@@ -48,10 +48,16 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/pg-ci-watch.service",  # a ci_watch test pins its flags.
     "docs/ci-watch.md",  # the same test pins the documented command.
     "deploy/systemd/pg-feeder.service",
+    "deploy/systemd/pg-wsl-cache-guard.service",
+    "deploy/systemd/pg-wsl-cache-guard.timer",
     "deploy/liveness/router.toml",
     "tools/liveness_watchdog.py",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
+    "src/plangraph/planner/benchmarks.py",
+    "src/plangraph/planner/route_policy.py",
+    "src/plangraph/routing_support/catalog_db.py",
+    "src/plangraph/routing_support/clients.py",
     "src/plangraph/planner/measured_down.py",
     # D-6054: native/agy quota isolation regressions exercise these boundaries.
     "src/plangraph/planner/provider_stop.py",
@@ -60,6 +66,8 @@ RUST_INPUTS: tuple[str, ...] = (
     # D-6054: rendered OpenCode catalog integration-test inputs.
     "src/plangraph/planner/legs.py",
     "src/plangraph/routing_support/__init__.py",
+    "src/plangraph/routing_support/catalog_schema.sql",
+    "configuration/benchmark_data_pending.json",
     "src/plangraph/routing_support/opencode_overlay.py",
     "src/plangraph/routing_support/opencode_render.py",
     "src/plangraph/routing_support/resolver.py",
@@ -79,6 +87,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "docs/spawner-reliability.md",
     "docs/workspace-resolver.md",
     "skills/review/SKILL.md",  # Native writer review composition fixture.
+    "tools/hooks/install_hooks.sh",  # The lesson Stop hook tests its installer.
     "tools/seat_record.py",  # Native review seat binding fixture.
     "tools/merge_batch_build.py",  # Landing journal and merge-policy fixtures.
     "tools/pgtest.py",  # Process and database helpers loaded by the preflight fixtures.

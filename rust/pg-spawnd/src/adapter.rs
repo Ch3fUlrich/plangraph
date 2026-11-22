@@ -1,5 +1,5 @@
 use crate::errors::ToolError;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -22,6 +22,15 @@ impl Adapter<'_> {
         args: &[String],
         timeout: Duration,
     ) -> Result<(i32, Vec<u8>, String), ToolError> {
+        self.run_input(args, timeout, None)
+    }
+
+    pub(crate) fn run_input(
+        &self,
+        args: &[String],
+        timeout: Duration,
+        input: Option<&str>,
+    ) -> Result<(i32, Vec<u8>, String), ToolError> {
         let mut cmd = if let Some(program) = std::env::var_os("PG_SPAWND_ADAPTER") {
             if !Path::new(&program).is_absolute() {
                 return Err(ToolError::Internal("route adapter could not start".into()));
@@ -36,20 +45,32 @@ impl Adapter<'_> {
             cmd
         };
         cmd.arg("--state").arg(self.0).args(args);
-        run_command(cmd, timeout)
+        run_command_input(cmd, timeout, input)
     }
 }
 
 /// Run `cmd` in its own process group with piped, bounded output: `(exit code, stdout, last
 /// stderr line)`. A command past `timeout` is killed with its group.
 pub(crate) fn run_command(
-    mut cmd: Command,
+    cmd: Command,
     timeout: Duration,
 ) -> Result<(i32, Vec<u8>, String), ToolError> {
+    run_command_input(cmd, timeout, None)
+}
+
+fn run_command_input(
+    mut cmd: Command,
+    timeout: Duration,
+    input: Option<&str>,
+) -> Result<(i32, Vec<u8>, String), ToolError> {
     {
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -57,6 +78,13 @@ pub(crate) fn run_command(
         }
         let mut child = pg_worker_core::stall::spawn_retrying(&mut cmd)
             .map_err(|e| ToolError::Internal(format!("route adapter could not start: {e}")))?;
+        if let Some(input) = input {
+            let bytes = input.as_bytes().to_vec();
+            let mut stdin = child.stdin.take().unwrap();
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(&bytes);
+            });
+        }
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let (send, receive) = std::sync::mpsc::channel();

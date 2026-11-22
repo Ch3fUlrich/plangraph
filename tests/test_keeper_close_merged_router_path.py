@@ -355,3 +355,28 @@ def test_plan_item_commits_failure_is_named_audited_refusal(w, monkeypatch, in_l
             row["code"], row["msg"]) == (
         "router", "router", "close_merged", KEY, 0,
         "evidence_unverified", "merged_on_default_missing")
+
+
+@pytest.mark.parametrize("fault", [None, "non-quota", "missing-finish", "no-serving-attempt"])
+def test_review_seats_accepts_one_witnessed_completion_after_skips(unseated_w, tmp_path, fault):
+    root = mirrored_reviews(unseated_w, tmp_path)
+    path = root / "fixture" / "run-one" / "record.json"
+    record = json.loads(path.read_text())
+    completed = {"status": "completed", "served_model": record["served_model"],
+                 "stdout_tail": record["stdout_tail"]}
+    record["attempts"] = [{"status": "skipped"} for _ in range(29)] + [completed]
+    if fault == "non-quota":
+        record["attempts"][0] = {"status": "failed", "stderr_tail": "connection reset"}
+    if fault == "missing-finish":
+        record.pop("finish_reason")
+    if fault == "no-serving-attempt":
+        record["attempts"][-1] = {"status": "skipped"}
+    path.write_text(json.dumps(record))
+    adapter = SpawnerRecordAdapter(root)
+    item = {"key": "demo:H", "run_ids": '["run-one"]'}
+    if fault:
+        with pytest.raises(ValueError, match="not a passing witnessed seat"):
+            adapter.review_seats(item, HEAD, "")
+    else:
+        assert adapter.review_seats(item, HEAD, "") == [
+            {"model": "gemini-test", "verdict": "pass", "run_id": "run-one", "head": HEAD}]

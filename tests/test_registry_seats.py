@@ -26,6 +26,12 @@ from registry_route_util import (CARD, DIFF, HIGH, RCARD, _Runner, _families, _r
 # --- 5. inline-only legs get the diff ----------------------------------------
 
 @pytest.fixture(autouse=True)
+def no_head_trailer_lookup(monkeypatch):
+    """These cards name placeholder repositories: the head Writer trailer lookup is not under test."""
+    monkeypatch.setattr("plangraph.planner.seats.head_writer_families", lambda card: [])
+
+
+@pytest.fixture(autouse=True)
 def fixed_seat_table(monkeypatch):
     # Exercise seat transport/failures independently of provider credits.
     legs = tuple(replace(leg, disabled=None) if leg.id == "qodercli-qwen3.8-flash"

@@ -1,0 +1,1 @@
+SKIPPED plangraph:UTILITY-EFFORT-ROWS. The requested Sol xhigh default conflicts with D-6310 and D-6397, and D-6366 admits a Claude fallback when all Codex legs are unavailable. Fable leg admission and ranking remain part of the deferred item.

@@ -1,8 +1,8 @@
 [Unit]
-Description=Check worker disk every fifteen minutes
+Description=Check worker disk every thirty minutes
 
 [Timer]
-OnCalendar=*-*-* *:00,15,30,45:00
+OnCalendar=*-*-* *:00,30:00
 Persistent=true
 
 [Install]

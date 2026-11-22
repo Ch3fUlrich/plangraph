@@ -33,6 +33,7 @@ struct Fake {
     defer_review_on: Option<usize>,
     fail_first_review: bool,
     pushed: Vec<String>,
+    push_failures: usize,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
@@ -142,6 +143,9 @@ impl Driver for Fake {
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         self.pushed.push(head.into());
+        if self.pushed.len() <= self.push_failures {
+            return Err("pre-push: fixture scrub hit".into());
+        }
         Ok(Some("refs/heads/lane/fixture".into()))
     }
     fn save(&mut self, _: &serde_json::Value) -> Result<(), String> {
@@ -598,6 +602,8 @@ fn batch_driver_reaches_done_on_accept_and_pushes_once() {
     assert_eq!(record["exit_code"], 0);
     assert_eq!(record["status_line"], "DONE");
     assert_eq!(record["review_rounds"], 1);
+    assert!(record["writer_turns"][0]["started"].is_string());
+    assert!(record["writer_turns"][0]["ended"].is_string());
     assert_eq!(record["fast_checks"]["status"], "passed");
     assert_eq!(record["pushed"], "refs/heads/lane/fixture");
     assert_eq!(driver.pushed, vec!["final-head".to_owned()]);
@@ -741,3 +747,5 @@ fn round_stop_is_the_round_progress_rule_capped_at_max_rounds() {
 mod idle;
 #[path = "native_writer_placement_tests.rs"]
 mod placement;
+#[path = "native_writer_push_tests.rs"]
+mod push;

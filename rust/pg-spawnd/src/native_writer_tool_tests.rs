@@ -1,12 +1,21 @@
 use super::*;
 
+const MOUNTS: &str = r"1 0 8:1 / / rw - ext4 /dev/root rw
+2 1 8:2 / /mnt/data rw - ext4 /dev/data rw
+3 1 0:3 / /mnt/c rw - 9p C:\ rw
+4 3 8:4 / /mnt/c/linux rw - ext4 /dev/data rw
+5 1 0:5 / /mnt/windows\040share rw - drvfs D:\ rw";
+
 #[test]
 fn refuses_windows_mount_codex_before_launch() {
-    for drive in ["c", "d"] {
-        let path = PathBuf::from(format!("/mnt/{drive}/codex-fixture/bin/codex"));
-        let error = checked_path(path).unwrap_err();
+    for (path, mountinfo) in [
+        ("/mnt/c/bin/codex", MOUNTS),
+        ("/mnt/windows share/bin/codex", MOUNTS),
+        ("/mnt/d/bin/codex", ""),
+    ] {
+        let error = require_native(Path::new(path), true, mountinfo).unwrap_err();
         assert!(error.starts_with("tool_wrong_platform:"), "{error}");
-        assert!(error.contains(&format!("/mnt/{drive}/")), "{error}");
+        assert!(error.contains(path), "{error}");
     }
 }
 
@@ -54,10 +63,18 @@ fn skips_non_executables_and_resolves_relative_path_from_writer_cwd() {
 fn refuses_linux_symlink_into_windows_mount() {
     let root = tempfile::tempdir().unwrap();
     let link = root.path().join("codex");
-    // /mnt exists on WSL and Linux; validating the canonical target must reject
-    // it even though the selected path itself is outside /mnt.
-    std::os::unix::fs::symlink("/mnt", &link).unwrap();
-    let error = checked_path(link).unwrap_err();
+    let target = root.path().join("windows-drive").join("codex");
+    executable(&target);
+    let canonical = target.canonicalize().unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let error = checked_path(link, |path| {
+        if path == canonical {
+            require_native(Path::new("/mnt/c/bin/codex"), true, MOUNTS)
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap_err();
     assert!(error.starts_with("tool_wrong_platform:"), "{error}");
 }
 
@@ -77,4 +94,16 @@ fn linux_npm_symlink_keeps_selected_path() {
     let link = root.path().join("codex");
     std::os::unix::fs::symlink(&target, &link).unwrap();
     assert_eq!(resolve(root.path().as_os_str(), root.path()).unwrap(), link);
+}
+
+#[test]
+fn accepts_a_linux_data_disk_below_mnt() {
+    for (path, is_wsl) in [
+        ("/mnt/data/bin/codex", false),
+        ("/mnt/data/bin/codex", true),
+        ("/mnt/c/bin/codex", false),
+        ("/mnt/c/linux/bin/codex", true),
+    ] {
+        require_native(Path::new(path), is_wsl, MOUNTS).unwrap();
+    }
 }

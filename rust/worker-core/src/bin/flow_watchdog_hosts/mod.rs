@@ -9,6 +9,8 @@ pub struct Host {
     host: String,
     tmp_used_percent: f64,
     root_used_percent: f64,
+    #[serde(default)]
+    work_used_percent: Vec<f64>,
     checkout_head: String,
     origin_main_head: String,
     // Collector supplies the ancestry count, not a comparison of commit timestamps.
@@ -19,7 +21,11 @@ pub struct Host {
 pub fn messages(hosts: &[Host]) -> Vec<String> {
     let mut messages = Vec::new();
     for host in hosts {
-        if host.tmp_used_percent > DISK_USED_PERCENT || host.root_used_percent > DISK_USED_PERCENT {
+        if [host.tmp_used_percent, host.root_used_percent]
+            .into_iter()
+            .chain(host.work_used_percent.iter().copied())
+            .any(|percent| percent > DISK_USED_PERCENT)
+        {
             messages.push(format!(
                 "host-disk: host={}",
                 serde_json::to_string(&host.host).unwrap()

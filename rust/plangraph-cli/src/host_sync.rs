@@ -6,6 +6,11 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "host_sync_protoc.rs"]
+mod protoc;
+#[path = "host_sync_wsl.rs"]
+mod wsl_guard;
+
 pub const FLEET_TOOLS: [&str; 3] = ["handoff-check", "resume-digest", "fleet-name"];
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -62,11 +67,17 @@ pub fn parse_args(args: &[OsString]) -> Result<Options, String> {
 }
 
 pub fn run_cli(args: &[OsString]) -> i32 {
+    if matches!(args, [flag] if flag == "--check-protoc") {
+        return protoc::run();
+    }
+    if matches!(args.first(), Some(flag) if flag == "--install-wsl-guard") {
+        return wsl_guard::run(&args[1..]);
+    }
     let options = match parse_args(args) {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
-            eprintln!("usage: host-sync [--data-dir PATH] [--bin-dir PATH]");
+            eprintln!("usage: host-sync [--data-dir PATH] [--bin-dir PATH] | --check-protoc | --install-wsl-guard POLICY HOST");
             return 2;
         }
     };

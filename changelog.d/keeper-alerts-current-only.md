@@ -1,1 +1,1 @@
-Keeper `alerts` lists findings and repeated refusals only for open, claimed or in_review items inside `alert_window_s` (default 7 days); `history` counts what was left out and no row is deleted.
+Keeper `alerts` lists findings and repeated refusals only for open, claimed or in_review items inside `alert_window_s` (default 7 days). An overdue finding moves into `history` when the item leaves that review round. `history` counts excluded rows and keeps them in the database.

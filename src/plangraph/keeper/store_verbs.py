@@ -188,7 +188,8 @@ class VerbsMixin:
                 " claimed_by=?, delegate=NULL, reviewer=NULL, lease_until=?,"
                 " review_waiver=NULL, updated_at=? WHERE key=?",
                 (epoch, principal.name, lease, self._iso(now), key))
-        return {"key": key, "epoch": epoch, "lease_until": lease}
+            return self._finish_retryable_write(principal, {
+                "key": key, "epoch": epoch, "lease_until": lease})
 
     def delegate(self, principal, key, worker_principal):
         return self._run(principal, "delegate", key,
@@ -262,7 +263,7 @@ class VerbsMixin:
             if receipt is not None:
                 reply["source_round"] = fresh["round"]
             record({"result": "ok", "reply": reply})
-            return reply
+            return self._finish_retryable_write(principal, reply)
 
     def release(self, principal, key, epoch):
         return self._run(principal, "release", key,

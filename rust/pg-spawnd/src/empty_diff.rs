@@ -1,13 +1,13 @@
 //! A review card whose diff is empty fails once, before routing or any leg is tried.
 use crate::errors::{RefusalKind, ToolError};
-use crate::placement::Args;
+use crate::placement::{parameter, Args};
 use pg_worker_core::hosts::RepoEntry;
+use pg_worker_core::workspace::DiffRef;
 use pg_worker_core::workspace_resolver;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Duration;
 
 fn plain(value: &Value) -> Option<&str> {
     value
@@ -26,35 +26,26 @@ fn check_with(args: &Args, repos: &BTreeMap<String, RepoEntry>) -> Result<(), To
         return Ok(());
     }
     let reference = &args["card"]["diff_ref"];
-    // Two formats: {repo, base, head} (a path) and the registry-rooted {repo_id, base_sha, head_sha}.
-    let registered = reference["repo_id"].as_str().and_then(|id| repos.get(id));
-    let (root, base, head) = match registered {
-        Some(entry) => (
-            Some(entry.root.clone()),
-            &reference["base_sha"],
-            &reference["head_sha"],
-        ),
-        None => (
-            reference["repo"]
-                .as_str()
-                .filter(|r| Path::new(r).is_absolute())
-                .map(str::to_owned),
-            &reference["base"],
-            &reference["head"],
-        ),
-    };
-    let (Some(repo), Some(base), Some(head)) = (root.as_deref(), plain(base), plain(head)) else {
+    if let Some(repo) = reference["repo_id"].as_str().and_then(|id| repos.get(id)) {
+        let diff: DiffRef = serde_json::from_value(reference.clone())
+            .map_err(|_| parameter("invalid registry diff_ref"))?;
+        return match crate::prompt_git::has_diff(repo, &diff) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(empty(&diff.base_sha, &diff.head_sha)),
+            Err(error) => Err(parameter(format!(
+                "could not check registry review diff: {error}"
+            ))),
+        };
+    }
+    let (Some(repo), Some(base), Some(head)) = (
+        reference["repo"]
+            .as_str()
+            .filter(|r| Path::new(r).is_absolute()),
+        plain(&reference["base"]),
+        plain(&reference["head"]),
+    ) else {
         return Ok(());
     };
-    if let Some(entry) = registered {
-        // Resolve the commits first, as the inline diff reader does: a registry checkout that has not
-        // fetched them yet would otherwise look unreadable and pass an empty range on to routing.
-        for sha in [base, head] {
-            if workspace_resolver::ensure_commit(entry, sha, Duration::from_secs(10)).is_err() {
-                return Ok(());
-            }
-        }
-    }
     let mut cmd = workspace_resolver::git_command(Path::new(repo));
     cmd.args([
         "--literal-pathspecs",
@@ -70,13 +61,17 @@ fn check_with(args: &Args, repos: &BTreeMap<String, RepoEntry>) -> Result<(), To
     }
     let status = cmd.stdout(Stdio::null()).stderr(Stdio::null()).status();
     if status.is_ok_and(|s| s.code() == Some(0)) {
-        return Err(ToolError::Refused {
-            kind: RefusalKind::Spawn,
-            message: format!("empty_diff: no change between base {base} and head {head}"),
-            legs: vec![],
-        });
+        return Err(empty(base, head));
     }
     Ok(())
+}
+
+fn empty(base: &str, head: &str) -> ToolError {
+    ToolError::Refused {
+        kind: RefusalKind::Spawn,
+        message: format!("empty_diff: empty review diff between base {base} and head {head}"),
+        legs: vec![],
+    }
 }
 
 #[cfg(test)]

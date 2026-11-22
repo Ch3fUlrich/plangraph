@@ -372,7 +372,7 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
             "commit",
             "-q",
             "-m",
-            "writer\n\nWriter: gemini-4-hydrogen-high run-6f00f4b3",
+            "writer\n\nSKIPPED plangraph:OTHER-HOST-ITEM Fixture contract unavailable.\nSKIPPED plangraph:UNLISTED-ITEM Not in this brief.\nSKIPPED plangraph:HOST-TEST-ITEM Waiting for fixture.\n\nWriter: gemini-4-hydrogen-high run-6f00f4b3",
         ],
     );
     fs::write(cwd.join("src/more.rs"), "pub fn fixture_symbol() {}\n").unwrap();
@@ -383,7 +383,7 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
             "commit",
             "-q",
             "-m",
-            "claude\n\nWriter: claude-opus-5-5 session_abc",
+            "claude\n\nPlan-Item: plangraph:HOST-TEST-ITEM\nWriter: claude-opus-5-5 session_abc",
         ],
     );
     let head = git(&cwd, &["rev-parse", "HEAD"]);
@@ -428,7 +428,7 @@ if verb == 'route':
         print(json.dumps({'legs': [{'id':'agy-gemini-4-hydrogen-high'}], 'skipped': []}))
     sys.exit(0)
 assert verb == 'spawn' and pathlib.Path(value('--cwd')) == pathlib.Path.cwd()
-families = [argv[i + 1] for i, a in enumerate(argv) if a == '--writer-family']
+families = [argv[i + 1] for i, a in enumerate(argv) if a == '--exclude-family']
 # The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
 assert sorted(families) == ['anthropic', 'google', 'openai'], families
 assert 'cwd' not in card
@@ -444,6 +444,9 @@ repo = pathlib.Path(card['diff_ref']['repo'])
 assert repo != pathlib.Path.cwd()
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
+assert 'SKIPPED plangraph:OTHER-HOST-ITEM Fixture contract unavailable.\n' in prompt, prompt
+assert 'SKIPPED plangraph:UNLISTED-ITEM' not in prompt, prompt
+assert 'SKIPPED plangraph:HOST-TEST-ITEM' not in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
 body = prompt.split('[/review-skill]\n\n', 1)[1]
 assert inline.split('\n\n', 1)[1] == body, inline
@@ -454,6 +457,8 @@ assert skill < context, prompt
 tools = compose(prompt, 'review', 'opencode', None, tool_mode='tools')
 assert tools.split('\n\n', 1)[1] == prompt, tools
 assert compose(tools, 'review', 'opencode', None, tool_mode='tools') == tools
+assert prompt.index('Open callers') < prompt.index('[/tools-only]') < context, prompt
+assert 'TEST-GAMING:' in body.split('=== ITEM CONTEXT', 1)[0], prompt
 assert 'Item key: plangraph:HOST-TEST-ITEM' in prompt, prompt
 assert 'Done criteria: By test: first line\nsecond criteria line\n' in prompt, prompt  # multi-line, whole
 assert 'Invariants named by the item: never push\n' in prompt, prompt
@@ -488,7 +493,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         tool_path: std::env::var("PATH").unwrap(),
         effort: WRITER_EFFORT.into(),
         state: state.clone(),
-        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n"
+        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n\nPlan item: plangraph:OTHER-HOST-ITEM\n"
             .into(),
         push_ref: None,
         reviews_started: 0,

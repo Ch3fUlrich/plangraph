@@ -6,6 +6,7 @@ from .exit_outcome import failure_reason, fallthrough_reason, refusal_record, re
 from .git_guard import annotate_tree, prepare_worktree, selected_checkout, writer_launch, run_tree
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
+from plangraph.planner.seats import with_head_writers
 from dataclasses import asdict, replace
 from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
@@ -86,6 +87,11 @@ class SpawnService(SeatSpawnMixin):
         record.setdefault('host', os.environ.get('PLANGRAPH_HOST') or socket.gethostname())
         record.setdefault('served_model', 'unwitnessed')
         record.setdefault('served_family', 'unwitnessed')
+        job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
+        if record.get('role') == 'review' and record.get('status') == 'completed':
+            finish = getattr(job, 'response_finish_reason', None)
+            if isinstance(finish, str) and finish and job.status == 'completed':
+                record['finish_reason'] = finish
         for target in [record, *record.get('attempts', [])]:
             if not target.get('served_model') or not target.get('served_family'):
                 target['served_model'] = target.get('served_model') or 'unwitnessed'
@@ -123,10 +129,14 @@ class SpawnService(SeatSpawnMixin):
             return value
         write_stderr_log(self._stderr_captures.setdefault(record['run_id'], {}), getattr(self.runner, 'jobs', {}), record, self._path(record['run_id']).with_name('stderr.log'), clean)
         host, item_key = record.get('host'), record.get('item_key')
+        binding = (record.get('request') or {}).get('verdict_binding')
+        bound_item = item_key if isinstance(binding, dict) and binding.get('key') == item_key else None
         if record.get('ended') is not None:
-            terminal_reason(record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
+            terminal_reason(record, job)
         record.update(clean(record))
         if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
+        if bound_item is not None:
+            record['request']['verdict_binding']['key'] = bound_item
         if host is not None:
             record['host'] = host   # top-level run host is an identifier (D-2960); nested 'host' keys stay redacted
         clean_attempts(record, clean)
@@ -144,7 +154,12 @@ class SpawnService(SeatSpawnMixin):
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
         path = self._path(record['run_id'])
-        payload = json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2)
+        persisted = redact(record)
+        if 'item_key' in record:
+            persisted['item_key'] = item_key
+        if bound_item is not None:
+            persisted['request']['verdict_binding']['key'] = bound_item
+        payload = json.dumps(persisted, indent=2)
         with inbox_lock(path):
             if isinstance(record.get('plan'), dict) and not record.get('pid'):
                 try:
@@ -156,7 +171,7 @@ class SpawnService(SeatSpawnMixin):
                     record.update(stored)
                     return False
             publish_run_record(self.state, path, payload)
-        publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
+        publish(path.parent, record, job)
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
@@ -198,7 +213,10 @@ class SpawnService(SeatSpawnMixin):
                                benchmark=benchmark, require_bench=require_bench)
             from plangraph.planner.routing import SpawnRefused, explicit_only_skips
             if plan.error and not (repository_preview and not plan.legs):
-                raise SpawnRefused("\n".join([plan.error, *(f"skip {row['leg']}: {row['reason']}" for row in plan.skipped)]))
+                refused = SpawnRefused("\n".join([plan.error, *(f"skip {row['leg']}: {row['reason']}" for row in plan.skipped)]))
+                # The record's error is the reason alone; the skip list is its own field.
+                refused.reason, refused.skipped = plan.error, [dict(row) for row in plan.skipped]
+                raise refused
             return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))), reasons=self._seat_reasons([s.family for s in plan.review_seats], plan.reasons))
         except Exception as exc:
             self.save_refusal(exc, role)
@@ -212,6 +230,9 @@ class SpawnService(SeatSpawnMixin):
             if not any(family):
                 raise SpawnRefused('writer family unavailable')
             families.extend(family)
+        if role == 'review':
+            from plangraph.planner.seats import head_writer_families
+            families.extend(head_writer_families(card))
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
@@ -230,6 +251,14 @@ class SpawnService(SeatSpawnMixin):
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench, **extra)
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
         return replace(plan, legs=witness_order(card, role, live(plan.legs), down), review_seats=live(plan.review_seats))
+    def _given_writers(self, card, role, writer_families, review_of):
+        """The writer families a run record names: the caller's, the reviewed run's and, for a review, the head's."""
+        families = list(writer_families)
+        if review_of:
+            source = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
+            families += [f for f in (source.get('given_writer_families') or [source.get('writer_family')])
+                         if f and f not in families]
+        return with_head_writers(card, role, families)
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
@@ -275,7 +304,8 @@ class SpawnService(SeatSpawnMixin):
                       started=time.time(), ended=time.time(),
                       status='refused' if isinstance(exc, SpawnRefused) else 'failed',
                       exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
-                      refusal=type(exc).__name__, error=str(exc),
+                      refusal=type(exc).__name__, error=getattr(exc, 'reason', None) or str(exc),
+                      **({'skipped': exc.skipped} if getattr(exc, 'skipped', None) else {}),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
         if placement is not None: record.update(placement=placement, host=placement['host'])
@@ -308,8 +338,11 @@ class SpawnService(SeatSpawnMixin):
         elif model is not None or leg is not None or not card:
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
-            from plangraph.planner.seats import seat_family, writer_parts
+            from plangraph.planner.seats import head_writer_families, seat_family, writer_parts
             reviewed = ((source.get('given_writer_families') or [f for f in [source.get('writer_family')] if f]) if (source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)) else []) if review_of else []
+            if role == 'review':
+                from plangraph.planner.seats import head_writer_families
+                reviewed = [*reviewed, *head_writer_families(card)]
             plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *reviewed])
             chosen = next((l for l in spawnable_legs() if l.id == leg), None) if leg else None
             if leg and chosen is None: raise SpawnRefused('unknown leg')
@@ -349,6 +382,8 @@ class SpawnService(SeatSpawnMixin):
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,),
                              tool_mode=row.get('tool_mode', 'tools'))
+            if role == 'review' and {seat_family(chosen.family)} & writer_parts(head_writer_families(card)):
+                raise SpawnRefused('excluded writer family')   # the head's own writer never reviews it
             if reviewed and writer_parts(reviewed) <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
@@ -388,12 +423,14 @@ class SpawnService(SeatSpawnMixin):
             # for standalone route requests, otherwise one error is saved twice.
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
-            raise SpawnRefused(plan.error or 'no eligible leg')
+            refused = SpawnRefused(plan.error or 'no eligible leg')
+            refused.reason, refused.skipped = refused.args[0], [dict(row) for row in plan.skipped]
+            raise refused
         plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs), placement=_placement or plan.placement)  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
-            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
+            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=self._given_writers(card, role, writer_families, review_of),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
         if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(record['run_id'])
@@ -433,7 +470,7 @@ class SpawnService(SeatSpawnMixin):
                             served_witness_reason=job.served_witness_reason,
                             stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events, provider_response=stop))
                         break
-                    unavailable = fallthrough_reason(self, chosen, job, record)
+                    unavailable = fallthrough_reason(self, chosen, job, record, card=card)
                     if unavailable: job.status, job.exit_code = 'failed', job.exit_code or 1
                     reason = unavailable or (failure_reason(job, stop, harness=chosen.harness)
                         if job.status in ('failed', 'skipped') else None)

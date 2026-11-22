@@ -282,7 +282,12 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
             "role":"review", "stderr_tail":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 5h."
         }), Status::Failed).ok().unwrap();
         assert!(!record.path().with_file_name("live.log").exists());
-        let argv = quota_args(&record, &json!({"harness":harness,"model":model})).unwrap();
+        let argv = quota_args(
+            &record,
+            &json!({"harness":harness,"model":model}),
+            &json!({"account":"fixture-A"}),
+        )
+        .unwrap();
         let output = Command::new("python3")
             .current_dir(&root)
             .env("PYTHONPATH", root.join("src"))
@@ -300,11 +305,12 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
     }
     let output = Command::new("python3").current_dir(&root)
         .env("PYTHONPATH", root.join("src")).env("XDG_STATE_HOME", dir.path())
-        .args(["-c", "import json; from plangraph.routing_support.leg_state import _default_store; print(json.dumps({m:_default_store().leg_status(k) for m,k in [('gemini-4-hydrogen','agy:gemini-4-hydrogen'),('gemini-4-neon','agy:gemini-4-neon'),('claude-sonnet-5-5','claude-sonnet-5-5-high'),('agy-sonnet','agy:claude-sonnet-5-5')]}))"])
+        .args(["-c", "import json; from plangraph.routing_support.leg_state import _default_store; print(json.dumps({m:_default_store().leg_status(k,account=a) for m,k,a in [('gemini-4-hydrogen','agy:gemini-4-hydrogen','fixture-A'),('gemini-4-neon','agy:gemini-4-neon','fixture-A'),('claude-sonnet-5-5','claude-sonnet-5-5-high','fixture-A'),('agy-sonnet','agy:claude-sonnet-5-5','fixture-A'),('other-account','agy:gemini-4-neon','fixture-B')]}))"])
         .output().unwrap();
     assert!(output.status.success());
     let states: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(states["gemini-4-hydrogen"]["state"], "limited");
+    assert_eq!(states["other-account"]["state"], "ok");
     assert_eq!(states["claude-sonnet-5-5"]["state"], "limited");
     for sibling in ["gemini-4-neon", "agy-sonnet"] {
         assert_eq!(states[sibling]["state"], "limited");
@@ -332,6 +338,7 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
     let argv = quota_args(
         &record,
         &json!({"harness":"claude", "model":"claude-sonnet-5-5-high"}),
+        &Value::Null,
     )
     .unwrap();
     assert_eq!(&argv[argv.len() - 2..], ["--reset-at", "2000000030"]);

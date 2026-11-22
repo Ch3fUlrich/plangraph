@@ -50,7 +50,7 @@ class OutboxMixin:
         for entry in entries:
             try:
                 eid, verb, body, digest = self._receipt_entry(entry)
-                if verb == "verdict":
+                if verb == "verdict" or (verb == "heartbeat" and entry.get("idempotency_key") is not None):
                     result = self.write_receipt(principal, entry)
                 else:
                     result = self._find_receipt(eid, principal.token_id, verb, digest)
@@ -140,6 +140,22 @@ class OutboxMixin:
         stored = self._find_receipt(eid, principal.token_id, verb, digest)
         if stored is not None:
             return stored
+        if verb == "heartbeat" and entry.get("idempotency_key") is not None:
+            from .api_routes import check_write_key
+            request_key = entry["idempotency_key"]
+            check_write_key(request_key)
+            key = body.get("key")
+            if not isinstance(key, str):
+                raise Refused("validation", "receipt write requires a key")
+            try:
+                reply, repeated = self.retry_http_write(
+                    principal, None, request_key, verb, "", body,
+                    lambda: self.heartbeat(principal, self.resolve_key(key), body.get("epoch")))
+            except Refused as exc:
+                if exc.code == "unavailable":
+                    raise
+                return {"id": eid, "result": exc.code, "msg": exc.msg}
+            return {"id": eid, "result": "ok", "reply": reply, "http_replayed": repeated}
         if entry.get("legacy") is True:
             return {"id": eid, "result": "recovery_required"}
         if verb not in RECEIPT_VERBS:

@@ -5,7 +5,9 @@ import json
 import logging
 import os
 import tempfile
+import threading
 import time
+from itertools import count
 from pathlib import Path
 
 from . import snapshot_sign, timing
@@ -21,9 +23,27 @@ SignError = snapshot_sign.SignError
 RETRY_PAUSE_S = 0.05
 
 
+class SnapshotPublication:
+    """Serialize publication and keep an older build from replacing a newer one."""
+
+    def __init__(self):
+        self.tickets = count()
+        self.latest = -1
+        self.lock = threading.Lock()
+
+    def publish(self, ticket, path, snapshot, key):
+        with timing.outside_request_lock():
+            with self.lock:
+                if ticket > self.latest:
+                    _publish(path, snapshot, key)
+                    self.latest = ticket
+
+
 def write_snapshot(server, principal) -> None:
     """Rewrite ``plan.snapshot.json`` atomically (temp file then rename)."""
     path = Path(server.config.snapshot)
+    publication = getattr(server, "snapshot_publication", None)
+    ticket = next(publication.tickets) if publication is not None else None
     # A run-token principal (M2B-RUN-TOKENS) may only act on its item: the snapshot is
     # role-agnostic, so it is built as the system principal, as the reaper does.
     from .auth import RunPrincipal
@@ -38,9 +58,16 @@ def write_snapshot(server, principal) -> None:
             "Fleet snapshot projection failed: %s: projection unavailable", type(exc).__name__)
         snapshot["fleet"] = None
         snapshot["fleet_error"] = "projection_failed"
+    key = getattr(server.config, "signing_key", None)
+    if publication is None:
+        _publish(path, snapshot, key)
+    else:
+        publication.publish(ticket, path, snapshot, key)
+
+
+def _publish(path, snapshot, key):
     body = timing.measured(part="encode_ms")(lambda: json.dumps(snapshot).encode("utf-8"))()
     path.parent.mkdir(parents=True, exist_ok=True)
-    key = getattr(server.config, "signing_key", None)
     if key:   # M2B: signature then snapshot; a reader in the gap retries once. A crash between the
               # two writes leaves a mismatch that FAILS CLOSED until the next write (the reaper
               # rewrites the snapshot every reap_interval), never an unsigned accept.

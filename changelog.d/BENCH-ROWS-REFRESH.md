@@ -1,0 +1,1 @@
+SKIPPED plangraph:BENCH-ROWS-REFRESH. D-5174 requires at least 300 live effort-labeled rows. The live source check yielded 146. The refresh implementation is withdrawn so a follow-up can deliver the capability with its source coverage.

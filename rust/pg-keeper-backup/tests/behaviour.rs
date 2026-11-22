@@ -83,6 +83,10 @@ impl Pg for Fake {
         self.log("list");
         Ok(listing(self.tables))
     }
+    fn archive_seq(&self, _: &Path, _: &str) -> Result<u64, String> {
+        self.log("inspect");
+        Ok(self.seq)
+    }
     fn create_scratch(&self, _: &str) -> Result<(), String> {
         self.log("create");
         if self.collide {
@@ -217,6 +221,9 @@ fn a_failed_dump_leaves_no_file_and_no_ledger_line() {
         fn list(&self, d: &Path) -> Result<String, String> {
             self.0.list(d)
         }
+        fn archive_seq(&self, d: &Path, schema: &str) -> Result<u64, String> {
+            self.0.archive_seq(d, schema)
+        }
         fn create_scratch(&self, s: &str) -> Result<(), String> {
             self.0.create_scratch(s)
         }
@@ -262,7 +269,10 @@ fn restore_test_passes_on_a_fresh_dump_and_drops_the_scratch() {
     let name = path_at(19096, 0);
     let report = restore_test(&fake, &name, "keeper", 43, names::MIN_SEQ).unwrap();
     assert_eq!((report.seq, report.tables), (19096, 43));
-    assert_eq!(*fake.calls.borrow(), ["list", "create", "restore", "drop"]);
+    assert_eq!(
+        *fake.calls.borrow(),
+        ["list", "inspect", "create", "restore", "drop"]
+    );
 }
 
 #[test]
@@ -277,7 +287,7 @@ fn restore_test_rejects_wrong_table_count_and_stale_content_and_still_drops() {
     let mut renamed = Fake::new(19200);
     renamed.scratch_seq = 18000;
     let err = restore_test(&renamed, &name, "keeper", 43, names::MIN_SEQ).unwrap_err();
-    assert!(err.contains("below"), "{err}");
+    assert!(err.contains("differs from archive max seq"), "{err}");
     assert_eq!(
         renamed.calls.borrow().last().map(String::as_str),
         Some("drop")
@@ -341,7 +351,7 @@ fn a_name_collision_never_drops_a_database_this_run_did_not_create() {
     fake.collide = true;
     let name = path_at(19200, 0);
     assert!(restore_test(&fake, &name, "keeper", 43, names::MIN_SEQ).is_err());
-    assert_eq!(*fake.calls.borrow(), ["list", "create"]);
+    assert_eq!(*fake.calls.borrow(), ["list", "inspect", "create"]);
 }
 
 #[test]

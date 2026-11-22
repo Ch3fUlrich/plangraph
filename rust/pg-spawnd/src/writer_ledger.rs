@@ -1,4 +1,4 @@
-//! One immutable JSONL row per terminal native run; daily totals preserve unknowns.
+//! One immutable JSONL row per terminal native writer attempt; daily totals preserve unknowns.
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs, io::Write, path::Path};
 
@@ -77,15 +77,64 @@ pub(crate) fn append(directory: &Path, row: &Value) -> Result<(), String> {
         .ok_or("writer ledger busy")?;
     let path = directory.join("ledger.jsonl");
     let text = format!("{row}\n");
-    match fs::read_to_string(&path) {
-        Ok(existing) if existing == text => return Ok(()),
-        Ok(_) => return Err("terminal writer ledger row changed".into()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+    let mut existing = match fs::read_to_string(&path) {
+        Ok(existing) => existing,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.to_string()),
+    };
+    let rows = parse_rows(&existing)?;
+    let number = resume_number(row)?;
+    if let Some(previous) = rows
+        .iter()
+        .find(|previous| resume_number(previous) == Ok(number))
+    {
+        return if previous == row {
+            Ok(())
+        } else {
+            Err("terminal writer ledger row changed".into())
+        };
     }
+    if rows
+        .last()
+        .is_some_and(|previous| resume_number(previous).is_ok_and(|prior| prior >= number))
+    {
+        return Err("terminal writer ledger order changed".into());
+    }
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        existing.push('\n');
+    }
+    existing.push_str(&text);
     // Reuse the existing private atomic writer so reports never see a partial row.
-    pg_worker_core::run::record_io::atomic_write_private(&path, text.as_bytes())
+    pg_worker_core::run::record_io::atomic_write_private(&path, existing.as_bytes())
         .map_err(|e| e.to_string())
+}
+
+fn resume_number(row: &Value) -> Result<u64, String> {
+    if !row.is_object() {
+        return Err("invalid writer ledger row".into());
+    }
+    row.get("resume_number").map_or(Ok(0), |value| {
+        value
+            .as_u64()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| "invalid writer ledger resume number".into())
+    })
+}
+
+fn parse_rows(text: &str) -> Result<Vec<Value>, String> {
+    let mut last = None;
+    text.lines()
+        .map(|line| {
+            let row =
+                serde_json::from_str(line).map_err(|e| format!("invalid writer ledger: {e}"))?;
+            let number = resume_number(&row)?;
+            if last.is_some_and(|prior| prior >= number) {
+                return Err("invalid writer ledger order".into());
+            }
+            last = Some(number);
+            Ok(row)
+        })
+        .collect()
 }
 
 pub(crate) fn report(args: Vec<String>, out: &mut dyn Write) -> Result<(), String> {
@@ -104,55 +153,61 @@ pub(crate) fn report(args: Vec<String>, out: &mut dyn Write) -> Result<(), Strin
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e.to_string()),
         };
-        let rows: Vec<_> = text.lines().collect();
-        if rows.len() != 1 {
+        let rows = parse_rows(&text)?;
+        if rows.is_empty() {
             return Err(format!("invalid ledger: {}", path.display()));
         }
-        let row: Value = serde_json::from_str(rows[0]).map_err(|e| e.to_string())?;
-        let ended = row["ended"]
-            .as_f64()
-            .filter(|n| n.is_finite() && *n >= 0.0)
-            .ok_or("invalid ledger end time")?;
-        let date = chrono::DateTime::from_timestamp(ended as i64, 0)
-            .ok_or("ledger end time out of range")?
-            .format("%Y-%m-%d")
-            .to_string();
-        let day = days
-            .entry(date.clone())
-            .or_insert_with(|| json!({"day":date,"runs":0}));
-        day["runs"] = json!(day["runs"].as_u64().unwrap() + 1);
-        for metric in METRICS {
-            let unknown = format!("{metric}_unknown");
-            let missing = day[&unknown].as_u64().unwrap_or(0);
-            if row[*metric].is_null() {
-                if day[*metric].is_null() {
-                    day[*metric] = json!(0);
-                }
-                day[&unknown] = json!(missing + 1);
-            } else if *metric == "wall_minutes" {
-                let value = row[*metric]
-                    .as_f64()
-                    .filter(|n| n.is_finite() && *n >= 0.0)
-                    .ok_or("invalid ledger wall minutes")?;
-                let total = day[*metric].as_f64().unwrap_or(0.0) + value;
-                if !total.is_finite() {
-                    return Err("ledger wall minutes overflow".into());
-                }
-                day[*metric] = json!(total);
-                day[&unknown] = json!(missing);
-            } else {
-                let value = row[*metric].as_u64().ok_or("invalid ledger count")?;
-                day[*metric] = json!(day[*metric]
-                    .as_u64()
-                    .unwrap_or(0)
-                    .checked_add(value)
-                    .ok_or("ledger total overflow")?);
-                day[&unknown] = json!(missing);
-            }
+        for row in rows {
+            report_row(&mut days, &row)?;
         }
     }
     for day in days.values() {
         writeln!(out, "{day}").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn report_row(days: &mut BTreeMap<String, Value>, row: &Value) -> Result<(), String> {
+    let ended = row["ended"]
+        .as_f64()
+        .filter(|n| n.is_finite() && *n >= 0.0)
+        .ok_or("invalid ledger end time")?;
+    let date = chrono::DateTime::from_timestamp(ended as i64, 0)
+        .ok_or("ledger end time out of range")?
+        .format("%Y-%m-%d")
+        .to_string();
+    let day = days
+        .entry(date.clone())
+        .or_insert_with(|| json!({"day":date,"runs":0}));
+    day["runs"] = json!(day["runs"].as_u64().unwrap() + 1);
+    for metric in METRICS {
+        let unknown = format!("{metric}_unknown");
+        let missing = day[&unknown].as_u64().unwrap_or(0);
+        if row[*metric].is_null() {
+            if day[*metric].is_null() {
+                day[*metric] = json!(0);
+            }
+            day[&unknown] = json!(missing + 1);
+        } else if *metric == "wall_minutes" {
+            let value = row[*metric]
+                .as_f64()
+                .filter(|n| n.is_finite() && *n >= 0.0)
+                .ok_or("invalid ledger wall minutes")?;
+            let total = day[*metric].as_f64().unwrap_or(0.0) + value;
+            if !total.is_finite() {
+                return Err("ledger wall minutes overflow".into());
+            }
+            day[*metric] = json!(total);
+            day[&unknown] = json!(missing);
+        } else {
+            let value = row[*metric].as_u64().ok_or("invalid ledger count")?;
+            day[*metric] = json!(day[*metric]
+                .as_u64()
+                .unwrap_or(0)
+                .checked_add(value)
+                .ok_or("ledger total overflow")?);
+            day[&unknown] = json!(missing);
+        }
     }
     Ok(())
 }

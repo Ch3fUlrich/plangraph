@@ -148,7 +148,9 @@ def test_both_completion_saves(tmp_path, monkeypatch, dispatch):
 @pytest.mark.parametrize('dry_run', [True, False])
 def test_dispatch_hash_is_in_memory(tmp_path, monkeypatch, dry_run):
     import asyncio
-    from plangraph.spawner import runner as module
+    from plangraph.spawner import host_ready, runner as module
+    # Host cache discovery is independent of constructing and hashing the prompt.
+    monkeypatch.setattr(host_ready, 'cargo_child_env', lambda env, **kwargs: env)
     received = []
     monkeypatch.setattr(module, 'build_command', lambda **kw:
         (received.append(kw['prompt']), ['synthetic'])[1])

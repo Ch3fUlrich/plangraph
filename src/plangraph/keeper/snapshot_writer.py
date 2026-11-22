@@ -58,7 +58,7 @@ class SnapshotWriter(threading.Thread):
             self._cond.notify_all()
 
     def _write_locked(self):
-        """Rebuild under the server lock; True when the file now reflects the database."""
+        """Read under the server lock, then publish; True when the file is current."""
         with timing.RequestTimer(self.server.lock, event="writer_timing"):
             with self._cond:
                 gen = self._gen
@@ -110,7 +110,7 @@ class SnapshotWriter(threading.Thread):
 
     def flush(self):
         """Synchronously bring the file level with the database (raises on a write error)."""
-        with self.server.lock:
+        with timing.RequestTimer(self.server.lock, event="snapshot_timing"):
             with self._cond:
                 gen, pending = self._gen, self._written != self._gen
             if not pending:

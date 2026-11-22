@@ -100,7 +100,16 @@ remain read/probe-free. This slice changes neither seat ordering nor route slots
 The default service reader retains its declared-state fallback for snapshot read
 errors. The service plan exposes the detailed error on the matching candidate
 as `leg_state_reason`. The launch boundary still retries the snapshot and probes
-the leg when the retry fails.
+the leg when the retry fails. If routing recorded an error for a bare model
+and launch uses a qualified state key, admission also rereads the bare model
+after checking the qualified state. The archived attempts preserve the skip
+labels from the run. The gateway response that produced the error is unavailable.
+
+`src/plangraph/routing_support/quota_snapshots.py:_build` interprets a connection's
+`testStatus` independently. Strings such as `refreshing` or `expired`, and an
+explicit null, leave that connection unavailable while preserving other
+connections in the snapshot. Invalid field types still report `bad_snapshot`
+and take the retry and probe path above.
 
 A `running` record on the same model/harness wins over a failed probe when its
 nonempty `live.log` grew within `LIVE_RUN_WRITE_WINDOW_S` (120 seconds).
@@ -139,6 +148,12 @@ Scheduled review probes (`--all-reviewers`, `caller='review-probe'`, source `rev
 
 ## AGY quota scope
 
-An `Individual quota reached` harness refusal with a future reset applies to all AGY models on the account. A model-specific refusal applies only to that model and its effort variants. Native Claude subscription legs do not share AGY quota state.
+An `Individual quota reached` refusal with a future reset applies to Antigravity
+legs with the event's account. An omitted account matches an event recorded
+without an account. Route evidence identifies the event, harness and account.
+A model-specific refusal applies to that model and its effort variants.
 
 Launch admission rereads quota evidence rather than trusting an earlier plan. `QuotaGate` reads the configured local `QUOTA_SNAPSHOT_DB` read-only on every check, even when gateway liveness discovery is disabled; only management API reads are cached for 60 seconds. A provider pool is skipped while every account is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1), until the earliest account reset. A reset-less row holds for 30 minutes from its timestamp or first observation.
+
+`plangraph quota [--db PATH]` prints usage by provider, account and window with the
+recorded observation time. `--db` selects an explicit read-only snapshot store.

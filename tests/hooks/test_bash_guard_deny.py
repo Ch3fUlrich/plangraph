@@ -288,3 +288,37 @@ def test_tables_have_unique_ids():
             + CLOSED + CLAUDE_BG_LAUNCHER)
     names = [row[0] for row in rows]
     assert len(names) == len(set(names))
+
+
+@cases([
+    ("while_full_pattern", 'while pgrep -f "pytest tests/test_example" >/dev/null; do sleep 5; done', "Wait on the PID"),
+    ("until_negated", 'until ! pgrep -f "tools/affected_tests.py"; do sleep 5; done', "Wait on the PID"),
+    ("nested_full_pattern", "bash -c 'while /usr/bin/pgrep --full task; do sleep 1; done'", "run_in_background"),
+    ("multiline_condition", "while\n  pgrep -af -- task\ndo\n  sleep 1\ndone", "Wait on the PID"),
+])
+def test_pgrep_cannot_wait_on_its_own_command_line(name, cmd, needle):
+    from bash_guard_support import run_bash
+
+    output = run_bash(cmd)
+    assert output.returncode == 2, output.stderr
+    assert needle in output.stderr.decode()
+
+
+def test_self_matching_pgrep_wait_loops():
+    from bash_guard_support import run_bash
+
+    for command in (
+        'while pgrep -f "pytest tests/test_keeper_close_merged" >/dev/null; do sleep 5; done',
+        "bash -c 'until ! /usr/bin/pgrep --full tools/affected_tests.py; do sleep 5; done'",
+    ):
+        result = run_bash(command)
+        assert result.returncode == 2, result.stderr
+        assert b"wait on the pid or unit" in result.stderr.lower()
+
+    for command in (
+        "pgrep -f fixture; sleep 5",
+        "while kill -0 $pid; do sleep 5; done; pgrep -f fixture",
+        "while pgrep -f '[f]ixture'; do sleep 5; done",
+        "while true; do pgrep -f fixture; sleep 5; done",
+    ):
+        assert run_bash(command).returncode == 0, command

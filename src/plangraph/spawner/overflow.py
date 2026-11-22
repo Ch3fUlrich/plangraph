@@ -533,11 +533,19 @@ async def native_spawn(self, card, options):
     async def finish():
         try:
             _, error = await process.communicate()
-            final = self.result(record['run_id'])
-            if final.get('status') == 'running':
-                final.update(status='failed', exit_code=process.returncode or 6,
-                             reason=error.decode(errors='replace')[-4096:], ended=time.time())
-            self._save(final)
+            import fcntl
+            with (directory / 'writer-supervisor.lock').open('ab') as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return
+                final = self.result(record['run_id'])
+                if final.get('resume_number'):
+                    return
+                if final.get('status') == 'running':
+                    final.update(status='failed', exit_code=process.returncode or 6,
+                                 reason=error.decode(errors='replace')[-4096:], ended=time.time())
+                self._save(final)
         except asyncio.CancelledError:
             survivors = await self.runner.kill_recorded(process.pid, identity)
             await process.wait()

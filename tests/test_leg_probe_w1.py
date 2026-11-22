@@ -19,6 +19,11 @@ import pytest
 from plangraph.routing_support import leg_state
 from plangraph.routing_support.leg_state import LegStateStore
 
+@pytest.fixture(autouse=True)
+def no_head_trailer_lookup(monkeypatch):
+    """These cards name placeholder repositories: the head Writer trailer lookup is not under test."""
+    monkeypatch.setattr("plangraph.planner.seats.head_writer_families", lambda card: [])
+
 
 def _leg():
     return SimpleNamespace(model='agy/model', harness='agy')
@@ -121,6 +126,13 @@ def test_probe_isolates_git_config_and_hooks(tmp_path, monkeypatch):
     from plangraph.spawner import leg_probe
     from plangraph.spawner.runner import SpawnerRunner
 
+    caller = tmp_path / 'caller'
+    caller.mkdir()
+    env = leg_probe.probe_env()
+    subprocess.run(['git', 'init', '-q'], cwd=caller, env=env, check=True)
+    subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                    'commit', '-qm', 'initial', '--allow-empty'], cwd=caller, env=env, check=True)
+    monkeypatch.chdir(caller)
     hostile = tmp_path / 'hostile.gitconfig'
     hooks = tmp_path / 'hostile-hooks'
     hooks.mkdir()

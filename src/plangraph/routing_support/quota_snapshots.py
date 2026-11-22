@@ -232,7 +232,7 @@ def _build(body, now):
         status = row.get("testStatus", "ok")
         if (not isinstance(provider, str) or not provider.strip()
                 or type(active) is not bool
-                or status not in ("ok", "success", "error", "failed", "unavailable")):
+                or (status is not None and not isinstance(status, str))):
             raise ValueError
         until = row.get("rateLimitedUntil") or ""
         limited = False

@@ -3,6 +3,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,7 @@ from .private_io import atomic_write_private
 
 HOST_TIMEOUT = 120
 MAX_AGE = 600
+_sccache_missing_warned = False
 
 
 def shared_cargo_target():
@@ -26,8 +28,47 @@ def shared_cargo_target():
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()
 
 
-def cargo_child_env(env):
-    return dict(env, CARGO_TARGET_DIR=str(shared_cargo_target()), CARGO_INCREMENTAL="0")
+def cargo_child_env(env, *, pin_configured=False):
+    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(shared_cargo_target()))
+    if pin_configured:
+        for name in ('RUSTC_WRAPPER', 'SCCACHE_CACHE_SIZE', 'SCCACHE_DIR', 'CARGO_HOME',
+                     'PIP_CACHE_DIR', 'npm_config_cache', 'UV_CACHE_DIR', 'TMPDIR'):
+            if value := os.environ.get(name):
+                result[name] = value
+    return result
+
+
+def _cargo_cache_env(env):
+    global _sccache_missing_warned
+    result = dict(env, CARGO_INCREMENTAL="0")
+    home = Path.home()
+    search = env.get('PATH', os.defpath)
+    inherited = env.get('RUSTC_WRAPPER')
+    named = env.get('PLANGRAPH_SCCACHE') or os.environ.get('PLANGRAPH_SCCACHE')
+    inherited_sccache = inherited and Path(inherited).name.lower() in ('sccache', 'sccache.exe')
+    if named:
+        wrapper = shutil.which(named, path=search)
+    else:
+        wrapper = ((shutil.which(inherited, path=search) if inherited_sccache else None)
+                   or shutil.which(str(home / '.local/bin/sccache'))
+                   or shutil.which('sccache', path=search))
+    if inherited and not inherited_sccache and (
+            not wrapper or Path(inherited).absolute() != Path(wrapper).absolute()):
+        result.pop('SCCACHE_DIR', None)
+        return result
+    if wrapper:
+        cap = (env.get('PLANGRAPH_SCCACHE_CACHE_SIZE') or os.environ.get('PLANGRAPH_SCCACHE_CACHE_SIZE')
+               or env.get('SCCACHE_CACHE_SIZE') or '20G')
+        result.update(RUSTC_WRAPPER=str(Path(wrapper).absolute()),
+                      SCCACHE_DIR=str(home / '.cache/plangraph/sccache'),
+                      SCCACHE_CACHE_SIZE=cap)
+    else:
+        result.pop('RUSTC_WRAPPER', None)
+        result.pop('SCCACHE_DIR', None)
+        if not _sccache_missing_warned:
+            _sccache_missing_warned = True
+            logging.warning('sccache unavailable; Cargo will build without a compiler cache')
+    return result
 
 
 def disk_free_gb(path):
@@ -35,6 +76,20 @@ def disk_free_gb(path):
     while not path.exists():
         path = path.parent
     return shutil.disk_usage(path).free / (1024 ** 3)
+
+
+def worktree_disk_root():
+    if not os.environ.get('PLANGRAPH_WORKTREE_MOUNTS'):
+        return None
+    probe = subprocess.run(['pg-spawnd', 'host', 'work-disk'], capture_output=True,
+                           text=True, encoding='utf-8', errors='replace', timeout=30, check=False)
+    if probe.returncode:
+        reason = probe.stderr.strip()
+        raise OSError(reason if reason.startswith('disk_low:') else 'disk_low: work mount probe failed')
+    root = Path(json.loads(probe.stdout))
+    if not root.is_absolute():
+        raise OSError('disk_low: invalid work mount probe response')
+    return root
 
 
 def cargo_target_size_gb(path):
@@ -290,12 +345,16 @@ def local_disk_refusal(worktree, service, role='implement'):
             return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
         paths = [worktree, target]
         if getattr(service, 'state', None) is not None:
-            paths.append(policy.get('worktree_root') or service.state / 'worktrees')
+            paths.append(worktree_disk_root() or policy.get('worktree_root') or service.state / 'worktrees')
             paths.append(service.state / 'trees')
         free = min(disk_free_gb(p) for p in paths)
         if free < floor:
             return f'disk_low: free {free:.2f} GB, floor {floor:g} GB'
-    except (OSError, ValueError, TypeError, KeyError):
+    except OSError as error:
+        if str(error).startswith('disk_low:'):
+            return str(error)
+        return 'disk_low: measurement or configuration unavailable'
+    except (ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
         return 'disk_low: measurement or configuration unavailable'
     return None
 
@@ -549,6 +608,19 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
             record['disk_free_gb'] = measure_argv('disk', ['df', '-Pk', '--', config['repo']],
                 lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
+            for mount in config.get('work_mounts', []):
+                if not isinstance(mount, str) or not mount.startswith('/') or mount == '/':
+                    fail('disk', 'invalid work mount')
+                    continue
+                if command_argv('disk.mount', 'mountpoint', '-q', '--', mount) is None:
+                    fail('disk', f'work mount unavailable: {mount}')
+                    continue
+                free = measure_argv('disk', ['df', '-Pk', '--', mount],
+                    lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
+                if free is not None:
+                    record.setdefault('work_mounts', {})[mount] = free
+                    if free < config.get('disk_floor_gb', 5):
+                        fail('disk', f'disk_low: {mount}: free {free} GB')
             def sha(s):
                 value = s.strip()
                 if not re.fullmatch(r'[0-9a-f]{40,64}', value):
@@ -639,11 +711,27 @@ def main(argv=None):
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--test-tools', metavar='REPO')
     parser.add_argument('--unit')
+    parser.add_argument('--cargo-run', nargs=argparse.REMAINDER, metavar='CARGO_ARG')
+    parser.add_argument('--cargo-cache-env', type=Path, metavar='GITHUB_ENV')
     args = parser.parse_args(argv)
+    if args.cargo_cache_env is not None:
+        env = _cargo_cache_env(os.environ)
+        keys = ('RUSTC_WRAPPER', 'SCCACHE_DIR', 'SCCACHE_CACHE_SIZE', 'CARGO_INCREMENTAL')
+        lines = {key: env.get(key, '') for key in keys}
+        if any('\n' in value or '\r' in value for value in lines.values()):
+            parser.error('Cargo cache environment contains a line break')
+        with args.cargo_cache_env.open('a', encoding='utf-8') as output:
+            output.writelines(f'{key}={value}\n' for key, value in lines.items())
+        return 0
+    if args.cargo_run is not None:
+        if not args.cargo_run:
+            parser.error('--cargo-run requires Cargo arguments')
+        return subprocess.call(['cargo', *args.cargo_run], env=_cargo_cache_env(os.environ))
     if args.test_tools:
         print(json.dumps(pre_push_report(args.test_tools, args.unit)))
         return 0
     from .overflow import host_config, placement_config, readiness_dir, registry_caps
+    from plangraph.fleet_sync.genconfig import work_mounts
     registry = registry_caps()
     hosts = placement_config(registry).get('hosts', {})
     local = host_config(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry['self'])
@@ -655,6 +743,7 @@ def main(argv=None):
             hosts[local['id']] = dict(local=True, registry=True, repo=repo,
                 spawner_src=repo + '/src', floor_mb=local['caps']['mem_floor_mb'],
                 state_dir=local.get('state_dir'),
+                work_mounts=work_mounts(local),
                 session_unit=local.get('env', {}).get('PG_SESSION_UNIT'))
     if not hosts and not args.host:
         parser.error('hosts.json has no readiness candidates')

@@ -27,6 +27,11 @@ pub(super) fn output(mut cmd: Command) -> Result<Value, String> {
     }
     serde_json::from_slice(&out.stdout).map_err(|_| "adapter returned invalid JSON".into())
 }
+pub(super) fn quota_snapshots(env: &Env, repo: &Path) -> Result<Value, String> {
+    let mut cmd = python(env, repo);
+    cmd.args(["-c", "import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
+    output(cmd)
+}
 pub trait Transport {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String>;
 }

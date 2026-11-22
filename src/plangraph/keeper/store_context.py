@@ -31,8 +31,8 @@ import json
 import time
 
 from .. import views
-from . import context_sources as src
-from .brief import ensure_cap
+from . import context_sources as src, timing
+from .brief import ensure_cap, superseded_contract
 from .errors import Refused
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
@@ -168,9 +168,10 @@ class ContextMixin:
 
     def _work(self, item, fetch, fresh_lanes=False):
         gitad = self._adapter("git")
-        commits = src.plan_item_commits(gitad, item["project"], item["key"], fetch=fetch)
-        closed = []
-        lanes = src.open_lanes(gitad, item["project"], item["key"], fresh_lanes, closed=closed)
+        with timing.outside_request_lock():
+            commits = src.plan_item_commits(gitad, item["project"], item["key"], fetch=fetch)
+            closed = []
+            lanes = src.open_lanes(gitad, item["project"], item["key"], fresh_lanes, closed=closed)
         return {"commits": commits, "lanes": lanes,
                 **({"closed_pr_lanes": closed} if closed else {})}
 
@@ -210,11 +211,13 @@ class ContextMixin:
             "work_exists": (self._work(item, fetch, fresh_lanes) if git
                             else {"commits": None, "lanes": None}),
         }
+        if contract := superseded_contract(item):
+            ctx["superseded_contract"] = contract
         ctx["stale"] = self._stale_reason(item, ctx)
         return ctx
 
     def _stale_reason(self, item, ctx):
-        why = []
+        why = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
         last = ctx.get("last_activity") or {}
         at = self._parse_iso(last.get("at")) if last.get("at") else None
         if at is not None and item.get("state") not in views.TERMINAL:
@@ -330,7 +333,7 @@ class ContextMixin:
     def _claim_guard(self, item, reason):
         """Refuse a stale claim with the facts, or return the override record."""
         reason = self._force_stale_reason(reason)
-        index = {it["key"]: it for it in self._all_items()}
+        index = self._item_neighborhood(item)
         try:
             inputs = self._inputs(index, fresh=True)
         except src.DecisionsUnreadable:
@@ -353,7 +356,7 @@ class ContextMixin:
     @staticmethod
     def _claim_staleness(ctx):
         """Shared refusal facts for claim and ready; informational age is separate."""
-        facts = []
+        facts = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
         if commits and not (isinstance(lanes, list) and lanes):

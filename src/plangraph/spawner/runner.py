@@ -233,7 +233,7 @@ class SpawnerRunner:
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
         from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
         prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
-                         getattr(leg, 'tool_mode', None))
+                         tool_mode=getattr(leg, 'tool_mode', None))
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
@@ -294,13 +294,13 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
-        from .host_ready import cargo_child_env
-        child_env = cargo_child_env(child_env)
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
         if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
             child_env = with_agent_shell(claude_child_env(child_env))
+        from .host_ready import cargo_child_env
+        child_env = cargo_child_env(child_env, pin_configured=True)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
@@ -871,14 +871,12 @@ def spawn_service(*args, **kwargs):
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry and super()._save(record) is False:
                 return
-            changed = False
-            if terminal:
-                if 'completion' not in record:
-                    record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
-                    if record.get('status') == 'needs_input':
-                        record['completion'].update(event='NEEDS_INPUT', question=record['question'])
-                    changed = True
-            if changed:
+            if terminal and 'completion' not in record:
+                record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
+                if record.get('role') == 'review' and record['completion'].get('head_sha'):
+                    record.setdefault('head_sha', record['completion']['head_sha'])
+                if record.get('status') == 'needs_input':
+                    record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                 super()._save(record)
             if terminal:
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
@@ -971,7 +969,7 @@ def spawn_service(*args, **kwargs):
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
-                given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
+                given_writer_families=self._given_writers(card, role, writer_families, review_of),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
@@ -991,7 +989,7 @@ def spawn_service(*args, **kwargs):
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
-                              evidence=plan.to_dict()['skipped'])
+                              skipped=plan.to_dict()['skipped'], evidence=plan.to_dict()['skipped'])
                 self._save(record)
                 return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
             async def execute():
@@ -1009,7 +1007,7 @@ def spawn_service(*args, **kwargs):
                         record.update(status='cancelled', exit_code=1, reason='cancelled')
                         return True
 
-                    from .leg_probe import ProbeBudget, before_launch
+                    from .leg_probe import ProbeBudget, before_launch, route_probe_scope
                     probe_budget = ProbeBudget(started=record.get('started'))  # one budget for every leg, net of admission time spent
                     for _ in range(len(plan.legs) + 2):
                         if cancelled():
@@ -1020,7 +1018,7 @@ def spawn_service(*args, **kwargs):
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
-                        probe_skip = await before_launch(self.runner, chosen, role, dry_run, probe_budget)
+                        probe_skip = await before_launch(self.runner, chosen, role, dry_run, probe_budget, **route_probe_scope(current, chosen))
                         if probe_skip:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped', skip_reason=probe_skip))
                             self._save(record)
@@ -1069,7 +1067,7 @@ def spawn_service(*args, **kwargs):
                                 stdout_tail=job.stdout, stderr_tail=job.stderr, provider_response=stop))
                             return
                         reason = None
-                        unavailable = fallthrough_reason(self, chosen, job, record)
+                        unavailable = fallthrough_reason(self, chosen, job, record, card=card)
                         if unavailable:
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1

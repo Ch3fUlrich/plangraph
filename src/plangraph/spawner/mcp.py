@@ -70,14 +70,17 @@ TOOLS_METADATA = [
     },
     {
         "name": "plangraph_agent_steer",
-        "description": "Send steering instructions or context to an active job",
+        "description": "Send steering instructions to an active job or native writer",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "job_id": {"type": "string", "description": "Target job ID"},
+                "run_id": {"type": "string", "description": "Target native run ID"},
+                "host": {"type": "string", "description": "Configured native run host"},
                 "message": {"type": "string", "description": "Steering message or instructions"},
             },
-            "required": ["job_id", "message"],
+            "required": ["message"],
+            "anyOf": [{"required": ["job_id"]}, {"required": ["run_id"]}],
         },
     },
     {
@@ -239,6 +242,9 @@ class MCPSpawnerServer:
             return res
 
         if name == "plangraph_agent_steer":
+            if 'run_id' in arguments:
+                return await asyncio.to_thread(remote_ps.steer_run, self.service, arguments['run_id'],
+                                               arguments['message'], arguments.get('host'))
             job_id = str(arguments["job_id"])
             message = str(arguments["message"])
             return await self.runner.steer(job_id=job_id, message=message)

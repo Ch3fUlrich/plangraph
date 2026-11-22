@@ -293,6 +293,56 @@ def test_admin_migrate_on_sqlite(tmp_path, monkeypatch, capsys):
     assert "schema up to date" in capsys.readouterr().out
 
 
+def test_admin_migrate_uses_private_dsn_and_check_schema_uses_runtime_dsn(tmp_path, monkeypatch, capsys):
+    from plangraph.keeper import cli
+
+    cfg = tmp_path / "keeper.json"
+    cfg.write_text('{"backend":"postgres","dsn":"runtime","pg_schema":"keeper"}')
+    cfg.chmod(0o600)
+    dsn = tmp_path / "migration.dsn"
+    dsn.write_text("migration\n")
+    dsn.chmod(0o644)
+    opened = []
+
+    class Connection:
+        def close(self):
+            pass
+
+    def open_db(path, **kwargs):
+        opened.append(kwargs)
+        return Connection()
+
+    monkeypatch.setattr(kdb, "open_db", open_db)
+    admin = ["--config", str(cfg), "admin"]
+    migrate = [*admin, "migrate", "--dsn-file", str(dsn)]
+    assert cli.main(migrate) == 2
+    assert not opened
+    assert "mode 0600" in capsys.readouterr().err
+    dsn.chmod(0o600)
+    assert cli.main(migrate) == 0
+    assert cli.main([*admin, "check-schema"]) == 0
+    assert opened == [
+        {"create": True, "backend": "postgres", "dsn": "migration", "schema": "keeper"},
+        {"create": False, "backend": "postgres", "dsn": "runtime", "schema": "keeper"},
+    ]
+
+
+def test_migrate_existing_schema_does_not_require_database_create():
+    class SchemaOwner:
+        def execute(self, sql, params=()):
+            assert not sql.startswith("CREATE SCHEMA"), "schema owner has no database CREATE permission"
+            if "FROM pg_catalog.pg_namespace" in sql:
+                assert params == ("keeper",)
+                return self
+            if sql == "SELECT version FROM schema_migrations":
+                return [(step.version,) for step in schema_pg.MIGRATIONS]
+
+        def fetchone(self):
+            return (True,)
+
+    assert db_pg.migrate(SchemaOwner(), "keeper") == []
+
+
 class _FakeRaw:
     """Just enough of a psycopg connection to drive PgConnection's transaction control."""
 

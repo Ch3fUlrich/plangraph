@@ -119,19 +119,58 @@ fn real_commit_child_writes_only_temporary_git_metadata() {
 }
 
 #[test]
-fn writer_launch_refuses_a_workspace_write_readiness_record() {
-    let record = pg_worker_core::host_readiness::Record {
+fn writer_placement_requires_workspace_write_readiness() {
+    use pg_worker_core::host_readiness::{Record, WRITER_SANDBOX};
+    let mut record = Record {
         host: "worker".into(),
         sandbox: "workspace-write".into(),
         checked_at: 100,
         errors: vec![],
     };
+    assert_eq!(record.refusal("worker", WRITER_SANDBOX, 100), None);
+    record.sandbox = "danger-full-access".into();
     assert_eq!(
-        record.refusal(
-            "worker",
-            pg_worker_core::host_readiness::WRITER_SANDBOX,
-            100
-        ),
+        record.refusal("worker", WRITER_SANDBOX, 100),
         Some("readiness sandbox mismatch")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_write_probe_names_both_git_directories() {
+    use pg_worker_core::host_readiness::Native;
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let codex = tmp.path().join("codex");
+    fs::write(
+        &codex,
+        r#"#!/bin/sh
+set -eu
+[ "$1" = sandbox ]
+[ "$2" = -c ]
+[ "$3" = 'sandbox_mode="workspace-write"' ]
+[ "$4" = -c ]
+[ "$5" = sandbox_workspace_write.network_access=true ]
+[ "$6" = -c ]
+case "$7" in
+    sandbox_workspace_write.writable_roots=*'/repository/.git"'*'/repository/.git/worktrees/worktree"'*) ;;
+    *) exit 2 ;;
+esac
+shift 7
+[ "$1" = -- ]
+shift
+exec "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut runner = Native {
+        codex,
+        executable: PathBuf::from(env!("CARGO_BIN_EXE_pg-host-readiness")),
+    };
+    runner
+        .probe(Probe::Commit, tmp.path(), "workspace-write")
+        .unwrap();
+    assert!(tmp.path().join("worktree/ready.txt").is_file());
 }

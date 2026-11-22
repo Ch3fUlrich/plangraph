@@ -249,3 +249,91 @@ def test_edit_missing_legacy_tier_defaults_to_standard(world_like, monkeypatch):
                                         {"done_criteria": "2 seats"})
     assert exc.value.code == "validation"
     assert "review_tier is 'standard'" in exc.value.msg
+
+
+def test_description_edit_reports_the_superseded_contract(world_like):
+    world = world_like
+    router = world.p("router")
+    world.store.create_items(router, [
+        defn("GOAL", ["R9"], kind="goal"),
+        defn("R9", title="Launch per spawn plan v6.4",
+             done_criteria="Verify the host counters in spawn plan v6.4"),
+    ])
+    key = "demo:R9"
+    result = world.store.edit_definition(router, key, {
+        "description": "Use one counter per spawn plan v9.",
+    })
+    assert result["warnings"] == [
+        "Superseded plan contract, update title and done_criteria together with description.",
+        "title: Launch per spawn plan v6.4",
+        "done_criteria: Verify the host counters in spawn plan v6.4",
+    ]
+    from plangraph.keeper.fmt import result_text
+    assert "title: Launch per spawn plan v6.4" in result_text("edit_definition", result)
+    assert "mixed plan versions" in world.store.show(router, key, brief=True)["stale"]
+    with pytest.raises(Refused, match="mixed plan versions in title, done_criteria") as refusal:
+        world.store.claim(world.p("l1main"), key)
+    assert refusal.value.code == "bad_state"
+    corrected = world.store.edit_definition(router, key, {
+        "description": "Use one counter per spawn plan v9.",
+        "title": "Launch per spawn plan v9",
+        "done_criteria": "Verify one counter as specified in spawn plan v9",
+    })
+    assert "warnings" not in corrected
+    assert "stale" not in world.store.show(router, key, brief=True)
+    assert world.store.claim(world.p("l1main"), key)["epoch"] == 1
+
+
+def test_explicitly_superseded_rule_blocks_claim(world_like):
+    world = world_like
+    router = world.p("router")
+    key = _create(world, done_criteria="Verify the routing change under rule 2.12b.")
+    result = world.store.edit_definition(router, key, {
+        "description": "Use rule 2.13, which supersedes rule 2.12b.",
+    })
+    assert result["warnings"][-1] == (
+        "done_criteria: Verify the routing change under rule 2.12b.")
+    assert world.store.show(router, key, brief=True)["stale"] == (
+        "superseded rule 2.12b in done_criteria")
+    with pytest.raises(Refused, match=r"superseded rule 2\.12b in done_criteria"):
+        world.store.claim(world.p("l1main"), key)
+
+
+@pytest.mark.parametrize("field,clause", [
+    ("done_criteria", "Receive one gpt-6.2-sol high review."),
+    ("description", "Review by agy-gemini-4-hydrogen-high."),
+    ("done_criteria", "Get a review from `omniroute/cx-gpt-6.2-sol`."),
+    ("done_criteria", "Approved by gpt-6.2-sol high."),
+    ("description", "Require gpt-6.2-sol approving the change."),
+    ("done_criteria", "Require a gpt-6.2-sol approver."),
+    ("description", "Use gpt-6.2-sol approvers."),
+    ("done_criteria", "Approvals from gpt-6.2-sol."),
+    ("description", "Signed off by gpt-6.2-sol."),
+    ("done_criteria", "Reviewer: gpt-6.2-sol high"),
+    ("description", "Verdict: gpt-6.2-sol"),
+    ("done_criteria", "Sign-off: gpt-6.2-sol"),
+    ("description", "Reviewer is gpt-6.2-sol"),
+    ("done_criteria", "Seat=gpt-6.2-sol"),
+    ("description", "Approver = `gpt-6.2-sol`"),
+])
+def test_define_and_edit_refuse_named_review_seats(world_like, field, clause):
+    fields = {field: clause}
+    with pytest.raises(Refused, match="a review seat outside every writer family"):
+        _create(world_like, **fields)
+    key = _create(world_like, done_criteria="Get a review from a seat outside every writer family.")
+    with pytest.raises(Refused, match="a review seat outside every writer family"):
+        world_like.store.edit_definition(world_like.p("router"), key, fields)
+
+
+@pytest.mark.parametrize("criteria", [
+    "Review report records tests on gpt-6.2-sol.",
+    "Review gpt-6.2-sol output.",
+    "Review of gpt-6.2-sol output.",
+    "Review: gpt-6.2-sol output.",
+    "Review of the model gpt-6.2-sol.",
+])
+def test_model_name_outside_review_clause_is_allowed(world_like, criteria):
+    key = _create(world_like,
+                  description="Compare gpt-6.2-sol settings. A seat outside every writer family reviews the result.",
+                  done_criteria=criteria)
+    world_like.store.edit_definition(world_like.p("router"), key, {"description": criteria})

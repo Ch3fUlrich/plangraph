@@ -218,9 +218,10 @@ def test_a_merge_in_another_scanned_repository_closes_the_item_and_the_repos_are
     assert state(env, "demo:C")["state"] == "done"
 
 
-def test_the_router_verb_also_finds_the_merge_in_another_scanned_repository(env):
+@pytest.mark.parametrize("explicit", [False, True])
+def test_the_router_verb_also_finds_the_merge_in_another_scanned_repository(env, explicit):
     set_states(env)
-    data = two_repos(env)
+    data = two_repos(env, scan=["demo"] if explicit else None)
     head = data.land("w1", "Plan-Item: demo:C", 400)
     env.store.record_run(env.p("spawner"), "demo:C", {
         "run_id": "fixture-seats", "phase": "finished", "rc": 0,
@@ -229,6 +230,12 @@ def test_the_router_verb_also_finds_the_merge_in_another_scanned_repository(env)
     path.write_text(f"| D-1 | demo | GO {head} |\n", encoding="utf-8")
     from plangraph.keeper.evidence_decisions import DecisionsAdapter
     env.store.ctx["decisions"] = DecisionsAdapter(path)
+    router = env.p("router")
+    if explicit:
+        with pytest.raises(Refused, match="merged_on_default_missing"):
+            env.store.close_merged(router, "demo:C", "D-1", ["google"])
+        assert state(env, "demo:C")["state"] == "in_review"
+        env.store.edit_definition(router, "demo:C", {"note": "Merge-Repo: data"})
     assert env.store.close_merged(env.p("router"), "demo:C", "D-1", ["google"])["state"] == "done"
 
 

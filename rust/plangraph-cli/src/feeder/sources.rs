@@ -1,7 +1,9 @@
-use super::adapters::{output, python, Env, Keeper, Transport};
+use super::adapters::{output, python, quota_snapshots, Env, Keeper, Transport};
 use super::*;
+use pg_worker_core::work_disks;
+use std::ffi::OsStr;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 pub(super) fn read_json(path: &Path) -> Result<Value, String> {
     serde_json::from_str(&fs::read_to_string(path).map_err(|_| "JSON file unreadable")?)
         .map_err(|_| "invalid JSON file".into())
@@ -186,17 +188,21 @@ fn apply_facts(
 pub(super) fn facts(
     env: &Env,
     repo: &Path,
-    path: &Path,
+    mut f: HostFacts,
     runs: &[Run],
     home: &Path,
     p: &Policy,
     local: Option<&str>,
 ) -> Result<HostFacts, String> {
-    let f: HostFacts =
-        serde_json::from_value(read_json(path)?).map_err(|_| "invalid host facts")?;
-    let mut cmd = python(env, repo);
-    cmd.args(["-c","import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
-    let rows = output(cmd).ok();
+    f.free_disk_bytes = disk_limit(
+        f.free_disk_bytes,
+        work_disks::worktree_disk_with(
+            env.get(work_disks::WORKTREE_MOUNTS).map(OsStr::new),
+            env.get("PLANGRAPH_DISK_MIN_FREE_PERCENT").map(OsStr::new),
+            work_disks::mounted_space,
+        ),
+    )?;
+    let rows = quota_snapshots(env, repo).ok();
     apply_facts(
         f,
         runs,
@@ -207,9 +213,78 @@ pub(super) fn facts(
         rows.as_ref(),
     )
 }
+
+fn disk_limit(
+    reported: u64,
+    work_disk: std::io::Result<Option<(PathBuf, pg_worker_core::disk_runtime::DiskSpace)>>,
+) -> Result<u64, String> {
+    let disk = work_disk.map_err(|error| error.to_string())?;
+    Ok(disk.map_or(reported, |(_, space)| reported.min(space.free)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feeder_reads_work_disk_settings_from_its_environment_file() {
+        let fixture = tempfile::tempdir().unwrap();
+        let mount = fixture.path().join("offline");
+        let env_file = fixture.path().join("plangraph.env");
+        let snapshot = fixture.path().join("facts.json");
+        fs::write(
+            &snapshot,
+            r#"{"host":"fixture","free_ram_bytes":100,"free_disk_bytes":100,"observed_at":0}"#,
+        )
+        .unwrap();
+        let sample = |percent| {
+            fs::write(
+                &env_file,
+                format!(
+                    "PLANGRAPH_WORKTREE_MOUNTS={}\nPLANGRAPH_DISK_MIN_FREE_PERCENT={percent}\n",
+                    mount.display()
+                ),
+            )
+            .unwrap();
+            let env = crate::env::load(&env_file, std::iter::empty()).unwrap();
+            facts(
+                &env,
+                fixture.path(),
+                serde_json::from_value(read_json(&snapshot).unwrap()).unwrap(),
+                &[],
+                fixture.path(),
+                &Policy::default(),
+                None,
+            )
+            .expect_err("configured work disk must constrain the host facts")
+        };
+        assert_eq!(sample("bad"), "disk_low: invalid free percentage");
+        let reason = sample("17");
+        assert!(reason.starts_with("disk_low: no work mount meets 5 GiB and 17% free"));
+        assert!(reason.contains(mount.to_str().unwrap()), "{reason}");
+    }
+
+    #[test]
+    fn feeder_disk_limit_uses_the_tighter_sample_and_propagates_a_mount_refusal() {
+        use pg_worker_core::disk_runtime::DiskSpace;
+        assert_eq!(disk_limit(100, Ok(None)).unwrap(), 100);
+        let sample = || {
+            Ok(Some((
+                PathBuf::from("fixture"),
+                DiskSpace {
+                    free: 80,
+                    total: 200,
+                },
+            )))
+        };
+        assert_eq!(disk_limit(100, sample()).unwrap(), 80);
+        assert_eq!(disk_limit(50, sample()).unwrap(), 50);
+        let reason = "disk_low: no eligible work mount";
+        assert_eq!(
+            disk_limit(100, Err(std::io::Error::other(reason))).unwrap_err(),
+            reason
+        );
+    }
     #[test]
     fn card_identity_and_unknown_scope_only_consume_their_host_slot() {
         let data = json!({"runs":[

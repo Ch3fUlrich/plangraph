@@ -23,3 +23,18 @@ actual stale refusal and current launch path. That source is absent from this
 plangraph checkout. The CLI fixture tests prove command behavior, not launcher
 integration. Session launch and external package-worktree coverage remain as
 documented in `docs/SPAWNER.md`.
+
+## Batch 76 routing work
+
+- `SKIPPED plangraph:LE-RESTART-PROMPT-CARRIES-OLDER-HANDOFF`. The fleet
+  launcher and its `resume-digest` consumer live in the routing data
+  repository. The similarly named Plangraph CLI command reports watcher
+  outcomes. The newest-handoff prompt and `PROMPT-STALE` checks belong in the
+  routing launcher and consumer.
+- `SKIPPED plangraph:LE-BATCH-PACKS-UNSLICED-OR-GO-HELD-ITEMS`. The
+  plan-order batch builder and its telemetry writer live in the routing data
+  repository. Item classification and skip-rate recording belong there.
+- `SKIPPED plangraph:LE-ITEM-FIELDS-KEEP-SUPERSEDED-CONTRACT` for batch
+  packaging. This checkout implements the keeper edit warning and stale claim
+  check. The routing data repository owns the plan-order preflight that must
+  reject stale keeper results and send the reason to plan-roadmap before launch.

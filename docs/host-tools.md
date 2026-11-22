@@ -1,13 +1,28 @@
 # Rust host tools: disk hygiene
 
+`host-sync --check-protoc` compiles a probe that imports
+`google/protobuf/field_mask.proto` and prints its include status. It uses
+`PROTOC` and `PROTOC_INCLUDE` when configured.
+
+`host-sync --install-wsl-guard POLICY HOST` installs the WSL guard system units
+and writes the configured floor for hosts with Windows memory placement.
+See [the WSL rollout notes](operations/worker-disks.md#wsl-cache-guard).
+
+NOTE Host-sync sessions. Add `host-sync --check-protoc` to the host setup check
+and record its output on all three workers. On the affected worker, install the
+well-known include files that match its system protoc and repeat the check.
+Temporal builds use the SDK's vendored descriptor compiler. Verify the worker
+build during the Dell push-gate probe with its normal shared Cargo target.
+
 Build `pg-disk-hygiene` with `cd rust && cargo build -p pg-worker-core --bin
 pg-disk-hygiene --bin pg-process-cwds --release`, using the environment's shared `CARGO_TARGET_DIR`.
 
 `pg-disk-hygiene --repo PATH --root WORKTREES --pins PINS.json --dry-run`
-reports an alarm below 5 GiB available. Below 10 GB available, `--apply`
+reports an alarm at 75% used or below 5 GiB available. At 80% used or below
+10 GB available, `--apply`
 reclaims ignored `target/`, `rust/target/`, `node_modules/`, and nested
 `__pycache__/` / `.pytest_cache/` in registered clean worktrees
-idle over six hours. It never removes worktrees or tracked source. Git probe
+idle over 24 hours. It never removes worktrees or tracked source. Git probe
 failures skip that tree. Freed bytes count only removed rebuildable files.
 The main checkout, locked trees, pinned paths, `plangraph-md-sync`, keeper
 `live-*` paths, active runs and process working directories are protected.
@@ -21,6 +36,23 @@ build process running and a nonblocking exclusive lease on the sibling
 `<target>.plangraph-lock` file. Spawner runs hold shared leases on that same
 file; cleanup skips a leased root and holds its exclusive lease through scanning
 and deletion. The lock file stays in place after release.
+
+On approved x86-64 Linux and WSL hosts, install the pinned compiler cache with
+`plangraph setup apply --component sccache`. The installer checks both the
+release archive and the executable before replacing `~/.local/bin/sccache`.
+Inspect the installed binary with `plangraph setup check --component sccache`.
+
+Spawner builds, pre-push preflight, Git hook installation and CI use
+`~/.cache/plangraph/sccache` for compiled objects. Set
+`PLANGRAPH_SCCACHE_CACHE_SIZE` in the host's build environment to change the
+default `20G` cap. Start a fresh sccache server after changing the cap.
+Self-hosted CI uses the host's installed binary through the shared Rust setup
+action. Each runner without sccache uses the same missing-wrapper fallback.
+`SCCACHE_BASEDIRS` can list the absolute roots of equivalent checkouts before
+server startup to normalize paths in cache keys.
+`sccache --show-stats` shows hits, misses and cache usage. With sccache absent,
+the build environment warns once and Cargo continues without a wrapper.
+
 The shared target cap defaults to 10 GB per root. Under disk pressure or above
 that cap, cleanup removes oldest idle incremental sessions and stale
 `build/<crate>-<hash>` variants, keeping the newest compile unit and run unit per crate and profile.
@@ -49,9 +81,14 @@ Collection failures write `alarm:true` and `error` and exit nonzero, replacing
 stale healthy reports. `--state DIR` overrides the destination. An unwritable
 state directory is a hard error. `--apply --dry-run` is refused.
 
-Install the service and 15-minute timer under `~/.config/systemd/user/` and the
+Install the service and 30-minute timer under `~/.config/systemd/user/` and the
 binary under `~/.local/bin`. Set `PG_REPO`, `PG_WORKTREES`, `PG_PINS` in
 `~/.config/plangraph/disk-hygiene.env`. Review dry-run output before enabling.
+Repeat `--root` for additional worktree roots. Configured worktree mounts and
+existing state worktree roots are included automatically. Each filesystem is
+compared with its own thresholds. An unavailable root raises the alarm while
+the other filesystems are still swept. Set `PLANGRAPH_SPAWN_STATE` when records live
+outside the default state directory.
 Threshold options are `--alarm-free-bytes` (default `5368709120`, 5 GiB),
 `--cleanup-free-bytes` (default `10000000000`) and `--shared-target-cap-bytes`
 (default `10000000000`); options take byte counts (10 GB is decimal). Alarm must be positive and no
@@ -160,15 +197,16 @@ no timer or live-host action is installed by this slice.
 
 Run `pg-host-readiness --project PATH --registry FILE --state DIR` on each
 candidate. The registry's `self` entry sets the recorded host. The default
-sandbox is `danger-full-access`, matching the native Codex writer. The tool
+sandbox is `workspace-write`, matching the native Codex writer. The tool
 checks configuration trust, login, CLI version, and sandbox startup and commit
-in a temporary Git worktree without a model call. Use `--scratch-root` for a
+in a temporary linked Git worktree with both Git directories named as writable
+roots. The probes make no model call. Use `--scratch-root` for a
 filesystem matching the intended worktree. Hooks and plugins whose trust cannot
 be established cause a failed check.
 
 The tool prints `READY` on success and `MISSING` with the check failure on exit
 1. It writes both results to
-`DIR/package-readiness/HOST/danger-full-access.json`. Make each host's latest
+`DIR/package-readiness/HOST/workspace-write.json`. Make each host's latest
 record available under the placement command's state directory. `pg-package-host`
 placement refuses missing, failed, future-dated, and older-than-120-second
 package-readiness records and records for a different host or sandbox. Remote capacity samples come from the

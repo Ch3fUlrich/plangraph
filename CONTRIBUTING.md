@@ -28,7 +28,7 @@ builds `pg-spawnd` from the selected checkout before pytest starts.
 
 The Rust step bound is `max(600, planned test binaries x 15)` seconds times `1 + load/cores`, capped at 3600 (`rust_bound`), and a timeout names the test binary that was running. `CARGO_BUILD_JOBS` follows the free cores (cores minus load, floor 4) unless it is set. `cargo test` runs with `--no-fail-fast`, the Rust family runs every cargo check, and the Python tests still run after a Rust failure, so one pass lists every failing Rust test (`failing test:` lines) and every Python failure. The affected-test selector takes `--parts-union` (preflight passes it): a pushed batch or train selects the tests of every part's changed files. Standalone preflight uses the train and base first-parent histories to find the range. Changed or added `tests/test_keeper_*.py` files also run with `PG_KEEPER_BACKEND=postgres` on a throwaway local cluster (`PG_BIN` or `PATH` with `initdb`, `pg_ctl`, `createdb`; an existing `PG_DSN` is used as is); a host without those binaries prints `keeper-postgres: SKIPPED` and CI is then the first Postgres run. Keeper tests insert many rows with `World.execute_many`; `tests/test_keeper_tests_lint.py` refuses `w.conn.executemany`.
 
-The pre-push hook has two explicit paths and runs no test on either (`preflight --lane`: scrub, commit policy, file size, new-code language, changelog, skill rule lint, `cargo fmt --check`); the affected tests run once, in CI. A lane push is a branch head outside `main` and `phase/*`. Phase pushes keep file-only affected preflight. A direct push to `main` or a tag keeps the full preflight. A push to `refs/heads/land/train-*` is a train: the hook reads the manifest from `PLANGRAPH_TRAIN_MANIFEST` (one full part head per line, merge order) and refuses the push unless the first-parent chain above the merge-base with `origin/main` is exactly one two-parent merge per manifest head, in order (a parent outside the manifest, a changed order or an extra commit is refused); the open-pull-request parent check, which rejects a train's parents, is skipped for it. Scrub and commit policy run on both.
+The pre-push hook has two explicit paths and runs no test on either (`preflight --lane`: scrub, commit policy, file size, new-code language, changelog, skill rule lint, `cargo fmt --check`); the affected tests run once, in CI. A lane push is a branch head outside `main` and `phase/*`. Phase pushes keep file-only affected preflight. A direct push to `main` or a tag keeps the full preflight. A push to `refs/heads/land/train-*` is a train: the hook reads the manifest from `PLANGRAPH_TRAIN_MANIFEST` (one full part head per line, merge order) and refuses the push unless the first-parent chain above the merge-base with `origin/main` is exactly one two-parent merge per manifest head, in order (a parent outside the manifest, a changed order or an extra commit is refused); its first push uses the manifest, and subsequent pushes also check the existing PR's folded parts against foreign open PRs. Scrub and commit policy run on both.
 
 A part (a batch waiting for a train) enters a train only after its own head passed: the seconds-fast checks (`preflight --lane`), and the entry set (`tools/ci_select.py entry-set --base B --head H --run`: suites from `select`, Rust crates and their reverse dependencies from preflight, Python tests from the affected selector, whose unknown-input fallback is the full suite, rule 3.9); a change that selects Rust CI, a Python-only quota change included, also needs the native Windows run (`windows` in the plan). The latest completed CI attempt on the head must not be red, and a red attempt followed by a green one clears only with a recorded flake disposition (rule 3.46; `attempt_problems`, `ready_problems`). The workflow separates the two roles: a pull request labelled `land-part` runs the affected-only mode, even on a `batch/*` head or with a stray `ci-full` label; a `land/train-*` head always runs the full suite once. `merge_batch push --ci-run` (and `tools/ci_select.py part-cost`) appends, per merged part from the Tests run matching its PR number and head and once for the candidate, queue seconds, run seconds and cold/warm runner to `part-cost.jsonl` in the telemetry directory. `pg-policy --part-entry BASE HEAD PARENT|- [OTHER...]` refuses a part that merges foreign history (`imported_history`), is built on another open head without naming it (`undeclared_dependency`) or shares commits outside the base with one (`shared_history`); `merge_batch build` runs that predicate on every part against all open pull request heads, and the readiness verdict from each part's own CI on its head (ci-gate stands for the fast checks, entry suites and Windows job; a rerun that turned green needs the `flake-dispositioned` label); a refusal stops the build unless `--force-set`, which logs it. `.gitattributes`, at any depth, is a gate path that needs a `Gate-Edit` trailer.
 
@@ -98,7 +98,11 @@ refreshes an existing run only on the same head; a new head clears it.
 reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
 non-green or missing CI, and workflow edits whose touching commits lack a
 `Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution (a main-into-lane merge that resolves a workflow conflict carries the trailer in its own message: the commit gate refuses it at push and in CI, and `build` refuses a PR head with such a merge before it builds). The batch key is explicit; part Plan-Items do not
-stand in for the batch's PLAN key. `tools/merge_batch.py land` always passes a merge commit `--subject` ending with `(#N)` for the batch PR and refuses a custom `--subject` without `(#N)`. After land reports included parts as merged,
+stand in for the batch's PLAN key. `tools/merge_batch.py land` always passes a merge commit `--subject` ending with `(#N)` for the batch PR and refuses a custom `--subject` without `(#N)`. When the keeper schema advances, copy the
+standalone `MIGRATION <version>` field into the GO statement for the exact PR
+head and pass that row with `land --go-row PATH`. See [keeper migrations](docs/keeper-postgres.md#schema-and-migrations).
+
+After land reports included parts as merged,
 cleanup invokes `pg-worktree-sweep --apply --delete-remote` with exact saved
 SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
 `PG_PINS` and `PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"`; authority failures
@@ -146,6 +150,10 @@ python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist
 python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR / L2
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
+
+`cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test benchmark_rows`
+checks the catalog schema and strict route admission. Both the schema and the
+legacy provenance fixture select Rust CI checks.
 
 The selector follows static Python module launches (`-m`) and calls through
 `tools/*.sh`, including imports in shell Python heredocs. Deleted Python modules
@@ -240,7 +248,7 @@ headers and extra columns are allowed. Missing or unreadable authority refuses t
 exception. Explicit pin flags still refuse, and the served model must be witnessed
 and the completion HEAD bound (D-5874). Rust regressions:
 `cargo test --manifest-path rust/Cargo.toml -p pg-policy --test seat_operator_order`.
-Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Historical records without a proven admission binding can be inspected and are surfaced for routing recovery before delivery. Card/environment identity validation never infers a target from prompt text. For an opencode seat, the review text is the text parts after the last step-start event of the JSON `live.log`, plain-text logs are used unchanged, and the `VERDICT` line must still be the last line (F8, D-3420). Lifecycle events decide event mode: at least one JSON object with `type` equal to `step_start` or `step_finish` and an object-valued `part` is required; `text`/`tool_use` lines, quoted JSON and other typed objects alone leave a plain-text log unchanged. `codex` names the openai family in both family tables (`tools/seat_verdict.py` and `src/plangraph/review/family.py`, kept equal by a test).
+Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Historical records without a proven admission binding can be inspected and are surfaced for routing recovery before delivery. A review record with a checkout `head_sha` can use the head-bound record path even when response artifacts are present. Card/environment identity validation never infers a target from prompt text. For an opencode seat, the review text is the text parts after the last step-start event of the JSON `live.log`, plain-text logs are used unchanged, and the `VERDICT` line must still be the last line (F8, D-3420). Lifecycle events decide event mode: at least one JSON object with `type` equal to `step_start` or `step_finish` and an object-valued `part` is required; `text`/`tool_use` lines, quoted JSON and other typed objects alone leave a plain-text log unchanged. `codex` names the openai family in both family tables (`tools/seat_verdict.py` and `src/plangraph/review/family.py`, kept equal by a test).
 The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
 When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
 
@@ -508,8 +516,8 @@ skip `PostToolUse` threshold guidance and do not disable `PreToolUse` denial. Te
 isolate state and mock the kick. The HANDOFF-NOW and HARD-CAP lines carry the absolute
 command `python3 <guard path> ready <handoff>` (`ready_command`); `ctx_guard_session.py`
 has no ready step and exits 2 naming that command when called with `ready` or `status`.
-`tools/hooks/install_hooks.sh` only copies `*.py` files and registers nothing in
-Claude Code settings (`setup/manifest.toml` defers hook merging); register the
+`tools/hooks/install_hooks.sh` copies the Python hooks by default. The installer
+leaves harness settings to the operator. Register the
 guarded missing-file wrapper on both `PreToolUse` (with an all-tools matcher) and
 `PostToolUse` (using either `context_guard.py` or `ctx_guard_session.py`, not both):
 
@@ -535,6 +543,10 @@ before the cursor are not detected (transcripts are append-only), and records ov
 The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
 existing watchdog binaries. The default `tools/hooks/install_hooks.sh` mode
 copies Python hooks; its `--git` mode installs the Rust Git hook.
+Use `--session-rust` to install the session guard binary and include it in
+`SHA256SUMS`. Register the Stop and PreToolUse commands separately using
+`tools/hooks/install_hooks.sh --help`. The events and inputs are documented in
+[Rust session guards](docs/rust-hooks.md#session-guards).
 Build, registration examples, injectable state paths and the polling-recognition
 boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
 Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
@@ -589,7 +601,7 @@ Rust test builds, including nested admission checks and Python placement fixture
 Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.
 
 Install Git message validation with `tools/hooks/install_hooks.sh --git`
-(using the shared host `CARGO_TARGET_DIR`). Non-merge commits require a strict
+(using the shared host `CARGO_TARGET_DIR` and [compiler cache](docs/host-tools.md)). Non-merge commits require a strict
 `Writer:` or `Hand-Edit:` trailer. See `docs/rust-hooks.md`.
 
 Writer handoffs named `STATUS-*.txt` are ignored at every depth. Keep them
@@ -607,6 +619,9 @@ The pre-push hook checks commit trailers on `origin/main..head` before scrub and
 preflight. It queries open PR heads and checks
 foreign merges when gh/network access is available; offline pushes still run the
 local trailer gate and explicitly report the skipped open-PR check.
+For a landing train re-push, keep the folded parts' head SHAs in the train PR's
+part table. `merge_batch push` uses the batch's saved part heads for the first
+push, before the batch PR exists. See [the commit gate](docs/ci-gate.md).
 
 Review prompt builders use `src/plangraph/review/review_brief.md` through
 `plangraph.review.prompt.render_brief`. Supply item context explicitly (the judge
@@ -654,6 +669,12 @@ the existing CI Temporal wrapper and require the Temporal CLI and protobuf tools
 Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
 Each step and the total report wall seconds; exceeding 300 seconds emits a
 warning and returns failure after checks, without interrupting or weakening them.
+Affected tests and base replays run with context, session and Python path
+overrides removed. To record a known base failure, use one `Fails-at-Base:`
+commit trailer per pytest node, with the pinned base SHA followed by the node
+ID. Fast checks print the replay command and its output from a disposable
+checkout. A passing or unreproduced base failure rejects the claim, and the
+affected tests must still pass on the proposed head.
 This is the cheap local projection of CI; hosted browser, Postgres and Windows
 runners remain CI responsibilities. A typical build host timing measurement is still
 required before claiming that host's five-minute done criterion.
@@ -680,8 +701,12 @@ denies:
   never through the Bash tool). `claude -p`/`--print`, `claude --bg --resume
   <uuid|hex>` / `-r <uuid|hex>` without `-n`/`--name`, `claude --resume`,
   `claude agents`, and `claude stop <id>` stay allowed.
+- A while or until condition where a literal `pgrep -f` pattern can match the
+  shell running the loop. Wait on the PID or unit, or put the original command
+  in the Bash tool's background mode.
 - Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
   (see `docs/TESTING.md`).
+- Sleep loops with a literal `pgrep -f` condition that can match their own shell command line.
 
 ## Skill lint (`tools/skill-rules.py`)
 

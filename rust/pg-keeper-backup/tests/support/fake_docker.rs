@@ -50,10 +50,15 @@ fn main() {
             }
         }
         "pg_restore" => {
-            // Loading an archive puts its seq into the scratch state.
             let text = String::from_utf8_lossy(archive.as_deref().unwrap_or_default()).into_owned();
             let seq = text.split("seq=").nth(1).unwrap_or("0").trim().to_owned();
-            std::fs::write(scratch_state_path(), format!("43|{seq}\n")).unwrap();
+            if tool.iter().any(|arg| arg == "--data-only") {
+                print!(
+                    "COPY keeper.events (payload, seq) FROM stdin;\nrow\t{seq}\nother\t1\n\\.\n"
+                );
+            } else {
+                std::fs::write(scratch_state_path(), format!("43|{seq}\n")).unwrap();
+            }
         }
         "psql" if sql.starts_with("CREATE DATABASE") => {
             if std::env::var("FAKE_DOCKER_COLLIDE").is_ok() {

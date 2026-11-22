@@ -332,10 +332,11 @@ def test_push_takes_over_a_batch_pr_a_dead_push_created(env):
     assert "| #1 |" in env.load()["prs"]["100"]["body"]
 
 
-def go_ready(env, *, seats=True):
-    env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
+def go_ready(env, *, seats=True, first_files=None):
+    env.branch_pr(1, first_files or {"a.txt": "a\n"}, item="ITEM-A")
     env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
-    assert env.run("build", "--name", "g1", "--prs", "1,2", "--plan", "plangraph:BATCH").returncode == 0
+    prs = "1" if first_files is not None else "1,2"
+    assert env.run("build", "--name", "g1", "--prs", prs, "--plan", "plangraph:BATCH").returncode == 0
     assert env.run("push", "--name", "g1").returncode == 0
     st = json.loads(env.state_file("g1").read_text())
     for rec in st["merged"]:
@@ -405,6 +406,53 @@ def test_go_req_from_recorded_evidence(env):
         assert f"#{rec['pr']} sha={rec['head']} review={run} verdict=ACCEPT" in result.stdout
     assert "CI run 42 state=completed conclusion=success" in result.stdout
     assert result.stdout.endswith("PLAN plangraph:BATCH conforms=yes deviations=none\n")
+
+
+def test_keeper_migration_needs_a_head_bound_go_marker(env):
+    schema = "src/plangraph/keeper/schema_pg.py"
+    migrations = "MIGRATIONS = (Migration(1, 'baseline', DDL),{} )\nLATEST = MIGRATIONS[-1].version\n"
+    env.seed({schema: migrations.format("")})
+    st = go_ready(env, first_files={schema: migrations.format(" Migration(2, 'add table', NEW_DDL),")})
+    head = st["head"]
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 0, result.stderr
+    assert "; MIGRATION 2;" in result.stdout
+
+    approval = env.tmp / "approval.txt"
+    approval.write_text(f"HEAD: {head}\nVERDICT: PASS\n")
+    env.load()["checks"]["100"] = [{"name": "ci-gate", "bucket": "pass"}]
+    env.save()
+    refused = land(env, approval, name="g1")
+    assert refused.returncode == 1 and "must include MIGRATION 2" in refused.stderr
+    assert not env.calls("pr", "merge")
+    row = env.tmp / "go-row.txt"
+    for text in (
+        f"GO owner/proj PR #100 GO-HEAD {head}; MIGRATION 1",
+        f"GO owner/proj PR #100 GO-HEAD {'f' * 40}; MIGRATION 2",
+        f"NO GO owner/proj PR #100 GO-HEAD {head}; MIGRATION 2",
+        f"GO owner/proj PR #100 GO-HEAD {head}\nMIGRATION 2",
+    ):
+        row.write_text(text)
+        refused = land(env, approval, "--go-row", str(row), name="g1")
+        assert refused.returncode == 1 and f"MIGRATION 2" in refused.stderr
+        assert not env.calls("pr", "merge")
+    row.write_text(f"| D-123 | proj | (15:46Z, date -u) GO #100 proj at GO-HEAD {head}; MIGRATION 2 | ROUTER |\n")
+    accepted = land(env, approval, "--go-row", str(row), name="g1")
+    assert accepted.returncode == 0, accepted.stderr
+    assert len(env.calls("pr", "merge")) == 1
+
+
+def test_land_refuses_legacy_batch_without_a_saved_base(env):
+    approval = pushed(env, prs=(1, 2))
+    path = env.state_file("l1")
+    state = json.loads(path.read_text())
+    del state["base_head"]
+    path.write_text(json.dumps(state))
+    refused = land(env, approval)
+    assert refused.returncode == 1
+    assert "no saved base head" in refused.stderr
+    assert "Traceback" not in refused.stderr
+    assert not env.calls("pr", "merge")
 
 
 @pytest.mark.parametrize("case", ["missing", "wrong_head", "reject", "deleted", "changed"])

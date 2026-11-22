@@ -32,6 +32,24 @@ fn setup_cli_uses_only_the_selected_temporary_home() {
     assert!(values.contains("PG_LEASE_S=7200"));
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn setup_sccache_plans_the_pinned_executable_without_writing_home() {
+    let root = tempfile::tempdir().unwrap();
+    let args = ["setup", "apply", "--component", "sccache", "--dry-run"];
+    let output = cli(root.path(), &args);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "sccache .local/bin/sccache installed manifest\n"
+    );
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
 #[test]
 fn env_override_and_userprofile_fallback_refuse_credentials_without_echoing_them() {
     let root = tempfile::tempdir().unwrap();
@@ -93,4 +111,181 @@ fn feeder_dry_run_error_and_missing_once_write_nothing() {
     assert_eq!(row["decision"], "refused");
     assert_eq!(row["dry_run"], true);
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn keeper_restart_checks_the_candidate_schema_before_requesting_restart() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("candidate");
+    fs::create_dir_all(checkout.join("src/plangraph/keeper")).unwrap();
+    fs::write(checkout.join("src/plangraph/keeper/cli.py"), "").unwrap();
+    let interpreter = checkout.join("venv/bin/keeper-python");
+    fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    for (path, script) in [
+        (root.path().join("python3"), "#!/bin/sh\nexit 97\n"),
+        (
+            interpreter.clone(),
+            r#"#!/bin/sh
+printf '%s\n' "$0|$UNIT_SETTING|$*" >> "$TRACE"
+for arg do
+  if [ "$arg" = "$FAIL_STEP" ]; then exit 4; fi
+done
+"#,
+        ),
+        (
+            root.path().join("systemctl"),
+            r#"#!/bin/sh
+if [ "$2" = show ]; then printf '%s\n' "$UNIT_CHECKOUT"; exit; fi
+printf '%s\n' "$*" >> "$TRACE"
+[ "$2" != "$FAIL_STEP" ]
+"#,
+        ),
+        (
+            root.path().join("busctl"),
+            r#"#!/bin/sh
+case "$3" in
+  call) printf '%s\n' inspect >> "$TRACE"; /bin/cat "$FIXTURE/unit" ;;
+  get-property) shift 6; for property do /bin/cat "$FIXTURE/$property"; done ;;
+  *) exit 99 ;;
+esac
+"#,
+        ),
+        (
+            root.path().join("systemd-run"),
+            r#"#!/bin/sh
+while [ "$1" != -- ]; do
+  case "$1" in
+    --property=EnvironmentFile=-*) [ "${1#*=EnvironmentFile=-}" = "$EXTRA_ENV" ] || exit 9; extra=yes ;;
+    --property=EnvironmentFile=*) /bin/grep -Fx 'UNIT_SETTING="configured value"' "${1#*=EnvironmentFile=}" >/dev/null || exit 8; direct=yes ;;
+    '--property=UnsetEnvironment="STALE"') unset_arg=yes ;;
+  esac
+  shift
+done
+[ "$direct:$extra:$unset_arg" = yes:yes:yes ] || exit 7
+shift
+UNIT_SETTING='configured value' exec "$@"
+"#,
+        ),
+    ] {
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let config = root.path().join("keeper.json");
+    let dsn_file = root.path().join("migration.dsn");
+    for path in [&config, &dsn_file] {
+        fs::write(path, "fixture").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let extra_env = root.path().join("runtime environment");
+    for (file, data) in [
+        (
+            "unit",
+            serde_json::json!(["/org/freedesktop/systemd1/unit/keeper"]),
+        ),
+        (
+            "ExecStartEx",
+            serde_json::json!([[
+                interpreter,
+                [
+                    interpreter.to_str().unwrap(),
+                    "-m",
+                    "plangraph.keeper.daemon",
+                    "--config",
+                    config.to_str().unwrap()
+                ],
+                [],
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ]]),
+        ),
+        (
+            "Environment",
+            serde_json::json!(["UNIT_SETTING=configured value"]),
+        ),
+        ("EnvironmentFiles", serde_json::json!([[extra_env, true]])),
+        ("UnsetEnvironment", serde_json::json!(["STALE"])),
+    ] {
+        fs::write(
+            root.path().join(file),
+            format!("{}\n", serde_json::json!({"data": data})),
+        )
+        .unwrap();
+    }
+    let trace = root.path().join("trace");
+    let migrate = format!(
+        "{}|configured value|-m plangraph.keeper.cli --config {} admin migrate --dsn-file {}",
+        interpreter.display(),
+        config.display(),
+        dsn_file.display()
+    );
+    let check = format!(
+        "{}|configured value|-m plangraph.keeper.cli --config {} admin check-schema",
+        interpreter.display(),
+        config.display()
+    );
+    let reload = "--user daemon-reload";
+    for (failure, unit_checkout, expected) in [
+        ("daemon-reload", checkout.as_path(), vec![reload]),
+        ("mismatch", root.path(), vec![reload, "inspect"]),
+        (
+            "migrate",
+            checkout.as_path(),
+            vec![reload, "inspect", migrate.as_str()],
+        ),
+        (
+            "check-schema",
+            checkout.as_path(),
+            vec![reload, "inspect", migrate.as_str(), check.as_str()],
+        ),
+        (
+            "",
+            checkout.as_path(),
+            vec![
+                reload,
+                "inspect",
+                migrate.as_str(),
+                check.as_str(),
+                "--user restart plangraph-keeper.service",
+            ],
+        ),
+    ] {
+        fs::write(
+            root.path().join("WorkingDirectory"),
+            format!("{}\n", serde_json::json!({"data": unit_checkout})),
+        )
+        .unwrap();
+        fs::write(&trace, "").unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .env_clear()
+            .env("PATH", root.path())
+            .env("TRACE", &trace)
+            .env("FAIL_STEP", failure)
+            .env("UNIT_CHECKOUT", unit_checkout)
+            .env("FIXTURE", root.path())
+            .env("EXTRA_ENV", &extra_env)
+            .arg("keeper-restart")
+            .arg(&checkout)
+            .arg(&config)
+            .arg(&dsn_file)
+            .output()
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&trace)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            expected,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.status.success(), failure.is_empty());
+    }
 }

@@ -198,6 +198,7 @@ def test_explicit_document_review(request_data, tmp_path, monkeypatch, with_diff
             SimpleNamespace(stdout='plain\n', stderr='', returncode=0) if 'cat-file' in args or 'merge-base' in args
             else real_run(args, **kw))
         request_data['card']['diff_ref'] = dict(repo=str(tmp_path), base='HEAD~1', head='HEAD')
+        monkeypatch.setattr('plangraph.planner.seats.head_writer_families', lambda card: [])   # tmp_path is no repository
     result = spec.build(request_data)
     service = spec.SpawnService(state=request_data['state'])
     service.runner.default_cwd = request_data['cwd']
@@ -463,3 +464,63 @@ def test_launch_refuses_same_family_deepseek(request_data):
     code, out, err = invoke(request_data)
     assert code == 2, (out, err)
     assert 'review seat is a writer family' in err
+
+
+def head_card(tmp_path, monkeypatch, writer_line):
+    import subprocess
+    monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', '/dev/null')
+    repo = tmp_path / 'headrepo'
+    repo.mkdir()
+    ident = ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid']
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+    git('init', '-q')
+    (repo / 'f').write_text('a\n')
+    git('add', 'f')
+    git(*ident, 'commit', '-qm', 'base')
+    base = git('rev-parse', 'HEAD')
+    (repo / 'f').write_text('b\n')
+    git(*ident, 'commit', '-qam', f'change\n\nWriter: {writer_line}')
+    return {'diff_ref': {'repo': str(repo), 'base': base, 'head': git('rev-parse', 'HEAD')}}
+
+
+def test_launch_headers_carry_the_head_writer_trailer_family(request_data, monkeypatch, tmp_path):
+    from plangraph.spawner import runner
+    captured = []
+    original = runner.build_child_env
+    def capture(extra_env, *, headers):
+        captured.append(headers)
+        return original(extra_env, headers=headers)
+    monkeypatch.setattr(runner, 'build_child_env', capture)
+    request_data['card'] = head_card(tmp_path, monkeypatch, 'gemini-4-hydrogen-high run-1 (writer)')
+    request_data['writer_families'] = ['openai']
+    request_data['leg'] = {'id': 'omniroute-deepseek-flash'}
+    code, out, err = invoke(request_data)
+    assert code == 0, (out, err)
+    assert set(captured[0]['X-OmniRoute-Exclude-Family'].split(',')) == {'gpt', 'gemini'}
+
+
+def test_launch_works_with_only_the_head_trailer_and_refuses_its_own_family(request_data, monkeypatch, tmp_path):
+    request_data['card'] = head_card(tmp_path, monkeypatch, 'deepseek run-1 (writer)')
+    request_data['writer_families'] = []
+    request_data['leg'] = {'id': 'omniroute-deepseek-flash'}
+    code, out, err = invoke(request_data)
+    assert code == 2 and 'review seat is a writer family' in err, (out, err)
+    request_data['leg'] = {'id': 'qodercli-qwen3.8-flash'}
+    code, out, err = invoke(request_data)
+    assert code == 0, (out, err)
+
+
+def test_launch_refuses_an_unreadable_head(request_data, monkeypatch, tmp_path):
+    card = head_card(tmp_path, monkeypatch, 'gemini-4-hydrogen-high run-1 (writer)')
+    card['diff_ref']['head'] = '0' * 40
+    request_data['card'] = card
+    code, out, err = invoke(request_data)
+    assert code == 2 and err.startswith('writer_family:') and 'cannot read the Writer trailer' in err, (out, err)
+
+
+def test_launch_accepts_a_registered_repository_diff_ref(request_data):
+    request_data['card'] = {'diff_ref': {'repo_id': 'demo', 'base_sha': 'a' * 40, 'head_sha': 'b' * 40}}
+    code, out, err = invoke(request_data)
+    assert code == 0, (out, err)

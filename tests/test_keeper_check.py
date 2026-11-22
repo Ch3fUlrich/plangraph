@@ -250,3 +250,41 @@ def test_check_lists_gates_with_cancelled_dependencies(json_mode, capsys):
         assert "CANCELLED-GATE-DEP demo:G -> demo:X" in out
         assert "CANCELLED-GATE-DEP demo:GOAL -> demo:X" in out
         assert "CANCELLED-GATE-DEP demo:WORK" not in out
+
+
+@pytest.mark.parametrize("clause", [
+    "Receive one gpt-6.2-sol high review.",
+    "Approved by gpt-6.2-sol high.",
+    "Require gpt-6.2-sol approving the change.",
+    "Require a gpt-6.2-sol approver.",
+    "Use gpt-6.2-sol approvers.",
+    "Approvals from gpt-6.2-sol.",
+    "Signed off by gpt-6.2-sol.",
+    "Reviewer: gpt-6.2-sol high",
+    "Verdict: gpt-6.2-sol",
+    "Sign-off: gpt-6.2-sol",
+    "Reviewer is gpt-6.2-sol",
+    "Seat=gpt-6.2-sol",
+    "Approver = `gpt-6.2-sol`",
+])
+def test_check_lists_open_items_with_named_review_models(world, tmp_path, monkeypatch, capsys, clause):
+    world.store.import_items(world.p("router"), [
+        defn("GOAL", ["A", "B"], kind="goal"),
+        defn("A", done_criteria=clause),
+        defn("B", done_criteria="Review of gpt-6.2-sol output."),
+    ])
+    assert run_main(world, tmp_path, monkeypatch, ["--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["named_review_models"] == [
+        {"key": "demo:A", "field": "done_criteria", "model": "gpt-6.2-sol"},
+    ]
+
+
+@pytest.mark.parametrize("args,code", [((), 0), (("--strict",), 1)])
+def test_check_text_and_strict_report_model_pin(world, tmp_path, monkeypatch, capsys, args, code):
+    world.store.import_items(world.p("router"), [
+        defn("GOAL", ["A"], kind="goal"),
+        defn("A", done_criteria="Receive one gpt-6.2-sol high review."),
+    ])
+    assert run_main(world, tmp_path, monkeypatch, args) == code
+    assert "NAMED-REVIEW-MODEL demo:A done_criteria gpt-6.2-sol" in capsys.readouterr().out.splitlines()

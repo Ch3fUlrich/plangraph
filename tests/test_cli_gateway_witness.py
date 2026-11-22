@@ -361,7 +361,7 @@ def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path,
             tag = parse_qs(urlsplit(self.path).query).get('sessionTag', [''])[0]
             seen_tags.append(tag)
             body = json.dumps([{'sessionTag': tag, 'status': 200,
-                                'model': 'mimo-v2.6-pro', 'provider': 'xiaomi-mimo'}]).encode()
+                                'model': 'mimo-v2.6-pro', 'provider': 'xiaomi-mimo', 'finishReason': 'stop'}]).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
@@ -426,6 +426,7 @@ def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path,
         assert record['status'] == 'completed'
         assert record['served_family'] == 'mimo'
         assert record['served_model'] == 'mimo/mimo-v2.6-pro'
+        assert record['finish_reason'] == 'stop'
         assert record['served_witness_reason'] == 'gateway call log (sessionTag) response-side model'
         assert seen_tags
         mimo_cfg = json.loads(captured_cfg.read_text())['providers']['mimo']

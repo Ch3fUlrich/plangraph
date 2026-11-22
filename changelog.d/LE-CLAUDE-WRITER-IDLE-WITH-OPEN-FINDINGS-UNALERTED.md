@@ -1,0 +1,1 @@
+- Queue one alert for an idle writer with open review work or a missing status report, including recognition of the batch's `<NAME> DONE` report.

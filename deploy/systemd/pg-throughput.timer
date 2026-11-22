@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh throughput metrics five minutes after each UTC hour
+
+[Timer]
+OnCalendar=*-*-* *:05:00 UTC
+Persistent=true
+Unit=pg-throughput.service
+
+[Install]
+WantedBy=timers.target

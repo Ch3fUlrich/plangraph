@@ -57,6 +57,9 @@ _CLAUDE_BG_LAUNCHER_MSG = (
     "bash-guard: DENIED - sessions are launched only by the fleet launcher "
     "(spawner session_launch / fleet-launch), which allocates the name counter; "
     "send the launch request to routing (D-158).")
+_PGREP_WAIT_MSG = (
+    "bash-guard: DENIED - pgrep -f can match the wait loop's own command line. "
+    "Wait on the PID or unit, or run the original command with run_in_background=true.")
 _DEPTH_MSG = (
     "bash-guard: DENIED - shell -c / eval strings nested more than %d levels "
     "deep; the guard cannot scan that far and fails closed. Flatten the "
@@ -67,8 +70,6 @@ _SIZE_MSG = (
 _PARSE_MSG = (
     "bash-guard: DENIED - could not parse this command (%s); the guard fails "
     "closed. Simplify the quoting or pass the text from a file.")
-
-
 # ─── unquoted heredoc scanner ───────────────────────────────────────────
 
 def _has_unescaped_heredoc_injection(text):
@@ -227,9 +228,29 @@ def _shell_strings(words, k):
 
 # ─── per-command rules ────────────────────────────────────────────────
 
-def _check_simple(cmd, depth, placement_required):
+def _pgrep_matches_parent(args, command):
+    """A literal full-command pattern also matches the shell carrying it."""
+    full = False
+    for word in args[:-1]:
+        flag = word.text
+        if flag == "--":
+            break
+        if flag == "--full":
+            full = True
+        elif re.fullmatch(r"-[afcilnoqw]+", flag):
+            full |= "f" in flag
+        else:
+            return False
+    if not full or not args:
+        return False
+    pattern = args[-1].text
+    return bool(pattern) and pattern in command and not args[-1].live and not re.search(r"[\\^$*+?{}\[\]()|]", pattern)
+
+
+def _check_simple(cmd, depth, placement_required, pending_loop, command):
     pos = [w for w in cmd if not w.redir]
     i = lead(pos)
+    loop_condition = pending_loop or any(w.text in ("while", "until") for w in pos[:i])
     while i < len(pos) and _ENV_ASSIGN_RE.match(pos[i].text):
         i += 1
     if i >= len(pos):
@@ -243,6 +264,8 @@ def _check_simple(cmd, depth, placement_required):
     for j in (range(i, len(pos)) if wrapped else (i,)):
         word = pos[j]
         name = _basename(word.text)
+        if loop_condition and name == "pgrep" and _pgrep_matches_parent(pos[j + 1:], command):
+            return _PGREP_WAIT_MSG
         if name in ("claude", "claude.exe") or (
                 word.live and "claude" in word.text and not _ENV_ASSIGN_RE.match(word.text)):
             if sfx is None:
@@ -281,10 +304,13 @@ def check_command(command, depth=0, placement_required=None):
         for delim, quoted, body in heredocs:
             if not quoted and _has_unescaped_heredoc_injection(body):
                 return _HEREDOC_MSG % (delim, delim)
+        pending_loop = False
         for cmd in commands:
-            reason = _check_simple(cmd, depth, placement_required)
+            reason = _check_simple(cmd, depth, placement_required, pending_loop, command)
             if reason:
                 return reason
+            pending_loop = (cmd[-1].plain and cmd[-1].text in ("while", "until")
+                            and lead(cmd) == len(cmd))
     except Exception as exc:  # ParseError, RecursionError, MemoryError, a bug: all fail closed
         return _PARSE_MSG % (str(exc) or type(exc).__name__)[:80]
     return None

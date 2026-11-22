@@ -153,6 +153,8 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     if not isinstance(head_sha, str) or not _HEAD_SHA.fullmatch(head_sha):
         error = RecordPending if head_sha in (None, "") else ValueError
         raise error("record completion.head_sha missing or not 40 hex chars")
+    if "head_sha" in record and record["head_sha"] != head_sha:
+        raise ValueError("record head_sha does not match completion.head_sha")
     binding, completed = record.get("review_binding"), completion.get("review_binding")
     if binding is not None or completed is not None:
         if (not isinstance(binding, dict) or binding != completed

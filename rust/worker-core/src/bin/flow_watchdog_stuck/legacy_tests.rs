@@ -4,6 +4,8 @@ mod tests {
     #[test]
     fn each_rule_has_below_boundary_above() {
         let mut s = Snapshot {
+            writer_activity: None,
+            review_leg_activity: None,
             host_idle_capacity: Default::default(),
             idle_messages: Vec::new(),
             hosts: Vec::new(),

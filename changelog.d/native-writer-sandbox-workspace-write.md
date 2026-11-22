@@ -1,0 +1,1 @@
+The native Codex writer now starts Codex in `sandbox_mode="workspace-write"` with network access, explicitly named writable roots, and an environment allowlist. Package placement requires readiness in the same sandbox mode, including a scratch linked-worktree commit (AGENT-JAIL step 1).

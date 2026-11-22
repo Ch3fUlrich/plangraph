@@ -60,9 +60,9 @@ item (`standard`/`high`) through `review_passed`, preserving the SQL locks,
 token revocation and fold of a passed review. Only the router may call it:
 
 ```sh
-pg close-merged demo:A D-5504 --family google
-pg close-merged demo:H D-5504 --family google --family deepseek
-pg close-merged demo:H D-5504  # recover seats from cited mirrored review runs
+pg close-merged demo:A D-5504 --family google  # preview the transition
+pg close-merged demo:H D-5504 --family google --family deepseek --apply
+pg close-merged demo:H D-5504 --apply  # recover seats from cited mirrored review runs
 ```
 
 HTTP `POST /v1/close_merged` and MCP `close_merged` take
@@ -70,6 +70,10 @@ HTTP `POST /v1/close_merged` and MCP `close_merged` take
 Plan-Item commits to their introducing default-ref merge's second parent
 (the PR head), never a later direct follow-up or caller-supplied head.
 Missing, unknown or failing Git proof refuses `evidence_unverified: merged_on_default_missing`.
+The item's project supplies the default repository. A `Merge-Repo: <project>`
+line in the item's note or description selects another registered repository.
+For that repository, a GO row that names the item can also prove the PR directly
+by matching its number and second-parent head to a merge on the default ref.
 The existing decisions index must verify the D-id; only its DECISION cell
 authorizes, beginning with `GO <head>` (8+ hex prefix, optional backticks) or
 `GO #PR ... GO-HEAD <sha40>`, optionally prefixed by `(HH:MMZ, date -u)`.
@@ -79,7 +83,7 @@ The PR number may be backticked or followed by punctuation (for example,
 The latter requires exactly one full-length GO-HEAD binding; later review
 narrative is not a verdict. A negated or quoted leading GO never authorizes;
 the head must uniquely match an actual merged PR head.
-If the CLI times out (120 s) on `close-merged` (also `--from-open --apply`), it reads the item back:
+If the CLI times out (120 s) on `close-merged --apply`, it reads the item back:
 state `done` prints a note and exits 0, any other state exits 3 (unreachable).
 
 Standard needs at least one known cross-writer-family seat; high needs at
@@ -157,19 +161,21 @@ unwitnessed records refuse `NO-WITNESS <key>` without changing state or events.
 The close rechecks witnesses under its transaction and records the recovered
 run bundle and each family verdict before passing the item atomically.
 
-`pg close-merged KEY D-NNNN --from-open [--family FAMILY]` checks an open or
-claimed item without changing it and emits `key`, `class`, `reason` TSV.
-Use `--apply` to close after the same checks. This router-only path scans the
+`pg close-merged KEY D-NNNN [--family FAMILY]` selects the proof checks from the
+item's current state and previews the transition. Use `--apply` to close after
+the same checks. `--from-open` limits the command to open or claimed items and
+emits `key`, `class`, `reason` TSV. For open or claimed items, the keeper scans the
 complete default-ref Plan-Item history after refreshing the configured remote ref
 (`merged_default_ref_refresh_failed` on failure), requires every introducing PR to have
 a head-bound GO (additional GO rows must name the same project and item), and refuses unmerged lanes or unavailable lane information.
 It uses the same seat rules (including cited-run recovery when families are
 omitted), records all PR numbers, heads and GO decisions in evidence, and
 atomically submits then passes the item. It does not require a new claim.
-HTTP `/v1/close_merged` accepts boolean `from_open` and `apply` for this path.
+HTTP `/v1/close_merged` accepts boolean `dry_run` to preview and boolean `from_open`
+to select the proof path explicitly.
 
 Historical missing-witness closes remain disabled unless explicitly requested:
-`pg close-merged KEY GO-D-ID --waive-seats OPERATOR-D-ID`. The authority must
+`pg close-merged KEY GO-D-ID --waive-seats OPERATOR-D-ID --apply`. The authority must
 be a unique indexed decision row using the decisions-log header
 `id | project | decision | by | why / evidence`. The `by` cell must contain the
 case-insensitive token `operator`, separated from other tokens by commas or plus

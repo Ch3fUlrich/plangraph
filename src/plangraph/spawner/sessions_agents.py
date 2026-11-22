@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from plangraph.routing_support.clients import without_prompt_env
 from plangraph.spawner.claude_env import with_agent_shell
@@ -54,6 +55,55 @@ class _AgentsMixin:
     self._which, self._platform, self._resolve_budget)."""
 
     # ---- subprocess argv construction (D-2873) -------------------------
+
+    def _session_tools(self, sid):
+        """Snapshot local Linux tools with this Claude session's full ID."""
+        if self._platform != 'linux' or not UUID_RE.fullmatch(sid):
+            return {}
+        from . import proc_kill
+        procs = proc_kill._scan()
+        protected = {os.getpid()}
+        parent = os.getppid()
+        while parent in procs and parent not in protected:
+            protected.add(parent)
+            parent = procs[parent][1]
+        marker = os.fsencode(f'CLAUDE_CODE_SESSION_ID={sid}')
+        owned = {}
+        for pid, entry in procs.items():
+            if pid in protected or entry[0] == 'Z':
+                continue
+            path = Path('/proc') / str(pid)
+            try:
+                if path.stat().st_uid != os.geteuid():
+                    continue
+                with (path / 'environ').open('rb') as stream:
+                    if marker in stream.read(1 << 20).split(b'\0') and proc_kill.alive(pid, entry[4]):
+                        owned[pid] = entry
+            except OSError:
+                continue
+        # A descendant can start a new process group and scrub its environment.
+        return {pid: procs[pid][4] for pid in proc_kill.descendants(procs, owned) - protected
+                if procs[pid][0] != 'Z'}
+
+    def _finish_session_tools(self, sid, before):
+        from . import proc_kill
+        members = {**before, **self._session_tools(sid)}
+        deadline = time.monotonic() + proc_kill.WAIT_S
+        while members:
+            proc_kill.kill_identities(members)
+            members = {pid: start for pid, start in members.items() if proc_kill.alive(pid, start)}
+            members.update(self._session_tools(sid))
+            if not members:
+                return
+            if time.monotonic() >= deadline:
+                raise _ActionFailed(str(proc_kill.KillIncomplete(members)), session_id=sid)
+            time.sleep(0.02)
+
+    def _record_stopped(self, rec, name, sid, before):
+        self._finish_session_tools(sid, before)
+        self._write_record(name, {**rec, 'state': 'stopped',
+                                  'stopped_ts': self._now(), 'session_id': sid})
+        return sid
 
     @staticmethod
     def _stop_token(row, sid):

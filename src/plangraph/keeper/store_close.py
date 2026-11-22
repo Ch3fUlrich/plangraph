@@ -432,6 +432,39 @@ class CloseMixin:
                 continue
         return heads
 
+    def _with_merge_repo(self, item):
+        """The item tagged with the one scanned repository that holds its Plan-Item commits.
+
+        A hint (``Merge-Repo:``) or a hit in the item's own repository decides at once;
+        otherwise exactly one other scanned repository must hold them, else the refusal names all.
+        """
+        if item.get("_merge_project") or self._merge_repository(item) != (item["project"], None):
+            return item
+        git, found = self._adapter("git"), []
+        for project in self._scan_projects(item):
+            try:
+                pinned = self._pin_close(dict(item, _merge_project=project))
+                commits = context_sources.plan_item_commits(
+                    git, project, item["key"], fetch=False, head=pinned["_close_head"])
+            except Exception:  # noqa: BLE001 - an unreadable repository names nothing
+                commits = None
+            if commits:
+                found.append(pinned)
+                if project == item["project"]:
+                    return pinned
+        if len(found) > 1:
+            names = ", ".join(candidate["_merge_project"] for candidate in found)
+            raise Refused("evidence_unverified", f"merge_repo_ambiguous: {names} (name one with Merge-Repo:)")
+        return found[0] if found else item
+
+    def _require_inferred_repo_scope(self, item, decision_id, now):
+        """A GO from another project needs an explicit Merge-Repo selection."""
+        if any(context_sources.MERGE_REPO_LINE.fullmatch(line) for line in self._merge_text(item).splitlines()):
+            return
+        rows = self._ctx(item, now).decisions._rows_strict().get(decision_id, ())
+        if len(rows) == 1 and rows[0].split("|")[2].strip() != item["project"]:
+            raise Refused("evidence_unverified", "merged_on_default_missing")
+
     def _pin_close(self, item):
         """Capture the default commit after any refresh, before reading close evidence."""
         git, project = self._adapter("git"), self._merge_project(item)
@@ -454,6 +487,13 @@ class CloseMixin:
         landed = tagged | {named["landed"]} if named else tagged
         changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head)}
         return (head, tagged), changes
+
+    def _merged_go_deploy_changes(self, item, head):
+        git, project = self._adapter("git"), self._merge_project(item)
+        try:
+            return set(git.deploy_changes(git.repo_path(project), head, item["_close_head"]))
+        except Exception:  # noqa: BLE001 - an unreadable diff cannot clear the deploy gate
+            raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
 
     def _deploy_pending(self, item, changes):
         """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for."""
@@ -524,18 +564,20 @@ class CloseMixin:
         _, token, changes = self._read_current_deploy_scan(item)
         return token, changes
 
-    def _manual_deploy_scan(self, item, *, complete_history):
+    def _manual_deploy_scan(self, item, *, complete_history, refresh_alternate=False):
         """Refresh the default when required before pinning the manual close's scan."""
         git = self._adapter("git")
         project, revision = self._merge_repository(item)
-        if not callable(getattr(git, "ref_commit", None)):
-            return item, None, ()
-        if revision or (complete_history and not self._warm(project)):
+        refresh_alternate = refresh_alternate and project != item["project"]
+        can_pin = callable(getattr(git, "ref_commit", None))
+        if refresh_alternate or (can_pin and (revision or (complete_history and not self._warm(project)))):
             if not self._refresh_merged_default_ref(git, project):
-                detail = (f"merge_repo_default_refresh_failed: {project}" if revision
+                detail = (f"merge_repo_default_refresh_failed: {project}" if revision or refresh_alternate
                           else "merged_default_ref_refresh_failed")
                 raise Refused("evidence_unverified", detail)
             item.pop("_close_head", None)
+        if not can_pin:
+            return item, None, ()
         return self._read_current_deploy_scan(item)
 
     def _read_current_deploy_scan(self, item):
@@ -552,13 +594,14 @@ class CloseMixin:
                 return pinned, token, changes
         raise Refused("conflict", "merged_on_default_changed")
 
-    def _deploy_pending_result(self, item, pending, now):
+    def _deploy_pending_result(self, item, pending, now, *, record=True):
         """Leave the item open: record the reason as an alert and report it."""
         msg = "deploy_pending: " + ", ".join(pending)
-        with self._write():
-            if self._has_finding(item["key"], "deploy_pending"):
-                self._alerts_raise_finding(item["key"], "deploy_pending", msg, now)
-            else:
-                self._finding(item["key"], "deploy_pending", msg, now)
+        if record:
+            with self._write():
+                if self._has_finding(item["key"], "deploy_pending"):
+                    self._alerts_raise_finding(item["key"], "deploy_pending", msg, now)
+                else:
+                    self._finding(item["key"], "deploy_pending", msg, now)
         return {"key": item["key"], "state": item["state"], "closed": False,
                 "reason": "deploy_pending", "missing": pending}

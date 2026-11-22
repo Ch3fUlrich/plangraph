@@ -230,7 +230,7 @@ class FakeSession:
 
 def close_args():
     return SimpleNamespace(key="demo:H", decision_id="D-5504", families=None, from_open=False,
-                           apply=False, waive_seats="D-6000")
+                           apply=True, waive_seats="D-6000")
 
 
 def test_client_timeout_after_a_committed_close_reads_back_and_exits_zero(capsys):
@@ -256,6 +256,16 @@ def test_from_open_apply_timeout_after_a_committed_close_reads_back_and_exits_ze
 def test_client_timeout_without_a_commit_exits_non_zero(capsys):
     from plangraph.keeper.cli_output_verbs import cmd_close_merged
     assert cmd_close_merged(close_args(), FakeSession("in_review")) == 3
+    assert "keeper unreachable" in capsys.readouterr().err
+
+
+def test_client_timeout_on_dry_run_does_not_read_back_or_report_a_close(capsys):
+    from plangraph.keeper.cli_output_verbs import cmd_close_merged
+    args = close_args()
+    args.apply = False
+    session = FakeSession("done")
+    assert cmd_close_merged(args, session) == 3
+    assert [call[0] for call in session.calls] == ["POST"]
     assert "keeper unreachable" in capsys.readouterr().err
 
 
@@ -332,7 +342,7 @@ def _git(repo, *args, date="2026-11-01T12:00:00Z"):
                           capture_output=True, text=True).stdout.strip()
 
 
-def merged_repo(path, parts):
+def merged_repo(path, parts, *, unit=None):
     """A repository whose main has one merged PR per ``(pr, key, date)``; ``pr`` None = direct commit.
 
     Returns the PR head per number (``None`` keyed by the direct commit's sha list).
@@ -348,6 +358,11 @@ def merged_repo(path, parts):
             heads.setdefault(None, []).append(_git(path, "rev-parse", "HEAD"))
             continue
         _git(path, "checkout", "-q", "-b", f"pr{pr}")
+        if unit is not None:
+            target = path / "deploy" / "systemd" / unit
+            target.parent.mkdir(parents=True)
+            target.write_text("[Service]\nExecStart=/bin/true\n")
+            _git(path, "add", str(target))
         _git(path, "commit", "-q", "--allow-empty", "-m", message, date=date)
         heads[pr] = _git(path, "rev-parse", "HEAD")
         _git(path, "checkout", "-q", "main")
@@ -455,6 +470,51 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
     w.conn.execute("UPDATE items SET description=? WHERE key='demo:H'", ("Merge-Repo: nowhere",))
     with pytest.raises(Refused, match="merge_repo_unknown"):
         w.store.close_merged(w.p("router"), "demo:H", "D-5504", ["google", "deepseek"])
+
+
+@pytest.mark.parametrize("evidence", ["trailer", "merge-subject", "deploy-pending", "wrong-pr", "wrong-project", "duplicate-head"])
+@pytest.mark.parametrize("state", ["open", "in_review"])
+def test_close_merged_reads_the_data_default_only_with_a_note(w, monkeypatch, tmp_path, evidence, state):
+    from plangraph.keeper import context_sources
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    primary, data = tmp_path / "demo", tmp_path / "data"
+    data_project = "fixture-secondary"
+    merged_repo(primary, [])
+    key = "demo:A"
+    heads = merged_repo(data, [(165, key if evidence == "trailer" else None, "2026-11-01T12:00:00Z")],
+                        unit="fixture.service" if evidence == "deploy-pending" else None)
+    w.store.ctx["git"] = GitAdapter({"demo": str(primary), data_project: str(data)})
+    monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **kw: [])
+    pr = 166 if evidence == "wrong-pr" else 165
+    project = "unrelated" if evidence == "wrong-project" else data_project
+    head = f"GO-HEAD {heads[165]}"
+    if evidence == "duplicate-head":
+        head += f"; {head}"
+    w.decision_path.write_text(HEADER + f"| D-5504 | {project} | GO #{pr} {data_project}, "
+                               f"item demo:OTHER and A; {head} | ROUTER | 2026-11-05 |\n")
+    router = w.p("router")
+    w.conn.execute("UPDATE items SET state=? WHERE key=?", (state, key))
+
+    def close():
+        return w.store.close_merged(router, key, "D-5504", ["google"],
+                                    from_open=state == "open", apply=True)
+
+    with pytest.raises(Refused, match="merged_on_default_missing"):
+        close()
+    w.store.edit_definition(router, key, {"note": f"Merge-Repo: {data_project}"})
+    if evidence in ("wrong-pr", "wrong-project", "duplicate-head"):
+        with pytest.raises(Refused, match="merged_on_default_missing"):
+            close()
+        assert w.store._item(key)["state"] == state
+    elif evidence == "deploy-pending":
+        result = close()
+        assert result["reason"] == "deploy_pending" and result["missing"] == ["(hosts unnamed)"]
+        assert w.store._item(key)["state"] == state
+    else:
+        assert close()["state"] == "done"
+        assert w.store._evidence(key)[-1]["ref"]["merged_head"] == heads[165]
 
 
 @pytest.mark.parametrize("state", ["MERGED", "OPEN", "CLOSED"])

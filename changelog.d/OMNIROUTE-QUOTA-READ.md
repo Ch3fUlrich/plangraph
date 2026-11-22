@@ -1,0 +1,1 @@
+SKIPPED plangraph:OMNIROUTE-QUOTA-READ. D-4661 and D-4695 require durable per-leg storage, routerctl status and the keeper digest together. The routerctl checkout is outside this writer lane. The quota CLI uses the existing read-only snapshot reader.

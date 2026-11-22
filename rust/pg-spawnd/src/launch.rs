@@ -66,6 +66,43 @@ fn parse(bytes: &[u8]) -> Result<LaunchSpec, ToolError> {
     }
     Ok(spec)
 }
+/// A review of a registered-repository `diff_ref` also excludes the families named by the head's
+/// `Writer` trailers: the Python launch adapter cannot resolve `repo_id`, so the families join
+/// `writer_families` here. A head that cannot be read refuses; refs the later admission rejects pass through.
+pub(crate) type RepoMap = std::collections::BTreeMap<String, pg_worker_core::hosts::RepoEntry>;
+
+pub(crate) fn with_head_writers(request: &Value, repos: &RepoMap) -> Result<Value, ToolError> {
+    let mut request = request.clone();
+    let reference = &request["card"]["diff_ref"];
+    if request["role"] != "review" || reference.get("repo_id").is_none() {
+        return Ok(request);
+    }
+    // The Python adapter cannot resolve a registered ref, so an unresolved one must not launch
+    // without the head writer's exclusion. The malformed value is never echoed.
+    let refuse = |message: &str| ToolError::Refused {
+        kind: crate::errors::RefusalKind::Spawn,
+        message: message.to_owned(),
+        legs: vec![],
+    };
+    let diff = serde_json::from_value::<pg_worker_core::workspace::DiffRef>(reference.clone())
+        .map_err(|_| refuse("invalid registered-repository diff_ref"))?;
+    let repo = repos
+        .get(&diff.repo_id)
+        .ok_or_else(|| refuse("unknown registered repository in diff_ref"))?;
+    let writers = crate::prompt_git::head_writers(repo, &diff)
+        .map_err(|_| refuse("cannot read the Writer trailer of the registered head"))?;
+    let mut families = request["writer_families"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for writer in writers {
+        if !families.iter().any(|f| f == &Value::from(writer.as_str())) {
+            families.push(Value::from(writer));
+        }
+    }
+    request["writer_families"] = Value::Array(families);
+    Ok(request)
+}
 fn drain(mut reader: impl Read, cap: usize) -> Vec<u8> {
     let mut kept = Vec::new();
     let mut buf = [0; 8192];
@@ -94,6 +131,9 @@ impl LaunchAdapter {
         request: &Value,
         timeout: Duration,
     ) -> Result<LaunchSpec, ToolError> {
+        // Resolve the head writers and serialise before any child exists: an error here leaves nothing to reap.
+        let request = with_head_writers(request, &crate::prompt::repos())?;
+        let bytes = serde_json::to_vec(&request).map_err(|_| invalid())?;
         let mut cmd = if let Some(program) = &self.0 {
             if !Path::new(program).is_absolute() {
                 return Err(internal("launch adapter could not start"));
@@ -117,7 +157,6 @@ impl LaunchAdapter {
         let mut child = pg_worker_core::stall::spawn_retrying(&mut cmd)
             .map_err(|e| internal(&format!("launch adapter could not start: {e}")))?;
         let mut stdin = child.stdin.take().unwrap();
-        let bytes = serde_json::to_vec(request).map_err(|_| invalid())?;
         std::thread::spawn(move || {
             let _ = stdin.write_all(&bytes);
         });

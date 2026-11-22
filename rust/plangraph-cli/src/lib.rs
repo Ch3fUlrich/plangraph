@@ -25,5 +25,6 @@ pub mod router_batch;
 pub mod runner;
 pub mod setup;
 pub mod state_shadow;
+pub mod throughput;
 pub mod wait_pid;
 pub mod watchers;

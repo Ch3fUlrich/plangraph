@@ -18,10 +18,34 @@ and `worker_idle` describe placement; `host_drift` compares expected host code r
 The fields above are required; budget must be positive. Missing data queues a durable invalid-snapshot alert.
 The seven condition groups produce 8 rule names: placement and host drift are separate.
 
+Collectors with review-route and served-leg telemetry can supply `review_leg_activity`.
+Use the route's first ruled leg for `first_leg`, put the actual served review counts
+in `served` keyed by leg, and set `window_seconds` to the length of the complete
+observation window. A window of at least 3600 seconds with at least one served
+review and no reviews served by the first leg queues one `review-leg-unserved`
+alert. The active identity is the leg, so refreshes with new counts in the same
+outage do not repeat the alert.
+
+`writer_activity` takes a Unix-seconds `now` and a `writers` list from the fleet
+session collector. Each writer supplies `host`, `session_id`, `parent`, `busy`,
+`idle_since`, `head`, `last_commit`, and the launch record's `status_path`.
+The collector includes the newest `review` with `head` and `verdict` and the
+observed `status` with `path` and `last_line`, or null for missing evidence.
+At 20 minutes of idleness, `writer-idle` reports REQUEST_CHANGES, an unreviewed
+head, or a missing READY, BLOCKED, DONE, or `<NAME> DONE` line in the expected file. The alert
+uses the parent session as its recipient and queues once per idle interval.
+
+The Linux service sets `PLANGRAPH_WATCHDOG_PROC_ROOT=/proc`. Each tick reports
+live shells older than two hours whose current directory has been unlinked.
+`deleted-cwd-shell` includes the PID, shell name, and process age. The process
+start time keeps the alert stable across ticks and distinguishes PID reuse.
+
 Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).
 Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
-`origin_main_head`, `behind_commits`, and `age_hours`. `host-disk` alerts strictly
-above 85% used on either `/tmp` or `/`. `host-code` alerts when the spawner checkout
+`origin_main_head`, `behind_commits`, and `age_hours`. Collectors can add
+`work_used_percent`, an array of usage percentages for configured work mounts.
+`host-disk` alerts once per host when any sampled filesystem exceeds 85% used.
+`host-code` alerts when the spawner checkout
 is behind origin/main by more than 10 commits **or** 24 hours. The collector must
 provide the ancestry-based behind count and age in hours since the first missing
 origin/main commit, not the checkout commit's timestamp. Equal heads or a zero
@@ -138,7 +162,7 @@ adding a timer, cancelling work or making any live deployment change.
 ## Delivery
 
 Routing uses the existing `PLANGRAPH_WATCHDOG_DELIVERY` JSON argv bridge contract
-(see stall-watchdog.md): one JSON alert on stdin with recipient `routing` and one
+(see stall-watchdog.md): one JSON alert on stdin with recipient `routing` by default and one
 message line per condition/session (the original eight rules share one line).
 `PLANGRAPH_FLOW_PUSH` is an explicit
 JSON argv push hook receiving the same event. No existing push implementation or

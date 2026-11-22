@@ -174,6 +174,15 @@ Verdict delivery uses the same resolver to forward canonical writer families.
 
 ## Route order and family admission (D-6310 / rule 3.53)
 
+Benchmark ranking resolves the catalog's preferred observation against the
+model, reasoning effort and harness of each leg. Legacy benchmark databases
+remain readable. The catalog query exposes source, imputation and staleness for
+each observation. See [benchmark observations](spawner-benchmarks.md#benchmark-observations-by-effort-and-harness).
+When a leg leaves effort unspecified, a legacy catalog row can supply the
+catalog's default effort for the same model and a compatible harness.
+Route candidates label utility backed by a catalog row as `p_source: measured`.
+The catalog observation carries its own `imputed` field and provenance.
+
 D-6310 retires `gpt-6.1-sol` (and `gemini-4-argon` for implement; D-6366 serves it as the first review leg), lists `opencode` as a provider,
 removes the `deepseek` and `glm` family bans, and leaves no `opencode-go` leg disabled.
 Implementation routes prioritize `cx-gpt-6.2-sol-medium` (with `cx-gpt-6.2-sol-{low,medium,high,xhigh,max}`
@@ -189,9 +198,9 @@ GPT implement and review legs default to medium effort (D-6397); elevated
 effort requires matching `card.effort` and an operator `card.effort_decision`
 of the form `D-<number>`. Native Codex package sessions pass
 `model_reasoning_effort=medium` by default. Other families keep their own effort.
-Spawn admission budgets 55% of the selected leg's configured context rather
-than the coarse window label. Sol and Astra have a 1,000,000-token configured
-context, including Sol effort variants and native package sessions.
+A 1M spawn route uses the declared request bound of a leg that supports that class.
+Sol and Astra declare 1,000,000 tokens, including effort variants and native sessions.
+Smaller spawn routes use 55% of declared leg context. Legs without a bound and keeper budgets use the 55% class share.
 Review routes under D-6550 prefer `agy-gemini-4-hydrogen-high` and then
 `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
 available in their configured order, and the Argon review legs stay last. A review run that ends without a VERDICT line is
@@ -199,6 +208,8 @@ recorded `failed` with reason `no_verdict`. The reviewer's family differs from t
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.
+The five-head benchmark for Flint, Big Pickle and Beam was skipped in this lane.
+The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_risk_and_families`.
 
 ## Automatic work mode (D-5952 / rule 3.41)
 
@@ -230,6 +241,15 @@ components). When an inline diff exceeds the leg limit, `pg-spawnd` and
 over the same `base` and `head`, passing each group in `diff_ref.paths` and
 failing the review if any group returns `REQUEST_CHANGES` or a single file exceeds
 the leg cap.
+
+
+A review route also reads the `Writer` trailer of the `diff_ref` head commit
+(`planner.seats.head_writer_families`): its family is excluded in addition to the
+`--exclude-family` values, an unknown writer refuses, and an explicit `--leg` of that
+family is refused.
+For a registered-repository ref (`repo_id`, `base_sha`, `head_sha`) the Rust server reads the
+same trailers (`launch::with_head_writers`) and adds the families to `writer_families` before the
+launch adapter runs; an unreadable head refuses.
 
 ## Own harness first (rule 3.53, D-6310)
 

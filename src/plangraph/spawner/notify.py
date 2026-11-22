@@ -250,7 +250,7 @@ def _deliver_verdict(directory, record, keeper):
             if not valid_item(key):
                 outcome('skipped', 'missing item key')
                 return
-            if (directory / 'evidence.json').exists():
+            if (directory / 'evidence.json').exists() and not record.get('head_sha'):
                 outcome('skipped', 'forward delivery requires record-derived evidence')
                 return
             if saved:

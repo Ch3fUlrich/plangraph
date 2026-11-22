@@ -79,7 +79,7 @@ def test_pg_sqlite_columns_match(pg):
 
 def test_keeper_migration_gates_documented():
     from pathlib import Path
-    text = (Path(__file__).resolve().parents[1] / 'docs/KEEPER.md').read_text()
+    text = (Path(__file__).resolve().parents[1] / 'docs/keeper-operations.md').read_text()
     section = text.split('## Placement rules migration-gates', 1)[1]
     for required in ('GO', 'reviewed SHA', 'backup', 'rehearsal', 'migrate role',
                      'runtime', 'restart', 'writers stopped', 'retired_v11'):

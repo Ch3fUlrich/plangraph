@@ -196,6 +196,12 @@ fn check_dump(
             "{name}: listing has {tables} tables, expected {expected_tables}"
         ));
     }
+    let archived_seq = pg.archive_seq(dump, schema)?;
+    if archived_seq < seq.max(min_seq) {
+        return Err(format!(
+            "{name}: archive max seq {archived_seq} is below the dump name's seq {seq}"
+        ));
+    }
     let scratch = format!("pgkb_scratch_{seq}_{}", std::process::id());
     // Only a database this run created is ever dropped: a name collision fails here.
     pg.create_scratch(&scratch)?;
@@ -211,9 +217,9 @@ fn check_dump(
             state.tables
         ));
     }
-    if state.max_seq < seq.max(min_seq) {
+    if state.max_seq != archived_seq {
         return Err(format!(
-            "{name}: scratch max seq {} is below the dump name's seq {seq}",
+            "{name}: scratch max seq {} differs from archive max seq {archived_seq}",
             state.max_seq
         ));
     }

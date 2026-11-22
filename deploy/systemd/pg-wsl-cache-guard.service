@@ -1,0 +1,10 @@
+[Unit]
+Description=Reclaim WSL page cache when Windows memory is low
+ConditionVirtualization=wsl
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/plangraph/wsl-cache-guard.env
+ExecStart=/usr/local/bin/pg-spawnd host wsl-cache-guard --min-free-mb ${PG_WSL_FREE_MB}
+TimeoutStartSec=120s

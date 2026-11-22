@@ -13,7 +13,8 @@ from plangraph.keeper import anchor, api, snapshot_io, snapshot_writer, timing
 PATTERN = re.compile(
     r"keeper: (request|writer|reaper|snapshot|changelog)_timing kind=(read|write|other)"
     r" wait_ms=\d+ hold_ms=\d+ build_ms=\d+ encode_ms=\d+ sign_ms=\d+"
-    r" write_ms=\d+ tick_ms=\d+ record_ms=\d+ submit_ms=\d+")
+    r" write_ms=\d+ tick_ms=\d+ record_ms=\d+ submit_ms=\d+"
+    r"(?: verb=[a-z_-]+ total_ms=\d+ query_ms=\d+ snapshot_write_ms=\d+)?")
 
 
 @pytest.fixture
@@ -57,6 +58,17 @@ def test_request_really_held_lock(meter):
     thread.join(2)
     assert not thread.is_alive()
     assert "wait_ms=300 hold_ms=10" in lines(out)[0]
+
+
+def test_fast_requests_report_verb_and_distinguish_io_from_lock_hold(meter):
+    clock, out = meter
+    with timing.RequestTimer(threading.Lock(), "read", verb="show"):
+        timing.measured(part="query_ms")(lambda: clock.advance(.002))()
+        with timing.outside_request_lock():
+            clock.advance(.003)
+    line = lines(out)[0]
+    assert "hold_ms=2" in line
+    assert "verb=show total_ms=5 query_ms=2 snapshot_write_ms=0" in line
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])

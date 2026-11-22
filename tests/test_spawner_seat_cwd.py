@@ -60,9 +60,10 @@ def service(tmp_path, monkeypatch, checkouts):
                 git(checkouts[1], 'commit', '--no-gpg-sign', '--allow-empty', '-qm', 'completion head')
             job_id = next(reversed(runner.jobs))
             runner.served_witness(job_id, chosen.model,
-                                  adapter_token=runner._adapter_tokens[job_id])
+                                  adapter_token=runner._adapter_tokens[job_id],
+                                  finish_reason=getattr(service, "witness_finish", None))
             return ('\n'.join(json.dumps(event) for event in [
-                {'type': 'text', 'part': {'text': text}},
+                {'type': 'text', 'part': {'text': getattr(service, 'witness_text', text)}},
                 {'type': 'step_finish', 'part': {'reason': 'stop'}}]).encode(), b'')
 
     async def factory(*args, **kwargs):
@@ -385,3 +386,46 @@ def test_legacy_overflow_classifies_explicit_cwd(checkouts, tmp_path, monkeypatc
     assert overflow.main(['spawn', '--repo', str(caller), '--card', str(card), '--prompt', str(prompt),
         *(['--cwd', str(reviewed)] if source == 'flag' else [])]) == 2
     assert 'repo is not public' in capsys.readouterr().out
+
+
+def test_named_cwd_posts_witnessed_seat_with_artifacts(service, checkouts, tmp_path,
+                                                       monkeypatch, tools_importable, capsys):
+    import seat_verdict
+
+    caller, reviewed = checkouts
+    head = git(reviewed, 'rev-parse', 'HEAD')
+    monkeypatch.setenv('PG_URL', 'http://fixture.invalid')
+    monkeypatch.setenv('PG_TOKEN_FILE', str(tmp_path / 'spawner.token'))
+
+    def admit(_sink, record, cwd):
+        assert Path(cwd) == reviewed
+        record['request']['verdict_binding'] = dict(
+            key='demo:CWD', epoch=1, round=1, head=head, seat_run=record['run_id'])
+
+    monkeypatch.setattr(notify.KeeperSink, 'admit_seat_verdict', admit)
+    service.witness_finish = 'stop'
+    service.witness_text = 'TEST-GAMING: no - searched the supplied change: 0 hits\nVERDICT: ACCEPT'
+    record = asyncio.run(service.spawn(
+        card={'estimate_tokens': 1000, 'item_key': 'demo:CWD', 'cwd': str(reviewed),
+              'diff_ref': {'repo': str(reviewed), 'base': git(reviewed, 'rev-parse', 'HEAD~1'), 'head': head}},
+        prompt='Review this checkout', role='review', writer_families=['gpt'], wait_seconds=None))
+    directory = service._path(record['run_id']).parent
+    assert (directory / 'evidence.json').exists(), (record['status'], record.get('error'), record.get('stdout_tail'))
+    assert record['head_sha'] == record['completion']['head_sha'] == head
+    binding = seat_verdict.read_record_identity(directory, 'demo:CWD')['binding']
+    assert binding == dict(key='demo:CWD', epoch=1, round=1, head=head, seat_run=record['run_id'])
+
+    token_dir = tmp_path / 'tokens'
+    token_dir.mkdir()
+    family = seat_verdict.model_family(record['served_model'])
+    (token_dir / f'reviewer-{family}.token').write_text('test-token')
+    calls = []
+    monkeypatch.setattr(seat_verdict, 'send', lambda _url, _token, body: (calls.append(body) or 200, 'ok'))
+    argv = ['--key', 'demo:CWD', '--seat-dir', str(directory), '--writer-family', 'openai',
+            '--token-dir', str(token_dir), '--url', 'http://fixture.invalid']
+    assert seat_verdict.main(argv + ['--head', head], record_wait=0) == 0
+    assert len(calls) == 1 and calls[0]['ok'] and head in calls[0]['reason']
+    assert calls[0]['binding'] == record['request']['verdict_binding']
+    assert seat_verdict.main(argv + ['--head', git(caller, 'rev-parse', 'HEAD')], record_wait=0) == 2
+    assert 'does not match --head' in capsys.readouterr().err
+    assert len(calls) == 1

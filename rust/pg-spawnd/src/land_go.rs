@@ -64,7 +64,7 @@ pub(crate) trait Landing {
     fn land(&self, row: &GoRow) -> Result<String, String>;
     /// One line to routing.
     fn post(&self, line: &str) -> Result<(), String>;
-    /// `close-merged KEY D-ID --from-open` without `--apply`; its result line (the line after the TSV header).
+    /// The proposed transition from `close-merged KEY D-ID`.
     fn close_merged_dry_run(&self, key: &str, decision: &str) -> Result<String, String>;
 }
 

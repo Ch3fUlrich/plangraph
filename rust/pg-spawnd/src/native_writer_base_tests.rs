@@ -48,6 +48,42 @@ fn local_base_fixture(dir: &Path) -> Host {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn host_reaps_a_writer_when_disk_crosses_the_stop_floor() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.cwd = host.repo.clone();
+    for (name, script) in [
+        ("codex", "#!/bin/sh\necho $$ > writer.pid\nexec sleep 4\n"),
+        (
+            "df",
+            "#!/bin/sh\nif [ -s \"$3/writer.pid\" ]; then echo 'x x x 0'; else echo 'x x x 10485760'; fi\n",
+        ),
+    ] {
+        let path = dir.path().join(name);
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = std::env::var_os("PATH").unwrap();
+    host.tool_path = std::env::join_paths(
+        std::iter::once(dir.path().to_path_buf()).chain(std::env::split_paths(&path)),
+    )
+    .unwrap()
+    .into_string()
+    .unwrap();
+
+    assert_eq!(
+        host.execute(None, "brief").unwrap_err(),
+        "disk_low: under 2 GB stop floor"
+    );
+    let pid = fs::read_to_string(host.cwd.join("writer.pid")).unwrap();
+    let pid: i32 = pid.trim().parse().unwrap();
+    assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "writer was not reaped");
+}
+
 #[test]
 fn base_ref_that_exists_only_in_the_host_repo_starts_and_pushes_its_result() {
     let dir = tempfile::tempdir().unwrap();

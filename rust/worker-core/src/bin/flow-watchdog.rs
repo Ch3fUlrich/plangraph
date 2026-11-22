@@ -2,8 +2,15 @@
 mod hosts;
 #[path = "flow_watchdog_quiet/mod.rs"]
 mod quiet;
+#[path = "flow_watchdog_review/mod.rs"]
+mod review;
+#[cfg(target_os = "linux")]
+#[path = "flow_watchdog_stale_shells/mod.rs"]
+mod stale_shells;
 #[path = "flow_watchdog_stuck/mod.rs"]
 mod stuck;
+#[path = "flow_watchdog_writer/mod.rs"]
+mod writer;
 include!("flow_watchdog_stuck/legacy_tests.rs");
 // Deterministic flow checks; host collectors supply a single JSON snapshot.
 use serde::Deserialize;
@@ -15,6 +22,10 @@ use std::{
 };
 #[derive(Deserialize)]
 struct Snapshot {
+    #[serde(default)]
+    writer_activity: Option<writer::Activity>,
+    #[serde(default)]
+    review_leg_activity: Option<review::Activity>,
     #[serde(default)]
     host_idle_capacity: pg_worker_core::host_idle::Snapshot,
     #[serde(skip)]
@@ -42,12 +53,14 @@ struct Snapshot {
 struct Alert {
     message: String,
     active: String,
+    recipient: Option<String>,
 }
 impl From<String> for Alert {
     fn from(message: String) -> Self {
         Self {
             active: message.clone(),
             message,
+            recipient: None,
         }
     }
 }
@@ -174,12 +187,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             alerts.extend(s.idle_messages.iter().map(|message| Alert {
                 active: format!("host-idle {}", message.split_whitespace().nth(1).unwrap()),
                 message: message.clone(),
+                recipient: None,
             }));
             alerts.extend(s.session_activity.alerts());
+            alerts.extend(s.writer_activity.iter().flat_map(writer::Activity::alerts));
+            alerts.extend(
+                s.review_leg_activity
+                    .as_ref()
+                    .and_then(review::Activity::alert),
+            );
             alerts
         }
         Err(_) => vec![Alert::from("invalid snapshot".to_owned())],
     };
+    #[cfg(target_os = "linux")]
+    if let Some(root) = std::env::var_os("PLANGRAPH_WATCHDOG_PROC_ROOT") {
+        messages.extend(stale_shells::alerts(Path::new(&root)));
+    }
     if let Some(state) = std::env::var_os("PLANGRAPH_TURN_BUDGET_STATE_DIR") {
         let now = std::env::var("PLANGRAPH_TURN_BUDGET_NOW")
             .ok()
@@ -200,12 +224,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let active = messages
         .iter()
         .map(|alert| alert.active.as_str())
-        // Validation failure is not an observed recovery for quiet sessions.
-        .chain(
-            previous
-                .lines()
-                .filter(|line| validated.is_err() && line.starts_with("busy-quiet ")),
-        )
+        // A missing observation does not clear an active alert.
+        .chain(previous.lines().filter(|line| {
+            (line.starts_with("busy-quiet ") && validated.is_err())
+                || (line.starts_with("writer-idle ")
+                    && validated
+                        .as_ref()
+                        .map_or(true, |s| s.writer_activity.is_none()))
+                || (line.starts_with("review-leg-unserved ")
+                    && validated
+                        .as_ref()
+                        .map_or(true, |s| s.review_leg_activity.is_none()))
+        }))
         .collect::<Vec<_>>()
         .join("\n");
     let queue_path = dir.join("queue.json");
@@ -261,7 +291,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 format!("FLOW-WATCHDOG: {}", alert.message)
             };
-            queue.push(serde_json::json!({"kind":"alert", "recipient":"routing",
+            let recipient = alert.recipient.as_deref().unwrap_or("routing");
+            queue.push(serde_json::json!({"kind":"alert", "recipient":recipient,
                 "message":line, "active":message}));
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }

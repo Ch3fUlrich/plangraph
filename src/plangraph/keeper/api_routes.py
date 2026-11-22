@@ -8,6 +8,7 @@ within its size budget as new doors (``close_on_decision``,
 from __future__ import annotations
 
 import os
+import re
 import urllib.parse
 
 from ..inbox import routes as _inbox
@@ -62,6 +63,14 @@ READ_CALLS = {
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
 RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay", "write_receipt", "write_context", "bind_seat_verdict"})
+
+# These verbs persist their response inside the same transaction as the mutation.
+RETRYABLE_WRITES = frozenset({"claim", "heartbeat", "set_priority"})
+
+
+def check_write_key(key):
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", key):
+        raise Refused("validation", "invalid idempotency key")
 
 #: Read-only verbs reachable by the ``sweep`` role (claims, runs, PR links).
 SWEEP_READ_VERBS = frozenset({"whoami", "snapshot", "show"})
@@ -310,7 +319,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                     principal, body.get("key"), body.get("decision_id"),
                     # Omission requests recovery; explicit JSON null is malformed.
                     body.get("families") if body.get("families", ()) is not None else (),
-                    from_open=body.get("from_open", False), apply=body.get("apply", False),
+                    from_open=body.get("from_open"), apply=body.get("apply", False),
                     waive_seats=body.get("waive_seats"), dry_run=body.get("dry_run", False),
                     require_seats=body.get("require_seats")),
                 "replay": _replay,

@@ -1,0 +1,1 @@
+- Scrub affected-test environments and replay recorded pytest failures at the pinned base before accepting a base-failure claim.

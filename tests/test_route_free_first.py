@@ -11,6 +11,7 @@ from plangraph.planner.legs import (DEFAULT_LEGS, REVIEW_ORDER, REVIEW_MIMO_PRO,
                                     REVIEW_HYDROGEN, REVIEW_NEON, REVIEW_BEAM, review_route_pool)
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
+from registry_route_util import _repo
 
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
@@ -249,7 +250,9 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     from plangraph.routing_support import catalog_db
     monkeypatch.setattr(catalog_db, "DEFAULT_DB_PATH", tmp_path / "absent.db")
     monkeypatch.setenv("PLANGRAPH_CATALOG_DB", str(tmp_path / "absent.db"))
-    assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
+    repo, base, head = _repo(tmp_path)
+    card = dict(CARD, diff_ref={"repo": str(repo), "base": base, "head": head})
+    assert main(["--state", str(tmp_path), "route", "--card", json.dumps(card),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
     argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]

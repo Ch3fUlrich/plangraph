@@ -15,6 +15,7 @@ a HIGH path built with standard PRs, a union merge that changed an old line with
 """
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -57,6 +58,108 @@ def wt_of(env, name):
 
 def read(env, name):
     return json.loads(env.state_file(name).read_text())
+
+
+def install_pre_push(env):
+    hook = env.repo / ".git/hooks/pre-push"
+    source = Path(__file__).resolve().parents[1] / "tools/hooks/pre-push"
+    hook.write_text("#!/usr/bin/env python3\nimport runpy\n"
+                    f"hook = runpy.run_path({str(source)!r})\n"
+                    "hook['main'].__globals__['hook_checkout_status'] = lambda: 0\n"
+                    "raise SystemExit(hook['main']())\n")
+    hook.chmod(0o755)
+
+
+@pytest.mark.parametrize("case", ["own", "train-pr", "train-head", "train-unrelated",
+                                  "train-wrong-pr", "train-fenced", "lane", "fork", "no-gh"])
+def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, tmp_path, case):
+    branch = "lane/topic" if case in ("lane", "fork") else "land/train-fixture"
+    writer = "\n\nWriter: codex/test"
+    closed = env.branch_pr(1, {"closed": "closed\n"}, state="CLOSED", trailer=writer)
+    part = env.branch_pr(2, {"part": "part\n"}, trailer=writer)
+    other = env.branch_pr(3, {"other": "other\n"}, trailer=writer)
+    follow_up = env.branch_pr(4, {"follow-up": "follow-up\n"}, state="CLOSED", trailer=writer)
+    env.git("checkout", "-qb", branch)
+    env.git("merge", "-q", "--no-ff", "-m", "merge closed part", closed)
+    previous = env.git("rev-parse", "HEAD")
+    env.git("push", "-q", "origin", branch)
+    env.add_pr(100, branch, head=previous, cross=case == "fork")
+    if case == "train-head":
+        body = ("| Part | Head | Writer (harness) | Review | Keys |\n"
+                f"| --- | --- | --- | --- | --- |\n"
+                f"| part | {part[:8]} ({other[:8]} plus a fix) | writer | pass | item |")
+    else:
+        name = 3 if case == "train-wrong-pr" else 2
+        body = ("| Part | PR | Part head | Plan-Item keys | Writers | Part review (family) | Ancestor of train head |\n"
+                f"| --- | --- | --- | --- | --- | --- | --- |\n"
+                f"| part | #{name} | {part[:8]} | item | writer | pass | yes |")
+    if case == "train-fenced":
+        body = f"```text\n{body}\n```"
+    env.state["prs"]["100"]["body"] = body
+    env.save()
+    parts = [closed]
+    next_head = follow_up if case in ("own", "fork") else part
+    env.git("merge", "-q", "--no-ff", "-m", f"follow-up{writer}\nFolded-PR: #2 {part}", next_head)
+    parts.append(next_head)
+    if case == "train-unrelated":
+        env.git("merge", "-q", "--no-ff", "-m", "merge unrelated part", other)
+        parts.append(other)
+    manifest = tmp_path / "train-manifest.txt"
+    manifest.write_text("\n".join(parts) + "\n")
+    env.env["PLANGRAPH_TRAIN_MANIFEST"] = str(manifest)
+    install_pre_push(env)
+    if case == "no-gh":
+        (env.stubs / "gh").unlink()
+    result = subprocess.run(["git", "push", "origin", branch], cwd=env.repo, env=env.env,
+                            capture_output=True, text=True)
+    output = result.stdout + result.stderr
+    forbidden = {"train-unrelated": other, "train-wrong-pr": part,
+                 "train-fenced": part, "lane": part, "fork": closed}
+    if case in forbidden:
+        assert result.returncode != 0
+        assert f"open_pr_merged {forbidden[case]}" in output
+        if case == "train-unrelated":
+            assert f"open_pr_merged {part}" not in output
+    else:
+        assert result.returncode == 0, output
+        assert ("open PR merge check skipped (network/gh unavailable)" in result.stderr) == (case == "no-gh")
+
+
+@pytest.mark.parametrize("case", ["exact", "unrecorded", "moved", "pr-plan"])
+def test_batch_push_open_pr_gate_uses_recorded_part_heads(env, case):
+    name = "folded"
+    writer = "\n\nWriter: codex/test"
+    env.branch_pr(1, {"a.txt": "a\n"}, trailer=writer)
+    part = env.branch_pr(2, {"b.txt": "b\n"}, trailer=writer)
+    unrecorded = env.branch_pr(3, {"c.txt": "c\n"}, trailer=writer)
+    build = env.run("build", "--name", name, "--prs", "1,2")
+    assert build.returncode == 0, build.stdout + build.stderr
+    worktree = wt_of(env, name)
+    if case == "unrecorded":
+        env.git("merge", "-q", "--no-ff", "-m", "merge unrecorded PR", unrecorded, cwd=worktree)
+    if case == "moved":
+        env.push_commit(2, {"more.txt": "more\n"})
+    if case == "pr-plan":
+        assert env.run("push", "--name", name).stdout == "100\n"
+        env.state_file(name).unlink()
+        env.git("commit", "-q", "--allow-empty", "-m", f"follow-up{writer}", cwd=worktree)
+    install_pre_push(env)
+    if case == "pr-plan":
+        result = subprocess.run(["git", "push", "origin", f"batch/{name}"], cwd=worktree, env=env.env,
+                                capture_output=True, text=True)
+    else:
+        result = env.run("push", "--name", name)
+    output = result.stdout + result.stderr
+    if case in ("unrecorded", "moved"):
+        assert result.returncode != 0
+        assert f"open_pr_merged {unrecorded if case == 'unrecorded' else part}" in output
+        if case == "unrecorded":
+            assert f"open_pr_merged {part}" not in output
+    else:
+        assert result.returncode == 0, output
+        assert "network/gh unavailable" not in output
+        assert env.git("rev-parse", f"refs/heads/batch/{name}", cwd=env.origin) == env.git(
+            "rev-parse", "HEAD", cwd=worktree)
 
 
 def three(env):

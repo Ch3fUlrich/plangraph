@@ -60,7 +60,9 @@ card = {'estimate_tokens': 500000, 'window_class': '256k'}
 plan = plan_spawn(card, role='implement', legs=(small, leg), catalog_rows=[],
                   leg_reader=lambda *a, **kw: dict(state='ok', evidence=None))
 assert plan.first_leg == leg, (plan.error, plan.skipped)
-assert next(s for s in plan.skipped if s['leg'] == 'small')['reason'] == 'window_class'
+small_skip = next(s for s in plan.skipped if s['leg'] == 'small')
+assert small_skip['reason'] == 'max_request_tokens', small_skip
+assert str(small.max_request_tokens) in small_skip['evidence']['error'], small_skip
 assert sum(line.startswith('WINDOW_TOKENS =') for path in Path('src/plangraph/planner').glob('*.py')
            for line in path.read_text().splitlines()) == 1
 "#,

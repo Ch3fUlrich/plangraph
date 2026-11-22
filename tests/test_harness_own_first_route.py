@@ -6,6 +6,7 @@ import pytest
 from plangraph.planner.legs import (OWN_HARNESS, harness_skips, own_harness_legs, refuse_foreign_pin, resolve_harness,
                                     spawnable_legs)
 from plangraph.routing_support.leg_state_flag import SpawnRefused
+from registry_route_util import _repo
 
 CATALOG = {leg.id: leg for leg in spawnable_legs()}
 ALL = lambda name: True
@@ -88,16 +89,14 @@ def test_service_route_names_codex_for_gpt_and_falls_back_to_opencode(tmp_path):
     assert plan.to_dict()["first_leg"]["harness_fallback"] == "client_missing"
 
 
-def test_service_route_review_for_claude_diff_runs_gpt_in_codex(tmp_path):
-    from pathlib import Path
-    service_card = {"estimate_tokens": 1000, "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-    from types import SimpleNamespace
+@pytest.fixture
+def review_diff_ref(tmp_path):
+    repo, base, head = _repo(tmp_path)
+    return {"repo": str(repo), "base": base, "head": head}
 
-    from plangraph.spawner.service import SpawnService
-    service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
-                           state=tmp_path / "state")
-    service.client_probe = ALL
-    plan = service.route(service_card, "review", ("claude",))
+
+def test_service_route_review_for_claude_diff_runs_gpt_in_codex(tmp_path, review_diff_ref):
+    plan = review_route(tmp_path, ALL, review_diff_ref)
     assert [(leg.id, leg.harness) for leg in plan.legs[:2]] == [
         ("agy-gemini-4-hydrogen-high", "agy"), ("gpt-6.2-sol-medium", "codex")]
 
@@ -145,35 +144,30 @@ def test_native_legs_with_a_missing_client_fall_back_or_leave_the_route():
         "claude-sonnet-5-5-high"]
 
 
-def test_probe_failure_across_the_three_families_through_the_route(tmp_path):
+def test_probe_failure_across_the_three_families_through_the_route(tmp_path, review_diff_ref):
     plan = routed(tmp_path, NONE)
     assert (plan.legs[0].harness, plan.legs[0].harness_fallback) == ("opencode", "client_missing")
     assert "agy-gemini-4-hydrogen-high" not in [leg.id for leg in plan.legs]
     assert any(row["leg"] == "agy-gemini-4-hydrogen-high" and row["reason"] == "client_missing" for row in plan.skipped)
-    review = review_route(tmp_path, NONE)
+    review = review_route(tmp_path, NONE, review_diff_ref)
     assert review.legs[0].id == "gpt-6.2-sol-medium"
     assert (review.legs[0].harness, review.legs[0].harness_fallback) == ("opencode", "client_missing")
     ids = [leg.id for leg in review.legs]
     assert "claude-sonnet-5-5-high" not in ids
     assert any(row["leg"] == "claude-sonnet-5-5-high" and row["reason"] == "client_missing" for row in review.skipped)
-    gemini = routed_for_writer(tmp_path, NONE, "gpt")
+    gemini = review_route(tmp_path, NONE, review_diff_ref, ("gpt",))
     assert all(leg.family != "gemini" or leg.harness == "agy" for leg in gemini.legs)
 
 
-def review_route(tmp_path, installed, writers=("claude",)):
-    from pathlib import Path
+def review_route(tmp_path, installed, diff_ref, writers=("claude",)):
     from types import SimpleNamespace
 
     from plangraph.spawner.service import SpawnService
     service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
                            state=tmp_path / "state")
     service.client_probe = installed
-    card = {"estimate_tokens": 1000, "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
+    card = {"estimate_tokens": 1000, "diff_ref": diff_ref}
     return service.route(card, "review", writers)
-
-
-def routed_for_writer(tmp_path, installed, writer):
-    return review_route(tmp_path, installed, (writer,))
 
 
 def test_paused_codex_harness_removes_the_converted_leg(tmp_path, monkeypatch):

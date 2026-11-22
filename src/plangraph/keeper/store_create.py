@@ -14,7 +14,7 @@ import re
 
 from ..views import cancelled_gate_dependencies
 from .auth import validate_family
-from .brief import creation_error
+from .brief import creation_error, superseded_contract
 from .errors import Refused
 from .credential_guard import guard
 from .item_fixes import check_fix_limit
@@ -24,6 +24,7 @@ from .store_tiers import (
     REVIEW_TIERS,
     _REVIEW_KEYWORD,
     _TIER_FIELDS,
+    check_named_review_model,
     check_seat_clause_tier,
     default_review_tier,
     decision_tier_conflict,
@@ -206,6 +207,7 @@ class CreateMixin:
                                   "import only honours open/claimed/in_review")
         else:
             for definition in defs:
+                check_named_review_model(definition, definition["key"])
                 check_seat_clause_tier(definition.get("done_criteria"),
                                        definition["review_tier"])
                 definition["state"] = "open"
@@ -456,6 +458,7 @@ class CreateMixin:
             deps_derived = True
         edit_fields = dict(rest)
         self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
+        check_named_review_model(edit_fields, key)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
         # audit-meta ``default`` marker keeps flagging the item forever.  An
         # ``estimate_h`` edit that does not say where the number came from
@@ -673,12 +676,16 @@ class CreateMixin:
                 self._apply_priority(principal, key, prio, now)
             else:
                 self._raise_for_incidents(principal, item, edit_fields, now)
+        if "description" in edit_fields and superseded_contract(me):
+            dropped.extend([
+                "Superseded plan contract, update title and done_criteria together with description.",
+                f"title: {me.get('title') or ''}",
+                f"done_criteria: {me.get('done_criteria') or ''}",
+            ])
         result = {"key": key}
         if bump_epoch:
             result["epoch"] = new_epoch
         if dropped:
-            # Only when something was actually dropped: every caller (the HTTP
-            # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.
             result["warnings"] = dropped
         return result
 
@@ -735,7 +742,7 @@ class CreateMixin:
         self._checked_priority(n)
         with self._write():
             self._apply_priority(principal, key, n, now)
-        return {"key": key, "priority": int(n)}
+            return self._finish_retryable_write(principal, {"key": key, "priority": int(n)})
 
     @staticmethod
     def _checked_priority(n):

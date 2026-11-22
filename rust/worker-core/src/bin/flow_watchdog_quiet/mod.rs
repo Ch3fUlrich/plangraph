@@ -213,6 +213,7 @@ impl Reader {
                 ),
                 // Mutable age/role/run details must not refire a standing episode.
                 active: format!("{PREFIX}{identity}transcript_mtime={mtime}"),
+                recipient: None,
             });
         }
         // Preserve failed enumeration with no affected busy row, without N+1 noise.

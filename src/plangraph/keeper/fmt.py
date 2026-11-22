@@ -373,12 +373,19 @@ def result_text(verb: str, result) -> str:
             return f"{result.get('key')} {result.get('state')}"
         if verb == "whoami":
             return whoami_text(result)
-        if verb == "close_merged" and result.get("flags"):
-            return f"{result.get('key')} {result.get('state')} {flags_text(result['flags'])}"
+        if verb == "close_merged":
+            flags = f" {flags_text(result['flags'])}" if result.get("flags") else ""
+            if result.get("would_close"):
+                return f"{result['key']} would close ({result['state']} -> {result['next_state']}){flags}"
+            if flags:
+                return f"{result['key']} {result['state']}{flags}"
         if "state" in result:
             return f"{result.get('key')} {result.get('state')}"
         if "key" in result:
-            return f"{result['key']} ok"
+            text = f"{result['key']} ok"
+            if verb == "edit_definition":
+                text += "".join(f"\n{warning}" for warning in result.get("warnings") or [])
+            return text
         if "expired" in result:
             return (f"reaped {len(result.get('expired') or [])} expired, "
                     f"{len(result.get('overdue') or [])} overdue")

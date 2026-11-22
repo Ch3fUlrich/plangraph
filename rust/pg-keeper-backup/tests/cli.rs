@@ -49,6 +49,7 @@ fn dump_verify_runs_the_postgres_commands_and_prints_no_password() {
         "-e PGPASSWORD ",
         "pg_dump -Fc --no-owner -n keeper",
         "pg_restore -l /backup/.keeper-schema-seq19200-",
+        "--data-only --schema keeper --table events --file - /backup/",
         "CREATE DATABASE \"pgkb_scratch_19200_",
         "pg_restore --no-owner --no-privileges --exit-on-error -d pgkb_scratch_19200_",
         "DROP DATABASE IF EXISTS \"pgkb_scratch_19200_",
@@ -149,7 +150,7 @@ fn restore_test_rejects_an_archive_whose_content_is_older_than_its_name() {
         "{}",
         text(&out)
     );
-    assert!(std::fs::read_to_string(&log)
-        .unwrap()
-        .contains("DROP DATABASE"));
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(!calls.contains("CREATE DATABASE"), "{calls}");
+    assert!(!calls.contains("-d pgkb_scratch_"), "{calls}");
 }

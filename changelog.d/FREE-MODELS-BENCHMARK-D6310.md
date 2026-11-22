@@ -1,0 +1,1 @@
+SKIPPED plangraph:FREE-MODELS-BENCHMARK-D6310. The five-head replay requires separate model dispatches and keeper evidence. This native writer lane delegates head review to the worker. The existing HIGH-review route exclusion for Flint, Big Pickle and Beam remains covered by the base route test.
