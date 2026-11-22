@@ -67,16 +67,14 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         command.process_group(0);
     }
     let mut child = command.spawn().map_err(|e| e.to_string())?;
-    let status: Result<_, String> = (|| {
-        loop {
-            if host.free()? < 2 {
-                return Err("disk_low: under 2 GB stop floor".into());
-            }
-            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                return Ok(status);
-            }
-            std::thread::sleep(Duration::from_secs(1));
+    let status: Result<_, String> = (|| loop {
+        if host.free()? < 2 {
+            return Err("disk_low: under 2 GB stop floor".into());
         }
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Ok(status);
+        }
+        std::thread::sleep(Duration::from_secs(1));
     })();
     if status.is_err() {
         #[cfg(unix)]

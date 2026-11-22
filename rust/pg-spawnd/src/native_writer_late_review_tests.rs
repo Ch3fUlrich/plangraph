@@ -1,6 +1,11 @@
 use super::*;
 
-pub(super) fn check_review_resume_after_missing_client(host: &mut Host, base: &str, head: &str, cli: &Path) {
+pub(super) fn check_review_resume_after_missing_client(
+    host: &mut Host,
+    base: &str,
+    head: &str,
+    cli: &Path,
+) {
     let previous = json!({"head":base,"text":"HIGH src/lib.rs:1 - previous finding"});
     let diagnostic = "REVIEW run-missing FAIL client_missing /fixture/codex";
     fs::write(
@@ -85,4 +90,3 @@ pub(super) fn check_review_replaces_unreadable_run(host: &mut Host, head: &str, 
         assert!(!pending.exists());
     }
 }
-

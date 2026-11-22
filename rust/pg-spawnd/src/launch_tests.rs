@@ -461,6 +461,9 @@ fn unresolved_registered_refs_refuse_without_echoing_or_starting_the_adapter() {
             "the adapter child started before the lookup"
         );
     }
+}
+
+#[test]
 fn deepseek_review_uses_the_catalogued_output_ceiling() {
     let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
     let code = r#"
