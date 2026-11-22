@@ -72,7 +72,7 @@ def active_train(st, head):
     """The part table at this exact head, with skipped and reverted parts removed."""
     from plangraph.keeper.evidence_git import REVERT_GREP, delivery_revert
 
-    skipped = {rec["pr"] for rec in st["skipped"]}
+    skipped = {rec["pr"] for rec in st.get("skipped", [])}
     dropped = set()
     log = git("log", "--first-parent", "-E", "-i", "--grep", REVERT_GREP, "--format=%B%x1d",
               f"{st['base_head']}..{head}", cwd=st["worktree"])

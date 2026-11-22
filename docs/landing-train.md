@@ -41,6 +41,17 @@ Adopted resolutions come from the replay of `--resolution-log`, bound to the bui
 snapshot order. `plangraph land-train verify` repeats the proof with `--manifest`, `--parts` (the selection the verifier
 recomputed), `--open`, `--freeze` and `--result`.
 
+## Push a built train
+
+The builder defaults to `land/train-NAME` and saves the ordered part heads in
+Git's common directory. Use `plangraph land-train push --repo DIR --branch
+land/train-NAME` to push to origin with the installed hook, the manifest and
+fast preflight. The push gate allows single-parent `Train N: resolve` and
+`Train N: drop` commits with `Writer` and `Harness` trailers. The ordered
+second parents must still match the manifest, including merges later reverted
+by a drop. Use `Dropped-Part: <key>` and the canonical revert body to record
+a dropped part.
+
 ## A red train
 
 `land::split` (rust/plangraph-cli/src/land/split.rs) plans the retries of a red train; every retry is a new frozen

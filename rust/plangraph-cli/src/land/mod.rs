@@ -10,6 +10,7 @@ mod main_gh_tests;
 pub mod main_state;
 #[cfg(test)]
 mod main_state_tests;
+mod push;
 pub mod registrar;
 #[cfg(test)]
 mod registrar_tests;

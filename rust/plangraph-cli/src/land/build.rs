@@ -224,6 +224,9 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
 
 /// Publishes the train as the branch `branch` (a ref under the builder's namespace).
 pub fn publish(repo: &Path, branch: &str, manifest: &Manifest) -> Result<(), String> {
+    if super::push::is_train_branch(branch) {
+        super::push::write_manifest(repo, branch, manifest)?;
+    }
     git::out(
         repo,
         &[

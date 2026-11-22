@@ -6,9 +6,9 @@ new branches scrub from origin/main and select affected test files from their ne
 Missing preflight refuses main pushes; topic and tag pushes retain the other gates.
 Lane and train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
 cargo fmt) and no test; the affected tests run once, in CI. A push to refs/heads/land/train-* is a
-train: its first-parent chain must be exactly the merges of the parts listed in the manifest
-(PLANGRAPH_TRAIN_MANIFEST, one head per line, merge order), and the open-pull-request parent
-check is replaced by that manifest check.
+train: its first-parent chain must carry the merges listed in the manifest in order, with
+attributed resolution or drop commits allowed between merges. PLANGRAPH_TRAIN_MANIFEST
+names the file of part heads. The manifest check replaces the open-PR parent check.
 When origin/main is available, identical upstream/base blobs and inherited lines
 are excluded; without it the stricter whole-file scan remains in effect.
 PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit
@@ -191,26 +191,41 @@ def read_train_manifest(path):
     return heads
 
 
+def train_resolution(commit):
+    fields = git_out(
+        "show", "-s", "--format=%s%x00"
+        "%(trailers:key=Writer,valueonly,separator=%x1f)%x00"
+        "%(trailers:key=Harness,valueonly,separator=%x1f)", commit,
+    ).split("\0")
+    return (len(fields) == 3 and re.match(r"^Train [0-9]+: (?:resolve|drop)(?:\s|$)", fields[0])
+            and all(value.strip() and "\x1f" not in value for value in fields[1:]))
+
+
 def train_gate(local_sha, manifest):
-    """The train is exactly its manifest: the first-parent chain above the base holds one two-parent
-    merge per manifest head, in manifest order, nothing else. Any other parent is refused."""
+    """Match merges to the manifest in order, allowing attributed single-parent fixes."""
     main = git_out("rev-parse", "--verify", "-q", "refs/remotes/origin/main^{commit}")
     base = git_out("merge-base", main, local_sha) if main else ""
     if not base:
         return "train base unavailable (no origin/main merge-base)"
-    chain = git_out("rev-list", "--first-parent", "--reverse", f"{base}..{local_sha}").split()
+    chain = git_out("rev-list", "--first-parent", "--reverse", "--parents", f"{base}..{local_sha}")
     previous = base
-    for index, commit in enumerate(chain):
-        parents = git_out("rev-list", "--parents", "-n", "1", commit).split()[1:]
-        if len(parents) != 2 or parents[0] != previous:
+    index = 0
+    for entry in chain.splitlines():
+        commit, *parents = entry.split()
+        if not parents or parents[0] != previous or len(parents) > 2:
             return f"train commit {commit[:12]} is not a merge of its predecessor (an extra commit?)"
+        previous = commit
+        if len(parents) == 1:
+            if not train_resolution(commit):
+                return f"train commit {commit[:12]} is an extra commit without resolver attribution"
+            continue
         if parents[1] not in manifest:
             return f"train parent {parents[1][:12]} is outside its manifest"
         if index >= len(manifest) or parents[1] != manifest[index]:
             return f"train parent {parents[1][:12]} is out of manifest order"
-        previous = commit
-    if len(chain) != len(manifest):
-        return f"train has {len(chain)} merges, its manifest {len(manifest)} parts"
+        index += 1
+    if index != len(manifest):
+        return f"train has {index} merges, its manifest {len(manifest)} parts"
     return None
 
 
