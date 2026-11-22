@@ -20,7 +20,7 @@ from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_pa
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key, 
+                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key,
                               keeper_landing_configured, landing_receipt_inputs)
 
 

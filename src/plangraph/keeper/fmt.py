@@ -71,6 +71,11 @@ def ready_context_rows(rows, ub) -> str:
     return "\n".join(out)
 
 
+def _incident_text(entry):
+    url = f" ({entry['evidence']})" if entry.get("evidence") else ""
+    return f"INCIDENT {entry['at']} {entry['author']} {entry['text']}{url}"
+
+
 def show_text(info: dict) -> str:
     """One compact block for one item: fields, deps, unblocks, evidence."""
     deps = ", ".join(f"{d['key']}={d.get('state')}"
@@ -95,6 +100,7 @@ def show_text(info: dict) -> str:
             for e in evidence))
     else:
         lines.append("evidence -")
+    lines.extend(_incident_text(entry) for entry in info.get("incidents", ()))
     lines.extend(_context_lines(info))
     if info.get("host"):
         lines.append(f"host {info['host']}")
@@ -339,8 +345,11 @@ def whoami_text(who: dict) -> str:
 
 def snapshot_text(snap: dict) -> str:
     items = snap.get("items") or []
-    return (f"snapshot {len(items)} items | generated {snap.get('generated')} | "
-            f"head {(snap.get('head') or '-')[:12]}")
+    lines = [f"snapshot {len(items)} items | generated {snap.get('generated')} | "
+             f"head {(snap.get('head') or '-')[:12]}"]
+    lines.extend(f"{item['key']} {_incident_text(entry)}"
+                 for item in items for entry in item.get("incidents", ()))
+    return "\n".join(lines)
 
 
 def flags_text(flags) -> str:

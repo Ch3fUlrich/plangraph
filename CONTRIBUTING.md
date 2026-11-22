@@ -657,6 +657,12 @@ Run it alone with `cargo run --manifest-path rust/Cargo.toml -p pg-policy --
 --test-sources .`; `python3 tools/check_new_code_lang.py` runs it in fast checks
 and CI. No allowlist is provided.
 
+The fleet Stop hook reads the commit SHA from plan-order's `DONE JOB-fix SHA`
+report and verifies it against the checkout HEAD before calling the prebuilt
+`pg-policy` from `PG_POLICY_BIN` or PATH. Launchers can also select a fix by
+setting `PG_LESSON_FIX_COMMIT`. A missing or unverified Class-Search record
+is filed as a LESSON-TO-GATE failure.
+
 ## Fast local CI (D-6054)
 
 Run `cargo run --manifest-path rust/Cargo.toml -p plangraph-cli -- fast-checks`

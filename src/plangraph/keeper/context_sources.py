@@ -151,7 +151,8 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
         else:
             problems.append("origin target ref unavailable")
     origin_stale = bool(problems)
-    if _github_repo(origin.strip()):
+    prs_expected = bool(_github_repo(origin.strip()))
+    if prs_expected:
         try:
             proc = subprocess.run(
                 ["gh", "pr", "list", "--state", "open", "--limit", "10000",
@@ -242,7 +243,10 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
         name, sha = line.split(" ", 1)
         if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
             branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
-    result = {"commits": commits, "prs": pulls if prs is not None else None,
+    prs_unverified = prs_expected and (prs is None or origin_stale)
+    previous_prs = hit[1].get("prs") if hit and prs_expected else None
+    result = {"commits": commits, "prs": pulls if prs is not None else previous_prs,
+              "prs_unverified": prs_unverified,
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
               "stale": bool(problems), "origin_stale": origin_stale,
               "reason": "; ".join(problems),
@@ -295,6 +299,18 @@ def work_index_cached(git, project):
                          daemon=True).start()
         return served
     return hit[1]
+
+
+def indexed_open_pulls(indexes, key, project):
+    """Match exact trailers across repositories; bare IDs belong to their own project."""
+    _, bare = _split(key)
+    pulls = set()
+    for name, index in indexes.items():
+        prs = (index or {}).get("prs") or {}
+        pulls.update(prs.get(key, ()))
+        if name == project:
+            pulls.update(prs.get(bare, ()))
+    return sorted(pulls)
 
 
 def indexed_work(index, key):

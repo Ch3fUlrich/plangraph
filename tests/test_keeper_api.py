@@ -412,3 +412,71 @@ def test_ready_unknown_index_warning_is_visible_in_json_and_text(srv, w, monkeyp
     text = raw.decode()
     assert text.count("WARNING:") == 1 and "origin fetch failed" in text
     assert "Unknown:\n  demo:A" in text
+
+
+def test_incident_log_across_item_states(srv, w):
+    from plangraph.keeper import cli
+
+    key = "demo:A"
+    l1 = w.p("l1main")
+    token = w.tok("l1main")
+
+    def append(text, who=token, **fields):
+        return call(srv, "/v1/incident", method="POST",
+                    body={"key": key, "text": text, **fields}, token=who)
+
+    w.store.put_card(w.p("router"), key, {"outcome": "finish the work"})
+    status, _, raw = append("initial report", evidence="https://example.org/report")
+    assert status == 200, raw
+    assert append("wrong project", w.tok("l1other"))[0] == 403
+    assert append("worker", w.tok("workerA"))[0] == 403
+    epoch = w.store.claim(l1, key)["epoch"]
+    w.clock.advance(1)
+    assert append("claimed report")[0] == 200
+    card = w.store.get_card(l1, key)
+    assert [entry["text"] for entry in card["incidents"]] == [
+        "initial report", "claimed report"]
+    with pytest.raises(api.Refused, match="claimed, not open"):
+        w.store.edit_definition(l1, key, {"title": "new title"})
+    w.store.add_evidence(l1, key, epoch, "decision", {"id": "D-123"})
+    w.store.submit(l1, key, epoch)
+    w.clock.advance(1)
+    assert append("review report")[0] == 200
+    assert append("router report", w.tok("router"))[0] == 200
+    w.store.verdict(w.p("reviewer"), key, True)
+    status, _, raw = append("too late")
+    assert status >= 400
+    assert "done" in jbody(raw)["msg"]
+
+    status, _, raw = call(srv, "/v1/show?key=demo:A", token=token)
+    assert status == 200, raw
+    assert "INCIDENT 2023-11-14T22:13:21Z l1main claimed report" in raw.decode()
+    status, _, raw = call(srv, "/v1/snapshot?fmt=text", token=token)
+    assert status == 200, raw
+    assert "demo:A INCIDENT 2023-11-14T22:13:22Z l1main review report" in raw.decode()
+    item = next(i for i in w.store.snapshot(l1)["items"] if i["key"] == key)
+    assert [entry["text"] for entry in item["incidents"]] == [
+        "initial report", "claimed report", "review report", "router report"]
+    assert item["incidents"][0]["evidence"] == "https://example.org/report"
+    args = cli.build_parser().parse_args(["incident", key, "--text", "new report"])
+    assert (args.key, args.text, args.evidence) == (key, "new report", None)
+    assert w.store.verify_integrity() == []
+
+
+def test_incident_migration_on_existing_sqlite_store(tmp_path):
+    import sqlite3
+
+    from plangraph.keeper import db
+
+    path = tmp_path / "existing.db"
+    conn = db.open_db(path, create=True, backend="sqlite")
+    conn.close()
+    with sqlite3.connect(path) as old:
+        old.execute("DROP INDEX idx_events_incidents")
+    conn = db.open_db(path, backend="sqlite")
+    try:
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE name='idx_events_incidents'"
+        ).fetchone()[0] == "idx_events_incidents"
+    finally:
+        conn.close()

@@ -44,6 +44,8 @@ Use grep for text that is not a symbol.
 
 ## Validate before you report
 
+For each fix of a failing test or review finding, verify the whole-class regression and use `pg-policy --class-search FIX_SHA` to check for `Class-Search: <pattern> -> <n> hits, <m> changed` in the commit body.
+
 Report a finding only after you have one of: a reproduction you ran, a failing test you
 wrote and ran in scratch space, or a cited `file:line` that shows the defect. If you
 cannot validate a suspicion, drop it or list it under a plain "Unverified" note that

@@ -4,6 +4,7 @@ one session-name check it shares with the other hooks.
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -51,3 +52,53 @@ def test_the_name_check_is_the_shared_one(hooks) -> None:
         assert report.safe_name(name)
     for name in ("", "-a", ".a", "a/b", "a b", "A" * 129, None, 5):
         assert not report.safe_name(name)
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_fix_stop_holds_done_until_class_search_passes(hooks, monkeypatch, tmp_path, exit_code):
+    report = hooks[0]
+    fix = "a" * 40
+    monkeypatch.setenv("PG_LESSON_FIX_COMMIT", fix)
+    monkeypatch.setenv("PG_POLICY_BIN", "fixture-policy")
+    checked = []
+
+    def validate(argv, **kwargs):
+        checked.append(argv)
+        return subprocess.CompletedProcess(argv, exit_code)
+
+    monkeypatch.setattr(subprocess, "run", validate)
+    rows = run_stop(report, monkeypatch, tmp_path, "DONE fix landed")
+    assert checked == [["fixture-policy", "--class-search", fix]]
+    expected = ("FAIL", "FAIL LESSON-TO-GATE Class-Search missing or invalid on fix commit")
+    assert [(row["status"], row["line"]) for row in rows] == [
+        expected if exit_code else ("DONE", "DONE fix landed")]
+
+
+@pytest.mark.parametrize("result_status", ["DONE", "FAIL", "stale"])
+def test_plan_order_fix_report_checks_the_checkout_head(
+        hooks, monkeypatch, tmp_path, result_status):
+    real_run = subprocess.run
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    real_run(["git", "init", "-q", str(repo)], check=True)
+    real_run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+              "commit", "--allow-empty", "-qm", "fixture fix"], cwd=repo, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    reported = "a" * 40 if result_status == "stale" else commit
+    checked = []
+
+    def validate(argv, **kwargs):
+        if argv[0] != "fixture-policy":
+            return real_run(argv, **kwargs)
+        checked.append((argv, kwargs["cwd"]))
+        return subprocess.CompletedProcess(argv, int(result_status == "FAIL"))
+
+    monkeypatch.delenv("PG_LESSON_FIX_COMMIT", raising=False)
+    monkeypatch.setenv("PG_POLICY_BIN", "fixture-policy")
+    monkeypatch.setattr(subprocess, "run", validate)
+    rows = run_stop(hooks[0], monkeypatch, tmp_path,
+                    f"DONE batch77-fix {reported} verified", cwd=repo)
+    assert checked == ([] if result_status == "stale" else [
+        (["fixture-policy", "--class-search", commit], str(repo))])
+    assert rows[0]["status"] == ("FAIL" if result_status == "stale" else result_status)
+    assert reported not in rows[0]["line"]
