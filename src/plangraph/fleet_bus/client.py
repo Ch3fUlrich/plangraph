@@ -47,6 +47,7 @@ import logging
 import math
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -677,16 +678,18 @@ def build_client(env=None, *, status=None, probe=None, wake=None, log=None):
 def call_tool(name, args, env=None, *, wake=None, log=None):
     """The MCP surface of this client: same signing, spool and refusals."""
     args = args if isinstance(args, dict) else {}
-    client = build_client(env, wake=wake, log=log)
     if name == "fleet_msg_send":
         to, text = args.get("to"), args.get("text")
         if not isinstance(to, str) or not to:
             raise Refused("to must be a nonempty agent or host name")
         if not isinstance(text, str):
             raise Refused("text must be a string")
+        _check_message_time(text)
+        client = build_client(env, wake=wake, log=log)
         return json.dumps(client.send(to, text), sort_keys=True,
                           ensure_ascii=False, default=str)
     if name == "fleet_msg_read":
+        client = build_client(env, wake=wake, log=log)
         rows = client.read(args.get("since"))
         return json.dumps({"rows": rows}, sort_keys=True, ensure_ascii=False)
     raise Refused(f"unknown bus tool: {name}")
@@ -711,11 +714,29 @@ def _parser():
     return parser
 
 
+def _check_message_time(text):
+    """Use the installed Rust guard on the message that will actually be sent."""
+    configured = os.getenv("PG_MESSAGE_TIME_HOOK")
+    binary = Path(configured) if configured else (
+        Path.home() / ".local/share/plangraph/hooks" /
+        ("pg-hook.exe" if os.name == "nt" else "pg-hook"))
+    if not configured and not binary.is_file():
+        return
+    try:
+        result = subprocess.run([str(binary), "message-time-text"], input=text,
+                                capture_output=True, encoding="utf-8", timeout=5)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise TransportError(f"message-time guard unavailable: {exc}") from None
+    if result.returncode == 2:
+        raise Refused(result.stderr.strip())
+    if result.returncode:
+        raise TransportError(f"message-time guard exited {result.returncode}")
+
+
 def main(argv=None, *, client=None):
     """CLI entry: exit 0 sent/read, 2 refusal, 1 transport failure."""
     args = _parser().parse_args(argv)
     try:
-        active = client if client is not None else build_client()
         if args.command == "send":
             text = args.text
             if args.as_json:
@@ -724,6 +745,8 @@ def main(argv=None, *, client=None):
                 except ValueError:
                     raise Refused("--json text is not valid JSON") from None
                 text = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+            _check_message_time(text)
+            active = client if client is not None else build_client()
             result = (active.send(args.agent, text, msg_id=args.msg_id) if args.msg_id
                       else active.send(args.agent, text))
             if result["queued"]:
@@ -731,6 +754,7 @@ def main(argv=None, *, client=None):
             else:
                 print(f"sent {result['msg_id']} seq={result['seq']}")
         else:
+            active = client if client is not None else build_client()
             rows = active.read(args.since)
             print(json.dumps({"rows": rows}, sort_keys=True,
                              ensure_ascii=False))

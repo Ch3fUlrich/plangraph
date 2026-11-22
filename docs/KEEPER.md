@@ -345,6 +345,22 @@ Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads 
 
 If `claim`, `heartbeat`, or `priority` gives an unknown outcome, repeat the same request with the printed `PG_IDEMPOTENCY_KEY` and the same credential. The keeper replies from the receipt written in the mutation's transaction. Run-token heartbeat outbox entries carry that key. The journal's `request_timing` records include `verb`, `wait_ms`, `hold_ms`, `query_ms`, `snapshot_write_ms`, and `total_ms`. Every `show`, `heartbeat`, and `set_priority` request contributes a latency sample. Snapshot builds read the store under its lock, then encode, sign, and publish outside that lock. A review-overdue finding moves to alert history when the item leaves its review round.
 
+`pg define` and `pg define --edit` refuse review clauses in `done_criteria`
+or `description` that pin a model or leg from the routing catalog. Ask for
+“a review seat outside every writer family” so the spawner can choose the seat.
+Phrases such as “approved by” and labels such as `Reviewer:` or `Seat=`
+can pin a reviewer. A request to review the output produced by a named model
+can still name that model.
+`pg check` lists existing nonterminal items with model pins as
+`NAMED-REVIEW-MODEL`. The JSON output includes `named_review_models`, and
+`--strict` exits 1 when it finds a pin.
+
+When a description edit introduces a newer plan version or explicitly
+supersedes a rule still cited in the title or done criteria, the edit response
+returns both fields and a reminder to update them together. The keeper
+includes that finding in the stale reason on `show` and applies the existing
+audited stale-claim override procedure.
+
 ## Tests (minimum; write first)
 state machine: every allowed edge + every disallowed edge refused · claim race: 3 threads → exactly one winner · stale epoch refused ·
 lease reaper · attack suite at store level: edit/delete/reopen/re-point a DONE item, `corrects` pointing at non-done, evidence/event/edge

@@ -60,7 +60,7 @@ if 'resume' in sys.argv:
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fix'], check=True, stdout=subprocess.DEVNULL)
 else:
     import os
-    if 'reject marker', 'client marker', 'late marker' in prompt:
+    if any(marker in prompt for marker in ('reject marker', 'client marker', 'late marker')):
         run = pathlib.Path.cwd().parent
         queued = subprocess.run(['fixture-spawnd', 'steer-local', run.name,
             '--state', str(run.parent.parent)], input='drop the fixture scope', text=True, capture_output=True)

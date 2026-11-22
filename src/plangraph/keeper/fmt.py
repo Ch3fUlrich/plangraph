@@ -391,7 +391,10 @@ def result_text(verb: str, result) -> str:
         if "state" in result:
             return f"{result.get('key')} {result.get('state')}"
         if "key" in result:
-            return f"{result['key']} ok"
+            text = f"{result['key']} ok"
+            if verb == "edit_definition":
+                text += "".join(f"\n{warning}" for warning in result.get("warnings") or [])
+            return text
         if "expired" in result:
             return (f"reaped {len(result.get('expired') or [])} expired, "
                     f"{len(result.get('overdue') or [])} overdue")

@@ -8,6 +8,7 @@ Findings, printed as one line each:
   ``dst``'s done criteria needs ``src``'s code and their declared ``paths``
   touch different trees, so the edge only orders the plan (it could be a
   phase/ordering note instead of a dependency).
+* ``NAMED-REVIEW-MODEL <key> <field> <model>`` — a review pins a catalog model.
 * ``MERGED-OPEN <key> <sha>`` — a commit on the project repo's main already
   carries ``Plan-Item: <key>`` while the item is still open.
 
@@ -23,6 +24,7 @@ import sys
 
 from .cli_verbs import EXIT_OK, EXIT_UNREACHABLE, Unreachable
 from .brief import missing_why_how
+from .store_tiers import review_model_findings
 from ..views import cancelled_gate_dependencies
 
 #: A key or path-list mention is case-insensitive.
@@ -160,24 +162,29 @@ def cmd_check(args, session):
     order_only, merged_open = findings(items, getattr(config, "repos", None))
     cancelled_deps = cancelled_gate_dependencies(items)
     missing = missing_why_how(items)
+    named_models = review_model_findings(items)
     if session.json_mode:
         print(json.dumps({
             "order_only": [{"src": src, "dst": dst} for src, dst in order_only],
             "merged_open": [{"key": key, "commit": sha} for key, sha in merged_open],
             "missing_why_how": missing,
+            "named_review_models": [{"key": key, "field": field, "model": model}
+                                    for key, field, model in named_models],
             "cancelled_gate_deps": [{"gate": gate, "dependency": dep}
                                     for gate, dep in cancelled_deps],
         }))
     else:
         print(f"missing_why_how: {len(missing)} items" +
               (" " + ", ".join(missing[:20]) if missing else ""))
+        for key, field, model in named_models:
+            print(f"NAMED-REVIEW-MODEL {key} {field} {model}")
         for gate, dep in cancelled_deps:
             print(f"CANCELLED-GATE-DEP {gate} -> {dep}")
         for src, dst in order_only:
             print(f"ORDER-ONLY {src} -> {dst}")
         for key, sha in merged_open:
             print(f"MERGED-OPEN {key} {sha}")
-    if getattr(args, "strict", False) and (order_only or merged_open or cancelled_deps):
+    if getattr(args, "strict", False) and (order_only or merged_open or cancelled_deps or named_models):
         return 1
     return EXIT_OK
 

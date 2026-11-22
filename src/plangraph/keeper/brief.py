@@ -37,6 +37,34 @@ def creation_error(items):
     return None
 
 
+_PLAN_VERSION = re.compile(r"\bplan\s+(?:v(?:ersion)?|rev(?:ision)?\.?)\s*(\d+(?:\.\d+)*)\b",
+                           re.IGNORECASE)
+_SUPERSEDED_RULE = re.compile(r"\bsupersedes?\s+rule\s+(\d+(?:\.\d+)*[a-z]?)\b",
+                              re.IGNORECASE)
+
+
+def _plan_versions(text):
+    for match in _PLAN_VERSION.findall(text):
+        yield tuple(map(int, re.sub(r"(?:\.0)+$", "", match).split(".")))
+
+
+def superseded_contract(item):
+    """Report title or done criteria that still reference the previous contract."""
+    description = item.get("description") or ""
+    latest = max(_plan_versions(description), default=None)
+    fields = {key: item.get(key) or "" for key in ("title", "done_criteria")}
+    conflicts = [key for key, text in fields.items()
+                 if latest is not None and any(version < latest for version in _plan_versions(text))]
+    if conflicts:
+        return f"mixed plan versions in {', '.join(conflicts)}"
+    for rule in _SUPERSEDED_RULE.findall(description):
+        names_rule = re.compile(rf"\brule\s+{re.escape(rule)}(?!\w|\.\d)", re.IGNORECASE)
+        conflicts = [key for key, text in fields.items() if names_rule.search(text)]
+        if conflicts:
+            return f"superseded rule {rule} in {', '.join(conflicts)}"
+    return None
+
+
 def missing_markers(description):
     """Return required markers without non-blank section content."""
     sections = re.split(r"(?m)^(Why:|How:)", description or "")
