@@ -118,7 +118,9 @@ def _split(key):
 
 def _cancelled_delivery(git, repo, candidates, reverts):
     cancelled = set()
-    for sha, (target, names) in reverts.items():
+    for sha, (target, names) in reverts.items():  # Descendants precede their ancestors.
+        if sha in cancelled:
+            continue
         parents = _ok(git, repo, ["rev-list", "--parents", "-n1", "--end-of-options", target]) if target else None
         if parents:
             commit, *previous = parents.split()
@@ -195,7 +197,7 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             problems.append("open PR inventory unavailable")
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
-    out = _ok(git, repo, ["log", "--all", "--no-show-signature",
+    out = _ok(git, repo, ["log", "--all", "--date-order", "--no-show-signature",
                          "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
     if refs_out is None or target is None or out is None:
         if not origin:
@@ -357,7 +359,7 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT, head
     prefix = f"({_ere(proj)}:)?" if proj else ""
     pattern = f"^Plan-Item:[ \t]*{prefix}{_ere(bare)}[ \t]*$"
     out = _ok(git, repo, [
-        "log", "--no-show-signature", "-E", "--grep", pattern,
+        "log", "--date-order", "--no-show-signature", "-E", "--grep", pattern,
         "--regexp-ignore-case", "--grep", REVERT_GREP,
         "--format=%H%x1f%cI%x1f%s%x1f%B%x1d", "--end-of-options", ref])
     if out is None:

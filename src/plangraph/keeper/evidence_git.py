@@ -103,8 +103,9 @@ def trailer_entries(message: str) -> list[tuple[str, str]]:
 
 
 # Include the historical train subjects as well as canonical git revert messages.
-REVERT_GREP = r"^(Revert|Train [0-9]+: drop |This reverts commit |Dropped-Part:)"
-_TRAIN_DROP = re.compile(r"^Train [0-9]+: drop ", re.I)
+_TRAIN_DROP_SUBJECT = "Train [0-9]+: drop([ \t]|$)"
+REVERT_GREP = f"^(Revert|{_TRAIN_DROP_SUBJECT}|This reverts commit |Dropped-Part:)"
+_TRAIN_DROP = re.compile("^" + _TRAIN_DROP_SUBJECT, re.I)
 _REVERT_TARGET = re.compile(r"\bThis reverts commit ([0-9a-f]{7,40})\b", re.I)
 _LEGACY_TARGET = re.compile(r"\brevers(?:e|t)\w* (?:[^\n]*?merge )?([0-9a-f]{7,40})\b", re.I)
 
