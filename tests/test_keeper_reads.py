@@ -631,12 +631,11 @@ def test_ready_reports_unknown_remote_facts_without_using_stale_authority(w, tmp
         assert src.work_index(adapter, "demo")["verified_at"] is None
         assert w.store._ready_groups()["warnings"][0]["age_seconds"] is None
         assert "age unknown" in w.store.ready(w.p("reader"))
-    with pytest.raises(Refused, match="work index unverified") as exc:
-        w.store.claim(w.p("l1main"), "demo:A")
-    assert exc.value.code == "bad_state"
-    assert w.store._item("demo:A")["epoch"] == 0
-    assert w.store.claim(w.p("l1main"), "demo:A",
-                         force_stale="operator verified work manually")["epoch"] == 1
+    for reason in (None, "operator verified work manually"):
+        with pytest.raises(Refused, match="open PR inventory unavailable") as exc:
+            w.store.claim(w.p("l1main"), "demo:A", force_stale=reason)
+        assert exc.value.code == "bad_state"
+        assert w.store._item("demo:A")["epoch"] == 0
 
 
 def test_ready_text_sections_preserve_startable_line_contract():

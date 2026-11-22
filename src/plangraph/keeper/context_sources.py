@@ -244,8 +244,7 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
         if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
             branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
     prs_unverified = prs_expected and (prs is None or origin_stale)
-    previous_prs = hit[1].get("prs") if hit and prs_expected else None
-    result = {"commits": commits, "prs": pulls if prs is not None else previous_prs,
+    result = {"commits": commits, "prs": pulls if prs is not None and not prs_unverified else None,
               "prs_unverified": prs_unverified,
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
               "stale": bool(problems), "origin_stale": origin_stale,
