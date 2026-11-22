@@ -236,7 +236,6 @@ def _upgrade(conn):
     conn.executescript(PLACEMENT_RULES_DDL)
     conn.executescript(GRANTS_DDL)
     conn.executescript(EVENT_AUDIENCE_DDL)
-    conn.executescript(CLAIM_DEFINITION_INDEX_DDL)
     conn.executescript(LANDING_STAGES_DDL)
     conn.executescript(LANDING_TRAINS_DDL)
     conn.executescript(LANDING_JOBS_DDL)
@@ -265,6 +264,7 @@ def _upgrade(conn):
     _upgrade_lock_triggers(conn)
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
         conn.executescript(INCIDENTS_DDL)
+        conn.executescript(CLAIM_DEFINITION_INDEX_DDL)
 
 
 def open_db(path, *, create: bool = False,
