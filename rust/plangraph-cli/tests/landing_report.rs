@@ -160,6 +160,7 @@ with (patch.object(landing, 'load_state', return_value=state),
       patch.object(landing, 'gh_json', return_value=dict(state='OPEN', headRefOid=head)),
       patch.object(landing, 'require_part_seats', return_value={5: ['run-fixture']}),
       patch.object(landing, 'batch_workflow_gate'),
+      patch.object(landing, 'keeper_migration', return_value=23),
       patch.object(landing, 'keeper_landing_configured', return_value=True),
       patch.object(build, 'run', report),
       patch.object(landing, 'save_state', save),
@@ -173,7 +174,7 @@ assert output.getvalue().splitlines() == [
     f'GO-REQ #17 example/repo head {head}; diff stat: 1 file changed; parts: '
     f'#5 sha={state["merged"][0]["head"]} review=run-fixture verdict=ACCEPT; '
     'CI run 12 state=completed conclusion=success; timeline: ci=2.5m push=0.5m; '
-    'PLAN example:TRAIN conforms=yes deviations=none']
+    'MIGRATION 23; PLAN example:TRAIN conforms=yes deviations=none']
 "#,
     );
 }
