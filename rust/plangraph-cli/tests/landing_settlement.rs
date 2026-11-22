@@ -73,7 +73,10 @@ with TemporaryDirectory() as tmp:
     identity = dict(repo='example/repo', pr=17)
     lease = Store(db).land(principal, dict(repo=identity['repo'], action='acquire', owner='test'))
     identity.update(lease)
-    train = dict(identity, base='a'*40, head='b'*40, parts=[{'pr': 5, 'head': 'c'*40}])
+    train = dict(identity, base='a'*40, head='b'*40, parts=[
+        {'pr': 5, 'head': 'c'*40, 'ref': 'lane/landed'},
+        {'pr': 6, 'head': 'e'*40, 'ref': 'lane/moved'},
+    ])
     Store(db).land(principal, dict(train, action='prepare'))
     db.close()
 
@@ -83,23 +86,44 @@ with TemporaryDirectory() as tmp:
     assert len(pending) == 1 and pending[0]['merge'] is None
     def journal(repo, action, **fields):
         return store.land(principal, dict(fields, repo=repo, action=action))
-    first = Store(db).land(principal, dict(identity, action='landed', merge='d'*40, included=[5]))
+    first = journal(identity['repo'], 'landed', pr=17, merge='d'*40, **lease)
     assert first['open_steps'] == ['evidence', 'close_parts', 'host_sync', 'cleanup']
+    assert 'included' not in first
+    try:
+        journal(identity['repo'], 'advance', pr=17, merge='d'*40, step='evidence', **lease)
+    except Refused as exc:
+        assert exc.code == 'conflict', exc.code
+    else:
+        raise AssertionError('settlement advanced without checked part outcomes')
     calls = []
     proof = [dict(host=str(i), head='d'*40, checkout='d'*40, hooks='d'*40, build='d'*40, synced=i==1)
              for i in range(3)]
     def effect(args, **kwargs):
         calls.append(args)
         return Mock(stdout=json.dumps({'verified': proof}) if 'verify-hosts' in args else '', stderr='')
+    def live_part(*args):
+        assert args[:2] == ('pr', 'view'), args
+        return (dict(state='MERGED', headRefOid='c'*40) if args[2] == '5'
+                else dict(state='OPEN', headRefOid='f'*40))
+    def sweep(state, parts, *, strict):
+        assert strict
+        assert [part['pr'] for part in parts] == [5]
+        assert journal(identity['repo'], 'show', pr=17)['train']['included'] == [5]
+        calls.append('cleanup')
     st = dict(merged=train['parts'], head=train['head'])
     with (patch.object(landing, 'landing_journal', journal),
           patch.object(build, 'landing_journal', journal),
+          patch.object(build, 'gh_json', side_effect=live_part) as part_views,
+          patch.object(build, 'git', return_value=Mock(returncode=0)),
+          patch.object(build, 'add_label', return_value=True) as label,
           patch.object(landing, 'read_verified_merge', return_value=('d'*40, 'merged')),
           patch.object(landing, 'run', effect),
-          patch.object(landing, 'cleanup_landed', side_effect=lambda *args, **kw: calls.append('cleanup')),
+          patch.object(landing, 'cleanup_landed', side_effect=sweep),
           patch.object(landing, 'drop_state', side_effect=lambda st: calls.append('drop_state'))):
         landing.settle_train(pending[0], lease, st)
-        landing.settle_train(pending[0], lease, st)
+        landing.settle_train(pending[0], lease)
+    assert part_views.call_count == 2
+    label.assert_called_once_with(identity['repo'], 6, 'needs-update')
     assert calls == [['plangraph', 'merge-close'], ['plangraph', 'landing', 'verify-hosts', 'example/repo', 'd'*40],
                      'cleanup', 'drop_state'], calls
     recorded = store.land(principal, dict(identity, action='show'))['train']

@@ -180,6 +180,8 @@ class MergeLocksMixin:
                     self.conn.execute("UPDATE landing_trains SET merged=?,manifest=? WHERE repo=? AND pr=?",
                                       (merge, json.dumps(manifest, separators=(",", ":")), *identity))
             elif action == "advance" and row["merged"] == merge:
+                if "included" not in manifest:
+                    raise Refused("conflict", "landing requires checked part outcomes")
                 step = body.get("step")
                 if step not in _LAND_STEPS or _LAND_STEPS.index(step) > row["cursor"]:
                     raise Refused("conflict", "landing cursor is out of order")
