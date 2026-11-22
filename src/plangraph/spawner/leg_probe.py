@@ -357,6 +357,16 @@ class ProbeBudget:
         self.left -= time.monotonic() - started
 
 
+def route_probe_scope(plan, leg):
+    for candidate in getattr(plan, 'candidates', ()):
+        if candidate['leg'] == leg.id:
+            reason = candidate.get('leg_state_reason') or ''
+            if reason.startswith('leg_state_snapshot_error:'):
+                return {'route_state_reason': reason}
+            break
+    return {}
+
+
 async def before_launch(runner, leg, role, dry_run, budget=None, *, route_state_reason=None):
     from .target import quota_paused
     from .env_redact import redact_output, redact_env_values

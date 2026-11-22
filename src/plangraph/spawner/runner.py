@@ -1010,7 +1010,7 @@ def spawn_service(*args, **kwargs):
                         record.update(status='cancelled', exit_code=1, reason='cancelled')
                         return True
 
-                    from .leg_probe import ProbeBudget, before_launch
+                    from .leg_probe import ProbeBudget, before_launch, route_probe_scope
                     probe_budget = ProbeBudget(started=record.get('started'))  # one budget for every leg, net of admission time spent
                     for _ in range(len(plan.legs) + 2):
                         if cancelled():
@@ -1021,10 +1021,7 @@ def spawn_service(*args, **kwargs):
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
-                        route_state_reason = next((row.get('leg_state_reason') for row in
-                                                   getattr(current, 'candidates', ()) if row['leg'] == chosen.id), None)
-                        probe_scope = dict(route_state_reason=route_state_reason) if (route_state_reason or '').startswith('leg_state_snapshot_error:') else {}
-                        probe_skip = await before_launch(self.runner, chosen, role, dry_run, probe_budget, **probe_scope)
+                        probe_skip = await before_launch(self.runner, chosen, role, dry_run, probe_budget, **route_probe_scope(current, chosen))
                         if probe_skip:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped', skip_reason=probe_skip))
                             self._save(record)
