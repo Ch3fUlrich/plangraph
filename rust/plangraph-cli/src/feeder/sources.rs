@@ -188,14 +188,12 @@ fn apply_facts(
 pub(super) fn facts(
     env: &Env,
     repo: &Path,
-    f: HostFacts,
+    mut f: HostFacts,
     runs: &[Run],
     home: &Path,
     p: &Policy,
     local: Option<&str>,
 ) -> Result<HostFacts, String> {
-    let mut f: HostFacts =
-        serde_json::from_value(read_json(path)?).map_err(|_| "invalid host facts")?;
     f.free_disk_bytes = disk_limit(
         f.free_disk_bytes,
         work_disks::worktree_disk_with(
@@ -252,7 +250,7 @@ mod tests {
             facts(
                 &env,
                 fixture.path(),
-                &snapshot,
+                serde_json::from_value(read_json(&snapshot).unwrap()).unwrap(),
                 &[],
                 fixture.path(),
                 &Policy::default(),
