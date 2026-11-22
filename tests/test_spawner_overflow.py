@@ -441,3 +441,25 @@ def test_wsl_host_gets_step_plans_on_stdin_and_never_a_shell(monkeypatch):
     cleanup = plans[5]
     assert cleanup['keep_going'] is True and cleanup['steps'][1]['argv'] == ['rmdir', '--', '/invented-stage']
     assert 'secret prompt' not in json.dumps(plans[3:])
+
+
+def test_native_placement_refuses_recorded_sandbox_failure(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready, overflow, seat_spawn
+
+    row = dict(ok=True, fresh=True, sandbox_ok=False,
+               sandbox_error='bwrap: setting up uid map: Permission denied')
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
+    monkeypatch.setattr(overflow, 'placement_config', lambda *_: {'registry': True, 'hosts': {}})
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *_: ('worker', False))
+    monkeypatch.setattr(overflow, 'local_limits', lambda *_: (2048, 3000))
+    monkeypatch.setattr(overflow, 'repos_public', lambda *_: True)
+    monkeypatch.setattr(overflow, 'read_readiness', lambda name: row)
+    monkeypatch.setattr(seat_spawn, 'resources', lambda _: (0, 16000))
+    monkeypatch.setattr(host_ready, 'local_disk_refusal', lambda *_: None)
+    result = seat_spawn.admit(SimpleNamespace(runner=SimpleNamespace()), {},
+                              card={'repo': str(tmp_path), 'run_kind': 'native-codex'})
+    assert result['status'] == 'refused'
+    assert result['reason'].startswith('sandbox_unavailable:')
+    assert row['sandbox_error'] in result['reason']
+    assert 'AppArmor' in result['reason']

@@ -32,7 +32,8 @@ fn prepared_host_ready_without_a_model_call() {
         fail: None,
         calls: vec![],
     };
-    assert!(check(&config(), tmp.path(), &mut runner).is_empty());
+    let report = check(&config(), tmp.path(), &mut runner);
+    assert!(report.errors.is_empty() && report.sandbox_status.sandbox_ok);
     assert_eq!(
         runner.calls,
         [Probe::Version, Probe::Login, Probe::Sandbox, Probe::Commit]
@@ -46,15 +47,16 @@ fn reproduces_sandbox_start_and_git_read_only_failures() {
             fail: Some(probe),
             calls: vec![],
         };
-        let errors = check(&config(), tmp.path(), &mut runner);
-        assert_eq!(
-            errors,
-            [if probe == Probe::Sandbox {
-                "sandbox cannot start"
-            } else {
-                "scratch worktree commit failed"
-            }]
-        );
+        let report = check(&config(), tmp.path(), &mut runner);
+        if probe == Probe::Sandbox {
+            assert!(report.errors.is_empty());
+            let refusal = report.sandbox_status.refusal().unwrap();
+            assert!(refusal.starts_with("sandbox_unavailable: injected failure"));
+            assert!(!runner.calls.contains(&Probe::Commit));
+        } else {
+            assert_eq!(report.errors, ["scratch worktree commit failed"]);
+            assert!(report.sandbox_status.sandbox_ok);
+        }
     }
 }
 #[test]
@@ -69,11 +71,13 @@ fn prompts_login_version_and_memory_are_independent_failures() {
         fail: Some(Probe::Login),
         calls: vec![],
     };
-    let errors = check(&cfg, tmp.path(), &mut runner);
+    let errors = check(&cfg, tmp.path(), &mut runner).errors;
     assert_eq!(errors.len(), 5);
     assert!(errors.contains(&"codex login unavailable".into()));
     runner.fail = Some(Probe::Version);
-    assert!(check(&config(), tmp.path(), &mut runner).contains(&"codex version unavailable".into()));
+    assert!(check(&config(), tmp.path(), &mut runner)
+        .errors
+        .contains(&"codex version unavailable".into()));
 }
 
 #[test]
@@ -126,11 +130,12 @@ fn writer_placement_requires_workspace_write_readiness() {
         sandbox: "workspace-write".into(),
         checked_at: 100,
         errors: vec![],
+        sandbox_status: pg_worker_core::host_readiness::SandboxStatus::from_probe(Ok(())),
     };
     assert_eq!(record.refusal("worker", WRITER_SANDBOX, 100), None);
     record.sandbox = "danger-full-access".into();
     assert_eq!(
-        record.refusal("worker", WRITER_SANDBOX, 100),
+        record.refusal("worker", WRITER_SANDBOX, 100).as_deref(),
         Some("readiness sandbox mismatch")
     );
 }
@@ -168,9 +173,49 @@ exec "$@"
     let mut runner = Native {
         codex,
         executable: PathBuf::from(env!("CARGO_BIN_EXE_pg-host-readiness")),
+        tool_path: None,
     };
     runner
         .probe(Probe::Commit, tmp.path(), "workspace-write")
         .unwrap();
     assert!(tmp.path().join("worktree/ready.txt").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_bwrap_probe_is_persisted_and_refuses_placement() {
+    use pg_worker_core::host_readiness::{Native, Record, WRITER_SANDBOX};
+    use pg_worker_core::package_placement::{refusal, Candidate, Policy};
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let codex = tmp.path().join("codex");
+    fs::write(&codex, "#!/bin/sh\ncase \"$1\" in sandbox) >&2 echo 'bwrap: setting up uid map: Permission denied'; exit 1;; esac\n").unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut runner = Native {
+        codex,
+        executable: env!("CARGO_BIN_EXE_pg-host-readiness").into(),
+        tool_path: None,
+    };
+    let report = check(&config(), tmp.path(), &mut runner);
+    assert!(!report.sandbox_status.sandbox_ok);
+    Record {
+        host: "worker".into(),
+        sandbox: WRITER_SANDBOX.into(),
+        checked_at: 100,
+        errors: report.errors,
+        sandbox_status: report.sandbox_status,
+    }
+    .save(tmp.path())
+    .unwrap();
+    let candidate = Candidate {
+        id: "worker".into(),
+        workstation: false,
+        ssh: None,
+        readiness: Some(Record::read(tmp.path(), "worker", WRITER_SANDBOX).unwrap()),
+        sample: None,
+    };
+    let reason = refusal(&candidate, &Policy::default(), 100).unwrap();
+    assert!(reason.starts_with("sandbox_unavailable: bwrap: setting up uid map: Permission denied"));
+    assert!(reason.contains("AppArmor"));
 }

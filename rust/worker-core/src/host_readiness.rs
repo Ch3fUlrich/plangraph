@@ -9,6 +9,47 @@ use std::{
 
 pub const WRITER_SANDBOX: &str = "workspace-write";
 const MAX_AGE_SECS: u64 = 120;
+pub const SANDBOX_UNAVAILABLE: &str = "sandbox_unavailable:";
+
+pub fn sandbox_unavailable(error: &str) -> String {
+    let scrubber = crate::run::scrub::Scrubber::from_env(&std::env::vars_os().collect::<Vec<_>>());
+    let error = scrubber.scrub(error);
+    format!("{SANDBOX_UNAVAILABLE} {error}; operator action: review the bwrap AppArmor profile or user namespace sysctl")
+}
+
+/// Identify a sandbox startup error without forwarding unrelated tool output.
+pub fn bwrap_start_failure(output: &str) -> Option<&str> {
+    output.lines().map(str::trim).find(|line| {
+        line.starts_with("bwrap:")
+            && ["setting up uid map", "new namespace", "Failed RTM_NEWADDR"]
+                .iter()
+                .any(|detail| line.contains(detail))
+    })
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+pub struct SandboxStatus {
+    #[serde(default)]
+    pub sandbox_ok: bool,
+    pub sandbox_error: Option<String>,
+}
+
+impl SandboxStatus {
+    pub fn from_probe(result: io::Result<()>) -> Self {
+        Self {
+            sandbox_ok: result.is_ok(),
+            sandbox_error: result.err().map(|e| sandbox_unavailable(&e.to_string())),
+        }
+    }
+
+    pub fn refusal(&self) -> Option<String> {
+        (!self.sandbox_ok).then(|| {
+            self.sandbox_error.clone().unwrap_or_else(|| {
+                sandbox_unavailable("workspace-write sandbox has no successful probe")
+            })
+        })
+    }
+}
 
 pub fn valid_sandbox(sandbox: &str) -> bool {
     matches!(sandbox, WRITER_SANDBOX | "read-only" | "danger-full-access")
@@ -78,6 +119,8 @@ pub struct Record {
     pub sandbox: String,
     pub checked_at: u64,
     pub errors: Vec<String>,
+    #[serde(flatten)]
+    pub sandbox_status: SandboxStatus,
 }
 
 impl Record {
@@ -94,20 +137,23 @@ impl Record {
         )
     }
 
-    pub fn refusal(&self, host: &str, sandbox: &str, now: u64) -> Option<&'static str> {
-        if self.host != host {
-            Some("readiness host mismatch")
+    pub fn refusal(&self, host: &str, sandbox: &str, now: u64) -> Option<String> {
+        let reason = if self.host != host {
+            "readiness host mismatch"
         } else if self.sandbox != sandbox {
-            Some("readiness sandbox mismatch")
+            "readiness sandbox mismatch"
         } else if self.checked_at > now {
-            Some("future readiness")
+            "future readiness"
         } else if now - self.checked_at > MAX_AGE_SECS {
-            Some("stale readiness")
+            "stale readiness"
+        } else if let Some(reason) = self.sandbox_status.refusal() {
+            return Some(reason);
         } else if !self.errors.is_empty() {
-            Some("readiness check failed")
+            "readiness check failed"
         } else {
-            None
-        }
+            return None;
+        };
+        Some(reason.into())
     }
 }
 
@@ -130,17 +176,31 @@ pub trait Runner {
     fn probe(&mut self, probe: Probe, scratch: &Path, sandbox: &str) -> io::Result<()>;
 }
 
-pub fn check(config: &Config, scratch: &Path, runner: &mut impl Runner) -> Vec<String> {
+#[derive(Default, serde::Serialize)]
+pub struct Report {
+    pub errors: Vec<String>,
+    #[serde(flatten)]
+    pub sandbox_status: SandboxStatus,
+}
+
+pub fn check(config: &Config, scratch: &Path, runner: &mut impl Runner) -> Report {
     let mut errors = Vec::new();
     for (probe, reason) in [
         (Probe::Version, "codex version unavailable"),
         (Probe::Login, "codex login unavailable"),
-        (Probe::Sandbox, "sandbox cannot start"),
-        (Probe::Commit, "scratch worktree commit failed"),
     ] {
         if runner.probe(probe, scratch, &config.sandbox).is_err() {
             errors.push(reason.into());
         }
+    }
+    let sandbox_status =
+        SandboxStatus::from_probe(runner.probe(Probe::Sandbox, scratch, &config.sandbox));
+    if sandbox_status.sandbox_ok
+        && runner
+            .probe(Probe::Commit, scratch, &config.sandbox)
+            .is_err()
+    {
+        errors.push("scratch worktree commit failed".into());
     }
     for (ok, reason) in [
         (config.project_trusted, "folder trust missing"),
@@ -163,7 +223,10 @@ pub fn check(config: &Config, scratch: &Path, runner: &mut impl Runner) -> Vec<S
             errors.push(reason.into());
         }
     }
-    errors
+    Report {
+        errors,
+        sandbox_status,
+    }
 }
 
 pub fn settings(codex_home: &Path, project: &Path, sandbox: String) -> io::Result<Config> {
@@ -209,6 +272,7 @@ pub fn settings(codex_home: &Path, project: &Path, sandbox: String) -> io::Resul
 pub struct Native {
     pub codex: PathBuf,
     pub executable: PathBuf,
+    pub tool_path: Option<String>,
 }
 fn git(dir: &Path, args: &[&std::ffi::OsStr]) -> io::Result<()> {
     host_command::output(
@@ -239,9 +303,27 @@ pub fn commit_child(worktree: &Path) -> io::Result<()> {
         ],
     )
 }
+fn configure_sandbox(
+    command: &mut Command,
+    cwd: &Path,
+    sandbox: &str,
+    roots: &[PathBuf],
+) -> io::Result<()> {
+    command.current_dir(cwd).arg("sandbox");
+    if sandbox == WRITER_SANDBOX {
+        command.args(writer_sandbox_args(roots)?);
+    } else {
+        command.args(["-c", &format!("sandbox_mode=\"{sandbox}\"")]);
+    }
+    Ok(())
+}
+
 impl Runner for Native {
     fn probe(&mut self, probe: Probe, scratch: &Path, sandbox: &str) -> io::Result<()> {
         let mut cmd = Command::new(&self.codex);
+        if let Some(path) = &self.tool_path {
+            cmd.env("PATH", path);
+        }
         match probe {
             Probe::Version => {
                 cmd.arg("--version");
@@ -249,7 +331,27 @@ impl Runner for Native {
             Probe::Login => {
                 cmd.args(["login", "status"]);
             }
-            Probe::Sandbox | Probe::Commit => {
+            Probe::Sandbox => {
+                configure_sandbox(&mut cmd, scratch, sandbox, &[])?;
+                let out = host_command::capture(
+                    cmd.arg("--").arg(&self.executable).arg("--child-start"),
+                    Duration::from_secs(30),
+                )?;
+                if out.status.success() {
+                    return Ok(());
+                }
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                return Err(io::Error::other(
+                    bwrap_start_failure(&stderr)
+                        .or_else(|| bwrap_start_failure(&stdout))
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            format!("Codex sandbox startup failed ({})", out.status)
+                        }),
+                ));
+            }
+            Probe::Commit => {
                 let repo = scratch.join("repository");
                 let worktree = scratch.join("worktree");
                 if !repo.exists() {
@@ -277,19 +379,13 @@ impl Runner for Native {
                         ],
                     )?;
                 }
-                cmd.current_dir(&worktree).arg("sandbox");
-                if sandbox == WRITER_SANDBOX {
-                    cmd.args(writer_sandbox_args(&writer_git_dirs(&worktree, None)?)?);
+                let roots = if sandbox == WRITER_SANDBOX {
+                    writer_git_dirs(&worktree, None)?
                 } else {
-                    cmd.args(["-c", &format!("sandbox_mode=\"{sandbox}\"")]);
-                }
-                cmd.arg("--")
-                    .arg(&self.executable)
-                    .arg(if probe == Probe::Sandbox {
-                        "--child-start"
-                    } else {
-                        "--child-commit"
-                    });
+                    Vec::new()
+                };
+                configure_sandbox(&mut cmd, &worktree, sandbox, &roots)?;
+                cmd.arg("--").arg(&self.executable).arg("--child-commit");
             }
         }
         host_command::output(&mut cmd, Duration::from_secs(30)).map(|_| ())

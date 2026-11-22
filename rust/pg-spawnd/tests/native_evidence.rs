@@ -4,7 +4,7 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 #[test]
 fn merged_review_seats_ignore_native_writers_and_origin_receipts() {
@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory() as tmp:
         card = dict(run_kind='native-codex', repo=str(root), item='project:item')
         probe = AsyncMock()
         probe.returncode = 0
-        probe.communicate.return_value = (b'{"tool_path":"/fixture","resolved_tools":{}}', b'')
+        probe.communicate.return_value = (b'{"tool_path":"/fixture","resolved_tools":{},"sandbox_ok":true}', b'')
         with patch('plangraph.fleet_snapshot._projection_binary', return_value='/fixture/pg-spawnd'), \
              patch('asyncio.create_subprocess_exec', side_effect=[probe, OSError('fixture')]):
             record = await native_spawn(service, card, dict(prompt='brief'))

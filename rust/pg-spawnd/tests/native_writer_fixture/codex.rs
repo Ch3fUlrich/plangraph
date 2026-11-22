@@ -1,6 +1,13 @@
 pub(super) const CODEX: &str = r#"#!/usr/bin/env python3
 import sys, pathlib, subprocess, json
+if sys.argv[1] == 'sandbox':
+    sys.exit(subprocess.call(sys.argv[sys.argv.index('--') + 1:]))
 prompt = sys.stdin.read()
+if 'sandbox error marker' in prompt:
+    print(json.dumps({'type':'thread.started','thread_id':'sandbox-error-session'}))
+    print(json.dumps({'type':'item.completed','item':{'type':'command_execution','exit_code':1,'aggregated_output':'bwrap: setting up uid map: Permission denied'}}))
+    print(json.dumps({'type':'turn.completed','usage':{'input_tokens':10,'output_tokens':10}}))
+    sys.exit(0)
 if 'resume' in sys.argv:
     brief = pathlib.Path(json.loads(prompt.strip().removeprefix('Read follow-up brief at ')))
     assert brief.stat().st_mode & 0o777 == 0o600 and brief.parent == pathlib.Path.cwd().parent

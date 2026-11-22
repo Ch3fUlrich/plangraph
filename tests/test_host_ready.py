@@ -41,6 +41,8 @@ def runner(argv, **kwargs):
         output = 'Filesystem 1024-blocks Used Available Capacity Mounted\nfake 9000000 0 9000000 0% /\n'
     elif 'rev-parse' in script:
         output = 'a' * 40
+    elif 'pg-host-readiness' in script:
+        output = json.dumps(dict(errors=[], sandbox_ok=True, sandbox_error=None))
     elif 'doctor --json' in script:
         output = json.dumps(dict(ok=True, checks=[dict(name='keeper_whoami', status='pass')]))
     elif 'cli ps' in script:
@@ -635,4 +637,22 @@ def test_invalid_probe_response(tmp_path, command, output, field, check):
     assert result[field] is None
     assert result['failures'] == [f'{check}: invalid_response']
     assert result['doctor_ok'] and result['spawner_session']
+    assert json.loads((tmp_path / 'fiction.json').read_text()) == result
+
+
+def test_host_record_keeps_native_sandbox_failure(tmp_path):
+    error = 'sandbox_unavailable: bwrap: setting up uid map: Permission denied'
+    planned = plan_runner([])
+
+    def fake(argv, **kwargs):
+        first = json.loads(kwargs['input'])['steps'][0].get('argv', [])
+        if first and first[0] == 'pg-host-readiness':
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                dict(errors=[], sandbox_ok=False, sandbox_error=error)))
+        return planned(argv, **kwargs)
+
+    result = h.check_host('fiction', dict(CONFIG, local=True, registry=True), tmp_path, fake)
+    assert result['ok'] and result['trust_ok']
+    assert result['sandbox_ok'] is False
+    assert result['sandbox_error'] == error
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result

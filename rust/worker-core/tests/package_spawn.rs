@@ -40,6 +40,7 @@ fn busy_fleet_queues_with_persisted_refusals_without_any_launch() {
                 sandbox: WRITER_SANDBOX.into(),
                 checked_at: now,
                 errors: vec![],
+                sandbox_status: pg_worker_core::host_readiness::SandboxStatus::from_probe(Ok(())),
             }
             .save(tmp.path())
             .unwrap();

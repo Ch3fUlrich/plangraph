@@ -298,6 +298,13 @@ async def check():
         assert record['exit_code'] == exit_code, record
         assert exit_code == 0 or ref in record['reason'], record
     card['base_ref'] = 'refs/heads/main'
+    with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
+        denied = await admitted_spawn(service, dict(card=card, prompt='brief marker sandbox error marker'))
+        await service.tasks[denied['run_id']]
+    denied = service.result(denied['run_id'])
+    assert denied['status'] == 'refused' and denied['reason'].startswith('sandbox_unavailable:'), denied
+    assert 'bwrap: setting up uid map: Permission denied' in denied['reason'], denied
+    assert denied['manifest']['try_count'] == 1 and denied['review_rounds'] == 0, denied
     for marker, tries, status in [('kill marker', 2, 'completed'), ('fail marker', 3, 'failed'), ('missing marker', 2, 'completed'), ('reject marker', 1, 'failed')]:
         brief = 'brief marker ' + marker + ('\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n' if marker == 'reject marker' else '')
         with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):

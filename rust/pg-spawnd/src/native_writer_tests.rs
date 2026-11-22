@@ -248,7 +248,7 @@ fn native_placement_uses_existing_ram_overflow_and_disk_floor() {
 from unittest.mock import patch
 from types import SimpleNamespace
 from plangraph.spawner import seat_spawn as s, overflow as o, host_ready as h
-row = dict(ssh='other', ok=True, fresh=True, live_runs=0, mem_available_mb=17000, role_mb=2048, floor_mb=3000, disk_free_gb=6)
+row = dict(ssh='other', ok=True, fresh=True, live_runs=0, mem_available_mb=17000, role_mb=2048, floor_mb=3000, disk_free_gb=6, sandbox_ok=True)
 opts = dict(card={}, prompt='brief')
 card = dict(run_kind='native-codex', base_ref='refs/heads/main')
 with patch.object(o, 'registry_caps', return_value={'self':'primary','hosts':[]}), patch.object(o, 'local_limits', return_value=(2048,3000)), patch.object(s, 'resources', return_value=(0,1000)), patch.object(o, 'ready_records', return_value={'other':row}), patch.object(o, 'repos_public', return_value=True), patch.object(h, 'cargo_target_size_gb', return_value=0.0):

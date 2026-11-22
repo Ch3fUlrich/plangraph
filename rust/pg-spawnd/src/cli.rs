@@ -113,9 +113,21 @@ pub(crate) fn execute(
         return writeln!(out, "{}", crate::fleet_snapshot::run()?)
             .map_err(|_| "fleet output failed".into());
     }
-    if first.as_deref() == Some("native-tools") && args.len() == 0 {
-        return writeln!(out, "{}", crate::native_writer_tools::snapshot()?)
-            .map_err(|e| e.to_string());
+    if first.as_deref() == Some("--child-start") && args.len() == 0 {
+        return Ok(());
+    }
+    if first.as_deref() == Some("native-tools") {
+        let check_sandbox = match args.as_slice() {
+            [] => false,
+            [flag] if flag == "--check-sandbox" => true,
+            _ => return Err("native-tools accepts only --check-sandbox".into()),
+        };
+        return writeln!(
+            out,
+            "{}",
+            crate::native_writer_tools::snapshot(check_sandbox)?
+        )
+        .map_err(|e| e.to_string());
     }
     if first.as_deref() == Some("doctor-sources") && args.len() == 0 {
         return writeln!(

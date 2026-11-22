@@ -1,5 +1,5 @@
 use pg_worker_core::{
-    host_readiness::{self, Native, Record, WRITER_SANDBOX},
+    host_readiness::{self, Native, Record, Report, WRITER_SANDBOX},
     hosts::HostRegistry,
 };
 use std::{
@@ -22,6 +22,7 @@ fn run() -> io::Result<bool> {
         .or_else(|| env::var_os("HOME").map(|p| PathBuf::from(p).join(".codex")))
         .ok_or_else(|| io::Error::other("CODEX_HOME or HOME required"))?;
     let mut project = env::current_dir()?;
+    let mut json = false;
     let mut sandbox = WRITER_SANDBOX.to_string();
     let mut registry = None;
     let mut state = None;
@@ -29,6 +30,10 @@ fn run() -> io::Result<bool> {
     let mut scratch_root = env::temp_dir();
     let mut args = first.into_iter().chain(args);
     while let Some(flag) = args.next() {
+        if flag == "--json" {
+            json = true;
+            continue;
+        }
         let value = args
             .next()
             .ok_or_else(|| io::Error::other("missing option value"))?;
@@ -57,16 +62,20 @@ fn run() -> io::Result<bool> {
             ))
         }
     };
-    let errors = match host_readiness::settings(&home, &project, sandbox.clone()) {
+    let report = match host_readiness::settings(&home, &project, sandbox.clone()) {
         Ok(settings) => {
             let scratch = tempfile::tempdir_in(scratch_root)?;
             let mut runner = Native {
                 codex,
                 executable: env::current_exe()?,
+                tool_path: None,
             };
             host_readiness::check(&settings, scratch.path(), &mut runner)
         }
-        Err(_) => vec!["readiness configuration unavailable".into()],
+        Err(_) => Report {
+            errors: vec!["readiness configuration unavailable".into()],
+            ..Report::default()
+        },
     };
     if let Some((host, state)) = destination {
         Record {
@@ -76,18 +85,24 @@ fn run() -> io::Result<bool> {
                 .duration_since(UNIX_EPOCH)
                 .map_err(io::Error::other)?
                 .as_secs(),
-            errors: errors.clone(),
+            errors: report.errors.clone(),
+            sandbox_status: report.sandbox_status.clone(),
         }
         .save(&state)?;
     }
-    if errors.is_empty() {
-        println!("READY");
-    } else {
-        for error in &errors {
-            println!("MISSING {error}");
-        }
+    if json {
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(true);
     }
-    Ok(errors.is_empty())
+    let sandbox_refusal = report.sandbox_status.refusal();
+    let ready = report.errors.is_empty() && sandbox_refusal.is_none();
+    if ready {
+        println!("READY");
+    }
+    for error in report.errors.iter().chain(sandbox_refusal.iter()) {
+        println!("MISSING {error}");
+    }
+    Ok(ready)
 }
 fn main() -> std::process::ExitCode {
     match run() {

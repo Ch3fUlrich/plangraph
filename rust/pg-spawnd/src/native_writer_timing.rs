@@ -24,5 +24,12 @@ pub(super) fn execute_turn(
     }
     record["writer_turns"][index]["ended"] = json!(chrono::Utc::now().to_rfc3339());
     driver.save(record).map_err(|e| (6, e))?;
-    result.map_err(|e| (6, e))
+    result.map_err(|e| {
+        let code = if e.starts_with(pg_worker_core::host_readiness::SANDBOX_UNAVAILABLE) {
+            2
+        } else {
+            6
+        };
+        (code, e)
+    })
 }
