@@ -40,3 +40,27 @@ def test_argon_is_the_end_of_the_whole_eligible_route():
     ids = route("claude")
     assert ids[-2:] == ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
     assert ids.index("cx-gpt-6-luna") < ids.index("agy-gemini-4-argon-low")
+
+
+def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
+    from plangraph.planner.legs import REVIEW_GPT, REVIEW_NEON, REVIEW_SONNET
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.routing_support.leg_state import LegStateStore
+
+    store = LegStateStore(tmp_path / "legs.sqlite")
+    store.record_harness_limit("agy/gemini-4-argon-low", "Individual quota reached. Resets in 2h.",
+                               "fixture", now=100, account="A")
+
+    def route(account):
+        return plan_spawn(dict(CARD, account=account), role="review",
+                          writer_families=("deepseek",), leg_reader=store, now=101,
+                          policy=RoutePolicy(), catalog_rows=(), installed=lambda _: True)
+
+    limited = route("A")
+    codex = limited.first_leg
+    assert (codex.id, codex.harness, codex.model) == (REVIEW_GPT, "codex", "gpt-6.2-sol-medium")
+    assert REVIEW_SONNET in {leg.id for leg in limited.legs}
+    evidence = next(row["evidence"] for row in limited.skipped if row["leg"] == REVIEW_NEON)
+    assert evidence["quota_scope"] == "account"
+    assert evidence["harness"] == "agy" and evidence["account"] == "A"
+    assert REVIEW_NEON in {leg.id for leg in route("B").legs}
