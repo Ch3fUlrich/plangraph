@@ -115,7 +115,11 @@ fn publish(
     let paths = serde_json::from_value::<Vec<String>>(request["changed_paths"].clone())
         .map_err(|e| e.to_string())?;
     let mut result = crate::native_writer_host::review_record_verdict(
-        state, record, head, &paths, request["expected_leg"].as_str(),
+        state,
+        record,
+        head,
+        &paths,
+        request["expected_leg"].as_str(),
     )?;
     let text = result["text"].as_str().unwrap_or_default();
     let file = pending.with_extension("txt");
@@ -319,8 +323,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pending = dir.path().join("review-receipt.json");
         let request = json!({"head":"abc","run_id":"run-fixture","changed_paths":["src/lib.rs"]});
-        let record =
-            json!({"run_id":"run-fixture","head_sha":"abc","host":"fixture-worker","status":"completed","stdout_tail":"VERDICT: ACCEPT"});
+        let record = json!({"run_id":"run-fixture","head_sha":"abc","host":"fixture-worker","status":"completed","stdout_tail":"VERDICT: ACCEPT"});
         let result = publish(dir.path(), &pending, &request, &record)
             .unwrap()
             .unwrap();

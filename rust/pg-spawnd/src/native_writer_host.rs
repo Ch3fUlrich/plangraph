@@ -397,6 +397,8 @@ mod session;
 use review::review_diff_base;
 pub(crate) use review::review_record_verdict;
 #[cfg(test)]
+use review::{review_run_text, review_verdict};
+#[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;
 #[cfg(test)]

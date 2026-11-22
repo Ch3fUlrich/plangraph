@@ -709,10 +709,13 @@ fn check_live_leg(mode: &str, expected_exit: i32, expected_verdict: &str) {
         "{stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let run_id = stdout.lines().find_map(|line| {
-        let (before, _) = line.split_once(" status=running")?;
-        Some(before.split_once("run=")?.1)
-    }).expect("running seat in review report");
+    let run_id = stdout
+        .lines()
+        .find_map(|line| {
+            let (before, _) = line.split_once(" status=running")?;
+            Some(before.split_once("run=")?.1)
+        })
+        .expect("running seat in review report");
     assert!(
         stdout.lines().any(|line| line.starts_with("REVIEW ")
             && line.contains(&format!("verdict={expected_verdict} "))),

@@ -385,9 +385,7 @@ pub(crate) fn review_record_verdict(
     paths: &[String],
     expected_leg: Option<&str>,
 ) -> Result<Value, String> {
-    if record["head_sha"] != head
-        || !record["host"].as_str().is_some_and(|host| !host.is_empty())
-    {
+    if record["head_sha"] != head || !record["host"].as_str().is_some_and(|host| !host.is_empty()) {
         return Err("review worker returned no exact-head receipt with host".into());
     }
     let chosen = &record["chosen_leg"];
