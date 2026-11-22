@@ -312,6 +312,16 @@ def test_http_close_merged_door(w, doors):
     assert _counts(w) == (before[0] + 2, before[1] + 1, before[2] + 1)
 
 
+def test_http_close_merged_keyless_deploy_probe_is_read_only(w, doors):
+    body = {"dry_run": True}
+    before, item = _counts(w), w.store._item(KEY)
+    status, response = doors.http("router", "POST", "/v1/close_merged", body)
+    assert (status, response, _counts(w)) == (200, {"dry_run": True, "route": "close_merged"}, before)
+    assert w.store._item(KEY) == item
+    status, response = doors.http("workerA", "POST", "/v1/close_merged", body)
+    assert status == 403 and response["error"] == "forbidden"
+
+
 def test_http_close_merged_dry_run_is_read_only(w, doors):
     def counts():
         return (*_counts(w), w.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0])
@@ -319,7 +329,8 @@ def test_http_close_merged_dry_run_is_read_only(w, doors):
     body = {"key": KEY, "decision_id": "D-5504", "families": ["google"], "dry_run": True}
     before, item = counts(), w.store._item(KEY)
     status, response = doors.http("router", "POST", "/v1/close_merged", body)
-    assert status == 200 and response == {"dry_run": True, "route": "close_merged"}
+    assert status == 200 and response["would_close"] is True
+    assert (response["state"], response["next_state"]) == ("in_review", "done")
     assert counts() == before
     assert w.store._item(KEY) == item
     status, response = doors.http("workerA", "POST", "/v1/close_merged", body)
@@ -329,10 +340,18 @@ def test_http_close_merged_dry_run_is_read_only(w, doors):
 def test_cli_close_merged_door(w, doors):
     code, _, err = doors.pg("workerA", "close-merged", KEY, "D-5504", "--family", "google")
     assert code == 2 and "forbidden" in err
+    before, item = _counts(w), w.store._item("demo:H")
     code, out, err = doors.pg("router", "close-merged", "demo:H", "D-5504",
                               "--family", "google", "--family", "deepseek")
     assert code == 0, err
+    assert w.store._item("demo:H") == item
+    assert _counts(w) == before
+    assert "demo:H would close (in_review -> done)" in out
+    code, out, err = doors.pg("router", "close-merged", "demo:H", "D-5504",
+                              "--family", "google", "--family", "deepseek", "--apply")
+    assert code == 0, err
     assert "demo:H" in out and "done" in out
+    assert w.store._item("demo:H")["state"] == "done"
 
 
 def test_mcp_close_merged_door_and_schema(w, doors, tmp_path):

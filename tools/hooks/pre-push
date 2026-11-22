@@ -37,13 +37,13 @@ TOOLS = Path(__file__).resolve().parent.parent
 SPLIT = TOOLS / "split"
 FILE_SIZE = TOOLS / "check_file_size.py"
 CHANGELOG_DOCS = TOOLS / "check_changelog_docs.py"
+sys.path.insert(0, str(TOOLS))
 sys.path.insert(0, str(SPLIT))
 import scrub_check as sc  # noqa: E402
 
 # Public allow-lists reviewed into the repo; loaded always so pushes of already
 # vetted files behave like the CI tree scan.  Never a place for private words.
 BASE_RULES = ("manifest.toml", "scrub_ci.toml")
-
 
 def git(*args):
     return subprocess.run(["git", "--no-replace-objects", *args], capture_output=True, timeout=30)
@@ -214,11 +214,93 @@ def train_gate(local_sha, manifest):
     return None
 
 
-def commit_gate(head, open_prs=True):
-    """Refuse bad trailers before expensive checks; only the network probe is optional.
+def planned_parts(body, layouts):
+    """Read only the PR's part tables, with optional PR numbers and abbreviated heads."""
+    columns = pending = None
+    fence = None
+    for line in body.splitlines():
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence:
+            if re.fullmatch(rf" {{0,3}}{fence[0]}{{{len(fence)},}}[ \t]*", line):
+                fence = None
+            continue
+        if marker:
+            fence = marker[1]
+        if marker or not (line.startswith("|") and line.rstrip().endswith("|")):
+            columns = pending = None
+            continue
+        cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.rstrip()[1:-1])]
+        if pending is not None:
+            width, layout = pending
+            pending = None
+            if len(cells) == width and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+                columns = (width, layout)
+                continue
+        layout = layouts.get(tuple(cell.casefold() for cell in cells))
+        if layout is not None:
+            columns = None
+            pending = (len(cells), layout)
+            continue
+        if columns is None:
+            continue
+        width, (pr_column, head_column) = columns
+        if len(cells) != width:
+            columns = None
+            continue
+        head = re.fullmatch(r"(`?)([0-9a-f]{8,40})\1(?:[ \t]+\(.+\))?", cells[head_column], re.I)
+        if pr_column is None:
+            pr = re.search(r"\(folded #([1-9][0-9]*)\)$", cells[0], re.I)
+        else:
+            pr = re.fullmatch(r"#([1-9][0-9]*)", cells[pr_column].strip("`"))
+        if head and (pr_column is None or pr):
+            yield int(pr[1]) if pr else None, head[2].lower()
 
-    A train skips the open-pull-request probe: its parents are open part heads by design,
-    and train_gate checks them against the manifest instead."""
+
+def batch_state_parts(branch):
+    from merge_batch_util import MergeBatchError, load_state
+
+    try:
+        state = load_state(branch.removeprefix("batch/"))
+    except (MergeBatchError, OSError, UnicodeError):
+        return
+    if (not isinstance(state, dict) or state.get("branch") != branch
+            or state.get("status") not in ("built", "pushed") or not isinstance(state.get("merged"), list)):
+        return
+    for part in state["merged"]:
+        if (isinstance(part, dict) and type(part.get("pr")) is int
+                and isinstance(part.get("head"), str) and re.fullmatch(r"[0-9a-f]{40}", part["head"])):
+            yield part["pr"], part["head"]
+
+
+def recorded_parts(branch, own):
+    body = (own[0]["body"] or "") if len(own) == 1 else ""
+    if branch.startswith("land/train-"):
+        yield from planned_parts(body, {
+            ("part", "pr", "part head", "plan-item keys", "writers", "part review (family)",
+             "ancestor of train head"): (1, 2),
+            ("part", "head", "writer (harness)", "review", "keys"): (None, 1),
+        })
+    elif branch.startswith("batch/"):
+        yield from planned_parts(body, {("pr", "plan-item", "head", "merge", "title"): (0, 2)})
+        yield from batch_state_parts(branch)
+
+
+def folded_heads(prs, parts):
+    """Resolve the exact recorded commits and keep a SHA if another PR at it is foreign."""
+    recorded = set()
+    for number, prefix in parts:
+        matches = [prefix] if len(prefix) == 40 else git_out("rev-parse", f"--disambiguate={prefix}").splitlines()
+        if len(matches) == 1:
+            recorded.add((number, matches[0]))
+    heads = {pr["headRefOid"] for pr in prs}
+    foreign = {pr["headRefOid"] for pr in prs
+               if (pr["number"], pr["headRefOid"]) not in recorded
+               and (None, pr["headRefOid"]) not in recorded}
+    return heads, heads - foreign
+
+
+def commit_gate(head, remote_ref="", remote_sha="", *, open_prs=True):
+    """Refuse bad trailers before expensive checks; only the network probe is optional."""
     base = git_out("rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
     if not base:
         print("pre-push: origin/main unavailable: commit gate refused", file=sys.stderr)
@@ -230,14 +312,20 @@ def commit_gate(head, open_prs=True):
         return result.returncode
     try:
         probe = subprocess.run(
-            ["gh", "pr", "list", "--state", "open", "--limit", "10000", "--json", "headRefOid"],
+            ["gh", "pr", "list", "--state", "open", "--limit", "10000",
+             "--json", "number,headRefName,headRefOid,isCrossRepository,body"],
             capture_output=True, text=True, timeout=15)
         if probe.returncode:
             raise OSError("open PR query unavailable")
-        heads = [pr["headRefOid"] for pr in json.loads(probe.stdout)]
-        for sha in heads:
-            if not re.fullmatch(r"[0-9a-f]{40}", sha):
-                raise ValueError("invalid open PR head")
+        prs = json.loads(probe.stdout)
+        if not isinstance(prs, list):
+            raise ValueError("invalid open PR list")
+        for pr in prs:
+            sha = pr["headRefOid"]
+            if (not re.fullmatch(r"[0-9a-f]{40}", sha) or type(pr["number"]) is not int
+                    or not isinstance(pr["headRefName"], str) or type(pr["isCrossRepository"]) is not bool
+                    or (pr["body"] is not None and not isinstance(pr["body"], str))):
+                raise ValueError("invalid open PR record")
             if git("cat-file", "-e", sha + "^{commit}").returncode:
                 if git("fetch", "--quiet", "origin", sha).returncode:
                     raise OSError("open PR head fetch unavailable")
@@ -248,9 +336,17 @@ def commit_gate(head, open_prs=True):
         print("pre-push: open PR merge check skipped (network/gh unavailable); local trailer gate passed",
               file=sys.stderr)
         return 0
+    branch = remote_ref.removeprefix("refs/heads/") if remote_ref.startswith("refs/heads/") else ""
+    own = [pr for pr in prs if branch and pr["headRefName"] == branch
+           and pr["headRefOid"] == remote_sha.lower() and not pr["isCrossRepository"]]
+    heads, folded = folded_heads([pr for pr in prs if pr not in own], recorded_parts(branch, own))
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "open-heads"
-        path.write_text("\n".join(heads), encoding="utf-8")
+        path.write_text("\n".join(sorted(heads)), encoding="utf-8")
+        if folded:
+            parts = Path(tmp) / "folded-heads"
+            parts.write_text("\n".join(sorted(folded)), encoding="utf-8")
+            command.extend(["--folded-heads", str(parts)])
         return subprocess.run([*command, "--open-heads", str(path)]).returncode
 
 
@@ -398,7 +494,7 @@ def push_main():
         return 0
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
     print(f"pre-push Python: {PYTHON}", flush=True)
-    for _, local_sha, remote_ref, _ in refs:
+    for _, local_sha, remote_ref, remote_sha in refs:
         train = is_train_ref(remote_ref)
         if train:
             try:
@@ -409,7 +505,7 @@ def push_main():
                 print(f"pre-push: {problem}: push refused", file=sys.stderr)
                 return 1
             print(f"pre-push: train path for {remote_ref}: manifest ok, no affected tests", file=sys.stderr)
-        if (commit_gate(local_sha, open_prs=False) if train else commit_gate(local_sha)) or file_size_gate(local_sha):
+        if commit_gate(local_sha, remote_ref, remote_sha, open_prs=not train) or file_size_gate(local_sha):
             return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None

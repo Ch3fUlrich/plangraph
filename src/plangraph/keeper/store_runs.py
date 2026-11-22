@@ -332,11 +332,15 @@ class RunsMixin:
         if len(rows) != 1:
             return False, None
         cells = [c.strip() for c in rows[0].split("|")[1:]]
-        if len(cells) < 3 or cells[1] != item["project"]:
+        project = self._merge_project(item)
+        if len(cells) < 3 or cells[1] not in (item["project"], project):
             return False, None
         text = cells[2]
         keys = re.findall(r"(?<![\w:-])[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_.-]+", text)
         if keys and item["key"] in keys:
+            return True, None
+        if keys and project != item["project"] and re.search(
+                r"(?<![\w:-])" + re.escape(item["key"].split(":", 1)[1]) + r"(?![\w:-])", text):
             return True, None
         if not keys and not require_key:
             return True, None  # legacy head-only GO; the caller selected this row
@@ -404,7 +408,10 @@ class RunsMixin:
         go_pr, go_head = None, None
         try:
             text = _strip_prefix(self._ctx(item, now).decisions.text(decision_id))
-            go_pr, go_head = _go_binding(_go_statement(text), item["project"])
+            statement = _go_statement(text)
+            go_pr, go_head = _go_binding(statement, project)
+            if go_pr is None and project != item["project"]:
+                go_pr, go_head = _go_binding(statement, item["project"])
         except Exception:  # noqa: BLE001 - unreadable GO row falls back to None
             pass
         named = self._named_merge_proof(item)
@@ -431,7 +438,7 @@ class RunsMixin:
                 proofs[proof_head] = {"pr": go_pr, "head": proof_head}
             else:
                 raise Refused("evidence_unverified", "merged_pr_missing")
-        if proofs and head not in proofs:
+        if head not in proofs and (proofs or (commits == [] and project != item["project"])):
             # A GO row bound to its own merged PR (merged_go_row) may name a head
             # the trailer search did not reach; that PR is proof in its own right.
             bound = context_sources.pr_merge_of(

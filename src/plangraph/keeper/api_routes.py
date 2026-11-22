@@ -310,7 +310,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                     principal, body.get("key"), body.get("decision_id"),
                     # Omission requests recovery; explicit JSON null is malformed.
                     body.get("families") if body.get("families", ()) is not None else (),
-                    from_open=body.get("from_open", False), apply=body.get("apply", False),
+                    from_open=body.get("from_open"), apply=body.get("apply", False),
                     waive_seats=body.get("waive_seats"), dry_run=body.get("dry_run", False),
                     require_seats=body.get("require_seats")),
                 "replay": _replay,

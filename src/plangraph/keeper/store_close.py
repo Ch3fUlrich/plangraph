@@ -524,18 +524,19 @@ class CloseMixin:
         _, token, changes = self._read_current_deploy_scan(item)
         return token, changes
 
-    def _manual_deploy_scan(self, item, *, complete_history):
+    def _manual_deploy_scan(self, item, *, complete_history, refresh_alternate=False):
         """Refresh the default when required before pinning the manual close's scan."""
         git = self._adapter("git")
         project, revision = self._merge_repository(item)
-        if not callable(getattr(git, "ref_commit", None)):
-            return item, None, ()
-        if revision or (complete_history and not self._warm(project)):
+        refresh_alternate = refresh_alternate and project != item["project"]
+        if refresh_alternate or revision or (complete_history and not self._warm(project)):
             if not self._refresh_merged_default_ref(git, project):
-                detail = (f"merge_repo_default_refresh_failed: {project}" if revision
+                detail = (f"merge_repo_default_refresh_failed: {project}" if revision or refresh_alternate
                           else "merged_default_ref_refresh_failed")
                 raise Refused("evidence_unverified", detail)
             item.pop("_close_head", None)
+        if not callable(getattr(git, "ref_commit", None)):
+            return item, None, ()
         return self._read_current_deploy_scan(item)
 
     def _read_current_deploy_scan(self, item):

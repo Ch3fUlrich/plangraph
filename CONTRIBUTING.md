@@ -612,6 +612,9 @@ The pre-push hook checks commit trailers on `origin/main..head` before scrub and
 preflight. It queries open PR heads and checks
 foreign merges when gh/network access is available; offline pushes still run the
 local trailer gate and explicitly report the skipped open-PR check.
+For a landing train re-push, keep the folded parts' head SHAs in the train PR's
+part table. `merge_batch push` uses the batch's saved part heads for the first
+push, before the batch PR exists. See [the commit gate](docs/ci-gate.md).
 
 Review prompt builders use `src/plangraph/review/review_brief.md` through
 `plangraph.review.prompt.render_brief`. Supply item context explicitly (the judge

@@ -525,6 +525,7 @@ def check(
     exempt: str | Path | None = None,
     cwd: str | Path | None = None,
     open_heads: str | Path | None = None,
+    folded_heads: str | Path | None = None,
 ) -> list[str]:
     '''Return one sha40: reason line per violation in base..head.
 
@@ -534,7 +535,9 @@ def check(
 
     violations: list[str] = []
     if open_heads is not None:
-        violations.extend(_open_pr_merges(base, head, open_heads, cwd=cwd))
+        violations.extend(_open_pr_merges(base, head, open_heads, cwd=cwd, folded_path=folded_heads))
+    elif folded_heads is not None:
+        raise GateError('--folded-heads requires --open-heads')
     for sha, message in _iter_commits(base, head, cwd=cwd):
         if sha.lower() in exempt_set:
             continue
@@ -580,7 +583,8 @@ def check(
 
 
 def _open_pr_merges(
-    base: str, head: str, path: str | Path, cwd: str | Path | None = None
+    base: str, head: str, path: str | Path, cwd: str | Path | None = None,
+    folded_path: str | Path | None = None,
 ) -> list[str]:
     '''Refuse merged-in parents reachable from foreign open heads but not base.'''
     def run_git(
@@ -608,22 +612,29 @@ def _open_pr_merges(
             reachability[key] = not probe.stdout.strip()
         return reachability[key]
 
-    try:
-        lines = Path(path).read_text(encoding='utf-8-sig').splitlines()
-    except (OSError, UnicodeError) as exc:
-        raise GateError(f'cannot read open-heads file {path}: {exc}') from exc
-    heads: set[str] = set()
-    for lineno, raw in enumerate(lines, start=1):
-        sha = raw.strip().lower()
-        if not sha:
-            continue
-        if OPEN_HEAD_SHA_RE.fullmatch(sha) is None:
-            raise GateError(f'open-heads file {path}:{lineno}: not a 40-hex sha')
-        run_git(
-            ['cat-file', '-e', f'{sha}^{{commit}}'],
-            context=f'; open-heads file {path}:{lineno}: not a local commit; fetch open PR heads first',
-        )
-        heads.add(sha)
+    def read_heads(path: str | Path, label: str) -> set[str]:
+        try:
+            lines = Path(path).read_text(encoding='utf-8-sig').splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise GateError(f'cannot read {label} file {path}: {exc}') from exc
+        heads = set()
+        for lineno, raw in enumerate(lines, start=1):
+            sha = raw.strip().lower()
+            if not sha:
+                continue
+            where = f'{label} file {path}:{lineno}'
+            if OPEN_HEAD_SHA_RE.fullmatch(sha) is None:
+                raise GateError(f'{where}: not a 40-hex sha')
+            run_git(['cat-file', '-e', f'{sha}^{{commit}}'],
+                    context=f'; {where}: not a local commit; fetch open PR heads first')
+            heads.add(sha)
+        return heads
+
+    heads = read_heads(path, 'open-heads')
+    if folded_path is not None:
+        folded = read_heads(folded_path, 'folded-heads')
+        # A plan can be ahead of this push. An unmerged head still counts.
+        heads -= {sha for sha in heads & folded if is_ancestor(sha, head)}
     # A merged foreign head is an ancestor of head: keep it as evidence.
     # Only the checked head itself and stacked descendants are not foreign PRs.
     heads = {sha for sha in heads
@@ -682,6 +693,7 @@ def main(argv: list[str] | None = None) -> int:
     check_parser.add_argument('--head', required=True, help='PR head SHA, not GitHub speculative pull_request merge ref (whose second parent is the PR head)')
     check_parser.add_argument('--item-text', help='UTF-8 PR/part text; warn on keys without commit trailers (CI defaults to GitHub PR event)')
     check_parser.add_argument('--open-heads', help='File regenerated per run from OPEN PRs only; drop closed-unmerged PRs. The PR under test\'s own head may be listed; fetch open PR heads first so each SHA is a local commit. One 40-hex SHA per line, case-insensitive, blanks allowed, UTF-8 BOM accepted. Check is inert until a caller writes and supplies this file.')
+    check_parser.add_argument('--folded-heads', help='Open heads recorded in the pushed train or batch plan, one 40-hex SHA per line')
     check_parser.add_argument(
         '--exempt',
         default=None,
@@ -715,7 +727,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(OPEN_PR_SKIP_NOTICE)
     try:
         violations = check(args.base, args.head, exempt=exempt, cwd=None,
-                           open_heads=args.open_heads)
+                           open_heads=args.open_heads, folded_heads=args.folded_heads)
         hand_edits = hand_edit_commits(args.base, args.head, cwd=None)
         warn_item_trailers(args.base, args.head, args.item_text)
     except (ExemptError, GateError, OSError, ValueError) as exc:

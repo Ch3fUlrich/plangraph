@@ -1,0 +1,1 @@
+- Router GO closes honor `Merge-Repo` notes and can match a named PR to its merge on that repository's default ref when the item has no `Plan-Item` trailer there.

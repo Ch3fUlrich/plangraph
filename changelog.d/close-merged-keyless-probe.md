@@ -1,0 +1,1 @@
+- Keep the router's keyless deploy probe for `close_merged` available without changing keeper state or writing an audit row.
