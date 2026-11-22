@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "name": "delayed_forward_is_fenced_after_resolve",
+      "admission_verified": true,
+      "steps": [
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"closed"}}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"closed"}}},
+        {"event":"take_start","expect":{"err":"guard"}}
+      ]
+    },
+    {
+      "name": "uncertain_launch_replays_without_a_second_start",
+      "admission_verified": true,
+      "steps": [
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":"launch_outcome_unknown","expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"starting"}}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"starting"}}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"err":"guard"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":{"claim":4},"expect":{"ok":"applied"}},
+        {"event":{"delivered":{"job":4,"generation":0}},"expect":{"ok":"applied"}},
+        {"event":"stage_publication","expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"published"}}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"published"}}},
+        {"event":{"store_answer":{"attempt":1,"target":1,"phase":"published"}},"expect":{"err":"guard"}},
+        {"event":{"store_answer":{"attempt":0,"target":2,"phase":"published"}},"expect":{"err":"guard"}},
+        {"event":{"store_answer":{"attempt":0,"target":1,"phase":"published"}},"expect":{"ok":"applied"}},
+        {"event":"acknowledge","expect":{"err":"guard"}},
+        {"event":"mirror_and_close","expect":{"ok":"applied"}},
+        {"event":"acknowledge","expect":{"ok":"applied"}}
+      ]
+    },
+    {
+      "name": "r5_surviving_work_without_attempt_environment",
+      "admission_verified": true,
+      "steps": [
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":{"claim":4},"expect":{"ok":"applied"}},
+        {"event":{"listing":{"row":{"ended":4},"at_secs":1}},"expect":{"ok":"applied"}},
+        {"event":{"boundary":"populated"},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"running"}}},
+        {"event":{"boundary":"empty_subtree"},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"failed"}}}
+      ]
+    },
+    {
+      "name": "r6_nested_cgroup_and_r7_unreadable_scope",
+      "admission_verified": true,
+      "steps": [
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":{"claim":4},"expect":{"ok":"applied"}},
+        {"event":{"listing":{"row":"absent","at_secs":1}},"expect":{"ok":"applied"}},
+        {"event":{"listing":{"row":"absent","at_secs":61}},"expect":{"ok":"applied"}},
+        {"event":{"boundary":"populated"},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"running"}}},
+        {"event":{"boundary":"unknown"},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"running"}}},
+        {"event":{"boundary":"manager_verified_gone"},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"failed"}}}
+      ]
+    },
+    {
+      "name": "r8_revoked_job_stops_without_a_scope",
+      "admission_verified": true,
+      "steps": [
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":"no_attempt_processes","expect":{"ok":"applied"}},
+        {"event":{"old_enough_to_revoke":{"elapsed_secs":600}},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"revoked"}}},
+        {"event":{"claim":4},"expect":{"err":"guard"}},
+        {"event":{"listing":{"row":{"live":4},"at_secs":1}},"expect":{"ok":"applied"}},
+        {"event":{"cleanup_job":4},"expect":{"ok":"applied"}},
+        {"event":{"listing":{"row":"absent","at_secs":2}},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"revoked"}}},
+        {"event":{"pid_gone":4},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"revoked"}}},
+        {"event":{"listing":{"row":"absent","at_secs":3}},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"failed"}}},
+        {"event":{"claim":4},"expect":{"err":"guard"}}
+      ]
+    },
+    {
+      "name": "r9_unrelated_or_ambiguous_name_match_is_never_stopped",
+      "admission_verified": true,
+      "steps": [
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":"no_attempt_processes","expect":{"ok":"applied"}},
+        {"event":{"old_enough_to_revoke":{"elapsed_secs":600}},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"revoked"}}},
+        {"event":{"listing":{"row":{"live":3},"at_secs":1}},"expect":{"ok":"applied"}},
+        {"event":{"cleanup_job":3},"expect":{"err":"guard"}},
+        {"event":"resolve","expect":{"ok":{"phase":"revoked"}}},
+        {"event":{"listing":{"row":"ambiguous","at_secs":2}},"expect":{"ok":"applied"}},
+        {"event":{"cleanup_job":4},"expect":{"err":"guard"}},
+        {"event":"resolve","expect":{"ok":{"phase":"revoked"}}}
+      ]
+    },
+    {
+      "name": "r7_timeout_cleanup_and_r8_legacy_predecessor",
+      "admission_verified": true,
+      "steps": [
+        {"event":"begin_recycle","expect":{"ok":"applied"}},
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":{"claim":4},"expect":{"ok":"applied"}},
+        {"event":"stop_predecessor","expect":{"err":"guard"}},
+        {"event":{"confirm":4},"expect":{"err":"guard"}},
+        {"event":{"delivered":{"job":4,"generation":0}},"expect":{"ok":"applied"}},
+        {"event":"publish","expect":{"ok":"applied"}},
+        {"event":"launch_outcome_unknown","expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"published"}}},
+        {"event":{"listing":{"row":{"live":4},"at_secs":1}},"expect":{"ok":"applied"}},
+        {"event":{"cleanup_job":4},"expect":{"err":"guard"}},
+        {"event":{"confirm":4},"expect":{"ok":"applied"}},
+        {"event":"mark_stop_eligible","expect":{"err":"guard"}},
+        {"event":"stop_predecessor","expect":{"err":"guard"}},
+        {"event":"promote","expect":{"ok":"applied"}},
+        {"event":"mark_stop_eligible","expect":{"ok":"applied"}},
+        {"event":{"listing":{"row":"absent","at_secs":2}},"expect":{"ok":"applied"}},
+        {"event":"stop_predecessor","expect":{"err":"guard"}},
+        {"event":{"listing":{"row":{"live":4},"at_secs":3}},"expect":{"ok":"applied"}},
+        {"event":"stop_predecessor","expect":{"ok":"applied"}}
+      ]
+    },
+    {
+      "name": "r9_clear_after_mark_before_resolver_commit",
+      "admission_verified": true,
+      "steps": [
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":{"claim":4},"expect":{"ok":"applied"}},
+        {"event":{"delivered":{"job":4,"generation":0}},"expect":{"ok":"applied"}},
+        {"event":"stage_publication","expect":{"ok":"applied"}},
+        {"event":{"new_conversation":1},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"running"}}},
+        {"event":"publish","expect":{"err":"guard"}},
+        {"event":{"delivered":{"job":4,"generation":0}},"expect":{"err":"guard"}},
+        {"event":{"delivered":{"job":4,"generation":1}},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"published"}}}
+      ]
+    },
+    {
+      "name": "r9_admission_unverified_cannot_publish_or_stop",
+      "admission_verified": false,
+      "steps": [
+        {"event":"begin_recycle","expect":{"ok":"applied"}},
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":{"claim":4},"expect":{"err":"guard"}},
+        {"event":{"delivered":{"job":4,"generation":0}},"expect":{"err":"guard"}},
+        {"event":"publish","expect":{"err":"guard"}},
+        {"event":"resolve","expect":{"ok":{"phase":"starting"}}},
+        {"event":{"confirm":4},"expect":{"err":"guard"}},
+        {"event":"mark_stop_eligible","expect":{"err":"guard"}}
+      ]
+    },
+    {
+      "name": "listing_presence_resets_absence_and_verified_stop_needs_a_later_read",
+      "admission_verified": true,
+      "steps": [
+        {"event":"reserve","expect":{"ok":"applied"}},
+        {"event":"forward","expect":{"ok":"applied"}},
+        {"event":{"receive":{"digest":0,"stale":false,"name_taken":false}},"expect":{"ok":{"phase":"accepted"}}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"start_child":{"launcher":0}},"expect":{"ok":"applied"}},
+        {"event":{"bind_job":4},"expect":{"ok":"applied"}},
+        {"event":{"claim":4},"expect":{"ok":"applied"}},
+        {"event":{"boundary":"empty_subtree"},"expect":{"ok":"applied"}},
+        {"event":{"listing":{"row":"absent","at_secs":1}},"expect":{"ok":"applied"}},
+        {"event":{"listing":{"row":{"present_without_status":4},"at_secs":61}},"expect":{"ok":"applied"}},
+        {"event":{"listing":{"row":"absent","at_secs":62}},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"running"}}},
+        {"event":{"stop_succeeded":4},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"running"}}},
+        {"event":{"listing":{"row":"absent","at_secs":63}},"expect":{"ok":"applied"}},
+        {"event":"resolve","expect":{"ok":{"phase":"failed"}}}
+      ]
+    }
+  ]
+}

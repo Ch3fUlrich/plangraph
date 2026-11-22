@@ -1,0 +1,1 @@
+- Add an executable Rust model and replay fixtures for uncertain session launches, execution-host settlement, and watchdog recovery.
