@@ -370,7 +370,9 @@ async def check():
             for _ in range(150):
                 if artifact.is_file(): break
                 await asyncio.sleep(.05)
-            assert artifact.read_text() == f'HEAD: {head}\nFILES READ: writer.txt\nVERDICT: ACCEPT\n'
+            assert artifact.read_text() == (
+                f'HEAD: {head}\nTESTS: none: reviewer supplied no test result\n'
+                'FILES READ: writer.txt\nVERDICT: ACCEPT\n')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         holding = await admitted_spawn(service, dict(card=card, prompt='brief marker hold marker'))
         holding = service.result(holding['run_id'])
