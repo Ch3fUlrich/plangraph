@@ -51,15 +51,15 @@ def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
     store.record_harness_limit("agy/gemini-4-argon-low", "Individual quota reached. Resets in 2h.",
                                "fixture", now=100, account="A")
 
-    def route(account):
-        return plan_spawn(dict(CARD, account=account, risk_tags=["auth"]), role="review",
+    def route(account, risk_tags=()):
+        return plan_spawn(dict(CARD, account=account, risk_tags=risk_tags), role="review",
                           writer_families=("deepseek",), leg_reader=store, now=101,
                           policy=RoutePolicy(), catalog_rows=(), installed=lambda _: True)
 
     limited = route("A")
     codex = limited.first_leg
     assert (codex.id, codex.harness, codex.model) == (REVIEW_GPT, "codex", "gpt-6.2-sol-medium")
-    assert REVIEW_SONNET in {leg.id for leg in limited.legs}
+    assert REVIEW_SONNET in {leg.id for leg in route("A", ["auth"]).legs}
     evidence = next(row["evidence"] for row in limited.skipped if row["leg"] == REVIEW_NEON)
     assert evidence["quota_scope"] == "account"
     assert evidence["harness"] == "agy" and evidence["account"] == "A"
