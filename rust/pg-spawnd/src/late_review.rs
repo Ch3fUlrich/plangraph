@@ -206,7 +206,7 @@ mod tests {
             "changed_paths":["src/lib.rs"]});
         save_pending(&pending, &request).unwrap();
         let mut record = json!({"run_id":"run-fixture","status":"running","started":0,
-            "stdout_tail":"src/lib.rs checked\nVERDICT: ACCEPT"});
+            "stdout_tail":"FILES READ: src/lib.rs\nVERDICT: ACCEPT"});
         assert!(publish(dir.path(), &pending, &request, &record)
             .unwrap()
             .is_none());
@@ -232,7 +232,7 @@ mod tests {
         save_pending(
             &run,
             &json!({"run_id":"run-fixture","status":"completed",
-            "stdout_tail":"src/lib.rs checked\nVERDICT: ACCEPT"}),
+            "stdout_tail":"FILES READ: src/lib.rs\nVERDICT: ACCEPT"}),
         )
         .unwrap();
         execute(vec![
