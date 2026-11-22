@@ -10,15 +10,14 @@ see `systemd/README.md` for the unit inventory and the gated install procedure.
 page every 5 minutes. Three steps, in order:
 
 1. `ExecStartPre` — `python3 -m plangraph.live_follow follow`: fast-forward the live tree
-   (`$PLANGRAPH_LIVE_TREE`) to the head that is allowed to be published. Prefixed with `-`, so a follow
-   failure still renders the page from whatever the tree already holds.
+   (`$PLANGRAPH_LIVE_TREE`) to the head that is allowed to be published. A follow failure can leave a previously verified revision available for the next step.
 2. `ExecStart` — render `plangraph.keeper.cli render --cdn` into a temp file under `$PLANGRAPH_OUT`, then
    publish it with `cat "$T" > plan-cdn.html`. Two properties matter: the page is only published when the
    temp file is non-empty and contains `</html>`, so a failed render leaves the previous page served; and
    `cat >` overwrites in place, keeping the destination inode, because the web server bind-mounts that
    single file (a `mv` would swap the inode and the container would keep exposing the old one).
-   The build stamp is not passed in: `render.py` falls back to `git rev-parse --short=10 HEAD` in the live
-   tree, which is exactly the head step 1 fast-forwarded to.
+   The renderer uses an archive of the recorded green revision and stamps its SHA. It preserves the
+   previous page if the checkout has no matching verified revision.
 3. `ExecStopPost` — `python3 -m plangraph.live_follow check`: compares the published page's stamp against
    the followed head. It is `ExecStopPost`, not `ExecStartPost`, because a `Type=oneshot` unit skips
    `ExecStartPost` when `ExecStart` fails and the staleness alert exists exactly for that case:
@@ -29,7 +28,7 @@ page every 5 minutes. Three steps, in order:
 workflow *file* (`PLANGRAPH_CI_WORKFLOW_PATH`, default `.github/workflows/tests.yml`) whose own
 `head_sha` is that sha and whose `head_repository` is `PLANGRAPH_REPO` — a same-NAMED workflow in
 another file, or a fork PR's copy of it, cannot decide the result; the run's `name` is not consulted.
-A commit with no PR must carry its own green run. Docs-only PRs run only the scrub and the `ci-gate` job (the
+The run must also identify the merged PR number and target branch. A commit with no PR must carry its own green run. Docs-only PRs run only the scrub and the `ci-gate` job (the
 workflow selects suites per change), so their heads are followed too. Keep `PLANGRAPH_STATE` outside
 `PLANGRAPH_OUT`: the output directory is the web-served render directory, and the gate state does not
 belong in it. The read-only token authorising
@@ -40,6 +39,9 @@ or copied into a unit or into `render.env`.
 **Staleness alert.** If the published page lags the followed head for longer than `PLANGRAPH_ALERT_GRACE_S`
 (default 1800 s, i.e. 30 min), `check` runs `PLANGRAPH_ALERT_CMD` with the alert line as its last argument
 (argv, not stdin), once per green head until the page catches up (re-armed when it does).
+
+Serve `/plan` over HTTPS and supply the site's htpasswd file as a private read-only mount at
+`/etc/nginx/private/plan.htpasswd` for the nginx example.
 
 **Install is a separate, gated deploy step** — this lane ships files only. On the render host: copy
 `plangraph-render.service` and `plangraph-render.timer` to `~/.config/systemd/user`, put an edited

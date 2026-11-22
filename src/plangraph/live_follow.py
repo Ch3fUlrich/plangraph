@@ -1,25 +1,7 @@
-"""Follow the CI-green head of main on the live host, then audit the page.
+"""Follow CI-green main, gate the render, and audit the published page.
 
-The live host runs ``python3 -m plangraph.live_follow follow`` before each
-render and ``... check`` after it. ``follow`` fast-forwards the live checkout
-to ``origin/<branch>`` only when GitHub CI has verified that head green; every
-doubt keeps the tree, and nothing here ever raises into the render unit —
-a broken gate must not blank a live page. ``check`` compares the published
-page's build stamp with the newest green sha and emits one alert line per
-green head once the grace window has passed, re-arming when the page catches
-up so a later regression can alert again.
-
-The token is only ever handed to :meth:`Runner.run` via ``env``; it never
-enters argv (world-readable in ``ps``), output, or the state file.
-
-Public API
-----------
-``follow(cfg, runner, now) -> dict`` / ``check(cfg, runner, now) -> dict``
-    The two steps; each returns a small result dict.
-``main(argv=None, env=None, runner=None, now=time.time) -> int``
-    CLI entry point, one JSON line on stdout.
-``Config`` / ``ConfigError`` / ``Runner``
-    Configuration, its parse error, and the injectable command runner.
+GitHub credentials enter only the runner environment. Follow and audit report
+one JSON line per tick and leave the previous page in place on uncertainty.
 """
 
 from __future__ import annotations
@@ -80,6 +62,9 @@ class Config:
             return value
 
         out = required("PLANGRAPH_OUT")
+        state = required("PLANGRAPH_STATE")
+        if Path(state).resolve().is_relative_to(Path(out).resolve()):
+            raise ConfigError("PLANGRAPH_STATE must be outside PLANGRAPH_OUT")
         alert = env.get("PLANGRAPH_ALERT_CMD")
         alert_cmd = None
         if alert:
@@ -108,7 +93,7 @@ class Config:
             repo=required("PLANGRAPH_REPO"),
             token_file=required("PLANGRAPH_GH_TOKEN_FILE"),
             out=out,
-            state=env.get("PLANGRAPH_STATE") or os.path.join(out, ".live-follow.json"),
+            state=state,
             workflow_path=(
                 env.get("PLANGRAPH_CI_WORKFLOW_PATH")
                 or ".github/workflows/tests.yml"
@@ -202,25 +187,13 @@ def gh_api(runner, cfg: Config, endpoint: str) -> dict | None:
 
 
 def _workflow_file(path: object) -> str | None:
-    """The workflow file a run came from, minus any "@refs/..." suffix.
-
-    The API reports a PR run as ".github/workflows/tests.yml@refs/pull/7/merge";
-    the ref part is not part of the file's identity. None when the field is
-    absent or empty — a run we cannot identify is a run that does not count.
-    """
     if not isinstance(path, str) or not path:
         return None
     return path.split("@", 1)[0] or None
 
 
 def _counts_toward_gate(run: dict, cfg: Config, head_sha: str) -> bool:
-    """Whether this run is the pinned workflow of exactly this head in our repo.
-
-    A workflow *name* is not an identity: any other file, or a fork's copy of
-    the same workflow, can be named "tests". Pinning the file path and checking
-    the run's own head_sha and head_repository keeps a lookalike — including a
-    fork PR's run — from deciding the result.
-    """
+    """Check the workflow file, repository, and exact head SHA."""
     if run.get("head_sha") != head_sha:
         return False
     head_repo = run.get("head_repository")
@@ -229,7 +202,22 @@ def _counts_toward_gate(run: dict, cfg: Config, head_sha: str) -> bool:
     return _workflow_file(run.get("path")) == cfg.workflow_path
 
 
-def _head_green(runner, cfg: Config, head_sha: str) -> bool:
+def _pr_run(run: dict, number: int, branch: str) -> bool:
+    refs = run.get("pull_requests")
+    ref = run["path"].partition("@")[2]
+    if run.get("event") != "pull_request" or not isinstance(refs, list):
+        return False
+    if ref.startswith("refs/pull/"):
+        if ref != f"refs/pull/{number}/merge":
+            return False
+    elif len(refs) != 1:
+        return False
+    return any(isinstance(pr, dict) and pr.get("number") == number
+               and isinstance(pr.get("base"), dict) and pr["base"].get("ref") == branch
+               for pr in refs)
+
+
+def _head_green(runner, cfg: Config, head_sha: str, pr_number: int | None = None) -> bool:
     """True when the newest run of cfg.workflow_path on head_sha completed success."""
     runs = gh_api(
         runner, cfg, f"repos/{cfg.repo}/actions/runs?head_sha={head_sha}&per_page=30"
@@ -240,6 +228,7 @@ def _head_green(runner, cfg: Config, head_sha: str) -> bool:
         r
         for r in runs.get("workflow_runs") or []
         if isinstance(r, dict) and _counts_toward_gate(r, cfg, head_sha)
+        and (pr_number is None or _pr_run(r, pr_number, cfg.branch))
     ]
     if not entries:
         return False
@@ -258,7 +247,8 @@ def is_green(runner, cfg: Config, sha: str) -> bool:
         # A commit pushed without a PR must carry its own green run.
         return _head_green(runner, cfg, sha)
     dicts = [p for p in items if isinstance(p, dict)]
-    exact = [p for p in dicts if p.get("merge_commit_sha") == sha]
+    exact = [p for p in dicts if p.get("merge_commit_sha") == sha
+             and (p.get("base") or {}).get("ref") == cfg.branch]
     if exact:
         candidates = exact
     else:
@@ -274,12 +264,12 @@ def is_green(runner, cfg: Config, sha: str) -> bool:
         ]
     if not candidates:
         return False
-    heads = [(p.get("head") or {}).get("sha") for p in candidates]
-    if any(not h for h in heads):
-        # A candidate without a head sha cannot be verified: fail closed
-        # rather than falling back to the commit sha.
-        return False
-    return all(_head_green(runner, cfg, h) for h in heads)
+    for candidate in candidates:
+        head = (candidate.get("head") or {}).get("sha")
+        number = candidate.get("number")
+        if not head or type(number) is not int or not _head_green(runner, cfg, head, number):
+            return False
+    return True
 
 
 def _result(action: str, reason: str, sha: str | None = None) -> dict:
@@ -460,16 +450,19 @@ def check(cfg: Config, runner, now=time.time) -> dict:
     return {"status": "stale", "page": page, "green": green}
 
 
-def main(argv=None, env=None, runner=None, now=time.time) -> int:
-    """CLI: ``follow`` before the render, ``check`` after it.
+def _render_revision(cfg: Config, runner) -> str | None:
+    sha = load_state(cfg).get("green_sha")
+    if not sha or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return None
+    rc, head = runner.run(["git", "-C", cfg.tree, "rev-parse", "HEAD"])
+    return sha if rc == 0 and head.strip() == sha else None
 
-    Returns 0 for every follow/check outcome — a page render must never be
-    blocked by this step; only a unusable config exits 2.
-    """
+
+def main(argv=None, env=None, runner=None, now=time.time) -> int:
     words = list(sys.argv[1:] if argv is None else argv)
     command = words[0] if words else ""
-    if command not in ("follow", "check"):
-        print("live_follow: usage: follow|check", file=sys.stderr)
+    if command not in ("follow", "check", "render-ready"):
+        print("live_follow: usage: follow|check|render-ready", file=sys.stderr)
         return 2
     try:
         cfg = Config.from_env(env or os.environ)
@@ -477,6 +470,13 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
         print(f"live_follow: {exc}", file=sys.stderr)
         return 2
     active = runner if runner is not None else Runner()
+    if command == "render-ready":
+        sha = _render_revision(cfg, active)
+        if sha:
+            print(sha)
+            return 0
+        print("live_follow: render skipped because HEAD has no matching verified revision", file=sys.stderr)
+        return 1
     try:
         result = (
             follow(cfg, active, now) if command == "follow" else check(cfg, active, now)

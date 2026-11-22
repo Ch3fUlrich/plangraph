@@ -3,10 +3,20 @@
 Portable on purpose: pure configparser/regex over the shipped text, so it runs without systemd.
 """
 
+import base64
 import configparser
+import hashlib
+import http.client
+import os
+import subprocess
 import re
 import shlex
+import shutil
+import socket
+import time
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 UNITS = ROOT / "deploy" / "systemd"
@@ -80,7 +90,7 @@ def test_service_shape():
 
 
 def test_execstart_publishes_in_place():
-    start = parse(SERVICE).get("Service", "ExecStart")
+    start = parse(SERVICE).get("Service", "ExecStart").replace(r'\"', '"')
     assert 'grep -q "</html>"' in start, "a truncated render must not replace a good page"
     assert 'cat "$T" >' in start, "publish with cat > so the destination inode survives the bind mount"
     assert "mv " not in start, "mv would swap the inode the web server bind-mounted"
@@ -141,3 +151,81 @@ def test_env_names_are_documented():
         for section, key, value in values(parse(path)):
             for name in ENV_NAME.findall(value):
                 assert name in documented, f"{path.name} uses {name}, undocumented in {ENV_EXAMPLE.name}"
+
+
+def test_nginx_plan_requires_http_authentication():
+    config = read(ROOT / "deploy" / "nginx" / "plan-page.conf.example")
+    location = config.split("location = /plan {", 1)[1]
+    assert re.search(r'^\s*auth_basic "(?!off")[^"]+";', location, re.M)
+    assert re.search(r'^\s*auth_basic_user_file /[^;]+;', location, re.M)
+    assert "satisfy all;" in location
+
+
+def test_execstart_keeps_page_when_checkout_is_unverified(tmp_path):
+    (tmp_path / "plan-cdn.html").write_text("<html>published</html>")
+    # Stub only Python. The actual ExecStart must avoid invoking the renderer if the gate refuses.
+    python = tmp_path / "python3"
+    python.write_text("#!/bin/sh\ncase \"$*\" in *live_follow*) exit 1 ;; esac\nprintf '<html>unverified</html>' > \"$6\"\n")
+    python.chmod(0o700)
+    command = shlex.split(parse(SERVICE).get("Service", "ExecStart").replace(r'\"', '"'))
+    env = dict(os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}",
+               PLANGRAPH_LIVE_TREE=str(tmp_path), PLANGRAPH_OUT=str(tmp_path))
+    subprocess.run(command, env=env, capture_output=True)
+    assert (tmp_path / "plan-cdn.html").read_text() == "<html>published</html>"
+
+
+def test_live_tree_dropin_supplies_private_gate_state():
+    assert "Environment=PLANGRAPH_STATE=%h/.local/state/" in read(DROPINS[1])
+
+
+@pytest.mark.skipif(shutil.which("nginx") is None, reason="nginx required for HTTP fixture")
+def test_plan_http_challenges_anonymous_requests(tmp_path):
+    socket_path = tmp_path / "http.sock"
+    page, auth = tmp_path / "page.html", tmp_path / "htpasswd"
+    page.write_text("private fixture")
+    credentials = b"fixture:fixture-password"
+    digest = base64.b64encode(hashlib.sha1(credentials.split(b":", 1)[1]).digest()).decode()
+    auth.write_text(f"fixture:{{SHA}}{digest}\n")
+    conf = read(ROOT / "deploy" / "nginx" / "plan-page.conf.example")
+    conf = conf.replace("/srv/plan/plan-cdn.html", str(page))
+    conf = conf.replace("/etc/nginx/private/plan.htpasswd", str(auth))
+    temp_dirs = " ".join(f"{name}_temp_path {tmp_path}/{name};"
+                         for name in ("client_body", "proxy", "fastcgi", "uwsgi", "scgi"))
+    (tmp_path / "nginx.conf").write_text(
+        f"daemon off; pid {tmp_path}/nginx.pid; error_log stderr;\n"
+        f"events {{}} http {{ {temp_dirs} access_log off; server {{ listen unix:{socket_path}; {conf} }} }}")
+    nginx = subprocess.Popen(["nginx", "-e", "stderr", "-p", str(tmp_path), "-c", "nginx.conf"],
+                             stderr=subprocess.PIPE)
+
+    class Connection(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX)
+            self.sock.settimeout(3)
+            self.sock.connect(str(socket_path))
+
+    def fetch(headers):
+        conn = Connection("fixture")
+        try:
+            conn.request("GET", "/plan", headers=headers)
+            response = conn.getresponse()
+            return response.status, response.headers, response.read()
+        finally:
+            conn.close()
+
+    try:
+        deadline = time.monotonic() + 3
+        while not socket_path.exists() and nginx.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not socket_path.exists():
+            nginx.terminate()
+            _, stderr = nginx.communicate(timeout=5)
+            pytest.fail(stderr.decode())
+        status, headers, body = fetch({})
+        assert status == 401 and "Basic" in headers["WWW-Authenticate"]
+        assert b"private fixture" not in body
+        status, headers, body = fetch({"Authorization": "Basic " + base64.b64encode(credentials).decode()})
+        assert status == 200 and body == b"private fixture"
+        assert headers["Cache-Control"] == "private, no-store"
+    finally:
+        nginx.terminate()
+        nginx.communicate(timeout=5)

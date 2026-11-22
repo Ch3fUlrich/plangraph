@@ -11,3 +11,4 @@ Environment=PLANGRAPH_LIVE_TREE=%h/plangraph-live
 Environment=PLANGRAPH_OUT=%h/plangraph-live/out
 Environment=PLANGRAPH_REPO=owner/name
 Environment=PLANGRAPH_GH_TOKEN_FILE=%h/.config/plangraph/gh-token.env
+Environment=PLANGRAPH_STATE=%h/.local/state/plangraph/live-follow.json
