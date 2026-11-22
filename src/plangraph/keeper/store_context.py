@@ -366,14 +366,16 @@ class ContextMixin:
         project = item["project"]
         indexes = self._work_indexes({project}, fresh=True)
         prs = src.indexed_open_pulls(indexes, item["key"], project)
+        if not prs and reason is None:
+            prs = src.indexed_open_pulls(indexes, item["key"], project, cached=True)
         if prs:
             raise Refused("bad_state", f"{item['key']} carried by "
                           + ", ".join(f"#{number}" for number in prs))
         unknown = [name for name, entry in indexes.items()
                    if entry and entry.get("prs_unverified")]
-        if unknown:
-            raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
         if not stale_checks:
+            if unknown:
+                raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
             return None
         index = self._item_neighborhood(item)
         try:
@@ -387,6 +389,8 @@ class ContextMixin:
         facts = self._claim_staleness(ctx)
         if work_index is not None and work_index.get("stale"):
             facts.append("work index unverified: " + work_index["reason"])
+        if unknown:
+            facts.append("work index unverified: open PR inventory unavailable: " + ", ".join(unknown))
         if not facts:
             return None
         if reason is None:

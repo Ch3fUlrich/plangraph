@@ -262,7 +262,8 @@ def _upgrade(conn):
         raise
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
-    conn.executescript(INCIDENTS_DDL)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+        conn.executescript(INCIDENTS_DDL)
 
 
 def open_db(path, *, create: bool = False,
