@@ -246,43 +246,9 @@ hosts. Review requests send their exact base and head as a `diff_ref`.
 Unpublished commits in approved public repositories are transferred in a
 temporary Git bundle, so testing this path requires no push.
 
-### Returning a worker to placement
-
-Run `pg-spawnd rejoin HOST` on the placement coordinator after its probe
-reports that the worker is reachable. The coordinator keeps the worker in
-`rejoining` until every check succeeds. Discover phase and check results in
-`STATE/worker-hosts/HOST.json`. All placement frontends on the coordinator
-must use the same spawner state directory.
-
-The worker must have the existing `plangraph-host-sync.service` installed.
-Configure it to preserve local changes on a branch and advance the Plangraph
-and hooks checkouts to main. Rejoin checks the checkout against live
-`origin/main`, resolves the effective Git hooks directory, and checks the
-installed spawner. A dirty checkout remains blocked on installations where
-the sync service only advances clean checkouts. Set the following `env` keys
-to absolute paths in the worker’s fleet registry entry.
-
-- `PG_REJOIN_BUILD_RECEIPT` points to an independent build receipt with
-  `main_sha` and `main_sha256` for the worker's platform.
-- `PG_REJOIN_SOURCE_STAMP` points to the installed binary's source SHA stamp.
-- `PG_REJOIN_RUN_RECONCILER` points to the host's run and claim reconciliation
-  command. It receives the canonical host ID and the coordinator's known run
-  IDs as arguments, with `PLANGRAPH_SPAWN_STATE` set to the worker's state.
-  It checks host-local records for additional affected runs and returns a JSON
-  object with `host` and `runs`. Each row has `run_id` and an `outcome` of
-  `collected`, `reattached`, or `released`. Only report release with proof
-  that the execution ended and the corresponding claim and lane were released.
-  An omitted or unresolved run leaves placement blocked. Retries can include
-  run IDs that the previous attempt already settled.
-
-Retry after a failed check is repaired. The worktree sweep uses its existing
-Keeper claim protection. Rejoin also checks unit worktree references, the
-checkout, worktree and state disks, the registry RAM floor, and routed leg
-probes. Keep the ordinary readiness checks enabled.
-
 ### Fleet worker liveness and maintenance
 
-Run `pg-spawnd worker-liveness --deliver --dispatch-rejoin` from the
+Run `pg-spawnd worker-liveness --deliver` from the
 placement coordinator once per minute. It probes SSH and Tailscale for the
 worker and workstation SSH entries in the fleet registry. Set
 `PG_TAILSCALE_PEER` in a host's registry `env` if its Tailscale address
@@ -292,22 +258,21 @@ launch uses SSH. The recorded Tailscale result helps diagnose a link failure.
 After two misses the worker is refused and `pg alerts` lists an open
 finding with the affected run IDs. The probe combines the coordinator's
 placed run records with the last available remote inventory. Recovery clears
-the finding and records which runs to check. After a long outage the host
-remains in `rejoining` while the coordinator starts the rejoin unit.
+the finding and records which runs to check. Placement continues to apply its
+regular readiness checks after recovery.
 
 An operator or router with coordinator state access can use
 `pg-spawnd worker-maintenance HOST END_UNIX_SECONDS` to block placement
 immediately. Misses during that window are recorded for host health without
-paging routing. A probe at or after the end requests rejoin on recovery,
-or raises an outage finding if the host still fails. An inventory-only host
+paging routing. A successful probe at or after the end clears the placement
+hold. A host that still fails remains unavailable. An inventory-only host
 needs an active worker configuration before it can receive placement.
 
-The versioned `pg-worker-liveness` service and timer and
-`pg-spawnd-rejoin@.service` use a coordinator `worker-liveness.env` with
+The versioned `pg-worker-liveness` service and timer use a coordinator
+`worker-liveness.env` with
 `PLANGRAPH_SPAWN_STATE`, `PG_URL`, `PG_TOKEN_FILE` and
 `PG_HOST_LINK_SENDER`. Use a Keeper system or router principal and place
 both updated binaries on the service PATH. The liveness command delivers
-through the host-link watchdog outbox and retries pending events. Use one
-coordinator timer for the fleet to avoid redundant SSH monitors. Installation,
-the run reconciliation adapter, and the returning-host checks are deployment
-work.
+through the host-link watchdog outbox and retries pending events. Events
+with a permanent payload refusal move to `watchdog/rejected`. Use one
+coordinator timer for the fleet to avoid redundant SSH monitors.

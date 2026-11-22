@@ -10,6 +10,9 @@ use std::{
     time::Duration,
 };
 
+/// File delivery reports this exit code for a permanent Keeper payload refusal.
+pub const WORKER_ALERT_REFUSED_EXIT: i32 = 3;
+
 pub fn probe_peer(peer: &str) -> io::Result<bool> {
     if peer.is_empty()
         || peer.starts_with('-')

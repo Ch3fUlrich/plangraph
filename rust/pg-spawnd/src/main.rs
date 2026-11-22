@@ -73,7 +73,6 @@ mod transport_unix;
 mod transport_windows;
 mod work_mode_config;
 mod worker_liveness;
-mod worker_rejoin;
 mod writer_control;
 mod writer_ledger;
 

@@ -1,10 +1,9 @@
 //! Fleet registry polling and delivery through the coordinator's existing watchdog bridge.
 
-use crate::worker_rejoin::{active_run_ids, now, registry, remote};
 use pg_worker_core::{
     host_command, host_link,
     hosts::{HostClass, HostEntry, HostRegistry, Transport},
-    run::record::valid_run_id,
+    run::{record::valid_run_id, record_io::ensure_private_dir},
     worker_host::{Observation, Store},
 };
 use serde_json::{json, Value};
@@ -14,8 +13,61 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+fn now() -> Result<u64, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .map_err(|_| "system clock predates epoch".into())
+}
+
+fn registry() -> Result<HostRegistry, String> {
+    let config = env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .ok_or("cannot resolve fleet configuration directory")?;
+    HostRegistry::load(&config.join("plangraph/hosts.json"))
+        .map_err(|_| "fleet host registry unavailable or invalid".into())
+}
+
+fn remote(host: &HostEntry) -> Result<Command, String> {
+    let route = host.ssh_route().ok_or("worker has no SSH route")?;
+    let mut command = host_command::ssh(&route).map_err(|_| "worker SSH route is invalid")?;
+    if let Some(distro) = host.wsl_distro.as_deref() {
+        if !host_command::valid_wsl_distro(distro) {
+            return Err("invalid worker WSL distribution".into());
+        }
+        command.args(["wsl.exe", "--distribution", distro, "--exec"]);
+    }
+    Ok(command)
+}
+
+fn active_run_ids(state: &Path, registry: &HostRegistry, host: &str) -> BTreeSet<String> {
+    crate::records::list_runs(state)
+        .into_iter()
+        .filter(|row| {
+            matches!(
+                row["status"].as_str(),
+                Some("running" | "queued" | "unknown")
+            )
+        })
+        .filter(|row| {
+            row["host"]
+                .as_str()
+                .and_then(|name| registry.resolve(name))
+                .is_some_and(|entry| entry.id == host)
+        })
+        .filter_map(|row| {
+            row["run_id"]
+                .as_str()
+                .filter(|id| valid_run_id(id))
+                .map(str::to_owned)
+        })
+        .collect()
+}
 
 fn state() -> Result<PathBuf, String> {
     crate::state::resolve_state(None, |key| env::var_os(key))
@@ -83,7 +135,7 @@ fn parse_inventory(host: &str, bytes: &[u8]) -> Option<BTreeSet<String>> {
         .collect()
 }
 
-fn check(host: &HostEntry, registry: &HostRegistry, state: &Path) -> Result<(Value, bool), String> {
+fn check(host: &HostEntry, registry: &HostRegistry, state: &Path) -> Result<Value, String> {
     let route = host.ssh_route().ok_or("worker lacks an SSH route")?;
     let peer = host
         .env
@@ -116,7 +168,7 @@ fn check(host: &HostEntry, registry: &HostRegistry, state: &Path) -> Result<(Val
         .flatten();
     let inventory_available = runs.is_some();
     let tailscale = tailscale.ok();
-    let (phase, rejoin) = Store::new(state, &host.id)
+    let phase = Store::new(state, &host.id)
         .and_then(|store| {
             store.observe_liveness(Observation {
                 now: now().map_err(io::Error::other)?,
@@ -131,28 +183,11 @@ fn check(host: &HostEntry, registry: &HostRegistry, state: &Path) -> Result<(Val
             })
         })
         .map_err(|error| error.to_string())?;
-    Ok((
-        json!({"host":host.id,"ssh":reachable,"tailscale":tailscale,
-        "inventory_available":inventory_available,"phase":phase,"rejoin_required":rejoin}),
-        rejoin,
-    ))
+    Ok(json!({"host":host.id,"ssh":reachable,"tailscale":tailscale,
+        "inventory_available":inventory_available,"phase":phase}))
 }
 
-fn dispatch(host: &str) -> Result<(), String> {
-    host_command::output(
-        Command::new("systemctl").args([
-            "--user",
-            "start",
-            "--no-block",
-            &format!("pg-spawnd-rejoin@{host}.service"),
-        ]),
-        Duration::from_secs(5),
-    )
-    .map(drop)
-    .map_err(|_| "could not queue worker rejoin unit".into())
-}
-
-fn deliver(state: &Path) -> Result<(), String> {
+fn deliver(state: &Path, out: &mut dyn Write) -> Result<(), String> {
     let outbox = state.join("watchdog/outbox");
     let entries = match fs::read_dir(outbox) {
         Ok(entries) => entries,
@@ -172,30 +207,64 @@ fn deliver(state: &Path) -> Result<(), String> {
         .map(|entry| entry.path())
         .collect();
     paths.sort();
+    let rejected = state.join("watchdog/rejected");
+    let mut failed = false;
     for path in paths {
-        host_command::output(
+        let name = path.file_name().expect("outbox entry has a name");
+        if !path.exists() {
+            continue;
+        }
+        let result = host_command::capture(
             Command::new("plangraph")
                 .arg("host-link-deliver")
                 .arg(&path),
             Duration::from_secs(12),
-        )
-        .map_err(|_| "Keeper did not acknowledge worker alert")?;
-        match fs::remove_file(path) {
-            Ok(()) => (),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
-            Err(_) => return Err("could not acknowledge delivered worker alert locally".into()),
+        );
+        let (reason, permanent, action) = match result.ok().and_then(|reply| reply.status.code()) {
+            Some(0) => (
+                "could not acknowledge delivered worker alert locally",
+                false,
+                fs::remove_file(&path),
+            ),
+            Some(host_link::WORKER_ALERT_REFUSED_EXIT) => (
+                "Keeper refused worker alert",
+                true,
+                ensure_private_dir(&rejected).and_then(|()| fs::rename(&path, rejected.join(name))),
+            ),
+            _ => (
+                "Keeper did not acknowledge worker alert",
+                false,
+                Err(io::Error::other("delivery failed")),
+            ),
+        };
+        match action {
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !path.exists() => continue,
+            Ok(()) if !permanent => continue,
+            action => {
+                failed = true;
+                writeln!(
+                    out,
+                    "{}",
+                    json!({"outbox_file":name.to_string_lossy(), "error":reason,
+                    "quarantined":permanent && action.is_ok()})
+                )
+                .map_err(|error| error.to_string())?;
+            }
         }
     }
-    Ok(())
+    if failed {
+        Err("one or more worker alerts failed delivery".into())
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String> {
-    let mut flags = BTreeSet::new();
-    if args.iter().any(|flag| {
-        !matches!(flag.as_str(), "--deliver" | "--dispatch-rejoin") || !flags.insert(flag.as_str())
-    }) {
-        return Err("usage: pg-spawnd worker-liveness [--deliver] [--dispatch-rejoin]".into());
-    }
+    let deliver_alerts = match args {
+        [] => false,
+        [flag] if flag == "--deliver" => true,
+        _ => return Err("usage: pg-spawnd worker-liveness [--deliver]".into()),
+    };
     let registry = registry()?;
     let state = state()?;
     let mut failed = false;
@@ -209,16 +278,7 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
             .collect::<Vec<_>>();
         for (host, task) in tasks {
             let row = match task.join().expect("worker probe thread") {
-                Ok((row, rejoin)) => {
-                    if flags.contains("--dispatch-rejoin") && rejoin && !host.inventory_only() {
-                        if let Err(error) = dispatch(&host.id) {
-                            failed = true;
-                            writeln!(out, "{}", json!({"host":host.id,"error":error}))
-                                .map_err(|e| e.to_string())?;
-                        }
-                    }
-                    row
-                }
+                Ok(row) => row,
                 Err(error) => {
                     failed = true;
                     json!({"host":host.id,"error":error})
@@ -228,8 +288,8 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
         }
         Ok(())
     })?;
-    if flags.contains("--deliver") {
-        deliver(&state)?;
+    if deliver_alerts {
+        deliver(&state, out)?;
     }
     if failed {
         Err("one or more worker liveness checks failed".into())

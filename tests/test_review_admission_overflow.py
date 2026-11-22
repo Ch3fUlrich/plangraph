@@ -73,3 +73,43 @@ def test_absent_overflow_config_refuses_with_a_hint(host, monkeypatch):
     monkeypatch.setattr(seat_spawn, 'resources', lambda svc: (0, 3300))
     record = seat_spawn.admit(service, {'role': 'review'})
     assert record['status'] == 'refused' and 'genconfig write' in record['hint']
+
+
+@pytest.mark.parametrize('state, refusal', [
+    ('{"phase":"ready"}', None),
+    ('{"phase":"unreachable"}', 'worker host unreachable'),
+    ('{"phase":"rejoining"}', 'worker host rejoining'),
+    ('{invalid', 'worker host state unavailable'),
+    (None, None),
+])
+@pytest.mark.parametrize('entry', ['service', 'overflow-cli'])
+def test_placement_reads_worker_phase(host, monkeypatch, capsys, state, refusal, entry):
+    service, root = host
+    config(root, monkeypatch)
+    monkeypatch.setattr(seat_spawn, 'resources', lambda svc: (0, 3300))
+    monkeypatch.setattr(overflow, 'local_resources', lambda state: (0, 3300))
+    monkeypatch.setattr(overflow, 'ready_records', lambda cfg, role: {'build-host': dict(
+        ssh='build-host', ok=True, fresh=True, live_runs=1, mem_available_mb=12000, role_mb=256, floor_mb=4096)})
+    remote = Mock(return_value={'run_id': 'run-remote', 'status': 'running'})
+    monkeypatch.setattr(overflow, 'remote_spawn', remote)
+    directory = root / 'worker-hosts'
+    directory.mkdir()
+    if state is not None:
+        (directory / 'build-host.json').write_text(state)
+    if entry == 'service':
+        result = seat_spawn.admit(service, {'role': 'review'}, card={'diff_ref': {'repo': str(root)}})
+    else:
+        card, prompt = root / 'card.json', root / 'prompt'
+        card.write_text('{}')
+        prompt.write_text('fixture')
+        monkeypatch.setattr(overflow.cli, 'SpawnService', lambda **kw: service)
+        code = overflow.main(['spawn', '--state', str(root), '--repo', str(root),
+                              '--card', str(card), '--prompt', str(prompt)])
+        assert code == (2 if refusal else 0)
+        result = json.loads(capsys.readouterr().out)
+    if refusal:
+        assert result['status'] == 'refused' and refusal in result['overflow_reason']
+        remote.assert_not_called()
+    else:
+        assert result['host'] == 'build-host' and result['status'] == 'running'
+        remote.assert_called_once()

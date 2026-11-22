@@ -44,7 +44,7 @@ impl Announcement {
 }
 
 impl Store {
-    /// Refuse placement immediately through the declared end and the subsequent rejoin.
+    /// Refuse placement immediately through the declared end and until a successful probe.
     pub fn set_maintenance(&self, now: u64, until: u64) -> io::Result<()> {
         let _guard = self.lock("lock")?;
         let mut state = self.load()?;
@@ -54,16 +54,11 @@ impl Store {
         state.phase = Phase::Rejoining;
         state.maintenance_until = Some(until);
         state.link.maintenance_end = Some(until);
-        state.episode = state.episode.saturating_add(1);
         self.save(&state)
     }
 
-    pub fn unknown_runs(&self) -> io::Result<BTreeSet<String>> {
-        Ok(self.load()?.link.unknown_runs)
-    }
-
     /// Record one completed probe, persist pending alerts, and queue them for Keeper delivery.
-    pub fn observe_liveness(&self, observed: Observation) -> io::Result<(Phase, bool)> {
+    pub fn observe_liveness(&self, observed: Observation) -> io::Result<Phase> {
         if observed
             .placed_runs
             .iter()
@@ -75,7 +70,7 @@ impl Store {
         let _guard = self.lock("lock")?;
         let mut state = self.load()?;
         let was_down = state.outage_since;
-        state.advance(observed.now, observed.ssh, None)?;
+        state.advance(observed.now, observed.ssh)?;
         let in_maintenance = state.maintenance_until.is_some();
         let link = &mut state.link;
         link.latest_tailscale = observed.tailscale;
@@ -131,10 +126,7 @@ impl Store {
         // The placement hold survives an outbox write failure.
         self.save(&state)?;
         self.drain_alerts(&mut state)?;
-        Ok((
-            phase,
-            phase == Phase::Rejoining && observed.ssh && !in_maintenance,
-        ))
+        Ok(phase)
     }
 
     fn drain_alerts(&self, state: &mut State) -> io::Result<()> {

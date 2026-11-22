@@ -85,9 +85,11 @@ fn deliver(event: &Value, rule: &str) -> Result<(), Box<dyn std::error::Error>> 
             "from": sender, "to": text("recipient")?, "key": text("item_key")?,
             "msg_id": msg_id, "body": body,
         }))
-        .map_err(|error| match error {
-            ureq::Error::StatusCode(code) => format!("keeper returned HTTP {code}"),
-            _ => "keeper delivery failed".into(),
+        .map_err(|error| -> Box<dyn std::error::Error> {
+            match error {
+                status @ ureq::Error::StatusCode(_) => status.into(),
+                _ => "keeper delivery failed".into(),
+            }
         })?;
     let receipt: Value = response
         .body_mut()
@@ -133,8 +135,37 @@ pub fn cli(args: &[String]) -> i32 {
     match result {
         Ok(()) => 0,
         Err(error) => {
+            if let Some(ureq::Error::StatusCode(status)) = error.downcast_ref::<ureq::Error>() {
+                eprintln!("host-link-deliver: keeper returned HTTP {status}");
+                return refusal_exit(*status, args.len() == 1);
+            }
             eprintln!("host-link-deliver: {error}");
             1
+        }
+    }
+}
+
+fn refusal_exit(status: u16, file_delivery: bool) -> i32 {
+    if file_delivery && matches!(status, 400 | 413 | 422) {
+        pg_worker_core::host_link::WORKER_ALERT_REFUSED_EXIT
+    } else {
+        1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::refusal_exit;
+    use pg_worker_core::host_link::WORKER_ALERT_REFUSED_EXIT;
+
+    #[test]
+    fn only_permanent_file_payload_refusals_are_quarantinable() {
+        for status in [400, 413, 422] {
+            assert_eq!(refusal_exit(status, true), WORKER_ALERT_REFUSED_EXIT);
+            assert_eq!(refusal_exit(status, false), 1);
+        }
+        for status in [401, 403, 404, 409, 429, 500, 503] {
+            assert_eq!(refusal_exit(status, true), 1);
         }
     }
 }

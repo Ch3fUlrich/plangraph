@@ -4,7 +4,7 @@ Description=Probe the fleet workers and deliver outage events
 [Service]
 Type=oneshot
 EnvironmentFile=%h/.config/plangraph/worker-liveness.env
-ExecStart=%h/.local/bin/pg-spawnd worker-liveness --deliver --dispatch-rejoin
+ExecStart=%h/.local/bin/pg-spawnd worker-liveness --deliver
 TimeoutStartSec=55s
 UMask=0077
 NoNewPrivileges=true

@@ -1,4 +1,4 @@
-//! Coordinator-owned placement state for a worker's link and rejoin checks.
+//! Coordinator-owned placement state for a worker link and maintenance window.
 
 use crate::{
     fleet_series::valid_host,
@@ -15,8 +15,6 @@ use std::{
 mod liveness;
 pub use liveness::Observation;
 
-const REJOIN_AFTER_SECONDS: u64 = 10 * 60;
-
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -26,28 +24,6 @@ pub enum Phase {
     Rejoining,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Step {
-    Sync,
-    Install,
-    Runs,
-    Worktrees,
-    Capacity,
-    Legs,
-}
-
-impl Step {
-    pub const ALL: [Self; 6] = [
-        Self::Sync,
-        Self::Install,
-        Self::Runs,
-        Self::Worktrees,
-        Self::Capacity,
-        Self::Legs,
-    ];
-}
-
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct State {
@@ -55,50 +31,34 @@ struct State {
     missed: u32,
     outage_since: Option<u64>,
     observed_at: u64,
-    episode: u64,
+    #[serde(default, rename = "episode", skip_serializing)]
+    _legacy_episode: Option<serde::de::IgnoredAny>,
     maintenance_until: Option<u64>,
-    rejoin: Option<Rejoin>,
+    #[serde(default, rename = "rejoin", skip_serializing)]
+    _legacy_rejoin: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     link: liveness::Link,
 }
 
 impl State {
-    fn advance(
-        &mut self,
-        now: u64,
-        reachable: bool,
-        maintenance_until: Option<u64>,
-    ) -> io::Result<()> {
+    fn advance(&mut self, now: u64, reachable: bool) -> io::Result<()> {
         if now < self.observed_at {
             return Err(io::Error::other(
                 "worker host observation clock moved backwards",
             ));
         }
-        let maintenance = maintenance_until
-            .or(self.maintenance_until)
-            .filter(|until| *until > now);
-        if maintenance.is_some() && self.maintenance_until != maintenance {
-            self.episode = self.episode.saturating_add(1);
-        }
-        self.maintenance_until = maintenance;
+        let was_rejoining = self.phase == Phase::Rejoining;
+        self.maintenance_until = self.maintenance_until.filter(|until| *until > now);
         if !reachable {
-            if self.outage_since.is_none() {
-                self.episode = self.episode.saturating_add(1);
-            }
             self.outage_since.get_or_insert(now);
             self.missed = self.missed.saturating_add(1);
         }
-        let rejoin_required = maintenance.is_some()
-            || self.phase == Phase::Rejoining
-            || self
-                .outage_since
-                .is_some_and(|since| now.saturating_sub(since) > REJOIN_AFTER_SECONDS);
-        self.phase = if rejoin_required {
+        self.phase = if self.maintenance_until.is_some() {
             Phase::Rejoining
-        } else if reachable || self.missed < 2 {
-            Phase::Ready
-        } else {
+        } else if !reachable && (self.missed >= 2 || was_rejoining) {
             Phase::Unreachable
+        } else {
+            Phase::Ready
         };
         if reachable {
             self.outage_since = None;
@@ -107,14 +67,6 @@ impl State {
         self.observed_at = now;
         Ok(())
     }
-}
-
-#[derive(Deserialize, Serialize)]
-struct Rejoin {
-    started_at: u64,
-    completed: Vec<(Step, serde_json::Value)>,
-    failures: Vec<(Step, String)>,
-    ready: bool,
 }
 
 pub struct Store {
@@ -173,83 +125,5 @@ impl Store {
             Phase::Unreachable => Some("worker host unreachable"),
             Phase::Rejoining => Some("worker host rejoining"),
         })
-    }
-
-    /// Persist a completed observation from the coordinator's minute probe.
-    pub fn observe(
-        &self,
-        now: u64,
-        reachable: bool,
-        maintenance_until: Option<u64>,
-    ) -> io::Result<Phase> {
-        let _lock = self.lock("lock")?;
-        let mut state = self.load()?;
-        state.advance(now, reachable, maintenance_until)?;
-        self.save(&state)?;
-        Ok(state.phase)
-    }
-
-    /// Keep placement blocked until this attempt passes for the same outage episode.
-    pub fn rejoin(
-        &self,
-        now: u64,
-        mut check: impl FnMut(Step) -> Result<serde_json::Value, String>,
-    ) -> io::Result<()> {
-        let _attempt = self.lock("rejoin.lock")?;
-        let episode = {
-            let _lock = self.lock("lock")?;
-            let state = self.load()?;
-            if state.phase != Phase::Rejoining
-                || state.outage_since.is_some()
-                || state.maintenance_until.is_some()
-                || now < state.observed_at
-            {
-                return Err(io::Error::other(
-                    "worker must be rejoining and reachable outside maintenance",
-                ));
-            }
-            state.episode
-        };
-        let mut failures = Vec::new();
-        let mut completed = Vec::new();
-        for step in Step::ALL {
-            // Run settlement is useful even while installation needs repair.
-            if !failures.is_empty() && step != Step::Runs {
-                continue;
-            }
-            match check(step) {
-                Ok(evidence) => completed.push((step, evidence)),
-                Err(error) => failures.push((step, error)),
-            }
-        }
-        let _lock = self.lock("lock")?;
-        let mut state = self.load()?;
-        let current = state.episode == episode
-            && state.outage_since.is_none()
-            && state.maintenance_until.is_none()
-            && state.phase == Phase::Rejoining;
-        let ready = current && failures.is_empty();
-        let error = failures
-            .first()
-            .map(|(step, error)| format!("{step:?}: {error}"));
-        state.rejoin = Some(Rejoin {
-            started_at: now,
-            completed,
-            failures,
-            ready,
-        });
-        if ready {
-            state.phase = Phase::Ready;
-            state.link.unknown_runs.clear();
-            state.link.maintenance_end = None;
-        }
-        self.save(&state)?;
-        if ready {
-            Ok(())
-        } else {
-            Err(io::Error::other(error.unwrap_or_else(|| {
-                "worker outage changed during rejoin".into()
-            })))
-        }
     }
 }

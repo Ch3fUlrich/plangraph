@@ -137,15 +137,6 @@ pub(crate) fn spawn(
     {
         return placement::native_spawn(state, args);
     }
-    if args.get("dry_run") != Some(&Value::Bool(true)) {
-        if let Some(reason) = pg_worker_core::worker_host::placement_refusal(state, host) {
-            return Err(ToolError::Refused {
-                kind: crate::errors::RefusalKind::Spawn,
-                message: reason.into(),
-                legs: vec![],
-            });
-        }
-    }
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     let admitted = crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)
         .and_then(|a| validate(&a).map(|()| a))

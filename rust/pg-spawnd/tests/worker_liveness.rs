@@ -89,3 +89,59 @@ fn two_misses_emit_one_alert_and_recovery_keeps_the_affected_runs() {
     assert_eq!(calls.lines().filter(|line| *line == "ssh").count(), 5);
     assert_eq!(calls.lines().filter(|line| *line == "tailscale").count(), 4);
 }
+
+#[test]
+fn delivery_continues_past_failed_events_and_quarantines_permanent_refusals() {
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path();
+    let config = root.join("plangraph");
+    let state = root.join("state");
+    let outbox = state.join("watchdog/outbox");
+    fs::create_dir_all(&config).unwrap();
+    fs::create_dir_all(&outbox).unwrap();
+    fs::write(
+        config.join("hosts.json"),
+        json!({"version":1,"self":"observer","hosts":[{
+            "id":"observer","aliases":[],"transport":"local","os":"linux",
+            "state_dir":state,"session_mb":1,"roles":[],
+            "caps":{"max_runs":1,"max_writers":0,"max_seats":0,"max_sessions":0,"mem_floor_mb":1},
+            "warmup":{"warmup_s":1,"ramp_mb":{}},"repos":{}
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    let names = ["retry", "refused", "success"].map(|name| {
+        format!(
+            "{:020}-worker-host-{name}.json",
+            match name {
+                "retry" => 1,
+                "refused" => 2,
+                _ => 3,
+            }
+        )
+    });
+    for name in &names {
+        fs::write(outbox.join(name), "{}").unwrap();
+    }
+    let bridge = root.join("plangraph-bridge");
+    fs::create_dir(&bridge).unwrap();
+    let executable = bridge.join("plangraph");
+    fs::write(
+        &executable,
+        "#!/bin/sh\ncase \"$2\" in\n*-retry.json) exit 1;;\n*-refused.json) exit 3;;\nesac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let result = Command::new(binary::spawnd())
+        .args(["worker-liveness", "--deliver"])
+        .env("PLANGRAPH_SPAWN_STATE", &state)
+        .env("XDG_CONFIG_HOME", root)
+        .env("PATH", &bridge)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(outbox.join(&names[0]).exists());
+    assert!(state.join("watchdog/rejected").join(&names[1]).exists());
+    assert!(!outbox.join(&names[1]).exists());
+    assert!(!outbox.join(&names[2]).exists());
+}
