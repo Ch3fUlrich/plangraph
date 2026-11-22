@@ -15,7 +15,7 @@ fn same_head_re_review_diffs_against_the_batch_base() {
 fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
     use super::review::{TOOLS_ONLY_CLOSE, TOOLS_ONLY_OPEN};
     let dir = tempfile::tempdir().unwrap();
-    let host = Host {
+    let mut host = Host {
         repo: dir.path().into(),
         cwd: dir.path().into(),
         run_id: "run-tools".into(),

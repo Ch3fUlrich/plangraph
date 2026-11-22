@@ -396,7 +396,6 @@ mod review_route;
 mod session;
 #[cfg(test)]
 use review::{review_diff_base, review_run_text, review_verdict};
-use review_route::review_override;
 #[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;
