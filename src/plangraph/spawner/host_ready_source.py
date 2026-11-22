@@ -160,26 +160,58 @@ def configured_work_drives(policy):
     return parsed
 
 
-def select_drive(drives, cleanup, free_gb):
-    """The one drive decision: the first configured drive at or above its floor.
+def select_drive(drives, cleanup, free_gb, *, check=None):
+    """Pick the first drive meeting its floor and any additional filesystem checks.
 
-    ``drives`` is ``[(path, floor_gb)]``. When none qualifies, ``cleanup`` runs once
-    and every drive is measured again. Returns ``(path, None)`` for the selected
-    drive, or ``(None, (free_gb, floor_gb))`` of the first drive when all stay low.
+    When none qualifies, clean up once and retry. Return the selected path or the
+    first shortfall as a (free GiB, floor GiB) pair.
     """
     if not drives:
         raise ValueError('select_work_drive select_drive needs at least one drive')
 
     def pick():
-        return next((p for p, floor in drives if free_gb(p) >= floor), None)
-    selected = pick()
-    if selected is None:
+        first_low = None
+        for path, floor in drives:
+            free = free_gb(path)
+            low = (free, floor) if free < floor else check(path) if check else None
+            if low is None:
+                return path, None
+            if first_low is None:
+                first_low = low
+        return None, first_low
+
+    selected, low = pick()
+    if low is not None:
         cleanup()
-        selected = pick()
-    if selected is not None:
-        return selected, None
-    first_path, first_floor = drives[0]
-    return None, (free_gb(first_path), first_floor)
+        return pick()
+    return selected, None
+
+
+def work_drive_checkouts(drives):
+    """Resolve configured drive paths that contain a launchable Git checkout."""
+    from .prompt_input import resolve_cwd
+    from plangraph.routing_errors import ParameterRefused
+
+    checkouts = []
+    for path, floor in drives:
+        try:
+            checkout = resolve_cwd(str(Path(path).expanduser()), None)
+        except ParameterRefused:
+            continue
+        checkouts.append((checkout, floor))
+    return checkouts
+
+
+def admission_shortfall(target, state, policy, floor, free_gb):
+    """Probe the Cargo target, state, and both supervisor and run worktree roots."""
+    paths = [target]
+    if state is not None:
+        paths.extend((state, state / 'trees', policy.get('worktree_root') or state / 'worktrees'))
+    for path in paths:
+        free = free_gb(path)
+        if free < floor:
+            return free, floor
+    return None
 
 
 def checkout_floor(worktree, drives, default):

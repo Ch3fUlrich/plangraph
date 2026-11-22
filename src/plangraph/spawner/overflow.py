@@ -603,7 +603,7 @@ def main(argv=None):
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         role_mb, floor_mb = local_limits(registry, args.role)
         _, memory = local_resources(args.state) if args.state is not None else local_resources()
-        from .host_ready import local_disk_refusal
+        from .host_ready import local_disk_admission
         try:
             card = json.loads(Path(args.card).read_text())
         except (OSError, ValueError):
@@ -613,10 +613,11 @@ def main(argv=None):
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
         named = cwd or ((card or {}).get('diff_ref') or {}).get('repo') or (card or {}).get('repo')
-        disk = local_disk_refusal(named or args.repo, cli.SpawnService(state=args.state), args.role,
-                                 movable=not named)
+        selected, disk = local_disk_admission(named or args.repo, cli.SpawnService(state=args.state), args.role,
+                                              movable=not named)
         if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
-            return cli.main([*local, Path(args.prompt).read_text(), *options])
+            placement = ['--cwd', selected] if selected is not None else []
+            return cli.main([*local, Path(args.prompt).read_text(), *options, *placement])
         if card is None:
             card = json.loads(Path(args.card).read_text())
         repo = Path(cwd or args.repo).resolve()

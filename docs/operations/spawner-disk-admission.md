@@ -2,10 +2,12 @@
 
 Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 `overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 5
-(GiB); the checkout, configured `worktree_root`, and state tree filesystems must
-all meet it. When `work_drives` are configured, a run that names no checkout (no `--cwd`, card `cwd`,
-`diff_ref.repo` or `repo`) needs at least one drive above its floor; a run pinned to a checkout is
-measured on that checkout's filesystem against the floor of the work drive it sits on. Before refusing `disk_low`, admission cleans idle rebuildable caches
+(GiB). With `work_drives` configured, an unnamed local run launches from the
+first configured path that is a Git checkout with enough free disk. Immediate
+and queued admission both pass this checkout to the launcher. A run with
+`--cwd`, card `cwd`, `diff_ref.repo`, or `repo` is pinned, and its checkout
+uses the floor for its filesystem when configured. Both paths also check the
+Cargo target, run state, supervisor tree, and worktree root filesystems. Before refusing `disk_low`, admission cleans idle rebuildable caches
 (`shared_cargo_target`, its pool slots `<target>-pool/slot-N`, `~/.cache/pg-target-po`,
 `~/.cache/pg-target-warm`, and idle worktree `rust/target` directories) once and re-measures free space; a
 persistent breach records a `disk-hygiene.json` floor alarm (`alarm: true`).

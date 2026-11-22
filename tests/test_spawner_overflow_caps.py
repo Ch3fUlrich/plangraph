@@ -467,8 +467,8 @@ def test_local_disk_uses_launch_cwd(tmp_path, monkeypatch, source):
     def disk(worktree, service, role='implement', movable=False):
         seen.append(worktree)
         moved.append(movable)
-        return None if worktree == cwd else 'disk_low'
-    monkeypatch.setattr(h, 'local_disk_refusal', disk)
+        return None, None if worktree == cwd else 'disk_low'
+    monkeypatch.setattr(h, 'local_disk_admission', disk)
     monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
     assert o.main(args) == 3
     assert seen == [cwd] and moved == [False]  # a named checkout is pinned
@@ -597,7 +597,9 @@ def test_select_work_drive_cleans_once_then_picks_or_refuses(monkeypatch):
 def test_local_work_drives_branch_admits_selected_drive_and_records_alarm(tmp_path, monkeypatch):
     from types import SimpleNamespace
     free = {'/d1': 4.0, '/d2': 8.0}
-    h = _drive_state(monkeypatch, free)
+    from plangraph.spawner import host_ready as h
+    monkeypatch.setattr(h, 'work_drive_checkouts', lambda drives: drives)
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: free.get(path, 20.0))
     monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps(
         [{'path': '/d1', 'disk_floor_gb': 5}, {'path': '/d2', 'disk_floor_gb': 5}]))
     monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 0)
@@ -618,6 +620,7 @@ def test_pinned_run_is_measured_on_its_own_checkout_not_an_alternate_drive(tmp_p
     monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps(
         [{'path': '/healthy', 'disk_floor_gb': 5}]))
     monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 0)
+    monkeypatch.setattr(h, 'work_drive_checkouts', lambda drives: drives)
     monkeypatch.setattr(h, 'disk_free_gb', lambda path: 1.0 if Path(path) == checkout else 20.0)
     service = SimpleNamespace(state=tmp_path / 'state', ps=lambda: {'runs': []})
     reason = h.local_disk_refusal(checkout, service, role='review')
@@ -660,14 +663,23 @@ def test_only_an_unnamed_checkout_is_movable_through_the_overflow_entry(tmp_path
     use_projected_overflow_config(monkeypatch, tmp_path / 'missing')
     monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
     seen = []
-    monkeypatch.setattr(h, 'local_disk_refusal', lambda worktree, service, role='implement', movable=False:
-                        seen.append((str(worktree), movable)))
-    monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
+    def disk(worktree, service, role='implement', movable=False):
+        seen.append((str(worktree), movable))
+        return '/alternate' if movable else None, None
+    monkeypatch.setattr(h, 'local_disk_admission', disk)
+    launch = Mock(return_value=3)
+    monkeypatch.setattr(o.cli, 'main', launch)
     assert o.main(['spawn', '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt)]) == 3
     assert seen == [(named or str(tmp_path), not named)]
+    args = launch.call_args.args[0]
+    if named:
+        assert '--cwd' not in args
+    else:
+        assert args[-2:] == ['--cwd', '/alternate']
 
 
 def test_pinned_checkout_is_held_to_its_work_drive_floor(tmp_path, monkeypatch):
+    import os
     from types import SimpleNamespace
     from plangraph.spawner import host_ready as h
     checkout = tmp_path / 'checkout'
@@ -682,8 +694,20 @@ def test_pinned_checkout_is_held_to_its_work_drive_floor(tmp_path, monkeypatch):
     monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps(
         [{'path': str(tmp_path), 'disk_floor_gb': 10}]))
     assert h.local_disk_refusal(checkout, service, role='review') == 'disk_low: free 7.00 GB, floor 10 GB'
-    # A drive on another filesystem does not apply to this checkout.
-    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps([{'path': '/proc', 'disk_floor_gb': 10}]))
+    # Simulate distinct devices even when the test host has only one filesystem.
+    alternate = tmp_path / 'alternate'
+    alternate.mkdir()
+    stat = Path.stat
+    def stat_with_devices(path, *args, **kwargs):
+        result = stat(path, *args, **kwargs)
+        if path in (checkout, tmp_path, alternate):
+            fields = list(result)
+            fields[2] = 2 if path == alternate else 1
+            return os.stat_result(fields)
+        return result
+    monkeypatch.setattr(Path, 'stat', stat_with_devices)
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps(
+        [{'path': str(alternate / 'future-checkout'), 'disk_floor_gb': 10}]))
     assert h.local_disk_refusal(checkout, service, role='review') is None
 
 

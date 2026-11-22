@@ -16,7 +16,7 @@ import time
 from .doctor import clean
 from .private_io import atomic_write_private
 from .host_ready_source import (
-    checkout_floor,
+    checkout_floor, admission_shortfall, work_drive_checkouts,
     configured_work_drives as _configured_work_drives,
     select_drive,
     legacy_cache_roots as _legacy_cache_roots,
@@ -329,13 +329,8 @@ def select_work_drive(drives, cleanup):
 NO_BUILD_ROLES = ('review',)
 
 
-def local_disk_refusal(worktree, service, role='implement', movable=False):
-    """Check the worktree filesystem and bound the host's shared build cache.
-
-    A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap. A pinned run is
-    measured on its checkout's filesystem against that work drive's floor; ``movable`` (no
-    checkout named) lets any configured drive satisfy the floor.
-    """
+def local_disk_admission(worktree, service, role='implement', movable=False):
+    """Return an alternate checkout to launch in, or the disk refusal reason."""
     # SettingsError derives from ValueError: validate before measurement's catch.
     from plangraph.settings import _policy_data, SettingsError, as_spawn_refused
     try:
@@ -353,50 +348,45 @@ def local_disk_refusal(worktree, service, role='implement', movable=False):
         size = cargo_target_size_gb(target) if building else 0
         if building and size >= cap:
             if any(cargo_run_busy(r) for r in service.ps()['runs']):
-                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
+                return None, f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
             try:
                 reclaim_cargo_target(target, cap, worktree)
             except OSError:
-                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
+                return None, f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
         if building:
             # The legacy caches and the pool slots stay under the same cap.
             for extra in _legacy_cache_roots() + _pool_slot_roots(target):
                 if extra != target and _safe_cache_dir(extra, worktree) and cargo_target_size_gb(extra) >= cap:
                     _clean_single_cache(extra, service, cap=cap)
         if cap == 0 and building:
-            return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
+            return None, f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
         configured = _configured_work_drives(policy)
-        drives = configured if movable else None
-        if drives:
-            selected, low = select_work_drive(
-                drives, lambda: _cleanup_before_disk_refusal(worktree, service))
-            if selected is not None:
-                return None
-            free, low_floor = low
-            reason = f'disk_low: free {free:.2f} GB, floor {low_floor:g} GB'
-            _record_disk_floor_alarm(service, free, low_floor, reason)
-            return reason
-        paths = [target]
-        if getattr(service, 'state', None) is not None:
-            paths.append(policy.get('worktree_root') or service.state / 'worktrees')
-            paths.append(service.state / 'trees')
-        # The checkout is held to the floor configured for the work drive it sits on.
-        checks = [(worktree, checkout_floor(worktree, configured, floor))] + [(p, floor) for p in paths]
+        place = movable and configured
+        drives = (work_drive_checkouts(configured) if place else
+                  [(worktree, checkout_floor(worktree, configured, floor))])
 
-        def shortfall():
-            return next(((free, need) for path, need in checks
-                         for free in [disk_free_gb(path)] if free < need), None)
-        low = shortfall()
-        if low:
-            _cleanup_before_disk_refusal(worktree, service)
-            low = shortfall()
-            if low:
-                reason = f'disk_low: free {low[0]:.2f} GB, floor {low[1]:g} GB'
-                _record_disk_floor_alarm(service, low[0], low[1], reason)
-                return reason
+        def check(checkout):
+            unsafe_cache_dir(target, checkout)
+            actual = policy if Path(checkout) == Path(worktree) else _policy_data(checkout) or {}
+            return admission_shortfall(target, getattr(service, 'state', None), actual, floor, disk_free_gb)
+
+        selected, low = select_drive(drives, lambda: _cleanup_before_disk_refusal(worktree, service),
+                                     disk_free_gb, check=check)
+        if low is not None:
+            free, need = low
+            reason = f'disk_low: free {free:.2f} GB, floor {need:g} GB'
+            _record_disk_floor_alarm(service, free, need, reason)
+            return None, reason
+        return selected if place else None, None
+    except SettingsError as exc:
+        raise as_spawn_refused(exc) from None
     except (OSError, ValueError, TypeError, KeyError):
-        return 'disk_low: measurement or configuration unavailable'
-    return None
+        return None, 'disk_low: measurement or configuration unavailable'
+
+
+def local_disk_refusal(worktree, service, role='implement', movable=False):
+    """Return only the disk refusal for callers that do not launch a run."""
+    return local_disk_admission(worktree, service, role, movable)[1]
 
 
 async def collect_with_disk_guard(runner, job_id, proc):

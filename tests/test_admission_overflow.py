@@ -52,10 +52,82 @@ def test_admission_passes_the_placement_decision_to_the_disk_check(setup, monkey
     service, _, _ = setup
     monkeypatch.setattr(a, 'resources', lambda service: (100, 9000))
     seen = []
-    monkeypatch.setattr(host_ready, 'local_disk_refusal',
-                        lambda worktree, svc, role='implement', movable=False: seen.append(movable))
+    def disk(worktree, svc, role='implement', movable=False):
+        seen.append(movable)
+        return None, None
+    monkeypatch.setattr(host_ready, 'local_disk_admission', disk)
     assert service.admit_spawn(options, card=card) is None
     assert seen == [movable]
+
+
+@pytest.fixture
+def alternate_checkout(tmp_path):
+    import subprocess
+    path = tmp_path / 'alternate'
+    subprocess.run(['git', 'init', '-q', str(path)], check=True)
+    subprocess.run(['git', '-C', str(path), '-c', 'user.name=Test', '-c',
+                    'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'init'], check=True)
+    return path
+
+
+@pytest.mark.parametrize('queued', [False, True])
+def test_unnamed_spawn_launches_on_the_admitted_drive(setup, monkeypatch, tmp_path, queued, alternate_checkout):
+    from pathlib import Path
+    from plangraph.spawner import host_ready
+    from plangraph.spawner.service import SpawnService
+
+    default = tmp_path / 'default'
+    alternate = alternate_checkout
+    service = SpawnService(state=tmp_path / 'run-state')
+    service.runner.default_cwd = str(default)
+    _, path, remote = setup
+    path.unlink()
+    monkeypatch.setattr(overflow, 'ready_records', lambda config, role: {})
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps([
+        {'path': str(default), 'disk_floor_gb': 5}, {'path': str(alternate), 'disk_floor_gb': 5}]))
+    free = {default: 1, alternate: 1 if queued else 20}
+    monkeypatch.setattr(host_ready, 'disk_free_gb', lambda p: free.get(Path(p), 20))
+    monkeypatch.setattr(host_ready, 'cargo_target_size_gb', lambda p: 0)
+    monkeypatch.setattr(host_ready, '_cleanup_before_disk_refusal', lambda *args: None)
+    monkeypatch.setattr(a, 'resources', lambda service: (0, 8000))
+    monkeypatch.setattr(a, 'admission_window', lambda: 30 if queued else 0)
+    recheck = Mock(side_effect=lambda delay: free.update({alternate: 20}))
+    monkeypatch.setattr(a, '_sleep', recheck)
+
+    async def launch(card=None, prompt='', *, cwd=None):
+        return {'status': 'running', 'cwd': cwd}
+    monkeypatch.setattr(service, '_spawn', launch)
+    result = asyncio.run(service.spawn(prompt='Implement the requested change.'))
+    assert result == {'status': 'running', 'cwd': str(alternate)}
+    assert recheck.call_count == int(queued)
+    remote.assert_not_called()
+
+
+@pytest.mark.parametrize('resource', ['cargo-target', 'state', 'state/trees', 'state/worktrees'])
+def test_healthy_work_drive_cannot_mask_another_filesystem_below_floor(
+        setup, monkeypatch, tmp_path, resource, alternate_checkout):
+    from pathlib import Path
+    from plangraph.spawner import host_ready
+
+    service, path, remote = setup
+    path.unlink()
+    service.state = tmp_path / 'state'
+    monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '5')
+    target = tmp_path / 'cargo-target'
+    monkeypatch.setattr(host_ready, 'shared_cargo_target', lambda: target)
+    monkeypatch.setattr(host_ready, 'unsafe_cache_dir', lambda *args: None)
+    monkeypatch.setattr(host_ready, 'cargo_target_size_gb', lambda p: 0)
+    monkeypatch.setattr(host_ready, 'disk_free_gb', lambda p: 1 if Path(p) == tmp_path / resource else 20)
+    monkeypatch.setattr(host_ready, '_cleanup_before_disk_refusal', lambda *args: None)
+    monkeypatch.setattr(overflow, 'ready_records', lambda config, role: {})
+    monkeypatch.setattr(a, 'resources', lambda service: (0, 8000))
+    monkeypatch.setattr(a, 'admission_window', lambda: 0)
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps([{'path': str(alternate_checkout), 'disk_floor_gb': 5}]))
+
+    result = service.admit_spawn({})
+    assert result['status'] == 'refused'
+    assert 'disk_low: free 1.00 GB, floor 5 GB' in result['reason']
+    remote.assert_not_called()
 
 
 def test_dry_run_preserves_local(setup):
