@@ -299,7 +299,8 @@ class SpawnerRunner:
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
         from .host_ready import cargo_child_env
-        child_env = cargo_child_env(child_env)
+        review_target = (extra_env or {}).get('CARGO_TARGET_DIR') if role == 'review' else None
+        child_env = cargo_child_env(child_env, target=review_target)
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
@@ -490,7 +491,7 @@ class SpawnerRunner:
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
             from .host_ready import cargo_lease
             self._cargo_leases = getattr(self, '_cargo_leases', {})
-            self._cargo_leases[job_id] = await asyncio.to_thread(cargo_lease)
+            self._cargo_leases[job_id] = None if review_target else await asyncio.to_thread(cargo_lease)
             try:
                 from .service import claim_first_dispatch
                 claim_first_dispatch(prompt_record)

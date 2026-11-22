@@ -1,6 +1,6 @@
 //! Review rounds of the native writer: fast checks with a per-head stamp, then one
 //! spawner review run on the exact head, its verdict read from the run record.
-use super::{context, output, Host};
+use super::{context, Host};
 use crate::native_writer::Driver;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
@@ -167,7 +167,7 @@ impl Host {
         prompt
     }
     /// One review run through the spawner, role review with every writer family of the range excluded,
-    /// in a disposable no-push clone at `head`; the verdict comes from that run's record.
+    /// in a disposable worker checkout at `head`; the verdict comes from that run's record.
     pub(super) fn review_run(
         &mut self,
         head: &str,
@@ -177,38 +177,7 @@ impl Host {
         self.reviews_started += 1;
         let tag = format!("{}-{}", &head[..8.min(head.len())], self.reviews_started);
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
-        let clone = self.reviews.join(format!("checkout-{tag}"));
-        let _ = fs::remove_dir_all(&clone);
-        let origin = self.git(&["remote", "get-url", "origin"])?;
-        output(
-            self.command("git")
-                .args(["clone", "-q", "--shared", "--no-checkout"])
-                .arg(&self.cwd)
-                .arg(&clone),
-        )?;
-        let result = self.review_in(&clone, &tag, &origin, &base, head, previous);
-        let _ = fs::remove_dir_all(&clone);
-        result
-    }
-    fn review_in(
-        &mut self,
-        clone: &Path,
-        tag: &str,
-        origin: &str,
-        base: &str,
-        head: &str,
-        previous: Option<&Value>,
-    ) -> Result<Value, String> {
-        let git = |host: &Self, args: &[&str]| {
-            output(host.command("git").arg("-C").arg(clone).args(args))
-        };
-        git(self, &["checkout", "-q", "--detach", head])?;
-        git(self, &["remote", "set-url", "origin", origin])?;
-        git(
-            self,
-            &["remote", "set-url", "--push", "origin", "/dev/null/no-push"],
-        )?;
-        git(self, &["update-ref", "refs/review/base", base])?;
+        let base = base.as_str();
         let prev = previous
             .and_then(|review| Some((review["head"].as_str()?, review["text"].as_str()?)))
             .filter(|(prev, _)| {
@@ -253,7 +222,7 @@ impl Host {
             .arg("--prompt-file")
             .arg(&prompt_path)
             .args(["--wait", "3300", "--json"])
-            .current_dir(clone)
+            .current_dir(&self.repo)
             .output()
             .map_err(|e| e.to_string())?;
         let record =
@@ -263,7 +232,26 @@ impl Host {
                     String::from_utf8_lossy(&printed.stderr).trim()
                 )
             })?;
-        let text = review_run_text(&self.state, &record)?;
+        if record["status"] != "completed"
+            || record["head_sha"] != head
+            || !record["host"].as_str().is_some_and(|host| !host.is_empty())
+        {
+            return Err(format!(
+                "review worker returned no completed exact-head receipt: {} ({})",
+                record["status"],
+                record["error"]
+                    .as_str()
+                    .unwrap_or("missing host or reviewed head")
+            ));
+        }
+        let text = if record["overflow_remote"] == true {
+            record["stdout_tail"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        } else {
+            review_run_text(&self.state, &record)?
+        };
         let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
         let mut verdict = review_verdict(&text, head, &paths);
         let id = record["run_id"].as_str().unwrap_or("run-unknown");

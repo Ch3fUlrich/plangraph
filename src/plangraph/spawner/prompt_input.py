@@ -17,6 +17,25 @@ def checkout_env():
         and not k.startswith(('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_'))}
 
 
+def checkout_review(diff, checkout):
+    """Materialize the transferred head in a disposable clone with no remote."""
+    def git(repo, *args):
+        return subprocess.check_output(['git', '-C', repo, *args], env=checkout_env(),
+                                       stderr=subprocess.PIPE, text=True, timeout=30).strip()
+
+    try:
+        source = diff['repo']
+        head = git(source, 'rev-parse', '--verify', '--end-of-options', diff['head'] + '^{commit}')
+        git(source, 'clone', '--shared', '--no-checkout', '--', source, str(checkout))
+        git(checkout, 'checkout', '--detach', head)
+        git(checkout, 'remote', 'remove', 'origin')
+        if git(checkout, 'rev-parse', 'HEAD') == head:
+            return head
+    except (KeyError, OSError, ValueError, subprocess.SubprocessError, TypeError):
+        pass
+    raise SpawnRefused('review workspace could not check out the exact head')
+
+
 def resolve_cwd(cwd, card):
     """Validate explicit checkout paths; never reinterpret a relative path."""
     card_cwd = (card or {}).get('cwd')

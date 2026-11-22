@@ -38,10 +38,12 @@ git identity (`example.invalid`, `localhost`, unset) as not ready. A review is r
 that head. The worker then starts one review run through the spawner CLI (role
 `review`, one `--writer-family` per family in the Writer trailers of base..head plus the
 served writer model's family, read by `pg_worker_core::writer_families`, the reader
-`plangraph review` shares; a diff_ref card in a disposable no-push clone
-at the head; `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
-`python3 -m plangraph.spawner.cli`). The review prompt starts with the versioned review brief (`render_brief`, review skill as its rules) whose item context carries the whole done criteria and invariants of the writer brief (feeder or batch layout), both SHAs, the public symbols the diff adds with their first callers, and the exact-head fast-check log (`<git-dir>/fast-checks/<head>.log`) and writer session log. The verdict is read from that run's record
-(`review_artifacts::review_text`), never from a file name: the last `VERDICT:`
+`plangraph review` shares). Admission selects a registered worker with enough
+disk and RAM. The diff card transfers the exact commits to that worker, which
+owns the checkout and its Cargo target under one disposable run directory.
+The writer keeps its inherited target for preflight. The worker releases the
+directory at review teardown. `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
+`python3 -m plangraph.spawner.cli`. The review prompt starts with the versioned review brief (`render_brief`, review skill as its rules) whose item context carries the whole done criteria and invariants of the writer brief (feeder or batch layout), both SHAs, the public symbols the diff adds with their first callers, and the exact-head fast-check log (`<git-dir>/fast-checks/<head>.log`) and writer session log. The completed run's receipt binds the worker host and head. The last `VERDICT:`
 line must be canonical, a `HEAD:` line naming another head or an ACCEPT that names
 no changed file is `no_verdict`, retried twice, then the run ends BLOCKED with
 exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.

@@ -234,7 +234,7 @@ fn writer_attempt(
             (record["review"]["verdict"] == "REQUEST_CHANGES").then(|| record["review"].clone());
         let review = review_round(driver, &head, previous.as_ref())?;
         record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
-        let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"]});
+        let summary = json!({"head":head, "run_id":review["run_id"], "host":review["host"], "verdict":review["verdict"]});
         record["review"] = review;
         if record["reviews"].as_array().is_none() {
             record["reviews"] = json!([]);

@@ -399,7 +399,8 @@ assert 'cwd' not in card
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 head = card['diff_ref']['head']
 repo = pathlib.Path(card['diff_ref']['repo'])
-assert repo != pathlib.Path.cwd()
+assert repo == pathlib.Path.cwd()
+assert card['review_workspace'] is True
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
@@ -420,13 +421,12 @@ excerpt = re.search(r'with their cargo runs: (\S+\.session\.log)', prompt).group
 assert excerpt.endswith('/fast-checks/' + head + '.session.log') and 'cargo test: 3 passed' in pathlib.Path(excerpt).read_text(), prompt
 assert '== ci_commit_gate.py (exit status: 0)' in pathlib.Path(log).read_text(), prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
-assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'
 run.mkdir(parents=True)
 text = 'src/lib.rs:1 checked\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type': 'result', 'is_error': False, 'result': text}) + '\n')
 print('banner line')
-print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'mimo-v2.6-pro'}}, indent=2))
+print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-worker', 'head_sha': head, 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'mimo-v2.6-pro'}}, indent=2))
 "#,
     )
     .unwrap();
@@ -476,6 +476,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert_eq!(review["head"], head.as_str());
     assert_eq!(review["run_id"], "run-rv1");
     assert_eq!(review["leg"], "mimo-v2.6-pro");
+    assert_eq!(review["host"], "fixture-worker");
     assert!(Path::new(review["path"].as_str().unwrap()).is_file());
     assert!(!host
         .reviews

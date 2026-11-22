@@ -281,12 +281,14 @@ def _deliver_verdict(directory, record, keeper):
 def completion_event(record, cwd):
     from .runner import redact
     from .prompt_input import checkout_env
-    try:
-        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
-                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
-                                       env=checkout_env(), timeout=10).strip()
-    except (OSError, subprocess.SubprocessError):
-        head = None
+    head = record.get('head_sha') if record.get('review_checkout') else None
+    if head is None:
+        try:
+            head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
+                                           text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
+                                           env=checkout_env(), timeout=10).strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
     rc = record.get('exit_code')
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],
         idempotency_key=record['run_id'] + ':' + record['status'],

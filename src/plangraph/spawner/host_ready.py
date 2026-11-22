@@ -26,8 +26,11 @@ def shared_cargo_target():
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()
 
 
-def cargo_child_env(env):
-    return dict(env, CARGO_TARGET_DIR=str(shared_cargo_target()), CARGO_INCREMENTAL="0")
+def cargo_child_env(env, *, target=None):
+    child = dict(env, CARGO_TARGET_DIR=str(target or shared_cargo_target()), CARGO_INCREMENTAL="0")
+    if target is not None:
+        child['CARGO_BUILD_BUILD_DIR'] = str(target)
+    return child
 
 
 def disk_free_gb(path):

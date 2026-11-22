@@ -128,7 +128,7 @@ def _decision_waives(decision, check):
 async def admit_base(service, record, card, *, launch=False):
     """Check the worker checkout and any reviewed diff at both admission boundaries."""
     card = card or {}
-    repo = record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
+    repo = record.get('review_source') or record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
     result = await asyncio.to_thread(base_fresh, repo)
     decision = card.get('base_decision')
     decisions = {}
