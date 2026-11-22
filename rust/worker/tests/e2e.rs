@@ -1409,7 +1409,11 @@ async fn a_check_that_never_passes_stops_the_card() {
             return;
         };
         let card = "e2e-check-fail";
-        let claim = env.claim(card, &["out.txt"], "exit 1");
+        let check = concat!(
+            "printf '%s\\n%1100000s\\n%s\\n%s\\n' '-----BEGIN TEST ",
+            "PRIVATE KEY-----' fake 'synthetic-fragment' '-----END TEST PRIVATE KEY-----'; echo retained; exit 1",
+        );
+        let claim = env.claim(card, &["out.txt"], check);
         let id = format!("e2e-check-fail-{}", unique());
         let handle = env.start(&id, claim).await;
 
@@ -1423,6 +1427,17 @@ async fn a_check_that_never_passes_stops_the_card() {
         );
         // A parked card: the park packet and its alarm both carry the card's
         // final attempt, with workflow id and run id.
+        let reports = env.keeper.attempts();
+        let packets = env.keeper.parked();
+        assert!(!reports.is_empty());
+        assert!(!packets.is_empty());
+        let report_tails = reports.iter().map(|report| &report.check_tail);
+        let park_tails = packets.iter().map(|packet| &packet.check_tail);
+        for tail in report_tails.chain(park_tails) {
+            assert!(!tail.contains("synthetic-fragment"));
+            assert!(tail.contains("[REDACTED]"));
+            assert!(tail.contains("retained"));
+        }
         assert_execs_name_the_attempts(&env, out.attempts);
         env.stop();
     })

@@ -116,10 +116,18 @@ def test_db_returns_latest_row_of_each_window_in_id_order(tmp_path):
     assert [(r['window_key'], r['remaining_percentage']) for r in rows] == [('daily', 30), ('weekly', 100)]
 
 
-def test_silent_gateway_leg_ends_on_logged_quota_refusal_without_waiting_for_stall(tmp_path, monkeypatch):
+@pytest.mark.parametrize('with_sensitive_values', [False, True], ids=['quota', 'redacted-quota'])
+def test_silent_gateway_leg_ends_on_logged_quota_refusal_without_waiting_for_stall(
+        tmp_path, monkeypatch, with_sensitive_values):
+    summary = THRESHOLD
+    expected = THRESHOLD
+    if with_sensitive_values:
+        summary += ' ' + 'gh' + 'p_' + 'A9' * 16 + ' ' + 'ab12' * 10
+        expected += ' [REDACTED] [REDACTED]'
     monkeypatch.setattr('plangraph.spawner.gateway_witness.QUOTA_POLL_IDLE_S', 0)
     monkeypatch.setattr('plangraph.spawner.gateway_witness.QUOTA_POLL_EVERY_S', .05)
-    monkeypatch.setattr('plangraph.spawner.gateway_witness.poll_quota', lambda *a, **k: THRESHOLD)
+    rows = [{**ROWS[0], 'error_summary': summary}, ROWS[1]]
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.fetch_rows', lambda *a: rows)
     async def run():
         runner, job = _job(tmp_path, {'stall_min': 10, 'first_edit_min': 20, 'max_min': 30})
         job.model_or_combo = 'omniroute/gpt-6.1-sol'
@@ -127,7 +135,9 @@ def test_silent_gateway_leg_ends_on_logged_quota_refusal_without_waiting_for_sta
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         runner._owned = {'j': dict(pid=proc.pid, pid_start=root_identity(proc.pid), job_object=False)}
         await asyncio.wait_for(collect(runner, 'j', proc), timeout=20)
-        assert job.status == 'failed' and job.exit_code == 7 and job.refusal == THRESHOLD
+        assert job.status == 'failed' and job.exit_code == 7 and job.refusal == expected
+        event = next(event for event in job.events if event['event'] == 'dispatch_refused')
+        assert event['reason'] == expected
     asyncio.run(run())
 
 
