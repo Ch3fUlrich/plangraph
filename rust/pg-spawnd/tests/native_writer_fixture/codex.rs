@@ -6,8 +6,12 @@ if 'resume' in sys.argv:
     assert brief.stat().st_mode & 0o777 == 0o600 and brief.parent == pathlib.Path.cwd().parent
     prompt = brief.read_text()
     original, heading, prompt = prompt.partition('\n\n# Follow-up\n\n')
-    expected = ('brief marker' if 'external fix' in prompt else
-                'brief marker reject marker\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n')
+    if 'external fix' in prompt:
+        expected = 'brief marker'
+    elif 'client marker' in original:
+        expected = 'brief marker client marker'
+    else:
+        expected = 'brief marker reject marker\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n'
     assert heading and original == expected, original
 if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in prompt:
     import os, signal
@@ -52,7 +56,7 @@ if 'resume' in sys.argv:
         assert 'sandbox_mode="workspace-write"' in sys.argv
     else:
         assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
-        expected = 'reject marker' in prompt and not pathlib.Path('fix.txt').exists()
+        expected = 'reject marker' in original and not pathlib.Path('fix.txt').exists()
         assert ('drop the fixture scope' in prompt) == expected, prompt
     # The fix turn commits its fix: a turn that leaves HEAD unchanged is resumed on its items.
     with open('fix.txt', 'a') as fix: fix.write('fixed after review\n')
