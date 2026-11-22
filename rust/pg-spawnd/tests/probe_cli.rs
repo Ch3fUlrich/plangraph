@@ -8,9 +8,50 @@ fn cli(args: &[&str]) -> Output {
 
 #[test]
 fn prepare_spawnd_cli() {
-    let executable = binary::spawnd();
-    assert!(std::path::Path::new(executable).is_file());
-    assert_eq!(binary::spawnd(), executable);
+    #[cfg(unix)]
+    {
+        use std::{fs, os::unix::fs::symlink, path::Path};
+
+        if let Some(target) = std::env::var_os("PG_TEST_CACHED_CLI_TARGET") {
+            let target = Path::new(&target);
+            let executable = binary::spawnd();
+            assert_eq!(executable, env!("CARGO_BIN_EXE_pg-spawnd"));
+            assert!(Path::new(executable).is_file());
+
+            // A second resolution would now try to build under /dev/null.
+            assert_eq!(
+                fs::read_link(target).unwrap(),
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+            );
+            fs::remove_file(target).unwrap();
+            symlink("/dev/null", target).unwrap();
+            assert_eq!(binary::spawnd(), executable);
+            return;
+        }
+
+        let scratch = tempfile::tempdir().unwrap();
+        let target = scratch.path().join("target");
+        symlink(env!("CARGO_MANIFEST_DIR"), &target).unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "prepare_spawnd_cli"])
+            .env("PG_TEST_CACHED_CLI_TARGET", &target)
+            .env("CARGO_TARGET_DIR", &target)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+    }
+
+    #[cfg(not(unix))]
+    {
+        let executable = binary::spawnd();
+        assert!(std::path::Path::new(executable).is_file());
+        assert_eq!(binary::spawnd(), executable);
+    }
 }
 
 #[test]
