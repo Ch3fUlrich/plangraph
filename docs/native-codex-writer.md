@@ -52,10 +52,13 @@ canonical. ACCEPT requires repository access and evidence in a `FILES READ:`
 line. The review record sets `tested` from the reviewer's standalone `TESTS:`
 report. A successful run exposes `review_test_status` as `reported` or `untested`
 in its terminal record. An absent report or `TESTS: none:` is untested.
-The Sonnet seat runs its scoped Bash commands in a read-only review checkout
-with disposable writable build and test scratch space. A different `HEAD:` or weak ACCEPT is `no_verdict`, retried twice, then
-the run ends BLOCKED with
-exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.
+When the host sandbox starts, the Sonnet seat runs scoped Bash commands in a
+read-only checkout with writable build and test scratch space. If the sandbox
+is unavailable, the seat receives the diff and uses Read, Grep and Glob. The
+run records `sandbox_unavailable` and the review records why no tests ran.
+A different `HEAD:` or weak ACCEPT is `no_verdict`, retried twice before the run
+ends BLOCKED with exit 4. The review text is kept in `review_dir` as
+`<head8>-<n>-<run-id>.txt`.
 REQUEST_CHANGES resumes the same session with a pointer to a private brief
 in the run directory. The file preserves the original brief byte for byte
 before the follow-up instructions and review text. Later rounds review

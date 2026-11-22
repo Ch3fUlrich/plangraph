@@ -381,7 +381,18 @@ from plangraph.spawner.mcp import MCPSpawnerServer, ParameterRefused, TOOLS_META
 state = str(Path(sys.argv[1]).resolve())
 request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=True,
     leg=dict(id='claude-sonnet-5-5-high'), prompt='review', writer_families=['openai'], card=dict(estimate_tokens=1000), cwd=str(Path.cwd()), state=state)
-spec = build(request)
+from unittest.mock import patch
+with patch('plangraph.routing_support.claude_seat.sandbox_available', return_value=False, create=True):
+    fallback = build(request)
+with patch('plangraph.routing_support.claude_seat.sandbox_available', return_value=True, create=True):
+    spec = build(request)
+fallback_argv = fallback['argv']
+assert '--settings' not in fallback_argv, fallback_argv
+assert fallback_argv[fallback_argv.index('--tools')+1] == 'Read,Grep,Glob', fallback_argv
+assert fallback_argv[fallback_argv.index('--allowedTools')+1] == 'Read,Grep,Glob', fallback_argv
+event = next(e for e in fallback['events'] if e['event'] == 'sandbox_unavailable')
+assert any(f"TESTS: none: sandbox unavailable on {event['host']}" in arg for arg in fallback_argv), fallback_argv
+assert not any(e['event'] == 'sandbox_unavailable' for e in spec['events']), spec['events']
 argv = spec['argv']
 assert argv[0] == 'claude', argv
 assert argv[argv.index('--model')+1] == 'claude-sonnet-5-5', argv

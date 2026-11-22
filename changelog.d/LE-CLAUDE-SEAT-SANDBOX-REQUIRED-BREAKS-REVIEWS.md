@@ -1,0 +1,1 @@
+- Sonnet review seats use Read, Grep and Glob when the host sandbox cannot start. The run records the fallback and the review records why no tests ran.

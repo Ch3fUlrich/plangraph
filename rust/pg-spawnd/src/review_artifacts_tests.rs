@@ -165,6 +165,58 @@ fn full_text_not_tail_and_unknown_format_nonpassing() {
     fs::remove_dir_all(state).unwrap();
 }
 #[test]
+fn sandbox_fallback_records_why_tests_did_not_run() {
+    let state = tempfile::tempdir().unwrap();
+    let dir = state.path().join("runs/run-fixture");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir(dir.join("seat")).unwrap();
+    let path = dir.join("live.log");
+    let mut record = json!({"run_id":"run-fixture","live_log":path,"events":[
+        {"event":"sandbox_unavailable","host":"fixture-host","python_job_id":"fixture"},
+        {"event":"launch_spec","python_job_id":"fixture"},
+    ]});
+    for supplied in [
+        "",
+        "TESTS: pytest fixture.py passed\n",
+        "TESTS: none: sandbox unavailable on fixture-host\n",
+    ] {
+        let result = format!("FILES READ: fixture.py\n{supplied}VERDICT: PASS\nTEST_GAMING: no");
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"type":"result","is_error":false,"result":result})
+            ),
+        )
+        .unwrap();
+        let review = review_text(state.path(), &record).unwrap();
+        assert_eq!(review.matches("TESTS: ").count(), 1, "{review}");
+        assert_eq!(
+            crate::review_test_evidence::tests_line(&review),
+            Some("none: sandbox unavailable on fixture-host")
+        );
+        write_review_artifacts(state.path(), &record, &review).unwrap();
+        let evidence: Value =
+            serde_json::from_slice(&fs::read(dir.join("seat/evidence.json")).unwrap()).unwrap();
+        assert_eq!(evidence["tested"], false);
+    }
+    record["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"event":"launch_spec","python_job_id":"retry"}));
+    let result = "TESTS: pytest fixture.py passed\nVERDICT: FAIL";
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({"type":"result","is_error":false,"result":result})
+        ),
+    )
+    .unwrap();
+    assert_eq!(review_text(state.path(), &record).unwrap(), result);
+}
+
+#[test]
 fn traversal_run_id_refused() {
     assert!(write_review_artifacts(
         Path::new("unused"),

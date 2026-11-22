@@ -486,10 +486,13 @@ pub(crate) fn review_run_text(state: &Path, record: &Value) -> Result<String, St
         return Err(error.to_owned());
     }
     if record["overflow_remote"] == true {
-        return Ok(record["stdout_tail"]
+        let tail = record["stdout_tail"]
             .as_str()
             .unwrap_or_default()
-            .to_owned());
+            .to_owned();
+        return Ok(crate::review_artifacts::with_sandbox_test_status(
+            record, tail,
+        ));
     }
     let rendered = crate::review_artifacts::review_text(state, record)
         .map_err(|_| "review run record unreadable".to_owned())?;
@@ -502,7 +505,9 @@ pub(crate) fn review_run_text(state: &Path, record: &Value) -> Result<String, St
         })
     };
     match record["stdout_tail"].as_str() {
-        Some(tail) if !canonical(&rendered) && canonical(tail) => Ok(tail.to_owned()),
+        Some(tail) if !canonical(&rendered) && canonical(tail) => Ok(
+            crate::review_artifacts::with_sandbox_test_status(record, tail.to_owned()),
+        ),
         _ => Ok(rendered),
     }
 }

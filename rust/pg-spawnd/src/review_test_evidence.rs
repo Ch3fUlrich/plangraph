@@ -1,8 +1,16 @@
 /// Return the last standalone test report, ignoring Markdown examples.
 pub(crate) fn tests_line(text: &str) -> Option<&str> {
+    test_report(text).map(|(_, body)| body)
+}
+
+fn test_report(text: &str) -> Option<(std::ops::Range<usize>, &str)> {
     let mut fence: Option<(u8, usize)> = None;
     let mut report = None;
-    for raw in text.lines() {
+    let mut offset = 0;
+    for segment in text.split_inclusive('\n') {
+        let start = offset;
+        offset += segment.len();
+        let raw = segment.trim_end_matches(['\r', '\n']);
         let line = raw.trim_start_matches(' ');
         if raw.len() - line.len() >= 4 || line.starts_with('\t') {
             continue;
@@ -20,11 +28,20 @@ pub(crate) fn tests_line(text: &str) -> Option<&str> {
         }
         if fence.is_none() {
             if let Some(body) = line.strip_prefix("TESTS:") {
-                report = Some(body.trim());
+                report = Some((start..start + raw.len(), body.trim()));
             }
         }
     }
     report
+}
+
+pub(crate) fn set_tests_line(mut text: String, line: &str) -> String {
+    if let Some((range, _)) = test_report(&text) {
+        text.replace_range(range, line);
+    } else {
+        text.insert_str(0, &format!("{line}\n"));
+    }
+    text
 }
 
 pub(crate) fn reported(text: &str) -> Option<&str> {

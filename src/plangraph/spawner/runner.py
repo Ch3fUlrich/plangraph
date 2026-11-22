@@ -371,8 +371,8 @@ class SpawnerRunner:
         try:
             if cmd[0] == 'claude' and (prepare_launch or not dry_run):
                 from plangraph.routing_support.claude_seat import configure_review_tests
-                configure_review_tests(cmd, child_env, leg, role, self._ocdata_dirs, job_id,
-                                       review_target=review_target)
+                tools_event = configure_review_tests(
+                    cmd, child_env, leg, role, self._ocdata_dirs, job_id, review_target=review_target)
             if render_reason is None:
                 self._child_envs[job_id] = child_env
 
