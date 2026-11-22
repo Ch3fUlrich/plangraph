@@ -215,20 +215,25 @@ def admission_shortfall(target, state, policy, floor, free_gb):
 
 
 def checkout_floor(worktree, drives, default):
-    """The configured floor of the work drive holding ``worktree`` (same filesystem), else ``default``."""
+    """Prefer the exact checkout's floor, then the first drive on its filesystem."""
     def device(path):
         path = Path(path)
         while not path.exists() and path != path.parent:
             path = path.parent
         return path.stat().st_dev
     try:
-        mine = device(worktree)
+        checkout = Path(worktree).expanduser().resolve()
+        mine = device(checkout)
     except OSError:
         return default
+    device_floor = None
     for path, floor in drives or ():
         try:
-            if device(path) == mine:
+            path = Path(path).expanduser().resolve()
+            if path == checkout:
                 return floor
+            if device_floor is None and device(path) == mine:
+                device_floor = floor
         except OSError:
             continue
-    return default
+    return default if device_floor is None else device_floor

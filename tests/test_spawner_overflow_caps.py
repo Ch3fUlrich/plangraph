@@ -711,6 +711,25 @@ def test_pinned_checkout_is_held_to_its_work_drive_floor(tmp_path, monkeypatch):
     assert h.local_disk_refusal(checkout, service, role='review') is None
 
 
+def test_pinned_checkout_keeps_its_own_floor_on_a_shared_device(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+
+    first = tmp_path / 'first'
+    selected = tmp_path / 'selected'
+    first.mkdir()
+    selected.mkdir()
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps([
+        {'path': str(first), 'disk_floor_gb': 5},
+        {'path': str(selected), 'disk_floor_gb': 10},
+    ]))
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 7.0)
+    service = SimpleNamespace(state=tmp_path / 'state', ps=lambda: {'runs': []})
+
+    assert h.local_disk_refusal(first, service, role='review') is None
+    assert h.local_disk_refusal(selected, service, role='review') == 'disk_low: free 7.00 GB, floor 10 GB'
+
+
 def test_remote_work_drives_selects_eligible_drive_or_overflows(tmp_path):
     low_drive_only = dict(
         ssh='a', ok=True, fresh=True, live_runs=0, mem_available_mb=10000,

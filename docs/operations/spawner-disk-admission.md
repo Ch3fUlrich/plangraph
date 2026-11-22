@@ -6,7 +6,8 @@ Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 first configured path that is a Git checkout with enough free disk. Immediate
 and queued admission both pass this checkout to the launcher. A run with
 `--cwd`, card `cwd`, `diff_ref.repo`, or `repo` is pinned, and its checkout
-uses the floor for its filesystem when configured. Both paths also check the
+uses its configured floor or falls back to the first matching filesystem floor.
+Both paths also check the
 Cargo target, run state, supervisor tree, and worktree root filesystems. Before refusing `disk_low`, admission cleans idle rebuildable caches
 (`shared_cargo_target`, its pool slots `<target>-pool/slot-N`, `~/.cache/pg-target-po`,
 `~/.cache/pg-target-warm`, and idle worktree `rust/target` directories) once and re-measures free space; a
