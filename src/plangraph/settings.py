@@ -59,6 +59,48 @@ class ReviewMethod:
             raise SettingsError('source: control characters not allowed')
 
 
+#: The ways a train or pull request reaches main (LAND-MODE-SETTING; no path is deleted):
+#: ``tested-ff`` moves main to the train commit that passed full CI, by a base-conditional push
+#: (LAND-MODE-TESTED-FF); ``train-pr-merge`` merges the train pull request with a merge commit
+#: (rule 3.39); ``single-pr`` merges one pull request on its own GO.
+LANDING_MODES = ('tested-ff', 'train-pr-merge', 'single-pr')
+#: The mode the operator recommends (decision D-6540).
+RECOMMENDED_LANDING_MODE = 'tested-ff'
+#: The mode a repository without a ``landing`` setting lands in. It becomes
+#: RECOMMENDED_LANDING_MODE when the live proof of tested-ff on the real protection passed.
+DEFAULT_LANDING_MODE = 'train-pr-merge'
+_REPO_NAME_RE = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
+
+
+def _landing_table(data):
+    table = data.get('landing', {})
+    if not isinstance(table, dict) or set(table) - {'mode', 'repos'}:
+        raise SettingsError('landing: expected table with mode and repos')
+    repos = table.get('repos', {})
+    if not isinstance(repos, dict):
+        raise SettingsError('landing.repos: expected table of repository to mode')
+    for value in (*([table['mode']] if 'mode' in table else []), *repos.values()):
+        if value not in LANDING_MODES:
+            raise SettingsError(f"landing.mode: expected one of {', '.join(LANDING_MODES)}")
+    return table, repos
+
+
+def landing_mode(repo=None, *, root=None) -> str:
+    """The landing mode of ``repo`` (``owner/name``) from the settings file PLANGRAPH_SETTINGS names.
+
+    The ``[landing.repos]`` entry of the repository wins over ``[landing] mode``, which wins over
+    DEFAULT_LANDING_MODE. Every landing path (router merge-part, tools/merge_batch.py land, the
+    keeper's phase finish) reads the mode here, so a change of the file changes the path without a
+    code change. An unknown mode or table shape raises SettingsError: a landing never guesses."""
+    if repo is not None and not _REPO_NAME_RE.fullmatch(str(repo)):
+        raise SettingsError('landing: repository must be owner/name')
+    data = _policy_data(root)
+    if data is None:
+        return DEFAULT_LANDING_MODE
+    table, repos = _landing_table(data)
+    return repos.get(repo) or table.get('mode') or DEFAULT_LANDING_MODE
+
+
 def project_of(card_or_key) -> str | None:
     """Derive project name from a card dictionary or string key/phase.
 
@@ -312,11 +354,15 @@ def admit_fixer_threshold(*, item=None, root=None, card=None) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['show'])
+    parser.add_argument('command', choices=['show', 'landing-mode'])
     parser.add_argument('--project')
     parser.add_argument('--phase')
     parser.add_argument('--root')
+    parser.add_argument('--repo', help='owner/name for landing-mode')
     args = parser.parse_args()
+    if args.command == 'landing-mode':
+        print(landing_mode(args.repo, root=args.root))
+        return
     print(json.dumps(asdict(review_method(args.project, args.phase, root=args.root)), sort_keys=True))
 
 

@@ -3,6 +3,8 @@ import json
 import re
 from importlib.resources import files
 
+from plangraph.settings import LANDING_MODES
+
 from .errors import Refused
 from .store_cards import _text
 
@@ -59,7 +61,7 @@ def _saved_manifest(row):
 
 def _landing_data(row):
     return {"repo": row["repo"], "pr": row["pr"], "base": row["base"],
-            **_saved_manifest(row),
+            "mode": "train-pr-merge", **_saved_manifest(row),
             "head": row["head"], "merge": row["merged"],
             "abandoned": bool(row["abandoned"]),
             "open_steps": list(_LAND_STEPS[row["cursor"]:]) if row["merged"] else []}
@@ -145,7 +147,12 @@ class MergeLocksMixin:
             if action == "prepare":
                 parts = _land_manifest(body)
                 batch = _text("batch_key", body.get("batch_key", f"train-{identity[1]}"), required=True, cap=256)
+                mode = body.get("mode", "train-pr-merge")
+                if mode not in LANDING_MODES:
+                    raise Refused("validation", "invalid landing mode")
                 manifest = {"parts": parts, "batch_key": batch}
+                if "mode" in body:
+                    manifest["mode"] = mode
                 frozen = (_land_sha(body.get("base")), _land_sha(body.get("head")),
                           json.dumps(manifest, separators=(",", ":")))
                 self.conn.execute("INSERT INTO landing_trains(repo,pr,base,head,manifest) VALUES(?,?,?,?,?)"
@@ -155,8 +162,8 @@ class MergeLocksMixin:
                                   (*identity, *frozen))
                 row = self.conn.execute(select, identity).fetchone()
                 data = _landing_data(row)
-                if ((row["base"], row["head"], data["parts"], data["batch_key"]) !=
-                        (*frozen[:2], parts, batch) or row["abandoned"]):
+                if ((row["base"], row["head"], data["parts"], data["batch_key"], data["mode"]) !=
+                        (*frozen[:2], parts, batch, mode) or row["abandoned"]):
                     raise Refused("conflict", "landing manifest differs from prepared train")
                 return data
             row = self.conn.execute(select, identity).fetchone()
@@ -171,11 +178,15 @@ class MergeLocksMixin:
                 raise Refused("conflict", "verified merge differs from the landing journal")
             manifest = _saved_manifest(row)
             if action == "landed":
+                if manifest.get("mode") == "tested-ff" and merge != row["head"]:
+                    raise Refused("conflict", "tested-ff must land the exact prepared head")
                 if "included" in body:
                     included = _included_parts(body["included"], manifest["parts"])
                     if manifest.get("included", included) != included:
                         raise Refused("conflict", "part outcomes differ from the landing journal")
                     manifest["included"] = included
+                if "mode" in manifest and "included" not in manifest:
+                    raise Refused("conflict", "landing requires checked part outcomes")
                 if row["merged"] is None or "included" in body:
                     self.conn.execute("UPDATE landing_trains SET merged=?,manifest=? WHERE repo=? AND pr=?",
                                       (merge, json.dumps(manifest, separators=(",", ":")), *identity))

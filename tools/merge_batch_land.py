@@ -12,13 +12,14 @@ import time
 from pathlib import Path
 
 from merge_batch_build import (
-    check_landed_parts, cmd_consumed, exclude_consumed, landing_journal, landing_lease,
-    landing_report, prepare_train, read_verified_merge, record_part_cost, record_stage, run_timing_import,
+    check_landed_parts, cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
+    landing_report, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
+    require_tested_ff_evidence, run_timing_import, wait_marked_merged,
 )
 from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
-                              REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
+                              TESTED_FF, REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
-                              batch_workflow_gate, part_review, run,
+                              batch_workflow_gate, part_review, run, write_landing,
                               cleanup_landed, close_merged_items, windows_commands, windows_gate, windows_needed, windows_report, windows_script)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
@@ -349,6 +350,53 @@ def require_main_green(repo, head, go_row=None):
     main_admission(repo, exception)
 
 
+#: git's own words for a server that answered no (a rejected ref, a stale lease, a protection or hook refusal):
+#: anything else that fails a push is an unknown delivery, not a refusal.
+PUSH_REFUSED = re.compile(r"\[(?:remote )?rejected\]|remote rejected|stale info|protected branch|GH\d{3}|"
+                          r"declined|denied", re.IGNORECASE)
+PUSH_TRIES = 3
+
+
+def push_tested(st, go_row=None):
+    """Land mode ``tested-ff``: the base branch moves to the batch head, the commit that passed full CI, by one
+    ``git push --force-with-lease=refs/heads/<base>:<B> origin <head>:refs/heads/<base>``, B the tested base the
+    batch was built on. The server applies it only while the branch is exactly B; the lease is only the
+    compare-and-set of a fast-forward (the head descends from B, nothing is rewritten) and there is no second
+    merge commit. The outcome is read from the branch, never from the push alone:
+
+    * the head is in the branch's history (after an answer, a lost answer or an earlier land): landed, no push;
+    * the branch is at another commit than B, head not in it: ``base_moved`` (final, also when it moved into a
+      commit the batch contains: the lease names B);
+    * the server refused while the branch is B (git says rejected/protected/declined): final, not retried;
+    * no answer (anything else that fails): the same push again while the branch is B, at most PUSH_TRIES."""
+    head, base, wt = st["head"], st["base"], st["worktree"]
+    for attempt in range(1, PUSH_TRIES + 1):
+        tip = main_tip(st)
+        if in_history(st, head, tip):
+            return
+        if tip != st["base_head"]:
+            raise MergeBatchError(f"base_moved: {base} is at {short(tip)}, the tested base was {short(st['base_head'])}: "
+                                  f"the batch head cannot be pushed as a fast-forward; build the batch again")
+        require_main_green(st["repo"], head, go_row)
+        proc = run(["git", "push", REMOTE, f"--force-with-lease=refs/heads/{base}:{st['base_head']}",
+                    f"{head}:refs/heads/{base}"], cwd=wt, ok=None, timeout=None)
+        sys.stderr.write(proc.stderr or "")
+        if proc.returncode and PUSH_REFUSED.search((proc.stderr or "") + (proc.stdout or "")):
+            tip = main_tip(st)  # a late landing of this very head counts
+            if in_history(st, head, tip):
+                return
+            if tip != st["base_head"]:  # the lease did its work: main moved after the read
+                raise MergeBatchError(f"base_moved: {base} moved to {short(tip)} while the push was sent, the tested "
+                                      f"base was {short(st['base_head'])}; build the batch again")
+            raise MergeBatchError(f"refused: origin rejected the push of {short(head)} to {base} while it was "
+                                  f"at {short(st['base_head'])}: {first_line((proc.stderr or '') + (proc.stdout or ''))}"
+                                  " (the batch stays, land again after the cause is fixed)")
+    tip = main_tip(st)
+    if not in_history(st, head, tip):
+        raise MergeBatchError(f"no answer from origin after {PUSH_TRIES} pushes of {short(head)}: delivery unknown, "
+                              f"{base} is at {short(tip)}; land again")
+
+
 def keeper_config_path():
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph" / "keeper.json"
 
@@ -386,6 +434,9 @@ def settle_train(train, lease, st=None, *, wait=0):
                                 included=[part["pr"] for part in checked], **lease)
     if st is not None and st.get("head") != train["head"]:
         st = None
+    if st is not None:
+        attempt = frozen_landing(st)
+        write_landing(st, train["mode"], merge, attempt.get("reruns", []), attempt.get("go_row"))
     landed = [part for part in train["parts"] if part["pr"] in train["included"]]
     for step in train["open_steps"]:
         receipt = {}
@@ -438,14 +489,18 @@ def cmd_settle(args):
 
 def cmd_land(args):
     st = load_state(args.name)
+    mode = frozen_landing(st).get("mode") or landing_mode_of(st)
     if keeper_landing_configured():
         with landing_lease(st["repo"]) as lease:
-            return land_with_lease(args, lease, st)
-    return land_with_lease(args, None, st)
+            return land_with_lease(args, lease, st, mode)
+    return land_with_lease(args, None, st, mode)
 
 
-def land_with_lease(args, lease, st):
+def land_with_lease(args, lease, st, mode):
     repo, number = st["repo"], args.batch_pr
+    if mode == "single-pr" and len(st["merged"]) != 1:
+        raise MergeBatchError(f"single-pr mode lands one pull request on its own GO: batch {st['name']!r} has "
+                              f"{len(st['merged'])} parts (set landing.mode to tested-ff or train-pr-merge)")
     if st["status"] != "pushed" or st.get("pr") != number:
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
@@ -460,7 +515,9 @@ def land_with_lease(args, lease, st):
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
                               f"{short(st['head'])} saved at push; review and push again")
     train = None
-    if pr["state"] == "OPEN":
+    reruns = []
+    already = mode == TESTED_FF and in_history(st, st["head"], main_tip(st))
+    if pr["state"] == "OPEN" and not already:
         if pr["isDraft"]:
             raise MergeBatchError(f"batch PR #{number} is a draft")
         if pr.get("baseRefName") != "main":
@@ -470,41 +527,56 @@ def land_with_lease(args, lease, st):
         require_current_base(repo, st["head"])
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         record_reruns(repo, number, reruns)
+        if mode == TESTED_FF:
+            require_tested_ff_evidence(st)
         if lease:
             main = gh_json("api", f"repos/{repo}/git/ref/heads/main")
             if (main.get("object") or {}).get("sha") != st["base_head"]:
                 raise MergeBatchError("stale_base: main moved from the frozen landing base")
-            train = prepare_train(st, lease)
+            st["landing_attempt"] = dict(head=st["head"], mode=mode, reruns=reruns, go_row=args.go_row)
+            save_state(st)
+            train = prepare_train(st, lease, mode)
             if st.get("go_requested_head") == st["head"]:
                 record_stage(repo, batch_key, "go", st["head"], st["go_requested_at_ms"])
         started = landing_now()
-        subject = _merge_subject(number, pr.get("title") or f"batch {st['name']}", custom_subject)
-        require_main_green(repo, st["head"], args.go_row)
-        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
-           "--subject", subject, "--body", merge_trailers(st))
+        if mode == TESTED_FF:
+            push_tested(st, args.go_row)
+        else:
+            subject = _merge_subject(number, pr.get("title") or f"batch {st['name']}", custom_subject)
+            require_main_green(repo, st["head"], args.go_row)
+            gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
+               "--subject", subject, "--body", merge_trailers(st))
         if lease:
             record_stage(repo, batch_key, "merge", st["head"], started)
-    elif pr["state"] != "MERGED":
+    elif pr["state"] not in ("MERGED", "OPEN"):
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
-    for _ in range(10):  # the merge commit can lag the merge by a moment
-        pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
-        if pr["state"] == "MERGED" and (pr.get("mergeCommit") or {}).get("oid"):
-            break
-        time.sleep(min(2.0, args.wait / 5))
-    merge = (pr.get("mergeCommit") or {}).get("oid")
-    if pr["state"] != "MERGED" or not merge:
-        raise MergeBatchError(f"batch PR #{number} is {pr['state']} with no merge commit yet: run land again")
+    if mode == TESTED_FF:
+        if not in_history(st, st["head"], main_tip(st)):  # a MERGED pull request proves nothing: read the branch
+            raise MergeBatchError(f"batch PR #{number} is {pr['state']} but its head {short(st['head'])} is not in "
+                                  f"{st['base']}: it was merged another way, so this is no tested-ff landing")
+        merge = st["head"]  # the tested commit itself is on main
+        wait_marked_merged(repo, number, args.wait)
+    else:
+        for _ in range(10):  # the merge commit can lag the merge by a moment
+            pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
+            if pr["state"] == "MERGED" and (pr.get("mergeCommit") or {}).get("oid"):
+                break
+            time.sleep(min(2.0, args.wait / 5))
+        merge = (pr.get("mergeCommit") or {}).get("oid")
+        if pr["state"] != "MERGED" or not merge:
+            raise MergeBatchError(f"batch PR #{number} is {pr['state']} with no merge commit yet: run land again")
     for skip in st["skipped"]:
         print(f"not merged: #{skip['pr']} ({skip['reason']})", file=sys.stderr)
     if lease:
         if train is None:
-            train = landing_journal(repo, "show", pr=number)["train"] or prepare_train(st, lease)
-        if train["head"] != st["head"]:
+            train = landing_journal(repo, "show", pr=number)["train"] or prepare_train(st, lease, mode)
+        if train["head"] != st["head"] or train["mode"] != mode:
             raise MergeBatchError("keeper landing journal names a different attempt")
         settle_train(train, lease, st, wait=args.wait)
         return 0
     git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
     landed = check_landed_parts(repo, number, st["merged"], merge, args.wait)
+    write_landing(st, mode, merge, reruns, args.go_row)
     drop_state(st)
     try:
         cleanup_landed(st, landed)
