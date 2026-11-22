@@ -15,6 +15,7 @@ pub const SID: &str = "12345678-1234-1234-1234-123456789abc";
 pub enum Launcher {
     Explicit(PathBuf),
     Pinned(PathBuf),
+    Rust(Option<PathBuf>),
 }
 
 impl Launcher {
@@ -30,39 +31,58 @@ impl Launcher {
     fn install(&self, root: &Path) -> PathBuf {
         let checkout = match self {
             Self::Explicit(path) => return path.clone(),
-            Self::Pinned(checkout) => checkout,
+            Self::Pinned(checkout) | Self::Rust(Some(checkout)) => Some(checkout),
+            Self::Rust(None) => None,
         };
         let router = root.join("router");
         for dir in ["bin", "ops"] {
             fs::create_dir_all(router.join(dir)).unwrap();
         }
-        for file in [
-            "bin/fleet-launch",
-            "bin/fleet_hosts.py",
-            "bin/fleet_launch_admission.py",
-            "bin/fleet_launch_mem.py",
-            "ops/fleet-launch-policy.json",
-            "ops/fleet-settings.json",
-            "ops/terse-style.txt",
-        ] {
-            let object = format!("{PIN}:router/{file}");
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(checkout)
-                .args(["show", &object])
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "reading pinned {object}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-            fs::write(router.join(file), out.stdout).unwrap();
+        if let Some(checkout) = checkout {
+            for file in [
+                "bin/fleet-launch",
+                "bin/fleet_hosts.py",
+                "bin/fleet_launch_admission.py",
+                "bin/fleet_launch_mem.py",
+                "ops/fleet-launch-policy.json",
+                "ops/fleet-settings.json",
+                "ops/terse-style.txt",
+            ] {
+                install_pinned_file(checkout, &router, file);
+            }
+            let path = router.join("bin/fleet-launch");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        } else {
+            fs::write(
+                router.join("ops/fleet-launch-policy.json"),
+                include_str!("../fixtures/fleet-launch/ops-policy.json"),
+            )
+            .unwrap();
+            fs::write(
+                router.join("ops/fleet-settings.json"),
+                include_str!("../fixtures/fleet-launch/ops-settings.json"),
+            )
+            .unwrap();
+            fs::write(router.join("ops/terse-style.txt"), "x".repeat(881) + "\n").unwrap();
         }
-        let path = router.join("bin/fleet-launch");
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        path
+        router.join("bin/fleet-launch")
     }
+}
+
+pub fn install_pinned_file(checkout: &Path, router: &Path, file: &str) {
+    let object = format!("{PIN}:router/{file}");
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(checkout)
+        .args(["show", &object])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "reading pinned {object}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    fs::write(router.join(file), out.stdout).unwrap();
 }
 
 pub fn reference_checkout() -> Option<PathBuf> {
@@ -87,6 +107,8 @@ pub fn reference_checkout() -> Option<PathBuf> {
 pub struct Sandbox {
     dir: TempDir,
     pub launcher: PathBuf,
+    remote_router: PathBuf,
+    rust: bool,
 }
 
 impl Sandbox {
@@ -95,8 +117,18 @@ impl Sandbox {
             .prefix("fleet-launch-parity-")
             .tempdir_in("/tmp")
             .unwrap();
+        let rust = matches!(launcher, Launcher::Rust(_));
         let launcher = launcher.install(dir.path());
-        let fixture = Self { dir, launcher };
+        let remote_router = fs::read_to_string(dir.path().join("router/bin/fleet_hosts.py"))
+            .ok()
+            .and_then(|host_source| receiver_router(&host_source))
+            .unwrap_or_else(|| PathBuf::from("code/fixture-data/router"));
+        let fixture = Self {
+            dir,
+            launcher,
+            remote_router,
+            rust,
+        };
         for path in ["work", "bin", "home"] {
             fs::create_dir(fixture.path(path)).unwrap();
         }
@@ -136,9 +168,26 @@ impl Sandbox {
 
     pub fn command(&self) -> Command {
         let mut cmd = Command::new("/usr/bin/timeout");
-        cmd.args(["--kill-after=2s", "30s"]).arg(&self.launcher);
-        self.isolate(&mut cmd);
+        cmd.args(["--kill-after=2s", "30s"]);
+        self.configure_launcher(&mut cmd, self.rust);
         cmd
+    }
+
+    fn configure_launcher(&self, cmd: &mut Command, rust: bool) {
+        if rust {
+            cmd.args([env!("CARGO_BIN_EXE_pg-spawnd"), "session"]);
+        } else {
+            cmd.arg(&self.launcher);
+        }
+        self.isolate(cmd);
+    }
+
+    pub fn install_destination(&self, target: PathBuf) {
+        if self.rust {
+            symlink(env::current_exe().unwrap(), target).unwrap();
+        } else {
+            symlink(&self.launcher, target).unwrap();
+        }
     }
 
     pub fn isolate(&self, cmd: &mut Command) {
@@ -158,11 +207,31 @@ impl Sandbox {
             .env("FLEET_LOCAL_HOST", LOCAL)
             .env("FLEET_MCP_CONFIG", self.path("mcp.json"))
             .env("FLEET_RESOLVE_BUDGET", "0")
+            .env("PLANGRAPH_FLEET_OPS", self.path("router/ops"))
+            .env("PLANGRAPH_FLEET_REMOTE_ROUTER", &self.remote_router)
             .env("FIXTURE_ROOT", self.dir.path());
     }
 
     pub fn launch(&self, role: &str) -> Command {
         let mut cmd = self.command();
+        self.launch_args(&mut cmd, role);
+        cmd
+    }
+
+    pub fn direct_launch(&self, role: &str, rust: bool) -> Command {
+        let mut cmd = if rust {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
+            command.arg("session");
+            command
+        } else {
+            Command::new(&self.launcher)
+        };
+        self.isolate(&mut cmd);
+        self.launch_args(&mut cmd, role);
+        cmd
+    }
+
+    fn launch_args(&self, cmd: &mut Command, role: &str) {
         cmd.arg(role)
             .arg(self.path("work"))
             .args(["sonnet", "high"])
@@ -179,7 +248,6 @@ impl Sandbox {
                 "--handoff",
                 "handoff.md",
             ]);
-        cmd
     }
 
     pub fn normalize(&self, bytes: &[u8]) -> String {
@@ -202,4 +270,10 @@ impl Sandbox {
             assert!(!self.path(path).exists(), "{path} was written");
         }
     }
+}
+
+pub fn receiver_router(source: &str) -> Option<PathBuf> {
+    let (_, suffix) = source.split_once("root=pathlib.Path.home()/\"")?;
+    let (path, _) = suffix.split_once('"')?;
+    Some(PathBuf::from(path))
 }

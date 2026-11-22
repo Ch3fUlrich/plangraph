@@ -1,0 +1,1 @@
+- Verify that the Rust session launcher shares the legacy counter and role locks, writes compatible launch records, and leaves the same state after interruption. Run the standalone proofs in CI without an external data checkout.

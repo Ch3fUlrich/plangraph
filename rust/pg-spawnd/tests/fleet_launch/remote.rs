@@ -1,9 +1,12 @@
-use super::sandbox::{reference_checkout, Launcher, Sandbox, LOCAL, PROMPT, REMOTE, SID};
+use super::sandbox::{Launcher, Sandbox, LOCAL, PROMPT, REMOTE, SID};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::symlink;
-use std::process::{Command, Output, Stdio};
+use std::{
+    path::{Component, Path},
+    process::{Command, Output, Stdio},
+};
 
 const DRY: &str = "forwarded dry run\n";
 const STARTED: &str = "remote stdout\nfleet-launch: started 12345678-1234-1234-1234-123456789abc\n";
@@ -45,11 +48,13 @@ pub fn check(launcher: &Launcher) {
     assert!(command.contains("import base64,sys;exec(base64.b64decode(sys.argv[1]))"));
     let payload = hop["payload"].as_object().unwrap();
     let expected = include_str!("../fixtures/fleet-launch/remote-dry-run.json")
+        .trim_end_matches('\n')
         .replace("$ROOT", s.path("").to_str().unwrap().trim_end_matches('/'));
     assert_eq!(
         Value::Object(payload.clone()),
         serde_json::from_str::<Value>(&expected).unwrap()
     );
+    assert_eq!(hop["wire"], expected);
     s.no_launch();
 
     fs::write(s.path("windows-kb"), "12582912\n").unwrap();
@@ -92,7 +97,100 @@ pub fn check(launcher: &Launcher) {
 
     check_mirror(&s);
     check_selection_errors(launcher);
+    check_local_memory(launcher);
     check_destination(launcher);
+}
+
+fn check_local_memory(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    s.hosts(json!([
+        {"name":LOCAL, "memory_source":"windows", "memory_floor_gib":0.5},
+        {"name":REMOTE, "ssh":"fixture-hop", "memory_floor_gib":0},
+        {"name":"fixture-disabled", "enabled":false, "last_resort":true, "memory_floor_gib":0},
+    ]));
+    fs::write(s.path("windows-kb"), "0\n").unwrap();
+    fs::write(s.path("memory-fixture-hop"), "MemAvailable: 1024 kB\n").unwrap();
+    fs::write(s.path("ssh.stdout"), DRY).unwrap();
+    let out = s.launch("writer").arg("--dry-run").output().unwrap();
+    s.expect(
+        &out,
+        0,
+        DRY,
+        "skip fixture-local: MemAvailable 0 MB < floor 512 MB\n",
+    );
+    assert!(s.path("interop").exists());
+    fs::remove_file(s.path("interop")).unwrap();
+
+    s.hosts(json!([{"name":LOCAL, "memory_source":"windows", "memory_floor_gib":0}]));
+    let out = s
+        .launch("review")
+        .arg("--dry-run")
+        .env("FLEET_MEMINFO", s.path("unreadable-meminfo"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    assert!(s.normalize(&out.stdout).starts_with("cd $ROOT/work && "));
+    assert!(!s.path("interop").exists());
+    s.no_launch();
+}
+
+pub fn check_interruption(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    s.hosts(json!([{"name": REMOTE, "ssh": "fixture-hop", "memory_floor_gib": 0}]));
+    fs::write(s.path("memory-fixture-hop"), "MemAvailable: 1024 kB\n").unwrap();
+    fs::write(s.path("ssh-remove-after-probe"), "").unwrap();
+    std::os::unix::fs::symlink("/usr/bin/python3", s.path("bin/python3")).unwrap();
+    let out = s
+        .launch("review")
+        .args(["--host", REMOTE])
+        .env("PATH", s.path("bin"))
+        .output()
+        .unwrap();
+    s.expect(&out, 2, "", "fleet-launch: host fixture-remote launch uncertain; do not retry: [Errno 2] No such file or directory: 'ssh'\n");
+    assert!(!s.path("child.json").exists());
+    assert!(!s.path("ssh.json").exists());
+    assert!(!s.path("state/launch").exists());
+    assert_eq!(
+        fs::read_to_string(s.path("state/session-seq")).unwrap(),
+        "1"
+    );
+
+    let s = Sandbox::new(launcher);
+    placement(&s);
+    fs::write(s.path("ssh.stdout"), "remote output\n").unwrap();
+    fs::write(s.path("ssh.stderr"), "fixture transport failure\n").unwrap();
+    fs::write(s.path("ssh.rc"), "255").unwrap();
+    let out = s
+        .launch("writer")
+        .args(["--host", REMOTE])
+        .output()
+        .unwrap();
+    s.expect(&out, 255, "remote output\n", "fixture transport failure\n");
+    assert!(!s.path("child.json").exists());
+    assert!(!s.path("state/launch").exists());
+
+    fs::remove_file(s.path("ssh.rc")).unwrap();
+    fs::remove_file(s.path("ssh.stderr")).unwrap();
+    let record = json!({"name": "writer", "session_name": "writer-0002",
+        "seq": 2, "session_id": null, "job_id": null});
+    let unknown = "fleet-launch: started-unknown writer-0002\n";
+    fs::write(
+        s.path("ssh.stdout"),
+        format!("{unknown}FLEET_REMOTE_SPEC={record}\n"),
+    )
+    .unwrap();
+    let out = s
+        .launch("writer")
+        .args(["--host", REMOTE])
+        .output()
+        .unwrap();
+    s.expect(&out, 0, unknown, "");
+    let mut role = record;
+    role["host"] = json!(REMOTE);
+    assert_eq!(s.json("state/launch/writer.json"), role);
+    role["prompt_file"] = json!(s.path("prompt"));
+    assert_eq!(s.json("state/launch/sessions/writer-0002.json"), role);
+    assert!(!s.path("guard").exists());
 }
 
 fn check_mirror(s: &Sandbox) {
@@ -187,22 +285,25 @@ fn check_destination(launcher: &Launcher) {
         .rsplit_once(' ')
         .unwrap()
         .1;
-    let checkout = match launcher {
-        Launcher::Pinned(checkout) => checkout.clone(),
-        Launcher::Explicit(_) => match reference_checkout() {
-            Some(checkout) => checkout,
-            None => {
-                eprintln!("destination replay skipped: the pinned checkout supplies the remote installation directory");
-                return;
-            }
-        },
-    };
-    let target = s
-        .path("target/code")
-        .join(checkout.file_name().unwrap())
-        .join("router/bin/fleet-launch");
+    let receiver = String::from_utf8(STANDARD.decode(encoded).unwrap()).unwrap();
+    let pinned = fs::read_to_string(s.path("router/bin/fleet_hosts.py"));
+    if let Ok(pinned) = pinned {
+        let required = pinned
+            .split_once("    code = '''")
+            .unwrap()
+            .1
+            .split_once("'''")
+            .unwrap()
+            .0;
+        assert_eq!(receiver, required);
+    }
+    let install = super::sandbox::receiver_router(&receiver).unwrap();
+    assert!(Path::new(&install)
+        .components()
+        .all(|part| matches!(part, Component::Normal(_))));
+    let target = s.path("target").join(install).join("bin/fleet-launch");
     fs::create_dir_all(target.parent().unwrap()).unwrap();
-    symlink(&s.launcher, target).unwrap();
+    s.install_destination(target);
 
     let output = deliver(&s, encoded, &payload);
     assert_eq!(

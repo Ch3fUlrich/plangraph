@@ -28,6 +28,16 @@ pub fn check(launcher: &Launcher) {
         .normalize(&out.stdout)
         .contains("fleet-launch <role> <cwd> <model> <effort> <prompt-file>"));
     assert!(out.stderr.is_empty());
+    if let Ok(source) = fs::read_to_string(s.path("router/bin/fleet-launch")) {
+        let doc = source
+            .split_once("\"\"\"")
+            .unwrap()
+            .1
+            .split_once("\"\"\"")
+            .unwrap()
+            .0;
+        assert_eq!(s.normalize(&out.stdout), format!("{doc}\n"));
+    }
     for case in cases {
         let args = case
             .args
@@ -82,9 +92,37 @@ pub fn check(launcher: &Launcher) {
 
     check_io_failures(launcher);
     check_child_failures(launcher);
-    if matches!(launcher, Launcher::Pinned(_)) {
+    if matches!(launcher, Launcher::Pinned(_) | Launcher::Rust(_)) {
         check_enforcement(launcher);
+        check_role_patterns(launcher);
     }
+}
+
+fn check_role_patterns(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let path = "router/ops/fleet-launch-policy.json";
+    let mut policy = s.json(path);
+    policy["refuse_roles"] = json!(["[", "(?<=blocked-)review$"]);
+    s.write_json(path, policy);
+    let out = s
+        .launch("blocked-review-0042")
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    s.expect(&out, 2, "", "fleet-launch: role blocked-review is refused by policy ((?<=blocked-)review$); no launch: dispatch the work as spawner runs from the L1\n");
+    s.no_launch();
+    fs::remove_file(s.path(path)).unwrap();
+    let out = s
+        .launch("blocked-review")
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(s.normalize(&out.stdout).contains("blocked-review-0000"));
+    assert!(s
+        .normalize(&out.stderr)
+        .contains("missing or invalid policy; invalid cap policy; using default"));
+    s.no_launch();
 }
 
 fn check_io_failures(launcher: &Launcher) {
