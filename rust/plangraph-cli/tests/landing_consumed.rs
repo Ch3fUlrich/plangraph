@@ -1,6 +1,10 @@
 #![cfg(unix)]
 
-use std::{path::Path, process::Command};
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
+use std::path::Path;
 
 #[test]
 fn keeper_backlog_hold_releases_only_the_landed_frozen_part_head() {
@@ -33,7 +37,7 @@ with TemporaryDirectory() as tmp:
         assert land.exclude_consumed(repo, [frozen, dropped]) == [dropped]
         assert land.exclude_consumed(repo, [moved, dropped]) == [moved, dropped]
 "#;
-    let output = Command::new("python3")
+    let output = test_python::command()
         .env("PYTHONPATH", repo.join("src"))
         .current_dir(repo.join("tools"))
         .args(["-c", fixture])

@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::{json, Value};
 use std::{
     io::Write,
@@ -187,7 +191,7 @@ assert output.getvalue().splitlines() == [
 #[cfg(unix)]
 fn run_keeper_fixture(fixture: &str) {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .env("PYTHONPATH", repo.join("src"))
         .current_dir(repo.join("tools"))
         .args(["-c", fixture])

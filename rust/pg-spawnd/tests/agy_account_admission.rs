@@ -1,10 +1,12 @@
-use std::process::Command;
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
 
 #[test]
 fn agy_limit_admission_distinguishes_account_and_model() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let state = tempfile::tempdir().unwrap();
-    let output = Command::new("python3")
+    let output = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .env("XDG_STATE_HOME", state.path())

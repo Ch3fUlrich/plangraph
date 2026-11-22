@@ -1,12 +1,15 @@
 //! Exercise Python launch identity until the runner is ported to Rust.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::Value;
-use std::process::Command;
 
 #[test]
 fn job_session_tags_keep_uuid_entropy() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let state = tempfile::tempdir().unwrap();
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .arg("-c")

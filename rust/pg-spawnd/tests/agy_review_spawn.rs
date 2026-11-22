@@ -1,4 +1,8 @@
 #![cfg(unix)]
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 #[path = "common/binary.rs"]
 mod binary;
 mod common;
@@ -207,7 +211,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     let record_file = state.path().join("finished.json");
     std::fs::write(&record_file, record.to_string()).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let checked = Command::new("python3")
+    let checked = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .arg("-c")

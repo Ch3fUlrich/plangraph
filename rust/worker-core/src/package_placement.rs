@@ -128,14 +128,11 @@ pub fn refusal(candidate: &Candidate, policy: &Policy, now: u64) -> Option<Strin
         "role not permitted on fallback host"
     } else if !fleet_series::valid_host(&candidate.id) {
         "invalid host id"
-    } else if let Some(reason) = candidate
-        .readiness
-        .as_ref()
-        .map_or(Some("missing readiness"), |record| {
-            record.refusal(&candidate.id, WRITER_SANDBOX, now)
-        })
-    {
-        reason
+    } else if let Some(reason) = candidate.readiness.as_ref().map_or_else(
+        || Some("missing readiness".into()),
+        |record| record.refusal(&candidate.id, WRITER_SANDBOX, now),
+    ) {
+        return Some(reason);
     } else if let Some(row) = &candidate.sample {
         if row.host != candidate.id {
             "sample identity mismatch"

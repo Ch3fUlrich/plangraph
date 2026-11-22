@@ -1,7 +1,11 @@
 #![cfg(unix)]
 //! Exercise the every-PR gate and repository ignore rules through real Git diffs.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn git(root: &Path, args: &[&str]) -> Output {
     pg_worker_core::git_test_support::command(root)
@@ -47,7 +51,7 @@ fn ignored_notes_and_forced_or_renamed_additions() {
                 .status
                 .success()
         );
-        let result = Command::new("python3")
+        let result = test_python::command()
             .arg(source.join("tools/check_changelog_docs.py"))
             .args(["--base", "base", "--cwd", root.to_str().unwrap()])
             .output()
@@ -65,13 +69,13 @@ fn ignored_notes_and_forced_or_renamed_additions() {
         )
         .status
         .success());
-        let result = Command::new("python3")
+        let result = test_python::command()
             .arg(source.join("tools/check_changelog_docs.py"))
             .args(["--base", "HEAD~1", "--cwd", root.to_str().unwrap()])
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
-        let full_range = Command::new("python3")
+        let full_range = test_python::command()
             .arg(source.join("tools/check_changelog_docs.py"))
             .args(["--base", "base", "--cwd", root.to_str().unwrap()])
             .output()

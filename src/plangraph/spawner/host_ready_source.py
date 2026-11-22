@@ -271,7 +271,8 @@ def probe_host(name, config, state, runner, timeout, *, persist):
                   mem_available_mb=None, disk_free_gb=None, checkout_sha=None,
                   main_sha=None, doctor_ok=None, keeper_ok=None,
                   spawner_session=None, live_runs=None, behind_main=None,
-                  src_ok=None, trust_ok=None, tools_ok=None, python_ok=None, tokens_ok=None)
+                  src_ok=None, trust_ok=None, tools_ok=None, python_ok=None, tokens_ok=None,
+                  sandbox_ok=None, sandbox_error=None)
     deadline = time.monotonic() + timeout
     reachability_failed = False
 
@@ -334,8 +335,18 @@ def probe_host(name, config, state, runner, timeout, *, persist):
                     'tools', 'command -v git && command -v python3 && command -v codex',
                     [{'argv': [tool, '--version']} for tool in ('git', 'python3', 'codex')]) is not None
                 record['tokens_ok'] = command('tokens', 'codex login status') is not None
-                record['trust_ok'] = command_argv(
-                    'trust', 'pg-host-readiness', '--project', config['repo']) is not None
+                readiness = measure_argv(
+                    'trust', ['pg-host-readiness', '--project', config['repo'], '--json'], json.loads)
+                if isinstance(readiness, dict):
+                    record['sandbox_ok'] = readiness.get('sandbox_ok') is True
+                    record['sandbox_error'] = clean(readiness.get('sandbox_error') or '') or None
+                    record['trust_ok'] = readiness.get('errors') == []
+                    if not record['trust_ok']:
+                        fail('trust', 'readiness check failed')
+                else:
+                    record['trust_ok'] = False
+                    if readiness is not None:
+                        fail('trust', 'invalid_response')
             repo = shlex.quote(config['repo'])
             prefix = 'cd ' + shlex.quote(config['spawner_src']) + ' && '
             if config.get('env_file'):

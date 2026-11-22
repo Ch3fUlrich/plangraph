@@ -1,6 +1,10 @@
 #![cfg(unix)]
 
-use std::{path::Path, process::Command};
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
+use std::path::Path;
 
 #[test]
 fn keeper_reprepares_an_open_train_but_preserves_terminal_manifests() {
@@ -150,7 +154,7 @@ with TemporaryDirectory() as tmp:
 
 fn keeper_fixture(fixture: &str) {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .env("PYTHONPATH", repo.join("src"))
         .current_dir(repo.join("tools"))
         .args(["-c", fixture])

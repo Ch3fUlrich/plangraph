@@ -1,5 +1,9 @@
 #![cfg(unix)]
 
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::{
     fs,
     os::unix::fs::{symlink, PermissionsExt},
@@ -60,7 +64,7 @@ fn hourly_router_heartbeat_stays_quiet_and_a_missed_beat_alerts_once() {
             format!("{{\"ts\":{}}}", now.as_secs() - age_min * 60),
         )
         .unwrap();
-        let output = Command::new("python3")
+        let output = test_python::command()
             .arg(root.join("tools/liveness_watchdog.py"))
             .arg("--config")
             .arg(&config)

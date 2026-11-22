@@ -1,3 +1,6 @@
+#[cfg(windows)]
+use crate::test_python;
+
 use super::*;
 use tempfile::{tempdir, TempDir};
 #[test]
@@ -287,7 +290,10 @@ fn child_sees_pinned_cwd_pwd_pythonpath_and_external_slot_cache() {
         "CARGO_TARGET_DIR".into(),
         cache.join("%SLOT%").to_str().unwrap().into(),
     );
-    let mut cmd = Command::new(if cfg!(windows) { "python" } else { "sh" });
+    #[cfg(windows)]
+    let mut cmd = test_python::command();
+    #[cfg(not(windows))]
+    let mut cmd = Command::new("sh");
     #[cfg(unix)]
     cmd.args([
         "-c",

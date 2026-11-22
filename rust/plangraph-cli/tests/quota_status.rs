@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -16,7 +20,7 @@ fn quota_status(db: &Path) -> Output {
 fn quota_status_reports_latest_usage_per_provider_account_and_window() {
     let directory = tempfile::tempdir().unwrap();
     let db = directory.path().join("quota #1.sqlite");
-    let fixture = Command::new("python3")
+    let fixture = test_python::command()
         .args([
             "-c",
             r#"

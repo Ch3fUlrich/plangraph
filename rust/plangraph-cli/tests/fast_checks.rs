@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::process::Command;
 
 #[test]
@@ -8,7 +12,7 @@ fn fast_checks_matches_ci_for_three_fixture_diffs() {
         "rust/worker/src/lib.rs",
         "rust/pg-spawnd/src/lib.rs",
     ] {
-        let expected = Command::new("python3")
+        let expected = test_python::command()
             .current_dir(&root)
             .args(["tools/ci_select.py", "select", "--files", path])
             .output()

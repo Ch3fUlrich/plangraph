@@ -256,6 +256,19 @@ def apply_worker_refusals(records, state):
     return records
 
 
+SANDBOX_UNAVAILABLE = 'sandbox_unavailable:'
+
+
+def sandbox_refusal(row):
+    if row.get('sandbox_ok') is True:
+        return None
+    error = row.get('sandbox_error')
+    if isinstance(error, str) and error.startswith(SANDBOX_UNAVAILABLE):
+        return error
+    detail = error if isinstance(error, str) and error else 'workspace-write sandbox has no successful probe'
+    return f'{SANDBOX_UNAVAILABLE} {detail}; operator action: review the bwrap AppArmor profile or user namespace sysctl'
+
+
 def ready_records(config, role='implement'):
     records = {}
     registry = registry_caps()
@@ -264,7 +277,8 @@ def ready_records(config, role='implement'):
         try:
             row = dict(host)
             data = read_readiness(name)
-            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb', 'fresh')})
+            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb', 'fresh',
+                                                     'sandbox_ok', 'sandbox_error')})
             if data.get('work_drives') is not None:
                 row['work_drives'] = data['work_drives']
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
@@ -503,6 +517,9 @@ def remote_spawn(name, host, card, prompt, options):
         except ValueError:
             receipt = None
         if isinstance(receipt, dict) and receipt.get('status') == 'refused':
+            reason = receipt.get('reason')
+            if card.get('run_kind') == 'native-codex' and isinstance(reason, str) and reason.startswith(SANDBOX_UNAVAILABLE):
+                raise RemoteRefusal(reason)
             raise RemoteRefusal('target rejected admission')
         if (isinstance(receipt, dict) and isinstance(receipt.get('run_id'), str)
                 and receipt['run_id'].strip()):
@@ -547,22 +564,29 @@ async def native_spawn(self, card, options):
         raise SpawnRefused(str(exc)) from exc
     binary = _projection_binary()
     # Resolve on the placed host before creating a run or acknowledging admission.
-    probe = await asyncio.create_subprocess_exec(binary, 'native-tools',
+    probe = await asyncio.create_subprocess_exec(binary, 'native-tools', '--check-sandbox',
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     tools, error = await probe.communicate()
     if probe.returncode:
         raise SpawnRefused(error.decode(errors='replace').strip())
     tool_environment = json.loads(tools)
+    placement = options.get('_placement')
+    host = (placement or {}).get('host') or os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname()
+    if placement:
+        placement = dict(placement, host=host)
+    reason = sandbox_refusal(tool_environment)
+    if reason:
+        return self.save_refusal(SpawnRefused(reason), card=card, placement=placement,
+                                 host=host, reason=reason, run_kind='native-codex')
     record = dict(run_id='run-' + uuid.uuid4().hex, run_kind='native-codex',
-        host=(options.get('_placement') or {}).get('host') or os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname(),
-        status='running', started=time.time(), role='implement', writer_family='openai',
+        host=host, status='running', started=time.time(), role='implement', writer_family='openai',
         base_ref=card.get('base_ref'), repo=str(repo),
         plan=dict(effort=effort, p_source='override'))
     record.update(tool_environment)
     from .exit_outcome import native_harness_fields
     record.update(native_harness_fields(record['host']))
-    if options.get('_placement'):
-        record['placement'] = options['_placement']
+    if placement:
+        record['placement'] = placement
     from .item_key import annotate_item
     from .notify import annotate_native
     annotate_item(record, card)

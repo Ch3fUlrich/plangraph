@@ -199,19 +199,26 @@ no timer or live-host action is installed by this slice.
 Run `pg-host-readiness --project PATH --registry FILE --state DIR` on each
 candidate. The registry's `self` entry sets the recorded host. The default
 sandbox is `workspace-write`, matching the native Codex writer. The tool
-checks configuration trust, login, CLI version, and sandbox startup and commit
-in a temporary linked Git worktree with both Git directories named as writable
+checks configuration trust, login, CLI version, and sandbox startup in a
+temporary directory. After startup succeeds, it checks commit access in a
+temporary linked Git worktree with both Git directories named as writable
 roots. The probes make no model call. Use `--scratch-root` for a
 filesystem matching the intended worktree. Hooks and plugins whose trust cannot
 be established cause a failed check.
 
-The tool prints `READY` on success and `MISSING` with the check failure on exit
+In text mode the tool prints `READY` on success and `MISSING` with the check failure on exit
 1. It writes both results to
 `DIR/package-readiness/HOST/workspace-write.json`. Make each host's latest
 record available under the placement command's state directory. `pg-package-host`
 placement refuses missing, failed, future-dated, and older-than-120-second
 package-readiness records and records for a different host or sandbox. Remote capacity samples come from the
 same state directory's `fleet/HOST.ndjson` history.
+
+The structured `--json` report and the saved record include `sandbox_ok` and
+`sandbox_error`. Native placement excludes hosts with a failed probe and verifies
+startup again on the selected host before creating a worktree. A startup
+failure reports `sandbox_unavailable` with the probe diagnostic. The operator
+can then review the bwrap AppArmor profile or the user namespace sysctl.
 
 ### Three-host writer and review rollout
 

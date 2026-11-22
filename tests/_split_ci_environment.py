@@ -1,9 +1,34 @@
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from contextlib import contextmanager
 import pytest
+
+def python_test_env(env=None):
+    """Return the repo interpreter and environment for a Python test subprocess."""
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ if env is None else env)
+    venv = env.pop('VIRTUAL_ENV', None)
+    env.pop('PYTHONHOME', None)
+    bin_dir, executable = ('Scripts', 'python.exe') if os.name == 'nt' else ('bin', 'python')
+    active_bin = Path(venv) / bin_dir if venv else None
+    path = [entry for entry in env.get('PATH', os.defpath).split(os.pathsep)
+            if Path(entry).is_absolute() and Path(entry) != active_bin
+            and not (Path(entry).parent / 'pyvenv.cfg').is_file()]
+    repo_venv = root / '.venv'
+    interpreter = repo_venv / bin_dir / executable
+    if interpreter.is_file():
+        path.insert(0, str(interpreter.parent))
+        env['VIRTUAL_ENV'] = str(repo_venv)
+    else:
+        # Keep the same Python version pytest runs, without the caller's venv.
+        interpreter = Path(sys._base_executable)
+    env['PATH'] = os.pathsep.join(path)
+    env['PYTHONPATH'] = str(root / 'src')
+    return str(interpreter), env
+
 
 @contextmanager
 def git_config_guard(root, registry_roots=None):

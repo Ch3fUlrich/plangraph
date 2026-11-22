@@ -1,12 +1,14 @@
 //! CI regressions execute the workflow's real bounded runner.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use saphyr::{LoadableYamlNode, Yaml};
 use std::path::Path;
 #[cfg(unix)]
-use std::process::Command;
-
 #[cfg(unix)]
 fn python(source: &str, script: &str) {
-    let output = Command::new("python3")
+    let output = test_python::command()
         .args(["-c", source])
         .env("BOUNDED_STEP_SCRIPT", script)
         .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))

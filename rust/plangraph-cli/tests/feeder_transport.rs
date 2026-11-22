@@ -1,9 +1,13 @@
 //! Existing Python boundary compatibility, driven by Rust tests and fake input;
 //! no network, keeper mutation, spawner process or new Python source file.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use plangraph_cli::feeder::*;
 use serde_json::{json, Value};
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 #[test]
 fn remote_ps_preserves_writer_identity_through_its_real_privacy_filter() {
@@ -12,7 +16,7 @@ fn remote_ps_preserves_writer_identity_through_its_real_privacy_filter() {
         .unwrap()
         .parent()
         .unwrap();
-    let mut child = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let mut child = test_python::command()
         .current_dir(root)
         .env("PYTHONPATH", root.join("src"))
         .args([
@@ -89,7 +93,7 @@ fn early_admission_queue_retains_identity_host_role_and_start_time() {
         .unwrap()
         .parent()
         .unwrap();
-    let out=Command::new(if cfg!(windows){"python"}else{"python3"}).current_dir(root).env("PYTHONPATH",root.join("src"))
+    let out=test_python::command().current_dir(root).env("PYTHONPATH",root.join("src"))
         .args(["-c",r#"import json, os
 from types import SimpleNamespace
 from unittest.mock import patch

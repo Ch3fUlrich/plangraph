@@ -1,5 +1,9 @@
 //! End-to-end Python admission -> Rust worker -> native CLI, without a model seat.
 #![cfg(unix)]
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 #[path = "common/binary.rs"]
 mod binary;
 #[path = "native_writer_fixture/codex.rs"]
@@ -201,7 +205,7 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
     let home = dir.join("home");
     let runtime = home.join("runtime");
     fs::create_dir_all(&runtime).unwrap();
-    let mut python = Command::new("python3");
+    let mut python = test_python::command();
     // Drop caller Git redirects first; the fixture HOME and Git config below override its paths.
     pg_worker_core::git_test_support::configure(&mut python, &dir);
     for (key, _) in std::env::vars_os() {
@@ -315,6 +319,13 @@ async def check():
         assert record['exit_code'] == exit_code, record
         assert exit_code == 0 or ref in record['reason'], record
     card['base_ref'] = 'refs/heads/main'
+    with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
+        denied = await admitted_spawn(service, dict(card=card, prompt='brief marker sandbox error marker'))
+        await service.tasks[denied['run_id']]
+    denied = service.result(denied['run_id'])
+    assert denied['status'] == 'refused' and denied['reason'].startswith('sandbox_unavailable:'), denied
+    assert 'bwrap: setting up uid map: Permission denied' in denied['reason'], denied
+    assert denied['manifest']['try_count'] == 1 and denied['review_rounds'] == 0, denied
     for marker, tries, status in [('kill marker', 2, 'completed'), ('fail marker', 3, 'failed'), ('missing marker', 2, 'completed'), ('reject marker', 1, 'failed')]:
         brief = 'brief marker ' + marker + ('\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n' if marker == 'reject marker' else '')
         with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):

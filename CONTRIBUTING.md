@@ -69,8 +69,11 @@ before initial nested conftests load, then repeats the guard at session start an
 before test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
-Rust source changes always select `tests/test_spawner_import_guard.py` in affected
-CI runs; its tree-wide scan rejects Python command bodies depending on pytest or test helpers.
+Changes to Rust sources or Python tests select `tests/test_spawner_import_guard.py`
+in affected CI runs. The guard identifies bare Python subprocess launches and keeps
+pytest modules and test helpers out of Rust-launched Python snippets. Use
+`test_python::command()` in Rust tests and `python_test_env()` in Python tests
+to select the checkout's interpreter and `src/` path.
 
 `tools/merge_batch.py plan` and `build` fetch origin and measure each PR against
 `origin/<base>...<head sha>` with Git, so refresh merges and GitHub's truncated

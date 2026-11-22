@@ -468,8 +468,9 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
     asset_cache = {}
     base_reverse = None
     for path in changed:
-        # CI's affected run must enforce the Rust Python dependency guard too.
-        if path.startswith('rust/') and path.endswith('.rs'):
+        # CI must enforce the subprocess guard when either test language changes.
+        if (path.startswith('rust/') and path.endswith('.rs')
+                or path.startswith('tests/') and path.endswith('.py')):
             guard = 'tests/test_spawner_import_guard.py'
             if guard in texts:
                 selected.add(guard)

@@ -1,11 +1,15 @@
 #![cfg(unix)]
 
+#[cfg(test)]
+#[path = "../../../test_support/python.rs"]
+mod test_python;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn python_executable() -> PathBuf {
     // Resolve before clearing the environment; never relocate Python away from its DLLs.
-    let output = Command::new("python3")
+    let output = test_python::command()
         .args(["-I", "-c", "import sys; print(sys.executable)"])
         .output()
         .unwrap();

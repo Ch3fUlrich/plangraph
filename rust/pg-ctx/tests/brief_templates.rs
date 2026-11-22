@@ -1,10 +1,13 @@
 //! Exercise the production prompt builders across the existing Python boundary.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::path::Path;
-use std::process::Command;
 
 fn render(script: &str) -> serde_json::Value {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .args(["-c", script])
         .env("PYTHONPATH", root.join("src"))
         .current_dir(root)
@@ -142,7 +145,7 @@ print(json.dumps(pairs))
 #[test]
 fn judge_renders_in_an_uninstalled_checkout() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .args(["-c", "from tools.judge_prompt import build_judge_prompt; print(build_judge_prompt('F1', 'diff', {}, {}))"])
         .env_remove("PYTHONPATH")
         .current_dir(root)

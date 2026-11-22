@@ -100,6 +100,8 @@ fn finish(
     record["exit_code"] = json!(exit);
     record["status"] = json!(if reason.as_deref() == Some(STOPPED) {
         "stopped"
+    } else if exit == 2 {
+        "refused"
     } else if exit == 0 {
         "completed"
     } else {

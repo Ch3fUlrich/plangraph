@@ -1,5 +1,9 @@
 //! Black-box regressions for the existing Python record/verdict boundary.
-use std::{fs, path::PathBuf, process::Command};
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
+use std::{fs, path::PathBuf};
 
 const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const ORDER: &str = "D-5866 operator order: review pass on claude-haiku-5.5";
@@ -66,7 +70,7 @@ impl Seat {
         diagnostic: &str,
         data_dir: Option<&std::ffi::OsStr>,
     ) {
-        let mut command = Command::new("python3");
+        let mut command = test_python::command();
         command.env_remove("PG_DATA_DIR");
         if let Some(path) = data_dir {
             command.env("PG_DATA_DIR", path);
@@ -93,7 +97,7 @@ impl Seat {
     }
 
     fn discovery(&self, accepted: bool) {
-        let out = Command::new("python3")
+        let out = test_python::command()
             .current_dir(&self.root)
             .env("PG_DATA_DIR", self.tmp.path())
             .env(

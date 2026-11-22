@@ -1,9 +1,11 @@
 //! Review placement from the three-host registry and review bundles on the receiving host.
 
+use crate::test_python;
+
 #[test]
 fn registry_places_a_review_without_cwd_and_records_the_memory_reason() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
@@ -60,7 +62,7 @@ with tempfile.TemporaryDirectory() as directory:
 #[test]
 fn overflow_review_bundle_materializes_unpublished_commits_on_receiver() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new("python3")
+    let output = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"

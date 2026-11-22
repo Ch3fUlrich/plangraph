@@ -290,30 +290,39 @@ def admit(service, options, *, card=None, preview=False):
         if selected is not None:
             options['cwd'] = selected
 
-    if not (remote_first or compare_local) and not disk and not overflow.memory_refusal(memory, role_mb, floor):
+    def local_readiness_refusal(public):
+        check_general = compare_local and public
+        if not local or not (native or check_general):
+            return None
+        try:
+            row = overflow.read_readiness(local)
+        except (OSError, ValueError, TypeError, KeyError):
+            return 'local readiness missing or malformed' if check_general else None
+        if native and row['fresh'] and row.get('sandbox_ok') is False:
+            return overflow.sandbox_refusal(row)
+        if not check_general:
+            return None
+        if row['ok'] is not True:
+            return 'local readiness failed'
+        return None if row['fresh'] else 'local readiness stale'
+    if (not (remote_first or compare_local) and not disk
+            and not overflow.memory_refusal(memory, role_mb, floor)
+            and not local_readiness_refusal(public=False)):
         if native or placed:
             options['_placement'] = dict(host=local, reason=os.environ.get(
                 'PLANGRAPH_PLACEMENT_REASON', 'local room'), free_mb=memory)
         return use_local()
     public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = (remote_first or compare_local) and options.get('benchmark') is not None
-    def local_readiness_refusal():
-        if not (compare_local and public and local):
-            return None
-        try:
-            row = overflow.read_readiness(local)
-        except (OSError, ValueError, TypeError, KeyError):
-            return 'local readiness missing or malformed'
-        if row['ok'] is not True:
-            return 'local readiness failed'
-        return None if row['fresh'] else 'local readiness stale'
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
     def load_rows():
         rows = overflow.apply_worker_refusals(overflow.ready_records(config, role), state)
         if native:
             for row in rows.values():
-                if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
+                if (reason := overflow.sandbox_refusal(row)):
+                    row.setdefault('refusal', reason)
+                elif type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
                     row.setdefault('refusal', 'disk_low: need 5 GB free to start')
         if review_workspace:
             for name, row in rows.items():
@@ -325,9 +334,16 @@ def admit(service, options, *, card=None, preview=False):
         rows.pop(local, None)
         return rows
     rows = load_rows()
-    health = disk or local_readiness_refusal() or (overflow.local_health_refusal(config, memory) if remote_first else None)
+    def local_health(disk):
+        readiness = local_readiness_refusal(public)
+        if readiness and readiness.startswith(overflow.SANDBOX_UNAVAILABLE):
+            return readiness
+        return disk or readiness or (overflow.local_health_refusal(config, memory) if remote_first else None)
+
+    health = local_health(disk)
+    sandbox_blocked = health and health.startswith(overflow.SANDBOX_UNAVAILABLE)
     retry_native_disk = native and disk and disk.startswith(('disk_low:', 'cargo_target_cap:'))
-    may_queue = not (remote_first or preview) and (retry_native_disk or not (placed or compare_local))
+    may_queue = not (remote_first or preview or sandbox_blocked) and (retry_native_disk or not (placed or compare_local))
     queued, window = None, admission_window() if may_queue else 0
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
@@ -369,9 +385,9 @@ def admit(service, options, *, card=None, preview=False):
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
                         _, memory = resources(service)
                         selected, disk = disk_admission()
-                        health = disk or local_readiness_refusal()
+                        health = local_health(disk)
                         rows = load_rows()
-                        if not (health if native else disk) and not overflow.memory_refusal(memory, role_mb, floor):
+                        if not health and not overflow.memory_refusal(memory, role_mb, floor):
                             taken = _close_queue(service, queued)
                             if taken is not None:
                                 return taken
@@ -385,6 +401,9 @@ def admit(service, options, *, card=None, preview=False):
                           'status': 'refused',
                           'reason': decision.reason, 'overflow_reason': decision.reason,
                           'exit_code': 2, **_no_hosts_hint(config)}
+                if native:
+                    now = time.time()
+                    record.update(run_kind='native-codex', started=now, ended=now)
                 break
             name = decision.host
             try:

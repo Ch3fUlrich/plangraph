@@ -1,4 +1,5 @@
 //! Resolve writer prerequisites in the target host's effective environment.
+use pg_worker_core::host_readiness::{Native, Probe, Runner, SandboxStatus, WRITER_SANDBOX};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -18,7 +19,7 @@ fn executable(path: &Path) -> bool {
     }
 }
 
-pub(crate) fn snapshot() -> Result<Value, String> {
+pub(crate) fn snapshot(check_sandbox: bool) -> Result<Value, String> {
     let path = std::env::var_os("PATH").ok_or("tool_missing: cargo (PATH unset)")?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     // Relative/empty entries must keep their caller meaning after worktree creation.
@@ -40,6 +41,25 @@ pub(crate) fn snapshot() -> Result<Value, String> {
         tools[tool] = json!(resolved);
     }
     // Codex also refuses Windows-side installs at admission, with the launch-time rule.
-    tools["codex"] = json!(crate::native_writer_tool::resolve(path.as_ref(), &cwd)?);
-    Ok(json!({"tool_path":path, "resolved_tools":tools}))
+    let codex = crate::native_writer_tool::resolve(path.as_ref(), &cwd)?;
+    tools["codex"] = json!(codex);
+    let mut report = json!({"tool_path":path, "resolved_tools":tools});
+    if check_sandbox {
+        let result = (|| {
+            let scratch = tempfile::tempdir()?;
+            let mut runner = Native {
+                codex,
+                executable: std::env::current_exe()?,
+                tool_path: Some(path.clone()),
+            };
+            runner.probe(Probe::Sandbox, scratch.path(), WRITER_SANDBOX)
+        })();
+        let sandbox =
+            serde_json::to_value(SandboxStatus::from_probe(result)).map_err(|e| e.to_string())?;
+        report
+            .as_object_mut()
+            .unwrap()
+            .extend(sandbox.as_object().unwrap().clone());
+    }
+    Ok(report)
 }

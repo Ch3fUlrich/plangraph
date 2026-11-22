@@ -1,5 +1,8 @@
 //! Unix domain socket transport: path resolution, safe binding, connecting.
 
+#[cfg(test)]
+use crate::test_python;
+
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -147,7 +150,7 @@ mod tests {
         // peer check sees the foreign uid while the verified directory stays ours.
         std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o777)).unwrap();
         use std::os::unix::process::CommandExt;
-        let mut command = std::process::Command::new("python3");
+        let mut command = test_python::command();
         command.args(["-c", "import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); time.sleep(3)"]).arg(&path);
         unsafe {
             command.pre_exec(|| {
