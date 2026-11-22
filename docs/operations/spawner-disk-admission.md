@@ -2,10 +2,20 @@
 
 Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 `overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 5
-(GiB); the checkout, configured `worktree_root`, and state tree filesystems must
-all meet it. A refusal reports `disk_low` and measured GB and uses RAM's overflow
-or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5); the
-receiving spawner also checks live disk before launching.
+(GiB). With `work_drives` configured, an unnamed local run launches from the
+first configured path that is a Git checkout with enough free disk. Immediate
+and queued admission both pass this checkout to the launcher. If no configured
+path is a launchable Git checkout, admission reports that configuration error.
+A run with `--cwd`, card `cwd`, `diff_ref.repo`, or `repo` is pinned, and its
+checkout uses its configured floor or falls back to the first matching
+filesystem floor. Both paths also check the Cargo target, run state, supervisor
+tree, and worktree root filesystems. Before refusing `disk_low`, admission cleans idle rebuildable caches
+(`shared_cargo_target`, its pool slots `<target>-pool/slot-N`, `~/.cache/pg-target-po`,
+`~/.cache/pg-target-warm`, and idle worktree `rust/target` directories) once and re-measures free space; a
+persistent breach records a `disk-hygiene.json` floor alarm (`alarm: true`).
+A refusal reports `disk_low` and measured GB and uses RAM's overflow
+or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5) and
+optional `work_drives`; the receiving spawner also checks live disk before launching.
 
 Writers, fixers, and reviews without a worker lease receive `CARGO_TARGET_DIR`
 from `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`).
@@ -13,10 +23,10 @@ Spawned builds also use host-configured cache variables. See the sccache
 settings in [Worker disk rollout](worker-disks.md).
 Caller and per-worktree target overrides are replaced; children also receive
 `CARGO_INCREMENTAL=0`. The cache cap is
-`PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB). Over-cap busy hosts refuse a building role with
+`PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB, per slot, shared with the Rust pool). Over-cap busy hosts refuse a building role with
 `cargo_target_cap`, which names the measured cache path. Native writer reviews use
 a disposable Cargo target alongside the exact-head checkout on a worker. The
-free-space floor applies to reviews. Idle hosts clear the shared cache before
+free-space floor applies to reviews, which are exempt from the shared cap. Idle hosts clear the shared cache before
 checking free space. A run keeps the
 host busy only while a recorded child or supervisor pid is alive (or it has survivors): ended,
 `timed_out`, `stalled` and `queued` records, and `running` records whose recorded pids are all gone, do
@@ -51,6 +61,9 @@ or under 10 GB (decimal) free.
 nested `__pycache__` / `.pytest_cache` directories in eligible idle worktrees.
 Other ignored data, tracked cache files, dirty trees and protection records
 prevent reclaim. Worktree removal remains a separate `pg-worktree-sweep` step.
+
+When every Cargo pool slot is leased, `plangraph fast-checks` waits up to 30 seconds
+for a slot. It reports exhaustion if every slot stays busy.
 
 Pre-push preflight also pins the shared target, disables incremental builds and
 holds its shared lease while Cargo runs. Cap checks run before and after each

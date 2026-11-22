@@ -266,20 +266,25 @@ def admit(service, options, *, card=None, preview=False):
         return None
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
-    repo = Path(options.get('cwd') or (card or {}).get('cwd') or
-                ((card or {}).get('diff_ref') or {}).get('repo') or
-                (card or {}).get('repo') or
-                getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
-    from .host_ready import local_disk_refusal
+    named = (options.get('cwd') or (card or {}).get('cwd') or
+             ((card or {}).get('diff_ref') or {}).get('repo') or (card or {}).get('repo'))
+    repo = Path(named or getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
+    movable = not named  # A run with no checkout named anywhere may be placed on any work drive.
+    from .host_ready import local_disk_admission
     if review_workspace and not local_worker:
-        disk = 'review workspace requires a registered worker host'
+        selected, disk = None, 'review workspace requires a registered worker host'
     else:
-        disk = local_disk_refusal(repo, service, role)
+        selected, disk = local_disk_admission(repo, service, role, movable=movable)
+
+    def use_local():
+        if selected is not None:
+            options['cwd'] = selected
+
     if not (remote_first or compare_local) and not disk and not overflow.memory_refusal(memory, role_mb, floor):
         if native or placed:
             options['_placement'] = dict(host=local, reason=os.environ.get(
                 'PLANGRAPH_PLACEMENT_REASON', 'local room'), free_mb=memory)
-        return None
+        return use_local()
     public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = (remote_first or compare_local) and options.get('benchmark') is not None
     def local_readiness_refusal():
@@ -339,11 +344,11 @@ def admit(service, options, *, card=None, preview=False):
                 return placement
             if compare_local and decision.host is None and not health and not overflow.memory_refusal(memory, role_mb, floor):
                 options['_placement'] = placement
-                return None
+                return use_local()
             if remote_first:
                 options['_placement'] = placement
                 if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
-                    return None
+                    return use_local()
             if decision.host is None:
                 if window > 0 and queued is None:
                     queued = _open_queue(service, role, decision, window, local, card)
@@ -351,7 +356,7 @@ def admit(service, options, *, card=None, preview=False):
                     if time.time() < queued['queued_until']:
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
                         _, memory = resources(service)
-                        disk = local_disk_refusal(repo, service, role)
+                        selected, disk = local_disk_admission(repo, service, role, movable=movable)
                         health = disk or local_readiness_refusal()
                         rows = load_rows()
                         if not disk and not overflow.memory_refusal(memory, role_mb, floor):
@@ -359,7 +364,7 @@ def admit(service, options, *, card=None, preview=False):
                             if taken is not None:
                                 return taken
                             if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
-                            return None
+                            return use_local()
                         continue
                     return _close_queue(service, queued, status='refused', reason=decision.reason,
                                         overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
@@ -495,6 +500,8 @@ class SeatSpawnMixin:
                     return {'writers': await asyncio.gather(*(dispatch(g, b) for g, b in zip(groups, briefs)))}
                 options['prompt'] = briefs[0]
                 return await self._spawn(**options)
+            if options.get('cwd') is not None:
+                bound.arguments['cwd'] = options['cwd']
             dispatch_kwargs = bound.kwargs
             if '_placement' in options:
                 dispatch_kwargs['_placement'] = options['_placement']

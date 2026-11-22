@@ -26,10 +26,19 @@ fn owned(path: &Path) -> io::Result<bool> {
     }
 }
 
+/// `Ok(None)` when the entry vanished meanwhile; any other error stays an error.
+fn skip_vanished<T>(result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Walk only two levels in the host temporary directory. Worktree targets are
 /// supplied separately from Git's authoritative worktree inventory.
 pub fn sweep(
-    temporary: &Path,
+    temporary: Option<&Path>,
     worktrees: &[std::path::PathBuf],
     guards: &Guards,
     apply: bool,
@@ -46,7 +55,7 @@ pub fn sweep(
 }
 
 fn sweep_using(
-    temporary: &Path,
+    temporary: Option<&Path>,
     worktrees: &[std::path::PathBuf],
     guards: &Guards,
     apply: bool,
@@ -54,19 +63,29 @@ fn sweep_using(
     mut processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
 ) -> io::Result<()> {
     let mut targets = vec![];
-    for entry in fs::read_dir(temporary)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() || !owned(&entry.path())? {
-            continue;
-        }
-        let path = entry.path();
-        if cargo_target(&path) {
-            targets.push(path);
-        } else {
-            for child in fs::read_dir(path)? {
-                let child = child?;
-                if child.file_type()?.is_dir() && cargo_target(&child.path()) {
-                    targets.push(child.path());
+    if let Some(temporary) = temporary {
+        for entry in fs::read_dir(temporary)? {
+            let entry = entry?;
+            // Another process may remove an entry between listing and inspection.
+            let Some(is_dir) = skip_vanished(entry.file_type().map(|t| t.is_dir()))? else {
+                continue;
+            };
+            if !is_dir || !skip_vanished(owned(&entry.path()))?.unwrap_or(false) {
+                continue;
+            }
+            let path = entry.path();
+            if cargo_target(&path) {
+                targets.push((path, None));
+            } else if let Some(children) = skip_vanished(fs::read_dir(&path))? {
+                for child in children {
+                    let Some(child) = skip_vanished(child)? else {
+                        continue;
+                    };
+                    if skip_vanished(child.file_type().map(|t| t.is_dir()))? == Some(true)
+                        && cargo_target(&child.path())
+                    {
+                        targets.push((child.path(), None));
+                    }
                 }
             }
         }
@@ -88,18 +107,17 @@ fn sweep_using(
             .trim()
                 == "rust/target/"
         {
-            targets.push(tree.join("rust/target"));
+            let last_commit = crate::disk_hygiene::git(tree, &["log", "-1", "--format=%ct"])
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .and_then(|seconds| {
+                    SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
+                });
+            targets.push((tree.join("rust/target"), last_commit));
         }
     }
-    for target in targets {
-        reclaim(
-            &target,
-            guards,
-            SystemTime::now(),
-            apply,
-            report,
-            &mut processes,
-        )?;
+    for (target, last_commit) in targets {
+        reclaim(&target, guards, last_commit, apply, report, &mut processes)?;
     }
     Ok(())
 }
@@ -107,7 +125,7 @@ fn sweep_using(
 fn reclaim(
     target: &Path,
     guards: &Guards,
-    now: SystemTime,
+    last_commit: Option<SystemTime>,
     apply: bool,
     report: &mut Report,
     mut processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
@@ -127,7 +145,9 @@ fn reclaim(
         return Ok(());
     };
     let (bytes, newest) = scan(target)?;
-    if now.duration_since(newest).unwrap_or_default() <= Duration::from_secs(1800) {
+    if last_commit.is_none_or(|commit| newest >= commit)
+        && SystemTime::now().duration_since(newest).unwrap_or_default() <= Duration::from_secs(1800)
+    {
         return Ok(());
     }
     let (cwds, building) = processes()?;

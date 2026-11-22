@@ -110,12 +110,15 @@ with TemporaryDirectory() as tmp:
         assert [part['pr'] for part in parts] == [5]
         assert journal(identity['repo'], 'show', pr=17)['train']['included'] == [5]
         calls.append('cleanup')
-    st = dict(merged=train['parts'], head=train['head'])
+    st = dict(merged=train['parts'], head=train['head'], landing_attempt=dict(
+        head=train['head'], mode='train-pr-merge', reruns=['rerun'], go_row='go-row', included=[5]))
+    telemetry = Mock()
     with (patch.object(landing, 'landing_journal', journal),
           patch.object(build, 'landing_journal', journal),
           patch.object(build, 'gh_json', side_effect=live_part) as part_views,
           patch.object(build, 'git', return_value=Mock(returncode=0)),
           patch.object(build, 'add_label', return_value=True) as label,
+          patch.object(landing, 'write_landing', telemetry),
           patch.object(landing, 'read_verified_merge', return_value=('d'*40, 'merged')),
           patch.object(landing, 'run', effect),
           patch.object(landing, 'cleanup_landed', side_effect=sweep),
@@ -124,6 +127,7 @@ with TemporaryDirectory() as tmp:
         landing.settle_train(pending[0], lease)
     assert part_views.call_count == 2
     label.assert_called_once_with(identity['repo'], 6, 'needs-update')
+    telemetry.assert_called_once_with(st, 'train-pr-merge', 'd'*40, ['rerun'], 'go-row')
     assert calls == [['plangraph', 'merge-close'], ['plangraph', 'landing', 'verify-hosts', 'example/repo', 'd'*40],
                      'cleanup', 'drop_state'], calls
     recorded = store.land(principal, dict(identity, action='show'))['train']

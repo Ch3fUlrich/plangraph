@@ -6,10 +6,13 @@ import json
 import os
 import re
 import shlex
+import sqlite3
+import statistics
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from preflight import run_test_process
@@ -17,6 +20,7 @@ from preflight import run_test_process
 REMOTE = "origin"
 BATCH_READY = "batch-ready"  # the label that marks a PR ready to join a batch, draft or not
 NEEDS_UPDATE = "needs-update"
+TESTED_FF = "tested-ff"  # the landing mode that moves main to the tested head (plangraph.settings.LANDING_MODES)
 EXIT_REFUSED, EXIT_USAGE, EXIT_CONFLICT = 1, 2, 3
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -391,6 +395,277 @@ def workflow_gate(wt, base, head):
 
 def batch_workflow_gate(st):
     workflow_gate(st["worktree"], st["base_head"], st["head"])
+
+
+# --- landing telemetry (LAND-MODE-MEASURE): one row per landing, the report compares the modes ------
+#: Columns a landing row takes, besides the key (repo, train, landed_sha). A time is an ISO-8601 string.
+LANDING_COLUMNS = ("mode", "pr", "parts", "first_ready_at", "build_started_at", "ci_run_id", "ci_started_at",
+                   "ci_ended_at", "go_at", "landed_at", "green_at", "ci_reruns", "fit_commits", "left_out",
+                   "red_main", "fix_tasks")
+LANDING_SCHEMA = """CREATE TABLE IF NOT EXISTS landing (
+    repo TEXT NOT NULL, train TEXT NOT NULL, landed_sha TEXT NOT NULL, mode TEXT NOT NULL, pr INTEGER,
+    parts TEXT NOT NULL, first_ready_at TEXT, build_started_at TEXT, ci_run_id INTEGER, ci_started_at TEXT,
+    ci_ended_at TEXT, go_at TEXT, landed_at TEXT, green_at TEXT, ci_reruns INTEGER, fit_commits INTEGER,
+    left_out INTEGER, red_main INTEGER, fix_tasks INTEGER, PRIMARY KEY (repo, landed_sha))"""
+
+
+def landing_modes():
+    """The landing modes of the setting (plangraph.settings.LANDING_MODES, the one list)."""
+    from plangraph.settings import LANDING_MODES
+
+    return LANDING_MODES
+
+
+def landing_db_path():
+    """The telemetry database file: $PLANGRAPH_LANDING_DB, else plangraph/landing-telemetry.sqlite3 under
+    $XDG_DATA_HOME (default ~/.local/share)."""
+    explicit = os.environ.get("PLANGRAPH_LANDING_DB")
+    if explicit:
+        return Path(explicit)
+    data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(data) / "plangraph" / "landing-telemetry.sqlite3"
+
+
+def landing_db():
+    """The open telemetry database. A missing table is created (one write transaction, the check repeated under
+    the lock); a current file is opened without any write lock, so a report runs beside the lander. A file whose
+    table is keyed by train (written by an earlier draft) is refused and left untouched: its rows say nothing
+    about which writer of one landing is authoritative, so nothing is guessed; move the file aside."""
+    path = landing_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=30, isolation_level=None)
+    db.row_factory = sqlite3.Row
+
+    def table():
+        return list(db.execute("PRAGMA table_info(landing)"))
+
+    if not table():
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            if not table():
+                db.execute(LANDING_SCHEMA)
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+    if "train" in [c["name"] for c in table() if c["pk"]]:
+        db.close()
+        raise MergeBatchError(f"landing telemetry {path} is keyed by train (an earlier draft): move it aside, "
+                              "a landing is now identified by repository and landed sha")
+    db.isolation_level = ""  # the callers use ``with db`` transactions
+    return db
+
+
+def record_landing(row, fill_only=False):
+    """Write the one telemetry row of a landing, identified by (repo, landed_sha); a second write for it adds
+    what the first did not know and never blanks a known value. ``fill_only`` (a backfill) fills only the columns
+    that are still unknown and never changes a recorded mode, train or part list: a live row stays authoritative.
+
+    ``row`` needs repo, train, landed_sha and a mode of LANDING_MODES; ``parts`` is a list of PR numbers.
+    A column the lander cannot know yet stays NULL (``landing-settle`` fills the green and red-main
+    columns later). An unknown mode is refused, so a row never names a path that does not exist."""
+    if row.get("mode") not in landing_modes():
+        raise MergeBatchError(f"landing telemetry: unknown mode {row.get('mode')!r}")
+    for key in ("repo", "train", "landed_sha"):
+        if not row.get(key):
+            raise MergeBatchError(f"landing telemetry: row has no {key}")
+    values = {name: row.get(name) for name in LANDING_COLUMNS} | {"train": row["train"]}
+    values["parts"] = json.dumps(sorted(row.get("parts") or [], key=str))
+    columns = ("train", *LANDING_COLUMNS)
+    with landing_db() as db:
+        db.execute("INSERT OR IGNORE INTO landing (repo, landed_sha, train, mode, parts) VALUES (?, ?, ?, ?, ?)",
+                   (row["repo"], row["landed_sha"], row["train"], row["mode"], values["parts"]))
+        # a landing is identified by (repo, landed sha): a later writer (backfill after the lander, or the reverse)
+        # fills what it knows and never blanks what an earlier one recorded
+        known = {k: v for k, v in values.items() if k in columns and v is not None}
+        if fill_only:
+            known = {k: v for k, v in known.items() if k not in ("train", "mode")}
+            assign = ", ".join(f"{k}=COALESCE({k}, ?)" for k in known)
+        else:
+            assign = ", ".join(f"{k}=?" for k in known)
+        db.execute(f"UPDATE landing SET {assign} WHERE repo=? AND landed_sha=?",
+                   [*known.values(), row["repo"], row["landed_sha"]])
+
+
+def landing_rows():
+    """Every telemetry row, oldest landing first, with ``parts`` as a list."""
+    with landing_db() as db:
+        rows = [dict(r) for r in db.execute("SELECT * FROM landing ORDER BY landed_at, train")]
+    for r in rows:
+        r["parts"] = json.loads(r["parts"])
+    return rows
+
+
+def require_landing_row(repo, train, sha, mode):
+    """The lander's own check: the landing has its telemetry row, naming the mode it landed in."""
+    with landing_db() as db:
+        found = db.execute("SELECT mode FROM landing WHERE repo=? AND landed_sha=?", (repo, sha)).fetchone()
+    if found is None or found["mode"] != mode:
+        raise MergeBatchError(f"landing of {train} at {short(sha)} has no telemetry row for mode {mode}: "
+                              "the landing is not counted (landing-report would miss it)")
+
+
+def minutes(start, end):
+    """Minutes from one ISO-8601 time to another (negative when end is first); None when either is unknown."""
+    try:
+        first, last = (datetime.fromisoformat(str(t).replace("Z", "+00:00")) for t in (start, end))
+    except (TypeError, ValueError):
+        return None
+    return (last - first).total_seconds() / 60
+
+
+def _spread(values):
+    values = [v for v in values if v is not None]
+    return {"median": float(statistics.median(values)), "worst": float(max(values))} if values else None
+
+
+def landing_report(rows=None):
+    """One entry per landing mode, comparing the modes: trains, median and worst minutes from the first part
+    READY to landed and from landed to the first green run, mean CI test minutes per landed part, the count
+    of trains whose main went red, and the mean fix tasks per train that has the count. A value that is not
+    known for a train stays out of its statistic; a statistic with no value is None."""
+    rows = landing_rows() if rows is None else rows
+    report = []
+    for mode in landing_modes():
+        mine = [r for r in rows if r["mode"] == mode]
+        if not mine:
+            continue
+        test = [minutes(r["ci_started_at"], r["ci_ended_at"]) for r in mine]
+        per_part = [m / len(r["parts"]) for m, r in zip(test, mine) if m is not None and r["parts"]]
+        fixes = [r["fix_tasks"] for r in mine if r["fix_tasks"] is not None]
+        report.append({
+            "mode": mode, "trains": len(mine), "parts": sum(len(r["parts"]) for r in mine),
+            "ready_to_landed_min": _spread([minutes(r["first_ready_at"], r["landed_at"]) for r in mine]),
+            "landed_to_green_min": _spread([minutes(r["landed_at"], r["green_at"]) for r in mine]),
+            "test_min_per_part": sum(per_part) / len(per_part) if per_part else None,
+            "ci_reruns": sum(r["ci_reruns"] or 0 for r in mine),
+            "red_main": sum(1 for r in mine if r["red_main"]),
+            "fix_tasks_per_train": sum(fixes) / len(fixes) if fixes else None})
+    return report
+
+
+def render_landing_report(report):
+    """The comparison of landing_report as a text table, one line per mode."""
+    def spread(value):
+        return "-" if value is None else f"{value['median']:.0f}/{value['worst']:.0f}"
+
+    def number(value):
+        return "-" if value is None else f"{value:.1f}"
+
+    lines = ["mode            trains parts ready->landed(med/worst min) landed->green(med/worst min) "
+             "test min/part reruns red main fix/train"]
+    for r in report:
+        lines.append(f"{r['mode']:<15} {r['trains']:>6} {r['parts']:>5} {spread(r['ready_to_landed_min']):>25} "
+                     f"{spread(r['landed_to_green_min']):>26} {number(r['test_min_per_part']):>13} "
+                     f"{r['ci_reruns']:>6} {r['red_main']:>8} {number(r['fix_tasks_per_train']):>9}")
+    return "\n".join(lines) + "\n"
+
+
+def settle_landings(fetch_runs):
+    """Fill the green and red-main columns of landings from the runs on the landed sha.
+
+    ``fetch_runs(repo, sha)`` returns the workflow runs (dicts with status, conclusion, updated_at) on that
+    sha. A completed failure or timeout marks the row red_main=1; with none and a completed run, red_main=0;
+    the first completed success sets green_at when it is unknown. A row with no completed run is left as
+    it is. Returns the number of rows changed."""
+    changed = 0
+    with landing_db() as db:
+        pending = db.execute("SELECT repo, train, landed_sha, green_at, red_main FROM landing "
+                             "WHERE green_at IS NULL OR red_main IS NULL").fetchall()
+        for found in pending:
+            done = [r for r in fetch_runs(found["repo"], found["landed_sha"]) if r.get("status") == "completed"]
+            wins = sorted(r["updated_at"] for r in done if r.get("conclusion") == "success")
+            red = any(r.get("conclusion") in ("failure", "timed_out") for r in done)
+            if not done:
+                continue
+            green_at = found["green_at"] or (wins[0] if wins else None)
+            red_main = 1 if red else 0
+            if (green_at, red_main) != (found["green_at"], found["red_main"]):
+                db.execute("UPDATE landing SET green_at=?, red_main=? WHERE repo=? AND landed_sha=?",
+                           (green_at, red_main, found["repo"], found["landed_sha"]))
+                changed += 1
+    return changed
+
+
+def set_fix_tasks(train, count):
+    """Record how many fix tasks named ``train`` on every telemetry row of that train."""
+    with landing_db() as db:
+        changed = db.execute("UPDATE landing SET fix_tasks=? WHERE train=?", (count, train)).rowcount
+    if not changed:
+        raise MergeBatchError(f"no telemetry row for train {train!r}")
+
+
+def iso_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def ci_window(repo, head):
+    """Run id and times of the full tests run on ``head`` (empty when GitHub does not say)."""
+    try:
+        runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}"
+                              "&event=pull_request&per_page=100")["workflow_runs"]
+        run_ = max(runs, key=lambda r: r["id"])
+        return {"ci_run_id": run_["id"], "ci_started_at": run_.get("run_started_at") or run_.get("created_at"),
+                "ci_ended_at": run_.get("updated_at"), "ci_reruns": len(runs) - 1 + run_.get("run_attempt", 1) - 1}
+    except (MergeBatchError, KeyError, ValueError, TypeError):
+        return {}
+
+
+def first_ready(repo, recs):
+    """The earliest time a part got the batch-ready label (None when GitHub does not say)."""
+    times = []
+    for rec in recs:
+        try:
+            events = gh_json("api", f"repos/{repo}/issues/{rec['pr']}/events?per_page=100")
+            times += [e["created_at"] for e in events
+                      if e.get("event") == "labeled" and (e.get("label") or {}).get("name") == "batch-ready"]
+        except (MergeBatchError, KeyError, ValueError, TypeError):
+            continue
+    return min(times) if times else None
+
+
+def landing_receipt_inputs(st, reruns, go_row):
+    """Freeze the receipt inputs that cannot be reconstructed from the train and GitHub."""
+    go_path = Path(go_row) if go_row else None
+    go_at = (datetime.fromtimestamp(go_path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+             if go_path and go_path.is_file() else st.get("go_at"))
+    return {"train": st["name"], "build_started_at": st.get("created"), "go_at": go_at,
+            "ci_reruns": len(reruns), "fit_commits": sum(bool(r["resolved"]) for r in st["merged"]),
+            "left_out": len(st["skipped"]), "plan_item": st.get("plan"),
+            "review_runs": {str(r["pr"]): r.get("review_runs") or {} for r in st["merged"]}}
+
+
+def write_landing_records(train, mode, merge, inputs):
+    """Write and verify the telemetry row, then write its receipt for the verified landing."""
+    repo, name = train["repo"], check_name(inputs["train"])
+    parts, landed_at = train["parts"], train["landed_at"]
+    row = {"repo": repo, "mode": mode, "train": name, "pr": train["pr"], "parts": [r["pr"] for r in parts],
+           "landed_sha": merge, "first_ready_at": first_ready(repo, parts), "build_started_at": inputs["build_started_at"],
+           "go_at": inputs["go_at"] or landed_at, "landed_at": landed_at, "ci_reruns": inputs["ci_reruns"],
+           "fit_commits": inputs["fit_commits"], "left_out": inputs["left_out"]}
+    window = ci_window(repo, train["head"])
+    window.pop("ci_reruns", None)  # use the reruns recorded when the train was admitted
+    row.update(window)
+    receipt = {key: inputs[key] for key in ("plan_item", "review_runs")}
+    if mode == TESTED_FF:
+        row["green_at"] = row.get("ci_ended_at")  # the green run is the run on the landed commit itself
+    try:
+        record_landing(row)
+        require_landing_row(repo, name, merge, mode)
+        receipts = state_dir() / "receipts"
+        receipts.mkdir(parents=True, exist_ok=True)
+        (receipts / f"{name}-{merge}.json").write_text(json.dumps({**row, **receipt}, indent=2, sort_keys=True) + "\n",
+                                                     encoding="utf-8")
+    except (sqlite3.Error, OSError) as exc:
+        raise MergeBatchError(f"landing telemetry row not written: {exc}") from None
+    print(f"landing receipt: mode={mode} train={name} sha={merge}", file=sys.stderr)
+
+
+def write_landing(st, mode, merge, reruns, go_row):
+    """Write the landing records from local state and save the timestamp for retries."""
+    st.setdefault("landed_at", iso_now())
+    write_landing_records(dict(st, parts=st["merged"]), mode, merge, landing_receipt_inputs(st, reruns, go_row))
+    save_state(st)
 
 
 WINDOWS_HOST_ENV = "PLANGRAPH_WINDOWS_HOST"

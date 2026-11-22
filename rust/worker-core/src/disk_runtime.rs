@@ -1,6 +1,29 @@
 //! Disk sampling and shared rebuildable-cache cleanup for Linux worker hosts.
 use crate::disk_hygiene::{Guards, Report};
-use std::{fs, io, path::Path};
+use crate::run::record_io;
+use std::{
+    fs, io,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+/// Atomically persist `disk-hygiene.json` and append a row to `disk-hygiene.ndjson`.
+pub fn write_hygiene_report(state: &Path, report: &serde_json::Value) -> io::Result<Vec<u8>> {
+    let mut report = report.clone();
+    if report.get("ts").is_none_or(serde_json::Value::is_null) {
+        report["ts"] = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_secs()
+            .into();
+    }
+    let bytes = serde_json::to_vec(&report)?;
+    record_io::atomic_write_private(&state.join("disk-hygiene.json"), &bytes)?;
+    let mut line = bytes.clone();
+    line.push(b'\n');
+    record_io::append_private(&state.join("disk-hygiene.ndjson"), &line)?;
+    Ok(bytes)
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct DiskSpace {
