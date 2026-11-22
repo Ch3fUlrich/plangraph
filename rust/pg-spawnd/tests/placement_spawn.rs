@@ -358,3 +358,23 @@ fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
     );
     assert!(!f.state.path().join("should_not_run").exists());
 }
+
+#[test]
+fn completed_review_persists_classification() {
+    let mut fixture = Fixture::new("printf 'Findings without a decision\\n'", Value::Null, &[]);
+    let run = payload(fixture.call(
+        "spawn",
+        json!({"card":{"x":1},"role":"review",
+        "writer_families":["gpt"],"prompt":"review","wait_seconds":5}),
+    ));
+    assert_eq!(run["status"], "completed");
+    assert_eq!(run["review_result"], "missing_verdict");
+    let path = fixture
+        .state
+        .path()
+        .join("runs")
+        .join(run["run_id"].as_str().unwrap())
+        .join("record.json");
+    let saved: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(saved["review_result"], "missing_verdict");
+}

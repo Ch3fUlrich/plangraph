@@ -273,21 +273,21 @@ impl Host {
             .current_dir(clone)
             .output()
             .map_err(|e| e.to_string())?;
+        let stderr = String::from_utf8_lossy(&printed.stderr);
+        let record = printed_record(&String::from_utf8_lossy(&printed.stdout));
         if printed.status.code() == Some(10) {
-            let stderr = String::from_utf8_lossy(&printed.stderr);
-            let line = stderr
+            let line = record
+                .as_ref()
+                .and_then(|row| row["stderr_tail"].as_str())
+                .unwrap_or_default()
                 .lines()
-                .find(|line| line.contains(" FAIL client_missing "));
+                .chain(stderr.lines())
+                .find(|line| line.starts_with("REVIEW ") && line.contains(" FAIL client_missing "));
             return Ok(json!({"status":"client_missing","head":head,"reason":
                 line.unwrap_or("client_missing: native Codex review could not start")}));
         }
         let record =
-            printed_record(&String::from_utf8_lossy(&printed.stdout)).ok_or_else(|| {
-                format!(
-                    "review run returned no record: {}",
-                    String::from_utf8_lossy(&printed.stderr).trim()
-                )
-            })?;
+            record.ok_or_else(|| format!("review run returned no record: {}", stderr.trim()))?;
         let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
         if late_review::live(&record) {
             let started = record["started"]

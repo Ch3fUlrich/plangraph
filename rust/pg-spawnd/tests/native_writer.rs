@@ -196,7 +196,8 @@ if 'resume' in sys.argv:
 else:
     import os
     pathlib.Path('writer-path').write_text(os.environ['PATH'])
-    pathlib.Path('writer.txt').write_text('written on selected host\n')
+    marker = next((m for m in ('reject marker', 'client marker', 'late marker') if m in prompt), '')
+    pathlib.Path('writer.txt').write_text('written on selected host ' + marker + '\n')
     subprocess.run(['git','add','writer.txt','writer-path'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','writer'], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}))
@@ -206,7 +207,7 @@ print('tokens used\n1,234')
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
     let review_cli = dir.join("review-cli.py");
-    fs::write(&review_cli, r#"import json, pathlib, sys, uuid
+    fs::write(&review_cli, r#"import json, pathlib, sys, time, uuid
 argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 assert value('--role') == 'review' and value('--writer-family') == 'openai', argv
@@ -216,7 +217,18 @@ prompt = pathlib.Path(value('--prompt-file')).read_text()
 run_id = 'run-' + uuid.uuid4().hex
 run = pathlib.Path(value('--state')) / 'runs' / run_id
 run.mkdir(parents=True)
-if 'reject marker' in prompt:
+marker = pathlib.Path('writer.txt').read_text()
+if 'late marker' in marker:
+    receipt = dict(run_id=run_id, status='running', started=time.time())
+    (run / 'record.json').write_text(json.dumps(receipt))
+    print(json.dumps(receipt))
+    sys.exit(0)
+if 'client marker' in marker and '----- previous review -----' in prompt:
+    assert 'HIGH writer.txt:1 - fixture finding' in prompt, prompt
+    print(json.dumps(dict(run_id=run_id, status='failed',
+        stderr_tail=f'REVIEW {run_id} FAIL client_missing /fixture/codex')))
+    sys.exit(10)
+if 'reject marker' in marker or 'client marker' in marker:
     text = 'HIGH writer.txt:1 - fixture finding\nHEAD: ' + head + '\nVERDICT: REQUEST_CHANGES\n'
 else:
     text = 'Reviewed writer.txt\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
@@ -345,6 +357,36 @@ async def check():
             assert final['result'] == 'BLOCKED' and final['exit_code'] == 9, final
         else:
             assert final['session_id'] == 'fixture-session', final
+    for marker in ('client marker', 'late marker'):
+        with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
+            reviewed = await admitted_spawn(service, dict(card=card, prompt='brief marker ' + marker))
+            await service.tasks[reviewed['run_id']]
+        final = service.result(reviewed['run_id'])
+        if marker == 'client marker':
+            assert final['exit_code'] == 10 and final['reason'].endswith('FAIL client_missing /fixture/codex'), final
+            assert final['review']['verdict'] == 'REQUEST_CHANGES', final
+            assert final['review']['head'] != final['final_head'], final
+            assert 'HIGH writer.txt:1' in final['review']['text'], final
+            assert final['review_rounds'] == 1 and final['resumes'] == 1, final
+            assert final['session_id'] == 'fixture-session', final
+            assert pathlib.Path(final['review']['path']).read_text() == final['review']['text'], final
+        else:
+            head = final['final_head']
+            pending = pathlib.Path(final['review_dir']) / f'late-review-{head}.json'
+            receipt = json.loads(pending.read_text())
+            assert final['exit_code'] == 4 and receipt['run_id'] in final['reason'], final
+            assert 'expected end' in final['reason'], final
+            run_file = root/'state'/'runs'/receipt['run_id']/'record.json'
+            run = json.loads(run_file.read_text())
+            run.update(status='completed', stdout_tail='Reviewed writer.txt\nVERDICT: ACCEPT\n')
+            updated = run_file.with_suffix('.tmp')
+            updated.write_text(json.dumps(run))
+            updated.replace(run_file)
+            artifact = pending.with_suffix('.txt')
+            for _ in range(150):
+                if artifact.is_file(): break
+                await asyncio.sleep(.05)
+            assert artifact.read_text() == f'HEAD: {head}\nReviewed writer.txt\nVERDICT: ACCEPT\n'
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         holding = await admitted_spawn(service, dict(card=card, prompt='brief marker hold marker'))
         holding = service.result(holding['run_id'])

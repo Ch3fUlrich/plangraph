@@ -19,6 +19,7 @@ pub fn extract_review_text_from_live_log(live_log: &str) -> Option<String> {
     let mut oc_event_log = false;
     let mut oc_texts: Vec<String> = Vec::new();
     let mut delta_id: Option<String> = None;
+    let mut previous_was_anonymous = false;
     let mut oc_completed: Option<String> = None;
     let mut oc_stopped = false;
 
@@ -29,6 +30,7 @@ pub fn extract_review_text_from_live_log(live_log: &str) -> Option<String> {
         let Ok(frame) = serde_json::from_str::<Value>(line) else {
             return None;
         };
+        let prior_was_anonymous = std::mem::take(&mut previous_was_anonymous);
         if frame["event"] == "result" {
             result = if frame["result"]["status"] == "SUCCESS" {
                 frame["result"]["response"].as_str().map(str::to_owned)
@@ -63,13 +65,14 @@ pub fn extract_review_text_from_live_log(live_log: &str) -> Option<String> {
                         }
                     } else if let Some(delta) = part.get("delta").and_then(Value::as_str) {
                         let id = part.get("id").and_then(Value::as_str);
+                        let continues_part =
+                            id.map_or(prior_was_anonymous, |id| delta_id.as_deref() == Some(id));
                         match oc_texts.last_mut() {
-                            Some(text) if id.is_some() && id == delta_id.as_deref() => {
-                                text.push_str(delta);
-                            }
+                            Some(text) if continues_part => text.push_str(delta),
                             _ => oc_texts.push(delta.to_owned()),
                         }
                         delta_id = id.map(str::to_owned);
+                        previous_was_anonymous = id.is_none();
                         oc_completed = None;
                     }
                 }
@@ -106,11 +109,15 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn split_log() -> String {
+    fn split_log(id: Option<&str>) -> String {
+        let delta = |text| match id {
+            Some(id) => json!({"type":"text","part":{"id":id,"delta":text}}),
+            None => json!({"type":"text","part":{"delta":text}}),
+        };
         [
             json!({"type":"step_start","part":{}}),
-            json!({"type":"text","part":{"id":"text-1","delta":"VER"}}),
-            json!({"type":"text","part":{"id":"text-1","delta":"DICT: PASS"}}),
+            delta("VER"),
+            delta("DICT: PASS"),
             json!({"type":"step_finish","part":{"reason":"stop"}}),
         ]
         .iter()
@@ -121,7 +128,7 @@ mod tests {
 
     #[test]
     fn rendered_record_takes_precedence_over_split_stream() {
-        let log = split_log();
+        let log = split_log(Some("text-1"));
         assert!(!log.contains("VERDICT:"));
         let available = json!({"stdout_tail":"VERDICT: PASS"});
         assert_eq!(record_answer(&available).as_deref(), Some("VERDICT: PASS"));
@@ -133,7 +140,25 @@ mod tests {
     #[test]
     fn joins_deltas_of_the_same_text_part() {
         assert_eq!(
-            extract_review_text_from_live_log(&split_log()).as_deref(),
+            extract_review_text_from_live_log(&split_log(Some("text-1"))).as_deref(),
+            Some("VERDICT: PASS")
+        );
+    }
+    #[test]
+    fn joins_consecutive_deltas_without_part_ids() {
+        let log = split_log(None);
+        assert_eq!(
+            extract_review_text_from_live_log(&log).as_deref(),
+            Some("VERDICT: PASS")
+        );
+    }
+    #[test]
+    fn identified_part_continues_across_metadata() {
+        let log = split_log(Some("text-1"));
+        let mut lines: Vec<_> = log.lines().collect();
+        lines.insert(2, r#"{"type":"heartbeat"}"#);
+        assert_eq!(
+            extract_review_text_from_live_log(&lines.join("\n")).as_deref(),
             Some("VERDICT: PASS")
         );
     }
