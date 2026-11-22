@@ -74,10 +74,13 @@ def active_train(st, head):
     """The part table at this exact head, with skipped and reverted parts removed."""
     from plangraph.keeper.evidence_git import REVERT_GREP, delivery_revert
 
+    base = st.get("base_head")
+    if not base:
+        raise MergeBatchError("batch has no saved base head for train evidence; rebuild the batch")
     skipped = {rec["pr"] for rec in st.get("skipped", [])}
     dropped = set()
     log = git("log", "--first-parent", "-E", "-i", "--grep", REVERT_GREP, "--format=%B%x1d",
-              f"{st['base_head']}..{head}", cwd=st["worktree"])
+              f"{base}..{head}", cwd=st["worktree"])
     for message in log.stdout.split("\x1d"):
         revert = delivery_revert(message.lstrip("\n"))
         if revert is None:
