@@ -6,9 +6,6 @@ mod stage;
 /// Batch writer driver (R-batch-01..04, 06): one writer session, fast checks per head,
 /// an other-family review run on the exact head, fixes in the same session.
 pub(crate) trait Driver {
-    fn cancelled(&self) -> bool {
-        false
-    }
     fn prepare(&mut self) -> Result<String, String>;
     fn refresh_base(&mut self) -> Result<String, String>;
     fn disk_gb(&mut self) -> Result<u64, String>;
@@ -37,7 +34,6 @@ pub(crate) trait Driver {
 /// Review attempts per round before the run ends BLOCKED for want of a verdict.
 const REVIEW_TRIES: usize = 3;
 const REVIEW_DEFERRED: &str = "deferred_to_batch_seat";
-pub(crate) const REVIEW_CLEANUP_UNCONFIRMED: &str = "review_cleanup_unconfirmed";
 /// Fast-check fix turns per head before the run fails.
 const FAST_CHECK_FIXES: usize = 2;
 /// Resumes after turns that left no commit beyond the base before the run fails.
@@ -76,16 +72,9 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
         }
         record["final_head"] = json!(head);
     }
-    let cancelled = driver.cancelled();
-    if cancelled && reason.as_deref() != Some(STOPPED) {
-        exit = 130;
-        reason = Some("cancelled".into());
-    }
     record["exit_code"] = json!(exit);
     record["status"] = json!(if reason.as_deref() == Some(STOPPED) {
         "stopped"
-    } else if cancelled {
-        "cancelled"
     } else if exit == 0 {
         "completed"
     } else {
@@ -136,9 +125,6 @@ fn lifecycle(
     let prompt = format!("{brief}\nNative writer rules: new code is Rust with Rust tests. No new Python, shell or Node source files or additions to tools/new_code_allowlist.txt without an operator D-id; fixes inside existing Python files remain allowed until their port. Do not push. Commit your work and end your turn: the driver runs the fast checks and an other-family review on your final HEAD and resumes this session with any failure or finding.\n");
     let prompt = format!("{prompt}\nUse the inherited shared CARGO_TARGET_DIR for every Cargo command, including reviews and preflight. Never override it with a private /tmp or worktree target, --target-dir, or Cargo configuration.\n");
     for attempt in 1..=3 {
-        if driver.cancelled() {
-            return Err((130, "cancelled".into()));
-        }
         record["manifest"]["try_count"] = json!(attempt);
         driver.save(record).map_err(|e| (6, e))?;
         // A relaunched session inherits the open findings of the last review.
@@ -205,9 +191,6 @@ fn review_round(
     }
     let mut last = String::from("no review run");
     for _ in 0..REVIEW_TRIES {
-        if driver.cancelled() {
-            return Err((130, "cancelled".into()));
-        }
         match driver.review(head, previous) {
             Ok(review) if review["head"] == head && review["status"] == REVIEW_DEFERRED => {
                 return Ok(review)
@@ -225,7 +208,6 @@ fn review_round(
                     .unwrap_or("weak_verdict")
                     .to_owned()
             }
-            Err(error) if error.starts_with(REVIEW_CLEANUP_UNCONFIRMED) => return Err((4, error)),
             Err(error) => last = error,
         }
     }

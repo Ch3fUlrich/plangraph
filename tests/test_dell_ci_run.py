@@ -17,7 +17,7 @@ def test_explicit_base_and_main_first_parent(tmp_path):
         assert "origin/custom" in command
         assert 'base=$(git rev-parse HEAD^)' in command
         assert '"$base" = "$(git rev-parse HEAD)"' in command
-@pytest.mark.parametrize("name", ["pytest", "pytest-postgres", "browser", "rust"])
+@pytest.mark.parametrize("name", ["pytest", "pytest-postgres", "browser"])
 def test_python_jobs_private_venv(tmp_path, name):
     fake = Fake()
     invoke(tmp_path, fake, jobs=name)
@@ -37,18 +37,14 @@ def test_trusted_fetch_precedes_offline_sandbox(tmp_path, name):
     assert '--unshare-net' in inner and '--setenv CARGO_NET_OFFLINE true' in inner
     argv = __import__('shlex').split(outer[outer.index('env -i '):])
     program = argv[argv.index('-c') + 1]
-    fetches_python = name in {"pytest", "rust"}
-    fetches_cargo = name.startswith("rust")
-    assert program.count('subprocess.run(') == fetches_python + fetches_cargo
-    assert ('"download"' in program) == fetches_python
-    assert ('subprocess.run(["cargo", "fetch",' in program) == fetches_cargo
+    assert program.count('subprocess.run(') == 1
     assert all(x not in program for x in ('shell=True', 'exec(', 'eval(', 'setup.py', 'build.rs'))
-    if fetches_python:
+    if name == 'pytest':
         assert '"--only-binary=:all:"' in program
-        assert 'unsupported CI requirement' in program
+        assert '"download"' in program and 'unsupported CI requirement' in program
         assert '--no-index --find-links /scratch/wheels' in inner
-    if fetches_cargo:
-        assert 'unsupported Cargo source' in program
+    else:
+        assert '"fetch"' in program and 'unsupported Cargo source' in program
         assert 'Cargo.toml").read' not in program
         assert 'cwd=stage' in program
     assert 'pip install' not in outer and 'cargo test' not in outer
@@ -244,16 +240,13 @@ def test_default_jobs_success_lists_omissions(tmp_path):
         "pytest-postgres": "tests/contract tests/test_keeper_pg_unit.py",
         "rust": "cargo check --target x86_64-pc-windows-gnu",
         "rust-worker": "PG_TEMPORAL_ADDR=http://127.0.0.1:$port",
-        "rust-spike": "python3 tools/preflight.py --cargo-test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay",
+        "rust-spike": "cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay",
         "browser": "python3 -m pytest -q tests/browser -m browser",
         "ci-gate": "python3 tools/ci_select.py gate --needs",
     }
     assert set(expected) == set(ci.JOBS)
     for name, command in zip(ci.JOBS, commands):
         assert expected[name] in command, name
-        if name in {"rust", "rust-worker", "rust-spike"}:
-            assert not re.search(r"\bcargo\s+test\b", command), name
-            assert "preflight.py --cargo-test" in command, name
     assert all(j["result"] == "success" and j["exit"] == 0 for j in record["jobs"])
 
 

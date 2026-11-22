@@ -28,7 +28,6 @@ fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
         brief: "the item brief".into(),
         push_ref: None,
         reviews_started: 0,
-        turn_timeout: Duration::from_secs(60),
         review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,

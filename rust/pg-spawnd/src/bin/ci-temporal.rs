@@ -168,8 +168,7 @@ mod tests {
                     .split("\n  rust-spike:\n")
                     .next()
                     .unwrap();
-                assert!(worker
-                    .contains("--bin ci-temporal -- python ../../tools/preflight.py --cargo-test"));
+                assert!(worker.contains("--bin ci-temporal -- cargo test"));
             }
             for forbidden in [concat!("17", "233"), concat!("/tmp/", "temporal.log")] {
                 assert!(

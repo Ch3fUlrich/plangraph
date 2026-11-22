@@ -191,15 +191,12 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
     if root in procs and procs[root][4] != ident:
         return {}  # the root pid was reused by a foreign process
     found = {p for p in found if p != root or procs[p][4] == ident}
-    return _descendants(procs, found, {root})
-
-
-def _descendants(procs, found, excluded=()):
-    while True:
-        kids = {p for p, s in procs.items() if s[1] in found and p not in found and p not in excluded}
-        if not kids:
-            return {p: procs[p][4] for p in found if p in procs and procs[p][0] != 'Z'}
-        found.update(kids)
+    grew = True
+    while grew:
+        kids = {p for p, s in procs.items() if s[1] in found and p not in found and p != root}
+        grew = bool(kids)
+        found |= kids
+    return {p: procs[p][4] for p in found if procs[p][0] != 'Z'}
 
 
 def alive(pid, start, *, platform=None, proc_root='/proc'):
@@ -240,31 +237,17 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None, members
     st = _stat(pid, proc_root)
     if st is not None and (st[4] != ident or st[2] != pid):
         raise KillIncomplete([pid])   # reused pid / not the group this run created
-    owned = snapshot(pid, ident, proc_root=proc_root)
-    owned.update(members or {})
-    if not owned:
-        return
-
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        current = {member: row for member, start in owned.items()
-                   if (row := _stat(member, proc_root)) is not None
-                   and row[0] != 'Z' and row[4] == start}
-        group_signalled = False
-        if any(row[2] == pid for row in current.values()):
+    if st is not None:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass  # the run's process group is already gone
+    for member, start in (members or {}).items():
+        if alive(member, start, proc_root=proc_root):
             try:
-                os.killpg(pid, sig)
-                group_signalled = True
+                os.kill(member, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
-        for member, row in current.items():
-            if (not group_signalled or row[2] != pid) and alive(member, row[4], proc_root=proc_root):
-                try:
-                    os.kill(member, sig)
-                except (ProcessLookupError, PermissionError):
-                    pass
-        if sig == signal.SIGTERM:
-            await asyncio.sleep(0.2)
-            owned.update(snapshot(pid, ident, proc_root=proc_root))
     # SIGKILL + wait: the reaped run must be seen dead, not merely signalled -
     # CI caught a grandchild still in state R while collect was returning.
     deadline = time.monotonic() + WAIT_S
@@ -357,6 +340,7 @@ def record_oom_envelope(events, envelope):
     name = event['event']
     if not any(isinstance(old, dict) and old.get('event') == name for old in events):
         events.append({'event': name})
+
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:

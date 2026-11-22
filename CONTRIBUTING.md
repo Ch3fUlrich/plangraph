@@ -182,12 +182,7 @@ Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
 `tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
 `setup/manifest.toml` and `docs/setup.md` select the Rust job because the CLI setup contract test (`rust/plangraph-cli/tests/setup_contract.rs`) reads them.
 
-Run `python3 ../tools/preflight.py --cargo-test -p <crate>` from `rust/` for each
-affected crate. The runner gives each libtest case two minutes and emits its
-`HUNG` ID and Linux stack diagnostics before terminating the process group.
-Pytest applies the same default to setup, execution and teardown. Extend a named
-pytest test with `@pytest.mark.test_deadline(seconds, reason="…")`.
-Documentation
+Run `cargo test -p <crate>` from `rust/` for each affected crate. Documentation
 mapping for a crate covers its own paths, not shared workspace manifests or locks.
 
 ### Rust builds and toolchain bumps

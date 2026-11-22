@@ -45,7 +45,6 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         push_ref: None,
         reviews_started: 0,
         review_override: None,
-        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -158,7 +157,6 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         push_ref: None,
         reviews_started: 0,
         review_override: None,
-        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -494,7 +492,6 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
             .into(),
         push_ref: None,
         reviews_started: 0,
-        turn_timeout: Duration::from_secs(60),
         review_override: None,
         review_cli: vec![
             "python3".into(),
@@ -540,6 +537,11 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         .reviews
         .join(format!("checkout-{}-1", &head[..8]))
         .exists());
+    let unfamiliar_skill =
+        extended_skill.replace("name: review", "name: review\nversion: unfamiliar");
+    fs::write(skill_dir.join("SKILL.md"), unfamiliar_skill).unwrap();
+    let review = host.review(&head, None).unwrap();
+    assert_eq!(review["verdict"], "ACCEPT", "{review}");
     // OpenCode legs: no result frame in the live log, the answer is the stdout tail.
     let record = json!({"run_id":"run-rv2", "status":"completed",
         "stdout_tail":format!("HIGH src/lib.rs:1 - x\nHEAD: {head}\nVERDICT: REQUEST_CHANGES\n")});
@@ -554,35 +556,13 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert_eq!(deferred["status"], "deferred_to_batch_seat");
     assert_eq!(deferred["causes"][0]["reason"], "limited");
     assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
-    fs::remove_file(state.join("no-review-seat")).unwrap();
-
-    let unfamiliar_skill =
-        extended_skill.replace("name: review", "name: review\nversion: unfamiliar");
-    fs::write(skill_dir.join("SKILL.md"), unfamiliar_skill).unwrap();
-    let review = host.review(&head, None).unwrap();
-    assert_eq!(review["verdict"], "ACCEPT", "{review}");
-    host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
-    // A definitive refusal is retryable and leaves no checkout.
-    host.review_cli = vec![
-        "python3".into(),
-        "-c".into(),
-        "raise SystemExit('review refused')".into(),
-    ];
-    let refusal = host.review(&head, None).unwrap_err();
-    assert_eq!(refusal, "review run returned no record: review refused");
-    assert!(!host
-        .reviews
-        .join(format!("checkout-{}-4", &head[..8]))
-        .exists());
-
-    // Successful exit without a receipt leaves admission unknown.
+    // A spawner that prints no run record is an error, never a verdict.
     host.review_cli = vec!["true".into()];
-    let missing = host.review(&head, None).unwrap_err();
-    assert!(missing.starts_with(crate::native_writer::REVIEW_CLEANUP_UNCONFIRMED));
+    host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
     assert!(host
-        .reviews
-        .join(format!("checkout-{}-5", &head[..8]))
-        .exists());
+        .review(&head, None)
+        .unwrap_err()
+        .starts_with("review run returned no record"));
 }
 
 #[cfg(unix)]
@@ -656,7 +636,6 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
         push_ref: None,
         reviews_started: 0,
         review_override: None,
-        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -741,7 +720,6 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
         push_ref: None,
         reviews_started: 0,
         review_override: None,
-        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };

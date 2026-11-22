@@ -4,8 +4,6 @@ use serde_json::json;
 #[derive(Default)]
 struct Fake {
     calls: Vec<Option<String>>,
-    cancel_requested: bool,
-    saved: Value,
     heads: usize,
     stale: bool,
     disk: u64,
@@ -37,9 +35,6 @@ struct Fake {
     pushed: Vec<String>,
 }
 impl Driver for Fake {
-    fn cancelled(&self) -> bool {
-        self.cancel_requested
-    }
     fn prepare(&mut self) -> Result<String, String> {
         if self.stale {
             Err("stale base".into())
@@ -149,8 +144,7 @@ impl Driver for Fake {
         self.pushed.push(head.into());
         Ok(Some("refs/heads/lane/fixture".into()))
     }
-    fn save(&mut self, record: &Value) -> Result<(), String> {
-        self.saved = record.clone();
+    fn save(&mut self, _: &serde_json::Value) -> Result<(), String> {
         Ok(())
     }
     fn skill(&mut self, _: &str) -> Result<String, String> {
@@ -165,21 +159,6 @@ fn fake() -> Fake {
         ..Fake::default()
     }
 }
-#[test]
-fn cancelled_writer_publishes_exit_130_without_starting_a_turn() {
-    let mut driver = Fake {
-        cancel_requested: true,
-        disk: 10,
-        ..Fake::default()
-    };
-    let record = run(&mut driver, json!({}), "brief");
-    assert_eq!(record["status"], "cancelled");
-    assert_eq!(record["exit_code"], 130);
-    assert_eq!(record["reason"], "cancelled");
-    assert_eq!(driver.saved, record);
-    assert!(driver.calls.is_empty());
-}
-
 #[test]
 fn native_missing_final_review_resumes_same_session_and_records_host_head() {
     // REQUEST_CHANGES resumes the same session; the second review on the head accepts.

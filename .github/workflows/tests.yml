@@ -470,23 +470,15 @@ jobs:
         run: cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-targets
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - name: Install pytest for the test deadline fixture
-        timeout-minutes: 5
-        uses: ./.github/actions/bounded-step
-        with:
-          seconds: 285
-          command: python -m pip install "pytest<9.2"
-      - name: Install debugger for hung Rust tests
-        run: command -v gdb || sudo apt-get -o DPkg::Lock::Timeout=600 install -y gdb
       - name: Build pg-jail helper
         run: cargo build -p pg-jail
       - name: cargo test
         run: |
-          PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" python ../tools/preflight.py --cargo-test
+          PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test
       - uses: actions/setup-python@v5
         with: {python-version: "3.14"}
       - name: Native writer lifecycle (Python 3.14)
-        run: python ../tools/preflight.py --cargo-test -p pg-spawnd --test native_writer
+        run: cargo test -p pg-spawnd --test native_writer
 
   rust-windows:
     name: 'Rust spawner and worker core tests on Windows'
@@ -510,9 +502,9 @@ jobs:
           # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
           key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: cargo test -p pg-spawnd
-        run: python ../tools/preflight.py --cargo-test -p pg-spawnd
+        run: cargo test -p pg-spawnd
       - name: cargo test -p pg-worker-core
-        run: python ../tools/preflight.py --cargo-test -p pg-worker-core
+        run: cargo test -p pg-worker-core
 
   rust-worker:
     name: 'Rust worker crate: fmt, clippy, tests'
@@ -528,8 +520,6 @@ jobs:
         working-directory: rust/worker
     steps:
       - uses: actions/checkout@v4
-      - name: Install debugger for hung Rust tests
-        run: command -v gdb || sudo apt-get -o DPkg::Lock::Timeout=600 install -y gdb
       - name: Install protobuf compiler
         run: (command -v protoc >/dev/null && test -f /usr/include/google/protobuf/field_mask.proto) || (sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y protobuf-compiler libprotobuf-dev)
       - uses: ./.github/actions/setup-rust
@@ -585,7 +575,7 @@ jobs:
         run: |
           # Inside the cached target dir: the guard's nested cargo checks stay warm between runs.
           export PG_ADMISSION_GUARD_TARGET_DIR="$CARGO_TARGET_DIR/admission-guard"
-          cargo run --manifest-path ../Cargo.toml -p pg-spawnd --bin ci-temporal -- python ../../tools/preflight.py --cargo-test
+          cargo run --manifest-path ../Cargo.toml -p pg-spawnd --bin ci-temporal -- cargo test
 
   rust-spike:
     name: 'Rust replay spike tests'
@@ -598,8 +588,6 @@ jobs:
       CI_CARGO_TARGET_CAP_GB: ${{ vars.CI_CARGO_TARGET_CAP_GB || '40' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install debugger for hung Rust tests
-        run: command -v gdb || sudo apt-get -o DPkg::Lock::Timeout=600 install -y gdb
       - name: Install protobuf compiler
         run: (command -v protoc >/dev/null && test -f /usr/include/google/protobuf/field_mask.proto) || (sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y protobuf-compiler libprotobuf-dev)
       - uses: ./.github/actions/setup-rust
@@ -640,7 +628,7 @@ jobs:
             rust/spikes/temporal-spike/target
           key: temporal-spike-${{ hashFiles('rust/spikes/temporal-spike/Cargo.lock') }}
       - name: cargo test replay
-        run: python tools/preflight.py --cargo-test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay
+        run: cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay
 
   ci-gate:
     name: ci-gate
