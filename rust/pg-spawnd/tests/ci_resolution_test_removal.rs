@@ -149,3 +149,37 @@ fn non_merge_test_removal_keeps_the_same_trailer_requirement() {
     let out = fx.gate(&authorized);
     assert!(out.status.success(), "{out:?}");
 }
+
+#[test]
+fn side_branch_sync_checks_deletions_of_tests_from_the_landing_base() {
+    for delete_base_test in [false, true] {
+        let fx = Fixture::new();
+        fx.git(&["checkout", "-qb", "part"]);
+        fx.write(
+            TEST_PATH,
+            &format!("{BASE_TESTS}\ndef test_part():\n    assert True\n"),
+        );
+        fx.commit(&format!("part test\n\n{WRITER}"));
+        fx.git(&["checkout", "-q", "main"]);
+        fx.write("conflict.txt", "main\n");
+        let base = fx.commit(&format!("main advances\n\n{WRITER}"));
+        fx.git(&["checkout", "-q", "part"]);
+        fx.git(&["merge", "--no-commit", "--no-ff", "main"]);
+        if delete_base_test {
+            std::fs::remove_file(fx.dir.path().join(TEST_PATH)).unwrap();
+        } else {
+            fx.write(TEST_PATH, BASE_TESTS);
+        }
+        let sync = fx.commit("sync part with main");
+        fx.git(&["checkout", "-q", "main"]);
+        fx.git(&["merge", "--no-ff", "-m", "integrate part", "part"]);
+        let head = fx.git(&["rev-parse", "HEAD"]);
+        let fx = Fixture { base, ..fx };
+        if delete_base_test {
+            fx.assert_removal_refused(&sync, &head);
+        } else {
+            let out = fx.gate(&head);
+            assert!(out.status.success(), "{out:?}");
+        }
+    }
+}

@@ -436,17 +436,18 @@ def _commit_removes_test(
 def _merge_removes_test(
     sha: str, paths: list[str], parents: list[str],
     replay: tuple[str, list[str]] | None, cwd: str | Path | None,
+    *, landing_base: str | None = None,
 ) -> bool:
     paths = [path for path in paths if TEST_PATH_RE.search(path)]
     if replay is not None:
         tree, conflicts = replay
         # The replay tree already incorporates any deletion inherited cleanly from a part.
-        if _commit_removes_test(sha, tree, sha, cwd=cwd, paths=paths, parent=tree):
+        if _commit_removes_test(sha, landing_base or tree, sha, cwd=cwd, paths=paths, parent=tree):
             return True
         # A conflicted replay may leave one side's tests out of its provisional tree.
         paths = [path for path in paths if path in conflicts]
     return bool(paths) and any(
-        _commit_removes_test(sha, parent, sha, cwd=cwd, paths=paths, parent=parent)
+        _commit_removes_test(sha, landing_base or parent, sha, cwd=cwd, paths=paths, parent=parent)
         for parent in parents
     )
 
@@ -596,7 +597,10 @@ def check(
         ):
             violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
 
-    for sha, message in _iter_merges(base, head, cwd=cwd):
+    merges = _iter_merges(base, head, cwd=cwd)
+    landing_merges = set(_git_text(['rev-list', '--first-parent', '--merges', f'{base}..{head}'], cwd).split()) if merges else set()
+    base_lineage = set(_git_text(['rev-list', '--first-parent', base], cwd).split()) if merges else set()
+    for sha, message in merges:
         if sha.lower() in exempt_set:
             continue
         paths, parents, replay = _merge_edit_evidence(sha, cwd)
@@ -608,8 +612,11 @@ def check(
             and not _has_trailer(_trailer_block_lines(message), GATE_EDIT_RE)
         ):
             violations.append(f'{sha}: {GATE_EDIT_VIOLATION}')
+        # An inherited lane sync with published main is prior branch history.
+        # Protect tests from the landing base there, and both parents at each new integration.
+        sync = sha not in landing_merges and len(parents) == 2 and parents[1] in base_lineage
         if not _has_test_removal_trailer(message.splitlines()) and _merge_removes_test(
-            sha, paths, parents, replay, cwd
+            sha, paths, parents, replay, cwd, landing_base=base if sync else None
         ):
             violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
 
