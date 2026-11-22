@@ -474,7 +474,7 @@ run.mkdir(parents=True, exist_ok=True)
 text = 'FILES READ: src/lib.rs:1\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type': 'result', 'is_error': False, 'result': text}) + '\n')
 print('banner line')
-print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'agy-gemini-4-hydrogen-high', 'harness': 'agy', 'tool_mode': 'tools'}}, indent=2))
+print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'agy-gemini-4-hydrogen-high', 'harness': 'agy', 'tool_mode': 'inline-only' if (state / 'inline-seat').exists() else 'tools'}}, indent=2))
 "#,
     )
     .unwrap();
@@ -550,6 +550,12 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         review_verdict(&text, &head, &[])["verdict"],
         "REQUEST_CHANGES"
     );
+    fs::write(state.join("inline-seat"), "").unwrap();
+    let inline = host.review(&head, None).unwrap();
+    assert_eq!(inline["verdict"], "no_verdict", "{inline}");
+    assert_eq!(inline["reason"], "repository_review_tools_unavailable");
+    assert_eq!(inline["harness"], "agy");
+    fs::remove_file(state.join("inline-seat")).unwrap();
     fs::write(state.join("no-review-seat"), "").unwrap();
     let previous = json!({"head":head, "text":"VERDICT: REQUEST_CHANGES"});
     let deferred = host.review(&head, Some(&previous)).unwrap();

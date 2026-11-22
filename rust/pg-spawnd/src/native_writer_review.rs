@@ -317,7 +317,16 @@ impl Host {
         }
         let text = review_run_text(&self.state, &record)?;
         let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
-        let mut verdict = review_verdict(&text, head, &paths);
+        let mut verdict = if matches!(
+            chosen["tool_mode"].as_str(),
+            Some("prompt-only" | "inline-only")
+        ) {
+            json!({"verdict":"no_verdict","status":"no_verdict",
+                   "reason":"repository_review_tools_unavailable","head":head,"text":text})
+        } else {
+            review_verdict(&text, head, &paths)
+        };
+        verdict["files_read"] = json!(pg_worker_core::review_split::files_read_text(&text));
         let id = record["run_id"].as_str().unwrap_or("run-unknown");
         let path = self.reviews.join(format!("{tag}-{id}.txt"));
         atomic_write_private(&path, text.as_bytes()).map_err(|e| e.to_string())?;

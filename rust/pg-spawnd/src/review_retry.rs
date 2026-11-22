@@ -54,6 +54,7 @@ pub(crate) fn hook_with_group(
         let may_retry = (quota.is_some() || weak)
             && !crate::cli_review::binding_completed(record)
             && status != Status::Cancelled
+            && record.status().is_some_and(|status| !status.is_terminal())
             && !record.path().with_file_name("cancelled").exists()
             && record.get("survivors").is_none()
             && args.get("no_fallthrough") != Some(&json!(true))
