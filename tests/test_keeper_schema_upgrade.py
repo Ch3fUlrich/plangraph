@@ -111,6 +111,28 @@ def test_schema_version_is_sixteen():
     assert schema.SCHEMA_VERSION == 25
 
 
+def test_v24_sqlite_upgrade_installs_claim_definition_index(tmp_path):
+    path = tmp_path / "v24.db"
+    kdb.open_db(path, create=True, backend="sqlite").close()
+    raw = sqlite3.connect(path)
+    try:
+        # The claim-definition index is the v25 addition to the v24 schema.
+        raw.execute("DROP INDEX idx_events_definition_seq")
+        assert "idx_events_definition_seq" not in {
+            row[1] for row in raw.execute("PRAGMA index_list(events)")}
+    finally:
+        raw.close()
+
+    conn = kdb.open_db(path, backend="sqlite")
+    try:
+        assert "idx_events_definition_seq" in {
+            row[1] for row in conn.execute("PRAGMA index_list(events)")}
+        columns = conn.execute("PRAGMA index_info(idx_events_definition_seq)")
+        assert [row[2] for row in columns] == ["seq"]
+    finally:
+        conn.close()
+
+
 def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path):
     """A schema-v15 database (no message_nonces/message_envelopes) upgrades to v16:
     rows and hash chain kept, new tables created with append-only triggers."""
