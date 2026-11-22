@@ -84,7 +84,8 @@ def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, case):
     env.add_pr(100, branch, head=previous, cross=case == "fork")
     if case == "train-head":
         body = ("| Part | Head | Writer (harness) | Review | Keys |\n"
-                f"| --- | --- | --- | --- | --- |\n| part | {part[:8]} | writer | pass | item |")
+                f"| --- | --- | --- | --- | --- |\n"
+                f"| part | {part[:8]} ({other[:8]} plus a fix) | writer | pass | item |")
     else:
         name = 3 if case == "train-wrong-pr" else 2
         body = ("| Part | PR | Part head | Plan-Item keys | Writers | Part review (family) | Ancestor of train head |\n"
@@ -115,6 +116,43 @@ def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, case):
     else:
         assert result.returncode == 0, output
         assert ("open PR merge check skipped (network/gh unavailable)" in result.stderr) == (case == "no-gh")
+
+
+@pytest.mark.parametrize("case", ["exact", "unrecorded", "moved", "pr-plan"])
+def test_batch_push_open_pr_gate_uses_recorded_part_heads(env, case):
+    name = "folded"
+    writer = "\n\nWriter: codex/test"
+    env.branch_pr(1, {"a.txt": "a\n"}, trailer=writer)
+    part = env.branch_pr(2, {"b.txt": "b\n"}, trailer=writer)
+    unrecorded = env.branch_pr(3, {"c.txt": "c\n"}, trailer=writer)
+    build = env.run("build", "--name", name, "--prs", "1,2")
+    assert build.returncode == 0, build.stdout + build.stderr
+    worktree = wt_of(env, name)
+    if case == "unrecorded":
+        env.git("merge", "-q", "--no-ff", "-m", "merge unrecorded PR", unrecorded, cwd=worktree)
+    if case == "moved":
+        env.push_commit(2, {"more.txt": "more\n"})
+    if case == "pr-plan":
+        assert env.run("push", "--name", name).stdout == "100\n"
+        env.state_file(name).unlink()
+        env.git("commit", "-q", "--allow-empty", "-m", f"follow-up{writer}", cwd=worktree)
+    install_pre_push(env)
+    if case == "pr-plan":
+        result = subprocess.run(["git", "push", "origin", f"batch/{name}"], cwd=worktree, env=env.env,
+                                capture_output=True, text=True)
+    else:
+        result = env.run("push", "--name", name)
+    output = result.stdout + result.stderr
+    if case in ("unrecorded", "moved"):
+        assert result.returncode != 0
+        assert f"open_pr_merged {unrecorded if case == 'unrecorded' else part}" in output
+        if case == "unrecorded":
+            assert f"open_pr_merged {part}" not in output
+    else:
+        assert result.returncode == 0, output
+        assert "network/gh unavailable" not in output
+        assert env.git("rev-parse", f"refs/heads/batch/{name}", cwd=env.origin) == env.git(
+            "rev-parse", "HEAD", cwd=worktree)
 
 
 def three(env):

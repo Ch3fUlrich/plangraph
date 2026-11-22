@@ -1,0 +1,1 @@
+- Batch pushes can keep their recorded part PRs open. The hook still flags merged foreign heads, including a part PR whose current head has moved beyond the recorded head.
