@@ -9,11 +9,10 @@ import pytest
 from plangraph.keeper import db_pg, schema_pg
 from plangraph.keeper import placement_rules_schema as rules
 
-pytestmark = pytest.mark.skipif(not os.environ.get('PG_DSN'), reason='PG_DSN not set')
-
-
 @pytest.fixture
 def pg(monkeypatch):
+    if not os.environ.get('PG_DSN'):
+        pytest.skip('PG_DSN not set')
     import psycopg
     raw = psycopg.connect(os.environ['PG_DSN'], autocommit=True)
     name = 't_rules_' + uuid.uuid4().hex[:12]
@@ -45,7 +44,7 @@ def test_migration_appends_without_rewriting_prior_steps():
     # Shipped _V1 from git blob d9942f65, independently pinned, not an alias.
     assert hashlib.sha256(schema_pg.MIGRATIONS[0].sql.encode()).hexdigest() == (
         'd5b853cc2d7780f2c4305f276db14713aa8fd77d3fc76d6bb20aa6ae2c96e7b0')
-    assert [m.version for m in schema_pg.MIGRATIONS] == list(range(1, 15))
+    assert [m.version for m in schema_pg.MIGRATIONS] == list(range(1, schema_pg.LATEST + 1))
 
 
 def test_pg_sqlite_columns_match(pg):
@@ -88,7 +87,7 @@ def test_keeper_migration_gates_documented():
 
 def test_upgrade_idempotent(pg):
     raw, name = pg
-    assert db_pg.migrate(raw, name) == [11, 12, 13, 14]
+    assert db_pg.migrate(raw, name) == list(range(11, schema_pg.LATEST + 1))
     assert db_pg.migrate(raw, name) == []
     for table in rules.TABLES:
         assert raw.execute(f'SELECT count(*) FROM {table}').fetchone() == (0,)

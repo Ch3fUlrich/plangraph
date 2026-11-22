@@ -30,11 +30,11 @@ class CardUpdatesMixin:
         from .schema import ATTEMPT_SPAWN_COLUMNS
 
         self._require_role(principal, "spawner", "system")
-        extras = [name for name, _ in ATTEMPT_SPAWN_COLUMNS if name != "route"]
+        extras = [name for name, _ in ATTEMPT_SPAWN_COLUMNS if name not in ("route", "item_key")]
         text = {name: _text(name, attempt.get(name), cap=512,
                             required=name in ("attempt_id", "role", "host", "plan_hash"))
                 for name in (*extras, "harness")}
-        if text["role"] not in ("implement", "review", "orchestrate", "research", "judge"):
+        if text["role"] not in ("implement", "fix", "review", "orchestrate", "research", "judge"):
             raise Refused("validation", "invalid spawn role")
         if not re.fullmatch(r"[a-f0-9]{64}", text["plan_hash"]):
             raise Refused("validation", "plan_hash must be a SHA-256 digest")
@@ -53,19 +53,15 @@ class CardUpdatesMixin:
                 "SELECT 1 FROM attempts WHERE attempt_id=?", (text["attempt_id"],)).fetchone()
             if duplicate:
                 return {"attempt_id": text["attempt_id"], "duplicate": True}
-            item = text["card_key"]
-            if item:
-                item = self.resolve_key(item)
-                project = item.partition(":")[0]
-                if principal.projects:
-                    self._require_project(principal, project)
-                if self.conn.execute("SELECT 1 FROM cards WHERE key=?", (item,)).fetchone() is None:
-                    item = None
-            text["card_key"] = item
-            columns = (*extras, "route", "harness", "model", "class", "run_id",
+            item = self.resolve_key(text["card_key"]) if text["card_key"] else None
+            if item and principal.projects:
+                self._require_project(principal, item.partition(":")[0])
+            card = item and self.conn.execute("SELECT 1 FROM cards WHERE key=?", (item,)).fetchone()
+            text["card_key"] = item if card else None
+            columns = (*extras, "item_key", "route", "harness", "model", "class", "run_id",
                        "started_at", "ended_at", "exit_class", "tokens_in", "tokens_out", "cost")
             route = _dump(_validate_spawn_route(attempt.get("route")))
-            values = (*(text[name] for name in extras), route,
+            values = (*(text[name] for name in extras), item, route,
                       text["harness"], text["served_model"], text["task_class"], text["attempt_id"],
                       self._iso(started), self._iso(ended), exit_class, in_tokens, out_tokens, cost)
             marks = ",".join("?" for _ in values)
@@ -86,7 +82,7 @@ class CardUpdatesMixin:
             if window <= 0:
                 raise Refused("validation", "since must be a positive duration")
             rows = self.conn.execute(
-                "SELECT attempt_id,card_key,role,harness,leg,requested_model,served_model,effort,"
+                "SELECT attempt_id,card_key,COALESCE(item_key,card_key) AS item,role,harness,leg,requested_model,served_model,effort,"
                 " level,level_reason,task_class,risk_band,bucket,host,plan_hash,route,"
                 " started_at,ended_at,exit_class,tokens_in,tokens_out,cost"
                 " FROM attempts WHERE attempt_id IS NOT NULL AND started_at>=?"
@@ -95,7 +91,7 @@ class CardUpdatesMixin:
             result = []
             for raw in rows:
                 row = dict(raw)
-                key = row["card_key"]
+                key = row["item"]
                 if projects and (key is None or key.partition(":")[0] not in projects):
                     continue
                 row.update(item=key or "adhoc", route=json.loads(row["route"]))

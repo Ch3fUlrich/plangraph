@@ -606,3 +606,23 @@ def test_watchdog_delivers_spawn_through_keeper_http(live, capsys, monkeypatch, 
     assert events == ["project-spawn-attempt", "project-spawn-attempt", "validate-attempt-route"]
     assert run(tokens["reader"], "attempts", "--since", "1d", "--json") == 0
     assert out_json(capsys)[0]["attempt_id"] == run_id
+
+
+@pytest.mark.parametrize(("ident", "role", "item", "card_key"), [
+    ("run-fix", "fix", None, None),
+    ("run-cardless", "implement", "demo:A", None),
+    ("run-unknown-item", "review", "demo:UNREGISTERED", None),
+])
+def test_attempts_preserve_fixer_and_cardless_item_identity(
+        live, capsys, monkeypatch, ident, role, item, card_key):
+    _, w, tokens, _, _ = live
+    monkeypatch.setattr("plangraph.keeper.store_card_updates._validate_spawn_route", lambda value: value)
+    row = dict(attempt_id=ident, role=role, card_key=item, host="fixture",
+               plan_hash="0" * 64, route={}, started=w.clock()-1, ended=w.clock(), exit_class="ok")
+    assert w.store.record_spawn_attempt(w.p("system"), row)["duplicate"] is False
+    assert run(tokens["reader"], "attempts", "--since", "1d", "--json") == 0
+    (stored,) = out_json(capsys)
+    assert (stored["role"], stored["item"], stored["card_key"]) == (role, item or "adhoc", card_key)
+    if item:
+        assert w.store.spawn_attempts(w.p("l1main"), "1d") == [stored]
+        assert w.store.spawn_attempts(w.p("l1other"), "1d") == []

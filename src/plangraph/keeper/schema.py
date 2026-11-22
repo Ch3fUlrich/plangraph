@@ -79,7 +79,7 @@ def _in(values):
 #: ``decisions`` and ``answers`` are append-only.  ``IF NOT EXISTS`` so
 #: ``db._upgrade`` can install it at open on a v9 database.
 ATTEMPT_SPAWN_COLUMNS = (
-    ("attempt_id", "TEXT"), ("card_key", "TEXT REFERENCES cards(key)"),
+    ("attempt_id", "TEXT"), ("card_key", "TEXT REFERENCES cards(key)"), ("item_key", "TEXT"),
     ("role", "TEXT"), ("leg", "TEXT"), ("requested_model", "TEXT"),
     ("served_model", "TEXT"), ("effort", "TEXT"), ("level", "TEXT"),
     ("level_reason", "TEXT"), ("task_class", "TEXT"), ("risk_band", "TEXT"),

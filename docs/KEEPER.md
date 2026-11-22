@@ -751,7 +751,8 @@ planner may supply an assigned level, and the keeper logs any attempt to
 lower it below the computed level.
 
 `pg attempts --since 1d --json` reads terminal spawn rows from keeper storage.
-Rows from spawns without a keeper card have a null `card_key` and an `adhoc`
-display item. The migration preserves the foreign keys and legacy attempt rows.
+A spawn without a keeper card has a null `card_key`. The display item preserves
+the supplied item key and uses `adhoc` when the spawn has no item key. The migration
+preserves foreign keys and legacy attempt rows.
 Spawn delivery retries through the watchdog, and the keeper deduplicates by
 spawn ID. An unwitnessed serving model and unknown usage remain explicit.

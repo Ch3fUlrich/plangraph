@@ -55,7 +55,8 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
     .unwrap();
     let record = json!({"run_id":"run-fixture", "host":"fixture", "started":0,
         "ended":120, "status":"failed", "exit_code":6, "resumes":1,
-        "item_key":"plangraph:FIXTURE"});
+        "item_key":"plangraph:FIXTURE", "run_kind":"native-codex", "role":"implement",
+        "requested_model": WRITER_MODEL, "plan":{"effort":{"level":"L2","reason":"size_bucket"}}});
     let mut running = record.clone();
     running.as_object_mut().unwrap().remove("ended");
     host.save(&running).unwrap();
@@ -81,6 +82,10 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
     let saved: Value =
         serde_json::from_str(&fs::read_to_string(&host.record_path).unwrap()).unwrap();
     assert_eq!(saved["ledger_error"], "terminal writer ledger row changed");
+    assert_eq!(saved["attempt_capture"], 1);
+    let attempt = crate::attempt_outcome::project(saved).unwrap();
+    assert_eq!(attempt["requested_model"], WRITER_MODEL);
+    assert_eq!(attempt["level"], "L2");
     assert_eq!(
         fs::read_to_string(dir.path().join("ledger.jsonl")).unwrap(),
         text

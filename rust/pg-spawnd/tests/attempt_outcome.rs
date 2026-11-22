@@ -69,4 +69,15 @@ fn terminal_spawn_projects_final_leg_once() {
         invalid["top5"][0]["n"] = json!(-1);
         assert!(!call("validate-attempt-route", &invalid).status.success());
     }
+
+    let leg = json!({"id":"manual","model":"requested","effort":"high","harness":"codex"});
+    let pinned = json!({
+        "run_id":"run-pin","host":"fixture","role":"implement","started":50.0,"ended":60.0,
+        "status":"completed","exit_code":0,"plan":{"legs":[leg],"p_source":"override"},
+        "attempts":[{"leg":leg,"status":"completed","served_model":"witnessed"}]
+    });
+    let output = call("project-spawn-attempt", &pinned);
+    assert!(output.status.success());
+    let row: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(row["route"]["pin"], true);
 }

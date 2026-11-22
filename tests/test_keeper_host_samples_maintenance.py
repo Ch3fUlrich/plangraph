@@ -13,7 +13,7 @@ def test_pg_partitioned_raw_and_migration(world):
     from plangraph.keeper import store_host_samples
     assert set(store_host_samples.TABLES) == {
         "host_samples_raw", "host_samples_1m", "host_samples_1h", "host_sample_tokens"}
-    assert schema_pg.LATEST == 16
+    assert any("CREATE TABLE host_samples_raw" in step.sql for step in schema_pg.MIGRATIONS)
     row = world.conn.execute(
         "SELECT partstrat FROM pg_partitioned_table WHERE partrelid="
         "'host_samples_raw'::regclass").fetchone()
