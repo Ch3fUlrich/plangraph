@@ -112,13 +112,14 @@ fn rust_hang_reports_when_the_debugger_emits_no_frames() {
 #[test]
 fn spawnd_cli_fixture_build_runs_before_case_deadline() {
     let tmp = tempfile::tempdir().unwrap();
-    let suite = tmp.path().join("agy_review_spawn-fixture");
+    let suite = tmp.path().join("review_diff_split-fixture");
     fs::write(
         &suite,
         r#"#!/bin/sh
 case " $* " in
-  *' --list '*) printf '%s\n' 'review_case: test';;
-  *' prepare_spawnd_cli '*) sleep 1.5; printf 'pg-test-fixture: "%s"\n' "$0";;
+  *' review_case --list '*) printf '%s\n' 'review_case: test';;
+  *' --list '*) printf '%s\n' 'binary::prepare_spawnd_cli: test' 'review_case: test';;
+  *' binary::prepare_spawnd_cli '*) sleep 1.5; printf 'pg-test-fixture: "%s"\n' "$0";;
   *) test "$PG_TEST_PREBUILT_SPAWND" = "$0";;
 esac
 "#,
@@ -135,6 +136,35 @@ esac
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn build_deadline_is_scoped_to_the_named_case() {
+    let tmp = tempfile::tempdir().unwrap();
+    let suite = tmp.path().join("admission_policy_guard-fixture");
+    fs::write(
+        &suite,
+        r#"#!/bin/sh
+case " $* " in
+  *' --list '*) printf '%s\n' "$2: test";;
+  *) sleep 1.5;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&suite, fs::Permissions::from_mode(0o700)).unwrap();
+    for (case, passes) in [
+        ("unrestricted_policy_is_test_only", true),
+        ("ordinary_case", false),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_pg-test-deadline"))
+            .arg(&suite)
+            .args(["--exact", case])
+            .env("PLANGRAPH_TEST_DEADLINE", "1")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), passes, "{output:?}");
+    }
 }
 
 fn run_rust_hang(debugger_dir: Option<&Path>) -> String {

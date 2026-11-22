@@ -13,7 +13,8 @@ use std::{
 };
 
 const DEFAULT_SECONDS: u64 = 120;
-const CLI_FIXTURE_TEST: &str = "prepare_spawnd_cli";
+const BUILD_SECONDS: u64 = 600;
+const CLI_FIXTURE_TEST: &str = "::prepare_spawnd_cli";
 const CLI_FIXTURE_ENV: &str = "PG_TEST_PREBUILT_SPAWND";
 const CLI_FIXTURE_MARKER: &str = "pg-test-fixture: ";
 
@@ -114,21 +115,39 @@ fn cases(binary: &OsStr, args: &[OsString], opts: &Opts) -> io::Result<Vec<Strin
         .collect())
 }
 
-fn prepare_spawnd_cli(binary: &OsStr, opts: &Opts) -> io::Result<String> {
+fn build_deadline(suite: &str, case: &str) -> Option<Duration> {
+    let seconds = match (suite, case) {
+        // Six production feature checks and one negative downstream compile.
+        ("admission_policy_guard", "unrestricted_policy_is_test_only") => 2 * BUILD_SECONDS,
+        // The probe script runs two Cargo tests, each bounded to 590 seconds.
+        ("admission_policy_guard_probes", "admission_guard_rejects_bypass_probes") => {
+            2 * BUILD_SECONDS
+        }
+        ("probe_cli", "cli_builds_stay_with_their_checkout")
+        | ("gh_pages", "merged_prs_come_from_concatenated_gh_pages") => BUILD_SECONDS,
+        _ => return None,
+    };
+    Some(Duration::from_secs(seconds))
+}
+
+fn prepare_spawnd_cli(binary: &OsStr, suite: &str, case: &str, opts: &Opts) -> io::Result<String> {
     // The checkout-isolated Cargo build has its own bound, outside the case budget.
     let opts = Opts {
-        timeout: Some(Duration::from_secs(600)),
+        timeout: Some(Duration::from_secs(BUILD_SECONDS)),
         ..opts.clone()
     };
     let mut prepare = Command::new(binary);
-    prepare.args(["--exact", CLI_FIXTURE_TEST, "--nocapture"]);
-    eprintln!("agy_review_spawn: preparing checkout CLI fixture");
+    prepare
+        .args(["--exact", case, "--nocapture"])
+        .env_remove(CLI_FIXTURE_ENV);
+    debug_child(&mut prepare);
+    eprintln!("{suite}: preparing checkout CLI fixture");
     let result = supervise_with_diagnostics(
         prepare,
         &opts,
         &|| false,
         |pid| {
-            eprintln!("HUNG agy_review_spawn::{CLI_FIXTURE_TEST}");
+            eprintln!("HUNG {suite}::{case}");
             stack(pid);
         },
         children::reap,
@@ -181,14 +200,23 @@ fn run() -> io::Result<bool> {
         .unwrap_or("libtest");
     let suite = stem.rsplit_once('-').map_or(stem, |(name, _)| name);
     children::adopt()?;
-    let spawnd = if suite == "agy_review_spawn" && !listed.is_empty() {
-        Some(prepare_spawnd_cli(&binary, &opts)?)
-    } else {
-        None
-    };
+    let mut fixture = listed
+        .iter()
+        .find(|case| case.ends_with(CLI_FIXTURE_TEST))
+        .cloned();
+    if fixture.is_none() && !listed.is_empty() && !args.is_empty() {
+        // A case filter can hide the suite's setup from the selected listing.
+        fixture = cases(&binary, &[], &opts)?
+            .into_iter()
+            .find(|case| case.ends_with(CLI_FIXTURE_TEST));
+    }
+    let spawnd = fixture
+        .as_deref()
+        .map(|case| prepare_spawnd_cli(&binary, suite, case, &opts))
+        .transpose()?;
     let mut failures = 0;
     for (index, case) in listed.iter().enumerate() {
-        if spawnd.is_some() && case == CLI_FIXTURE_TEST {
+        if fixture.as_ref() == Some(case) {
             continue; // It passed during suite preparation.
         }
         let mut cmd = Command::new(&binary);
@@ -213,9 +241,13 @@ fn run() -> io::Result<bool> {
         }
         cmd.arg(case);
         debug_child(&mut cmd);
+        let case_opts = Opts {
+            timeout: build_deadline(suite, case).or(opts.timeout),
+            ..opts.clone()
+        };
         let result = supervise_with_diagnostics(
             cmd,
-            &opts,
+            &case_opts,
             &|| false,
             |pid| {
                 eprintln!("HUNG {suite}::{case}");
