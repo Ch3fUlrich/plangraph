@@ -231,7 +231,7 @@ class SpawnerRunner:
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
-        from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
+        from .prompt_input import TOOLLESS_MODES, compose  # the role header and skill are fixed repository text, never redacted
         prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
                          getattr(leg, 'tool_mode', None))
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
@@ -449,8 +449,13 @@ class SpawnerRunner:
             from .probe_cleanup import register
             self.jobs[job_id] = job; register(job_id)
             job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
-            from .run_watchdog import thresholds, edit_signature
+            from .run_watchdog import thresholds, edit_signature, inline_review_limits
+            job._inline_review = role == 'review' and (
+                getattr(leg, 'tool_mode', None) in TOOLLESS_MODES
+                or tools_event and tools_event['event'] == 'opencode_tools_denied')
             job._watchdog_limits = watchdog or thresholds(role=role)
+            if job._inline_review:
+                job._watchdog_limits = inline_review_limits(job._watchdog_limits, job.start_time)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir) if role in ('implement', 'fix') else None
             if tools_event:
@@ -689,7 +694,9 @@ class SpawnerRunner:
             job.stderr = redact_output(env_redact.redact_env_values(stderr_text, env), allow_shas=allow_shas)
             job.exit_code = exit_code
             job.end_time = time.time()
-            if job.status not in ('stalled', 'timeout', 'cancelled'):
+            if any(event.get('event') == 'inline_review_no_verdict' for event in job.events):
+                job.status, job.exit_code = 'failed', 6
+            elif job.status not in ('stalled', 'timeout', 'cancelled'):
                 # Preserve the existing denied-review terminal verdict contract.
                 tails = [text.rstrip('\r\n').splitlines()
                          for text in (stdout_text, final_answer(stdout_text, allow_unfinished=True) or '')]

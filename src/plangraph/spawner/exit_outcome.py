@@ -31,6 +31,9 @@ def is_opencode(job):
 
 
 def failure_reason(job, stop=None, *, harness=None):
+    for event in getattr(job, 'events', ()):
+        if event.get('event') == 'inline_review_no_verdict':
+            return 'no_verdict: ' + event['reason']
     opencode = harness == 'opencode' or is_opencode(job)
     text = without_progress(job.stderr) if opencode else job.stderr
     reason = first_reason(text)

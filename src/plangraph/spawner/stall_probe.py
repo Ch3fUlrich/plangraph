@@ -105,10 +105,11 @@ class ToolLoop:
     MISSING = object()
     REPEATS = 6
 
-    def __init__(self):
+    def __init__(self, max_errors=None):
         from collections import deque
         self.seen, self.order, self.pending = set(), deque(), {}
         self.last, self.count = None, 0
+        self.max_errors, self.errors, self.stop_reason = max_errors, 0, None
 
     @staticmethod
     def _polling(name, arguments):
@@ -151,6 +152,12 @@ class ToolLoop:
             self.order.append(identity)
             if len(self.order) > 1024:
                 self.seen.remove(self.order.popleft())
+        if self.max_errors is not None:
+            _, exit_code, is_error = result
+            self.errors += is_error is True or (type(exit_code) is int and exit_code != 0)
+            if self.errors >= self.max_errors:
+                self.stop_reason = 'inline_tool_errors'
+                return True
         call, polling = call
         if polling:
             self.last, self.count = None, 0
@@ -158,7 +165,10 @@ class ToolLoop:
         digest = hashlib.sha256(call + json.dumps(result, sort_keys=True).encode()).digest()
         self.count = self.count + 1 if digest == self.last else 1
         self.last = digest
-        return self.count >= self.REPEATS
+        if self.count >= self.REPEATS:
+            self.stop_reason = 'tool_loop'
+            return True
+        return False
 
     def feed(self, line):
         try:
@@ -168,6 +178,8 @@ class ToolLoop:
         if not isinstance(frame, dict):
             return False
         def result(part):
+            if self.max_errors is not None and part.get('status') == 'error':
+                return [part.get('error'), part.get('exit_code'), True]
             for key in ('output', 'result', 'aggregated_output', 'content'):
                 if key in part:
                     return [part[key], part.get('exit_code'), part.get('is_error')]

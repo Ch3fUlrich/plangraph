@@ -83,7 +83,7 @@ not check.
   full suite.
 - Add the line `FILES READ: <paths you opened>`, also when you have no finding, and end
   with `HEAD: <full 40-character sha you reviewed>`, never shortened or redacted, then
-  the verdict line once more as the last line.
+  the verdict line once more as the last line. The acceptance gate requires an opened repository path.
 - A prompt for the merge delta of a batch asks for `VERDICT: PASS` as that last line: use
   the word the prompt gives, and `VERDICT: REQUEST_CHANGES` when a finding blocks.
 
@@ -113,7 +113,8 @@ prompt, and this section replaces every instruction above that needs a tool.
 - Validated means a quoted diff line with its `file:line`. Do not run or ask for a test
   run; name the CI evidence the brief lists (job names, summary lines) instead, and say
   that you did not run it.
-- Open no file and do not use the skill tool. Write `FILES READ: diff only`.
+- Open no file and do not use the skill tool. Write `FILES READ: diff only`. The spawner
+  uses this declaration to distinguish advisory findings from acceptance evidence.
 - Findings need only the quoted diff lines; what you cannot see in the diff goes under
   "Unverified" and never blocks.
 - You always give the verdict: the `HEAD:` line and the final `VERDICT:` line. Never
