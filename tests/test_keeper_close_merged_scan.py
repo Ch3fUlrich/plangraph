@@ -474,18 +474,19 @@ def test_close_merged_reads_the_data_default_only_with_a_note(w, monkeypatch, tm
     from plangraph.keeper.evidence_git import GitAdapter
 
     primary, data = tmp_path / "demo", tmp_path / "data"
+    data_project = "fixture-secondary"
     merged_repo(primary, [])
     key = "demo:A"
     heads = merged_repo(data, [(165, key if evidence == "trailer" else None, "2026-11-01T12:00:00Z")])
-    w.store.ctx["git"] = GitAdapter({"demo": str(primary), "plangraph-data": str(data)})
+    w.store.ctx["git"] = GitAdapter({"demo": str(primary), data_project: str(data)})
     monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
     monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **kw: [])
     pr = 166 if evidence == "wrong-pr" else 165
-    project = "unrelated" if evidence == "wrong-project" else "plangraph-data"
+    project = "unrelated" if evidence == "wrong-project" else data_project
     head = f"GO-HEAD {heads[165]}"
     if evidence == "duplicate-head":
         head += f"; {head}"
-    w.decision_path.write_text(HEADER + f"| D-5504 | {project} | GO #{pr} plangraph-data, "
+    w.decision_path.write_text(HEADER + f"| D-5504 | {project} | GO #{pr} {data_project}, "
                                f"item demo:OTHER and A; {head} | ROUTER | 2026-11-05 |\n")
     router = w.p("router")
     w.conn.execute("UPDATE items SET state=? WHERE key=?", (state, key))
@@ -496,7 +497,7 @@ def test_close_merged_reads_the_data_default_only_with_a_note(w, monkeypatch, tm
 
     with pytest.raises(Refused, match="merged_on_default_missing"):
         close()
-    w.store.edit_definition(router, key, {"note": "Merge-Repo: plangraph-data"})
+    w.store.edit_definition(router, key, {"note": f"Merge-Repo: {data_project}"})
     if evidence in ("wrong-pr", "wrong-project", "duplicate-head"):
         with pytest.raises(Refused, match="merged_on_default_missing"):
             close()
