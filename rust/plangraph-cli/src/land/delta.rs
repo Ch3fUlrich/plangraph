@@ -10,6 +10,37 @@ pub struct Delta {
     pub train_sha: String,
     pub policy: Policy,
     pub merges: Vec<DeltaMerge>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub resolutions: Vec<DeltaResolution>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeltaResolution {
+    commit: String,
+    parent: String,
+    writer: String,
+    harness: String,
+    patch: String,
+}
+
+impl DeltaResolution {
+    pub(super) fn new(
+        commit: String,
+        parent: String,
+        writer: String,
+        harness: String,
+        patch: Vec<u8>,
+    ) -> Result<Self, String> {
+        let patch = String::from_utf8(patch)
+            .map_err(|_| format!("train resolution {commit} has a non-UTF-8 diff"))?;
+        Ok(Self {
+            commit,
+            parent,
+            writer,
+            harness,
+            patch,
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +96,21 @@ impl<'a> ReviewPacket<'a> {
                 return Err(format!("resolution author family unavailable for {commit}"));
             }
             excluded.extend(writers);
+        }
+        if !artifact.resolutions.is_empty() {
+            let commits: Vec<_> = artifact
+                .resolutions
+                .iter()
+                .map(|fix| fix.commit.clone())
+                .collect();
+            let families =
+                pg_worker_core::writer_families::delta_commit_families(repo, &commits, python)?;
+            for (commit, writers) in families.per_commit {
+                if writers.is_empty() {
+                    return Err(format!("resolution author family unavailable for {commit}"));
+                }
+                excluded.extend(writers);
+            }
         }
         let canonical = serde_json::to_string(artifact).map_err(|e| e.to_string())?;
         let diff_sha256 = hash(&canonical);

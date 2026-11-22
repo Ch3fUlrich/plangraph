@@ -82,6 +82,62 @@ print(json.dumps({text: families.get(text) for text in json.load(sys.stdin)}))
 
 #[cfg(unix)]
 #[test]
+fn train_delta_binds_standalone_resolution_to_its_patch_and_writer() {
+    let fx = Fx::new();
+    let head = fx.commit(&fx.base(), "part.txt", "part\n");
+    let later = fx.commit(&fx.base(), "later.txt", "later part\n");
+    let parts = vec![part(1, &head, None), part(2, &later, None)];
+    let mut manifest = build(&fx.input(parts.clone(), "", None))
+        .unwrap()
+        .manifest
+        .unwrap();
+    let merge = manifest.merges[0].clone();
+    let fix = fx.commit(&merge, "resolution.txt", "resolved\n");
+    g(fx.path(), &["checkout", "--detach", &fix]);
+    g(
+        fx.path(),
+        &[
+            "commit",
+            "--amend",
+            "-m",
+            "Train 11: resolve fixture\n\nWriter: gpt-6.2-sol\nHarness: codex",
+        ],
+    );
+    let resolution = g(fx.path(), &["rev-parse", "HEAD"]);
+    g(fx.path(), &["merge", "--no-ff", "-m", "later part", &later]);
+    manifest.merges[1] = g(fx.path(), &["rev-parse", "HEAD"]);
+    g(
+        fx.path(),
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Train 11: resolve bookkeeping\n\nWriter: gpt-6.2-sol\nHarness: codex",
+        ],
+    );
+    manifest.train_sha = g(fx.path(), &["rev-parse", "HEAD"]);
+    let delta = verify_manifest_with(fx.path(), &manifest, &parts, &[], &[]).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let python = || crate::base_fresh::python_command(Some(&root));
+    let packet =
+        super::super::delta::ReviewPacket::new(&delta, fx.path(), &manifest, &python).unwrap();
+    let packet = serde_json::to_value(packet).unwrap();
+    let fix = &packet["artifact"]["resolutions"][0];
+    assert_eq!(fix["commit"], resolution);
+    assert_eq!(fix["parent"], merge);
+    assert_eq!(fix["writer"], "gpt-6.2-sol");
+    assert!(fix["patch"].as_str().unwrap().contains("+resolved"));
+    assert_eq!(packet["artifact"]["merges"][1]["parents"][0], resolution);
+    assert_eq!(
+        packet["artifact"]["resolutions"][1]["commit"],
+        manifest.train_sha
+    );
+    assert_eq!(packet["excluded"], serde_json::json!(["openai"]));
+    assert!(packet["prompt"].as_str().unwrap().contains("+resolved"));
+}
+
+#[cfg(unix)]
+#[test]
 fn train_delta_admission_requires_an_independent_authenticated_seat_on_its_prompt() {
     use super::super::delta::ReviewPacket;
     use serde_json::json;

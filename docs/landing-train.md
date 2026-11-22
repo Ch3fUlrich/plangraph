@@ -45,9 +45,10 @@ recomputed), `--open`, `--freeze` and `--result`.
 
 `verify --delta-out FILE` exports a replay artifact with the frozen base, train head, policy and each merge's
 parents, actual tree and replay tree. For an adopted resolution it includes the diff from Git's conflict
-tree to the committed tree. `land-train review` takes the same proof inputs and `--item KEY`. It dispatches
+tree to the committed tree. Each standalone resolution carries its commit and first parent, patch,
+and Writer and Harness attribution. `land-train review` takes the same proof inputs and `--item KEY`. It dispatches
 the canonical artifact as a witnessed document review from a clean checkout of the train head.
-Only authors of the merge delta are excluded. A mechanical merge can have an empty exclusion set.
+Only authors of the train delta are excluded. A mechanical merge can have an empty exclusion set.
 `land-train admit --item KEY --review-run ID` repeats the proof and
 requires a passing gateway-witnessed review in the keeper mirror. The serving attempt must be from
 outside the delta's writer families, and the run must match the exact train head and artifact prompt.
@@ -57,7 +58,8 @@ outside the delta's writer families, and the run must match the exact train head
 The builder defaults to `land/train-NAME` and saves the ordered part heads in
 Git's common directory. Use `plangraph land-train push --repo DIR --branch
 land/train-NAME` to push to origin with the installed hook, the manifest and
-fast preflight. The push gate allows single-parent `Train N: resolve` and
+fast preflight. The hook uses the installed `plangraph land-train check-chain` command on `PATH`.
+Push and replay use the same chain validator. It allows single-parent `Train N: resolve` and
 `Train N: drop` commits with `Writer` and `Harness` trailers. The ordered
 second parents must still match the manifest, including merges later reverted
 by a drop. Use `Dropped-Part: <key>` and the canonical revert body to record

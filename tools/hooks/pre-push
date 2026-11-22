@@ -160,7 +160,6 @@ def file_size_gate(head):
 
 
 TRAIN_REF_PREFIX = "refs/heads/land/train-"
-HEX40 = re.compile(r"[0-9a-f]{40}")
 
 
 def is_train_ref(remote_ref):
@@ -173,60 +172,19 @@ def lane_or_train_ref(remote_ref):
             and not remote_ref.startswith("refs/heads/phase/"))
 
 
-def read_train_manifest(path):
-    """The parts of a train, in merge order: one full head sha per line, # comments allowed."""
-    heads = []
-    try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines() if path else []
-    except OSError:
-        lines = []
-    for line in lines:
-        line = line.split("#", 1)[0].strip()
-        if line:
-            if not HEX40.fullmatch(line):
-                raise ValueError("manifest line is not a full lowercase sha")
-            heads.append(line)
-    if not heads:
-        raise ValueError("manifest missing or empty (set PLANGRAPH_TRAIN_MANIFEST)")
-    return heads
-
-
-def train_resolution(commit):
-    fields = git_out(
-        "show", "-s", "--format=%s%x00"
-        "%(trailers:key=Writer,valueonly,separator=%x1f)%x00"
-        "%(trailers:key=Harness,valueonly,separator=%x1f)", commit,
-    ).split("\0")
-    return (len(fields) == 3 and re.match(r"^Train [0-9]+: (?:resolve|drop)(?:\s|$)", fields[0])
-            and all(value.strip() and "\x1f" not in value for value in fields[1:]))
-
-
 def train_gate(local_sha, manifest):
-    """Match merges to the manifest in order, allowing attributed single-parent fixes."""
-    main = git_out("rev-parse", "--verify", "-q", "refs/remotes/origin/main^{commit}")
-    base = git_out("merge-base", main, local_sha) if main else ""
-    if not base:
-        return "train base unavailable (no origin/main merge-base)"
-    chain = git_out("rev-list", "--first-parent", "--reverse", "--parents", f"{base}..{local_sha}")
-    previous = base
-    index = 0
-    for entry in chain.splitlines():
-        commit, *parents = entry.split()
-        if not parents or parents[0] != previous or len(parents) > 2:
-            return f"train commit {commit[:12]} is not a merge of its predecessor (an extra commit?)"
-        previous = commit
-        if len(parents) == 1:
-            if not train_resolution(commit):
-                return f"train commit {commit[:12]} is an extra commit without resolver attribution"
-            continue
-        if parents[1] not in manifest:
-            return f"train parent {parents[1][:12]} is outside its manifest"
-        if index >= len(manifest) or parents[1] != manifest[index]:
-            return f"train parent {parents[1][:12]} is out of manifest order"
-        index += 1
-    if index != len(manifest):
-        return f"train has {index} merges, its manifest {len(manifest)} parts"
-    return None
+    """Delegate the first-parent proof to the same validator as land-train verify."""
+    if not manifest:
+        return "train manifest missing (set PLANGRAPH_TRAIN_MANIFEST)"
+    try:
+        result = subprocess.run(
+            ["plangraph", "land-train", "check-chain", "--repo", ".",
+             "--head", local_sha, "--heads", manifest],
+            capture_output=True, text=True, timeout=30,
+        )
+    except OSError as exc:
+        return f"train validator unavailable: {exc}"
+    return None if result.returncode == 0 else result.stderr.strip() or "train chain validation failed"
 
 
 def planned_parts(body, layouts):
@@ -512,10 +470,7 @@ def push_main():
     for _, local_sha, remote_ref, remote_sha in refs:
         train = is_train_ref(remote_ref)
         if train:
-            try:
-                problem = train_gate(local_sha, read_train_manifest(os.environ.get("PLANGRAPH_TRAIN_MANIFEST")))
-            except ValueError as exc:
-                problem = f"train {exc}"
+            problem = train_gate(local_sha, os.environ.get("PLANGRAPH_TRAIN_MANIFEST"))
             if problem:
                 print(f"pre-push: {problem}: push refused", file=sys.stderr)
                 return 1

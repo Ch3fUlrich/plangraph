@@ -1,1 +1,2 @@
 - Save the landing-train push manifest at build time, use it in the hooked push wrapper, and admit attributed resolution and drop commits while verifying the ordered merge parents.
+- Share the train chain validator with replay verification and include standalone resolver patches and attribution in the reviewed artifact.

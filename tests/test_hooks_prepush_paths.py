@@ -1,6 +1,9 @@
 """The pre-push hook has a lane path (no tests) and a train path (manifest, no tests) (LAND-PUSH-GATE-FAST-ONLY)."""
 import json
+import os
 import runpy
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +12,23 @@ from test_hooks_prepush import HOOK, commit_file, fake_ip, git, push_line, repo,
 LOG_PREFLIGHT = ("import json, os, sys\n"
                  "from pathlib import Path\n"
                  "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text(json.dumps(sys.argv[1:]))\n")
+
+
+@pytest.fixture(scope="session")
+def train_cli():
+    root = HOOK.parents[2]
+    command = ["cargo", "build", "--locked", "--manifest-path", str(root / "rust" / "Cargo.toml"),
+               "-p", "plangraph-cli", "--bin", "plangraph", "--message-format=json"]
+    env = dict(os.environ, CARGO_BUILD_JOBS="1")
+    result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=True)
+    artifacts = (json.loads(line) for line in result.stdout.splitlines())
+    return next(Path(entry["executable"]).parent for entry in artifacts
+                if entry.get("executable") and entry["target"]["name"] == "plangraph")
+
+
+@pytest.fixture
+def train_validator_on_path(train_cli, monkeypatch):
+    monkeypatch.setenv("PATH", str(train_cli), prepend=os.pathsep)
 
 
 def install_preflight(r, marker):
@@ -47,6 +67,7 @@ def test_a_lane_push_runs_preflight_in_lane_mode_and_no_tests(repo, tmp_path):
     assert "--fast" not in argv or "--lane" in argv
 
 
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_with_its_exact_manifest_passes_without_tests(repo, tmp_path):
     r, base = repo
     install_preflight(r, tmp_path / "unused")
@@ -60,6 +81,7 @@ def test_a_train_push_with_its_exact_manifest_passes_without_tests(repo, tmp_pat
     assert "pre-push: train path" in res.stderr
 
 
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_with_a_parent_outside_its_manifest_is_refused(repo, tmp_path):
     r, base = repo
     install_preflight(r, tmp_path / "unused")
@@ -74,6 +96,7 @@ def test_a_train_push_with_a_parent_outside_its_manifest_is_refused(repo, tmp_pa
 
 
 @pytest.mark.parametrize("case", ["order", "extra-commit", "no-manifest", "bad-manifest"])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_that_is_not_exactly_the_manifest_is_refused(repo, tmp_path, case):
     r, base = repo
     install_preflight(r, tmp_path / "unused")
@@ -118,6 +141,7 @@ def test_a_train_push_is_not_judged_by_the_open_pull_request_parent_check(repo, 
 
 
 @pytest.mark.parametrize("ref", ["lane/x", "land/train-20261121-3"])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_scrub_still_refuses_on_both_paths(repo, tmp_path, ref):
     r, base = repo
     install_preflight(r, tmp_path / "unused")
@@ -143,6 +167,7 @@ def _one(tmp_path, head):
 
 
 @pytest.mark.parametrize("ref", ["lane/x", "land/train-20261121-3"])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
     """A valid one-merge train whose part commit lacks the trailers: the manifest passes, commit policy refuses."""
     r, base = repo
@@ -167,6 +192,7 @@ def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
 
 
 @pytest.mark.parametrize("ref,lane", [("refs/heads/lane/x", True), ("refs/heads/main", False), ("refs/tags/v9", False)])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, lane):
     r, base = repo
     env = install_preflight(r, tmp_path / "argv")
@@ -178,6 +204,7 @@ def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, 
 
 
 @pytest.mark.parametrize("extra", [None, "unrelated", "no-harness", "foreign-parent"])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_permits_only_attributed_resolves_and_drops(repo, tmp_path, extra):
     r, _ = repo
     env = install_preflight(r, tmp_path / "argv")

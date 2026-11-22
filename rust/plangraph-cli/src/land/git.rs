@@ -26,6 +26,7 @@ pub fn command(dir: &Path, attributes: Option<&Path>) -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_AUTHOR_NAME", "plangraph-train")
         .env("GIT_AUTHOR_EMAIL", "train@example.invalid")
@@ -91,6 +92,36 @@ pub fn commits(dir: &Path, range: &str) -> Result<Vec<String>, String> {
         .lines()
         .map(str::to_owned)
         .collect())
+}
+
+pub(super) fn replay_diff(
+    dir: &Path,
+    attributes: Option<&Path>,
+    before: &str,
+    after: &str,
+) -> Result<Vec<u8>, String> {
+    let output = run(
+        dir,
+        attributes,
+        &[
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            before,
+            after,
+            "--",
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(format!(
+            "replay: could not read resolution diff from {before} to {after}"
+        ));
+    }
+    Ok(output.stdout)
 }
 
 /// The outcome of merging `head` onto the checkout at `dir` with the protected inputs.

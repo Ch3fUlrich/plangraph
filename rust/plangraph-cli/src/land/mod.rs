@@ -2,6 +2,7 @@
 pub mod build;
 #[cfg(test)]
 mod build_tests;
+mod chain;
 pub mod cli;
 pub mod delta;
 pub mod git;
