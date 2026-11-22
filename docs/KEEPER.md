@@ -312,9 +312,11 @@ These lanes no longer block a merged close.
 
 ## API (stdlib `http.server`, threaded; one Store with a lock; bind 127.0.0.1 by default, `--host`)
 
-A router can send `dry_run: true` to `POST /v1/close_merged` as a deploy probe.
+A router can send the keyless body `{"dry_run": true}` to `POST /v1/close_merged` as a deploy probe.
 A permitted probe returns `{"dry_run": true, "route": "close_merged"}` with
 zero item, audit, evidence, or event writes.
+To preview a particular close, include the item's `key` and `decision_id` with
+`dry_run: true`. The keeper checks the close and returns the proposed transition.
 `POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}` plus
 `GET /v1/audit-meta?project=&stale_days=` (router/L1 only, and `GET /v1/changelog?since=`);
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is

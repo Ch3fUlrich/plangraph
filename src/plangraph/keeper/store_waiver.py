@@ -502,6 +502,8 @@ class WaiverMixin:
                 or any(type(value) is not bool for value in (apply, dry_run))):
             raise Refused("validation", "from_open must be a boolean when supplied; apply and dry_run must be booleans")
         required = self._seats_required(require_seats)
+        if dry_run is True and key is None and decision_id is None:
+            return {"dry_run": True, "route": "close_merged"}
         if not isinstance(key, str) or not key.strip():
             raise Refused("validation", "key must be a nonblank string")
         if families is not None and waive_seats is not None:

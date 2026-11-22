@@ -312,6 +312,16 @@ def test_http_close_merged_door(w, doors):
     assert _counts(w) == (before[0] + 2, before[1] + 1, before[2] + 1)
 
 
+def test_http_close_merged_keyless_deploy_probe_is_read_only(w, doors):
+    body = {"dry_run": True}
+    before, item = _counts(w), w.store._item(KEY)
+    status, response = doors.http("router", "POST", "/v1/close_merged", body)
+    assert (status, response, _counts(w)) == (200, {"dry_run": True, "route": "close_merged"}, before)
+    assert w.store._item(KEY) == item
+    status, response = doors.http("workerA", "POST", "/v1/close_merged", body)
+    assert status == 403 and response["error"] == "forbidden"
+
+
 def test_http_close_merged_dry_run_is_read_only(w, doors):
     def counts():
         return (*_counts(w), w.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0])
