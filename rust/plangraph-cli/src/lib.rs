@@ -21,6 +21,7 @@ pub mod merge_close;
 pub mod paths;
 pub mod review;
 mod review_git;
+pub mod route_shadow;
 pub mod router_batch;
 pub mod runner;
 pub mod setup;
