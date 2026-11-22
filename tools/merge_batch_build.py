@@ -712,7 +712,7 @@ def read_verified_merge(train):
 
 
 def prepare_train(st, lease, mode=None):
-    """Journal the exact train and receipt inputs before attempting to land it."""
+    """Journal the active parts at the frozen head and their receipt inputs."""
     parts = []
     for part in st["merged"]:
         entry = dict(part, ref=st["prs"][str(part["pr"])]["ref"])

@@ -110,6 +110,37 @@ else:
     return request
 
 
+@pytest.mark.parametrize("operation", ["push", "review", "land"])
+def test_active_parts_agree_after_a_drop(env, journal, operation):
+    approval = pushed(env, prs=(1, 2), plan="plangraph:BATCH")
+    st = json.loads(env.state_file("l1").read_text())
+    worktree = st["worktree"]
+    dropped = st["merged"][1]
+    env.git("revert", "-m", "1", "--no-edit", dropped["merge"], cwd=worktree)
+    head = env.git("rev-parse", "HEAD", cwd=worktree)
+    result = env.run("push", "--name", "l1")
+    assert result.returncode == 0, result.stderr
+    body = env.load()["prs"]["100"]["body"]
+    assert "| #1 |" in body and "| #2 |" not in body
+
+    if operation == "review":
+        env.attach_seat("l1", st["merged"][0])
+        refused = env.run("review", "--name", "l1", "--pr", str(dropped["pr"]),
+                          "--run-id", next(iter(dropped["review_runs"].values())))
+        assert refused.returncode == 1 and "not an included part" in refused.stderr
+    if operation == "land":
+        mode(env, "single-pr")
+        approval.write_text(f"HEAD: {head}\nVERDICT: PASS\n")
+        result = land(env, approval)
+        assert result.returncode == 0, result.stderr
+    train = journal()["train"]
+    assert [part["pr"] for part in train["parts"]] == [1]
+    if operation == "land":
+        assert train["included"] == [1]
+    else:
+        assert train["parts"][0]["review_runs"]
+
+
 @pytest.mark.parametrize("keeper_configured", [False, True])
 def test_tested_ff_moves_main_to_the_train_head_without_a_merge_commit(env, keeper_configured, request):
     approval = pushed(env)

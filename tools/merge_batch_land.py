@@ -157,7 +157,7 @@ def cmd_push(args):
     save_state(st)
     if keeper_landing_configured():
         with landing_lease(st["repo"]) as lease:
-            prepare_train(st, lease)
+            prepare_train(dict(st, merged=active["merged"]), lease)
     if run_id:
         ci = gh_json("run", "view", str(run_id), "--repo", st["repo"], "--json",
                      "databaseId,headSha,status,conclusion")
@@ -549,9 +549,6 @@ def cmd_land(args):
 
 def land_with_lease(args, lease, st, mode):
     repo, number = st["repo"], args.batch_pr
-    if mode == "single-pr" and len(st["merged"]) != 1:
-        raise MergeBatchError(f"single-pr mode lands one pull request on its own GO: batch {st['name']!r} has "
-                              f"{len(st['merged'])} parts (set landing.mode to tested-ff or train-pr-merge)")
     if st["status"] != "pushed" or st.get("pr") != number:
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
@@ -560,6 +557,9 @@ def land_with_lease(args, lease, st, mode):
         _merge_subject(number, None, custom_subject)
     check_approval(args.approval, st["head"])
     st = active_train(st, st["head"])
+    if mode == "single-pr" and len(st["merged"]) != 1:
+        raise MergeBatchError(f"single-pr mode lands one pull request on its own GO: batch {st['name']!r} has "
+                              f"{len(st['merged'])} parts (set landing.mode to tested-ff or train-pr-merge)")
     require_part_seats(st)
     fields = "state,headRefOid,isDraft,mergeCommit,baseRefName,title"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
@@ -724,7 +724,10 @@ def require_part_seats(st):
 
 def cmd_review(args):
     st = load_state(args.name)
-    rec = next((r for r in st["merged"] if r["pr"] == args.pr), None)
+    pushed = st.get("status") == "pushed"
+    head = st["head"] if pushed else git("rev-parse", "HEAD", cwd=st["worktree"]).stdout.strip()
+    active = active_train(st, head)
+    rec = next((r for r in active["merged"] if r["pr"] == args.pr), None)
     if rec is None:
         raise MergeBatchError(f"PR #{args.pr} is not an included part")
     if args.file:
@@ -742,9 +745,9 @@ def cmd_review(args):
         else:
             raise reason
     save_state(st)
-    if st.get("status") == "pushed" and keeper_landing_configured():
+    if pushed and keeper_landing_configured():
         with landing_lease(st["repo"]) as lease:
-            prepare_train(st, lease)
+            prepare_train(active, lease)
     return 0
 
 
