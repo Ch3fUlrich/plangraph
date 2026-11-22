@@ -155,7 +155,7 @@ for tool in ('cargo', 'git', 'codex'):
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
     let review_cli = dir.join("review-cli.py");
-    fs::write(&review_cli, r#"import json, pathlib, sys, time, uuid
+    fs::write(&review_cli, r#"import json, pathlib, subprocess, sys, time, uuid
 argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 assert value('--role') == 'review' and value('--exclude-family') == 'openai', argv
@@ -167,7 +167,8 @@ prompt = pathlib.Path(value('--prompt-file')).read_text()
 run_id = 'run-' + uuid.uuid4().hex
 run = pathlib.Path(value('--state')) / 'runs' / run_id
 run.mkdir(parents=True)
-marker = pathlib.Path('writer.txt').read_text()
+assert card['review_workspace'] and '--cwd' not in argv
+marker = subprocess.check_output(['git', 'show', head + ':writer.txt'], text=True)
 if 'late marker' in marker:
     receipt = dict(run_id=run_id, status='running', started=time.time())
     (run / 'record.json').write_text(json.dumps(receipt))
@@ -350,7 +351,9 @@ async def check():
             assert 'expected end' in final['reason'], final
             run_file = root/'state'/'runs'/receipt['run_id']/'record.json'
             run = json.loads(run_file.read_text())
-            run.update(status='completed', stdout_tail='Reviewed writer.txt\nVERDICT: ACCEPT\n')
+            run.update(status='completed', host='fixture-worker', head_sha=head, overflow_remote=True,
+                       chosen_leg={'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'},
+                       stdout_tail='FILES READ: writer.txt\nVERDICT: ACCEPT\n')
             updated = run_file.with_suffix('.tmp')
             updated.write_text(json.dumps(run))
             updated.replace(run_file)
@@ -358,7 +361,7 @@ async def check():
             for _ in range(150):
                 if artifact.is_file(): break
                 await asyncio.sleep(.05)
-            assert artifact.read_text() == f'HEAD: {head}\nReviewed writer.txt\nVERDICT: ACCEPT\n'
+            assert artifact.read_text() == f'HEAD: {head}\nFILES READ: writer.txt\nVERDICT: ACCEPT\n'
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         holding = await admitted_spawn(service, dict(card=card, prompt='brief marker hold marker'))
         holding = service.result(holding['run_id'])
@@ -384,7 +387,7 @@ async def check():
             except ProcessLookupError: pass
 # Exercise admission with fixed local policy; installed host policy may queue or
 # remotely place the run, neither of which has a local supervisor task.
-with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_path), patch('plangraph.spawner.host_ready.disk_free_gb', return_value=10), patch.object(overflow, 'placement_policy', return_value=('fixture', False)), patch.object(overflow, 'local_limits', return_value=(2048, 3000)), patch('plangraph.spawner.host_ready.local_disk_refusal', return_value=None):
+with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_path), patch('plangraph.spawner.host_ready.disk_free_gb', return_value=10), patch.object(overflow, 'placement_policy', return_value=('fixture', False)), patch.object(overflow, 'local_limits', return_value=(2048, 3000)), patch('plangraph.spawner.host_ready.local_disk_admission', return_value=(None, None)):
     asyncio.run(check())
 "#]).output().unwrap();
     assert!(
