@@ -115,6 +115,8 @@ Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
 key, including subitems of a larger item. `ci_commit_gate.py check --base BASE
 --head HEAD --item-text PART.txt` warns for uncovered keys; GitHub CI reads the
 matching PR event automatically. See [the commit gate](docs/ci-gate.md).
+A merge resolution that removes a test needs its own `Test-Removal: D-<id>`
+trailer, including when a later commit restores the test.
 
 CI job ids stay fixed; each job's display name and the per-job audit are in [the CI gate page](docs/ci-gate.md).
 
