@@ -1431,7 +1431,9 @@ async fn a_check_that_never_passes_stops_the_card() {
         let packets = env.keeper.parked();
         assert!(!reports.is_empty());
         assert!(!packets.is_empty());
-        for tail in reports.iter().map(|r| &r.check_tail).chain(packets.iter().map(|p| &p.check_tail)) {
+        let report_tails = reports.iter().map(|report| &report.check_tail);
+        let park_tails = packets.iter().map(|packet| &packet.check_tail);
+        for tail in report_tails.chain(park_tails) {
             assert!(!tail.contains("synthetic-fragment"));
             assert!(tail.contains("[REDACTED]"));
             assert!(tail.contains("retained"));
