@@ -19,15 +19,17 @@ def assert_review_seat_safety(estimate):
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        # Rule 3.61 order for a gpt writer, two families: inline-only mimo-v2.6-pro needs diff metadata; every leg
-        # serves a card up to the usable share of its own request limit (per-leg context).
+        # D-6550 starts with Hydrogen. Mimo Pro needs diff metadata, and every
+        # seat must fit its own request limit and contribute a distinct family.
         limit = {leg.id: leg.max_request_tokens for leg in DEFAULT_LEGS}
         fits = lambda leg_id: estimate * 100 <= USABLE_FRACTION_PCT * limit[leg_id]
-        order = (["mimo-v2.6-pro"] if diff else []) + ["opencode-deepseek-v4.1-flash-free",
-                                                     "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash"]
+        order = [("agy-gemini-4-hydrogen-high", "gemini")]
+        if diff:
+            order.append(("mimo-v2.6-pro", "mimo"))
+        order.extend([("opencode-deepseek-v4.1-flash-free", "deepseek"),
+                      ("opencode-go-deepseek-v4-flash", "deepseek"), ("opencode-go-glm-5.3-flash", "glm")])
         expected, families = [], set()
-        for leg_id in order:
-            family = "mimo" if "mimo" in leg_id else ("glm" if "glm" in leg_id else "deepseek")
+        for leg_id, family in order:
             if fits(leg_id) and family not in families and len(expected) < 2:
                 expected.append(leg_id)
                 families.add(family)

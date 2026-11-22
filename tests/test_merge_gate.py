@@ -68,7 +68,7 @@ def test_finding_open(facts, severity, refuse):
     ".filesize-baseline", ".gitleaks.toml", "tools/ci_select.py",
     "tools/preflight.py", "tools/red_proof.py", "src/auth/session.rs",
     "rust/x/redact/pattern.rs", "configuration/allowlists/paths.json",
-    "tools/public_scrub.py"])
+    "tools/public_scrub.py", ".gitattributes", "rust/x/.gitattributes"])
 def test_gate_path(facts, path, refuse):
     facts["changed_paths"] = [path]
     refuse(facts, "gate_path")

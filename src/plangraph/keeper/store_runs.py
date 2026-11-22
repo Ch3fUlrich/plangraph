@@ -20,6 +20,11 @@ from ..review.family import model_family
 __all__ = ["RunsMixin", "normalise_run"]
 
 _REVIEW_RUN = re.compile(r"Review-Run:[ \t]+(\S+)[ \t]+(run-\S+)[ \t]+([0-9a-f]{40})[ \t]*")
+_GO_HEAD_TOKEN = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
+# One part-table entry: "Batch 23, part head <sha>", "Batch 13, PR #1084, head <sha>", "Batch 26, heads <sha> and fix <sha>".
+_HEX = r"`?[0-9a-f]{7,40}(?![\w])`?"
+_PART_HEADS = re.compile(r"(?<![\w-])Batch\s+\d+\w*(?:\s*\([^)]*\))?,\s*(?:PR\s*#\d+,\s*)?(?:(?:part|lane)\s+)?heads?\s+"
+                         rf"({_HEX}(?:(?:,\s*|\s+and\s+(?:fix\s+)?){_HEX})*)")
 _WARM_S = 60  # how long a warm scan may be read under the request lock
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
@@ -145,7 +150,7 @@ class RunsMixin:
         by the witness adapter, so a citation only points at it.
         """
         git, project = self._adapter("git"), self._merge_project(item)
-        repo, ref, key = git.repo_path(project), git.repo_ref(project), item["key"]
+        repo, ref, key = git.repo_path(project), item.get("_close_head") or git.repo_ref(project), item["key"]
         names = {key, key.split(":", 1)[-1]}
         valid_run = RunRecordAdapter(None).valid_run_id
         cited = {}
@@ -188,8 +193,11 @@ class RunsMixin:
 
     def merge_candidates(self):
         """``(key, project)`` of every item the automatic close may take: the input of :meth:`warm_merge_scan`."""
-        return [(item["key"], item["project"]) for item in self._all_items()
-                if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+        items = [item for item in self._all_items()
+                 if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+        # What the deploy scan needs of each item, read here under the lock so the scan does not touch the database.
+        self.__dict__["_deploy_inputs"] = {item["key"]: dict(item) for item in items}
+        return [(item["key"], item["project"]) for item in items]
 
     def warm_merge_scan(self, candidates=()):
         """Fetch, index and look up the hosted lanes of the scanned repositories; the API calls it outside its lock.
@@ -200,6 +208,7 @@ class RunsMixin:
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
         self.__dict__["_warmed"], self.__dict__["_lanes"] = {}, {}   # a failed refresh must not keep an old snapshot
+        self.__dict__["_deploy_warm"] = {}
         for project in list(scan()) if callable(scan) else []:
             if self._refresh_merged_default_ref(git, project):
                 index = context_sources.work_index(git, project, fresh=True)
@@ -207,6 +216,7 @@ class RunsMixin:
                     for key, item_project in candidates:
                         if context_sources.indexed_work(index, key)["commits"]:
                             context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
+                            self._snapshot_deploy(key, project)
                     self.__dict__["_warmed"][project] = time.monotonic()
 
     def _warm(self, project):
@@ -270,7 +280,7 @@ class RunsMixin:
             for proof in prs:
                 go_date = as_epoch(_decision_date(decisions.fields(proof["decision_id"])))
                 merge = git.merge_commit_of(git.repo_path(project), proof["head"],
-                                             git.repo_ref(project))
+                                             item.get("_close_head") or git.repo_ref(project))
                 proc = git._run(git.repo_path(project),
                                 ["show", "-s", "--format=%cI", "--end-of-options", merge[0]]) if merge else None
                 merge_date = as_epoch(proc.stdout.strip()) if proc and proc.returncode == 0 else None
@@ -308,51 +318,124 @@ class RunsMixin:
 
     def _merged_go_scope_matches(self, decision_id, item, now, *, require_key=True, decisions=None):
         """Additional PR GOs must name this project and this item explicitly."""
+        return self._merged_go_scope(decision_id, item, now, require_key=require_key,
+                                     decisions=decisions)[0]
+
+    def _merged_go_scope(self, decision_id, item, now, *, require_key=True, decisions=None):
+        """``(matches, part)``: whether the GO row covers the item, and the part head that vouches for it.
+
+        The row covers the item when its key list names it. A merged row is frozen evidence, so a key
+        its list omits is also covered by a part head the row names (``part``, else ``None``).
+        """
         decisions = decisions or self._ctx(item, now).decisions
         rows = decisions._rows_strict().get(decision_id, ())
         if len(rows) != 1:
-            return False
+            return False, None
         cells = [c.strip() for c in rows[0].split("|")[1:]]
         if len(cells) < 3 or cells[1] != item["project"]:
-            return False
+            return False, None
         text = cells[2]
         keys = re.findall(r"(?<![\w:-])[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_.-]+", text)
-        if keys:
-            return item["key"] in keys
-        if not require_key:
-            return True  # legacy head-only GO; the caller selected this row
+        if keys and item["key"] in keys:
+            return True, None
+        if not keys and not require_key:
+            return True, None  # legacy head-only GO; the caller selected this row
         bare = item["key"].split(":", 1)[1]
-        return re.search(r"(?<![\w:-])" + re.escape(bare) + r"(?![\w:-])", text) is not None
+        if not keys and re.search(r"(?<![\w:-])" + re.escape(bare) + r"(?![\w:-])", text):
+            return True, None
+        part = self._merged_go_part(item, text)
+        return part is not None, part
+
+    def _merged_go_part(self, item, text):
+        """Full head of the part a GO row names that lies in its GO-HEAD and carries the item's Plan-Item commit.
+
+        Only the heads the row names after ``head``/``heads`` count, never the GO-HEAD itself (it would
+        vouch for every key of the train); a commit with the exact trailer must be an ancestor of that part.
+        """
+        from .store_waiver import _go_statement  # lazy: store_waiver imports this module
+        text = _go_statement(text) or ""  # only the accepted GO ruling speaks, never a sibling ruling of the row
+        go_heads = {h.lower() for h in _GO_HEAD_TOKEN.findall(text)}
+        tokens = list(dict.fromkeys(t for run in _PART_HEADS.findall(text)
+                                    for t in re.findall(r"[0-9a-f]{7,40}", run)))
+        if len(go_heads) != 1 or not tokens:
+            return None
+        go_head = go_heads.pop()
+        git, project = self._adapter("git"), self._merge_project(item)
+        repo = git.repo_path(project)
+        try:
+            commits = context_sources.plan_item_commits(git, project, item["key"], fetch=False, limit=None)
+        except Exception:  # noqa: BLE001 - an unreadable git proof never authorizes
+            return None
+        shas = [c["sha"] for c in commits or () if valid_commit_ref(c.get("sha"))]
+        if not shas:
+            return None
+
+        def within(inner, outer):
+            return git._run(repo, ["merge-base", "--is-ancestor", "--end-of-options", inner, outer]).returncode == 0
+
+        named = []
+        for token in tokens:
+            found = git._run(repo, ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{token.strip('`')}^{{commit}}"])
+            part = found.stdout.strip() if found.returncode == 0 else ""
+            if valid_commit_ref(part) and part != go_head and within(part, go_head):
+                named.append(part)
+        match = next((part for part in named if any(within(sha, part) for sha in shas)), None)
+        merge = git.merge_commit_of(repo, go_head, git.repo_ref(project)) if match else None
+        # Every commit the GO's merge brought for the item must lie in a named part, as for a cited review part.
+        if match and merge and valid_commit_ref(merge[0]) and self._parts_cover_merge(
+                (git, repo), merge[0], {item["key"], item["key"].split(":", 1)[-1]}, named):
+            return match
+        return None
 
     def _merged_open_prs_checked(self, item, decision_id, head, now):
         from . import context_sources
         from .evidence_types import valid_commit_ref
         git = self._adapter("git")
         project = self._merge_project(item)
-        if not self._refresh_merged_default_ref(git, project):
+        default_head = item.get("_close_head")
+        if default_head is None and not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
-        if context_sources.open_lanes(git, project, item["key"]) != []:
+        lanes = {"head": default_head} if default_head is not None else {}
+        if context_sources.open_lanes(git, project, item["key"], **lanes) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
-            git, project, item["key"], fetch=False, limit=None)
+            git, project, item["key"], fetch=False, limit=None, head=default_head)
+        from .store_waiver import _go_binding, _go_statement, _strip_prefix
+        go_pr, go_head = None, None
+        try:
+            text = _strip_prefix(self._ctx(item, now).decisions.text(decision_id))
+            go_pr, go_head = _go_binding(_go_statement(text), item["project"])
+        except Exception:  # noqa: BLE001 - unreadable GO row falls back to None
+            pass
         named = self._named_merge_proof(item)
-        proofs = ({named["head"]: named} if named and named["pr"] else {})
+        proofs = ({named["head"]: {"pr": named["pr"], "head": named["head"]}}
+                  if named and named["pr"] else {})
+        repo = git.repo_path(project)
+        ref = default_head or git.repo_ref(project)
         for commit in commits or ():
             merge = commit.get("merge") or {}
-            if type(merge.get("pr")) is not int or merge["pr"] <= 0:
+            pr = merge.get("pr")
+            has_subject_pr = type(pr) is int and pr > 0
+            if not has_subject_pr and (
+                    type(go_pr) is not int or go_pr <= 0 or not valid_commit_ref(go_head)):
                 raise Refused("evidence_unverified", "merged_pr_missing")
-            merged = git.merge_commit_of(git.repo_path(project), commit["sha"],
-                                         git.repo_ref(project))
-            proc = git._run(git.repo_path(project),
-                            ["show", "-s", "--format=%P", "--end-of-options", merged[0]]) if merged else None
+            merged = git.merge_commit_of(repo, commit["sha"], ref)
+            proc = git._run(repo, ["show", "-s", "--format=%P", "--end-of-options", merged[0]]) if merged else None
             parents = proc.stdout.strip().split() if proc and proc.returncode == 0 else []
             if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
                 raise Refused("evidence_unverified", "merged_pr_head_missing")
-            proofs[parents[1]] = {"pr": merge["pr"], "head": parents[1]}
+            if has_subject_pr:
+                proofs[parents[1]] = {"pr": pr, "head": parents[1]}
+            elif context_sources._head_introduced_by_merge(git, repo, parents, go_head):
+                proof_head = go_head if go_head == head else parents[1]
+                proofs[proof_head] = {"pr": go_pr, "head": proof_head}
+            else:
+                raise Refused("evidence_unverified", "merged_pr_missing")
         if proofs and head not in proofs:
             # A GO row bound to its own merged PR (merged_go_row) may name a head
             # the trailer search did not reach; that PR is proof in its own right.
-            bound = context_sources.pr_merge_of(git, project, head)
+            bound = context_sources.pr_merge_of(
+                git, project, head, fallback_pr=go_pr if head == go_head else None, default_head=default_head)
             if bound:
                 proofs[head] = {"pr": bound["pr"], "head": head}
         if not proofs or head not in proofs:

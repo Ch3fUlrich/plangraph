@@ -86,6 +86,10 @@ def record(tmp_path, **changes):
                 cwd="/work", attempts=[{"status": "completed"}],
                 finish_reason="stop", stdout_tail="", stderr_tail="")
     data.update(changes)
+    if data["role"] == "review":
+        data.setdefault("request", {"verdict_binding": {
+            "key": data.get("item_key"), "epoch": 1, "round": 1, "head": SHA,
+            "seat_run": data["run_id"]}})
     (run / "record.json").write_text(json.dumps(data))
     (run / "record.json").chmod(0o600)
     (run / "live.log").write_text("VERDICT: PASS\nTEST_GAMING: no\n")

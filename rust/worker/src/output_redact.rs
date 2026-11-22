@@ -18,9 +18,22 @@ pub fn question(mut q: crate::question::Question) -> crate::question::Question {
 }
 
 fn question_text(text: &str) -> String {
-    // Redact before keeping the first MAX_TAIL_BYTES bytes, without a marker.
+    redacted_head(text, pg_worker_core::redact::MAX_TAIL_BYTES)
+}
+
+/// An activity failure message as it may reach workflow history: redacted whole,
+/// then cut to `MAX_FAILURE_BYTES`. Git stderr and io errors can carry credentials.
+pub fn failure_text(text: &str) -> String {
+    redacted_head(text, MAX_FAILURE_BYTES)
+}
+
+/// Byte cap of a failure message kept in history.
+pub const MAX_FAILURE_BYTES: usize = 4096;
+
+fn redacted_head(text: &str, max: usize) -> String {
+    // Redact before keeping the first `max` bytes, without a marker.
     let redacted = pg_worker_core::redact::redact(text);
-    let mut end = redacted.len().min(pg_worker_core::redact::MAX_TAIL_BYTES);
+    let mut end = redacted.len().min(max);
     while !redacted.is_char_boundary(end) {
         end -= 1;
     }

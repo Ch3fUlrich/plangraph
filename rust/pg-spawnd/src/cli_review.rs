@@ -8,6 +8,10 @@ use pg_worker_core::run::record::{RunRecord, Status};
 use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
+#[path = "cli_review_binding.rs"]
+mod binding;
+pub(crate) use binding::{completed as binding_completed, Dispatch};
+
 pub(crate) fn kind(args: &Args) -> Option<&str> {
     args.get("leg")
         .and_then(Value::as_str)
@@ -88,15 +92,19 @@ pub(crate) fn prepare(
     args: &Args,
     launch: &mut LaunchSpec,
     leg: &Value,
-) -> Result<Option<String>, ToolError> {
+) -> Result<Option<Dispatch>, ToolError> {
     let head = clean_head(&launch.cwd)?;
-    let expected = args["card"]
-        .get("head_sha")
-        .or_else(|| args["card"]["diff_ref"].get("head_sha"));
-    if expected.is_some_and(|v| v.as_str() != Some(head.as_str())) {
+    let card = &args["card"];
+    let reference = &card["diff_ref"];
+    let expected = [card.get("head_sha"), reference.get("head_sha")];
+    if expected
+        .into_iter()
+        .flatten()
+        .any(|v| v.as_str() != Some(head.as_str()))
+    {
         return Err(parameter("CLI review head does not match worktree"));
     }
-    if let Some(reference) = args["card"]["diff_ref"].get("head") {
+    if let Some(reference) = reference.get("head") {
         let reference = reference
             .as_str()
             .ok_or_else(|| parameter("invalid review head"))?;
@@ -117,6 +125,8 @@ pub(crate) fn prepare(
     if !Path::new(&gitdir).join("fast-checks").join(&head).is_file() {
         return Err(parameter("CLI review requires fast-checks stamp for HEAD"));
     }
+    let dispatch = Dispatch::new(&launch.cwd, head, reference)?;
+    let head = &dispatch.head;
     let old = launch
         .prompt
         .as_deref()
@@ -133,18 +143,28 @@ pub(crate) fn prepare(
     } else {
         ""
     };
-    let prompt = format!("{access}Read-only repository review of HEAD {head}. Open callers and tests; never edit. Do not run background commands; wait for every command to finish before deciding. Name at least one reviewed path from the diff or a file:line in your review. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
-    binding::replace_prompt(launch, prompt)?;
-    Ok(Some(head))
+    let range = dispatch
+        .binding
+        .as_ref()
+        .map_or_else(String::new, |binding| {
+            let base = binding["base_sha"].as_str().unwrap();
+        format!(" Review the full diff using `git --no-replace-objects diff --no-ext-diff --no-textconv {base} {head} --`.")
+        });
+    let prompt = format!("{access}Read-only repository review of HEAD {head}.{range} Open callers and tests; never edit. Do not run background commands; wait for every command to finish before deciding. Name at least one reviewed path from the diff or a file:line in your review. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
+    if launch.stdin.as_deref() == Some(old) {
+        launch.stdin = Some(prompt.clone());
+    } else {
+        let mut event: Value = serde_json::from_str(launch.stdin.as_deref().unwrap_or(""))
+            .map_err(|_| parameter("invalid CLI prompt transport"))?;
+        if event["event"] != "user" || event["message"]["content"] != old {
+            return Err(parameter("invalid CLI prompt transport"));
+        }
+        event["message"]["content"] = json!(prompt);
+        launch.stdin = Some(event.to_string() + "\n");
+    }
+    launch.prompt = Some(prompt);
+    Ok(Some(dispatch))
 }
-
-#[path = "cli_review_binding.rs"]
-mod binding;
-#[cfg(test)]
-#[path = "cli_review_binding_tests.rs"]
-mod binding_tests;
-
-pub(crate) use binding::bind_launch;
 
 #[path = "cli_review_checkout.rs"]
 mod checkout;
@@ -229,10 +249,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         return;
     }
     let value = record.to_value();
-    let bound = !value["review_binding"].is_null();
-    if bound && !value["completion"].is_null() {
-        return;
-    }
+    let binding = &value["review_binding"];
     let Some(state) = record
         .path()
         .parent()
@@ -273,16 +290,18 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     let Some(cwd) = value["cwd"].as_str() else {
         return;
     };
-    if clean_head(Path::new(cwd)).ok().as_deref() != Some(head) {
-        return;
-    }
-    let review_cwd = Path::new(value["review_checkout"].as_str().unwrap_or(cwd));
-    if review_cwd != Path::new(cwd) && clean_head(review_cwd).ok().as_deref() != Some(head) {
-        return;
-    }
-    if bound && !binding::matches_completion(&value, review_cwd, head) {
-        record.set("verdict", json!("no_verdict"));
-        record.set("reason", json!("review_diff_binding_mismatch"));
+    let checkout = value["review_checkout"].as_str().map(Path::new);
+    if clean_head(Path::new(cwd)).ok().as_deref() != Some(head)
+        || checkout.is_some_and(|path| clean_head(path).ok().as_deref() != Some(head))
+        || (!binding.is_null()
+            && !binding::matches(checkout.unwrap_or(Path::new(cwd)), head, binding))
+    {
+        if !binding.is_null() {
+            record.set(
+                "review_binding_error",
+                json!("review diff does not match dispatch"),
+            );
+        }
         return;
     }
     let mut model = leg["model"].as_str().unwrap().to_owned();
@@ -363,8 +382,8 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     record.set("test_gaming", json!(gaming.as_slice() != ["no"]));
     record.set("finish_reason", json!("stop"));
     let mut completion = json!({"head_sha":head,"finish_reason":"stop"});
-    if bound {
-        completion["review_binding"] = value["review_binding"].clone();
+    if !binding.is_null() {
+        completion["review_binding"] = binding.clone();
     }
     record.set("completion", completion);
 }

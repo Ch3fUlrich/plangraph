@@ -179,22 +179,25 @@ fn temp_dir_creation_is_exclusive_and_private() {
     );
 }
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 pub(crate) struct McpClient {
     pub(crate) stream: BufReader<std::os::unix::net::UnixStream>,
     next_id: i64,
+    response_timeout: Duration,
 }
 
 impl McpClient {
     pub(crate) fn connect(socket: &Path) -> McpClient {
         let stream = wait_connect(socket, Duration::from_secs(5));
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .expect("read timeout");
         McpClient {
             stream: BufReader::new(stream),
             next_id: 0,
+            response_timeout: Duration::from_secs(15),
         }
+    }
+
+    pub(crate) fn set_response_timeout(&mut self, timeout: Duration) {
+        self.response_timeout = timeout;
     }
 
     pub(crate) fn send(&mut self, message: &serde_json::Value) {
@@ -207,10 +210,44 @@ impl McpClient {
     }
 
     pub(crate) fn recv(&mut self) -> serde_json::Value {
-        let mut line = String::new();
-        self.stream.read_line(&mut line).expect("read response");
-        assert!(!line.is_empty(), "server closed the connection");
-        serde_json::from_str(line.trim_end_matches('\n')).expect("parse response")
+        self.recv_until(Instant::now() + self.response_timeout)
+    }
+
+    fn recv_until(&mut self, deadline: Instant) -> serde_json::Value {
+        let mut line = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "MCP response deadline exceeded");
+            self.stream
+                .get_mut()
+                .set_read_timeout(Some(remaining))
+                .expect("set response deadline");
+            let bytes = match self.stream.fill_buf() {
+                Ok(bytes) => bytes,
+                // Unix may report a blocking receive timeout as WouldBlock.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::Interrupted | ErrorKind::WouldBlock | ErrorKind::TimedOut
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => panic!("read MCP response: {error}"),
+            };
+            if bytes.is_empty() {
+                assert!(!line.is_empty(), "server closed the connection");
+                break;
+            }
+            let newline = bytes.iter().position(|&byte| byte == b'\n');
+            let consumed = newline.map_or(bytes.len(), |offset| offset + 1);
+            line.extend_from_slice(&bytes[..consumed]);
+            self.stream.consume(consumed);
+            if newline.is_some() {
+                break;
+            }
+        }
+        serde_json::from_slice(&line).expect("parse response")
     }
 
     pub(crate) fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
@@ -219,8 +256,10 @@ impl McpClient {
         self.send(&serde_json::json!({
             "jsonrpc": "2.0", "id": id, "method": method, "params": params,
         }));
+        // Notifications and partial frames share the original request deadline.
+        let deadline = Instant::now() + self.response_timeout;
         loop {
-            let response = self.recv();
+            let response = self.recv_until(deadline);
             if response.get("id") == Some(&serde_json::json!(id)) {
                 return response;
             }

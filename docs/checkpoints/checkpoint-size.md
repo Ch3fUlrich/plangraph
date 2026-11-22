@@ -8,6 +8,23 @@ The Rust `checkpoint-size BASE HEAD` command in `pg-hook` enforces it. The
 before pushes and seats, and describes stacked checkpoints. Existing hook
 installation and non-checkpoint pushes are unchanged.
 
+## Batch size is computed
+
+`plangraph batch-size INPUT.json` (`rust/plangraph-cli/src/batch_size.rs`) prints how many
+items one batch brief carries and why; with `--brief` it assembles that brief: a `# Batch size`
+block naming the count and the reason (and the items left for the next batch), the selected
+items' text in order under `# Items`, and the input's `run_values` under `# Run values`. An item
+without text refuses the brief. The count is the smallest of:
+the model cap (10 for a strong writer, catalog intelligence 50 or more, with a window of
+400k tokens or more; 5 for a strong writer below that window; 3 otherwise), the fit (the
+items' expected diff bytes, in order, kept under 60% of the limit so the fix rounds still
+fit; the estimate of an item is its own, else the median of merged items of its kind) and
+the feedback of the last batch (one fewer after skipped items or a HIGH that survived two
+rounds, one more after a batch accepted in round 1). An item expected above half the limit
+goes alone. The limit is an input (default the interim 100,000 bytes above); the ledger
+(LEDGER-AUTO-FILL, MERGE-TELEMETRY-LEDGER-D6311) gives rounds to ACCEPT by diff size, and
+the experiment item sets it from that measure.
+
 ## Evidence slice: 2026-11-13 and 2026-11-14 UTC
 
 Snapshot collected 2026-11-15 from GitHub for the eight PRs named in the item.

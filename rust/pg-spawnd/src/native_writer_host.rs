@@ -1,6 +1,6 @@
 //! Target-host execution for the placed native-Codex run kind.
 use crate::native_writer::{self, Driver};
-use pg_worker_core::run::record_io::atomic_write_private;
+use pg_worker_core::run::lifecycle;
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -62,6 +62,7 @@ struct Host {
     /// `refs/heads/...` that receives the accepted head; None keeps the head on the host.
     push_ref: Option<String>,
     reviews_started: usize,
+    review_override: Option<(String, String)>,
     /// Spawner CLI argv prefix that starts review runs (`review_cli`).
     review_cli: Vec<String>,
     /// Checkout of trusted plangraph sources for the family table; None uses the installed
@@ -86,6 +87,19 @@ impl Host {
     fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         let mut command = Command::new(program);
         command.env("PATH", &self.tool_path);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+
+            // Apply the run's mask in the child so concurrent daemon work keeps its own mask.
+            // SAFETY: umask is async-signal-safe and the closure touches no shared Rust state.
+            unsafe {
+                command.pre_exec(|| {
+                    libc::umask(0o022);
+                    Ok(())
+                });
+            }
+        }
         command
     }
     fn git(&self, args: &[&str]) -> Result<String, String> {
@@ -208,6 +222,7 @@ impl Driver for Host {
         Ok(base)
     }
     fn refresh_base(&mut self) -> Result<String, String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         self.git(&[
             "fetch",
             "origin",
@@ -218,6 +233,7 @@ impl Driver for Host {
         self.git(&["rev-parse", "origin/main"])
     }
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         // The caller PATH recorded at admission selects Codex for every launch and resume.
         let codex = crate::native_writer_tool::resolve(self.tool_path.as_ref(), &self.cwd)?;
         let directory = self
@@ -341,6 +357,7 @@ impl Driver for Host {
         self.git(&["rev-parse", "HEAD"])
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         if self.git(&["rev-parse", "HEAD"])? != head {
             return Err(format!("worktree is not at {head}"));
         }
@@ -363,6 +380,7 @@ impl Driver for Host {
         self.review_run(head, previous)
     }
     fn gates(&mut self) -> Result<(), String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
         self.checks().map(|_| ())
     }
@@ -370,6 +388,7 @@ impl Driver for Host {
         let Some(target) = self.push_ref.clone() else {
             return Ok(None);
         };
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         // No force flag: the remote refuses anything but a fast-forward.
         self.git(&["push", "origin", &format!("{head}:{target}")])?;
         Ok(Some(target))
@@ -378,6 +397,7 @@ impl Driver for Host {
         let mut record = record.clone();
         record["cwd"] = json!(self.cwd);
         record["review_dir"] = json!(self.reviews);
+        lifecycle::publish(&self.state, &self.record_path, &record).map_err(|e| e.to_string())?;
         let ledger = if record["ended"].is_number() {
             self.ledger_row(&record).and_then(|row| {
                 crate::writer_ledger::append(
@@ -392,9 +412,9 @@ impl Driver for Host {
         };
         if let Err(error) = &ledger {
             record["ledger_error"] = json!(error);
+            lifecycle::publish(&self.state, &self.record_path, &record)
+                .map_err(|e| e.to_string())?;
         }
-        atomic_write_private(&self.record_path, record.to_string().as_bytes())
-            .map_err(|e| e.to_string())?;
         ledger
     }
 }
@@ -419,7 +439,49 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     }
     let request: Value = serde_json::from_slice(&fs::read(&args[0]).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    let mut record = request["record"].clone();
+    let record_path = request["record_path"]
+        .as_str()
+        .ok_or("record_path missing")?;
+    let _supervisor = crate::writer_control::supervisor_guard(Path::new(record_path))?;
+    execute_request(&request, request["record"].clone())
+}
+
+pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
+    let [record] = args.as_slice() else {
+        return Err("usage: pg-spawnd writer-resume RECORD".into());
+    };
+    let record = Path::new(record);
+    let request_path = record
+        .parent()
+        .ok_or("writer record directory missing")?
+        .join("native-request.json");
+    let request: Value =
+        serde_json::from_slice(&fs::read(request_path).map_err(|_| "writer request unavailable")?)
+            .map_err(|_| "invalid saved writer request")?;
+    let requested = request["record_path"]
+        .as_str()
+        .ok_or("writer request record path missing")?;
+    if Path::new(requested)
+        .canonicalize()
+        .ok()
+        .zip(record.canonicalize().ok())
+        .is_none_or(|(a, b)| a != b)
+    {
+        return Err("saved writer request names another record".into());
+    }
+    let _supervisor = crate::writer_control::supervisor_guard(record)?;
+    let mut resumed = crate::writer_control::take_resume(record)?;
+    let fields = resumed
+        .as_object_mut()
+        .ok_or("invalid saved writer record")?;
+    for obsolete in ["ended", "exit_code", "reason", "result"] {
+        fields.remove(obsolete);
+    }
+    resumed["status"] = json!("running");
+    execute_request(&request, resumed)
+}
+
+fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
     record["pid"] = json!(std::process::id());
     #[cfg(target_os = "linux")]
     if let Ok(stat) = fs::read_to_string("/proc/self/stat") {
@@ -461,10 +523,11 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             .ok_or("tool PATH missing")?
             .into(),
         effort: WRITER_EFFORT.into(),
-        state: record_path_state(&request)?,
+        state: record_path_state(request)?,
         brief: request["prompt"].as_str().unwrap_or("").into(),
         push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
         reviews_started: 0,
+        review_override: None,
         review_cli: review_cli()?,
         python_src: None,
     };
@@ -486,6 +549,19 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             return host.save(&record);
         }
     }
+    match review_override(&request["card"]) {
+        Ok(override_) => host.review_override = override_,
+        Err(reason) => {
+            record["status"] = json!("failed");
+            record["exit_code"] = json!(5);
+            record["reason"] = json!(reason);
+            return host.save(&record);
+        }
+    }
+    if let Some((leg, reason)) = &host.review_override {
+        record["requested_review_leg"] = json!(leg);
+        record["review_override_reason"] = json!(reason);
+    }
     record["effort"] = json!(host.effort);
     record["cwd"] = json!(host.cwd);
     host.save(&record)?;
@@ -503,11 +579,17 @@ mod context;
 #[path = "native_writer_review.rs"]
 mod review;
 use review::review_cli;
+#[path = "native_writer_review_route.rs"]
+mod review_route;
 #[cfg(test)]
-use review::{review_run_text, review_verdict};
+use review::{review_diff_base, review_run_text, review_verdict};
+use review_route::review_override;
 #[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;
+#[cfg(test)]
+#[path = "native_writer_host_review_tests.rs"]
+mod review_tests;
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;

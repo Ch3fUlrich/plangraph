@@ -63,7 +63,7 @@ def _door_table_valid(table):
         return False
     normalized = [_path(p, pattern=True) for p in table]
     return (all(normalized) and len(set(normalized)) == len(normalized)
-            and all("/" in p or p in ("roles*", "scopes*") for p in table))
+            and all("/" in p or p in ("roles*", "scopes*", ".gitattributes") for p in table))
 
 
 def _gate_path(path):

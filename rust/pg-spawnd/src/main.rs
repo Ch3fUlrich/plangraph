@@ -4,6 +4,7 @@ mod agent_view_projection;
 mod cli;
 mod cli_review;
 mod doctor_sources;
+mod empty_diff;
 #[cfg(test)]
 mod error_tests;
 mod errors;
@@ -21,6 +22,7 @@ mod land_go_shell;
 mod land_go_tests;
 mod launch;
 mod leg_ref;
+mod lifecycle_cli;
 mod manage_key_alert;
 mod native_writer;
 mod native_writer_host;
@@ -50,6 +52,8 @@ mod review_retry;
 mod review_split;
 mod role_header;
 mod round_progress;
+mod round_replan;
+mod round_replan_ports;
 mod runs;
 mod serve;
 mod serve_options;
@@ -64,6 +68,7 @@ mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
 mod work_mode_config;
+mod writer_control;
 mod writer_ledger;
 
 use pg_worker_core::host_probe::probe;

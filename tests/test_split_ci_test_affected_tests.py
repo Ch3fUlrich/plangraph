@@ -51,7 +51,14 @@ def test_local_selection_always_includes_repository_policy_tests(tmp_path, chang
     plan = module.select_tests(tmp_path, [changed], local=True, files_only=True)
     assert policies <= set(plan['tests'])
     if changed == 'src/pkg/core.py':
-        assert len(plan['tests']) == 45 + len(policies)
+        assert len(plan['tests']) == module.LOCAL_TEST_LIMIT
+        assert plan['ci_deferred'] == 45 + len(policies) - module.LOCAL_TEST_LIMIT
+        ci_plan = module.select_tests(tmp_path, [changed])
+        assert len(ci_plan['tests']) == 45
+        assert 'ci_deferred' not in ci_plan
+        last = 'tests/test_core_44.py'
+        assert last in module.select_tests(tmp_path, [changed, last], local=True,
+                                           files_only=True)['tests']
     # Explicit shard/suite restrictions still apply to local selections.
     assert module.select_tests(tmp_path, [changed], local=True, files_only=True,
                                within=['tests/test_spawner_utf8.py'])['tests'] == ['tests/test_spawner_utf8.py']

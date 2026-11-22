@@ -224,6 +224,101 @@
         assert!(!is_stale_state_refusal(None));
     }
 
+    /// An admission refusal of the attempt activity is found along the cause
+    /// chain, for every kind the worker raises; an untyped or foreign failure is
+    /// not one, so a real crash still takes the crash path.
+    #[test]
+    fn admission_refusal_is_found_along_the_cause_chain() {
+        let typed = |kind: &str| Failure {
+            message: format!("{kind}: c-1"),
+            failure_info: Some(FailureInfo::ApplicationFailureInfo(
+                ApplicationFailureInfo {
+                    r#type: kind.into(),
+                    non_retryable: true,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        for kind in crate::card_admit::REFUSAL_KINDS {
+            let wrapped = Failure {
+                message: "Activity task failed".into(),
+                cause: Some(Box::new(typed(kind))),
+                ..Default::default()
+            };
+            assert_eq!(admission_refusal(Some(&wrapped)), Some(kind));
+            assert_eq!(admission_refusal(Some(&typed(kind))), Some(kind));
+        }
+        assert_eq!(admission_refusal(Some(&typed(STALE_STATE_FAILURE))), None);
+        assert_eq!(admission_refusal(Some(&Failure::default())), None);
+        assert_eq!(admission_refusal(None), None);
+        assert_eq!(ADMISSION_REFUSAL_PATCH, "admission-refusal-terminal-v1");
+    }
+
+    /// The workflow reads a failed attempt activity through
+    /// `classify_attempt_failure`: a typed refusal ends the card (only once the
+    /// replay marker holds), every other failure is a synthetic attempt.
+    #[test]
+    fn a_refusal_ends_the_card_and_other_failures_stay_synthetic_attempts() {
+        let refusal = Failure {
+            message: "Activity task failed".into(),
+            cause: Some(Box::new(Failure {
+                failure_info: Some(FailureInfo::ApplicationFailureInfo(
+                    ApplicationFailureInfo {
+                        r#type: "card_not_allowlisted".into(),
+                        non_retryable: true,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert_eq!(
+            classify_attempt_failure(Some(&refusal), None, || true),
+            AttemptFailure::Refused("card_not_allowlisted".into())
+        );
+        // A history recorded before the marker replays the old crash path.
+        assert_eq!(
+            classify_attempt_failure(Some(&refusal), None, || false),
+            AttemptFailure::Synthetic(ExitClass::WorkerCrash)
+        );
+        // The marker is asked about only when a refusal was found.
+        let plain = Failure::default();
+        assert_eq!(
+            classify_attempt_failure(Some(&plain), None, || panic!("marker recorded")),
+            AttemptFailure::Synthetic(ExitClass::WorkerCrash)
+        );
+        for (timeout, class) in [
+            (TimeoutType::Heartbeat, ExitClass::Stall),
+            (TimeoutType::StartToClose, ExitClass::Timeout),
+            (TimeoutType::ScheduleToClose, ExitClass::Timeout),
+            (TimeoutType::ScheduleToStart, ExitClass::Stall),
+        ] {
+            assert_eq!(
+                classify_attempt_failure(None, Some(timeout), || true),
+                AttemptFailure::Synthetic(class)
+            );
+        }
+    }
+
+    /// The kinds the workflow ends a card on are exactly the `type_name`s the
+    /// worker's admission refusals carry.
+    #[test]
+    fn refusal_kinds_match_the_worker_refusals() {
+        use crate::card_admit::{attempt_error, AdmissionReason};
+        for reason in [
+            AdmissionReason::NotAllowlisted("c-1".into()),
+            AdmissionReason::NotClaimable("c-1".into()),
+            AdmissionReason::Overlap("c-1".into()),
+        ] {
+            let temporalio_sdk::activities::ActivityError::Application(f) = attempt_error(reason.into()) else {
+                panic!("expected application failure")
+            };
+            assert!(crate::card_admit::REFUSAL_KINDS.contains(&f.type_name().unwrap()));
+        }
+    }
+
     #[test]
     fn a_merge_time_verdict_replaces_the_attempts_entry_not_adds_one() {
         // Attempt 1 ran ok (entry pushed), then failed its post-rebase check.

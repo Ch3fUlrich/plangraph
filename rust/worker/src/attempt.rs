@@ -276,6 +276,7 @@ fn run_attempt_inner(
         timeout: Some(cfg.start_to_close),
         grace: cfg.kill_grace,
         max_output: 1 << 20,
+        redact_discarded: true,
     };
     // The agent's private HOME lives beside the worktree (never in its diff) and
     // goes away with the attempt. The check below gets its own HOME, so a login
@@ -582,7 +583,7 @@ fn clear_dest(repo: &Path, dest: &Path) -> Result<(), AttemptError> {
 }
 
 // Never grant an attempt write access to the shared system temp root.
-fn attempt_tmp() -> std::io::Result<tempfile::TempDir> {
+pub(crate) fn attempt_tmp() -> std::io::Result<tempfile::TempDir> {
     tempfile::Builder::new().prefix("pg-attempt-").tempdir()
 }
 

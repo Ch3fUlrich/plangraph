@@ -57,6 +57,7 @@ Binding on every level. Each line names its source; read the source, never a cop
     D-5903 enables agy-gemini-4-hydrogen-high for implementation, unwitnessed.
     D-5924 supersedes D-5903's medium, inline-only review: Hydrogen reviews use agy CLI at high effort with read-only worktree access.
     Authorized quota fallbacks follow D-5952 and the Work modes section below; muse-spark-1.3 = opencode ACP.
+12. Nothing lands while `plangraph main-state` is not green, and no environment trial runs on main: runner variables (`CI_SELF_HOSTED*`, `*_RUNNER_LABELS`) change only after a green `workflow_dispatch` full run on a non-main branch, recorded in the D-row [D-6514; docs/ci-parallel.md "Red main and runner switches"].
 
 ## Work modes
 
@@ -151,3 +152,14 @@ persist the job directory in the handoff. On start, including successor sessions
 read `plangraph resume-digest JOB` before spawning or scheduling follow-up work.
 The detached service owns the wait and its authorized push/merge steps; result
 files are the recovery contract when the orchestrator is killed.
+
+## Learn as you go
+
+- When something fails, stalls or surprises you (a wrong assumption, a tool that lied, a gate
+  that blocked valid work, a check that passed wrong work), report one line to your
+  orchestrator in the same turn: `LESSON <what happened> <evidence: run id, file:line, command output>`.
+- The orchestrator defines an `LE-*` keeper item the same beat: what happened with evidence,
+  the cause, the change in code that prevents it, a done check. A prompt line or a memory note
+  is never the fix.
+- Before you start work in an area, read the open and done `LE-*` items that name its files.
+- A lesson that happens twice raises the priority of its item.

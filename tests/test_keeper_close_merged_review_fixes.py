@@ -1,15 +1,55 @@
 """PR 878 review regressions: authority, freshness and witnessed seats."""
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.evidence import VERIFIERS
 from plangraph.keeper.evidence_git import GitAdapter
-from test_keeper_close_merged import HEAD, MERGE, unseated_w
+from test_keeper_close_merged import HEAD, MERGE, MergedGit, unseated_w, w  # noqa: F401
 from test_keeper_close_merged_router_path import mirrored_reviews
 from test_keeper_waiver_validation import historical_waiver_fixture
+
+
+def test_tip_merge_with_plan_item_trailers_closes_both_keys(w, tmp_path, monkeypatch):
+    from plangraph.keeper import context_sources
+
+    repo = tmp_path / "tip-merge"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(repo), "-c", "user.name=Fixture",
+             "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+             *args], text=True).strip()
+
+    git("init", "-q", "-b", "main")
+    git("commit", "--allow-empty", "-qm", "base")
+    git("checkout", "-qb", "fixture-pr")
+    git("commit", "--allow-empty", "-qm", "work")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    subject = "Merge work mentioning #42 (#1087)"
+    git("merge", "--no-ff", "-q", "-m", subject,
+        "-m", "Plan-Item: demo:A\nPlan-Item: demo:H", "fixture-pr")
+    tip = git("rev-parse", "main")
+    adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    assert context_sources.named_merge(adapter, "demo", tip) == {"head": head, "pr": 1087, "landed": tip}
+    w.store.ctx["git"] = adapter
+    monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
+    w.decision_path.write_text(f"| D-5504 | demo | GO {head} demo:A demo:H |\n")
+    w.conn.execute("UPDATE items SET state='open' WHERE key IN ('demo:A', 'demo:H')")
+
+    for key in ("demo:A", "demo:H"):
+        result = w.store.close_merged(w.p("router"), key, "D-5504",
+                                      ["google", "deepseek"], from_open=True, apply=True)
+        assert result["state"] == "done"
+        assert w.store._evidence(key)[-1]["ref"]["prs"][0]["pr"] == 1087
+        indexed = context_sources.indexed_work(context_sources.work_index(adapter, "demo"), key)
+        assert indexed["commits"][0]["merge"] == {"sha": tip, "subject": subject, "pr": 1087}
 
 
 @pytest.mark.parametrize("name", [
@@ -93,11 +133,14 @@ def test_complete_pr_scan_refreshes_or_refuses(unseated_w, monkeypatch, failed):
         if args[0] == "fetch":
             refreshed.append(args)
             return SimpleNamespace(returncode=int(failed), stdout="")
+        if args[0] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout=MERGE)
         if "--format=%cI" in args:
             return SimpleNamespace(returncode=0, stdout="2026-11-12T12:00:00Z")
         return SimpleNamespace(returncode=0, stdout=f"{'2' * 40} {HEAD}")
     monkeypatch.setattr(git, "_run", run)
     monkeypatch.setattr(git, "merge_commit_of", lambda *a: (MERGE, "fixture"))
+    monkeypatch.setattr(git, "deploy_changes", lambda *a: [])
     world.store.ctx["git"] = git
     original = world.store._merged_open_prs_checked
     def checked(*args):
@@ -125,6 +168,8 @@ def test_refresh_exposes_previously_unseen_pr(unseated_w, monkeypatch):
         if args[0] == "fetch":
             refreshed.append(args)
             return SimpleNamespace(returncode=0, stdout="")
+        if args[0] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout=MERGE)
         if "--format=%cI" in args:
             return SimpleNamespace(returncode=0, stdout="2026-11-12T12:00:00Z")
         return SimpleNamespace(returncode=0, stdout=f"{'2' * 40} {args[-1]}")
@@ -133,6 +178,7 @@ def test_refresh_exposes_previously_unseen_pr(unseated_w, monkeypatch):
             [{"sha": other, "merge": {"pr": 900}}] if refreshed else [])
     monkeypatch.setattr(git, "_run", run)
     monkeypatch.setattr(git, "merge_commit_of", lambda repo, sha, ref: (sha, "fixture"))
+    monkeypatch.setattr(git, "deploy_changes", lambda *a: [])
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", commits)
     world.store.ctx["git"] = git
     with pytest.raises(Refused, match="merged_pr_go_missing"):
@@ -171,6 +217,292 @@ def test_selected_go_of_another_item_refuses(unseated_w, monkeypatch, project, k
     with pytest.raises(Refused, match="merged_pr_go_scope_mismatch"):
         world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
     assert world.store._item("demo:H")["state"] == "in_review"
+
+
+# ----- LE-MERGED-UNIT-NEVER-DEPLOYED: a merged unit is not done until active on every host
+
+def _ships(w, monkeypatch, paths, hosts="alpha, beta"):
+    git = MergedGit()
+    git.ref_commit = lambda repo, ref: "1" * 40
+    git.deploy_changes = lambda repo, sha, ref: [
+        p if isinstance(p, tuple) else ("A", p) for p in paths]
+    w.store.ctx = {**w.store.ctx, "git": git}
+    w.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    w.conn.execute("UPDATE items SET description=? WHERE key='demo:A'",
+                   (f"Why: x\nHow: y\nDeploy-Hosts: {hosts}\n" if hosts else "Why: x\nHow: y\n",))
+
+
+def _deploy(w, host, unit, is_active="active"):
+    return w.store.add_evidence_router(w.p("router"), "demo:A", "deploy",
+                                       {"host": host, "unit": unit, "is_active": is_active})
+
+
+UNIT = ["deploy/systemd/pg-disk-hygiene.service", "deploy/systemd/pg-disk-hygiene.timer"]
+
+
+def test_shipped_unit_without_deploy_proof_stays_open_and_alerts(w, monkeypatch):
+    _ships(w, monkeypatch, UNIT)
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["closed"] is False and out["reason"] == "deploy_pending"
+    assert "alpha:pg-disk-hygiene.timer" in out["missing"]
+    assert w.store._item("demo:A")["state"] == "in_review"
+    alerts = w.store.alerts(w.p("reader"))
+    assert [f["code"] for f in alerts["findings"] if f["key"] == "demo:A"] == ["deploy_pending"]
+
+
+def test_unit_closes_once_every_named_host_reports_active(w, monkeypatch):
+    _ships(w, monkeypatch, UNIT)
+    for host in ("alpha", "beta"):
+        for unit in ("pg-disk-hygiene.service", "pg-disk-hygiene.timer"):
+            assert _deploy(w, host, unit)["verified"]
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["state"] == "done"
+
+
+def test_one_host_missing_keeps_the_item_open(w, monkeypatch):
+    _ships(w, monkeypatch, UNIT)
+    for unit in ("pg-disk-hygiene.service", "pg-disk-hygiene.timer"):
+        _deploy(w, "alpha", unit)
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["missing"] == ["beta:pg-disk-hygiene.service", "beta:pg-disk-hygiene.timer"]
+
+
+def test_inactive_report_is_not_proof_and_unnamed_hosts_stay_pending(w, monkeypatch):
+    _ships(w, monkeypatch, UNIT, hosts="")
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["missing"] == ["(hosts unnamed)"]
+    assert _deploy(w, "alpha", "x.service", "inactive")["verified"] is False
+
+
+def test_host_binary_needs_installed_proof_and_other_diffs_close_as_before(w, monkeypatch):
+    _ships(w, monkeypatch, ["rust/pg-disk/src/main.rs"], hosts="alpha")
+    assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["missing"] == [
+        "alpha:bin:pg-disk"]
+    _ships(w, monkeypatch, ["src/plangraph/keeper/store.py", "docs/KEEPER.md"])
+    assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
+
+
+def test_deploy_targets_count_a_binary_only_when_its_entry_point_is_added():
+    from plangraph.keeper.evidence import deploy_targets
+    assert deploy_targets([("M", "rust/pg-disk/src/main.rs"), ("D", "rust/pg-old/src/bin/tool.rs")]) == []
+    assert deploy_targets([("A", "rust/pg-disk/src/main.rs"), ("A", "rust/pg/src/bin/tool.rs")]) == [
+        "bin:pg-disk", "bin:tool"]
+    assert deploy_targets([("M", "deploy/systemd/a.service")]) == ["a.service"]
+    assert deploy_targets(["rust/pg-disk/src/main.rs"]) == ["bin:pg-disk"]
+
+
+def _pr_repo(tmp_path, follow_up_files, tagged_files=None, *, main_after=None, tag_merge=False):
+    """A repo whose PR has a tagged commit and an untagged follow-up that adds `follow_up_files`."""
+    import os
+    import subprocess
+    env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                              capture_output=True, text=True, env=env).stdout.strip()
+    repo = tmp_path / "pr-repo"
+    (repo / "rust/pg-old/src").mkdir(parents=True)
+    (repo / "rust/pg-old/src/main.rs").write_text("fn main() {}\n")
+    git("-c", "init.defaultBranch=main", "init", "-q")
+    git("add", "-A")
+    git("commit", "-m", "seed")
+    git("checkout", "-q", "-b", "batch")
+    (repo / "NOTES.md").write_text("tagged work\n")
+    for path, text in (tagged_files or {}).items():
+        if text is None:
+            (repo / path).unlink()
+        else:
+            (repo / path).write_text(text)
+    git("add", "-A")
+    git("commit", "-m", "work\n\nPlan-Item: demo:A")
+    for path, text in follow_up_files.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        if text is None:
+            (repo / path).unlink()
+        else:
+            (repo / path).write_text(text)
+    git("add", "-A")
+    git("commit", "-m", "follow-up without a trailer")
+    tip = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    for path, text in (main_after or {}).items():  # the default branch moves on after the branch point
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+        git("add", "-A")
+        git("commit", "-m", f"main gains {path}")
+    subject = "batch (#1078)" + ("\n\nPlan-Item: demo:A" if tag_merge else "")
+    git("merge", "-q", "--no-ff", "-m", subject, "batch")
+    return repo, tip
+
+
+def _close_pr_repo(w, tmp_path, monkeypatch, follow_up_files, tagged_files=None, **repo_args):
+    repo, tip = _pr_repo(tmp_path, follow_up_files, tagged_files, **repo_args)
+    from plangraph.keeper.evidence_git import GitAdapter
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    w.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    w.conn.execute("UPDATE items SET state='open', description=? WHERE key='demo:A'",
+                   ("Why: x\nHow: y\nDeploy-Hosts: alpha\n",))
+    w.decision_path.write_text(f"| D-6395 | demo | GO #1078 demo:A; GO-HEAD {tip} | ROUTER |\n")
+    return w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
+                                from_open=True, apply=True)
+
+
+def test_an_untagged_follow_up_of_the_same_pr_that_adds_a_unit_needs_deploy_proof(w, tmp_path, monkeypatch):
+    out = _close_pr_repo(w, tmp_path, monkeypatch,
+                         {"deploy/systemd/new.service": "[Service]\n"})
+    assert out["closed"] is False and out["reason"] == "deploy_pending"
+    assert out["missing"] == ["alpha:new.service"]
+
+
+def test_editing_an_existing_binary_entry_point_ships_no_new_host_binary(w, tmp_path, monkeypatch):
+    out = _close_pr_repo(w, tmp_path, monkeypatch,
+                         {"rust/pg-old/src/main.rs": "fn main() { run(); }\n"})
+    assert out["state"] == "done"
+
+
+@pytest.mark.parametrize("tagged", [{"rust/pg-old/src/main.rs": "fn main() { tagged(); }\n"},
+                                    {"rust/pg-old/src/main.rs": None}])
+def test_a_tagged_edit_or_deletion_of_an_existing_entry_point_ships_no_new_host_binary(
+        w, tmp_path, monkeypatch, tagged):
+    out = _close_pr_repo(w, tmp_path, monkeypatch, {"docs/x.md": "x\n"}, tagged)
+    assert out["state"] == "done"
+
+
+def test_an_untagged_deletion_of_an_existing_entry_point_ships_no_new_host_binary(w, tmp_path, monkeypatch):
+    out = _close_pr_repo(w, tmp_path, monkeypatch, {"rust/pg-old/src/main.rs": None})
+    assert out["state"] == "done"
+
+
+def test_a_tagged_merge_is_read_against_its_first_parent_only(w, tmp_path, monkeypatch):
+    # The default branch gains a binary after the PR branched; the PR itself is docs only.
+    out = _close_pr_repo(w, tmp_path, monkeypatch, {"docs/x.md": "x\n"},
+                         main_after={"rust/pg-main/src/main.rs": "fn main() {}\n"},
+                         tag_merge=True)
+    assert out["state"] == "done"
+
+
+def test_an_added_host_binary_in_an_untagged_follow_up_needs_installed_proof(w, tmp_path, monkeypatch):
+    out = _close_pr_repo(w, tmp_path, monkeypatch,
+                         {"rust/pg-new/src/main.rs": "fn main() {}\n"})
+    assert out["missing"] == ["alpha:bin:pg-new"]
+
+
+# ----- LE-MERGE-SUBJECT-WITHOUT-PR-NUMBER: GO row PR fallback when merge subject lacks #N
+
+def _subjectless_repo(tmp_path, subject):
+    import os
+    import subprocess
+    env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    def git(repo, *args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                              capture_output=True, text=True, env=env).stdout.strip()
+    repo = tmp_path / "subj-repo"
+    repo.mkdir()
+    git(repo, "-c", "init.defaultBranch=main", "init", "-q")
+    git(repo, "commit", "--allow-empty", "-m", "seed")
+    git(repo, "checkout", "-q", "-b", "prior")
+    git(repo, "commit", "--allow-empty", "-m", "prior pr")
+    prior_head = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "-m", "prior (#10)", "prior")
+    git(repo, "checkout", "-q", "-b", "batch7")
+    git(repo, "commit", "--allow-empty", "-m", "work\n\nPlan-Item: demo:A")
+    anc_head = git(repo, "rev-parse", "HEAD")
+    git(repo, "commit", "--allow-empty", "-m", "batch tip")
+    tip_head = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "-m", subject, "batch7")
+    git(repo, "checkout", "-q", "-b", "loose")
+    git(repo, "commit", "--allow-empty", "-m", "unmerged")
+    unmerged = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    return repo, prior_head, anc_head, tip_head, unmerged
+
+
+@pytest.mark.parametrize("use_ancestor", [False, True])
+def test_subjectless_merge_closes_via_go_row_pr_and_head(w, tmp_path, monkeypatch, use_ancestor):
+    repo, _, anc_head, tip_head, _ = _subjectless_repo(
+        tmp_path, "Spawner admission window, session counter, prepush bound (Batch 7, GO D-6395)")
+    from plangraph.keeper.evidence_git import GitAdapter
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
+    chosen = anc_head if use_ancestor else tip_head
+    w.decision_path.write_text(f"| D-6395 | demo | GO #1078 demo:A; GO-HEAD {chosen} | ROUTER |\n")
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
+                               from_open=True, apply=True)
+    assert out["state"] == "done"
+    assert w.store._evidence("demo:A")[-1]["ref"]["prs"] == [
+        {"pr": 1078, "head": chosen, "decision_id": "D-6395"}]
+
+
+@pytest.mark.parametrize("subject,pr", [
+    ("Follow up on #42 (#1078)", 1078),
+    ("Fix #7 and #8 (#9)", 9),
+    ("Merge pull request #12 from x/y", 12),
+    ("no number", None),
+    ("see #5 and #6", 5),
+])
+def test_merge_subject_pr_prefers_the_trailing_canonical_number(subject, pr):
+    from plangraph.keeper.context_sources import subject_pr
+    assert subject_pr(subject) == pr
+
+
+def test_a_title_with_an_earlier_reference_closes_on_the_trailing_pr(w, tmp_path, monkeypatch):
+    repo, _, _, tip_head, _ = _subjectless_repo(tmp_path, "Follow up on #42 (#1078)")
+    from plangraph.keeper.evidence_git import GitAdapter
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
+    w.decision_path.write_text(f"| D-6395 | demo | GO #1078 demo:A; GO-HEAD {tip_head} | ROUTER |\n")
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
+                               from_open=True, apply=True)
+    assert out["state"] == "done"
+    assert w.store._evidence("demo:A")[-1]["ref"]["prs"] == [
+        {"pr": 1078, "head": tip_head, "decision_id": "D-6395"}]
+
+
+def test_the_work_index_records_the_trailing_pr_of_the_merge_that_introduced_a_commit(tmp_path):
+    repo, _, _, tip_head, _ = _subjectless_repo(tmp_path, "Follow up on #42 (#1078)")
+    from plangraph.keeper import context_sources
+    from plangraph.keeper.evidence_git import GitAdapter
+    adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    index = context_sources.work_index(adapter, "demo", fresh=True)
+    assert [c["merge"]["pr"] for c in index["commits"]["demo:A"]] == [1078]
+    commits = context_sources.plan_item_commits(adapter, "demo", "demo:A", fetch=False)
+    assert [c["merge"]["pr"] for c in commits] == [1078]
+    assert context_sources.pr_merge_of(adapter, "demo", tip_head, fallback_pr=None)["pr"] == 1078
+
+
+@pytest.mark.parametrize("case", ["no_pr_in_go", "prior_head", "unmerged_head", "other_pr_on_ancestor"])
+def test_subjectless_merge_refuses_bad_pr_or_head(w, tmp_path, monkeypatch, case):
+    subject = ("batch (#1078)" if case == "other_pr_on_ancestor"
+               else "Batch 7 without pr number")
+    repo, prior_head, anc_head, tip_head, unmerged = _subjectless_repo(tmp_path, subject)
+    from plangraph.keeper.evidence_git import GitAdapter
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
+    row = {
+        "no_pr_in_go": f"GO {tip_head}",
+        "prior_head": f"GO #1078 demo:A; GO-HEAD {prior_head}",
+        "unmerged_head": f"GO #1078 demo:A; GO-HEAD {unmerged}",
+        "other_pr_on_ancestor": f"GO #999 demo:A; GO-HEAD {anc_head}",
+    }[case]
+    w.decision_path.write_text(f"| D-6395 | demo | {row} | ROUTER |\n")
+    with pytest.raises(Refused):
+        w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
+                             from_open=True, apply=True)
+    assert w.store._item("demo:A")["state"] == "open"
 
 
 def _passed_payload(world, key):
@@ -229,3 +561,115 @@ def test_off_never_flags_away_the_credential_lane_seat_rule(unseated_w, risk):
     with pytest.raises(Refused, match="NO-WITNESS|insufficient_non_anthropic"):
         w.store.close_merged(w.p("router"), "demo:H", "D-5504")
     assert w.store._item("demo:H")["state"] == "in_review"
+
+
+# --- KEEPER-CLOSE-KEY-IN-GO-PART-TABLE: a merged GO row is frozen evidence, so its part table
+# (the heads it names) can vouch for a key its key list omits.
+
+def _train_repo(path):
+    """main <- train(#9) <- parts: ``partP`` (Plan-Item demo:H) and ``partQ`` (Plan-Item demo:A)."""
+    import subprocess
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    lines, when = [], 1_760_000_000
+
+    def commit(ref, mark, message, parents):
+        nonlocal when
+        when += 60
+        lines.extend([f"commit {ref}", f"mark :{mark}", f"committer T <t@example.invalid> {when} +0000",
+                      f"data {len(message.encode())}", message])
+        lines.extend(f"{'from' if n == 0 else 'merge'} :{p}" for n, p in enumerate(parents))
+        lines.append("")
+    commit("refs/heads/main", 1, "base", [])
+    commit("refs/heads/partP", 2, "work p\n\nPlan-Item: demo:H\nPlan-Item: demo:SPLIT", [1])
+    commit("refs/heads/partQ", 3, "work q\n\nPlan-Item: demo:A\nPlan-Item: demo:SPLIT", [1])
+    commit("refs/heads/train", 4, "train", [1, 2, 3])
+    commit("refs/heads/main", 5, "Landing train (#9)", [1, 4])
+    commit("refs/heads/partR", 6, "late\n\nPlan-Item: demo:LATE", [2])
+    commit("refs/heads/main", 7, "Later (#10)", [5, 6])
+    subprocess.run(["git", "-C", str(path), "fast-import", "--quiet"], input="\n".join(lines) + "\n",
+                   text=True, check=True)
+    rev = lambda ref: subprocess.run(["git", "-C", str(path), "rev-parse", ref], text=True,
+                                     capture_output=True, check=True).stdout.strip()
+    return {name: rev(name) for name in ("partP", "partQ", "partR", "train")}
+
+
+def _part_table_world(world, monkeypatch, tmp_path, table):
+    from plangraph.keeper.context_sources import open_lanes  # noqa: F401 - the module the patch targets
+    heads = _train_repo(tmp_path / "train")
+    row = (f"| D-5504 | demo | GO #9 demo:X; GO-HEAD {heads['train']}; Per-part table: "
+           + table.format(**{k: v[:9] for k, v in heads.items()}) + " | ROUTER | 2026-11-12 |\n")
+    world.decision_path.write_text(
+        "| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n" + row
+        + "| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H demo:A | OPERATOR | 2026-11-14 |\n")
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", world.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *args, **kwargs: [])
+    world.store.ctx["git"] = GitAdapter({"demo": {"path": str(tmp_path / "train"), "ref": "main"}})
+    return heads
+
+
+def _scope(world, key):
+    item = dict(world.store._item("demo:H"), key=key)
+    return world.store._merged_go_scope_matches("D-5504", item, None, require_key=False)
+
+
+def test_part_table_head_vouches_for_a_key_the_list_omits(unseated_w, monkeypatch, tmp_path):
+    heads = _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partP}, keys demo:X")
+    assert _scope(unseated_w, "demo:H")
+    result = unseated_w.store.close_merged(unseated_w.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert result["state"] == "done"
+    ref = unseated_w.store._evidence("demo:H")[-1]["ref"]
+    assert ref["go_part"] == heads["partP"] and ref["merged_head"] == heads["train"]
+    assert unseated_w.store.verify_integrity() == []
+
+
+def test_key_in_a_part_the_row_does_not_name_still_refuses(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partP}, keys demo:X")
+    assert not _scope(unseated_w, "demo:A")
+    with pytest.raises(Refused, match="merged_pr_go_scope_mismatch"):
+        unseated_w.store.close_merged(unseated_w.p("router"), "demo:A", "D-5504", waive_seats="D-6000")
+
+
+def test_key_in_no_part_still_refuses(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path,
+                      "Batch 23, part head {partP} and fix {partQ}, keys demo:X")
+    assert not _scope(unseated_w, "demo:NOWHERE")
+
+
+def test_the_go_head_itself_is_not_a_part(unseated_w, monkeypatch, tmp_path):
+    """A table that names the train head as a part would vouch for every key of the train."""
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 1, part head {train}, keys demo:X")
+    assert not _scope(unseated_w, "demo:H")
+
+
+def test_a_part_outside_the_go_head_does_not_vouch(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 24, part head {partR}, keys demo:X")
+    assert not _scope(unseated_w, "demo:LATE")
+
+
+def test_a_head_outside_a_part_entry_does_not_vouch(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "rejected head {partP}, keys demo:X")
+    assert not _scope(unseated_w, "demo:H")
+
+
+def test_a_key_split_across_a_named_and_an_unnamed_part_refuses(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partP}, keys demo:X")
+    assert not _scope(unseated_w, "demo:SPLIT")
+    both = "Batch 23, part head {partP}, keys demo:X; Batch 24, heads {partQ}, keys demo:Y"
+    _part_table_world(unseated_w, monkeypatch, tmp_path / "again", both)
+    assert _scope(unseated_w, "demo:SPLIT")
+
+
+def test_part_heads_in_code_spans_and_lists_are_read(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path,
+                      "Batch 22 (folded PR #1088, closed unmerged), heads `{partQ}` and fix `{partP}`, keys demo:X")
+    assert _scope(unseated_w, "demo:H") and _scope(unseated_w, "demo:A")
+
+
+def test_a_part_listed_under_another_ruling_of_the_row_does_not_vouch(unseated_w, monkeypatch, tmp_path):
+    heads = _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partQ}, keys demo:X")
+    path = unseated_w.decision_path
+    text = path.read_text().replace("| D-5504 | demo | GO #9 demo:X;", "| D-5504 | demo | RULINGS (1) HOLD Batch 23, part head "
+                                    + heads["partP"] + ", keys demo:Z; (2) GO #9 demo:X;")
+    path.write_text(text)
+    assert not _scope(unseated_w, "demo:H")
+    assert _scope(unseated_w, "demo:A")

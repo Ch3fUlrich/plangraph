@@ -15,6 +15,33 @@ from test_md_sync_pin_retry import (  # noqa: E402
 __all__ = ["repo", "site", "srv", "token", "world"]
 
 
+def test_invalid_close_report_is_once_per_row_across_invocations(
+        world, site, srv, token, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    path = site / "decisions-log.md"
+    rows = (dec_row("D-512", "bad", "routing:R-1@not-a-sha).", project="routing")
+            + dec_row("D-513", "missing", "routing:MISSING.", project="routing"))
+    path.write_text(rows, encoding="utf-8")
+    synthetic(site, questions="", answers="")
+    status = tmp_path / "status.json"
+    for expected in (1, 0):
+        rc, out, err = sync(site, srv, token, "--status-file", str(status))
+        assert rc == 0, out + err
+        assert out.count("invalid Closes token in D-512") == expected
+        assert not status_of(status)["ops"]
+        assert [row["key"] for row in status_of(status)["close_skipped"]] == ["routing:MISSING"]
+
+    path.write_text(rows.replace("routing:R-1@not-a-sha).", "routing:R-1."), encoding="utf-8")
+    rc, out, err = sync(site, srv, token, "--apply", "--status-file", str(status))
+    assert rc == 0, out + err
+    assert status_of(status)["d_closes"] == [{"key": "routing:R-1", "decision": "D-512"}]
+    assert status_of(status)["applied"] is True
+    assert world.store._item("routing:R-1")["state"] == "done"
+    rc, out, err = sync(site, srv, token, "--apply", "--status-file", str(status))
+    assert rc == 0, out + err
+    assert status_of(status)["ops"] == 0
+
+
 # ------------------------------------------------ dclose: seat clause guard
 
 def seated(ident, done, tier="high", state="in_review"):

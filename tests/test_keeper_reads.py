@@ -1,5 +1,8 @@
 """Read verbs: ready, show, blocked, waves, critical_path, percent, alerts,
 digest, snapshot, whoami — all built on plangraph.views."""
+import json
+import re
+
 import pytest
 
 from keeper_util import World, seed, to_claimed, to_done, to_in_review
@@ -137,6 +140,244 @@ def test_alerts_drop_findings_and_refusals_of_done_items(w):
     assert alerts["history"]["refusal_keys"] >= 1
     rows = w.conn.execute("SELECT COUNT(*) FROM audit_findings").fetchone()[0]
     assert rows >= 1
+
+
+# ----------------------------------------- alerts table (raise/clear, no history scan)
+
+def _telemetry(w, action):
+    return [tuple(r) for r in w.conn.execute(
+        "SELECT key, code FROM alert_log WHERE action=? ORDER BY id", (action,))]
+
+
+def _alert_rows(w):
+    return [tuple(r) for r in w.conn.execute(
+        "SELECT kind, key, code, state, n FROM alerts ORDER BY id")]
+
+
+def test_alert_raise_and_clear_write_one_row_and_one_telemetry_row_each(w):
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    assert _alert_rows(w) == [("finding", "demo:A", "late", "open", 1)]
+    assert _telemetry(w, "alert_raised") == [("demo:A", "late")]
+    assert _telemetry(w, "alert_cleared") == []
+    to_done(w, "demo:A")
+    assert _alert_rows(w) == [("finding", "demo:A", "late", "resolved", 1)]
+    assert _telemetry(w, "alert_cleared") == [("demo:A", "late")]
+    assert _telemetry(w, "alert_raised") == [("demo:A", "late")]
+
+
+def test_repeated_finding_updates_its_row_without_a_second_raise(w):
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    w.store._finding("demo:A", "late", "y", w.store.now())
+    assert _alert_rows(w) == [("finding", "demo:A", "late", "open", 2)]
+    assert len(_telemetry(w, "alert_raised")) == 1
+
+
+def test_refusal_alert_raises_at_the_second_refusal_and_clears_with_the_item(w):
+    _refuse_twice(w)
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 2)]
+    assert _telemetry(w, "alert_raised") == [("demo:A", "refused")]
+    to_done(w, "demo:A")
+    assert _alert_rows(w)[0][3] == "resolved"
+    assert _telemetry(w, "alert_cleared") == [("demo:A", "refused")]
+
+
+def test_the_reaper_clears_alerts_older_than_the_window(w):
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    w.clock.advance(w.store.alert_window_s + 60)
+    w.store.reap(w.p("system"))
+    assert _alert_rows(w)[0][3] == "resolved"
+    assert _telemetry(w, "alert_cleared") == [("demo:A", "late")]
+
+
+class _StatementSpy:
+    """Record the store's SQL before handing it to either backend."""
+
+    def __init__(self, conn):
+        self._conn, self.sql = conn, []
+
+    def execute(self, sql, *args):
+        self.sql.append(" ".join(sql.split()))
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_alerts_call_reads_only_the_alerts_table(w, monkeypatch):
+    _refuse_twice(w)
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    spy = _StatementSpy(w.store.conn)
+    with monkeypatch.context() as patch:
+        patch.setattr(w.store, "conn", spy)
+        alerts = w.store.alerts(w.p("reader"))
+    assert [f["code"] for f in alerts["findings"]] == ["late"]
+    assert {r["key"] for r in alerts["refusals"]} == {"demo:A"}
+    reads = [sql.lower() for sql in spy.sql if sql.upper().startswith(("SELECT ", "WITH "))]
+    tables = {table for sql in reads for table in re.findall(r'\b(?:from|join) +"?(\w+)', sql)}
+    # Principal authentication and item scoping still read their own tables.
+    assert tables - {"principals", "items", "edges"} == {"alerts"}, reads
+
+
+def test_backfill_builds_the_table_from_history_and_is_idempotent(w):
+    _refuse_twice(w)
+    w.store._finding("demo:A", "old_code", "old", w.store.now())
+    live = _alert_rows(w)
+    # A keeper that predates the table: history rows only.
+    w.conn.execute("DELETE FROM alerts")
+    first = w.store.backfill_alerts()
+    again = w.store.backfill_alerts()
+    assert first["skipped"] is False and again["skipped"] is True
+    assert sorted(_alert_rows(w)) == sorted(live)
+    assert len(_telemetry(w, "alerts_backfill")) == 1
+    assert [f["code"] for f in w.store.alerts(w.p("reader"))["findings"]] == ["old_code"]
+
+
+def test_a_refusal_older_than_the_window_stops_counting_while_newer_ones_continue(w):
+    window = w.store.alert_window_s
+    for n in range(3):
+        if n:
+            w.clock.advance(window * 0.75)
+        with pytest.raises(Refused):
+            w.store.claim(w.p("reader"), "demo:A")
+    # Refusals at 0, 0.75 and 1.5 windows: when the third landed only two were current.
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 2)]
+    # Raised at the second refusal, expired by the third, raised again by it.
+    assert len(_telemetry(w, "alert_raised")) == 2
+    counts = {r["key"]: r["count"] for r in w.store.alerts(w.p("reader"))["refusals"]}
+    assert counts == {"demo:A": 2}
+    # A refusal after a long quiet spell restarts the count.
+    w.clock.advance(window * 2)
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 1)]
+
+
+def test_first_backfill_merges_into_the_live_rows_of_the_same_identity(w):
+    _refuse_twice(w)
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    live = _alert_rows(w)
+    assert w.store.backfill_alerts()["skipped"] is False
+    # One row per alert identity: the live rows were merged, not joined by a second one.
+    assert _alert_rows(w) == live
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    assert _alert_rows(w)[0][4] == 3
+    assert w.store.backfill_alerts()["skipped"] is True
+    assert len(_alert_rows(w)) == 2
+
+
+def test_backfill_checks_its_marker_inside_the_write_transaction(w, monkeypatch):
+    _refuse_twice(w)
+
+    spy = _StatementSpy(w.store.conn)
+    with monkeypatch.context() as patch:
+        patch.setattr(w.store, "conn", spy)
+        w.store.backfill_alerts()
+    marker = next(i for i, sql in enumerate(spy.sql) if "action='alerts_backfill'" in sql)
+    begin = next(i for i, sql in enumerate(spy.sql) if sql.startswith("BEGIN"))
+    assert begin < marker
+
+
+def test_backfill_does_not_make_an_expired_refusal_count_toward_an_alert(w):
+    window = w.store.alert_window_s
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    w.clock.advance(window + 60)
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 1)]
+    w.store.backfill_alerts()
+    # One current refusal and one expired one: still no alert, one row.
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 1)]
+    assert w.store.alerts(w.p("reader"))["refusals"] == []
+
+
+def test_backfill_orders_its_bounds_by_time_when_the_clock_went_back(w):
+    w.store._finding("demo:A", "late", "later", w.store.now() + 100)
+    w.store._finding("demo:A", "late", "earlier", w.store.now())
+    w.conn.execute("DELETE FROM alerts")
+    w.store.backfill_alerts()
+    row = w.conn.execute("SELECT first_seen, last_seen, msg FROM alerts").fetchone()
+    assert row["first_seen"] < row["last_seen"] and row["msg"] == "later"
+
+
+def test_backfill_keeps_a_raised_alert_in_the_history_when_a_refusal_aged_out(w):
+    window = w.store.alert_window_s
+    for n in range(2):
+        if n:
+            w.clock.advance(window * 0.5)
+        with pytest.raises(Refused):
+            w.store.claim(w.p("reader"), "demo:A")
+    w.clock.advance(window * 0.75)  # the first refusal has left the window
+    before = w.store.alerts(w.p("reader"))
+    assert before["refusals"] == [] and before["history"]["refusal_keys"] == 1
+    w.store.backfill_alerts()
+    after = w.store.alerts(w.p("reader"))
+    assert after["refusals"] == [] and after["history"]["refusal_keys"] == 1
+
+
+def test_backfill_keeps_the_precise_times_of_a_live_row(w):
+    window = w.store.alert_window_s
+    w.clock.advance(0.9)  # a time with a fraction: the audit log only holds whole seconds
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    w.clock.advance(window - 0.5)  # the second refusal lands half a second before the first leaves
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    assert [r["count"] for r in w.store.alerts(w.p("reader"))["refusals"]] == [2]
+    w.store.backfill_alerts()
+    assert [r["count"] for r in w.store.alerts(w.p("reader"))["refusals"]] == [2]
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 2)]
+
+
+def test_backfill_adds_the_audit_refusals_beyond_the_live_ones_of_the_same_second(w):
+    from plangraph.keeper.store_support import iso
+    now = float(int(w.store.now()))
+    # One live refusal in this second (a row), plus a legacy refusal of the same second that
+    # only the audit log holds: two refusals, an active alert.
+    w.conn.execute(
+        "INSERT INTO alerts(kind,key,code,msg,first_seen,last_seen,n,state)"
+        " VALUES('refusal','demo:A','refused',?,?,?,1,'open')",
+        (json.dumps([now + 0.4]), iso(now), iso(now)))
+    for _ in range(2):  # the audit log holds both refusals of that second
+        w.conn.execute(
+            "INSERT INTO audit_log(ts,actor,role,action,key,ok) VALUES(?,?,?,?,?,0)",
+            (iso(now), "reader", "reader", "claim", "demo:A"))
+    w.store.backfill_alerts()
+    row = w.conn.execute("SELECT msg, n, state FROM alerts WHERE kind='refusal'").fetchone()
+    assert (row["n"], row["state"], len(json.loads(row["msg"]))) == (2, "open", 2)
+    assert [r["count"] for r in w.store.alerts(w.p("reader"))["refusals"]] == [2]
+
+
+def test_backfill_sorts_out_of_order_refusals_before_the_cap_and_the_bounds(w):
+    from plangraph.keeper.store_support import REFUSAL_TIMES_CAP, iso
+    now = w.store.now()
+    total = REFUSAL_TIMES_CAP + 4
+    # Newest first in insertion order: row order is not time order (a clock set back).
+    for k in range(total):
+        w.conn.execute(
+            "INSERT INTO audit_log(ts,actor,role,action,key,ok) VALUES(?,?,?,?,?,0)",
+            (iso(now - k), "reader", "reader", "claim", "demo:A"))
+    w.store.backfill_alerts()
+    row = w.conn.execute(
+        "SELECT msg, first_seen, last_seen, n FROM alerts WHERE kind='refusal'").fetchone()
+    times = json.loads(row["msg"])
+    assert times == sorted(times) and len(times) == row["n"] == REFUSAL_TIMES_CAP
+    # The cap keeps the newest refusals, not the last ones inserted.
+    assert int(times[-1]) == int(now) and int(times[0]) == int(now) - (REFUSAL_TIMES_CAP - 1)
+    assert row["first_seen"] == iso(now - (total - 1)) and row["last_seen"] == iso(now)
+
+
+def test_alerts_reads_the_refusals_inside_the_window_not_the_stored_count(w):
+    window = w.store.alert_window_s
+    for _ in range(2):
+        with pytest.raises(Refused):
+            w.store.claim(w.p("reader"), "demo:A")
+        w.clock.advance(window * 0.75)
+    # The row still says 2; the first refusal has left the window, so no alert.
+    assert _alert_rows(w)[0][4] == 2
+    assert w.store.alerts(w.p("reader"))["refusals"] == []
+    assert w.store.alerts(w.p("reader"))["history"]["refusal_keys"] == 1
 
 
 # ------------------------------------------------------------------ digest

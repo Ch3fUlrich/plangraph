@@ -51,8 +51,23 @@ def test_all_cards_done_opens_pr_and_merges_when_ci_green(w, tmp_path):
         "push_branch",
         "open_pr",
         "ci_green",
+        "main_refusal",
         "merge_pr",
     ]
+
+@pytest.mark.parametrize("word", ["main_red", "main_pending", "state_unknown", "ref_not_forward_only"])
+def test_a_green_phase_pr_is_refused_while_main_is_not_green(w, tmp_path, word):
+    gate(w)
+    finish_cards(w, "demo:C1", "demo:C2")
+    root, head = git_repo(tmp_path)
+    github = FakeGitHub(ci=True, main=word)
+
+    with pytest.raises(Refused, match=word):
+        phase_finish.finish_phase(
+            w.store, w.p("router"), "demo:PH-X", phase_finish.phase_branch("demo:PH-X"), head,
+            repo_root=root, github=github)
+
+    assert "merge_pr" not in [c[0] for c in github.calls]
 
 def test_waiting_ci_does_not_merge(w, tmp_path):
     gate(w)

@@ -99,8 +99,8 @@ impl Runs {
             }
             Err(err) => return Err(err),
         };
-        let review_head = match crate::prompt::prepare_launch(args, &leg, &mut launch, dry) {
-            Ok(head) => head,
+        let review = match crate::prompt::prepare_launch(args, &leg, &mut launch, dry) {
+            Ok(dispatch) => dispatch,
             Err(ToolError::Refused {
                 kind: crate::errors::RefusalKind::Spawn,
                 ref message,
@@ -167,7 +167,7 @@ impl Runs {
             &run_id,
             &job_id,
             launch,
-            review_head.as_deref(),
+            review.as_ref(),
             &admission.fields,
             dry,
             None,
@@ -191,7 +191,7 @@ impl Runs {
         run_id: &str,
         job_id: &str,
         mut launch: crate::launch::LaunchSpec,
-        review_head: Option<&str>,
+        review: Option<&crate::cli_review::Dispatch>,
         admission_fields: &Value,
         dry: bool,
         group_meta: Option<(&str, usize, usize, &[String])>,
@@ -199,9 +199,6 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
-        if let Some(head) = review_head {
-            base["head_sha"] = json!(head);
-        }
         if let Some((seat_group_id, index, total, paths)) = group_meta {
             base["seat_group"] = json!(seat_group_id);
             base["review_group"] = json!({
@@ -211,11 +208,6 @@ impl Runs {
                 "paths": paths,
             });
         }
-        let pre_isolate_cwd = launch.cwd.clone();
-        let checkout = crate::cli_review::isolate(&mut launch, leg, base["head_sha"].as_str())?;
-        if checkout.is_some() {
-            base["review_checkout"] = json!(launch.cwd);
-        }
         if role == "review" {
             base["review_base"] = args["card"]["diff_ref"]
                 .get("base_sha")
@@ -223,17 +215,17 @@ impl Runs {
                 .cloned()
                 .unwrap_or(Value::Null);
         }
+        if let Some(review) = review {
+            review.apply(&mut base);
+        }
+        let pre_isolate_cwd = launch.cwd.clone();
+        let checkout = crate::cli_review::isolate(&mut launch, leg, base["head_sha"].as_str())?;
+        if checkout.is_some() {
+            base["review_checkout"] = json!(launch.cwd);
+        }
         base.as_object_mut()
             .unwrap()
             .extend(admission_fields.as_object().unwrap().clone());
-        if role == "review" && !dry && group_meta.is_none() {
-            crate::cli_review::bind_launch(
-                &mut launch,
-                &pre_isolate_cwd,
-                &args["card"]["diff_ref"],
-                &mut base,
-            )?;
-        }
         if !dry && base["writer_round"].is_u64() {
             base["round_work_before"] = json!(crate::round_progress::work_fingerprint(&launch.cwd));
         }
@@ -519,6 +511,9 @@ pub(crate) fn finish_with_allowlist(
     attempt_id: u32,
     allow_shas: &BTreeSet<String>,
 ) {
+    if crate::cli_review::binding_completed(record) {
+        return;
+    }
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     crate::round_progress::finish_round(record, status);

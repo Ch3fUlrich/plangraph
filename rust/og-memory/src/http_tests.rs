@@ -228,3 +228,138 @@ fn non_success_statuses_never_succeed() {
         ));
     }
 }
+
+#[test]
+fn access_checks_health_and_authenticated_project_hub() {
+    const OK: &str = r#"{"graph_commit_id":"fixture","row_count":1,"rows":[{"slug":"plangraph"}]}"#;
+    const EMPTY: &str = r#"{"graph_commit_id":"fixture","row_count":0,"rows":[]}"#;
+    for (graph, health_status, reply, expected) in [
+        ("plangraph", "200 OK", Some(("200 OK", OK)), Ok(())),
+        ("another", "200 OK", None, Err(AccessError::WrongGraph)),
+        (
+            "plangraph",
+            "503 Service Unavailable",
+            None,
+            Err(AccessError::HealthUnavailable),
+        ),
+        ("plangraph", "", None, Err(AccessError::HealthTimeout)),
+        (
+            "plangraph",
+            "200 OK",
+            Some(("200 OK", EMPTY)),
+            Err(AccessError::MissingHub),
+        ),
+        (
+            "plangraph",
+            "200 OK",
+            Some(("401 Unauthorized", "")),
+            Err(AccessError::Unauthorized),
+        ),
+        (
+            "plangraph",
+            "200 OK",
+            Some(("403 Forbidden", "")),
+            Err(AccessError::Forbidden),
+        ),
+        (
+            "plangraph",
+            "200 OK",
+            Some(("426 Upgrade Required", "")),
+            Err(AccessError::UnsupportedApi),
+        ),
+        (
+            "plangraph",
+            "200 OK",
+            Some(("200 OK", "{}")),
+            Err(AccessError::UnsupportedApi),
+        ),
+        (
+            "plangraph",
+            "200 OK",
+            Some(("", "")),
+            Err(AccessError::ReadTimeout),
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/graphs/{graph}", listener.local_addr().unwrap());
+        let path = std::env::temp_dir().join(format!("og-access-{}", std::process::id()));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        write!(file, "local-{}", std::process::id()).unwrap();
+        let client = Http::new(&base, &path, Duration::from_millis(300)).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let server = thread::spawn(move || {
+            let (mut health, _) = listener.accept().unwrap();
+            let headers = access_headers(&mut health);
+            assert!(headers.starts_with("get /healthz "));
+            assert!(!headers.contains("authorization:"));
+            if health_status.is_empty() {
+                thread::sleep(Duration::from_millis(450));
+            } else {
+                write!(
+                    health,
+                    "HTTP/1.1 {health_status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            }
+            drop(health);
+            if let Some((status, body)) = reply {
+                listener.set_nonblocking(true).unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                let mut query = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "missing hub request");
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => panic!("fake server accept failed"),
+                    }
+                };
+                let headers = access_headers(&mut query);
+                assert!(headers.starts_with("post /graphs/plangraph/query "));
+                assert!(headers.contains("authorization: bearer "));
+                assert!(headers.contains("omnigraph-http-api: 0.13"));
+                let length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                let mut payload = vec![0; length];
+                query.read_exact(&mut payload).unwrap();
+                let request: Value = serde_json::from_slice(&payload).unwrap();
+                assert_eq!(request["params"]["slug"], "plangraph");
+                if status.is_empty() {
+                    thread::sleep(Duration::from_millis(450));
+                } else {
+                    write!(query, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
+            }
+            listener.set_nonblocking(true).unwrap();
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        });
+        assert_eq!(client.probe_access(), expected);
+        server.join().unwrap();
+    }
+}
+
+fn access_headers(stream: &mut std::net::TcpStream) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut headers = Vec::new();
+    while !headers.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        stream.read_exact(&mut byte).unwrap();
+        headers.push(byte[0]);
+    }
+    String::from_utf8(headers).unwrap().to_ascii_lowercase()
+}

@@ -12,6 +12,7 @@ struct Fake {
     failures: usize,
     refreshes: usize,
     refresh_error: bool,
+    stop_on_refresh: bool,
     prompts: Vec<String>,
     skill: Option<String>,
     /// Verdict and HIGH count of each review run, in order; then ACCEPT.
@@ -20,6 +21,7 @@ struct Fake {
     review_head: Option<&'static str>,
     /// Fast-check runs that fail before the first green one.
     fast_failures: usize,
+    stop_on_fast_checks: bool,
     /// HEAD seen at each call count (indexed by calls so far, the last entry repeats); overrides the default.
     head_script: Vec<&'static str>,
     /// Turns after which HEAD is still the base (no commit yet).
@@ -28,6 +30,8 @@ struct Fake {
     stamps: bool,
     stamped: Vec<String>,
     reviews: Vec<Option<serde_json::Value>>,
+    defer_review_on: Option<usize>,
+    fail_first_review: bool,
     pushed: Vec<String>,
 }
 impl Driver for Fake {
@@ -43,6 +47,9 @@ impl Driver for Fake {
     }
     fn refresh_base(&mut self) -> Result<String, String> {
         self.refreshes += 1;
+        if self.stop_on_refresh {
+            return Err(crate::writer_control::STOPPED.into());
+        }
         if self.refresh_error {
             return Err("merge conflict".into());
         }
@@ -84,6 +91,9 @@ impl Driver for Fake {
             self.fast_failures -= 1;
             return Err("check_file_size.py: too large".into());
         }
+        if self.stop_on_fast_checks {
+            return Err(crate::writer_control::STOPPED.into());
+        }
         if self.stamps {
             self.stamped.push(head.into());
         }
@@ -98,6 +108,17 @@ impl Driver for Fake {
         previous: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, String> {
         self.reviews.push(previous.cloned());
+        if self.fail_first_review && self.reviews.len() == 1 {
+            return Err("temporary route preview failure".into());
+        }
+        if self
+            .defer_review_on
+            .is_some_and(|call| self.reviews.len() >= call)
+        {
+            return Ok(json!({"status":"deferred_to_batch_seat","head":head,
+                "causes":[{"leg":"mimo-v2.6-pro","reason":"repository_review_tools_unavailable"},
+                          {"leg":"agy-gemini-4-hydrogen-high","reason":"limited"}]}));
+        }
         let (verdict, high) = if self.verdicts.is_empty() {
             ("ACCEPT", 0)
         } else {
@@ -583,6 +604,9 @@ fn batch_driver_reaches_done_on_accept_and_pushes_once() {
     assert!(driver.reviews[0].is_none());
     assert!(!driver.prompts[0].contains("configured review directory"));
 }
+#[path = "native_writer_deferral_tests.rs"]
+mod deferral;
+
 #[test]
 fn batch_driver_refuses_review_without_fast_checks_stamp() {
     let mut driver = Fake {
@@ -616,6 +640,10 @@ fn batch_driver_resumes_on_fast_check_failure_then_fails() {
     assert!(driver.reviews.is_empty());
     assert_eq!(driver.calls.len(), 1 + FAST_CHECK_FIXES);
 }
+
+#[path = "native_writer_stop_tests.rs"]
+mod stop;
+
 #[test]
 fn batch_driver_retries_weak_or_other_head_reviews_then_blocks() {
     let mut driver = Fake {

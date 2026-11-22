@@ -36,6 +36,9 @@ class GitHub(Protocol):
     def find_pr(self, branch: str) -> dict[str, Any] | None: ...
     def open_pr(self, branch: str, base: str, title: str, body: str) -> dict[str, Any]: ...
     def ci_green(self, head: str) -> bool: ...
+    def main_refusal(self) -> str | None:
+        """None when main is green, else main_red, main_pending, state_unknown or ref_not_forward_only."""
+        ...
     def merge_pr(self, number: int, head: str, *, commit_message: str | None = None) -> dict[str, Any]: ...
 
 def merge_message(gate: str, cards: list[str]) -> str:
@@ -207,6 +210,10 @@ def _finish_locked(key: str, branch: str, head: str, root: Path,
 
         if not github.ci_green(head):
             return _result(key, branch, head, "waiting_ci", pr, cards)
+
+        refusal = github.main_refusal()
+        if refusal is not None:
+            raise Refused("bad_state", f"{refusal}: nothing lands while main is not green")
 
         merged = github.merge_pr(pr["number"], head, commit_message=merge_message(key, cards))
         return _result(key, branch, head, "merged", merged, cards)

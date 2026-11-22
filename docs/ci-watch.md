@@ -51,3 +51,31 @@ The supplied user service/timer run every five minutes with `--keeper`.
 Adjust `WorkingDirectory` and `ExecStart` for the host, then install/enable them
 explicitly as user units. This change does not install units. `gh`, the built
 Rust CLI, and keeper credentials must be available to the user service.
+
+## Main-freeze handler and batch failures
+
+`plangraph ci-watch --keeper --main-freeze` (the supplied `pg-ci-watch` service runs exactly this; without `--keeper` fix tasks stay local and are not defined or cancelled in the keeper) acts on the runs `plangraph main-state` names as blocking (docs/ci-parallel.md).
+The recovery table, one action per ref at a time, with a budget persisted per run in `main-freeze.json`:
+
+| Blocking run | Action |
+|---|---|
+| failure maps to a FLAKE item (`deploy/ci-watch/flakes.toml`), log complete | one failed-job rerun |
+| no FLAKE item, a second red attempt, or a capped log | the fix task of rule 3.46 (once per run) |
+| cancelled, timed_out, startup_failure, or an expected job missing | one full rerun |
+| an attempt older than the bound T | cancel it, then one rerun |
+| budget spent, GitHub refuses the request, run id `none` | no action; an alert for routing |
+
+Each request is reserved in the state file before it is sent and reconciled by reading the run's attempts;
+after 10 minutes without a new attempt it stays recorded as unresolved, is never sent again, routing is
+alerted and the ref is released. The alerts (`main_red_no_progress`, `main_pending_aged`, `main_state_unknown`,
+`main_ref_not_forward_only`, `recovery_*`) go to `alerts.json` in the watcher state directory, each with the party
+that is due, for the flow watchdog collector to hand to routing.
+
+A failing head of a pull request that `owners.json` (`prs`, `writers`, `successors`) maps to a batch is not turned
+into an unassigned fix lane: the failure is recorded first, delivered with its log through
+`CI_WATCH_DELIVER_CMD <writer> <record file>` to the batch's current writer (a successor is followed), kept open
+until `plangraph ci-watch --ack=<id>`, and escalated to plan-order after 15 minutes. The watcher never starts a writer.
+
+The handler tracks the full runs of main's current tip by run id, whatever ref they ran on and whether or not the train
+pull request is still open. It creates the fix task of rule 3.46 when main reads red and cancels it in the keeper when main
+reads green again (a failed cancel stays open and is retried on the next pass).

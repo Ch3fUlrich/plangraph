@@ -55,29 +55,44 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
         String::from_utf8_lossy(&output.stderr)
     );
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-    // Argon runs last since rule 3.61, so the first leg is the free OpenCode one in
-    // every stage; the argon legs show the independent quota in the leg list.
-    let models_of = |stage: &str| -> Vec<String> {
+    let models_of = |stage: &str| -> Vec<&str> {
         result[stage]["legs"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|l| l["model"].as_str().unwrap().to_string())
+            .map(|leg| leg["model"].as_str().unwrap())
             .collect()
     };
-    for stage in ["initial", "hydrogen", "argon"] {
+    assert_eq!(
+        result["initial"]["first_leg"]["model"],
+        "gemini-4-hydrogen-high"
+    );
+    for stage in ["hydrogen", "argon"] {
         assert_eq!(
             result[stage]["first_leg"]["model"],
             "opencode/deepseek-v4.1-flash-free"
         );
     }
-    assert_eq!(models_of("hydrogen"), models_of("initial"));
-    assert!(models_of("initial")
-        .iter()
-        .any(|m| m == "gemini-4-argon-low"));
-    assert!(!models_of("argon")
-        .iter()
-        .any(|m| m.contains("gemini-4-argon")));
+    let initial = models_of("initial");
+    assert_eq!(
+        initial,
+        [
+            "gemini-4-hydrogen-high",
+            "opencode/deepseek-v4.1-flash-free",
+            "opencode-go/deepseek-v4.1-flash",
+            "opencode-go/glm-5.3-flash",
+            "gemini-4-neon-medium",
+            "gemini-4-argon-low",
+            "gemini-4-argon-medium"
+        ]
+    );
+    // The Hydrogen limit removes only its first seat. The Argon limit then
+    // removes both Argon efforts while keeping the existing Hydrogen limit.
+    assert_eq!(models_of("hydrogen"), initial[1..]);
+    assert_eq!(models_of("argon"), initial[1..initial.len() - 2]);
+    let argon_states = &result["argon"]["agy_quota_states"];
+    assert_eq!(argon_states["agy:gemini-4-hydrogen"]["state"], "limited");
+    assert_eq!(argon_states["agy:gemini-4-argon"]["state"], "limited");
     assert_eq!(result["later"]["state"], "limited");
     assert_eq!(
         result["snapshot"]["agy_quota_states"]["agy:gemini-4-argon"]["state"],
@@ -113,24 +128,6 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
                 > state["evidence"]["ts"].as_f64().unwrap()
         );
     }
-    let models: Vec<_> = result["initial"]["legs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|l| l["model"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        models,
-        [
-            "opencode/deepseek-v4.1-flash-free",
-            "opencode-go/deepseek-v4.1-flash",
-            "opencode-go/glm-5.3-flash",
-            "gemini-4-neon-medium",
-            "claude-sonnet-5-5-high",
-            "gemini-4-argon-low",
-            "gemini-4-argon-medium"
-        ]
-    );
 }
 
 #[test]

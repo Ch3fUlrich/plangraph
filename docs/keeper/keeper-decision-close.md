@@ -210,3 +210,9 @@ is a validation refusal. Synthetic `merged-D-NNNN` bundles are not run citations
 GO stamp prefixes accept `(HH:MMZ)` and `(HH:MxZ)` only, with optional `~`
 before the hour and optional `, date -u` before `)`. Hours are 00–23; minutes
 are 00–59 or a tens digit 0–5 followed by literal `x`. `(18Z)` is refused.
+
+A GO row is frozen evidence, so its key list may omit a key whose commits it covers by its part
+table. The scope check then accepts the key when a part head the row names after `head`/`heads`
+lies in the row's GO-HEAD and a commit with the key's exact `Plan-Item` trailer lies in that part
+(the GO-HEAD itself never counts as a part). The close evidence records that head as `go_part`.
+A key whose commits lie in no named part still refuses `merged_pr_go_scope_mismatch`.

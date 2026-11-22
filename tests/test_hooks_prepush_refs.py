@@ -442,69 +442,39 @@ def test_incremental_batch_preserves_published_part_overlap(repo, tmp_path, monk
 def _install_marker_preflight(r, marker):
     (r / "tools").mkdir(parents=True, exist_ok=True)
     (r / "tools/preflight.py").write_text(
-        "import os\nfrom pathlib import Path\n"
-        "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text('ran')\n"
+        "import os, sys\nfrom pathlib import Path\n"
+        "assert '--fast' not in sys.argv\n"
+        "with Path(os.environ['TEST_PREFLIGHT_MARKER']).open('a') as marker:\n"
+        "    marker.write('ran\\n')\n"
     )
     return {"TEST_PREFLIGHT_MARKER": str(marker)}
 
 
-@pytest.mark.parametrize("ref,allowed", [
-    ("phase/x", True),
-    ("phase/nested/y", True),
-    ("feat/x", False),
-    ("lane/x", False),
-    ("main", False),
-    ("phase-x", False),
-])
-def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref, allowed):
+@pytest.mark.parametrize("ref", ["phase/x", "phase/nested/y", "feat/x", "lane/x", "main", "phase-x"])
+def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref):
+    """Legacy phase skip flags cannot suppress affected preflight on any ref."""
     r, base = repo
-    head = commit_file(r, "app/clean_change.py", "clean = 1\n")
     marker = tmp_path / "preflight-ran"
     env = _install_marker_preflight(r, marker)
-    env["PREFLIGHT_SKIP"] = "1"
-    res = run_hook(r, [push_line(ref, head, base)], env)
-    out = res.stdout + res.stderr
-    assert not marker.exists(), "PREFLIGHT_SKIP=1 must never invoke preflight"
-    if allowed:
-        assert res.returncode == 0, out
-        assert ("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
-                in res.stderr)
-    else:
-        assert res.returncode == 1, out
-        assert "D-5843" in res.stderr
+    head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
+    res = run_hook(r, [push_line(ref, head, base)],
+                   {**env, "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1"})
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert marker.read_text() == "ran\n"
 
 
 def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
+    """Legacy phase skip flags leave every ref and the scrub gate covered."""
     r, base = repo
     marker = tmp_path / "preflight-ran"
-    env = _install_marker_preflight(r, marker)
-    # Preflight runs from each pushed head's tree, so the marker script is committed.
-    commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
-    clean_head = commit_file(r, "app/clean_change.py", "clean = 1\n")
-    # Mixed batch (phase + non-phase) refuses PREFLIGHT_SKIP=1 with D-5843.
-    mixed = run_hook(
-        r,
-        [push_line("phase/x", clean_head, base), push_line("feat/x", clean_head, base)],
-        {**env, "PREFLIGHT_SKIP": "1"},
-    )
-    assert mixed.returncode == 1, mixed.stdout + mixed.stderr
-    assert "D-5843" in mixed.stderr
-    assert not marker.exists()
-    # Non-branch ref refuses PREFLIGHT_SKIP=1 with D-5843.
-    tag_push = run_hook(
-        r,
-        [f"HEAD {clean_head} refs/tags/v1 {ZERO}"],
-        {**env, "PREFLIGHT_SKIP": "1"},
-    )
-    assert tag_push.returncode == 1, tag_push.stdout + tag_push.stderr
-    assert "D-5843" in tag_push.stderr
-    assert not marker.exists()
-    # Without PREFLIGHT_SKIP, non-phase ref runs preflight.
-    normal = run_hook(r, [push_line("feat/x", clean_head, base)], env)
-    assert normal.returncode == 0, normal.stdout + normal.stderr
-    assert marker.exists(), "normal push on feat/x must run preflight"
+    env = {**_install_marker_preflight(r, marker), "PREFLIGHT_SKIP": "1"}
+    clean_head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
+    mixed = run_hook(r, [push_line("phase/x", clean_head, base),
+                         push_line("feat/x", clean_head, base),
+                         f"HEAD {clean_head} refs/tags/v1 {ZERO}"], env)
+    assert mixed.returncode == 0, mixed.stdout + mixed.stderr
+    assert marker.read_text().splitlines() == ["ran"] * 3
     marker.unlink()
-    # On phase/*, PREFLIGHT_SKIP=1 still runs the other gates (e.g. scrub).
     dirty_head = commit_file(r, "app/leak.py", f'peer = "{fake_ip()}"\n')
     dirty = run_hook(
         r,
@@ -514,3 +484,64 @@ def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
     assert dirty.returncode == 1, dirty.stdout + dirty.stderr
     assert "app/leak.py:1: ipv4" in dirty.stdout + dirty.stderr
     assert not marker.exists()
+
+
+def test_phase_hook_runs_only_affected_tests_with_a_fixed_deadline(repo):
+    import site
+    import sys
+    import time
+
+    r, _ = repo
+    preflight = HOOK.parents[1] / "preflight.py"
+    user_base = site.getuserbase()
+    # Keep the hook, preflight argument construction, timeout and selector real.
+    # The unrelated scrub, policy and Rust subprocesses are covered separately.
+    launcher = f"""
+from pathlib import Path
+import os
+import runpy
+import site
+
+assert "PREFLIGHT_TOOLS_DIR" not in os.environ
+assert site.getuserbase() == {user_base!r}
+main = runpy.run_path({str(preflight)!r})["main"]
+settings = main.__globals__
+run = settings["run"]
+run_test_process = settings["run_test_process"]
+
+def affected_only(command, cwd, env):
+    if settings["is_affected_step"](command):
+        return run(command, cwd, env)
+    return 0, ""
+
+def run_with_deadline(command, **kwargs):
+    assert {{"--files-only", "--local", "--run"}} <= set(command)
+    assert kwargs["timeout"] == 240
+    return run_test_process(command, **kwargs)
+
+def unexpected_plan(*args):
+    raise AssertionError("File-only runs must share one deadline with selection")
+
+settings.update(run=affected_only, run_test_process=run_with_deadline,
+                planned_paths=unexpected_plan, trim_shared_target=lambda root: None)
+raise SystemExit(main(root=Path.cwd()))
+"""
+    commit_file(r, "tools/preflight.py", launcher)
+    base = commit_file(r, "tests/test_unaffected.py",
+                       'raise AssertionError("the full suite was collected")\n')
+    git(r, "update-ref", "refs/remotes/origin/main", base)
+    head = commit_file(r, "tests/test_selected.py", "def test_selected():\n    assert True\n")
+    env = {"PREFLIGHT_PYTHON": sys.executable, "PREFLIGHT_TEST_WORKERS": "1",
+           "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1",
+           "PREFLIGHT_TOOLS_DIR": str(r / "ambient-tools")}
+    if user_base is not None:
+        env["PYTHONUSERBASE"] = user_base
+    started = time.monotonic()
+    result = run_hook(r, [push_line("phase/affected", head, base)], env)
+    elapsed = time.monotonic() - started
+    print(f"phase pre-push replay wall seconds: {elapsed:.3f}")
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert '"tests": ["tests/test_selected.py"]' in output
+    assert "1 passed" in output
+    assert elapsed < 300

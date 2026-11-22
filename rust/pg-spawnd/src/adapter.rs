@@ -35,10 +35,19 @@ impl Adapter<'_> {
             cmd.args(["-m", "plangraph.spawner.cli"]);
             cmd
         };
-        cmd.arg("--state")
-            .arg(self.0)
-            .args(args)
-            .stdin(Stdio::null())
+        cmd.arg("--state").arg(self.0).args(args);
+        run_command(cmd, timeout)
+    }
+}
+
+/// Run `cmd` in its own process group with piped, bounded output: `(exit code, stdout, last
+/// stderr line)`. A command past `timeout` is killed with its group.
+pub(crate) fn run_command(
+    mut cmd: Command,
+    timeout: Duration,
+) -> Result<(i32, Vec<u8>, String), ToolError> {
+    {
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]

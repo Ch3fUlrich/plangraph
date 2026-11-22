@@ -119,6 +119,17 @@ class SpawnerRecordAdapter:
             model = record.get("served_model")
             family = model_family(model) if isinstance(model, str) else None
             completion = record.get("completion")
+            binding = record.get("review_binding")
+            completed_binding = completion.get("review_binding") if isinstance(completion, dict) else None
+            if ((binding is not None or completed_binding is not None)
+                    and (not isinstance(binding, dict) or binding != completed_binding
+                         or binding.get("head_sha") != completion.get("head_sha")
+                         or binding.get("head_sha") != record.get("head_sha")
+                         or not re.fullmatch(r"[0-9a-f]{40}", str(binding.get("base_sha")))
+                         or not re.fullmatch(r"[0-9a-f]{64}", str(binding.get("diff_sha256"))))):
+                raise ValueError(f"{run_id}: review diff binding mismatch")
+            if item.get("review_binding") is not None and item["review_binding"] != binding:
+                raise ValueError(f"{run_id}: review diff does not match expected binding")
             attempts = record.get("attempts")
             text = record.get("stdout_tail")
             if isinstance(attempts, list) and len(attempts) > 1:

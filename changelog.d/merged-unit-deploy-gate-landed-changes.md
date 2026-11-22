@@ -1,0 +1,1 @@
+- The keeper's deploy gate (`close_merged`) reads the changes a Plan-Item commit's merge landed, not only the trailer-tagged commits, so an untagged follow-up commit of the same PR that adds a unit no longer closes the item without deploy evidence; a host binary counts only when its entry point is added (an edit or deletion of an existing one needs no install proof).
