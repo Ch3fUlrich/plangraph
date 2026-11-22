@@ -400,3 +400,29 @@ def test_orchestration_cli_remote_first(orchestration, monkeypatch, capsys, cli_
     assert (overflow.main if entry == 'overflow' else cli.main)(args) == 0
     assert json.loads(capsys.readouterr().out)['placement']['host'] == 'host-b'
     remote.assert_called_once()
+
+
+def test_build_review_requires_worker_with_disk_and_ram(orchestration):
+    service, rows, remote, path, registry = orchestration
+    config = json.loads(path.read_text())
+    config['hosts']['host-c'] = {'ssh': 'host-c'}
+    path.write_text(json.dumps(config))
+    data = json.loads(registry.read_text())
+    data['hosts'].append(dict(data['hosts'][1], id='host-c'))
+    registry.write_text(json.dumps(data))
+    rows['host-b'].update(disk_free_gb=4)
+    rows['host-c'] = dict(rows['host-b'], ssh='host-c', disk_free_gb=30)
+    card = {'review_workspace': True,
+            'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
+    options = {'role': 'review', 'prompt': 'review the exact head'}
+    record = service.admit_spawn(options, card=card)
+    assert record['host'] == record['placement']['host'] == 'host-c'
+    assert remote.call_args.args[0] == 'host-c'
+    assert remote.call_args.args[2] == card
+
+    remote.reset_mock()
+    rows['host-c']['mem_available_mb'] = 1024
+    record = service.admit_spawn(options, card=card)
+    assert record['status'] == 'refused'
+    assert 'disk_low' in record['reason'] and 'memory:' in record['reason']
+    remote.assert_not_called()
