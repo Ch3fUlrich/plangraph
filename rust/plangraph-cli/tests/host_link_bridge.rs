@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 use std::{
     fs,
     io::Write,
-    path::Path,
     process::{Command, Stdio},
 };
 
@@ -53,7 +52,6 @@ fn blocked_peer_alert_reaches_keeper_through_the_watchdog_bridge() {
         }
     }
 
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let result = test_python::command()
         .args([
             "-c",
@@ -106,7 +104,6 @@ finally:
         .arg(state)
         .arg(&event)
         .arg(env!("CARGO_BIN_EXE_plangraph"))
-        .env("PYTHONPATH", repo.join("src"))
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
@@ -154,8 +151,7 @@ fn unrelated_watchdog_event_is_forwarded_unchanged_and_propagates_failure() {
 #[test]
 fn worker_outage_and_clear_reach_keeper_alerts_with_run_ids() {
     let state = tempfile::tempdir().unwrap();
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let result = Command::new("python3")
+    let result = test_python::command()
         .args([
             "-c",
             r#"
@@ -216,7 +212,6 @@ finally:
         ])
         .arg(state.path())
         .arg(env!("CARGO_BIN_EXE_plangraph"))
-        .env("PYTHONPATH", repo.join("src"))
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
