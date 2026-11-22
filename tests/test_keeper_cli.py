@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -695,3 +696,26 @@ def test_cli_lease_batches_report_each_row_and_refuse_partial_success(live, caps
     assert "demo:A epoch 1 lease" in capsys.readouterr().out
     assert run(token, "heartbeat-batch", "--claim", "demo:A", "wrong") == 2
     assert "epoch must be an integer" in capsys.readouterr().err
+
+
+def test_cli_claim_batch_prints_the_train_base(live, capsys, monkeypatch):
+    _, w, tokens, _, _ = live
+    monkeypatch.setattr(w.store, "ctx", {
+        "spawner_records": SimpleNamespace(review_seats=lambda *args, **options: [{"verdict": "pass"}]),
+    })
+    router = w.p("router")
+    repo, head = "example/repo", "c" * 40
+    lease = w.store.land(router, dict(repo=repo, action="acquire", owner="fixture"))
+    w.store.land(router, dict(
+        lease, repo=repo, action="prepare", pr=10, base="a" * 40, head=head,
+        parts=[dict(pr=1, head="b" * 40, items=["demo:A"],
+                    review_runs={"demo:A": "run-" + "1" * 32})],
+    ))
+
+    assert run(tokens["l1main"], "claim-batch", "demo:B", "demo:A") == 0
+    assert w.store.claim_train_base("demo:B") == head
+    lease_until = w.store._item("demo:B")["lease_until"]
+    assert capsys.readouterr().out.splitlines() == [
+        f"demo:B epoch 1 lease {lease_until} | base {head}",
+        f"demo:A epoch 1 lease {lease_until}",
+    ]
