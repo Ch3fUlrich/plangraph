@@ -17,6 +17,9 @@ import sys
 import pytest
 
 from merge_batch_env import env_fixture, head_of, land, pushed
+from plangraph.keeper.auth import Principal, add_principal
+from plangraph.keeper.db import open_db
+from plangraph.keeper.store import Store
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stubs")
 
@@ -49,11 +52,61 @@ def rows(env):
             return []
 
 
+@pytest.fixture
+def journal(env):
+    path = env.tmp / "keeper.db"
+    db = open_db(path, create=True, backend="sqlite")
+    add_principal(db, "lander", "router", [])
+    db.close()
+    env.env.update(PLANGRAPH_ENV_FILE=str(env.tmp / "keeper.env"), JOURNAL_DB=str(path),
+                   JOURNAL_SWEEP_LOG=str(env.tmp / "sweep"))
+    binary = env.stubs / "plangraph"
+    binary.write_text("""#!/usr/bin/env python3
+import json, os, subprocess, sys
+from plangraph.keeper.auth import Principal
+from plangraph.keeper.db import open_db
+from plangraph.keeper.store import Store
+
+args = sys.argv[1:]
+if args == ['landing', 'journal']:
+    body = json.load(sys.stdin)
+    if body['action'] == 'prepare':
+        main = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/main'],
+                                       text=True).split()[0]
+        assert main == body['base'], 'the journal must be prepared before main moves'
+    if body['action'] == 'landed' and os.environ.get('INTERRUPT_LANDING'):
+        sys.exit('interrupted before saving the part outcomes')
+    db = open_db(os.environ['JOURNAL_DB'], backend='sqlite')
+    print(json.dumps(Store(db).land(Principal('lander', 'router', []), body)))
+    db.close()
+elif args[:2] == ['landing', 'verify-hosts']:
+    head = args[-1]
+    print(json.dumps(dict(verified=[dict(host=str(n), head=head, checkout=head,
+        hooks=head, build=head, synced=False) for n in range(3)])))
+else:
+    assert args[:2] == ['landing', 'ci-import'] or args == ['merge-close'], args
+""")
+    binary.chmod(0o755)
+    sweep = env.stubs / "pg-worktree-sweep"
+    sweep.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$JOURNAL_SWEEP_LOG"\n')
+    sweep.chmod(0o755)
+
+    def request(action="show", **fields):
+        db = open_db(path, backend="sqlite")
+        try:
+            return Store(db).land(Principal("lander", "router", []),
+                                  dict(repo=env.state["repo"], pr=100, action=action, **fields))
+        finally:
+            db.close()
+
+    return request
+
+
 @pytest.mark.parametrize("keeper_configured", [False, True])
-def test_tested_ff_moves_main_to_the_train_head_without_a_merge_commit(env, keeper_configured):
+def test_tested_ff_moves_main_to_the_train_head_without_a_merge_commit(env, keeper_configured, request):
     approval = pushed(env)
     if keeper_configured:
-        env.env["PLANGRAPH_ENV_FILE"] = str(env.tmp / "keeper.env")
+        journal = request.getfixturevalue("journal")
     mode(env, "tested-ff")
     head = head_of(env)
     res = land(env, approval)
@@ -63,6 +116,48 @@ def test_tested_ff_moves_main_to_the_train_head_without_a_merge_commit(env, keep
     assert res.stdout.splitlines() == [f"MERGED 1 {head} plangraph:ITEM-A", f"MERGED 2 {head} plangraph:ITEM-B",
                                        f"MERGED 3 {head} plangraph:ITEM-C"]
     assert not env.state_file("l1").exists()
+    if keeper_configured:
+        train = journal()["train"]
+        assert train["mode"] == "tested-ff" and train["merge"] == head
+        assert train["included"] == [1, 2, 3] and train["open_steps"] == []
+        assert len(train["host_verification"]) == 3
+        frozen = [{"pr": part["pr"], "head": part["head"]} for part in train["parts"]]
+        assert journal("consumed", parts=frozen)["consumed"] == frozen
+
+
+@pytest.mark.parametrize("local_state", [True, False])
+def test_tested_ff_recovers_after_push_before_part_outcomes_are_saved(env, request, local_state):
+    approval = pushed(env)
+    journal = request.getfixturevalue("journal")
+    mode(env, "tested-ff")
+    head = head_of(env)
+    env.env["INTERRUPT_LANDING"] = "1"
+    interrupted = land(env, approval)
+    del env.env["INTERRUPT_LANDING"]
+    assert interrupted.returncode != 0 and "interrupted before saving" in interrupted.stderr
+    assert main_tip(env) == head
+    train = journal()["train"]
+    assert train["merge"] is None and "included" not in train
+    if not local_state:
+        env.state_file("l1").unlink()
+
+    env.push_commit(2, {"b.txt": "late change"})
+    env.git("fetch", "-q", "origin")
+    env.git("merge", "--ff-only", "origin/main")
+    env.seed({"later.txt": "main moved forward"})
+    assert main_tip(env) != head
+    resumed = env.run("settle")
+    assert resumed.returncode == 0, resumed.stderr
+    lines = resumed.stdout.splitlines()
+    assert "NOT-MERGED 2 head moved" in lines
+    assert not any(line.startswith("MERGED 2 ") for line in lines)
+    train = journal()["train"]
+    assert train["merge"] == head and train["included"] == [1, 3]
+    assert train["open_steps"] == [] and len(train["host_verification"]) == 3
+    sweep = (env.tmp / "sweep").read_text().splitlines()
+    assert {s for s in sweep if s.startswith("lane/")} == {
+        f"{part['ref']}:{part['head']}" for part in train["parts"] if part["pr"] in (1, 3)
+    }
 
 
 def test_tested_ff_pushes_with_a_lease_on_the_tested_base(env):

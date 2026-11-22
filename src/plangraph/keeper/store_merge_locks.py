@@ -3,6 +3,8 @@ import json
 import re
 from importlib.resources import files
 
+from plangraph.settings import LANDING_MODES
+
 from .errors import Refused
 from .store_cards import _text
 
@@ -50,14 +52,29 @@ def _land_manifest(body):
     return sorted(manifest, key=lambda part: part["pr"])
 
 
-def _landing_data(row):
+def _saved_manifest(row):
     manifest = json.loads(row["manifest"])
     if isinstance(manifest, list):
         manifest = {"parts": manifest, "batch_key": f"train-{row['pr']}"}
-    return {"repo": row["repo"], "pr": row["pr"], "base": row["base"], **manifest,
+    return manifest
+
+
+def _landing_data(row):
+    return {"repo": row["repo"], "pr": row["pr"], "base": row["base"],
+            "mode": "train-pr-merge", **_saved_manifest(row),
             "head": row["head"], "merge": row["merged"],
             "abandoned": bool(row["abandoned"]),
             "open_steps": list(_LAND_STEPS[row["cursor"]:]) if row["merged"] else []}
+
+
+def _included_parts(value, parts):
+    if not isinstance(value, list):
+        raise Refused("validation", "included landing PRs must be a list")
+    included = sorted(_land_number(pr) for pr in value)
+    allowed = {part["pr"] for part in parts}
+    if len(included) != len(set(included)) or not allowed.issuperset(included):
+        raise Refused("validation", "included landing PRs must be unique frozen parts")
+    return included
 
 
 def _timing(row):
@@ -130,8 +147,14 @@ class MergeLocksMixin:
             if action == "prepare":
                 parts = _land_manifest(body)
                 batch = _text("batch_key", body.get("batch_key", f"train-{identity[1]}"), required=True, cap=256)
-                manifest = json.dumps({"parts": parts, "batch_key": batch}, separators=(",", ":"))
-                frozen = (_land_sha(body.get("base")), _land_sha(body.get("head")), manifest)
+                mode = body.get("mode", "train-pr-merge")
+                if mode not in LANDING_MODES:
+                    raise Refused("validation", "invalid landing mode")
+                manifest = {"parts": parts, "batch_key": batch}
+                if "mode" in body:
+                    manifest["mode"] = mode
+                frozen = (_land_sha(body.get("base")), _land_sha(body.get("head")),
+                          json.dumps(manifest, separators=(",", ":")))
                 self.conn.execute("INSERT INTO landing_trains(repo,pr,base,head,manifest) VALUES(?,?,?,?,?)"
                                   " ON CONFLICT (repo,pr) DO UPDATE SET"
                                   " base=excluded.base, head=excluded.head, manifest=excluded.manifest"
@@ -139,8 +162,8 @@ class MergeLocksMixin:
                                   (*identity, *frozen))
                 row = self.conn.execute(select, identity).fetchone()
                 data = _landing_data(row)
-                if ((row["base"], row["head"], data["parts"], data["batch_key"]) !=
-                        (*frozen[:2], parts, batch) or row["abandoned"]):
+                if ((row["base"], row["head"], data["parts"], data["batch_key"], data["mode"]) !=
+                        (*frozen[:2], parts, batch, mode) or row["abandoned"]):
                     raise Refused("conflict", "landing manifest differs from prepared train")
                 return data
             row = self.conn.execute(select, identity).fetchone()
@@ -153,22 +176,32 @@ class MergeLocksMixin:
             merge = _land_sha(body.get("merge"))
             if row["abandoned"] or row["merged"] not in (None, merge):
                 raise Refused("conflict", "verified merge differs from the landing journal")
-            if action == "landed" and row["merged"] is None:
-                self.conn.execute("UPDATE landing_trains SET merged=? WHERE repo=? AND pr=?", (merge, *identity))
+            manifest = _saved_manifest(row)
+            if action == "landed":
+                if manifest.get("mode") == "tested-ff" and merge != row["head"]:
+                    raise Refused("conflict", "tested-ff must land the exact prepared head")
+                if "included" in body:
+                    included = _included_parts(body["included"], manifest["parts"])
+                    if manifest.get("included", included) != included:
+                        raise Refused("conflict", "part outcomes differ from the landing journal")
+                    manifest["included"] = included
+                if "mode" in manifest and "included" not in manifest:
+                    raise Refused("conflict", "landing requires checked part outcomes")
+                if row["merged"] is None or "included" in body:
+                    self.conn.execute("UPDATE landing_trains SET merged=?,manifest=? WHERE repo=? AND pr=?",
+                                      (merge, json.dumps(manifest, separators=(",", ":")), *identity))
             elif action == "advance" and row["merged"] == merge:
                 step = body.get("step")
                 if step not in _LAND_STEPS or _LAND_STEPS.index(step) > row["cursor"]:
                     raise Refused("conflict", "landing cursor is out of order")
                 if _LAND_STEPS.index(step) == row["cursor"]:
                     if step == "host_sync":
-                        data = _landing_data(row)
-                        manifest = {"parts": data["parts"], "batch_key": data["batch_key"],
-                                    "host_verification": _host_receipts(body.get("verification"), merge)}
+                        manifest["host_verification"] = _host_receipts(body.get("verification"), merge)
                         self.conn.execute("UPDATE landing_trains SET cursor=cursor+1,manifest=? WHERE repo=? AND pr=?",
                                           (json.dumps(manifest, separators=(",", ":")), *identity))
                     else:
                         self.conn.execute("UPDATE landing_trains SET cursor=cursor+1 WHERE repo=? AND pr=?", identity)
-            elif action != "landed":
+            else:
                 raise Refused("conflict", "invalid landing journal transition")
             return _landing_data(self.conn.execute(select, identity).fetchone())
 

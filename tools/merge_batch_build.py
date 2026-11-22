@@ -17,10 +17,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents, stack_sorted
-from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff, run,
+from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees, gh_json, landing_now, landing_batch_key)
+                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key)
 
 
 def merge_trailers(st):
@@ -670,29 +670,97 @@ def landing_lease(repo):
 
 def read_verified_merge(train):
     repo, number, head = train["repo"], train["pr"], train["head"]
-    pr = gh_json("pr", "view", str(number), "--repo", repo,
-                 "--json", "state,headRefOid,mergeCommit,baseRefName")
-    if pr["state"] == "CLOSED":
-        return None, "closed"
-    merge = (pr.get("mergeCommit") or {}).get("oid")
-    if pr["state"] != "MERGED" or not merge:
-        return None, "pending"
-    if pr["headRefOid"] != head or pr["baseRefName"] != "main" or not re.fullmatch(r"[0-9a-f]{40}", merge):
-        raise MergeBatchError(f"train #{number} has inconsistent merge evidence")
     main = f"refs/remotes/{REMOTE}/main"
-    git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
-    parents = git("show", "-s", "--format=%P", merge).stdout.split()
-    if (parents != [train["base"], head] or
-            git("merge-base", "--is-ancestor", merge, main, ok=(0, 1)).returncode or
-            git("rev-parse", f"{merge}^{{tree}}").stdout != git("rev-parse", f"{head}^{{tree}}").stdout):
-        raise MergeBatchError(f"train #{number} merge {merge} did not land the exact tested tree on main")
+    if train["mode"] == TESTED_FF:
+        git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
+        if git("merge-base", "--is-ancestor", head, main, ok=(0, 1)).returncode:
+            return None, "pending"
+        if git("merge-base", "--is-ancestor", train["base"], head, ok=(0, 1)).returncode:
+            raise MergeBatchError(f"train #{number} did not fast-forward the tested base")
+        merge = head
+    else:
+        pr = gh_json("pr", "view", str(number), "--repo", repo,
+                     "--json", "state,headRefOid,mergeCommit,baseRefName")
+        if pr["state"] == "CLOSED":
+            return None, "closed"
+        merge = (pr.get("mergeCommit") or {}).get("oid")
+        if pr["state"] != "MERGED" or not merge:
+            return None, "pending"
+        if pr["headRefOid"] != head or pr["baseRefName"] != "main" or not re.fullmatch(r"[0-9a-f]{40}", merge):
+            raise MergeBatchError(f"train #{number} has inconsistent merge evidence")
+        git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
+        parents = git("show", "-s", "--format=%P", merge).stdout.split()
+        if (parents != [train["base"], head] or
+                git("merge-base", "--is-ancestor", merge, main, ok=(0, 1)).returncode or
+                git("rev-parse", f"{merge}^{{tree}}").stdout != git("rev-parse", f"{head}^{{tree}}").stdout):
+            raise MergeBatchError(f"train #{number} merge {merge} did not land the exact tested tree on main")
     for part in train["parts"]:
         if git("merge-base", "--is-ancestor", part["head"], head, ok=(0, 1)).returncode:
             raise MergeBatchError(f"train #{number} did not contain part #{part['pr']}")
     return merge, "merged"
 
 
-def prepare_train(st, lease):
+def prepare_train(st, lease, mode):
     parts = [dict(part, ref=st["prs"][str(part["pr"])]["ref"]) for part in st["merged"]]
     return landing_journal(st["repo"], "prepare", pr=st["pr"], base=st["base_head"],
-                           head=st["head"], parts=parts, batch_key=landing_batch_key(st), **lease)
+                           head=st["head"], parts=parts, mode=mode, batch_key=landing_batch_key(st), **lease)
+
+
+def settle(repo, recs, wait):
+    """{pr: GitHub's state and head} of the included PRs, polled for up to ``wait`` seconds until each is MERGED
+    or has a moved head (a PR with a new commit does not merge by itself, so it is not waited for)."""
+    deadline = time.monotonic() + wait
+    views = {}
+
+    def open_rec(rec):
+        view = views.get(rec["pr"])
+        return view is None or (view["state"] != "MERGED" and view["headRefOid"] == rec["head"])
+
+    while True:
+        for rec in filter(open_rec, recs):
+            views[rec["pr"]] = gh_json("pr", "view", str(rec["pr"]), "--repo", repo, "--json", "state,headRefOid")
+        if not any(map(open_rec, recs)) or time.monotonic() >= deadline:
+            return views
+        time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
+
+
+def included_pr(repo, number, rec, view, merge, *, report):
+    """Check frozen-head ancestry and report the PR's live-head outcome.
+
+    Read an open PR again before closing it. If its head moved after the
+    build, leave it open and label it needs-update.
+    """
+    num = rec["pr"]
+    if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
+        return "problem", f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}"  # no MERGED line
+    if view["state"] != "MERGED" and view["headRefOid"] == rec["head"]:
+        view = gh_json("pr", "view", str(num), "--repo", repo, "--json", "state,headRefOid")
+        if view["state"] == "OPEN" and view["headRefOid"] == rec["head"]:
+            gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")
+    if view["headRefOid"] != rec["head"]:
+        print(f"NOT-MERGED {num} head moved")
+        if view["state"] == "OPEN" and not add_label(repo, num, NEEDS_UPDATE):
+            print(f"warning: could not add the {NEEDS_UPDATE} label to PR #{num}", file=sys.stderr)
+        return "moved", ""
+    if report:
+        print(f"MERGED {num} {merge} {','.join(rec['items']) or '-'}")
+    return "ok", ""
+
+
+def check_landed_parts(repo, number, parts, merge, wait, *, report=True):
+    views = settle(repo, parts, wait)
+    problems, moved, landed = [], [], []
+    for rec in parts:
+        outcome, why = included_pr(repo, number, rec, views[rec["pr"]], merge, report=report)
+        if outcome == "moved":
+            moved.append(rec["pr"])
+        elif outcome == "problem":
+            problems.append(why)
+        else:
+            landed.append(rec)
+    if problems:
+        raise MergeBatchError("batch PR merged, but " + "; ".join(problems) + " (state kept, land again after a fix)")
+    if moved:
+        print(f"batch PR #{number} merged without " + ", ".join(f"#{n}" for n in moved)
+              + f" (head moved after the build; labelled {NEEDS_UPDATE}): they need a new batch", file=sys.stderr)
+    return landed

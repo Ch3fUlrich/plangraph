@@ -83,7 +83,7 @@ with TemporaryDirectory() as tmp:
     assert len(pending) == 1 and pending[0]['merge'] is None
     def journal(repo, action, **fields):
         return store.land(principal, dict(fields, repo=repo, action=action))
-    first = Store(db).land(principal, dict(identity, action='landed', merge='d'*40))
+    first = Store(db).land(principal, dict(identity, action='landed', merge='d'*40, included=[5]))
     assert first['open_steps'] == ['evidence', 'close_parts', 'host_sync', 'cleanup']
     calls = []
     proof = [dict(host=str(i), head='d'*40, checkout='d'*40, hooks='d'*40, build='d'*40, synced=i==1)
@@ -108,6 +108,7 @@ with TemporaryDirectory() as tmp:
                      'cleanup', 'drop_state'], calls
     recorded = store.land(principal, dict(identity, action='show'))['train']
     assert recorded['host_verification'] == proof
+    assert recorded['included'] == [5]
     assert store.land(principal, dict(repo=identity['repo'], action='pending')) == {'trains': []}
     assert store.land(principal, dict(identity, action='landed', merge='d'*40))['open_steps'] == []
     try:

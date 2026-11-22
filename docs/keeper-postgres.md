@@ -74,9 +74,11 @@ record wins. A new execution of that stage uses a new attempt number. The read
 query in `landing_stage_list.sql` returns the batch's stages in start-time order.
 
 Migration 19 installs the keeper landing journal. A configured lander writes the
-train's frozen manifest before it requests a merge. `merge_batch.py settle`
-discovers unfinished trains and verifies the merged commit against main before
-resuming the keeper cursor. Recovery uses the keeper merge lease for that repo.
+train's frozen manifest and landing mode before a PR merge or tested fast-forward.
+`merge_batch.py settle` discovers unfinished trains and verifies the landed commit
+against main. For tested fast-forward, the exact tested head must be an ancestor
+of main. Settlement records the checked PR outcomes before advancing the cursor
+and excludes moved PRs from cleanup. Recovery uses the keeper merge lease for that repo.
 A new push can replace the prepared manifest while the train is open.
 Set `PG_LANDING_HOSTS` to the host registry for the three repository checkouts.
 Each host entry supplies `PG_LANDING_BUILD_STAMP` and, for repair,

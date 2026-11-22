@@ -12,12 +12,12 @@ import time
 from pathlib import Path
 
 from merge_batch_build import (
-    cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
+    check_landed_parts, cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
     landing_report, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
     require_tested_ff_evidence, run_timing_import, wait_marked_merged,
 )
 from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
-                              NEEDS_UPDATE, TESTED_FF, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
+                              TESTED_FF, REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, part_review, run, write_landing,
                               cleanup_landed, close_merged_items, windows_commands, windows_gate, windows_needed, windows_report, windows_script)
@@ -350,47 +350,6 @@ def require_main_green(repo, head, go_row=None):
     main_admission(repo, exception)
 
 
-def settle(repo, recs, wait):
-    """{pr: GitHub's state and head} of the included PRs, polled for up to ``wait`` seconds until each is MERGED
-    or has a moved head (a PR with a new commit does not merge by itself, so it is not waited for)."""
-    deadline = time.monotonic() + wait
-    views = {}
-
-    def open_rec(rec):
-        view = views.get(rec["pr"])
-        return view is None or (view["state"] != "MERGED" and view["headRefOid"] == rec["head"])
-
-    while True:
-        for rec in filter(open_rec, recs):
-            views[rec["pr"]] = gh_json("pr", "view", str(rec["pr"]), "--repo", repo, "--json", "state,headRefOid")
-        if not any(map(open_rec, recs)) or time.monotonic() >= deadline:
-            return views
-        time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
-
-
-def included_pr(repo, number, rec, view, merge):
-    """Report one PR of the batch: ``("ok", "")`` after printing its MERGED line, ``("moved", "")`` after its
-    NOT-MERGED line, or ``("problem", why)``. A PR GitHub left open is closed only after its head was read once
-    more, so a push that came after ``settle`` looked is not closed as merged; a head that moved after the
-    build is neither closed nor reported merged, and its author has to update it (needs-update label). Every
-    PR is reported MERGED only when its recorded head is an ancestor of the merge commit, whatever GitHub's
-    state says."""
-    num = rec["pr"]
-    if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
-        return "problem", f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}"  # no MERGED line
-    if view["state"] != "MERGED" and view["headRefOid"] == rec["head"]:
-        view = gh_json("pr", "view", str(num), "--repo", repo, "--json", "state,headRefOid")
-        if view["state"] == "OPEN" and view["headRefOid"] == rec["head"]:
-            gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")
-    if view["headRefOid"] != rec["head"]:
-        print(f"NOT-MERGED {num} head moved")
-        if view["state"] == "OPEN" and not add_label(repo, num, NEEDS_UPDATE):
-            print(f"warning: could not add the {NEEDS_UPDATE} label to PR #{num}", file=sys.stderr)
-        return "moved", ""
-    print(f"MERGED {num} {merge} {','.join(rec['items']) or '-'}")
-    return "ok", ""
-
-
 #: git's own words for a server that answered no (a rejected ref, a stale lease, a protection or hook refusal):
 #: anything else that fails a push is an unknown delivery, not a refusal.
 PUSH_REFUSED = re.compile(r"\[(?:remote )?rejected\]|remote rejected|stale info|protected branch|GH\d{3}|"
@@ -456,28 +415,34 @@ def _merge_subject(number, title, custom):
     return base if base.endswith(suffix) else f"{base} {suffix}"
 
 
-def settle_train(train, lease, st=None, landed=None):
+def settle_train(train, lease, st=None, *, wait=0):
     repo, number = train["repo"], train["pr"]
+    train = landing_journal(repo, "show", pr=number)["train"]
+    if train["abandoned"] or (train["merge"] and not train["open_steps"]):
+        return
     merge, state = read_verified_merge(train)
     if state == "closed" and not train["merge"]:
         landing_journal(repo, "abandon", pr=number, **lease)
         return
     if not merge:
         raise MergeBatchError(f"train #{number} is {state}; settlement remains pending")
-    train = landing_journal(repo, "landed", pr=number, merge=merge, **lease)
-    attempt = frozen_landing(st) if st is not None else {}
-    if st is not None and train["open_steps"]:
-        write_landing(st, attempt.get("mode") or landing_mode_of(st), merge,
-                      attempt.get("reruns", []), attempt.get("go_row"))
-    if landed is None and "included" in attempt:
-        landed = [rec for rec in st["merged"] if rec["pr"] in attempt["included"]]
-    included = {rec["pr"] for rec in landed} if landed is not None else None
+    if train["merge"] not in (None, merge):
+        raise MergeBatchError("verified merge differs from the landing journal")
+    if "included" not in train:
+        checked = check_landed_parts(repo, number, train["parts"], merge, wait, report=False)
+        train = landing_journal(repo, "landed", pr=number, merge=merge,
+                                included=[part["pr"] for part in checked], **lease)
+    if st is not None and st.get("head") != train["head"]:
+        st = None
+    if st is not None:
+        attempt = frozen_landing(st)
+        write_landing(st, train["mode"], merge, attempt.get("reruns", []), attempt.get("go_row"))
+    landed = [part for part in train["parts"] if part["pr"] in train["included"]]
     for step in train["open_steps"]:
         receipt = {}
         if step == "evidence":
-            for part in train["parts"]:
-                if included is None or part["pr"] in included:
-                    print(f"MERGED {part['pr']} {merge} {','.join(part['items']) or '-'}")
+            for part in landed:
+                print(f"MERGED {part['pr']} {merge} {','.join(part['items']) or '-'}")
         elif step == "close_parts":
             result = run(["plangraph", "merge-close"], timeout=330)
             sys.stderr.write(result.stdout + result.stderr)
@@ -489,13 +454,13 @@ def settle_train(train, lease, st=None, landed=None):
             record_stage(repo, train["batch_key"], "host_sync", merge, started)
         elif step == "cleanup":
             if st is not None:
-                cleanup_landed(st, st["merged"] if landed is None else landed, strict=True)
+                cleanup_landed(st, landed, strict=True)
                 drop_state(st)
             else:
-                parts = train["parts"]
+                parts = [part for part in landed if part["ref"]]
                 state = {"head": train["head"], "worktree": "", "branch": "",
-                         "prs": {str(part["pr"]): part for part in parts if part["ref"]}}
-                cleanup_landed(state, [part for part in parts if part["ref"]], strict=True)
+                         "prs": {str(part["pr"]): part for part in parts}}
+                cleanup_landed(state, parts, strict=True)
         else:
             raise MergeBatchError(f"unknown keeper landing step {step}")
         landing_journal(repo, "advance", pr=number, merge=merge, step=step, **receipt, **lease)
@@ -525,7 +490,7 @@ def cmd_settle(args):
 def cmd_land(args):
     st = load_state(args.name)
     mode = frozen_landing(st).get("mode") or landing_mode_of(st)
-    if keeper_landing_configured() and mode != TESTED_FF:
+    if keeper_landing_configured():
         with landing_lease(st["repo"]) as lease:
             return land_with_lease(args, lease, st, mode)
     return land_with_lease(args, None, st, mode)
@@ -564,24 +529,25 @@ def land_with_lease(args, lease, st, mode):
         record_reruns(repo, number, reruns)
         if mode == TESTED_FF:
             require_tested_ff_evidence(st)
+        if lease:
+            main = gh_json("api", f"repos/{repo}/git/ref/heads/main")
+            if (main.get("object") or {}).get("sha") != st["base_head"]:
+                raise MergeBatchError("stale_base: main moved from the frozen landing base")
+            st["landing_attempt"] = dict(head=st["head"], mode=mode, reruns=reruns, go_row=args.go_row)
+            save_state(st)
+            train = prepare_train(st, lease, mode)
+            if st.get("go_requested_head") == st["head"]:
+                record_stage(repo, batch_key, "go", st["head"], st["go_requested_at_ms"])
+        started = landing_now()
+        if mode == TESTED_FF:
             push_tested(st, args.go_row)
         else:
-            if lease:
-                main = gh_json("api", f"repos/{repo}/git/ref/heads/main")
-                if (main.get("object") or {}).get("sha") != st["base_head"]:
-                    raise MergeBatchError("stale_base: main moved from the frozen landing base")
-                st["landing_attempt"] = dict(head=st["head"], mode=mode, reruns=reruns, go_row=args.go_row)
-                save_state(st)
-                train = prepare_train(st, lease)
-                if st.get("go_requested_head") == st["head"]:
-                    record_stage(repo, batch_key, "go", st["head"], st["go_requested_at_ms"])
-            started = landing_now()
             subject = _merge_subject(number, pr.get("title") or f"batch {st['name']}", custom_subject)
             require_main_green(repo, st["head"], args.go_row)
             gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
                "--subject", subject, "--body", merge_trailers(st))
-            if lease:
-                record_stage(repo, batch_key, "merge", st["head"], started)
+        if lease:
+            record_stage(repo, batch_key, "merge", st["head"], started)
     elif pr["state"] not in ("MERGED", "OPEN"):
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
     if mode == TESTED_FF:
@@ -599,33 +565,17 @@ def land_with_lease(args, lease, st, mode):
         merge = (pr.get("mergeCommit") or {}).get("oid")
         if pr["state"] != "MERGED" or not merge:
             raise MergeBatchError(f"batch PR #{number} is {pr['state']} with no merge commit yet: run land again")
-    git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
-    views = settle(repo, st["merged"], args.wait)
-    problems, moved, landed = [], [], []
-    for rec in st["merged"]:
-        outcome, why = included_pr(repo, number, rec, views[rec["pr"]], merge)
-        if outcome == "moved":
-            moved.append(rec["pr"])
-        elif outcome == "problem":
-            problems.append(why)
-        else:
-            landed.append(rec)
-    if problems:
-        raise MergeBatchError("batch PR merged, but " + "; ".join(problems) + " (state kept, land again after a fix)")
-    if moved:
-        print(f"batch PR #{number} merged without " + ", ".join(f"#{n}" for n in moved)
-              + f" (head moved after the build; labelled {NEEDS_UPDATE}): they need a new batch", file=sys.stderr)
     for skip in st["skipped"]:
         print(f"not merged: #{skip['pr']} ({skip['reason']})", file=sys.stderr)
     if lease:
         if train is None:
-            train = prepare_train(st, lease)
-        attempt = frozen_landing(st) or dict(head=st["head"], mode=mode)
-        attempt["included"] = [rec["pr"] for rec in landed]
-        st["landing_attempt"] = attempt
-        save_state(st)
-        settle_train(train, lease, st, landed)
+            train = landing_journal(repo, "show", pr=number)["train"] or prepare_train(st, lease, mode)
+        if train["head"] != st["head"] or train["mode"] != mode:
+            raise MergeBatchError("keeper landing journal names a different attempt")
+        settle_train(train, lease, st, wait=args.wait)
         return 0
+    git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
+    landed = check_landed_parts(repo, number, st["merged"], merge, args.wait)
     write_landing(st, mode, merge, reruns, args.go_row)
     drop_state(st)
     try:
