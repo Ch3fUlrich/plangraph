@@ -589,10 +589,10 @@ def test_ready_reports_unknown_remote_facts_without_using_stale_authority(w, tmp
         elif args[0] == "log":
             # Old on-disk authority says A was merged. A failed origin fetch
             # must neither use this to exclude A nor declare A startable.
-            trailer = "demo:A" if failure == "origin" else ""
-            out = f"{sha}\x1f\x1f2026-11-15\x1fbase\x1f{trailer}\x1d"
+            body = "base\n\nPlan-Item: demo:A" if failure == "origin" else "base"
+            out = f"{sha}\x1f\x1f2026-11-15\x1fbase\x1f{body}\x1d"
             if not (failed and failure == "missing-head"):
-                out += f"{head}\x1f{sha}\x1f2026-11-15\x1fpending\x1fdemo:A\x1d"
+                out += f"{head}\x1f{sha}\x1f2026-11-15\x1fpending\x1fpending\n\nPlan-Item: demo:A\x1d"
         else:
             pytest.fail(f"unexpected git call {args}")
         return subprocess.CompletedProcess(args, 0, out, "")
@@ -631,8 +631,9 @@ def test_ready_reports_unknown_remote_facts_without_using_stale_authority(w, tmp
         assert src.work_index(adapter, "demo")["verified_at"] is None
         assert w.store._ready_groups()["warnings"][0]["age_seconds"] is None
         assert "age unknown" in w.store.ready(w.p("reader"))
+    refusal = "open PR inventory unavailable" if failure == "origin" else "carried by #71"
     for reason in (None, "operator verified work manually"):
-        with pytest.raises(Refused, match="open PR inventory unavailable") as exc:
+        with pytest.raises(Refused, match=refusal) as exc:
             w.store.claim(w.p("l1main"), "demo:A", force_stale=reason)
         assert exc.value.code == "bad_state"
         assert w.store._item("demo:A")["epoch"] == 0

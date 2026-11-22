@@ -352,7 +352,7 @@ class ContextMixin:
         reason = self._force_stale_reason(reason)
         project = item["project"]
         indexes = self._work_indexes({project}, fresh=True)
-        prs = src.indexed_open_pulls(indexes, item["key"], project)
+        prs = src.indexed_open_pulls(indexes, item["key"], project, allow_cached=True)
         if prs:
             raise Refused("bad_state", f"{item['key']} carried by "
                           + ", ".join(f"#{number}" for number in prs))

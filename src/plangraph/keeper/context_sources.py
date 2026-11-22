@@ -244,7 +244,10 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
         if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
             branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
     prs_unverified = prs_expected and (prs is None or origin_stale)
-    result = {"commits": commits, "prs": pulls if prs is not None and not prs_unverified else None,
+    open_pulls = pulls if prs is not None else None
+    if prs_unverified:
+        open_pulls = hit[1].get("prs") if hit else None
+    result = {"commits": commits, "prs": open_pulls,
               "prs_unverified": prs_unverified,
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
               "stale": bool(problems), "origin_stale": origin_stale,
@@ -300,12 +303,14 @@ def work_index_cached(git, project):
     return hit[1]
 
 
-def indexed_open_pulls(indexes, key, project):
+def indexed_open_pulls(indexes, key, project, *, allow_cached=False):
     """Match exact trailers across repositories; bare IDs belong to their own project."""
     _, bare = _split(key)
     pulls = set()
     for name, index in indexes.items():
-        prs = (index or {}).get("prs") or {}
+        if not index or (index.get("prs_unverified") and not allow_cached):
+            continue
+        prs = index.get("prs") or {}
         pulls.update(prs.get(key, ()))
         if name == project:
             pulls.update(prs.get(bare, ()))
@@ -320,7 +325,7 @@ def indexed_work(index, key):
     names = (key, bare) if key != bare else (key,)
     commits = {c["sha"]: c for name in names
                for c in index["commits"].get(name, [])}
-    prs = index["prs"]
+    prs = None if index.get("prs_unverified") else index["prs"]
     ordered = sorted(commits.values(), key=lambda c: index.get("order", {}).get(c["sha"], 0))
     return {"commits": ordered[:COMMIT_LIMIT],
             "lanes": [b for b in index["branches"] if bare.lower() in b.lower()],
