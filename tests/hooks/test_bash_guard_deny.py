@@ -313,7 +313,7 @@ def test_self_matching_pgrep_wait_loops():
     ):
         result = run_bash(command)
         assert result.returncode == 2, result.stderr
-        assert b"wait on the PID or unit" in result.stderr.lower()
+        assert b"wait on the pid or unit" in result.stderr.lower()
 
     for command in (
         "pgrep -f fixture; sleep 5",
