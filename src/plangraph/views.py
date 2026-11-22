@@ -207,8 +207,11 @@ def warnings(items):
     return sorted(out, key=lambda p: (p["code"], p["key"]))
 
 
-def ready(items, project=None, ub=None, owner=None, agent=False):
-    """Open items whose every dependency is ``done``, best first.
+def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies_ready=None):
+    """Open items whose dependencies are satisfied, best first.
+
+    By default every dependency must be done. The keeper can supply its claim
+    predicate to include work based on an accepted landing-train part.
 
     *ub* is a precomputed :func:`unblocks` map over the FULL graph, for a caller
     that holds only a subset of the items.  *owner* keeps only items owned by
@@ -220,12 +223,15 @@ def ready(items, project=None, ub=None, owner=None, agent=False):
     """
     idx = index(items)
     ub = unblocks(items) if ub is None else ub
+    if dependencies_ready is None:
+        def dependencies_ready(it):
+            return all(idx.get(d, {}).get("state") == "done" for d in _deps(it))
     out = [it for it in items
            if _state(it) == "open"
            and (project is None or it.get("project") == project)
            and (owner is None or it.get("owner") == owner)
            and not (agent and (it.get("operator") or it.get("kind") in OPERATOR_KINDS))
-           and all(idx.get(d, {}).get("state") == "done" for d in _deps(it))]
+           and dependencies_ready(it)]
     out.sort(key=lambda it: (-_prio(it), -ub.get(it["key"], 0), _est(it), it["key"]))
     return out
 

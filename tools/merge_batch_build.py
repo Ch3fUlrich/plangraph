@@ -20,7 +20,8 @@ from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_pa
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key, landing_receipt_inputs)
+                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key, 
+                              keeper_landing_configured, landing_receipt_inputs)
 
 
 def merge_trailers(st):
@@ -477,6 +478,11 @@ def cmd_abort(args):
         print(f"batch {name!r} has no state file: removing what its build left", file=sys.stderr)
     else:
         raise MergeBatchError(f"no batch {name!r} in progress (merge_batch.py status lists them)")
+    if st.get("pr") and keeper_landing_configured():
+        with landing_lease(st["repo"]) as lease:
+            train = landing_journal(st["repo"], "show", pr=st["pr"])["train"]
+            if train is not None and not train["merge"]:
+                landing_journal(st["repo"], "abandon", pr=st["pr"], **lease)
     os.chdir(state_dir().parent)  # the git dir: the cwd may be the worktree that is about to go
     registered = dict(worktrees())
     paths = {path for path, branch in registered.items() if branch == st["branch"]}
@@ -679,15 +685,15 @@ def read_verified_merge(train):
             if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
                 raise MergeBatchError(f"train #{number} is missing from local main history; use a full checkout to settle")
             pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", "state")
-            return None, "closed" if pr["state"] == "CLOSED" else "pending"
+            return None, pr["state"].lower() if pr["state"] in ("OPEN", "CLOSED") else "pending"
         if git("merge-base", "--is-ancestor", train["base"], head, ok=(0, 1)).returncode:
             raise MergeBatchError(f"train #{number} did not fast-forward the tested base")
         merge = head
     else:
         pr = gh_json("pr", "view", str(number), "--repo", repo,
                      "--json", "state,headRefOid,mergeCommit,baseRefName")
-        if pr["state"] == "CLOSED":
-            return None, "closed"
+        if pr["state"] in ("OPEN", "CLOSED"):
+            return None, pr["state"].lower()
         merge = (pr.get("mergeCommit") or {}).get("oid")
         if pr["state"] != "MERGED" or not merge:
             return None, "pending"
@@ -705,14 +711,26 @@ def read_verified_merge(train):
     return merge, "merged"
 
 
-def prepare_train(st, lease, mode):
+def prepare_train(st, lease, mode=None):
     """Journal the exact train and receipt inputs before attempting to land it."""
+    parts = []
+    for part in st["merged"]:
+        entry = dict(part, ref=st["prs"][str(part["pr"])]["ref"])
+        review = entry.get("review")
+        if review and (review.get("verdict"), review.get("head")) != ("ACCEPT", entry["head"]):
+            entry.pop("review_runs", None)
+        parts.append(entry)
     attempt = frozen_landing(st)
-    inputs = landing_receipt_inputs(st, attempt.get("reruns", []), attempt.get("go_row"))
-    parts = [dict(part, ref=st["prs"][str(part["pr"])]["ref"]) for part in st["merged"]]
+    inputs = {}
+    if mode is not None or attempt:
+        mode = mode or attempt["mode"]
+        inputs = landing_receipt_inputs(st, attempt.get("reruns", []), attempt.get("go_row"))
+        inputs["review_runs"] = {str(part["pr"]): part.get("review_runs") or {} for part in parts}
+        inputs = dict(mode=mode, receipt_inputs=inputs)
+    elif (configured_mode := landing_mode_of(st)) != "train-pr-merge":
+        inputs = dict(mode=configured_mode)
     return landing_journal(st["repo"], "prepare", pr=st["pr"], base=st["base_head"],
-                           head=st["head"], parts=parts, mode=mode, receipt_inputs=inputs,
-                           batch_key=landing_batch_key(st), **lease)
+                           head=st["head"], parts=parts, batch_key=landing_batch_key(st), **inputs, **lease)
 
 
 def settle(repo, recs, wait):

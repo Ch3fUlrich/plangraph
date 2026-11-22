@@ -104,7 +104,11 @@ def worker_claim(
             lease_dt = None
         if lease_dt is not None and lease_dt.timestamp() > store.now():
             lease_live = True
-    if not lease_live:
-        store.worker_claim_lease(principal, key)
+    if lease_live:
+        pinned_base = store.claim_train_base(key)
+    else:
+        pinned_base = store.worker_claim_lease(principal, key).get("base_sha")
+    if pinned_base:
+        claim["base_sha"] = pinned_base
 
     return claim

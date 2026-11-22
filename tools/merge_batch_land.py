@@ -148,6 +148,9 @@ def cmd_push(args):
     run_id = args.ci_run or ((st.get("ci") or {}).get("id") if previous_head == head else None)
     st["ci"] = None  # never keep CI evidence across a new pushed head or a failed lookup
     save_state(st)
+    if keeper_landing_configured():
+        with landing_lease(st["repo"]) as lease:
+            prepare_train(st, lease)
     if run_id:
         ci = gh_json("run", "view", str(run_id), "--repo", st["repo"], "--json",
                      "databaseId,headSha,status,conclusion")
@@ -444,7 +447,7 @@ def _merge_subject(number, title, custom):
     return base if base.endswith(suffix) else f"{base} {suffix}"
 
 
-def settle_train(train, lease, st=None, *, wait=0):
+def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
     """Verify a pending landing, write its records, and resume the fenced settlement cursor."""
     repo, number = train["repo"], train["pr"]
     train = landing_journal(repo, "show", pr=number)["train"]
@@ -453,6 +456,8 @@ def settle_train(train, lease, st=None, *, wait=0):
     merge, state = read_verified_merge(train)
     if state == "closed" and not train["merge"]:
         landing_journal(repo, "abandon", pr=number, **lease)
+        return
+    if state == "open" and allow_open and not train["merge"]:
         return
     if not merge:
         raise MergeBatchError(f"train #{number} is {state}; settlement remains pending")
@@ -516,7 +521,7 @@ def cmd_settle(args):
     for train in pending:
         try:
             with landing_lease(repo) as lease:
-                settle_train(train, lease, states.get(train["pr"]))
+                settle_train(train, lease, states.get(train["pr"]), allow_open=True)
         except MergeBatchError as exc:
             failures.append(str(exc))
     if failures:
@@ -578,10 +583,14 @@ def land_with_lease(args, lease, st, mode):
                 record_stage(repo, batch_key, "go", st["head"], st["go_requested_at_ms"])
         started = landing_now()
         if mode == TESTED_FF:
+            if lease:
+                landing_journal(repo, "check_dependencies", pr=number, head=st["head"], **lease)
             push_tested(st, args.go_row)
         else:
             subject = _merge_subject(number, pr.get("title") or f"batch {st['name']}", custom_subject)
             require_main_green(repo, st["head"], args.go_row)
+            if lease:
+                landing_journal(repo, "check_dependencies", pr=number, head=st["head"], **lease)
             gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
                "--subject", subject, "--body", merge_trailers(st))
         if lease:
@@ -686,17 +695,14 @@ def part_seat(run_id, key, head):
     from plangraph.keeper.config import ConfigError, load_config
     from plangraph.keeper.evidence_runs import RunRecordAdapter
     from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
+    from plangraph.keeper.store_merge_locks import require_train_review
 
     if not isinstance(run_id, str) or not run_id.startswith("run-") or not RunRecordAdapter(None).valid_run_id(run_id):
         raise MergeBatchError("a keeper-bound review requires a spawner run id")
     try:
         config = load_config(keeper_config_path())
         adapter = SpawnerRecordAdapter(config.spawner_records_dir)
-        seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
-                                     allow_cli_reported=True, require_diff_head=True,
-                                     require_explicit_accept=True)
-        if len(seats) != 1 or seats[0]["verdict"] != "pass":
-            raise ValueError(f"{run_id}: expected one passing review seat")
+        require_train_review(adapter, key, head, run_id)
     except (ConfigError, OSError, ValueError) as exc:
         raise MergeBatchError(f"keeper-bound review for {key}: {exc}") from None
 
@@ -743,6 +749,9 @@ def cmd_review(args):
         else:
             raise reason
     save_state(st)
+    if st.get("status") == "pushed" and keeper_landing_configured():
+        with landing_lease(st["repo"]) as lease:
+            prepare_train(st, lease)
     return 0
 
 

@@ -254,8 +254,21 @@ class ContextMixin:
         """Candidate rows with shared claim facts and presentation status."""
         items = self._all_items()
         index = {it["key"]: it for it in items}
-        rows = [dict(row) for row in
-                views.ready(items, project=project, owner=owner, agent=agent)]
+        states = {key: item["state"] for key, item in index.items()}
+        trains = self._open_claim_trains()
+        bases = {}
+
+        def dependencies_ready(item):
+            train = self._claim_train(item, states, trains)
+            if train:
+                bases[item["key"]] = train["base_sha"]
+            return train is not False
+
+        rows = [dict(row) for row in views.ready(items, project=project, owner=owner, agent=agent,
+                                                dependencies_ready=dependencies_ready)]
+        for row in rows:
+            if row["key"] in bases:
+                row["base_sha"] = bases[row["key"]]
         inputs, activity = self._inputs(index), self._last_activity_map()
         indexes = {p: src.work_index_cached(self._adapter("git"), p)
                    for p in {r["project"] for r in rows}}

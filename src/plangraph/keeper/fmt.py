@@ -65,6 +65,8 @@ def ready_context_rows(rows, ub) -> str:
             line += " | NEEDS_RECONCILE: " + row["reason"]
         elif row.get("ready_status") == "in_progress":
             line += " | IN_PROGRESS: " + ", ".join(f"PR #{p}" for p in row["prs"])
+        if row.get("base_sha"):
+            line += f" | base {row['base_sha']}"
         out.append(line)
     return "\n".join(out)
 
@@ -362,7 +364,8 @@ def result_text(verb: str, result) -> str:
             return text
         if verb == "claim":
             return (f"{result.get('key')} claimed epoch {result.get('epoch')} "
-                    f"lease {result.get('lease_until')}")
+                    f"lease {result.get('lease_until')}"
+                    + (f" | base {result['base_sha']}" if result.get("base_sha") else ""))
         if verb == "verdict":
             if result.get("state") == "done":
                 return "done (2/2)"

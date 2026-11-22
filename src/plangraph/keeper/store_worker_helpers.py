@@ -1,6 +1,9 @@
 """Worker ownership and state guards."""
-from .errors import Refused
 import json
+
+from .errors import Refused
+from .evidence_floor import record_bases
+from .store_merge_locks import _landing_data
 from .store_cards import _exec_parts, SETTABLE_STATES
 
 _LIVE_SET = frozenset(("open", "ready", "running", "waiting", "needs_input"))
@@ -9,6 +12,109 @@ _EXEC_IDS = ("workflow_id", "run_id", "attempt")
 
 
 class WorkerGuardsMixin:
+    def _open_claim_trains(self):
+        return [_landing_data(row) for row in self.conn.execute(
+            "SELECT * FROM landing_trains WHERE merged IS NULL AND abandoned=0"
+            " ORDER BY repo, pr DESC")]
+
+    @staticmethod
+    def _claim_train(item, states, trains):
+        """Find one open train head whose stack covers every unfinished dependency."""
+        missing = {dep for dep in item["depends_on"] if states.get(dep) != "done"}
+        if not missing:
+            return None
+        if (item["kind"] != "lane" or any(states.get(dep) in (None, "cancelled") for dep in missing)):
+            return False
+        by_head = {(train["repo"], train["head"]): train for train in trains}
+        for train in trains:
+            witnesses = {}
+            parent = train
+            visited = set()
+            while parent is not None and parent["pr"] not in visited:
+                visited.add(parent["pr"])
+                for part in parent["parts"]:
+                    for key in part.get("review_runs", {}):
+                        witnesses.setdefault(key, [parent["pr"], parent["head"], part["pr"], part["head"]])
+                if missing.issubset(witnesses):
+                    return {"repo": train["repo"], "pr": train["pr"], "base_sha": train["head"],
+                            "witnesses": {key: witnesses[key] for key in sorted(missing)}}
+                parent = by_head.get((train["repo"], parent["base"]))
+        return False
+
+    def _claim_train_for(self, item):
+        states = {row["dst"]: row["state"] for row in self.conn.execute(
+            "SELECT e.dst, i.state FROM edges e LEFT JOIN items i ON i.key=e.dst WHERE e.src=?",
+            (item["key"],))}
+        trains = self._open_claim_trains() if any(state != "done" for state in states.values()) else ()
+        return self._claim_train(item, states, trains)
+
+    def _record_claim_train(self, key, epoch, train):
+        self.conn.execute("DELETE FROM landing_claim_bases WHERE key=?", (key,))
+        if train is not None:
+            self.conn.execute(
+                "INSERT INTO landing_claim_bases(key,epoch,repo,pr,head,witnesses) VALUES(?,?,?,?,?,?)",
+                (key, epoch, train["repo"], train["pr"], train["base_sha"],
+                 json.dumps(train["witnesses"])))
+
+    def claim_train_base(self, key):
+        """Resolve the pinned base of the current lease, including retried worker claims."""
+        row = self.conn.execute(
+            "SELECT b.head FROM landing_claim_bases b JOIN items i ON i.key=b.key AND i.epoch=b.epoch"
+            " WHERE i.key=? AND i.state='claimed'", (key,)).fetchone()
+        return row["head"] if row else None
+
+    def _reconcile_train_claims(self, principal, repo, reason, now):
+        active = self.conn.execute(
+            "SELECT b.* FROM landing_claim_bases b JOIN items i ON i.key=b.key AND i.epoch=b.epoch"
+            " WHERE b.repo=? AND i.state IN ('claimed','in_review')", (repo,)).fetchall()
+        if not active:
+            return
+        trains = {row["pr"]: _landing_data(row) for row in self.conn.execute(
+            "SELECT * FROM landing_trains WHERE repo=?", (repo,))}
+        for claim in active:
+            train = trains.get(claim["pr"])
+            valid = train and not train["abandoned"] and train["head"] == claim["head"]
+            for key, (pr, head, part_pr, part_head) in json.loads(claim["witnesses"]).items():
+                source = trains.get(pr)
+                valid = valid and source and not source["abandoned"] and source["head"] == head and any(
+                    part["pr"] == part_pr and part["head"] == part_head
+                    and key in part.get("review_runs", {})
+                    and ("included" not in source or part_pr in source["included"])
+                    for part in source["parts"])
+            if not valid:
+                item = self._get_or_refuse(claim["key"])
+                bases = record_bases(item, self._adapter("git"))
+                payload = {"reason": reason, "train": {"repo": repo, "pr": claim["pr"], "head": claim["head"]}}
+                if bases:
+                    payload["bases"] = bases
+                    if item["project"] in bases:
+                        payload["base"] = bases[item["project"]]
+                self._release_claim(principal, item, payload, now)
+                self._record_claim_train(claim["key"], claim["epoch"], None)
+
+    def _check_train_dependencies(self, repo, train, included=None):
+        """Verify keeper edges before the lander calls the host merge operation."""
+        parts = train["parts"]
+        members = {key for part in parts if included is None or part["pr"] in included
+                   for key in part["items"]}
+        if not members:
+            return
+        landed = set()
+        for row in self.conn.execute(
+                "SELECT * FROM landing_trains WHERE repo=? AND merged IS NOT NULL AND pr<>?",
+                (repo, train["pr"])):
+            previous = _landing_data(row)
+            landed.update(key for part in previous["parts"] if part["pr"] in previous.get("included", ())
+                          for key in part["items"])
+        states = {row["key"]: row["state"] for row in self.conn.execute("SELECT key,state FROM items")}
+        dependencies = self._dep_map()
+        for key in sorted(members):
+            if key not in states:
+                continue
+            for dep in dependencies.get(key, ()):
+                if states.get(dep) != "done" and dep not in members and dep not in landed:
+                    raise Refused("conflict", f"{key} cannot land before {dep}")
+
     def _system_phase_holder(self, principal, item):
         """Recognize only the system phase-worker claim door, not plain claims."""
         if not (principal is not None and principal.role in ("system", "phase-worker")
