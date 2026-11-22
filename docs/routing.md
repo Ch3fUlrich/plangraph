@@ -194,8 +194,8 @@ than the coarse window label. Sol and Astra have a 1,000,000-token configured
 context, including Sol effort variants and native package sessions.
 Review routes under D-6550 prefer `agy-gemini-4-hydrogen-high` and then
 `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
-available in their configured order, and the Argon review legs stay last. A review run that ends without a VERDICT line is
-recorded `failed` with reason `no_verdict`. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
+available in their configured order, and the Argon review legs stay last. Repository-required reviews admit OpenCode Go DeepSeek and GLM tools legs, which get checkout reads and scoped test commands.
+A missing verdict or a diff-only acceptance cannot complete a repository review. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.
