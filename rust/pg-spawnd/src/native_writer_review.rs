@@ -1,7 +1,7 @@
 //! Review rounds of the native writer: fast checks with a per-head stamp, then one
 //! spawner review run on the exact head, its verdict read from the run record.
 use super::{context, output, Host};
-use crate::native_writer::Driver;
+use crate::{late_review, native_writer::Driver};
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
@@ -174,6 +174,20 @@ impl Host {
         previous: Option<&Value>,
     ) -> Result<Value, String> {
         let base = self.git(&["rev-parse", &format!("{}^{{commit}}", self.base_pin())])?;
+        let pending = self.reviews.join(format!("late-review-{head}.json"));
+        if let Some(request) = late_review::read_pending(&pending)? {
+            if request["head"] != head {
+                return Err("late review head mismatch".into());
+            }
+            let record = late_review::read_run(&self.state, &request)?;
+            return match late_review::publish(&self.state, &pending, &request, &record)? {
+                Some(result) => {
+                    fs::remove_file(&pending).map_err(|e| e.to_string())?;
+                    Ok(result)
+                }
+                None => Ok(late_review::pending_result(&request)),
+            };
+        }
         self.reviews_started += 1;
         let tag = format!("{}-{}", &head[..8.min(head.len())], self.reviews_started);
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
@@ -187,7 +201,9 @@ impl Host {
                 .arg(&clone),
         )?;
         let result = self.review_in(&clone, &tag, &origin, &base, head, previous);
-        let _ = fs::remove_dir_all(&clone);
+        if !pending.is_file() {
+            let _ = fs::remove_dir_all(&clone);
+        }
         result
     }
     fn review_in(
@@ -241,7 +257,8 @@ impl Host {
         let prompt = self.review_prompt(base, head, prev, &families, &versioned);
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
-        let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
+        let max_min = 60;
+        let card = json!({"estimate_tokens":300000, "max_min":max_min, "stall_min":20,
             "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
         let printed = self
             .command(&self.review_cli[0])
@@ -252,7 +269,7 @@ impl Host {
             .args(families.iter().flat_map(|f| ["--writer-family", f]))
             .arg("--prompt-file")
             .arg(&prompt_path)
-            .args(["--wait", "3300", "--json"])
+            .args(["--wait", &(max_min * 60).to_string(), "--json"])
             .current_dir(clone)
             .output()
             .map_err(|e| e.to_string())?;
@@ -263,8 +280,25 @@ impl Host {
                     String::from_utf8_lossy(&printed.stderr).trim()
                 )
             })?;
-        let text = review_run_text(&self.state, &record)?;
         let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
+        if late_review::live(&record) {
+            let started = record["started"]
+                .as_f64()
+                .unwrap_or_else(pg_worker_core::run::finalize::now);
+            let request = json!({"head":head,"run_id":record["run_id"],"checkout":clone,
+                "expected_end":started + f64::from(max_min * 60),"changed_paths":paths});
+            let pending = self.reviews.join(format!("late-review-{head}.json"));
+            late_review::save_pending(&pending, &request)?;
+            let mut result = late_review::pending_result(&request);
+            if let Err(error) = late_review::start(&self.state, &pending) {
+                result["reason"] = json!(format!(
+                    "{}; finisher launch failed: {error}",
+                    result["reason"].as_str().unwrap_or("review_running")
+                ));
+            }
+            return Ok(result);
+        }
+        let text = review_run_text(&self.state, &record)?;
         let mut verdict = review_verdict(&text, head, &paths);
         let id = record["run_id"].as_str().unwrap_or("run-unknown");
         let path = self.reviews.join(format!("{tag}-{id}.txt"));
@@ -334,7 +368,7 @@ pub(super) fn printed_record(stdout: &str) -> Option<Value> {
 }
 /// Review text of a review run record: the rendered result of its live log, else the
 /// record's `stdout_tail` (OpenCode legs keep their answer text there).
-pub(super) fn review_run_text(state: &Path, record: &Value) -> Result<String, String> {
+pub(crate) fn review_run_text(state: &Path, record: &Value) -> Result<String, String> {
     let rendered = crate::review_artifacts::review_text(state, record)
         .map_err(|_| "review run record unreadable".to_owned())?;
     let canonical = |text: &str| {

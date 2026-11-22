@@ -171,6 +171,15 @@ fn review_round(
             {
                 return Ok(review)
             }
+            Ok(review) if review["status"] == "review_running" => {
+                return Err((
+                    4,
+                    review["reason"]
+                        .as_str()
+                        .unwrap_or("review_running")
+                        .to_owned(),
+                ));
+            }
             Ok(review) => {
                 last = review["reason"]
                     .as_str()

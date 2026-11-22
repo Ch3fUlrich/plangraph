@@ -1,0 +1,1 @@
+The native review command waits through the card's time budget. If the reviewer is still active, the command reports its run ID and expected end, and a local finisher writes its review file once the run completes. The next invocation for that head checks the existing run before spawning.

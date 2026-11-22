@@ -503,8 +503,7 @@ mod context;
 #[path = "native_writer_review.rs"]
 mod review;
 use review::review_cli;
-#[cfg(test)]
-use review::{review_run_text, review_verdict};
+pub(crate) use review::{review_run_text, review_verdict};
 #[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;
