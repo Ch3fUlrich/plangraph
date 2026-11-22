@@ -69,7 +69,7 @@ fn exported_review_scenarios() {
     let vectors: Vectors =
         serde_json::from_str(include_str!("../fixtures/transitions.json")).unwrap();
     assert_eq!(vectors.version, 1);
-    assert_eq!(vectors.scenarios.len(), 10);
+    assert_eq!(vectors.scenarios.len(), 11);
     for scenario in vectors.scenarios {
         let mut model = Model::new([SPEC], scenario.admission_verified, 600);
         for (index, step) in scenario.steps.into_iter().enumerate() {

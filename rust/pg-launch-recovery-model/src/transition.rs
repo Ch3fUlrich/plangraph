@@ -150,7 +150,8 @@ impl Model {
                 row.stopped_job = Some(job);
                 row.stop_verified_by_listing = false;
             }
-            Event::PidGone(job) if row.phase == Phase::Revoked && row.stopped_job == Some(job) => {
+            Event::PidGone(job) if row.phase == Phase::Revoked && row.bound_job == Some(job) => {
+                // The bound process can exit before cleanup can stop it.
                 row.pid_gone_at = row.last_listing_at;
             }
             Event::Resolve if row.reservation.open() || row.phase != Phase::Missing => {
