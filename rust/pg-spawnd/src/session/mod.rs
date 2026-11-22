@@ -7,18 +7,21 @@ mod placement;
 mod policy;
 mod process;
 mod remote;
+mod request;
+mod restart;
 mod settings;
 mod storage;
 #[cfg(test)]
 mod tests;
 
 use arguments::{Arguments, ParseError};
-use paths::{basename, io_text, normalize, read_text, repr, resolve, shell_quote, var, Paths};
+use paths::{io_text, normalize, read_text, repr, resolve, shell_quote, var, Paths};
 use placement::Placement;
 use policy::{refused_role, Admission};
 use regex::Regex;
+use request::Request;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
     io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
@@ -59,52 +62,6 @@ fn role_of(name: &str) -> &str {
     static SEQ: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-\d{4,}$").unwrap());
     SEQ.find(name.strip_suffix('\n').unwrap_or(name))
         .map_or(name, |m| &name[..m.start()])
-}
-
-struct Request {
-    args: Arguments,
-    spec: Value,
-    spec_path: PathBuf,
-    legacy_respawn: bool,
-    override_cap: Option<Value>,
-}
-
-impl Request {
-    fn new(args: Arguments, paths: &Paths) -> Option<Self> {
-        let launch = paths.state.join("launch");
-        let spec_path = launch.join(format!("{}.json", args.role));
-        let mut spec = json!({});
-        let mut legacy_respawn = false;
-        if args.respawn {
-            let source = args.option("session").unwrap_or(&args.name);
-            let from = if source == args.role {
-                legacy_respawn = true;
-                spec_path.clone()
-            } else {
-                if role_of(source) != args.role || !basename(source) {
-                    eprintln!("fleet-launch: invalid respawn session");
-                    return None;
-                }
-                launch.join("sessions").join(format!("{source}.json"))
-            };
-            if let Some(saved) = policy::load(&from).filter(Value::is_object) {
-                spec = saved;
-                legacy_respawn = true;
-            }
-        }
-        let override_cap = args.guard.map(|guard| json!(guard)).or_else(|| {
-            (spec["ctx_guard_source"] == "operator")
-                .then(|| spec["ctx_guard"].clone())
-                .filter(|cap| !cap.is_null())
-        });
-        Some(Self {
-            args,
-            spec,
-            spec_path,
-            legacy_respawn,
-            override_cap,
-        })
-    }
 }
 
 /// Run one session launch with fleet policy and settings from the supplied ops directory.
@@ -150,9 +107,24 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
         eprintln!("fleet-launch: role {} is refused by policy ({pattern}); no launch: dispatch the work as spawner runs from the L1", args.role);
         return Ok(2);
     }
-    let Some(request) = Request::new(args, paths) else {
+    let Some(mut request) = Request::new(args, paths) else {
         return Ok(2);
     };
+    match restart::prepare(&request, paths, policy.as_ref()) {
+        Ok(Some(restart)) => {
+            request.args.set_harness(&restart.model, &restart.effort);
+            request.restart = Some(restart);
+        }
+        Ok(None) => {}
+        Err(reason) => {
+            if !request.args.dry {
+                let admission = Admission::check(&request, policy.as_ref(), None, &paths.state);
+                storage::record_outcome(&admission, "refused", None);
+            }
+            eprintln!("fleet-launch: PROMPT-STALE {reason}");
+            return Ok(2);
+        }
+    }
     let host_policy = std::env::var_os("FLEET_HOST_POLICY").map_or(policy_path, PathBuf::from);
     let host_policy = policy::load(&host_policy);
     let placement = Placement::new(&request, host_policy.as_ref());
@@ -200,11 +172,7 @@ fn local(
         if args.dry {
             return true;
         }
-        if storage::ledger(admission, false, outcome, name).is_err() {
-            eprintln!("fleet-launch: admission ledger unavailable");
-            return false;
-        }
-        true
+        storage::record_outcome(admission, outcome, name)
     };
     if !admission.allowed {
         if args.dry {
@@ -219,7 +187,12 @@ fn local(
         return Ok(2);
     }
     let prompt_path = Path::new(&args.prompt);
-    let prompt = match read_text(prompt_path) {
+    let supplied = || read_text(prompt_path);
+    let prompt = match request
+        .restart
+        .as_ref()
+        .map_or_else(supplied, |restart| Ok(restart.prompt.clone()))
+    {
         Ok(prompt) => prompt,
         Err(error) => {
             log("refused", None);

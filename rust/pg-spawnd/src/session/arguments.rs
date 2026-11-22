@@ -23,16 +23,18 @@ pub(super) struct Arguments {
     pub respawn: bool,
     pub oom: bool,
     pub guard: Option<Caps>,
+    positional_indices: [usize; 5],
     options: HashMap<String, String>,
 }
 
 impl Arguments {
     pub fn parse(raw: Vec<String>) -> Result<Self, ParseError> {
         let mut pos = Vec::new();
+        let mut indices = Vec::new();
         let mut options = HashMap::new();
         let (mut dry, mut respawn, mut oom) = (false, false, false);
-        let mut iter = raw.iter().cloned().peekable();
-        while let Some(arg) = iter.next() {
+        let mut iter = raw.iter().cloned().enumerate().peekable();
+        while let Some((index, arg)) = iter.next() {
             match arg.as_str() {
                 "--dry-run" => dry = true,
                 "--respawn" => respawn = true,
@@ -44,9 +46,12 @@ impl Arguments {
                     });
                     match (key, iter.peek()) {
                         (Some(key), Some(_)) => {
-                            options.insert(key.to_owned(), iter.next().unwrap());
+                            options.insert(key.to_owned(), iter.next().unwrap().1);
                         }
-                        _ => pos.push(arg),
+                        _ => {
+                            indices.push(index);
+                            pos.push(arg);
+                        }
                     }
                 }
             }
@@ -74,12 +79,20 @@ impl Arguments {
             respawn,
             oom,
             guard,
+            positional_indices: indices.try_into().expect("five parsed positionals"),
             options,
         })
     }
 
     pub fn option(&self, key: &str) -> Option<&str> {
         self.options.get(key).map(String::as_str)
+    }
+
+    pub fn set_harness(&mut self, model: &str, effort: &str) {
+        self.model = model.to_owned();
+        self.effort = effort.to_owned();
+        self.raw[self.positional_indices[2]].clone_from(&self.model);
+        self.raw[self.positional_indices[3]].clone_from(&self.effort);
     }
 }
 

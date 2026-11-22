@@ -20,6 +20,25 @@ const IDLE: &str = "CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS";
 const HANDOFF: &str = "AUTOOS_CTX_HANDOFF";
 const HARD: &str = "AUTOOS_CTX_HARD";
 
+fn configured_window() -> (String, i128) {
+    let raw = std::env::var("FLEET_COMPACT_WINDOW").unwrap_or_else(|_| "400000".into());
+    let tokens = raw.trim().parse::<i128>().unwrap_or(400000);
+    (raw, tokens)
+}
+
+fn required_window(hard: u64) -> i128 {
+    i128::from(hard) + 50000
+}
+
+pub(super) fn effective_window(hard: u64) -> String {
+    let (raw, tokens) = configured_window();
+    if required_window(hard) > tokens {
+        required_window(hard).to_string()
+    } else {
+        raw
+    }
+}
+
 pub(super) fn prepare(
     paths: &Paths,
     role: &str,
@@ -27,9 +46,8 @@ pub(super) fn prepare(
     write: bool,
 ) -> Result<Settings, String> {
     let lean = paths.ops.join("fleet-settings.json");
-    let compact = std::env::var("FLEET_COMPACT_WINDOW").unwrap_or_else(|_| "400000".into());
-    let base = compact.trim().parse::<i128>().unwrap_or(400000);
-    let needed = i128::from(cap.hard) + 50000;
+    let (compact, base) = configured_window();
+    let needed = required_window(cap.hard);
     let doc = load(&lean);
     let handoff = cap.handoff.to_string();
     let hard = cap.hard.to_string();

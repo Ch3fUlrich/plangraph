@@ -138,6 +138,12 @@ impl Admission {
             .map(|key| {
                 let option = if key == "host" {
                     host.or(request.args.option(key))
+                } else if let Some(restart) = request.restart.as_ref() {
+                    match key {
+                        "card" => restart.card.to_str(),
+                        "handoff" => restart.handoff.to_str(),
+                        _ => request.args.option(key),
+                    }
                 } else {
                     request.args.option(key)
                 };
@@ -172,7 +178,16 @@ impl Admission {
         let error = configured.is_none().then_some("missing or invalid policy");
         let (ledger, enforce) =
             configured.unwrap_or_else(|| (state.join("fleet-launch-ledger.jsonl"), false));
-        let caps = select_caps(policy, &request.args.role, request.override_cap.as_ref());
+        let mut caps = select_caps(policy, &request.args.role, request.override_cap.as_ref());
+        if let Some(restart) = request
+            .restart
+            .as_ref()
+            .filter(|restart| restart.saved_caps)
+        {
+            caps.caps = restart.caps;
+            caps.source = "record";
+            caps.error = None;
+        }
         let allowed = !enforce || (missing.is_empty() && caps.error != Some("invalid_override"));
         Self {
             caps,

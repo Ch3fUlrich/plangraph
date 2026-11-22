@@ -62,13 +62,26 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
     let mut argv = args.raw.clone();
     argv.extend(["--host".into(), host.name().into()]);
     let prompt = Path::new(&args.prompt);
+    let prompt = if let Some(restart) = request.restart.as_ref() {
+        argv.extend([
+            "--card".into(),
+            restart.card.to_string_lossy().into_owned(),
+            "--handoff".into(),
+            restart.handoff.to_string_lossy().into_owned(),
+            "--ctx-guard".into(),
+            format!("{},{}", restart.caps.handoff, restart.caps.hard),
+        ]);
+        restart.prompt.clone()
+    } else {
+        read_text(prompt).map_err(|e| io_text(&e, prompt))?
+    };
     let mcp = args
         .option("mcp")
         .filter(|s| !s.is_empty())
         .map_or_else(|| paths.mcp(), Into::into);
     let payload = json!({
         "host": host.name(), "argv": argv, "spec": request.spec, "seq": seq,
-        "prompt": read_text(prompt).map_err(|e| io_text(&e, prompt))?,
+        "prompt": prompt,
         "mcp": read_text(&mcp).map_err(|e| io_text(&e, &mcp))?,
     });
     // The path is installation data. The receiver keeps the old bytes when

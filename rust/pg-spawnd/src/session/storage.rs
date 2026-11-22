@@ -89,6 +89,14 @@ fn flock(file: &File, operation: libc::c_int) -> io::Result<()> {
     }
 }
 
+pub(super) fn record_outcome(admission: &Admission, outcome: &str, name: Option<&str>) -> bool {
+    if ledger(admission, false, outcome, name).is_err() {
+        eprintln!("fleet-launch: admission ledger unavailable");
+        return false;
+    }
+    true
+}
+
 pub(super) fn ledger(
     admission: &Admission,
     fallback: bool,

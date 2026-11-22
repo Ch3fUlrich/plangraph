@@ -28,6 +28,18 @@ same installation path relative to the destination home. Set
 `PLANGRAPH_FLEET_REMOTE_ROUTER` if the caller’s ops directory is outside that layout.
 These fixtures use temporary state and fake peers for every launch.
 
+For a Rust respawn with a role card, the launcher selects the newest readable
+card by modification time. It considers the saved and explicit references,
+the recorded session's ready marker, and cards for the role in the applicable
+status and referenced directories. It uses the card's drill-down handoff, its
+companion file, or the associated ready or launch record path. The successor's
+prompt is generated from that one handoff and the saved model, effort and caps.
+The caller's file is checked before launch and any conflicting handoff, caps,
+or compact window produces `PROMPT-STALE` with the supplied and expected values.
+Legacy respawns with neither a card reference nor a discoverable card keep
+their existing prompt behavior. A referenced card with no usable replacement
+causes a refusal.
+
 The harness isolates HOME, state, cwd, and PATH. Rust peers stand in for Claude, SSH,
 and Windows memory probes. A destination test delivers the captured envelope to a
 second temporary home. Time stamps must be positive integers, and all other fields of

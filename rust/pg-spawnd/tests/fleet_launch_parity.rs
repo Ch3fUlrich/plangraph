@@ -18,6 +18,9 @@ mod refusals;
 #[path = "fleet_launch/remote.rs"]
 mod remote;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/restart.rs"]
+mod restart;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/sandbox.rs"]
 mod sandbox;
 #[cfg(target_os = "linux")]
@@ -64,6 +67,9 @@ fn check(launcher: &sandbox::Launcher) {
     records::check(launcher);
     records::check_id_resolution(launcher);
     remote::check(launcher);
+    if matches!(launcher, sandbox::Launcher::Rust(_)) {
+        restart::check(launcher);
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
