@@ -182,7 +182,8 @@ if 'client marker' in marker and '----- previous review -----' in prompt:
 if 'reject marker' in marker or 'client marker' in marker:
     text = 'HIGH writer.txt:1 - fixture finding\nHEAD: ' + head + '\nVERDICT: REQUEST_CHANGES\n'
 else:
-    tests = 'TESTS: cargo test -p fixture — 1 passed\n' if pathlib.Path('fix.txt').is_file() else ''
+    fixed = subprocess.run(['git', 'cat-file', '-e', head + ':fix.txt'], capture_output=True).returncode == 0
+    tests = 'TESTS: cargo test -p fixture — 1 passed\n' if fixed else ''
     text = 'FILES READ: writer.txt\n' + tests + 'HEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type':'result','is_error':False,'result':text}) + '\n')
 print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'fixture-worker','overflow_remote':True,'stdout_tail':text,'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
