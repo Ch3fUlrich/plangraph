@@ -22,7 +22,7 @@ def checkout_review(diff, checkout):
     """Materialize the transferred head in a disposable clone with no remote."""
     def git(repo, *args):
         return subprocess.check_output(['git', '-C', repo, *args], env=checkout_env(),
-                                       stderr=subprocess.PIPE, text=True, timeout=30).strip()
+                                       stderr=subprocess.PIPE, encoding='utf-8', errors='replace', timeout=30).strip()
 
     try:
         source = diff['repo']

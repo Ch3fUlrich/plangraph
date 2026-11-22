@@ -368,13 +368,13 @@ def terminal_reason(record, job=None):
             and (last_reason or '').startswith('no_verdict')):
         record.update(reason=last_reason, review_status='no_verdict')
         return
-    if (record.get('role') == 'review' and record.get('status') == 'completed'
+    if (job is not None and record.get('role') == 'review' and record.get('status') == 'completed'
             and record.get('exit_code') in (None, 0)):
-        # Base dispatch has no job here: use only the final attempt, never the
-        # combined stdout tail (an earlier leg's verdict cannot bless this one).
-        attempts = [a for a in record.get('attempts') or () if a.get('status') != 'skipped']
-        text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
-        if missing := review_no_verdict(text, getattr(job, 'response_finish_reason', None),
+        from .prompt_input import TOOLLESS_MODES
+        chosen = record.get('chosen_leg') or leg
+        toolless = (chosen.get('tool_mode') in TOOLLESS_MODES or getattr(job, '_inline_review', False))
+        if missing := review_no_verdict(job.stdout, getattr(job, 'response_finish_reason', None),
+                                       toolless=toolless,
                                        require_files=record.get('review_document') != 'train_delta'):
             record.update(status='failed', exit_code=6, reason=missing, review_status='no_verdict')
             return
