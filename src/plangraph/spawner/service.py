@@ -328,8 +328,10 @@ class SpawnService(SeatSpawnMixin):
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
         if placement is not None: record.update(placement=placement, host=placement['host'])
+        from .notify import annotate_native
         try:
             annotate_item(record, card)
+            annotate_native(record, card)
             self._save(record)
         except Exception as storage_error:
             import logging

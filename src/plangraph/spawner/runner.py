@@ -368,10 +368,13 @@ class SpawnerRunner:
             if cmd[0] == 'agy' and (prepare_launch or not dry_run):
                 from plangraph.routing_support.clients import prepare_agy_review_home
                 render_reason = prepare_agy_review_home(child_env, role, model_or_combo, self._ocdata_dirs, job_id)
-        if render_reason is None:
-            self._child_envs[job_id] = child_env
-
         try:
+            if cmd[0] == 'claude' and (prepare_launch or not dry_run):
+                from plangraph.routing_support.claude_seat import configure_review_tests
+                configure_review_tests(cmd, child_env, leg, role, self._ocdata_dirs, job_id)
+            if render_reason is None:
+                self._child_envs[job_id] = child_env
+
             if dry_run:
                 served_model = model_or_combo
                 served_family = detect_model_family(model_or_combo)
@@ -852,7 +855,7 @@ def spawn_service(*args, **kwargs):
         def _save(self, record, *, retry=False):
             import socket
             record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
-            from .notify import completion_event, CommandSink, KeeperNotConfigured, KeeperRefused, KeeperSink, settle_refusal
+            from .notify import completion_event, completion_recipient, CommandSink, KeeperNotConfigured, KeeperRefused, KeeperSink, settle_refusal
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
                 record['last_activity_ts'] = getattr(job, 'last_activity_ts', None)
@@ -883,7 +886,7 @@ def spawn_service(*args, **kwargs):
                         no_keeper_item = (recipient == 'keeper' and isinstance(sink, KeeperSink)
                                           and not record['completion'].get('item'))
                         if not no_keeper_item:
-                            sink.deliver(recipient, record['completion'])
+                            sink.deliver(completion_recipient(recipient, record), record['completion'])
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'not-applicable: no item\n' if no_keeper_item else 'delivered\n')
                     except KeeperRefused as refusal:

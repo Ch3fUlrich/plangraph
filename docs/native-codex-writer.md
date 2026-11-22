@@ -49,7 +49,11 @@ public symbols and their first callers, and the exact-head fast-check log
 (`<git-dir>/fast-checks/<head>.log`) and writer session log. The completed run's
 receipt binds the worker host and head. The last `VERDICT:` line must be
 canonical. ACCEPT requires repository access and evidence in a `FILES READ:`
-line. A different `HEAD:` or weak ACCEPT is `no_verdict`, retried twice, then
+line. The review record sets `tested` from the reviewer's standalone `TESTS:`
+report. A successful run exposes `review_test_status` as `reported` or `untested`
+in its terminal record. An absent report or `TESTS: none:` is untested.
+The Sonnet seat runs its scoped Bash commands in a read-only review checkout
+with disposable writable build and test scratch space. A different `HEAD:` or weak ACCEPT is `no_verdict`, retried twice, then
 the run ends BLOCKED with
 exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.
 REQUEST_CHANGES resumes the same session with a pointer to a private brief
@@ -155,6 +159,11 @@ The plan-order launcher scripts remain until the migration slice.
 Overflow receipts keep target process identity under `remote_process`; origin
 watchdogs never sample that PID locally. Cancel is forwarded to the target by run
 ID. A failed SSH cancel leaves the last known run status intact with a query error.
+Set `parent_session` on the card to receive terminal results in that session's
+inbox on the supervising host. A refused launch also raises a Keeper finding
+when the run is linked to an item. Native admission rechecks transient disk and
+cache limits during its admission window (120 seconds by default). A refusal
+after that window ends the attempt. The caller must submit a new launch.
 
 The Rust MCP bridge delegates native launch, result refresh and cancellation to
 the same Python owner. Remote receipts refresh before returning a result; cancel

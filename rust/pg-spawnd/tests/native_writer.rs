@@ -182,7 +182,8 @@ if 'client marker' in marker and '----- previous review -----' in prompt:
 if 'reject marker' in marker or 'client marker' in marker:
     text = 'HIGH writer.txt:1 - fixture finding\nHEAD: ' + head + '\nVERDICT: REQUEST_CHANGES\n'
 else:
-    text = 'FILES READ: writer.txt\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
+    tests = 'TESTS: cargo test -p fixture — 1 passed\n' if pathlib.Path('fix.txt').is_file() else ''
+    text = 'FILES READ: writer.txt\n' + tests + 'HEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type':'result','is_error':False,'result':text}) + '\n')
 print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'fixture-worker','overflow_remote':True,'stdout_tail':text,'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
 "#).unwrap();
@@ -275,6 +276,10 @@ async def check():
     assert record['host'] and record['exit_code'] == 0, record
     assert record['session_id'] == 'fixture-session' and record['resumes'] == 0, record
     assert record['review']['verdict'] == 'ACCEPT' and record['review']['head'] == record['final_head'], record
+    assert record['review_test_status'] == 'untested', record
+    review_text = pathlib.Path(record['review']['path']).read_text()
+    assert [line for line in review_text.splitlines() if line.startswith('TESTS:')] == [
+        'TESTS: none: reviewer supplied no test result'], review_text
     assert record['review']['leg'] == 'claude-sonnet-5-5-high' and record['review']['harness'] == 'claude' and record['status_line'] == 'DONE', record
     assert record['fast_checks'] == {'head': record['final_head'], 'status': 'passed'}, record
     assert pathlib.Path(record['cwd']).is_dir(), record
@@ -291,6 +296,9 @@ async def check():
         assert fixed[field] == record[field], (field, fixed)
     assert fixed['review']['head'] == fixed['final_head'], fixed
     assert fixed['review']['run_id'] != record['review']['run_id'], fixed
+    assert fixed['resume_from']['head'] == record['final_head'], fixed
+    assert fixed['fast_checks'] == {'head': fixed['final_head'], 'status': 'passed'}, fixed
+    assert fixed['review_test_status'] == 'reported', fixed
     ledger = pathlib.Path(fixed['cwd']).parent/'ledger.jsonl'
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert len(rows) == 2 and rows[0]['tokens'] == rows[1]['tokens'] == 1234, rows

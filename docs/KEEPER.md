@@ -334,6 +334,7 @@ To preview a particular close, include the item's `key` and `decision_id` with
 `GET /v1/audit-meta?project=&stale_days=` (router/L1 only), `GET /v1/changelog?since=` and the [principal-scoped event replay route](contract/keeper-contract-v1-routes.md#get-v1events).
 The shadow collector also reads `GET /v1/messages?since=SEQ` for bus messages and
 `GET /v1/hosts` for current host levels.
+The spawner's `record_run` call can include `native_launch_refusal` for a finished run with a nonzero exit. Keeper publishes a `native_launch_refused` finding when it records that run for the first time.
 An automatic merge close records the terminal verdict for the claimant and
 delegate whose claim it released.
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is

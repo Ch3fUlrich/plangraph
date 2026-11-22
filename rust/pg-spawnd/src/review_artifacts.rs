@@ -108,6 +108,7 @@ pub(crate) fn write_review_artifacts_with_allowlist(
     let seat = directory(state, record)?.join("seat");
     regular(&seat, true)?;
     let mut evidence = json!({});
+    evidence["tested"] = json!(crate::review_test_evidence::reported(review).is_some());
     for key in [
         "served_model",
         "requested_model",

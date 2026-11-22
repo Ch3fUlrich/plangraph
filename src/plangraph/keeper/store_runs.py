@@ -29,7 +29,7 @@ _WARM_S = 60  # how long a warm scan may be read under the request lock
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
 _VERDICTS = ("pass", "fail", "invalid", None)
-_TOP_KEYS = frozenset({"run_id", "phase", "rc", "writer", "seats", "item_key"})
+_TOP_KEYS = frozenset({"run_id", "phase", "rc", "writer", "seats", "item_key", "native_launch_refusal"})
 _WRITER_KEYS = frozenset({"model", "family", "source"})
 _SEAT_KEYS = frozenset({"model", "verdict", "run_id"})
 _UTC_DATE_RE = re.compile(
@@ -123,8 +123,14 @@ def normalise_run(run) -> dict:
     item_key = run.get("item_key")
     if item_key is not None and not isinstance(item_key, str):
         raise Refused("validation", "item_key must be a string or null")
-    return {"run_id": run_id, "phase": phase, "rc": rc,
-            "writer": writer, "seats": seats, "item_key": item_key}
+    result = {"run_id": run_id, "phase": phase, "rc": rc,
+              "writer": writer, "seats": seats, "item_key": item_key}
+    if "native_launch_refusal" in run:
+        reason = run["native_launch_refusal"]
+        if phase != "finished" or not rc or not isinstance(reason, str) or not 1 <= len(reason) <= 512:
+            raise Refused("validation", "native launch refusal requires a finished, nonzero run and a reason")
+        result["native_launch_refusal"] = reason
+    return result
 
 
 #: Refusal codes of the seat proof that the keeper setting ``require_seats`` (off) turns into a flag.
@@ -542,6 +548,8 @@ class RunsMixin:
                 return {"key": key, "run_id": run_id, "phase": phase,
                         "duplicate": True}
             self._append(principal, key, "run_recorded", normed, now)
+            if reason := normed.get("native_launch_refusal"):
+                self._finding(key, "native_launch_refused", f"{run_id}: {reason}", now)
             try:
                 have = json.loads(fresh.get("run_ids")) if fresh.get("run_ids") else []
             except (ValueError, TypeError):

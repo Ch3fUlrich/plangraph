@@ -383,7 +383,7 @@ def select_work_drive(drives, cleanup):
 NO_BUILD_ROLES = ('review',)
 
 
-def local_disk_admission(worktree, service, role='implement', movable=False):
+def local_disk_admission(worktree, service, role='implement', movable=False, *, native=False):
     """Return an alternate checkout to launch in, or the disk refusal reason."""
     # SettingsError derives from ValueError: validate before measurement's catch.
     from plangraph.settings import _policy_data, SettingsError, as_spawn_refused
@@ -396,17 +396,27 @@ def local_disk_admission(worktree, service, role='implement', movable=False):
         cap = cargo_target_cap_gb()
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
-        target = shared_cargo_target()
+        configured_target = shared_cargo_target()
+        target = configured_target.resolve() if native else configured_target
         unsafe_cache_dir(target, worktree)
         building = role not in NO_BUILD_ROLES
         size = cargo_target_size_gb(target) if building else 0
-        if building and size >= cap:
-            if any(cargo_run_busy(r) for r in service.ps()['runs']):
-                return None, f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
-            try:
-                reclaim_cargo_target(target, cap, worktree)
-            except OSError:
-                return None, f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
+        if building and cap and size >= cap:
+            runs = service.ps()['runs']
+            if native:
+                runs = [row for row in runs if not row.get('overflow_remote') and row.get('role') == 'implement']
+            active = sum(cargo_run_busy(row) for row in runs)
+            limit = cap * (1 + active) if native else cap
+            if size >= limit:
+                measured = f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {limit:g} GB'
+                if active:
+                    return None, measured + '; busy'
+                if configured_target.is_symlink():
+                    return None, measured + '; cleanup unavailable for a symlinked target'
+                try:
+                    reclaim_cargo_target(target, cap, worktree)
+                except OSError:
+                    return None, measured + '; busy or cleanup unavailable'
         if building:
             # The legacy caches and the pool slots stay under the same cap.
             for extra in _legacy_cache_roots() + _pool_slot_roots(target):
@@ -446,9 +456,9 @@ def local_disk_admission(worktree, service, role='implement', movable=False):
         return None, 'disk_low: measurement or configuration unavailable'
 
 
-def local_disk_refusal(worktree, service, role='implement', movable=False):
+def local_disk_refusal(worktree, service, role='implement', movable=False, *, native=False):
     """Return only the disk refusal for callers that do not launch a run."""
-    return local_disk_admission(worktree, service, role, movable)[1]
+    return local_disk_admission(worktree, service, role, movable, native=native)[1]
 
 
 async def collect_with_disk_guard(runner, job_id, proc):
