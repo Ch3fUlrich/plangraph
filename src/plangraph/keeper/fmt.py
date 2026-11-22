@@ -353,6 +353,11 @@ def flags_text(flags) -> str:
 def result_text(verb: str, result) -> str:
     """The smallest useful line for a write verb's result."""
     if isinstance(result, dict):
+        if verb in ("claim_batch", "heartbeat_batch"):
+            return "\n".join(
+                f"{row['key']} refused {row['error']}: {row['msg']}" if "error" in row
+                else f"{row['key']} epoch {row['epoch']} lease {row['lease_until']}"
+                for row in result["results"])
         if "created" in result:
             text = f"created {len(result['created'])} items"
             for refusal in result.get("refused") or []:

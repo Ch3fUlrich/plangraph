@@ -412,11 +412,10 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                       f"{key} is {fresh['state']}, not {expected_state}")
 
     def _ready(self, item):
-        for dep in self._dep_map().get(item["key"], []):
-            target = self._item(dep)
-            if target is None or target["state"] != "done":
-                return False
-        return True
+        return self.conn.execute(
+            "SELECT 1 FROM edges e LEFT JOIN items i ON i.key=e.dst"
+            " WHERE e.src=? AND (i.key IS NULL OR i.state!='done') LIMIT 1",
+            (item["key"],)).fetchone() is None
 
     @staticmethod
     def _problem_affects(problem, affected):

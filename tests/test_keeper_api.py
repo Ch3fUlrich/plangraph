@@ -412,3 +412,104 @@ def test_ready_unknown_index_warning_is_visible_in_json_and_text(srv, w, monkeyp
     text = raw.decode()
     assert text.count("WARNING:") == 1 and "origin fetch failed" in text
     assert "Unknown:\n  demo:A" in text
+
+
+def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
+    from time import perf_counter, sleep
+    from plangraph.keeper import context_sources
+
+    ids = [f"LOAD-{i}" for i in range(16)]
+    w.store.create_items(w.p("router"), [*(defn(key) for key in ids),
+                                           defn("LOAD-GOAL", ids, kind="goal")])
+    keys = [f"demo:{key}" for key in ids]
+    original = context_sources.work_index
+    phases = {name: [] for name in ("index", "dependency", "transaction", "event", "snapshot")}
+
+    def measure(name, fn):
+        def run(*args, **kwargs):
+            start = perf_counter()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                phases[name].append(perf_counter() - start)
+        return run
+
+    def work_index(*args, **kwargs):
+        if kwargs.get("fresh"):
+            sleep(.75)  # Simulate a responsive remote fetch and forge inventory.
+        return original(*args, **kwargs)
+
+    @contextmanager
+    def transaction():
+        start = perf_counter()
+        with write():
+            yield
+        phases["transaction"].append(perf_counter() - start)
+
+    write = w.store._write
+    monkeypatch.setattr(w.store, "_write", transaction)
+    monkeypatch.setattr(w.store, "_ready", measure("dependency", w.store._ready))
+    monkeypatch.setattr(w.store, "_append", measure("event", w.store._append))
+    monkeypatch.setattr(context_sources, "work_index", measure("index", work_index))
+    monkeypatch.setattr(api.KeeperHandler, "_snapshot", measure("snapshot", api.KeeperHandler._snapshot))
+    barrier = threading.Barrier(12)
+
+    def request(i):
+        is_writer = i < 8
+        session = Session(url=srv.base_url)
+        session._token = w.tok("l1main" if is_writer else "reader")
+        barrier.wait(timeout=10)
+        start = perf_counter()
+        if is_writer:
+            assert session.call("POST", "claim", body={"key": keys[i]}, timeout=10)["key"] == keys[i]
+        else:
+            assert session.call("GET", f"show/{keys[i]}", timeout=10)["key"] == keys[i]
+        return perf_counter() - start
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        samples = sorted(pool.map(request, range(12)))
+    print("HTTP p95", round(samples[-1], 3),
+          "phase maxima", {name: round(max(values), 4) for name, values in phases.items()})
+    assert samples[-1] < 5
+
+
+def test_batch_claim_and_heartbeat_commit_once_and_replay(srv, w, monkeypatch):
+    ids = [f"BATCH-{i}" for i in range(100)]
+    w.store.create_items(w.p("router"), [*(defn(key) for key in ids),
+                                           defn("BATCH-GOAL", ids, kind="goal")])
+    keys = [f"demo:{key}" for key in ids]
+    commits = []
+    from contextlib import contextmanager
+
+    @contextmanager
+    def transaction():
+        with write():
+            yield
+        commits.append("commit")
+
+    write = w.store._write
+    monkeypatch.setattr(w.store, "_write", transaction)
+    session = Session(url=srv.base_url)
+    session._token = w.tok("l1main")
+
+    request = {"keys": [*keys, "demo:missing"]}
+    claimed = session.call("POST", "claim_batch", body=request, idempotency_key="claim-fixture")
+    assert [row["key"] for row in claimed["results"]] == request["keys"]
+    assert all(row["epoch"] == 1 for row in claimed["results"][:-1])
+    assert claimed["results"][-1]["error"] == "not_found"
+    assert commits == ["commit"]
+    assert session.call("POST", "claim_batch", body=request,
+                        idempotency_key="claim-fixture") == claimed
+    assert commits == ["commit"]
+
+    w.clock.advance(60)
+    claims = [{"key": key, "epoch": 1} for key in keys]
+    claims[-1]["epoch"] = 2
+    renewed = session.call("POST", "heartbeat_batch", body={"claims": claims})
+    assert [row["key"] for row in renewed["results"]] == keys
+    assert all(row["lease_until"] > claimed["results"][0]["lease_until"]
+               for row in renewed["results"][:-1])
+    assert renewed["results"][-1]["error"] == "epoch_stale"
+    assert commits == ["commit", "commit"]

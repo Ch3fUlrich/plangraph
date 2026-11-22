@@ -2,14 +2,71 @@
 from contextvars import ContextVar
 from contextlib import contextmanager
 from functools import wraps
+from concurrent.futures import Future
+from threading import Lock
+
+from .errors import Refused
 import sys
 import time
 
 clock = time.monotonic
 THRESHOLD_MS = 250
-_LATENCY_VERBS = frozenset({"show", "heartbeat", "set_priority"})
+_LATENCY_VERBS = frozenset({"show", "claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
 _parts = ContextVar("keeper_timing_parts", default=None)
 _request_timer = ContextVar("keeper_request_timer", default=None)
+_io_deadline = ContextVar("keeper_io_deadline", default=None)
+
+_inflight = {}
+_inflight_lock = Lock()
+
+
+def share_inflight(key, fetch):
+    """Share a running authority lookup, then discard its answer."""
+    with _inflight_lock:
+        pending = _inflight.get(key)
+        if pending is None:
+            pending = _inflight[key] = Future()
+            leader = True
+        else:
+            leader = False
+    if not leader:
+        try:
+            return pending.result(timeout=io_timeout(3.0))
+        except TimeoutError:
+            raise Refused("conflict", "claim authority refresh exceeded its deadline") from None
+    try:
+        result = fetch()
+    except BaseException as exc:
+        with _inflight_lock:
+            del _inflight[key]
+            pending.set_exception(exc)
+        raise
+    else:
+        with _inflight_lock:
+            del _inflight[key]
+            pending.set_result(result)
+        return result
+
+
+@contextmanager
+def io_budget(seconds):
+    """Keep subprocesses in a claim preflight within a common elapsed budget."""
+    token = _io_deadline.set(time.monotonic() + seconds)
+    try:
+        yield
+    finally:
+        _io_deadline.reset(token)
+
+
+def io_timeout(seconds):
+    deadline = _io_deadline.get()
+    if deadline is None:
+        return seconds
+    return max(0, min(seconds, deadline - time.monotonic()))
+
+
+def io_expired():
+    return io_timeout(1) == 0
 
 
 @contextmanager

@@ -23,6 +23,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+from . import timing
 from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell
 from .evidence_git import is_first_parent_merge, plan_items, valid_ref
@@ -156,7 +157,7 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             proc = subprocess.run(
                 ["gh", "pr", "list", "--state", "open", "--limit", "10000",
                  "--json", "number,headRefOid,headRefName"], cwd=repo,
-                capture_output=True, text=True, timeout=30, check=False)
+                capture_output=True, text=True, timeout=timing.io_timeout(30), check=False)
             value = json.loads(proc.stdout) if proc.returncode == 0 else None
             if isinstance(value, list) and len(value) < 10000 and all(
                     isinstance(p, dict) and type(p.get("number")) is int
@@ -178,6 +179,8 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     out = _ok(git, repo, ["log", "--all", "--no-show-signature",
                          "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
     if refs_out is None or target is None or out is None:
+        if timing.io_expired():
+            raise Refused("conflict", "claim authority refresh exceeded its deadline")
         if not origin:
             return None
         origin_stale = True

@@ -24,7 +24,7 @@ READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "answers", "progress", "changelog", "audit-meta", "metrics",
               "jev_report", "write_context", "events"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
-               "set_priority", "claim", "delegate", "heartbeat", "release",
+               "set_priority", "claim", "claim_batch", "delegate", "heartbeat", "heartbeat_batch", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
@@ -65,7 +65,7 @@ READ_CALLS = {
 RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay", "write_receipt", "write_context", "bind_seat_verdict"})
 
 # These verbs persist their response inside the same transaction as the mutation.
-RETRYABLE_WRITES = frozenset({"claim", "heartbeat", "set_priority"})
+RETRYABLE_WRITES = frozenset({"claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
 
 
 def check_write_key(key):

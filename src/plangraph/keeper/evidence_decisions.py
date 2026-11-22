@@ -35,6 +35,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from . import timing
+
 __all__ = ["DecisionsAdapter", "DECISION_LINE_RE"]
 
 DECISION_LINE_RE = re.compile(r"^\| D-([0-9]+) \|")
@@ -78,7 +80,7 @@ def _global_credential_entries() -> list[tuple[str, str]]:
             ["git", "config", "--global", "--no-includes", "--null", "--get-regexp", r"^credential\..*helper$"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
-            out, _ = proc.communicate(timeout=10)
+            out, _ = proc.communicate(timeout=timing.io_timeout(10))
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
@@ -120,7 +122,7 @@ def read_decisions_origin(path: Path) -> str:
         path = path.resolve()
         root = subprocess.run(
             ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
-            check=True, capture_output=True, env=env, timeout=30).stdout.decode("utf-8").strip()
+            check=True, capture_output=True, env=env, timeout=timing.io_timeout(30)).stdout.decode("utf-8").strip()
         repo = Path(root).resolve()
         relative = path.relative_to(repo).as_posix()
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -129,13 +131,13 @@ def read_decisions_origin(path: Path) -> str:
         subprocess.run(
             ["git", "-C", str(repo), "fetch", "origin",
              "+refs/heads/main:refs/remotes/origin/main"],
-            check=True, capture_output=True, env=env, timeout=60)
+            check=True, capture_output=True, env=env, timeout=timing.io_timeout(60))
     except (OSError, subprocess.SubprocessError):
         raise DecisionsFetchFailed from None
     try:
         return subprocess.run(
             ["git", "-C", str(repo), "cat-file", "blob", f"origin/main:{relative}"],
-            check=True, capture_output=True, env=env, timeout=30).stdout.decode("utf-8")
+            check=True, capture_output=True, env=env, timeout=timing.io_timeout(30)).stdout.decode("utf-8")
     except (OSError, ValueError, subprocess.SubprocessError):
         raise DecisionsOriginUnreadable from None
 

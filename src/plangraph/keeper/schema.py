@@ -33,7 +33,7 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: v19 landing stages, v20 landing settlement, v21 Actions job timings.
 #: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
 #: this number at runtime.
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 LANDING_STAGES_DDL = files(__package__).joinpath("landing_stages.sql").read_text(encoding="utf-8")
 LANDING_TRAINS_DDL = files(__package__).joinpath("landing_trains.sql").read_text(encoding="utf-8")
@@ -409,6 +409,13 @@ CREATE TABLE IF NOT EXISTS event_audience (
 );
 """
 
+DEFINITION_EVENTS = "type IN ('item_created','item_defined')"
+CLAIM_DEFINITION_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_events_definition_seq ON events(seq) "
+    f"WHERE {DEFINITION_EVENTS};"
+)
+
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + RECEIPTS_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
-          + GRANTS_DDL + ALERTS_DDL + LANDING_STAGES_DDL + LANDING_TRAINS_DDL + LANDING_JOBS_DDL + EVENT_AUDIENCE_DDL)
+          + GRANTS_DDL + ALERTS_DDL + LANDING_STAGES_DDL + LANDING_TRAINS_DDL + LANDING_JOBS_DDL + EVENT_AUDIENCE_DDL
+          + CLAIM_DEFINITION_INDEX_DDL)

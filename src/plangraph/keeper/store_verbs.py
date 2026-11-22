@@ -12,7 +12,7 @@ normalisation, evidence checks, authorisation) live on the ``Store`` base class.
 from __future__ import annotations
 
 from .. import views
-from . import auth, context_sources as src, events
+from . import auth, context_sources as src, events, timing
 from .errors import Refused
 from .evidence_floor import record_bases
 from .phase_merge import merge_subject
@@ -126,70 +126,130 @@ class VerbsMixin:
     def claim(self, principal, key, lease_s=None, force_stale=None):
         """TASK-CONTEXT-GUARD: a stale claim is refused unless *force_stale*."""
         return self._run(principal, "claim", key,
-                         lambda now: self._claim(principal, key, lease_s, now,
+                         lambda now: self._claim(principal, key, lease_s,
                                                  force_stale=force_stale))
 
     def worker_claim_lease(self, principal, key, lease_s=None):
         return self._run(principal, "claim", key,
-                         lambda now: self._claim(principal, key, lease_s, now, allow_system=True))
+                         lambda now: self._claim(principal, key, lease_s, allow_system=True))
 
-    def _claim(self, principal, key, lease_s, now, *, allow_system=False,
+    def _claim(self, principal, key, lease_s, *, allow_system=False,
                force_stale=None):
-        # Only worker_claim admits system; plain claim admits l1/worker/phase-worker.
-        self._require_role(principal, *(("l1", "worker", "system", "phase-worker") if allow_system else ("l1", "worker", "phase-worker")))
-        lease_seconds = self._lease_seconds(lease_s)
-        force_stale = self._force_stale_reason(force_stale)
-        override = None
-        first = self._item(key)
-        if first is not None and first["state"] == "open" and self._ready(first) \
-                and principal.role in ("l1", "worker"):
-            # The slow repo/decision reads run before the write lock.
-            self._require_project(principal, first["project"])
-            override = self._claim_guard(first, force_stale)
+        self._require_role(principal, *(("l1", "worker", "system", "phase-worker")
+                                        if allow_system else ("l1", "worker", "phase-worker")))
+        lease = self._lease_seconds(lease_s)
+        reason = self._force_stale_reason(force_stale)
+        with timing.io_budget(3.0):
+            prepared = self._prepare_claim(principal, key, reason, {})
         with self._write():
-            item = self._item(key)
-            if item is None:
-                raise Refused("not_found", f"no item {key!r}")
-            if item["state"] == "cancelled":
-                raise Refused("locked", f"{key} is cancelled: "
-                              + self._reasons([key]).get(key, "no reason recorded"))
-            self._assert_unlocked(item)
-            if principal.role in ("l1", "worker"):
-                self._require_project(principal, item["project"])
-            if item["state"] == "claimed":
-                raise Refused("conflict", f"{key} already claimed")
-            if item["state"] != "open" or not self._ready(item):
-                index = {it["key"]: it for it in self._all_items()}
-                facts = self._not_open_facts(item, index)
-                if item["state"] != "open":
-                    raise Refused("bad_state", f"{key} is {item['state']}, not open"
-                                  + (f" ({facts})" if facts else ""))
-                raise Refused("bad_state", f"{key} has unfinished dependencies: {facts}")
-            epoch = item["epoch"] + 1
-            lease = self._iso(now + lease_seconds)
-            payload = {
-                "epoch": epoch,
-                "claimed_by": principal.name,
-                "lease_until": lease,
-            }
-            if allow_system and principal.role in ("system", "phase-worker"):
-                payload["via"] = "worker_claim"
-            if override is not None:
-                payload["force_stale"] = override
-            base = self._ref_head(item["project"])
-            if base is not None:
-                payload["base"] = base
-            bases = record_bases(item, self._adapter("git"))
-            if bases:  # recorded only with a head, like base: legacy payloads
-                payload["bases"] = bases      # stay byte-identical (D-3335)
-            self._append(principal, key, "claimed", payload, now)
-            self.conn.execute(
-                "UPDATE items SET state='claimed', epoch=?, round=0,"
-                " claimed_by=?, delegate=NULL, reviewer=NULL, lease_until=?,"
-                " review_waiver=NULL, updated_at=? WHERE key=?",
-                (epoch, principal.name, lease, self._iso(now), key))
-            return self._finish_retryable_write(principal, {
-                "key": key, "epoch": epoch, "lease_until": lease})
+            self._check_principal(principal)
+            return self._finish_retryable_write(principal, self._commit_claim(
+                principal, key, lease, prepared, self.now(), allow_system))
+
+    def _prepare_claim(self, principal, key, reason, shared):
+        item = self._item(key)
+        if item is None or item["state"] != "open" or not self._ready(item):
+            return None
+        override = None
+        if principal.role in ("l1", "worker"):
+            self._require_project(principal, item["project"])
+            override = self._claim_guard(item, reason, shared)
+        repo = (item["project"], item.get("track"))
+        bases = shared.setdefault("bases", {})
+        if repo not in bases:
+            with timing.outside_request_lock():
+                bases[repo] = record_bases(item, self._adapter("git"))
+        if timing.io_expired():
+            raise Refused("conflict", "claim preflight exceeded its deadline")
+        return item, override, bases[repo]
+
+    def _commit_claim(self, principal, key, lease_seconds, prepared, now,
+                      allow_system=False):
+        item = self._get_or_refuse(key)
+        if item["state"] == "cancelled":
+            raise Refused("locked", f"{key} is cancelled: "
+                          + self._reasons([key]).get(key, "no reason recorded"))
+        self._assert_unlocked(item)
+        if principal.role in ("l1", "worker"):
+            self._require_project(principal, item["project"])
+        if item["state"] == "claimed":
+            raise Refused("conflict", f"{key} already claimed")
+        if item["state"] != "open" or not self._ready(item):
+            facts = self._not_open_facts(item, self._item_neighborhood(item))
+            if item["state"] != "open":
+                raise Refused("bad_state", f"{key} is {item['state']}, not open"
+                              + (f" ({facts})" if facts else ""))
+            raise Refused("bad_state", f"{key} has unfinished dependencies: {facts}")
+        if prepared is None or prepared[0] != item:
+            raise Refused("conflict", f"{key} changed while checking claim eligibility")
+        _, override, bases = prepared
+        epoch = item["epoch"] + 1
+        lease = self._iso(now + lease_seconds)
+        payload = {"epoch": epoch, "claimed_by": principal.name, "lease_until": lease}
+        if allow_system and principal.role in ("system", "phase-worker"):
+            payload["via"] = "worker_claim"
+        if override is not None:
+            payload["force_stale"] = override
+        if item["project"] in bases:
+            payload["base"] = bases[item["project"]]
+        if bases:
+            payload["bases"] = bases
+        self._append(principal, key, "claimed", payload, now)
+        self.conn.execute(
+            "UPDATE items SET state='claimed', epoch=?, round=0,"
+            " claimed_by=?, delegate=NULL, reviewer=NULL, lease_until=?,"
+            " review_waiver=NULL, updated_at=? WHERE key=?",
+            (epoch, principal.name, lease, self._iso(now), key))
+        return {"key": key, "epoch": epoch, "lease_until": lease}
+
+    def claim_batch(self, principal, keys, lease_s=None, force_stale=None):
+        """Claim up to 200 keys in one transaction, with one result per key."""
+        return self._run(principal, "claim_batch", None, lambda now: self._claim_batch(
+            principal, keys, lease_s, force_stale))
+
+    def _claim_batch(self, principal, keys, lease_s, force_stale):
+        self._require_role(principal, "l1", "worker")
+        self._validate_lease_batch(keys)
+        lease = self._lease_seconds(lease_s)
+        reason = self._force_stale_reason(force_stale)
+        shared, prepared = {}, {}
+        with timing.io_budget(3.0):
+            for key in keys:
+                try:
+                    prepared[key] = self._prepare_claim(principal, key, reason, shared)
+                except Refused as exc:
+                    prepared[key] = exc
+
+        def commit(key, now):
+            found = prepared[key]
+            if isinstance(found, Refused):
+                raise found
+            return self._commit_claim(principal, key, lease, found, now)
+
+        return self._commit_lease_batch(principal, "claim", keys, commit)
+
+    @staticmethod
+    def _validate_lease_batch(keys):
+        if (not isinstance(keys, list) or not 1 <= len(keys) <= 200
+                or any(not isinstance(key, str) or not key.strip() for key in keys)
+                or len(set(keys)) != len(keys)):
+            raise Refused("validation", "expected 1 to 200 distinct item keys")
+
+    def _commit_lease_batch(self, principal, action, keys, commit):
+        results = []
+        with self._write():
+            self._check_principal(principal)
+            now = self.now()
+            for key in keys:
+                try:
+                    result = commit(key, now)
+                except Refused as exc:
+                    self._audit(principal, action, key, False, exc.code, exc.msg, now)
+                    result = {"key": key, "error": exc.code, "msg": exc.msg}
+                else:
+                    self._audit(principal, action, key, True, now=now)
+                results.append(result)
+            return self._finish_retryable_write(principal, {"results": results})
 
     def delegate(self, principal, key, worker_principal):
         return self._run(principal, "delegate", key,
@@ -247,23 +307,53 @@ class VerbsMixin:
             if receipt is not None:
                 self._check_run_principal(principal, "heartbeat", key, self.now())
             self._actor_or_delegate(principal, fresh)
-            # D-837: a heartbeat extends, never shortens - a claim may hold a lease longer than
-            # the default (claim lease_s), and the fold expects the cache lease >= the claimed one.
-            current = self._parse_iso(fresh["lease_until"]) if fresh["lease_until"] else None
-            lease = self._iso(max(now + self.default_lease,
-                                  current.timestamp() if current is not None else 0))
-            cursor = self.conn.execute(
-                "UPDATE items SET lease_until=?, updated_at=?"
-                " WHERE key=? AND state='claimed' AND epoch=?",
-                (lease, self._iso(now), key, epoch))
-            self._race_guard(cursor, key, "claimed", epoch)
-            if isinstance(principal, auth.RunPrincipal):
-                self._extend_run_token(principal, dict(fresh, lease_until=lease), now)
-            reply = {"key": key, "epoch": epoch, "lease_until": lease}
+            reply = self._renew_lease(principal, fresh, epoch, now)
             if receipt is not None:
                 reply["source_round"] = fresh["round"]
             record({"result": "ok", "reply": reply})
             return self._finish_retryable_write(principal, reply)
+
+    def heartbeat_batch(self, principal, claims):
+        """Renew up to 200 claim epochs in one transaction."""
+        return self._run(principal, "heartbeat_batch", None,
+                         lambda now: self._heartbeat_batch(principal, claims))
+
+    def _heartbeat_batch(self, principal, claims):
+        self._require_role(principal, "l1", "worker")
+        if not isinstance(claims, list) or any(
+                not isinstance(row, dict) or type(row.get("epoch")) is not int
+                or row["epoch"] <= 0 for row in claims):
+            raise Refused("validation", "claims must be a list of keys and positive epochs")
+        keys = [row.get("key") for row in claims]
+        self._validate_lease_batch(keys)
+        epochs = {row["key"]: row["epoch"] for row in claims}
+
+        def commit(key, now):
+            item = self._get_or_refuse(key)
+            self._assert_unlocked(item)
+            if item["state"] != "claimed":
+                raise Refused("bad_state", f"{key} is {item['state']}, not claimed")
+            self._actor_or_delegate(principal, item)
+            self._epoch_ok(item, epochs[key])
+            return self._renew_lease(principal, item, epochs[key], now)
+
+        return self._commit_lease_batch(principal, "heartbeat", keys, commit)
+
+    def _renew_lease(self, principal, fresh, epoch, now):
+        key = fresh["key"]
+        # D-837: a heartbeat extends, never shortens - a claim may hold a lease longer than
+        # the default (claim lease_s), and the fold expects the cache lease >= the claimed one.
+        current = self._parse_iso(fresh["lease_until"]) if fresh["lease_until"] else None
+        lease = self._iso(max(now + self.default_lease,
+                              current.timestamp() if current is not None else 0))
+        cursor = self.conn.execute(
+            "UPDATE items SET lease_until=?, updated_at=?"
+            " WHERE key=? AND state='claimed' AND epoch=?",
+            (lease, self._iso(now), key, epoch))
+        self._race_guard(cursor, key, "claimed", epoch)
+        if isinstance(principal, auth.RunPrincipal):
+            self._extend_run_token(principal, dict(fresh, lease_until=lease), now)
+        return {"key": key, "epoch": epoch, "lease_until": lease}
 
     def release(self, principal, key, epoch):
         return self._run(principal, "release", key,

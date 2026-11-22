@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
-from .schema import EVENT_AUDIENCE_DDL, EXIT_CLASSES, JEV_KINDS, JEV_STATUSES, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL, WINDOW_CLASSES
+from .schema import CLAIM_DEFINITION_INDEX_DDL, EVENT_AUDIENCE_DDL, EXIT_CLASSES, JEV_KINDS, JEV_STATUSES, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL, WINDOW_CLASSES
 from .messages_schema import PG as MESSAGES_DDL
 from .schema_pg_spawner import PG as SPAWNER_DDL
 from .schema_pg_baseline import BASELINE as _V1
@@ -354,7 +354,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(19, "landing train settlement",
                         LANDING_TRAINS_DDL.replace("TEXT", 'TEXT COLLATE "C"')),
               Migration(20, "landing CI jobs",
-                        LANDING_JOBS_DDL.replace("TEXT", 'TEXT COLLATE "C"')))
+                        LANDING_JOBS_DDL.replace("TEXT", 'TEXT COLLATE "C"')),
+              Migration(21, "claim definition event index", CLAIM_DEFINITION_INDEX_DDL))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)

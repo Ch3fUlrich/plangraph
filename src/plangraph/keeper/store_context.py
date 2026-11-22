@@ -34,6 +34,7 @@ from .. import views
 from . import context_sources as src, timing
 from .brief import ensure_cap, superseded_contract
 from .errors import Refused
+from .schema import DEFINITION_EVENTS
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
 
@@ -43,7 +44,7 @@ READY_GIT_LIMIT = 25
 FORCE_STALE_MAX = 500
 BRIEF_DECISIONS = 6
 BRIEF_STALE_MAX = 240
-_DEF_TYPES = ("item_created", "item_defined")
+
 
 
 def _payload(raw):
@@ -125,7 +126,7 @@ class ContextMixin:
         """
         row = self.conn.execute(
             "SELECT COUNT(*) AS n, MAX(seq) AS m, COALESCE(SUM(seq), 0) AS s"
-            " FROM events WHERE type IN (?,?)", _DEF_TYPES).fetchone()
+            f" FROM events WHERE {DEFINITION_EVENTS}").fetchone()
         stamp = (row["n"], row["m"], row["s"])
         clock = getattr(self, "_ctx_clock", None)
         if clock is not None and clock["stamp"] == stamp:
@@ -133,8 +134,8 @@ class ContextMixin:
         clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp}
         mark = -1
         for row in self.conn.execute(
-                "SELECT seq, key, payload FROM events WHERE type IN (?,?)"
-                " ORDER BY seq", _DEF_TYPES):
+                f"SELECT seq, key, payload FROM events WHERE {DEFINITION_EVENTS}"
+                " ORDER BY seq"):
             raw = row["payload"]
             ids = src.decision_ids(raw if isinstance(raw, str) else json.dumps(raw))
             if ids:
@@ -330,18 +331,31 @@ class ContextMixin:
                           f"force_stale reason is over {FORCE_STALE_MAX} chars")
         return value.strip()
 
-    def _claim_guard(self, item, reason):
+    def _claim_guard(self, item, reason, shared=None):
         """Refuse a stale claim with the facts, or return the override record."""
         reason = self._force_stale_reason(reason)
         index = self._item_neighborhood(item)
-        try:
-            inputs = self._inputs(index, fresh=True)
-        except src.DecisionsUnreadable:
-            path = getattr(self._adapter("decisions"), "_path", None)
-            raise Refused("bad_state", f"cannot read decisions file: {path}") from None
-        ctx = self._task_context(item, index, inputs=inputs, git=False)
-        gitad = self._adapter("git")
-        work_index = src.work_index(gitad, item["project"], fresh=True)
+        shared = {} if shared is None else shared
+        if "clock" not in shared:
+            shared["clock"] = self._decision_clock()
+        project = item["project"]
+        indexes = shared.setdefault("indexes", {})
+        with timing.outside_request_lock():
+            try:
+                if "book" not in shared:
+                    adapter = self._adapter("decisions")
+                    shared["book"] = timing.share_inflight(
+                        ("decisions", id(adapter)), lambda: src.decision_book(adapter, fresh=True))
+            except src.DecisionsUnreadable:
+                path = getattr(self._adapter("decisions"), "_path", None)
+                raise Refused("bad_state", f"cannot read decisions file: {path}") from None
+            if project not in indexes:
+                git = self._adapter("git")
+                indexes[project] = timing.share_inflight(
+                    ("work", id(git), project), lambda: src.work_index(git, project, fresh=True))
+        ctx = self._task_context(item, index, inputs={
+            "graph": _graph(index), "book": shared["book"], "clock": shared["clock"]}, git=False)
+        work_index = indexes[project]
         ctx["work_exists"] = src.indexed_work(work_index, item["key"])
         facts = self._claim_staleness(ctx)
         if work_index is not None and work_index.get("stale"):

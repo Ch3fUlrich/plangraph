@@ -31,8 +31,10 @@ HANDLERS = {
     "ready": cli_verbs.cmd_ready,
     "show": cli_verbs.cmd_show,
     "claim": cli_verbs.cmd_claim,
+    "claim-batch": cli_verbs.cmd_claim_batch,
     "delegate": cli_verbs.cmd_delegate,
     "heartbeat": cli_verbs.cmd_heartbeat,
+    "heartbeat-batch": cli_verbs.cmd_heartbeat_batch,
     "release": cli_verbs.cmd_release,
     "evidence": cli_verbs.cmd_evidence,
     "submit": cli_verbs.cmd_submit,
@@ -119,11 +121,19 @@ def _add_reads(sub):
 
 
 def _add_writes(sub):
-    claim = _p(sub, "claim", help="claim a ready item")
-    claim.add_argument("key")
-    claim.add_argument("--lease", help="lease, e.g. 2h")
-    claim.add_argument("--force-stale", metavar="REASON",
-                       help="claim a stale item anyway (audited reason)")
+    for name in ("claim", "claim-batch"):
+        claim = _p(sub, name, help="claim one or more ready items")
+        if name == "claim":
+            claim.add_argument("key")
+        else:
+            claim.add_argument("keys", nargs="+")
+        claim.add_argument("--lease", help="lease, e.g. 2h")
+        claim.add_argument("--force-stale", metavar="REASON",
+                           help="claim a stale item anyway (audited reason)")
+
+    heartbeat = _p(sub, "heartbeat-batch", help="renew a batch of held claim epochs")
+    heartbeat.add_argument("--claim", dest="claims", action="append", nargs=2,
+                           metavar=("KEY", "EPOCH"), required=True)
 
     delegate = _p(sub, "delegate", help="delegate a claimed item")
     delegate.add_argument("key")
