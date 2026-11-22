@@ -1,0 +1,1 @@
+- Admitted 1M spawn routes up to each leg’s declared request bound and reported the bound used on refusal.
