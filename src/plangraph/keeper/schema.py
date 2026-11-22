@@ -30,7 +30,7 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: oversight step reached main first and keeps v14 (``OVERSIGHT_SCHEMA_VERSION``,
 #: installed presence-based); the bus steps renumber after it: v15 durable
 #: messages, v16 message nonces/envelopes, v17 placement rules, v18 write receipts,
-#: v19 landing stages, v20 landing settlement, v21 Actions job timings.
+#: v19 landing stages, v20 landing settlement, v21 Actions job timings, v22 claim definition event index.
 #: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
 #: this number at runtime.
 SCHEMA_VERSION = 22

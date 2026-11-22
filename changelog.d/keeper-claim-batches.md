@@ -1,1 +1,3 @@
 Keeper claim preflight now shares overlapping fresh Git and decision lookups outside the request lock. Claim and heartbeat batches commit up to 200 keys in one transaction and return a result for each key. The CLI exposes them as `claim-batch KEY...` and `heartbeat-batch --claim KEY EPOCH` with repeatable claim pairs.
+
+Coalesced lookups preserve the leader's error and report a separate refusal when the follower's own deadline expires.

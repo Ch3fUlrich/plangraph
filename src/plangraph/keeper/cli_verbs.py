@@ -502,7 +502,6 @@ def cmd_heartbeat_batch(args, session):
     return write(session, "heartbeat_batch", {"claims": claims})
 
 
-
 def cmd_delegate(args, session):
     return write(session, "delegate", {"key": args.key, "worker": args.worker})
 

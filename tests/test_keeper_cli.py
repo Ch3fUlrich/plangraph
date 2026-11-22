@@ -533,3 +533,25 @@ def test_live_server_has_no_background_snapshot_writer(live):
     assert cfg.snapshot_debounce_s == 0
     assert server.snapshot_writer is None
     assert not [t for t in threading.enumerate() if t.name == "keeper-snapshot"]
+
+
+def test_cli_lease_batches_report_each_row_and_refuse_partial_success(live, capsys):
+    _, w, tokens, _, _ = live
+    token = tokens["l1main"]
+    assert run(token, "claim-batch", "demo:A", "demo:missing", "--lease", "2m", "--json") == 2
+    claimed = out_json(capsys)["results"]
+    assert claimed[0] == {"key": "demo:A", "epoch": 1,
+                          "lease_until": w.store._iso(w.clock() + 120)}
+    assert (claimed[1]["key"], claimed[1]["error"]) == ("demo:missing", "not_found")
+
+    assert run(token, "heartbeat-batch", "--claim", "demo:A", "1",
+               "--claim", "demo:missing", "1", "--json") == 2
+    renewed = out_json(capsys)["results"]
+    assert renewed[0]["key"] == "demo:A"
+    assert renewed[0]["lease_until"] > claimed[0]["lease_until"]
+    assert (renewed[1]["key"], renewed[1]["error"]) == ("demo:missing", "not_found")
+
+    assert run(token, "heartbeat-batch", "--claim", "demo:A", "1") == 0
+    assert "demo:A epoch 1 lease" in capsys.readouterr().out
+    assert run(token, "heartbeat-batch", "--claim", "demo:A", "wrong") == 2
+    assert "epoch must be an integer" in capsys.readouterr().err

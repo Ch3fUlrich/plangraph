@@ -2,7 +2,7 @@
 from contextvars import ContextVar
 from contextlib import contextmanager
 from functools import wraps
-from concurrent.futures import Future
+from concurrent.futures import Future, wait
 from threading import Lock
 
 from .errors import Refused
@@ -30,10 +30,10 @@ def share_inflight(key, fetch):
         else:
             leader = False
     if not leader:
-        try:
-            return pending.result(timeout=io_timeout(3.0))
-        except TimeoutError:
-            raise Refused("conflict", "claim authority refresh exceeded its deadline") from None
+        done, _ = wait((pending,), timeout=io_timeout(3.0))
+        if not done:
+            raise Refused("conflict", "claim authority refresh exceeded its deadline")
+        return pending.result()
     try:
         result = fetch()
     except BaseException as exc:

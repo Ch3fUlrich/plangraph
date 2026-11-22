@@ -46,7 +46,6 @@ BRIEF_DECISIONS = 6
 BRIEF_STALE_MAX = 240
 
 
-
 def _payload(raw):
     if isinstance(raw, dict):
         return raw
