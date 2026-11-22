@@ -19,7 +19,7 @@ from pathlib import Path
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
-from .schema import (ALIASES_DDL, DESIGN3_DDL, GRANTS_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
+from .schema import (ALIASES_DDL, DESIGN3_DDL, GRANTS_DDL, INCIDENTS_V18_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
                      OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock", "select_backend"]
@@ -225,6 +225,7 @@ def _upgrade(conn):
         raise
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
+    conn.executescript(INCIDENTS_V18_DDL)
 
 
 def open_db(path, *, create: bool = False,

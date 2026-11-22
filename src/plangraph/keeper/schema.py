@@ -27,7 +27,7 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: installed presence-based); the bus steps renumber after it: v15 durable
 #: messages, v16 message nonces/envelopes, v17 placement rules.  Every step past v12 installs
 #: presence-based in ``db._upgrade``; nothing keys off this number at runtime.
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 #: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
 #: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
@@ -66,6 +66,7 @@ EVENT_TYPES = (
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
     "kind_set", "state_set", "exec_owner_changed", "oversight_token_minted",
+    "incident_appended",
 )
 
 def _in(values):
@@ -358,6 +359,11 @@ CREATE TABLE audit_findings (
 );
 """
 
+INCIDENTS_V18_DDL = """
+CREATE INDEX IF NOT EXISTS idx_events_incidents ON events(key, seq)
+    WHERE type = 'incident_appended';
+"""
+
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
-          + GRANTS_DDL)
+          + GRANTS_DDL + INCIDENTS_V18_DDL)

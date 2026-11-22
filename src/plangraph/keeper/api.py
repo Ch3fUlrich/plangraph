@@ -424,6 +424,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name in ("heartbeat", "release", "submit"):
             return getattr(store, name)(principal, self._need(body, "key"),
                                         self._need(body, "epoch"))
+        if name == "incident":
+            return store.incident(principal, self._need(body, "key"),
+                                  body.get("text"), body.get("evidence"))
         if name == "add_evidence":
             return store.add_evidence(principal, self._need(body, "key"),
                                       self._need(body, "epoch"),

@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
-from .schema import EXIT_CLASSES, JEV_KINDS, JEV_STATUSES, WINDOW_CLASSES
+from .schema import EXIT_CLASSES, INCIDENTS_V18_DDL, JEV_KINDS, JEV_STATUSES, WINDOW_CLASSES
 from .messages_schema import PG as MESSAGES_DDL
 from .schema_pg_spawner import PG as SPAWNER_DDL
 from .schema_pg_baseline import BASELINE as _V1
@@ -310,7 +310,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(12, "host samples", HOST_SAMPLES_DDL),
               Migration(13, "l1 apply grants", _V13),
               Migration(14, "host samples: partition function not executable by PUBLIC",
-                        HOST_SAMPLES_ACL_DDL))
+                        HOST_SAMPLES_ACL_DDL),
+              Migration(15, "item incident log index", INCIDENTS_V18_DDL))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)

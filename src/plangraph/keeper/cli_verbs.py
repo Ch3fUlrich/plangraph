@@ -467,6 +467,11 @@ def cmd_release(args, session):
                  {"key": args.key, "epoch": _epoch(session, args.key)})
 
 
+def cmd_incident(args, session):
+    return write(session, "incident",
+                 {"key": args.key, "text": args.text, "evidence": args.evidence})
+
+
 def cmd_evidence(args, session):
     ref = evidence_ref(args)
     return write(session, "add_evidence",
