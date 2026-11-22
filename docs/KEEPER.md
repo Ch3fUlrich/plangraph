@@ -659,7 +659,7 @@ cards cannot use these low-trust seats; their existing two-seat gate remains.
 
 `ready` uses the claim guard's merged-work and newer-decision checks. Its JSON
 reply separates startable `items`, `needs_reconcile` rows (with `reason`), and
-`in_progress` rows (with `prs`, the open PR numbers), and `unknown` rows when
+`in_progress` rows (shown as `in_review` with `prs`, the open PR numbers), and `unknown` rows when
 remote facts cannot be verified. Text and CLI print startable rows first, then
 separate, indented Needs reconcile, In progress and Unknown sections; only
 startable rows retain the top-level `key | ...` line format. `-n` caps only
@@ -678,8 +678,10 @@ retried after 10 seconds. Independently verified decision/merge facts can still
 require reconciliation. Unconfigured or unavailable local adapters retain the
 existing best-effort behavior. Claim refreshes the index before enforcement;
 an unverified index refuses claim with `work index unverified` unless the caller
-uses the existing audited force-stale override. Its override, audit and
-authorization rules remain unchanged. Ready and claim share merge PR metadata
+uses the existing audited force-stale override for merged-work and decision facts.
+A matching open PR in any scanned repository refuses every claim, including worker
+claims and force-stale requests. A successful refresh after an unmerged close clears
+the PR hold. Ready and claim share merge PR metadata
 computed from the refreshed target topology, even when local main lags origin.
 
 `PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims` prints exactly `{"paths":[...],"branches":[...]}` for active
