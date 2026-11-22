@@ -2,11 +2,10 @@
 import json
 import os
 import runpy
-import subprocess
-from pathlib import Path
 
 import pytest
 
+from merge_batch_env import train_cli  # noqa: F401
 from test_hooks_prepush import HOOK, commit_file, fake_ip, git, push_line, repo, run_hook  # noqa: F401
 
 LOG_PREFLIGHT = ("import json, os, sys\n"
@@ -14,21 +13,9 @@ LOG_PREFLIGHT = ("import json, os, sys\n"
                  "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text(json.dumps(sys.argv[1:]))\n")
 
 
-@pytest.fixture(scope="session")
-def train_cli():
-    root = HOOK.parents[2]
-    command = ["cargo", "build", "--locked", "--manifest-path", str(root / "rust" / "Cargo.toml"),
-               "-p", "plangraph-cli", "--bin", "plangraph", "--message-format=json"]
-    env = dict(os.environ, CARGO_BUILD_JOBS="1")
-    result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=True)
-    artifacts = (json.loads(line) for line in result.stdout.splitlines())
-    return next(Path(entry["executable"]).parent for entry in artifacts
-                if entry.get("executable") and entry["target"]["name"] == "plangraph")
-
-
 @pytest.fixture
 def train_validator_on_path(train_cli, monkeypatch):
-    monkeypatch.setenv("PATH", str(train_cli), prepend=os.pathsep)
+    monkeypatch.setenv("PATH", str(train_cli.parent), prepend=os.pathsep)
 
 
 def install_preflight(r, marker):

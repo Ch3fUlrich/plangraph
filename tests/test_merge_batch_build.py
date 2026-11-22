@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from merge_batch_env import conflicting, env_fixture, first_parent, two
+from merge_batch_env import train_cli  # noqa: F401
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stubs")
 
@@ -72,8 +73,10 @@ def install_pre_push(env):
 
 @pytest.mark.parametrize("case", ["own", "train-pr", "train-head", "train-unrelated",
                                   "train-wrong-pr", "train-fenced", "lane", "fork", "no-gh"])
-def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, tmp_path, case):
+def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, tmp_path, request, case):
     branch = "lane/topic" if case in ("lane", "fork") else "land/train-fixture"
+    if branch.startswith("land/train-"):
+        (env.stubs / "plangraph").symlink_to(request.getfixturevalue("train_cli"))
     writer = "\n\nWriter: codex/test"
     closed = env.branch_pr(1, {"closed": "closed\n"}, state="CLOSED", trailer=writer)
     part = env.branch_pr(2, {"part": "part\n"}, trailer=writer)

@@ -5,14 +5,31 @@ other live tool) is unreachable; the tool under test runs as a subprocess with a
 """
 import json
 from contextlib import contextmanager
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "merge_batch.py"
 STUB = Path(__file__).with_name("merge_batch_gh_stub.py")
+
+
+@pytest.fixture(scope="session")
+def train_cli():
+    """Build the real validator used by the hook inside hermetic Git fixtures."""
+    command = ["cargo", "build", "--locked", "--manifest-path", str(ROOT / "rust" / "Cargo.toml"),
+               "-p", "plangraph-cli", "--bin", "plangraph", "--message-format=json"]
+    env = dict(os.environ, CARGO_BUILD_JOBS="1")
+    result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, check=True)
+    artifacts = (json.loads(line) for line in result.stdout.splitlines())
+    return next(Path(entry["executable"]) for entry in artifacts
+                if entry.get("executable") and entry["target"]["name"] == "plangraph")
+
+
 #: A `git` that interferes with the n-th `git $CRASH_SUB` it is asked to run (see Env.run): kill the parent
 #: (the tool) right after it, like an OOM kill; fail after it ran (its side effect stands); refuse it (exit
 #: non-zero without running, so it leaves no side effect behind).
