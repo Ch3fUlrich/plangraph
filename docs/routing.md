@@ -266,15 +266,3 @@ without an own client (deepseek, glm, mimo, free legs) stay on OpenCode. Pinning
 OpenCode leg with `--leg` while its own client is installed needs `--override-reason`.
 
 Merge paths and main's state: the keeper's phase finish asks `plangraph main-state --admit` after CI is green on the phase head and refuses to merge with `main_red`, `main_pending`, `state_unknown` or `ref_not_forward_only` (docs/ci-parallel.md, "Red main and runner switches").
-
-The D-5174 effort profile is computed from the measured S0–S4 bucket, risk,
-test coverage, fanout, write set, and context fit. The effective AA floor is
-the larger of the risk and level floors. A planner can raise a level. A lower
-assignment records its requested value and the rule reason. Task classes group
-S0–S1, S2, and S3–S4 by change or regression check. Version 1 uses the plan's
-starting floors. Cite a replay delta for future changes to the profile table.
-
-Keeper attempts retain the routed profile, plan hash and selected leg alongside
-the captured eligibility, rejected legs, top five, pin and benchmark baselines.
-The watchdog delivers one terminal record per spawner run, including runs that
-fell through to a different leg. Missing benchmark evidence stays null.

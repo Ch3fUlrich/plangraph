@@ -413,9 +413,6 @@ def main(argv=None, *, hung_config=None):
         _budget.reset(token)
     findings = tick(runs, [], lambda s: read_activity(state, s),
                     deliver=deliver, state=state, dry_run=args.dry_run, budget=budget, hung=hung, stuck=True)
-    if not args.dry_run:
-        from .notify import retry_spawn_attempts
-        findings.extend(retry_spawn_attempts(state, runs))
     error = warning = None
     try:
         findings += tick([r for r in runs if r.get('status') in ('running', 'queued')],

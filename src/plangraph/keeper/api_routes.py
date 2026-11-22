@@ -22,14 +22,14 @@ __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
               "answers", "progress", "changelog", "audit-meta", "metrics",
-              "jev_report", "write_context", "events", "attempts"}
+              "jev_report", "write_context", "events"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "incident", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "grant_apply", "revoke_apply",
-               "rehome", "record_run", "record_spawn_attempt", "answer", "mint_run_token", "replay",
+               "rehome", "record_run", "answer", "mint_run_token", "replay",
                 "withdraw_review", "reopen", "set_kind", "set_metrics", "requeue",
                "close_merged", "close_merged_auto",
                # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
@@ -342,8 +342,6 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "land": lambda store, principal, body, need: store.land(principal, body),
-                      "record_spawn_attempt": lambda store, principal, body, need:
-                          store.record_spawn_attempt(principal, body),
                       "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
                           principal, body.get("project"), require_seats=body.get("require_seats"),
                           apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True),

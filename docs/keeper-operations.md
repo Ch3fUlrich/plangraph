@@ -248,14 +248,3 @@ and was not claimed since; `priority KEY <same value>` re-confirms and restarts 
 change is a `priority_set` event with `was` and `reason`. `digest` carries `priority_levels` (open
 items per level) and `level10_warning` when level 10 holds more open items than lanes closed in
 the last 7 days.
-
-Keeper cards retain the computed effort level and reason when written. A
-planner may supply an assigned level, and the keeper logs any attempt to
-lower it below the computed level.
-
-`pg attempts --since 1d --json` reads terminal spawn rows from keeper storage.
-A spawn without a keeper card has a null `card_key`. The display item preserves
-the supplied item key and uses `adhoc` when the spawn has no item key. The migration
-preserves foreign keys and legacy attempt rows.
-Spawn delivery retries through the watchdog, and the keeper deduplicates by
-spawn ID. An unwitnessed serving model and unknown usage remain explicit.

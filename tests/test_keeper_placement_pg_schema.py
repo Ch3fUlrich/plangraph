@@ -9,10 +9,11 @@ import pytest
 from plangraph.keeper import db_pg, schema_pg
 from plangraph.keeper import placement_rules_schema as rules
 
+pytestmark = pytest.mark.skipif(not os.environ.get('PG_DSN'), reason='PG_DSN not set')
+
+
 @pytest.fixture
 def pg(monkeypatch):
-    if not os.environ.get('PG_DSN'):
-        pytest.skip('PG_DSN not set')
     import psycopg
     raw = psycopg.connect(os.environ['PG_DSN'], autocommit=True)
     name = 't_rules_' + uuid.uuid4().hex[:12]

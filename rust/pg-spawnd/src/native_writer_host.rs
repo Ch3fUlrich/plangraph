@@ -8,6 +8,7 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
     process::Command,
+    time::Duration,
 };
 
 /// Lead writer leg cx-gpt-6.2-sol-medium (operator D-6397).
@@ -352,9 +353,6 @@ impl Driver for Host {
         let mut record = record.clone();
         record["cwd"] = json!(self.cwd);
         record["review_dir"] = json!(self.reviews);
-        if record["plan"]["effort"].is_object() {
-            record["attempt_capture"] = json!(1);
-        }
         lifecycle::publish(&self.state, &self.record_path, &record).map_err(|e| e.to_string())?;
         let ledger = if record["ended"].is_number() {
             self.ledger_row(&record).and_then(|row| {

@@ -75,17 +75,6 @@ class SpawnService(SeatSpawnMixin):
 
     def _save(self, record):
         native_receipt(record); self._sync_seat(record)
-        effort = (record.get("plan") or {}).get("effort") if isinstance(record.get("plan"), dict) else None
-        if effort:
-            record["attempt_capture"] = 1
-            assigned = effort.get("lowered")
-            if assigned is not None:
-                event = dict(event="effort_level_lowered", ts=record.get("started"),
-                             item=record.get("item_key") or "adhoc", assigned=assigned,
-                             reason=effort["reason"])
-                events = record.setdefault("events", [])
-                if event not in events:
-                    events.append(event)
         if not self._path(record['run_id']).exists():
             annotate_tree(record)
             if record.get('tree_sha') is None:
@@ -428,12 +417,7 @@ class SpawnService(SeatSpawnMixin):
                 override_reason = override_reason.strip()
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
-            from plangraph.planner.routing import rule_level
-            try:
-                effort = rule_level(card)
-            except (TypeError, ValueError) as exc:
-                raise SpawnRefused(str(exc)) from exc
-            plan = SpawnPlan((chosen,), (), 'override', (), (), effort=effort)
+            plan = SpawnPlan((chosen,), (), 'override', (), ())
         else:
             # The spawn wrapper owns refusal persistence; route() owns it only
             # for standalone route requests, otherwise one error is saved twice.
