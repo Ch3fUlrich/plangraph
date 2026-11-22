@@ -13,7 +13,9 @@
   train base. A part left out takes its descendants with it. A stack above the cap enters as a prefix; the rest is left out as
   `cap`, a failed merge as `conflict`, a part below a left-out part as `descendant`. Conflicts are not resolved here.
 - **Manifest** (`build.rs`): base, parts in stack order with their own-commit digest, dependency graph, Git version, the merge
-  attributes used, the merge commit of each part, every READY head left out with its reason. Merges run in a private shared
+  attributes used, the merge commit and review receipt of each part, every READY head left out with its reason. The READY
+  snapshot names the previously checked seat as `receipt: {run_id, head}`. The builder requires its exact part head and
+  replay checks that the manifest carries the receipt from the independently supplied READY snapshot. Merges run in a private shared
   clone with no user, system or repository configuration and no `info/attributes`; attributes come only from the recorded file.
 - **Verification** (`verify_manifest`, `verify_result`): the registered head and parent of every part, the whole first-parent
   chain (one merge per part with exactly the two expected parents), a clean replay of every merge under the recorded inputs, and

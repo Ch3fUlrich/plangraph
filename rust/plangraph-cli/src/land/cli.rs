@@ -8,7 +8,7 @@ use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest,
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train verify --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES]\n\
-parts FILE: JSON array of {pr, head, parent: {pr, head} | null} in selection order (the registrar's READY entries)\n\
+parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
 #[derive(Clone)]

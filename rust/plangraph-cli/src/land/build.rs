@@ -75,6 +75,9 @@ fn in_base(repo: &Path, base: &str, sha: &str) -> bool {
 
 /// Builds the train on a detached checkout and returns manifest and result. The caller pushes nothing here.
 pub fn build(input: &BuildInput) -> Result<Outcome, String> {
+    for part in &input.parts {
+        part.check_receipt()?;
+    }
     let repo = input.repo;
     let attrs = Attrs::new(&input.attributes)?;
     let date = base_date(repo, &input.base)?;
@@ -136,6 +139,7 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
                     head: part.head.clone(),
                     parent: part.parent.clone(),
                     own: Own::of(&own),
+                    receipt: part.receipt.clone(),
                 });
             }
             Merged::Conflict => {
@@ -164,6 +168,7 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
                         head: part.head.clone(),
                         parent: part.parent.clone(),
                         own: Own::of(&own),
+                        receipt: part.receipt.clone(),
                     });
                     continue;
                 }
@@ -251,6 +256,9 @@ pub fn verify_manifest_with(
     adopted: &[Adopted],
     protected: &[String],
 ) -> Result<(), String> {
+    for part in selection {
+        part.check_receipt()?;
+    }
     if m.policy.version != POLICY_VERSION {
         return Err(format!(
             "policy version {} is not {POLICY_VERSION}",
@@ -276,11 +284,12 @@ pub fn verify_manifest_with(
             pr: part.pr,
             head: part.head.clone(),
             parent: part.parent.clone(),
+            receipt: part.receipt.clone(),
         };
         // The verifier recomputes the selection itself; the manifest cannot declare another head or parent.
         if !selection.contains(&p_in) {
             return Err(format!(
-                "registered: part #{} differs from the registered head and dependencies",
+                "registered: part #{} differs from the registered head, dependencies or receipt",
                 part.pr
             ));
         }
