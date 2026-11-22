@@ -46,8 +46,8 @@ fn checksum(path: &Path) -> Option<String> {
 
 pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), String> {
     let mut flags = std::collections::BTreeMap::new();
-    let mut pairs = args.chunks_exact(2);
-    for pair in &mut pairs {
+    let (pairs, remaining) = args.as_chunks::<2>();
+    for pair in pairs {
         if !matches!(
             pair[0].as_str(),
             "--host-id" | "--binary" | "--source-stamp" | "--main-sha" | "--main-sha256"
@@ -57,7 +57,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
             return Err("check-install: invalid or duplicate flag".into());
         }
     }
-    if !pairs.remainder().is_empty() || flags.len() != 5 {
+    if !remaining.is_empty() || flags.len() != 5 {
         return Err("Usage: pg-spawnd check-install --host-id ID --binary PATH --source-stamp PATH --main-sha SHA --main-sha256 SHA256".into());
     }
     let host = flags["--host-id"];
