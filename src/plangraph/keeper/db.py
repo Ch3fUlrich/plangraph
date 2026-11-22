@@ -200,11 +200,11 @@ def _migrate_spawn_attempts(conn):
     try:
         columns = [row[1] for row in conn.execute("PRAGMA table_info(attempts)")]
         if "attempt_id" not in columns:
-            conn.execute(ATTEMPTS_TABLE.replace("attempts (", "attempts_v25 (", 1))
+            conn.execute(ATTEMPTS_TABLE.replace("attempts (", "attempts_v24 (", 1))
             names = ",".join(columns)
-            conn.execute(f"INSERT INTO attempts_v25 ({names}) SELECT {names} FROM attempts")
+            conn.execute(f"INSERT INTO attempts_v24 ({names}) SELECT {names} FROM attempts")
             conn.execute("DROP TABLE attempts")
-            conn.execute("ALTER TABLE attempts_v25 RENAME TO attempts")
+            conn.execute("ALTER TABLE attempts_v24 RENAME TO attempts")
             for statement in _split_statements(ATTEMPTS_GUARDS, disallow=("PRAGMA", "VACUUM")):
                 conn.execute(statement)
         for statement in _split_statements(ATTEMPT_SPAWN_INDEXES, disallow=("PRAGMA", "VACUUM")):

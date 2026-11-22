@@ -298,7 +298,7 @@ def test_route_governor_override_passes_provider(w):
 # --- schema ------------------------------------------------------------------
 
 def test_schema_version_and_metrics_ddl():
-    assert schema.SCHEMA_VERSION == 25
+    assert schema.SCHEMA_VERSION == 24
     assert schema.METRICS_DDL in schema.SCHEMA
 
 

@@ -31,10 +31,10 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: installed presence-based); the bus steps renumber after it: v15 durable
 #: messages, v16 message nonces/envelopes, v17 placement rules, v18 write receipts,
 #: v19 landing stages, v20 landing settlement, v21 Actions job timings, v22 train claims, v23 item incident index,
-#: v24 card effort decisions, v25 spawn attempt outcomes.
+#: v24 card effort decisions and spawn attempt outcomes.
 #: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
 #: this number at runtime.
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 24
 
 LANDING_STAGES_DDL = files(__package__).joinpath("landing_stages.sql").read_text(encoding="utf-8")
 LANDING_TRAINS_DDL = files(__package__).joinpath("landing_trains.sql").read_text(encoding="utf-8")

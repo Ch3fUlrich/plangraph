@@ -104,8 +104,8 @@ the exact merged-head completion and the elapsed time from the folded parts' ACC
 
 Migration 21 records dependency claims against accepted open-train heads. Migration 22 indexes
 keeper incident events by item and sequence. Migration 23 records card effort decisions, and
-migration 24 stores terminal spawn attempt outcomes. SQLite installs these changes in schema
-v22 through v25 in the same order.
+migration 24 stores terminal spawn attempt outcomes. SQLite installs the claim and incident changes in schemas v22 and v23
+and both of the remaining changes in schema v24.
 
 For a batch that advances the keeper schema, copy the GO request's standalone
 `MIGRATION <version>` field into the GO decision for the exact batch head.

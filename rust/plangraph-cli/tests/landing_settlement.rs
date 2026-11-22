@@ -194,6 +194,7 @@ with tempfile.TemporaryDirectory() as directory:
     db.close()
     with sqlite3.connect(path) as old:
         old.execute('DROP TABLE IF EXISTS landing_claim_bases')
+        old.execute('PRAGMA user_version=21')
     db = open_db(path, backend='sqlite')
     store = Store(db, ctx={'spawner_records': Seats()}, verifiers={'decision': Verifier()})
     router = Principal('lander', 'router', [])
