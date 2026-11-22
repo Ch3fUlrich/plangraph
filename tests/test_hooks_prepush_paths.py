@@ -175,3 +175,41 @@ def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, 
     res = run_hook(r, [line], env)
     assert res.returncode == 0, res.stdout + res.stderr
     assert ("--lane" in json.loads((tmp_path / "argv").read_text())) is lane
+
+
+@pytest.mark.parametrize("extra", [None, "unrelated", "no-harness", "foreign-parent"])
+def test_a_train_push_permits_only_attributed_resolves_and_drops(repo, tmp_path, extra):
+    r, _ = repo
+    env = install_preflight(r, tmp_path / "argv")
+    base = git(r, "rev-parse", "HEAD").strip()
+    git(r, "update-ref", "refs/remotes/origin/main", base)
+    _, parts = make_train(r, base, parts=3)
+
+    def commit(message):
+        git(r, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+            "commit", "--allow-empty", "-qm", message)
+
+    trailers = "Writer: codex/train-resolver\nHarness: codex"
+    commit(f"Train 9: resolve first issue\n\n{trailers}")
+    commit(f"Train 9: resolve second issue\n\n{trailers}")
+    merge = git(r, "rev-parse", "HEAD~2").strip()
+    git(r, "revert", "--no-commit", "-m", "1", merge)
+    commit(f"Train 9: drop last part\n\nThis reverts commit {merge}.\n\nDropped-Part: plangraph:TEST\n{trailers}")
+    if extra == "unrelated":
+        commit(f"Unrelated\n\n{trailers}")
+    elif extra == "no-harness":
+        commit("Train 9: resolve without a harness\n\nWriter: codex/train-resolver")
+    elif extra == "foreign-parent":
+        git(r, "checkout", "-qb", "foreign", base)
+        commit(f"Foreign work\n\n{trailers}")
+        git(r, "checkout", "-q", "train")
+        git(r, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+            "merge", "-q", "--no-ff", "foreign", "-m", "Foreign merge")
+    head = git(r, "rev-parse", "HEAD").strip()
+    result = run_hook(r, [push_line("land/train-9", head, "0" * 40)], {**env, **manifest(tmp_path, parts)})
+    if extra is None:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "manifest ok" in result.stderr and (tmp_path / "argv").exists()
+    else:
+        assert result.returncode == 1 and not (tmp_path / "argv").exists()
+        assert ("outside its manifest" if extra == "foreign-parent" else "extra commit") in result.stderr

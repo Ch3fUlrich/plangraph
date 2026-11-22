@@ -177,7 +177,7 @@ def test_refresh_exposes_previously_unseen_pr(unseated_w, monkeypatch):
         return [{"sha": HEAD, "merge": {"pr": 1}}] + (
             [{"sha": other, "merge": {"pr": 900}}] if refreshed else [])
     monkeypatch.setattr(git, "_run", run)
-    monkeypatch.setattr(git, "merge_commit_of", lambda repo, sha, ref: (sha, "fixture"))
+    monkeypatch.setattr(git, "merge_commit_of", lambda repo, sha, ref, item_key=None: (sha, "fixture"))
     monkeypatch.setattr(git, "deploy_changes", lambda *a: [])
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", commits)
     world.store.ctx["git"] = git
@@ -198,7 +198,7 @@ def test_another_items_go_with_same_head_refuses(unseated_w, monkeypatch, projec
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", lambda *a, **kw: [
         {"sha": HEAD, "merge": {"pr": 1}}, {"sha": other_head, "merge": {"pr": 2}}])
     git = world.store.ctx["git"]
-    monkeypatch.setattr(git, "merge_commit_of", lambda repo, sha, ref: (sha, "fixture"))
+    monkeypatch.setattr(git, "merge_commit_of", lambda repo, sha, ref, item_key=None: (sha, "fixture"))
     monkeypatch.setattr(git, "_run", lambda repo, args: SimpleNamespace(returncode=0,
         stdout="2026-11-12T12:00:00Z" if "--format=%cI" in args else f"{'2' * 40} {args[-1]}"))
     with pytest.raises(Refused, match="merged_pr_go_missing"):
@@ -224,7 +224,7 @@ def test_selected_go_of_another_item_refuses(unseated_w, monkeypatch, project, k
 def _ships(w, monkeypatch, paths, hosts="alpha, beta"):
     git = MergedGit()
     git.ref_commit = lambda repo, ref: "1" * 40
-    git.deploy_changes = lambda repo, sha, ref: [
+    git.deploy_changes = lambda repo, sha, ref, item_key=None: [
         p if isinstance(p, tuple) else ("A", p) for p in paths]
     w.store.ctx = {**w.store.ctx, "git": git}
     w.store.verifiers["deploy"] = VERIFIERS["deploy"]
@@ -673,3 +673,22 @@ def test_a_part_listed_under_another_ruling_of_the_row_does_not_vouch(unseated_w
     path.write_text(text)
     assert not _scope(unseated_w, "demo:H")
     assert _scope(unseated_w, "demo:A")
+
+
+def test_train_go_keys_block_is_authoritative_over_anchor_and_legacy_part_prose(
+        unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path,
+                      "Batch 23, part head {partP}, keys demo:X; GO-KEYS [demo:A,demo:SPLIT]")
+    assert _scope(unseated_w, "demo:A") and _scope(unseated_w, "demo:SPLIT")
+    assert not _scope(unseated_w, "demo:X")
+    with pytest.raises(Refused, match="merged_pr_go_scope_mismatch"):
+        unseated_w.store.close_merged(unseated_w.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+
+
+def test_train_go_keys_block_closes_each_listed_key(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "GO-KEYS [demo:A,demo:H]")
+    for key in ("demo:A", "demo:H"):
+        unseated_w.conn.execute("UPDATE items SET state='open' WHERE key=?", (key,))
+        result = unseated_w.store.close_merged(unseated_w.p("router"), key, "D-5504",
+                                               from_open=True, apply=True, waive_seats="D-6000")
+        assert result["closed"] is True

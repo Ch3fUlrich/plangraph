@@ -546,3 +546,69 @@ def test_off_closes_witnessed_merges_without_a_flag_and_leaves_sensitive_cards(e
     assert [c["key"] for c in result["closed"]] == ["demo:C"] and "flags" not in result["closed"][0]
     assert [r["key"] for r in result["listed"]] == ["demo:S"]
     assert state(env, "demo:S")["state"] == "in_review"
+
+
+@pytest.mark.parametrize("style", ["revert", "drop", "legacy", "bare-drop"])
+def test_reverted_delivery_is_ready_and_claimable_until_landed_again(env, style):
+    from plangraph.keeper import context_sources as source
+
+    root = env.repo.root
+    adapter = env.store.ctx["git"]
+    env.repo.land("first", "Plan-Item: demo:A", 57)
+    first_merge = git(root, "rev-parse", "main")
+    if style == "revert":
+        message = f'Revert "work"\n\nThis reverts commit {first_merge}.'
+    elif style == "drop":
+        message = f"Train 9: drop b41\n\nThis reverts commit {first_merge}.\n\nDropped-Part: demo:A"
+    elif style == "legacy":
+        message = "Train 9: drop b41 (revert its merge)\n\nPlan-Item: demo:A"
+    else:
+        message = "Train 9: drop\n\nPlan-Item: demo:A"
+    git(root, "commit", "--allow-empty", "-qm", message)
+    pinned = git(root, "rev-parse", "main")
+    assert source.plan_item_commits(adapter, "demo", "demo:A", head=pinned, limit=None) == []
+    index = source.work_index(adapter, "demo", fresh=True)
+    assert source.indexed_work(index, "demo:A")["commits"] == []
+    assert "demo:A" in env.store.ready(env.p("reader"))
+    assert auto(env, require_seats=False)["closed"] == []
+    with pytest.raises(Refused, match="merged_on_default_missing"):
+        env.store.close_merged(env.p("router"), "demo:A", "D-5504", from_open=True, apply=True)
+    to_claimed(env, "demo:A")
+    env.repo.land("again", "Plan-Item: demo:A", 58)
+    index = source.work_index(adapter, "demo", fresh=True)
+    assert [c["merge"]["pr"] for c in source.indexed_work(index, "demo:A")["commits"]] == [58]
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+
+
+def test_reverting_a_revert_restores_delivery_on_both_read_paths(env, monkeypatch):
+    from plangraph.keeper import context_sources as source
+
+    root = env.repo.root
+    adapter = env.store.ctx["git"]
+    git(root, "checkout", "-qb", "part")
+    (root / "feature.txt").write_text("delivered\n")
+    git(root, "add", "feature.txt")
+    git(root, "commit", "-qm", "work\n\nPlan-Item: demo:A")
+    delivery = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-qm", "Landing part (#57)", "part")
+    git(root, "branch", "-D", "part")
+    landing = git(root, "rev-parse", "HEAD")
+    git(root, "revert", "--no-edit", "-m", "1", landing)
+
+    def commits():
+        tip = git(root, "rev-parse", "HEAD")
+        pinned = source.plan_item_commits(adapter, "demo", "demo:A", head=tip, limit=None)
+        index = source.work_index(adapter, "demo", fresh=True)
+        indexed = source.indexed_work(index, "demo:A")["commits"]
+        return [c["sha"] for c in pinned], [c["sha"] for c in indexed]
+
+    assert commits() == ([], [])
+    # A newer descendant with an older committer date still takes effect first.
+    git(root, "branch", "reverted-tip")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+    git(root, "revert", "--no-edit", "HEAD")
+    monkeypatch.delenv("GIT_COMMITTER_DATE")
+    assert commits() == ([delivery], [delivery])
+    git(root, "revert", "--no-edit", "HEAD")
+    assert commits() == ([], [])

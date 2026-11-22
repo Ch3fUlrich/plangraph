@@ -7,7 +7,7 @@ use super::resolve::{self, Adopted, Append, Outcome, Refusal};
 use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest, PartIn};
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
@@ -167,6 +167,12 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
             .cloned()
             .ok_or_else(|| format!("{USAGE}\nmissing --{k}"))
     };
+    if cmd == "push" {
+        let repo = PathBuf::from(need("repo")?);
+        let branch = need("branch")?;
+        super::push::run(&repo, &branch)?;
+        return Ok(vec![format!("pushed {branch}")]);
+    }
     let parts: Vec<PartIn> = read(&need("parts")?)?;
     let protected: Vec<String> = flags
         .get("protected")
@@ -216,7 +222,7 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
                     branch: flags
                         .get("branch")
                         .cloned()
-                        .unwrap_or_else(|| format!("land/build/{name}")),
+                        .unwrap_or_else(|| format!("land/train-{name}")),
                     name,
                 },
                 &answer.state,

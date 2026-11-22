@@ -278,10 +278,10 @@ def test_a_ref_that_moves_away_and_back_during_the_scan_cannot_hide_the_unit(env
     git(root, "branch", "-q", "-D", "alt")  # a lane would hold the close; the commit stays for update-ref
     real = GitAdapter.deploy_changes
 
-    def excursion(self, repo, sha, ref):
+    def excursion(self, repo, sha, ref, item_key=None):
         git(root, "update-ref", "refs/heads/main", alt)  # the ref is elsewhere while the diff is read
         try:
-            return real(self, repo, sha, ref)
+            return real(self, repo, sha, ref, item_key)
         finally:
             git(root, "update-ref", "refs/heads/main", final)
 
@@ -358,9 +358,9 @@ def test_automatic_close_pins_tagged_named_and_deploy_reads(env, monkeypatch):  
     monkeypatch.setattr(adapter, "_run", record)
     scan = adapter.deploy_changes
 
-    def record_scan(repo, sha, ref):
+    def record_scan(repo, sha, ref, item_key=None):
         revisions.append(("deploy", ref))
-        return scan(repo, sha, ref)
+        return scan(repo, sha, ref, item_key)
 
     monkeypatch.setattr(adapter, "deploy_changes", record_scan)
     result = frozen(env, require_seats=False)
@@ -384,8 +384,8 @@ def test_manual_close_handles_a_fast_forward_after_its_diff(w, monkeypatch, tmp_
     scan = adapter.deploy_changes
     scanned = []
 
-    def fast_forward(repo, sha, ref):
-        changes = scan(repo, sha, ref)
+    def fast_forward(repo, sha, ref, item_key=None):
+        changes = scan(repo, sha, ref, item_key)
         if not scanned:
             message = "more work\n\nPlan-Item: demo:A" if related else "unrelated work"
             git(root, "commit", "-q", "--allow-empty", "-m", message)
@@ -398,3 +398,35 @@ def test_manual_close_handles_a_fast_forward_after_its_diff(w, monkeypatch, tmp_
     assert set(scanned) == ({original, git(root, "rev-parse", "main")} if related else {original})
     assert result["closed"] is False and result["reason"] == "deploy_pending"
     assert w.store._item("demo:A")["state"] == "in_review"
+
+
+@pytest.mark.parametrize("subject", ["Landing train 9 (#57)", "batch train-9: #55 #56 (#57)"])
+def test_train_deploy_gate_attributes_units_to_their_part(env, subject):  # noqa: F811
+    root = env.repo.root
+    base = git(root, "rev-parse", "main")
+    git(root, "checkout", "-q", "-b", "train")
+    for branch, item in (("docs", "demo:A"), ("unit", "demo:B")):
+        git(root, "checkout", "-q", "-b", branch, base)
+        git(root, "commit", "-q", "--allow-empty", "-m", f"work\n\nPlan-Item: {item}")
+        if branch == "unit":
+            (root / "deploy/systemd").mkdir(parents=True)
+            (root / "deploy/systemd/train.service").write_text("[Service]\n")
+            git(root, "add", "-A")
+            git(root, "commit", "-q", "-m", "unit follow-up")
+        git(root, "checkout", "-q", "train")
+        git(root, "merge", "-q", "--no-ff", "-m", f"Train 9: merge {branch}", branch)
+        git(root, "branch", "-D", branch)
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m",
+        f"{subject}\n\nPlan-Item: demo:A\nPlan-Item: demo:B\nPlan-Item: demo:BATCH", "train")
+    git(root, "branch", "-D", "train")
+
+    store = env.store
+    docs = store._pin_close(store._item("demo:A"))
+    unit = dict(docs, key="demo:B")
+    assert store._deploy_changes(docs)[1] == set()
+    assert store._deploy_changes(unit)[1] == {("A", "deploy/systemd/train.service")}
+    assert store._deploy_changes(dict(docs, key="demo:BATCH"))[1] == {
+        ("A", "deploy/systemd/train.service"),
+    }
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
