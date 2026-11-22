@@ -173,6 +173,7 @@ def rust_python_test_imports(root: Path) -> list[str]:
         strings = _rust_strings(source)
         values = {value for value, _ in strings}
         launches_python = ('test_python::command' in source
+                           or re.search(r"(?:\.|Sandbox::)python_command\s*\(", source) is not None
                            or any(Path(value).name in {'python3', 'python'} for value in values))
         if '-c' not in values or not launches_python:
             continue
@@ -222,6 +223,8 @@ def test_rust_python_dependency_guard_red(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize('source', [
+    '''const RECYCLE: &str = r#"import pytest"#;
+       fn recycle(s: &Sandbox) { s.python_command().args(["-c", RECYCLE]); }''',
     '''fn bridge(script: &str) { Command::new("python3").args(["-c", script]); }
        fn test_bad() { bridge(r#"import pytest"#); }''',
     '''let script = "import pytest"; Command::new("python3").args(["-c", script]);''',
