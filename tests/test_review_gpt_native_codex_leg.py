@@ -52,7 +52,7 @@ def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
                                "fixture", now=100, account="A")
 
     def route(account):
-        return plan_spawn(dict(CARD, account=account), role="review",
+        return plan_spawn(dict(CARD, account=account, risk_tags=["auth"]), role="review",
                           writer_families=("deepseek",), leg_reader=store, now=101,
                           policy=RoutePolicy(), catalog_rows=(), installed=lambda _: True)
 
