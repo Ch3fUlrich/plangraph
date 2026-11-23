@@ -17,6 +17,8 @@ parent key alone and legacy Closes tokens do not prove a subitem was merged.
 Commit trailer format (writers only; ALL trailers in ONE final paragraph):
 Plan-Item: plangraph:<item>
 Writer: <writer identity supplied by the brief>
+For train resolve and drop commits, also include `Harness: <harness>` in that paragraph.
+Use `Dropped-Part: <key>` in place of `Plan-Item` for drops.
 
 === ITEM CONTEXT
 Item key: $item_key

@@ -374,8 +374,10 @@ def refresh_diff(base, prs, heads=None):
             # Display each diff against main, but count only this layer of a stack
             # toward the batch cap, as with GitHub's per-PR sizes before refresh.
             contribution = f"{heads[parent['number']]}...{heads[pr['number']]}" if parent else diff
+            own_paths = git("diff", "--name-only", "--no-renames", "-z", contribution).stdout if parent else all_paths
             pr.update(files=files, truncated=False, lines=lines(diff), batch_lines=lines(contribution),
                       generated_lines=generated_lines, generated_files=sorted(generated_files),
+                      own_paths=[path for path in own_paths.split("\0") if path],
                       extra=sorted(set(all_paths.split("\0")) - set(files) - {""}))
         except MergeBatchError as exc:
             raise MergeBatchError(f"cannot read the diff of PR #{pr['number']} ({short(pr['head'])}): {exc}") from None

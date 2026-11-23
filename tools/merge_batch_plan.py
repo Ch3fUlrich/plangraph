@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, git,
+from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, gh_json, git,
                               pr_labels, save_state)
 
 try:
@@ -301,3 +301,80 @@ def windows_report(st, head):
     """The Windows run of this exact head for the GO-REQ, or None when none ran for it."""
     recorded = st.get("windows") or {}
     return recorded["line"] if recorded.get("head") == head else None
+
+
+RUNNER_PATHS = frozenset({
+    "pytest.ini", "requirements-ci.txt", "pyproject.toml", "rust-toolchain.toml",
+    "tools/affected_tests.py", "tools/ci_select.py", "tools/pgtest.py", "tools/preflight.py",
+    "tools/dell_ci_jobs.py", "tools/dell_ci_run.py",
+    "src/plangraph/spawner/proc_kill.py", "src/plangraph/spawner/winjob.py",
+    "rust/worker-core/src/run/group.rs", "rust/worker-core/src/run/group_unix.rs",
+    "rust/worker-core/src/run/group_windows.rs", "rust/worker-core/src/run/supervise.rs",
+    "rust/worker-core/src/run/supervisor.rs", "rust/worker-core/src/stall.rs",
+    "rust/worker-core/src/stall/deadline.rs", "rust/worker-core/src/stall/unix.rs",
+    "rust/worker-core/src/stall/windows.rs",
+})
+
+
+def runner_wide_path(path):
+    """Paths that can change the selection, execution or setup of unrelated tests."""
+    parts = Path(path).parts
+    if parts[-1] == "conftest.py":
+        return True
+    if path in RUNNER_PATHS or path.startswith((".github/workflows/", "tests/fixtures/", "rust/test_support/")):
+        return True
+    if parts[0] == "tests":
+        return len(parts) == 2 and not parts[-1].startswith("test_")
+    return False
+
+
+def runner_wide_receipts(repo, infos, order, api=gh_json):
+    """Require a green full Tests run at the exact head of every runner-wide part."""
+    from merge_batch_land import full_job_problems
+    from ci_select import CI_FULL, ci_full_description
+
+    endpoint = f"repos/{repo}/actions"
+    receipts = {}
+    for num in order:
+        pr = infos[num]
+        if not any(runner_wide_path(path) for path in pr["own_paths"]):
+            continue
+        head = pr["head"]
+        runs = api("api", f"{endpoint}/workflows/tests.yml/runs?head_sha={head}&per_page=100")["workflow_runs"]
+        pr_evidence = None
+        for row in sorted(runs, key=lambda row: row["id"], reverse=True):
+            if (row.get("head_sha") != head or row.get("head_branch") != pr["ref"]
+                    or (row.get("status"), row.get("conclusion")) != ("completed", "success")):
+                continue
+            run_id, attempt = row["id"], row.get("run_attempt", 1)
+            if row.get("event") == "pull_request":
+                if not any(p.get("number") == num for p in row.get("pull_requests") or []):
+                    continue
+                if pr_evidence is None:
+                    tree = git("rev-parse", f"{head}^{{tree}}").stdout.strip()
+                    statuses = api("api", f"repos/{repo}/commits/{head}/statuses?per_page=100")
+                    pr_evidence = {s.get("description") for s in statuses
+                                   if (s.get("context"), s.get("state")) == (CI_FULL, "success")}
+                if ci_full_description(run_id, attempt, tree, tree) not in pr_evidence:
+                    continue
+            elif row.get("event") != "workflow_dispatch":
+                continue
+            if not full_job_problems(workflow_attempt_jobs(endpoint, run_id, attempt, api)):
+                receipts[num] = run_id
+                break
+        else:
+            raise MergeBatchError(f"PR #{num}: runner-wide part {head} needs green full CI "
+                                  "on its own head before train entry")
+    return receipts
+
+
+def workflow_attempt_jobs(endpoint, run_id, attempt, api):
+    jobs, page = [], 1
+    while True:
+        data = api("api", f"{endpoint}/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}")
+        jobs.extend(data["jobs"])
+        if len(jobs) >= data["total_count"]:
+            return jobs
+        if not data["jobs"]:
+            raise MergeBatchError("full_ci: incomplete job pagination")
+        page += 1

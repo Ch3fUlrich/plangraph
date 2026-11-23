@@ -113,6 +113,9 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
     if re.search(r"/issues/\d+/events", endpoint_get):  # label events of a PR (the READY time of a part)
         print(json.dumps(S.get("events", {}).get(re.search(r"/issues/(\d+)/", endpoint_get).group(1), [])))
         sys.exit(0)
+    if re.search(r"/commits/[0-9a-f]{40}/statuses\?", endpoint_get):
+        print(json.dumps([]))
+        sys.exit(0)
     if "/actions/" in endpoint_get:
         batch = next((follow_branch(p) for p in S["prs"].values() if p["headRefName"].startswith("batch/")), None)
         run = {"id": 7, "head_sha": batch["headRefOid"] if batch else "0" * 40,
@@ -130,6 +133,8 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
             ]
             if batch and batch in matches and not batch["statusCheckRollup"]:
                 runs.append(dict(run, pull_requests=[{"number": batch["number"]}]))
+            if "event=" not in endpoint_get:
+                runs.extend(S.get("full_dispatch_runs", {}).get(sha, []))
             print(json.dumps({"workflow_runs": runs}))
             sys.exit(0)
         if "branch=main" in endpoint_get:

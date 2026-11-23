@@ -36,4 +36,6 @@ def test_missing_preflight_main(tmp_path, skip):
         env=env, input=f"{ref} {head} {ref} {head}\n",
         capture_output=True, text=True)
     assert result.returncode == 1
-    assert result.stderr.splitlines().count("pre-push: tools/preflight.py missing: push refused") == 1
+    diagnostic = ("pre-push: PREFLIGHT_SKIP=1 is not allowed for refs/heads/main: push refused"
+                  if skip else "pre-push: tools/preflight.py missing: push refused")
+    assert result.stderr.splitlines().count(diagnostic) == 1

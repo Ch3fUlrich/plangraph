@@ -351,9 +351,11 @@ class GateHookTests(RepoFixture):
         head = self.git("rev-parse", "HEAD").stdout.strip()
         self.git("update-ref", "refs/remotes/origin/main", head)
         line = "refs/heads/lane %s refs/heads/lane %s\n" % (head, ZERO)
+        env = os.environ.copy()
+        env.pop("PREFLIGHT_SKIP", None)
         return subprocess.run(
             [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"],
-            cwd=str(self.repo), input=line, capture_output=True, text=True)
+            cwd=str(self.repo), input=line, capture_output=True, text=True, env=env)
 
     def test_the_pre_push_hook_refuses_an_oversized_file(self):
         self.file("big_module.py", 801)

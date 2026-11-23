@@ -66,7 +66,8 @@ def test_merge_main_scrubs_only_branch_additions(repo, tmp_path, case):
                                         "refs/custom/review"])
 @pytest.mark.parametrize("case", ["non-ff", "delete", "missing"])
 @pytest.mark.parametrize("unsafe_first", [False, True])
-def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case, unsafe_first):
+@pytest.mark.parametrize("skip", [False, True])
+def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case, unsafe_first, skip):
     r, base = repo
     remote = commit_file(r, "app/other.py", "y = 2\n")
     local = base
@@ -78,7 +79,8 @@ def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case, unsaf
              f"refs/heads/main {local} {remote_ref} {remote}"]
     if unsafe_first:
         lines.reverse()
-    res = run_hook(r, lines, {"PLANGRAPH_SCRUB_WORDS": str(tmp_path / "missing")})
+    res = run_hook(r, lines, {"PLANGRAPH_SCRUB_WORDS": str(tmp_path / "missing"),
+                             "PREFLIGHT_SKIP": "1" if skip else "0"})
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
     action = "delete" if case == "delete" else "non-fast-forward update"
@@ -194,7 +196,8 @@ def test_hook_ignores_replace_objects(repo):
     ("non-ff", "pre-push: refused non-fast-forward update of refs/heads/main"),
     ("delete", "pre-push: refused delete of refs/heads/main"),
 ])
-def test_script_push_uses_installed_hook(repo, tmp_path, case, expected):
+@pytest.mark.parametrize("skip", ["0", "1"])
+def test_script_push_uses_installed_hook(repo, tmp_path, monkeypatch, case, expected, skip):
     r, base = repo
     remote = tmp_path / "remote.git"
     git(r, "init", "--bare", str(remote))
@@ -204,6 +207,7 @@ def test_script_push_uses_installed_hook(repo, tmp_path, case, expected):
     script = tmp_path / "push.sh"
     script.write_text('#!/bin/bash\ngit push --force "$1" "$2:refs/heads/main"\n')
     source = base if case == "non-ff" else ""
+    monkeypatch.setenv("PREFLIGHT_SKIP", skip)
     res = subprocess.run(["bash", str(script), str(remote), source], cwd=r,
                          capture_output=True, text=True, timeout=120)
     assert res.returncode != 0
@@ -445,14 +449,14 @@ def _install_marker_preflight(r, marker):
         "import os, sys\nfrom pathlib import Path\n"
         "assert '--fast' not in sys.argv\n"
         "with Path(os.environ['TEST_PREFLIGHT_MARKER']).open('a') as marker:\n"
-        "    marker.write('ran\\n')\n"
+        "    marker.write('fast gates only\\n' if '--lane' in sys.argv else 'affected tests\\n')\n"
     )
     return {"TEST_PREFLIGHT_MARKER": str(marker)}
 
 
-@pytest.mark.parametrize("ref", ["phase/x", "phase/nested/y", "feat/x", "lane/x", "main", "phase-x"])
+@pytest.mark.parametrize("ref", ["phase/x", "phase/nested/y"])
 def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref):
-    """Legacy phase skip flags cannot suppress affected preflight on any ref."""
+    """Phase pushes keep their affected tests even when the legacy flags are present."""
     r, base = repo
     marker = tmp_path / "preflight-ran"
     env = _install_marker_preflight(r, marker)
@@ -460,25 +464,44 @@ def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref):
     res = run_hook(r, [push_line(ref, head, base)],
                    {**env, "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1"})
     assert res.returncode == 0, res.stdout + res.stderr
-    assert marker.read_text() == "ran\n"
+    assert marker.read_text() == "affected tests\n"
+    assert "skipping local preflight tests" not in res.stderr
+
+
+@pytest.mark.parametrize("ref", ["land/x", "feat/x", "lane/x", "main", "phase-x"])
+def test_preflight_skip_scope_allows_land_and_refuses_off_scope_refs(repo, tmp_path, ref):
+    r, base = repo
+    marker = tmp_path / "preflight-ran"
+    env = _install_marker_preflight(r, marker)
+    head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
+    res = run_hook(r, [push_line(ref, head, base)],
+                   {**env, "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1"})
+    if ref == "land/x":
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert marker.read_text() == "fast gates only\n"
+        assert "skipping local preflight tests for refs/heads/land/x (PREFLIGHT_SKIP=1)" in res.stderr
+    else:
+        assert res.returncode == 1, res.stdout + res.stderr
+        assert f"PREFLIGHT_SKIP=1 is not allowed for refs/heads/{ref}" in res.stderr
+        assert not marker.exists()
 
 
 def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
-    """Legacy phase skip flags leave every ref and the scrub gate covered."""
+    """Land still runs scrub, and mixed pushes cannot apply the skip to off-scope refs."""
     r, base = repo
     marker = tmp_path / "preflight-ran"
     env = {**_install_marker_preflight(r, marker), "PREFLIGHT_SKIP": "1"}
     clean_head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
     mixed = run_hook(r, [push_line("phase/x", clean_head, base),
-                         push_line("feat/x", clean_head, base),
+                         push_line("land/x", clean_head, base),
                          f"HEAD {clean_head} refs/tags/v1 {ZERO}"], env)
-    assert mixed.returncode == 0, mixed.stdout + mixed.stderr
-    assert marker.read_text().splitlines() == ["ran"] * 3
-    marker.unlink()
+    assert mixed.returncode == 1, mixed.stdout + mixed.stderr
+    assert "PREFLIGHT_SKIP=1 is not allowed for refs/tags/v1" in mixed.stderr
+    assert not marker.exists()
     dirty_head = commit_file(r, "app/leak.py", f'peer = "{fake_ip()}"\n')
     dirty = run_hook(
         r,
-        [push_line("phase/x", dirty_head, clean_head)],
+        [push_line("land/x", dirty_head, clean_head)],
         {**env, "PREFLIGHT_SKIP": "1"},
     )
     assert dirty.returncode == 1, dirty.stdout + dirty.stderr

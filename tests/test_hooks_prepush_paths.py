@@ -2,6 +2,7 @@
 import json
 import os
 import runpy
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -138,6 +139,21 @@ def test_a_train_push_with_its_exact_manifest_passes_without_tests(repo, tmp_pat
     assert "pre-push: train path" in res.stderr
 
 
+def test_a_train_push_names_the_missing_plangraph_binary(repo, tmp_path):
+    r, base = repo
+    train, heads = make_train(r, base)
+    env = manifest(tmp_path, heads)
+    # Give the hook a PATH without the train CLI while retaining Git and Python.
+    bin_dir = tmp_path / "hook-bin"
+    bin_dir.mkdir()
+    for name in ("git", "python3"):
+        (bin_dir / name).symlink_to(shutil.which(name))
+    env.update(PATH=str(bin_dir), HOME=str(tmp_path / "empty-home"))
+    result = run_hook(r, [push_line("land/train-9", train, "0" * 40)], env)
+    assert result.returncode == 1
+    assert "plangraph binary not found on PATH" in result.stderr
+
+
 @pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_with_a_parent_outside_its_manifest_is_refused(repo, tmp_path):
     r, base = repo
@@ -260,7 +276,7 @@ def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, 
     assert ("--lane" in json.loads((tmp_path / "argv").read_text())) is lane
 
 
-@pytest.mark.parametrize("extra", [None, "unrelated", "no-harness", "foreign-parent"])
+@pytest.mark.parametrize("extra", [None, "unrelated", "no-harness", "drop-no-harness", "foreign-parent"])
 @pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_permits_only_attributed_resolves_and_drops(repo, tmp_path, extra):
     r, _ = repo
@@ -278,7 +294,8 @@ def test_a_train_push_permits_only_attributed_resolves_and_drops(repo, tmp_path,
     commit(f"Train 9: resolve second issue\n\n{trailers}")
     merge = git(r, "rev-parse", "HEAD~2").strip()
     git(r, "revert", "--no-commit", "-m", "1", merge)
-    commit(f"Train 9: drop last part\n\nThis reverts commit {merge}.\n\nDropped-Part: plangraph:TEST\n{trailers}")
+    drop_trailers = trailers if extra != "drop-no-harness" else trailers.splitlines()[0]
+    commit(f"Train 9: drop last part\n\nThis reverts commit {merge}.\n\nDropped-Part: plangraph:TEST\n{drop_trailers}")
     if extra == "unrelated":
         commit(f"Unrelated\n\n{trailers}")
     elif extra == "no-harness":
@@ -297,3 +314,5 @@ def test_a_train_push_permits_only_attributed_resolves_and_drops(repo, tmp_path,
     else:
         assert result.returncode == 1 and not (tmp_path / "argv").exists()
         assert ("outside its manifest" if extra == "foreign-parent" else "extra commit") in result.stderr
+        if extra in ("no-harness", "drop-no-harness"):
+            assert f"train commit {head} is an extra commit without a valid Harness trailer" in result.stderr

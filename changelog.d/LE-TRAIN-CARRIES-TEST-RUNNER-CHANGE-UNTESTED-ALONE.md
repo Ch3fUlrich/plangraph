@@ -1,0 +1,1 @@
+- Require a green full CI receipt on each runner-wide part's own head before batch entry and show its run ID in the part table.

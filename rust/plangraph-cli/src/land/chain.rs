@@ -50,16 +50,46 @@ fn resolver(repo: &Path, commit: &str) -> Result<(String, String), String> {
     )?;
     let valid = |value: &str| !value.trim().is_empty() && !value.contains('\x1f');
     let split: Vec<&str> = fields.split('\0').collect();
-    match split.as_slice() {
-        [subject, writer, harness]
-            if resolver_subject(subject) && valid(writer) && valid(harness) =>
-        {
-            Ok((writer.trim().into(), harness.trim().into()))
+    let [subject, writer, harness] = split.as_slice() else {
+        return Err(format!(
+            "chain: cannot read resolver attribution for {commit}"
+        ));
+    };
+    if !resolver_subject(subject) {
+        return Err(format!(
+            "chain: train commit {commit} is an extra commit without resolver attribution"
+        ));
+    }
+    for (name, value) in [("Writer", writer), ("Harness", harness)] {
+        if !valid(value) {
+            return Err(format!(
+                "chain: train commit {commit} is an extra commit without a valid {name} trailer"
+            ));
         }
-        _ => Err(format!(
-            "chain: train commit {} is an extra commit without resolver attribution",
-            &commit[..12]
-        )),
+    }
+    Ok((writer.trim().into(), harness.trim().into()))
+}
+
+#[cfg(test)]
+#[test]
+fn resolver_diagnostic_names_the_offending_commit_and_trailer() {
+    use super::build_tests::{g, Fx};
+
+    let fixture = Fx::new();
+    let repo = fixture.path();
+    for (subject, trailers, missing) in [
+        ("Train 9: resolve fixture", "Writer: codex", "Harness"),
+        ("Train 9: drop fixture", "Harness: codex", "Writer"),
+    ] {
+        let message = format!("{subject}\n\n{trailers}");
+        g(repo, &["commit", "--allow-empty", "-m", &message]);
+        let head = g(repo, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            resolver(repo, &head).unwrap_err(),
+            format!(
+                "chain: train commit {head} is an extra commit without a valid {missing} trailer"
+            )
+        );
     }
 }
 

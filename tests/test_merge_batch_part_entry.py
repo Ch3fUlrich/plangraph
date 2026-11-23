@@ -61,6 +61,73 @@ def test_build_refuses_a_part_the_predicate_refuses_and_force_set_logs_it(env, t
     assert "FORCE-SET: building despite part entry" in forced.stderr
 
 
+@pytest.mark.parametrize("path,runner_wide", [
+    ("tests/conftest.py", True),
+    ("tools/pgtest.py", True),
+    ("rust-toolchain.toml", True),
+    ("rust/worker-core/src/run/group_windows.rs", True),
+    ("rust/worker-core/src/run/supervise.rs", True),
+    ("rust/worker-core/src/stall/deadline.rs", True),
+    ("src/plangraph/spawner/proc_kill.py", True),
+    ("src/plangraph/planner/provider_stop.py", False),
+])
+def test_runner_wide_part_requires_full_ci_before_build(env, path, runner_wide):
+    head = env.branch_pr(1, {path: "value = 1\n"})
+    result = env.run("build", "--name", "runner-wide", "--prs", "1", "--force-set")
+    if not runner_wide:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1, result.stderr
+        assert f"PR #1: runner-wide part {head} needs green full CI" in result.stderr
+        assert not env.state_file("runner-wide").exists()
+
+
+@pytest.mark.parametrize("case", ["dispatch", "pull_request", "affected-only", "wrong-head",
+                                 "wrong-tree", "failed-job"])
+def test_runner_wide_receipt_proves_a_full_run_on_the_part_head(env, monkeypatch, case):
+    from merge_batch_land import JOB_DISPLAY, SHARD_DISPLAY, render_body
+
+    head = env.branch_pr(1, {"tests/conftest.py": "value = 1\n"})
+    tree = env.git("rev-parse", f"{head}^{{tree}}")
+    monkeypatch.chdir(env.repo)
+    event = "pull_request" if case in ("pull_request", "affected-only", "wrong-tree") else "workflow_dispatch"
+    run = {"id": 51, "event": event, "head_sha": head if case != "wrong-head" else "f" * 40,
+           "head_branch": "lane/p1", "status": "completed", "conclusion": "success",
+           "run_attempt": 2, "pull_requests": [{"number": 1}]}
+    names = [*JOB_DISPLAY.values(), *(f"{name} (shard {i} of 3)" for name in SHARD_DISPLAY.values()
+                                     for i in range(1, 4))]
+    jobs = [{"name": name, "status": "completed", "conclusion": "success"} for name in names]
+    if case == "failed-job":
+        jobs[-1]["conclusion"] = "skipped"
+
+    def api(_verb, endpoint):
+        if "/workflows/" in endpoint:
+            return {"workflow_runs": [run]}
+        if "/statuses?" in endpoint:
+            if case == "affected-only":
+                return []
+            tested = "e" * 40 if case == "wrong-tree" else tree
+            return [{"context": "ci-full", "state": "success",
+                     "description": f"run 51 attempt 2 tree {tested}"}]
+        assert "/runs/51/attempts/2/jobs?" in endpoint
+        return {"jobs": jobs, "total_count": len(jobs)}
+
+    pr = {"head": head, "ref": "lane/p1", "title": "Part", "own_paths": ["tests/conftest.py"]}
+    if case in ("dispatch", "pull_request"):
+        receipts = build.runner_wide_receipts("o/p", {1: pr}, [1], api=api)
+        assert receipts == {1: 51}
+        env.git("checkout", "-q", "main")
+        env.git("merge", "--no-ff", "-m", "Merge fixture", head)
+        merge = env.git("rev-parse", "HEAD")
+        state = {"name": "train", "base": "main", "merged": [
+            {"pr": 1, "head": head, "merge": merge, "items": [], "resolved": False}],
+            "prs": {"1": dict(pr, full_ci_run=receipts[1])}, "skipped": [], "worktree": env.repo}
+        assert "Full CI run 51" in render_body(state)
+    else:
+        with pytest.raises(build.MergeBatchError, match=f"runner-wide part {head} needs green full CI"):
+            build.runner_wide_receipts("o/p", {1: pr}, [1], api=api)
+
+
 def test_open_pull_requests_outside_the_batch_are_compared_too():
     runner, calls = recording()
     heads = {1: "a" * 40}

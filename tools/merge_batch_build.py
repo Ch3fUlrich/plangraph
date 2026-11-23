@@ -16,7 +16,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents, stack_sorted
+from merge_batch_plan import high_patterns, plan_batches, runner_wide_receipts, set_problems, stack_parents, stack_sorted
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
@@ -413,6 +413,7 @@ def cmd_build(args):
         forced = [*forced, *entry]
         for num in order:  # a frozen batch push cannot be fixed by a history rewrite: refuse before the build
             workflow_gate(None, f"{REMOTE}/{base}", f"refs/merge-batch/{name}/{num}")
+        full_ci_runs = runner_wide_receipts(repo, infos, order)
     except MergeBatchError:
         drop_refs(name)
         raise
@@ -424,6 +425,8 @@ def cmd_build(args):
           "skip_conflicts": bool(args.skip_conflicts), "union": list(dict.fromkeys(default_union(f"{REMOTE}/{base}") + list(args.union))), "pending": order,
           "current": None, "merging": None, "merged": [], "skipped": [], "forced": forced, "head": None, "pr": None,
           "url": None, "prs": {str(n): {k: infos[n][k] for k in ("title", "head", "ref", "base")} for n in order}}
+    for num, run_id in full_ci_runs.items():
+        st["prs"][str(num)]["full_ci_run"] = run_id
     save_state(st)  # before the worktree exists: a crash during `worktree add` leaves a state that abort cleans up
     try:
         git("worktree", "add", "--no-track", "-b", branch, str(path), f"{REMOTE}/{base}")
