@@ -58,17 +58,17 @@ def is_affected_step(command):
     return len(command) > 1 and Path(command[1]).name == "affected_tests.py"
 
 
-def planned_paths(command, cwd, env):
-    """Count of test paths the selector plans for this real (--run) command, else None."""
+def planned_tests(command, cwd, env):
+    """Test paths the selector plans for this real (--run) command, else None."""
     if "--run" not in command:
         return None
     try:
         done = subprocess.run([part for part in command if part != "--run"], cwd=cwd, env=env, text=True,
                               capture_output=True, timeout=CHECK_TIMEOUT)
-        count = selected_count(done.stdout)
-    except (OSError, subprocess.SubprocessError):
+        paths = json.loads(done.stdout.splitlines()[0])["tests"]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError):
         return None
-    return count if isinstance(count, int) else None
+    return paths if not done.returncode and isinstance(paths, list) else None
 
 
 def scaled_test_timeout(count):
@@ -94,7 +94,8 @@ def check_timeout(command, cwd=None, env=None):
     if is_affected_step(command):
         if "--files-only" in command:
             return TEST_TIMEOUT
-        return scaled_test_timeout(planned_paths(command, cwd, env))
+        paths = planned_tests(command, cwd, env)
+        return scaled_test_timeout(len(paths) if paths is not None else None)
     return CHECK_TIMEOUT
 
 
@@ -473,8 +474,8 @@ def policy_build_command(root):
             '--manifest-path', str(manifest), '-p', 'pg-policy']
 
 
-def policy_artifact(output):
-    """The pg-policy executable Cargo reports for this checkout, and the human-readable rest."""
+def cargo_artifact(output, name):
+    """The named executable Cargo reports, and the human-readable rest."""
     executable, text = None, []
     for line in output.splitlines():
         try:
@@ -486,10 +487,14 @@ def policy_artifact(output):
         elif message.get('reason') == 'compiler-message':
             text.append(message.get('message', {}).get('rendered', ''))
         elif (message.get('reason') == 'compiler-artifact' and message.get('executable')
-              and message.get('target', {}).get('name') == 'pg-policy'
+              and message.get('target', {}).get('name') == name
               and 'bin' in message['target'].get('kind', [])):
             executable = message['executable']
     return executable, ''.join(line + '\n' for line in text if line)
+
+
+def policy_artifact(output):
+    return cargo_artifact(output, 'pg-policy')
 
 
 def policy_target(root):
@@ -512,11 +517,15 @@ def policy_target(root):
     return shared_cargo_target() / 'policy-bin' / digest.hexdigest()[:16]
 
 
-def stage_policy_binary(executable, cleanup):
-    """Private copy of the built pg-policy, taken under the build lease."""
-    private = tempfile.mkdtemp(prefix='preflight-policy-')
+def stage_binary(executable, cleanup, prefix):
+    private = tempfile.mkdtemp(prefix=prefix)
     cleanup.append(private)
     return shutil.copy2(executable, Path(private) / Path(executable).name)
+
+
+def stage_policy_binary(executable, cleanup):
+    """Private copy of the built pg-policy, taken under the build lease."""
+    return stage_binary(executable, cleanup, 'preflight-policy-')
 
 
 def build_policy(root, env, cleanup):
@@ -612,17 +621,36 @@ def _main(argv, root, cleanup):
     def python(name, *extra):
         return [interpreter, str(tools / name), *extra]
 
+    def run_cargo(command, cwd, command_env):
+        refusal = running_disk_refusal(root)
+        if refusal:
+            return 1, refusal + '\n'
+        code, output = run(command, cwd, command_env)
+        refusal = running_disk_refusal(root)
+        return (1, output + refusal + '\n') if refusal else (code, output)
+
     def invoke(command, cwd, command_env):
         if command[0] != 'cargo':
             return run(command, cwd, command_env)
         # Share the spawner's target, cap checks and cleanup lease.
         with cargo_lease():
-            refusal = running_disk_refusal(root)
-            if refusal:
-                return 1, refusal + '\n'
-            code, output = run(command, cwd, command_env)
-            refusal = running_disk_refusal(root)
-            return (1, output + refusal + '\n') if refusal else (code, output)
+            return run_cargo(command, cwd, command_env)
+
+    def build_train_cli(command_env):
+        build = ["cargo", "build", "--locked", "--manifest-path", "rust/Cargo.toml",
+                 "-p", "plangraph-cli", "--bin", "plangraph", "--message-format=json"]
+        print("tests: building plangraph-cli before the affected-test deadline", flush=True)
+        try:
+            # Keep another managed build from replacing the shared executable before we copy it.
+            with cargo_lease(exclusive=True, wait=RUST_TIMEOUT):
+                code, output = run_cargo(build, root, command_env)
+                executable, output = cargo_artifact(output, "plangraph")
+                print(output, end="", flush=True)
+                if code or not executable:
+                    raise FailFamily("plangraph-cli build did not produce PLANGRAPH_TEST_CLI")
+                return stage_binary(executable, cleanup, "preflight-test-cli-")
+        except OSError as exc:
+            raise FailFamily(f"could not prepare PLANGRAPH_TEST_CLI: {exc}") from exc
 
     scrub = python("split/scrub_check.py", ".", "--base", args.scrub_base or args.base, "--head", args.head,
                    "--rules", str(tools / "split/manifest.toml"),
@@ -681,6 +709,13 @@ def _main(argv, root, cleanup):
                     else:
                         failed.append(("FAIL", "pg-policy build", first_error(output)))
                         commands = [c for c in commands if Path(c[1]).name != "check_new_code_lang.py"]
+                if (family == "tests" and commands
+                        and (root / "tests/test_hooks_prepush_paths.py").is_file()):
+                    selected = planned_tests(tests, root, family_env)
+                    if selected is None:
+                        raise FailFamily("cannot plan affected tests for the train CLI fixture")
+                    if "tests/test_hooks_prepush_paths.py" in selected:
+                        family_env = dict(family_env, PLANGRAPH_TEST_CLI=build_train_cli(family_env))
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
                     command_env = family_env

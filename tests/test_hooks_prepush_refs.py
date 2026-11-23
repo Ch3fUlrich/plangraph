@@ -522,8 +522,9 @@ def run_with_deadline(command, **kwargs):
 def unexpected_plan(*args):
     raise AssertionError("File-only runs must share one deadline with selection")
 
+assert "planned_tests" in settings
 settings.update(run=affected_only, run_test_process=run_with_deadline,
-                planned_paths=unexpected_plan, trim_shared_target=lambda root: None)
+                planned_tests=unexpected_plan, trim_shared_target=lambda root: None)
 raise SystemExit(main(root=Path.cwd()))
 """
     commit_file(r, "tools/preflight.py", launcher)

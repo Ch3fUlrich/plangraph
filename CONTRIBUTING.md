@@ -31,6 +31,11 @@ file-only affected preflight has 240 seconds (`TEST_TIMEOUT`) for selection and 
 
 When the local affected selection includes the fleet projection tests, the selector
 builds `pg-spawnd` from the selected checkout before pytest starts.
+When preflight selects `tests/test_hooks_prepush_paths.py`, it builds and stages
+one `plangraph` CLI before starting the 240-second step. Every pytest worker
+uses that executable through `PLANGRAPH_TEST_CLI`. Direct pytest and selector
+runs build the CLI once per pytest session when the variable is unset. Set it
+to a prebuilt executable's path to reuse a build.
 
 The Rust step bound is `max(600, planned test binaries x 15)` seconds times `1 + load/cores`, capped at 3600 (`rust_bound`), and a timeout names the test binary that was running. `CARGO_BUILD_JOBS` follows the free cores (cores minus load, floor 4) unless it is set. `cargo test` runs with `--no-fail-fast`, the Rust family runs every cargo check, and the Python tests still run after a Rust failure, so one pass lists every failing Rust test (`failing test:` lines) and every Python failure. The affected-test selector takes `--parts-union` (preflight passes it): a pushed batch or train selects the tests of every part's changed files. Standalone preflight uses the train and base first-parent histories to find the range.
 

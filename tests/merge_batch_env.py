@@ -19,15 +19,40 @@ STUB = Path(__file__).with_name("merge_batch_gh_stub.py")
 
 
 @pytest.fixture(scope="session")
-def train_cli():
-    """Build the real validator used by the hook inside hermetic Git fixtures."""
-    command = ["cargo", "build", "--locked", "--manifest-path", str(ROOT / "rust" / "Cargo.toml"),
-               "-p", "plangraph-cli", "--bin", "plangraph", "--message-format=json"]
-    env = dict(os.environ, CARGO_BUILD_JOBS="1")
-    result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, check=True)
-    artifacts = (json.loads(line) for line in result.stdout.splitlines())
-    return next(Path(entry["executable"]) for entry in artifacts
-                if entry.get("executable") and entry["target"]["name"] == "plangraph")
+def train_cli(tmp_path_factory, pytestconfig):
+    """Use preflight's executable or share one build in a direct pytest run."""
+    path = os.environ.get("PLANGRAPH_TEST_CLI")
+    if not path:
+        base = tmp_path_factory.getbasetemp()
+        # Local xdist workers have sibling basetemps within the controller's session.
+        session = base.parent if hasattr(pytestconfig, "workerinput") else base
+        path = build_train_cli(session)
+    binary = Path(path).resolve()
+    if not shutil.which(str(binary)):
+        pytest.fail("PLANGRAPH_TEST_CLI does not point to an executable file")
+    return binary
+
+
+def build_train_cli(session):
+    from plangraph.spawner.host_ready import _cargo_lease_for
+
+    artifact = session / "train-cli-path"
+    with _cargo_lease_for(artifact, exclusive=True, wait=600):
+        if artifact.is_file():
+            return artifact.read_text()
+        command = ["cargo", "build", "--locked", "--manifest-path", str(ROOT / "rust/Cargo.toml"),
+                   "-p", "plangraph-cli", "--bin", "plangraph", "--message-format=json"]
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        if result.returncode:
+            pytest.fail(f"Could not build plangraph for train tests:\n{result.stderr}")
+        messages = (json.loads(line) for line in result.stdout.splitlines())
+        path = next((entry["executable"] for entry in messages
+                     if entry.get("reason") == "compiler-artifact" and entry.get("executable")
+                     and entry["target"]["name"] == "plangraph"), None)
+        if not path:
+            pytest.fail("Cargo did not report a plangraph executable for train tests")
+        artifact.write_text(path)
+        return path
 
 
 #: A `git` that interferes with the n-th `git $CRASH_SUB` it is asked to run (see Env.run): kill the parent
