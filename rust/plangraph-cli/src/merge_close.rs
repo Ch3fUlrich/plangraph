@@ -243,8 +243,29 @@ fn run_scheduled(
         env,
         max_time_secs: 10,
     };
+    run_scheduled_with(
+        &keeper,
+        &control,
+        seats,
+        apply,
+        project,
+        deployment_only,
+        Duration::from_secs(95),
+    )
+}
+
+/// Run the scheduled refresh and paged close using the supplied keeper transports.
+pub fn run_scheduled_with(
+    keeper: &dyn Transport,
+    control: &dyn Transport,
+    seats: Option<bool>,
+    apply: bool,
+    project: Option<&str>,
+    deployment_only: bool,
+    refresh_timeout: Duration,
+) -> Result<Outcome, String> {
     control.call("close_merged_auto", Some(json!({"refresh": "start"})))?;
-    let deadline = Instant::now() + Duration::from_secs(95);
+    let deadline = Instant::now() + refresh_timeout;
     loop {
         let reply = control.call("close_merged_auto", Some(json!({"refresh": "status"})))?;
         match reply["scan"].as_str() {
@@ -261,7 +282,7 @@ fn run_scheduled(
         ..ClosePass::default()
     };
     if let Some(project) = project {
-        pass.collect(&keeper, seats, apply, Some(project))?;
+        pass.collect(keeper, seats, apply, Some(project))?;
     } else {
         let reply = control.call("close_merged_auto", Some(json!({"refresh": "projects"})))?;
         for project in reply["projects"]
@@ -269,7 +290,7 @@ fn run_scheduled(
             .ok_or("keeper reply has no project list")?
         {
             let project = project.as_str().ok_or("keeper project name is not text")?;
-            pass.collect(&keeper, seats, apply, Some(project))?;
+            pass.collect(keeper, seats, apply, Some(project))?;
         }
     }
     if !apply && !pass.scan_errors.is_empty() {

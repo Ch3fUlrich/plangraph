@@ -367,12 +367,17 @@ def test_a_warmed_scan_is_not_fetched_again_under_the_lock(env, monkeypatch):
     assert calls == [True, False] and [c["key"] for c in result["closed"]] == ["demo:C"]
 
 
+@pytest.mark.parametrize("env", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(
+    not os.environ.get("PG_DSN"), reason="PG_DSN not set"))], indirect=True)
 def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_closes(env, tmp_path, monkeypatch):
     import threading
     from door_util import Doors
+    from plangraph.keeper import api_routes
 
     set_states(env)
     env.repo.land("c", "Plan-Item: demo:C", 84)
+    tick = [100.0]
+    monkeypatch.setattr(api_routes, "monotonic", lambda: tick[0], raising=False)
     doors = Doors(env, tmp_path)
     held = []
     started = threading.Event()
@@ -399,9 +404,25 @@ def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_close
         worker.join(5)
         assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "ready"})
         assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "ready"})
-        status, body = doors.http("system", "POST", path, {"require_seats": False})
+        status, body = doors.http("system", "POST", path, {
+            "require_seats": False, "limit": 1, "after": "demo:B"})
         assert status == 200 and [c["key"] for c in body["closed"]] == ["demo:C"]
-        assert held == [False]
+        assert body["next_after"] == "demo:C"
+        status, body = doors.http("system", "POST", path, {"after": body["next_after"]})
+        assert status == 200 and body["next_after"] is None
+        tick[0] += 300
+        assert doors.http("system", "POST", path, {}) == (
+            409, {"error": "conflict", "msg": "merge index expired; start a refresh"})
+        started.clear()
+        unblock.clear()
+        assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
+        assert started.wait(2)
+        worker = next(thread for thread in threading.enumerate() if thread.name == "keeper-merge-index")
+        unblock.set()
+        worker.join(5)
+        assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "ready"})
+        assert doors.http("system", "POST", path, {"apply": False})[0] == 200
+        assert held == [False, False]
     finally:
         unblock.set()
         doors.close()

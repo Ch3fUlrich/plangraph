@@ -12,6 +12,7 @@ import os
 import re
 import threading
 from copy import copy
+from time import monotonic
 import urllib.parse
 
 from ..inbox import routes as _inbox
@@ -344,10 +345,13 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 class MergeRefresh:
     """Publish a complete scan to HTTP close calls, including partial-scan errors."""
 
+    MAX_AGE_SECONDS = 300
+
     def __init__(self, server):
         self.server = server
         self.state = "idle"
         self.used = False
+        self.expires_at = 0.0
 
     def control(self, action):
         server = self.server
@@ -358,15 +362,22 @@ class MergeRefresh:
             return {"projects": projects}
         if action not in ("start", "status"):
             raise Refused("validation", "refresh must be start, status or projects")
-        if action == "start" and (self.state == "idle" or (self.state == "ready" and self.used)):
-            self.state, self.used = "running", False
-            threading.Thread(target=self._build, name="keeper-merge-index", daemon=True).start()
+        if action == "start" and self.state != "running":
+            now = monotonic()
+            if self.state == "idle" or self.used or now >= self.expires_at:
+                # Bound reuse from the beginning of the scan, when it starts fetching default refs.
+                self.expires_at = now + self.MAX_AGE_SECONDS
+                self.state, self.used = "running", False
+                threading.Thread(target=self._build, name="keeper-merge-index", daemon=True).start()
         return {"scan": self.state}
 
     def consume(self):
         if self.state == "running":
             raise Refused("conflict", "merge index refresh is running")
-        self.used = self.state == "ready"
+        if self.state == "ready":
+            if monotonic() >= self.expires_at:
+                raise Refused("conflict", "merge index expired; start a refresh")
+            self.used = True
 
     def _build(self):
         server = self.server
