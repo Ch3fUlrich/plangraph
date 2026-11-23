@@ -123,15 +123,15 @@ IDs. Missing registry caps exclude a host from overflow. Local admission uses
 conservative defaults of floor 3000 MB and role 2048 MB when the registry is
 unavailable. The independent OOM guard (D-5057/D-5075) still applies.
 
-Native Codex writers and reviews with a `diff_ref` and no explicit cwd compare
-ready local and remote hosts. Candidates must have enough free memory to
-cover the floor and role reservation. Of those candidates, the host with the
-most free memory above its floor wins. A host set to `placement_fallback` is
-considered after the ready workers. Spawn records carry `placement` with
-`host`, `reason`, and `free_mb`. Other eligible spawns try SSH overflow when
-local admission refuses. Dry runs, private or unknown repositories, and local
-benchmark databases stay local. Repository-required reviews keep the checkout local and
-apply the orchestration host's fallback health thresholds. Route planning accepts a placement snapshot.
+Native Codex writers and reviews with a `diff_ref` and no explicit cwd compare ready hosts.
+Each candidate must meet its memory floor and role reservation. The most free RAM above
+the floor wins, with `placement_fallback` hosts considered after the ready workers.
+Spawn records carry `placement` with `host`, `reason`, and `free_mb`. Route planning accepts
+a placement snapshot. Other eligible spawns try SSH overflow when local admission refuses.
+Dry runs, private or unknown repositories, and local benchmark databases stay local.
+Repository-required reviews that use the existing checkout apply orchestration fallback
+health thresholds. In-worker native reviews with a disposable checkout can run locally
+without host registration if worker placement is allowed and the host meets disk and RAM limits.
 See [placement rules](placement-rules.md).
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel

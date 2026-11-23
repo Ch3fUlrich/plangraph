@@ -8,6 +8,15 @@ def valid_item(value):
             and re.fullmatch(r'[A-Za-z0-9._-]+:[A-Za-z0-9._:-]{1,180}', value) is not None)
 
 
+def native_writer_review(card):
+    """Return the writer run ID carried by a native workspace review card."""
+    if isinstance(card, dict) and card.get('review_workspace') is True:
+        run = card.get('native_writer_run')
+        if isinstance(run, str) and re.fullmatch(r'run-[A-Za-z0-9]{1,64}', run):
+            return run
+    return None
+
+
 def annotate_item(record, card, *, inherit=False):
     value = card.get('item_key') if isinstance(card, dict) else None
     if value is None or value == '':
@@ -23,6 +32,8 @@ def annotate_item(record, card, *, inherit=False):
             item = item[len(project) + 1:]
         value = project + ':' + item
     record['item_key'] = value
+    if record.get('role') == 'review' and (writer_run := native_writer_review(card)):
+        record['native_writer_run'] = writer_run
     if value and record.get('role') == 'review' and not inherit:
         request = record.setdefault('request', {})
         request.update(item_key=value, role='review')

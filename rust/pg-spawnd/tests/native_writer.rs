@@ -104,11 +104,11 @@ fn native_writer_ignores_host_admission_policy() {
     native_writer_fixture(true);
 }
 fn native_writer_fixture(hostile_policy: bool) {
-    let dir = std::env::temp_dir().join(format!(
-        "native-writer-e2e-{}-{hostile_policy}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&dir).unwrap();
+    let fixture = tempfile::Builder::new()
+        .prefix("native-writer-e2e-")
+        .tempdir()
+        .unwrap();
+    let dir = fixture.path().to_path_buf();
     let remote = dir.join("remote.git");
     let repo = dir.join("checkout");
     fs::create_dir_all(&repo).unwrap();
@@ -172,6 +172,8 @@ run_id = 'run-' + uuid.uuid4().hex
 run = pathlib.Path(value('--state')) / 'runs' / run_id
 run.mkdir(parents=True)
 assert card['review_workspace'] and '--cwd' not in argv
+assert card['item_key'] == 'demo:FIXTURE' and card['native_writer_run'].startswith('run-'), card
+assert __import__('os').environ['PLANGRAPH_HOST_NAME'] == 'fixture', card
 marker = subprocess.check_output(['git', 'show', head + ':writer.txt'], text=True)
 if 'late marker' in marker:
     receipt = dict(run_id=run_id, status='running', started=time.time())
@@ -190,7 +192,8 @@ else:
     tests = 'TESTS: cargo test -p fixture — 1 passed\n' if fixed else ''
     text = 'FILES READ: writer.txt\n' + tests + 'HEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type':'result','is_error':False,'result':text}) + '\n')
-print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'fixture-worker','overflow_remote':True,'stdout_tail':text,'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
+(run / 'verdict.json').write_text(json.dumps(dict(status='skipped', reason='no Keeper access')))
+print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'fixture-worker','item_key':card['item_key'],'overflow_remote':True,'stdout_tail':text,'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
 "#).unwrap();
     fs::create_dir_all(dir.join("supervisor-bin")).unwrap();
     // The fixture does not depend on free space on the host's /tmp mount.
@@ -245,7 +248,7 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
         .env("NATIVE_BINARY", binary::spawnd())
         .env("PLANGRAPH_NATIVE_REVIEW_CLI", serde_json::json!(["python3", review_cli]).to_string())
-        .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base)
+        .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base).env("PLANGRAPH_HOST_NAME", "fixture")
         .args(["-c", r#"
 import asyncio, json, os, pathlib
 from unittest.mock import patch
@@ -267,7 +270,7 @@ FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM',
 assert not [k for k in os.environ if k.startswith(('AUTOOS_', 'PLANGRAPH_', 'XDG_', 'GIT_CONFIG')) and k not in FIXTURE_KEYS], sorted(os.environ)
 async def check():
     service = SpawnService(state=root/'state')
-    card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main',
+    card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main', item_key='demo:FIXTURE',
                 review_leg='claude-sonnet-5-5-high', review_override_reason='D-6550 fixture credential review')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         run = await admitted_spawn(service, dict(card=card, prompt='brief marker'))
@@ -281,6 +284,7 @@ async def check():
     assert record['host'] and record['exit_code'] == 0, record
     assert record['session_id'] == 'fixture-session' and record['resumes'] == 0, record
     assert record['review']['verdict'] == 'ACCEPT' and record['review']['head'] == record['final_head'], record
+    assert record['review']['host'] == 'fixture-worker' and record['review']['item_key'] == 'demo:FIXTURE', record
     assert record['review_test_status'] == 'untested', record
     review_text = pathlib.Path(record['review']['path']).read_text()
     assert [line for line in review_text.splitlines() if line.startswith('TESTS:')] == [
@@ -359,6 +363,7 @@ async def check():
             assert final['exit_code'] == 10 and final['reason'].endswith('FAIL client_missing /fixture/codex'), final
             assert final['review']['verdict'] == 'REQUEST_CHANGES', final
             assert final['review']['head'] != final['final_head'], final
+            assert final['review']['host'] == 'fixture-worker' and final['review']['item_key'] == 'demo:FIXTURE', final
             assert 'HIGH writer.txt:1' in final['review']['text'], final
             assert final['review_rounds'] == 1 and final['resumes'] == 1, final
             assert final['session_id'] == 'fixture-session', final
@@ -439,5 +444,5 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
     // attempt's partial.txt.
     completed.sort_unstable();
     assert_eq!(completed, [2, 2, 2, 3]);
-    fs::remove_dir_all(dir).unwrap();
+    fixture.close().unwrap();
 }
