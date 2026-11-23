@@ -21,5 +21,5 @@ Final message: max 10 lines, include validation and any remaining limitation.
 Every non-merge commit ends with all trailers in ONE final paragraph:
 
 Plan-Item: {{item_key}}
-Writer: codex/gpt-6.1-sol-medium (native-codex spawner run)
+Writer: codex/gpt-6.2-sol-medium (native-codex spawner run)
 Changelog: <fragment path or skip (reason), as the check requires>
