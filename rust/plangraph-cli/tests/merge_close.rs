@@ -111,3 +111,34 @@ fn a_flagged_close_prints_the_flag_with_its_run_ids() {
          would-close\tdemo:C\tc1\tFLAGGED seats_missing\nmerged-not-done\t3\n"
     );
 }
+
+#[test]
+fn follows_a_cursor_and_reports_scan_errors_once() {
+    struct Pages(RefCell<Vec<Value>>);
+    impl Transport for Pages {
+        fn call(&self, _verb: &str, body: Option<Value>) -> Result<Value, String> {
+            let mut calls = self.0.borrow_mut();
+            calls.push(body.unwrap());
+            let first = calls.len() == 1;
+            Ok(json!({
+                "would_close": if first { json!([{"key":"demo:A"}]) } else { json!([{"key":"demo:B"}]) },
+                "next_after": if first { Some("demo:A") } else { None },
+                "scan_errors": {"other": "origin fetch failed"},
+                "merged_not_done": 1
+            }))
+        }
+    }
+    let keeper = Pages(RefCell::default());
+    let out = run_with(&keeper, None, false, Some("demo")).unwrap();
+    assert_eq!(out.merged_not_done, 2);
+    assert_eq!(keeper.0.borrow()[1]["after"], "demo:A");
+    assert_eq!(
+        out.text
+            .matches("scan-error\tother\torigin fetch failed")
+            .count(),
+        1
+    );
+    assert!(out
+        .text
+        .contains("would-close\tdemo:A\t\nwould-close\tdemo:B\t\n"));
+}
