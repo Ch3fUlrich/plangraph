@@ -735,53 +735,81 @@ def test_hung_probes_fail_over_leg_by_leg_inside_the_admission_window(monkeypatc
     assert runner.cancelled == ['hung0', 'hung1']  # hung harnesses are killed, not orphaned
 
 
-def test_a_spawn_joining_an_inflight_probe_is_bounded_and_charged(monkeypatch):
-    """The joining spawn waits at most its own remaining budget, and that wait is charged."""
+@pytest.fixture
+def probe_waits(monkeypatch):
+    """Advance the probe clock by each requested wait and expire its shield."""
     from plangraph.spawner import base_fresh, leg_probe
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.delenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', raising=False)
     monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 0.9)  # 0.3 s per probe, 0.45 s in all
+    monkeypatch.setattr(leg_probe, '_INFLIGHT', {})
+    now = 0.0
+    waits = []
 
-    async def slow(runner, leg, **kwargs):
-        await asyncio.sleep(5)  # another spawn's probe, still running
-        return dict(ok=True, reason='', seconds=0)
+    async def expire(pending, timeout):
+        nonlocal now
+        waits.append(timeout)
+        now += timeout
+        return await asyncio.wait_for(pending, timeout=0)
 
-    monkeypatch.setattr(leg_probe, 'probe', slow)
+    monkeypatch.setattr(leg_probe, 'time', SimpleNamespace(monotonic=lambda: now, time=time.time))
+    monkeypatch.setattr(leg_probe, 'asyncio', SimpleNamespace(
+        TimeoutError=asyncio.TimeoutError, ensure_future=asyncio.ensure_future,
+        shield=asyncio.shield, wait_for=expire,
+    ))
+    return waits
+
+
+def test_a_spawn_joining_an_inflight_probe_is_bounded_and_charged(monkeypatch, probe_waits):
+    """The joining spawn waits at most its own remaining budget, and that wait is charged."""
+    from plangraph.spawner import leg_probe
+
+    async def unexpected_probe(*args, **kwargs):
+        pytest.fail('the joining spawn should share the in-flight probe')
+
+    monkeypatch.setattr(leg_probe, 'probe', unexpected_probe)
 
     async def run():
-        owner = asyncio.ensure_future(leg_probe.before_launch(None, _leg(), 'implement', False))
-        await asyncio.sleep(0.05)  # the owner's probe is in flight
-        budget, started, skips = leg_probe.ProbeBudget(), time.monotonic(), []
-        for _ in range(3):  # three legs joining the same in-flight probe
-            skips.append(await leg_probe.before_launch(None, _leg(), 'implement', False, budget))
-        waited = time.monotonic() - started
-        owner.cancel()
-        return skips, waited
+        leg = _leg()
+        pending = asyncio.get_running_loop().create_future()
+        leg_probe._INFLIGHT[leg_probe.key(leg)] = pending
+        budget = leg_probe.ProbeBudget()
+        try:
+            skips = [await leg_probe.before_launch(None, leg, 'implement', False, budget)
+                     for _ in range(3)]
+            assert not pending.done()
+            return skips, budget.left
+        finally:
+            pending.cancel()
 
-    skips, waited = asyncio.run(run())
+    skips, left = asyncio.run(run())
     assert skips == ['probe_budget_exhausted'] * 3
-    assert waited < 0.6  # 0.3 + 0.15 of budget, then nothing: not 3 x 0.3
+    assert probe_waits == pytest.approx([0.3, 0.15])
+    assert left == pytest.approx(0)
 
 
-def test_the_spawn_that_starts_a_probe_is_bounded_too(monkeypatch):
+def test_the_spawn_that_starts_a_probe_is_bounded_too(monkeypatch, probe_waits):
     """A probe stuck in setup or cleanup cannot hold its own spawn past the probe budget."""
-    from plangraph.spawner import base_fresh, leg_probe
-    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
-    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 0.9)  # 0.3 s per probe
+    from plangraph.spawner import leg_probe
 
     async def stuck(runner, leg, **kwargs):
-        await asyncio.sleep(5)  # e.g. delayed log scanning before its own deadline starts
-        return dict(ok=True, reason='', seconds=0)
+        await asyncio.Future()
 
     monkeypatch.setattr(leg_probe, 'probe', stuck)
 
     async def run():
-        budget, started = leg_probe.ProbeBudget(), time.monotonic()
-        skip = await leg_probe.before_launch(None, _leg(), 'implement', False, budget)
-        return skip, time.monotonic() - started, budget.left
+        leg, budget = _leg(), leg_probe.ProbeBudget()
+        skip = await leg_probe.before_launch(None, leg, 'implement', False, budget)
+        pending = leg_probe._INFLIGHT[leg_probe.key(leg)]
+        assert not pending.done()
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        return skip, budget.left
 
-    skip, waited, left = asyncio.run(run())
+    skip, left = asyncio.run(run())
     assert skip == 'probe_budget_exhausted'
-    assert waited < 0.5 and left < 0.45  # 0.3 s probe + a short grace, charged to the budget
+    assert probe_waits == pytest.approx([0.35])  # 0.3 s per probe and 0.05 s of owner grace
+    assert left == pytest.approx(0.1)
 
 
 def test_probe_budget_is_net_of_the_admission_time_already_spent(monkeypatch):
