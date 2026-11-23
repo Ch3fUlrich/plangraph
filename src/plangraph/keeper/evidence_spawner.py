@@ -1,8 +1,9 @@
-"""Read keeper-owned mirrored records without following untrusted links."""
+"""Read keeper-owned spawner records without following untrusted links."""
 
 import json
 import os
 import re
+import socket
 import stat
 from contextlib import ExitStack
 from pathlib import Path
@@ -73,9 +74,22 @@ def _one_serving_attempt(attempts, model):
 
 
 class SpawnerRecordAdapter:
-    def __init__(self, directory, *, uid=None):
+    def __init__(self, directory, *, uid=None, local_runs=None, local_host=None):
         self.directory = Path(directory) if directory else None
         self.uid = os.geteuid() if uid is None else uid
+        self.local_runs = Path(local_runs).expanduser() if local_runs else None
+        self.local_host = local_host
+
+    @classmethod
+    def for_keeper(cls, directory, runs_dir):
+        """Use the local spawner state when Keeper and the spawner share a host."""
+        if not runs_dir:
+            state_home = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+            state = Path(os.environ.get("PLANGRAPH_SPAWN_STATE") or state_home / "plangraph")
+            runs_dir = state / "runs"
+        host = (os.environ.get("PLANGRAPH_HOST") or os.environ.get("PLANGRAPH_HOST_NAME")
+                or socket.gethostname())
+        return cls(directory, local_runs=runs_dir, local_host=host)
 
     def _trusted(self, fd, directory=False):
         info = os.fstat(fd)
@@ -90,20 +104,19 @@ class SpawnerRecordAdapter:
 
     def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False,
                      require_diff_head=False, require_explicit_accept=False, train_delta=None):
-        """Read cited mirrored review witnesses, never infer a served model."""
+        """Read cited review witnesses without inferring a served model."""
         from ..review.family import model_family
         ids = json.loads(item.get("run_ids") or "[]")
         if not isinstance(ids, list) or any(not isinstance(r, str) for r in ids):
             raise ValueError("invalid item run citations")
         ids = {r for r in ids if not re.fullmatch(r"merged-D-[0-9]+", r)} | set(re.findall(r"(?<![\w-])run-[A-Za-z0-9._-]+", decision_text))
-        if not ids or self.directory is None:
+        if not ids or (self.directory is None and self.local_runs is None):
             raise ValueError("no cited records or record mirror")
         seats = []
         for run_id in sorted(ids):
             if not RunRecordAdapter(None).valid_run_id(run_id):
                 raise ValueError("invalid cited run id")
-            hosts = [p.name for p in self.directory.iterdir()
-                     if (p / run_id).exists()]
+            hosts = self._record_hosts(run_id)
             records = [(host, self.record(host, run_id)) for host in hosts]
             records = [(host, record) for host, record in records
                        if record.get("role") == "review"
@@ -196,18 +209,39 @@ class SpawnerRecordAdapter:
             raise ValueError("no cited review witnesses")
         return seats
 
+    def _record_hosts(self, run_id):
+        hosts = set()
+        if self.directory is not None:
+            try:
+                hosts.update(p.name for p in self.directory.iterdir() if (p / run_id).exists())
+            except FileNotFoundError:
+                pass
+        if (self.local_host and self.local_runs is not None
+                and os.path.lexists(self.local_runs / run_id / "record.json")):
+            hosts.add(self.local_host)
+        return sorted(hosts)
+
     def record(self, host, run_id):
-        if self.directory is None:
-            raise ValueError("spawner_records_dir is not configured")
         if (not isinstance(host, str) or not RUN_ID_RE.fullmatch(host)
                 or host in (".", "..")):
             raise ValueError("invalid spawner host")
         if not RunRecordAdapter(None).valid_run_id(run_id):
             raise ValueError("invalid spawner run id")
+        if self.local_runs is not None and host == self.local_host:
+            root = self.local_runs.parent.resolve() / self.local_runs.name
+            try:
+                return self._read_record(root, (run_id,))
+            except FileNotFoundError:
+                if self.directory is None:
+                    raise
+        if self.directory is None:
+            raise ValueError("spawner_records_dir is not configured")
         root = self.directory.resolve()
-        candidate = root / host / run_id / "record.json"
-        if not candidate.resolve().is_relative_to(root):
+        if not (root / host / run_id / "record.json").resolve().is_relative_to(root):
             raise ValueError("record escapes mirror directory")
+        return self._read_record(root, (host, run_id))
+
+    def _read_record(self, root, components):
         with ExitStack() as stack:
             def opened(name, flags, parent=None):
                 fd = os.open(name, flags, dir_fd=parent)
@@ -215,8 +249,9 @@ class SpawnerRecordAdapter:
                 return fd
 
             flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+            # Source roots are configured. Apply owner/mode checks to the proof beneath them.
             parent = opened(root, flags)
-            for name in (host, run_id):
+            for name in components:
                 parent = opened(name, flags, parent)
                 self._trusted(parent, directory=True)
             fd = opened("record.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, parent)

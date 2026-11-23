@@ -49,6 +49,69 @@ def test_other_host_verifies_through_store(keeper):
         f"run run-1 on host-other for {key} rc=0 leg=leg-1 family=family-1")
 
 
+@pytest.mark.parametrize("case,detail", [
+    ("completed", "rc=0"), ("running", "status is not completed"),
+    ("symlink", "unreadable or symlinked"), ("symlinked-directory", "unreadable or symlinked"),
+    ("writable-record", "writable by group or other"),
+    ("wrong-ref-host", "record is missing"), ("wrong-record-host", "host mismatch"),
+])
+def test_local_review_through_store(keeper, monkeypatch, case, detail):
+    world, cfg, remote, key, evidence = keeper
+    monkeypatch.setenv("PLANGRAPH_HOST", "local-review-host")
+    world.store.ctx = verifier_context(cfg)
+    runs = Path(cfg.runs_dir)
+    path = runs / "run-local" / "record.json"
+    path.parent.mkdir(parents=True)
+    runs.chmod(0o775)
+    record = dict(json.loads(remote.read_text()), run_id="run-local", role="review",
+                  host="foreign-host" if case == "wrong-record-host" else "local-review-host",
+                  served_family="anthropic", writer_family="anthropic",
+                  status="running" if case == "running" else "completed")
+    path.write_text(json.dumps(record))
+    if case == "writable-record":
+        path.chmod(0o660)
+    if case == "symlink":
+        target = runs / "target.json"
+        path.rename(target)
+        path.symlink_to(target)
+    if case == "symlinked-directory":
+        target = runs / "target"
+        path.parent.rename(target)
+        path.parent.symlink_to(target, target_is_directory=True)
+    ref = {"run_id": "run-local", "host": record["host"], "writer": "leg-1"}
+    if case == "wrong-record-host":
+        ref["host"] = "local-review-host"
+    if case == "wrong-ref-host":
+        ref["host"] = "foreign-host"
+    result = evidence(ref)
+    assert detail in result["detail"]
+    assert result["verified"] is (case == "completed")
+    if result["verified"]:
+        assert f"for {key}" in result["detail"]
+
+
+def test_local_witness_discovery_without_mirror(keeper, monkeypatch):
+    _, cfg, _, key, _ = keeper
+    monkeypatch.setenv("PLANGRAPH_HOST", "local-review-host")
+    cfg.spawner_records_dir = None
+    head = "a" * 40
+    run_id = "run-local"
+    runs = Path(cfg.runs_dir)
+    monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(runs.parent))
+    cfg.runs_dir = None
+    local = runs / run_id / "record.json"
+    local.parent.mkdir(parents=True)
+    local.write_text(json.dumps({
+        "host": "local-review-host", "run_id": run_id, "item_key": key, "role": "review",
+        "status": "completed", "exit_code": 0, "served_model": "gemini-test",
+        "finish_reason": "stop", "attempts": [{}], "completion": {"head_sha": head},
+        "stdout_tail": "TEST_GAMING: no\nVERDICT: PASS\n",
+    }))
+    adapter = verifier_context(cfg).spawner_records
+    assert adapter.review_seats({"key": key}, head, f"Review-Runs: {run_id}") == [
+        {"model": "gemini-test", "verdict": "pass", "run_id": run_id, "head": head}]
+
+
 def test_forged_writer_refused_through_store(keeper):
     result = keeper[-1](dict(REF, writer="forged-leg"))
     assert result["verified"] is False

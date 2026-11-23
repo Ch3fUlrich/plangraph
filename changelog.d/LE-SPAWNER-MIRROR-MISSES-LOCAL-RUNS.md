@@ -1,0 +1,1 @@
+Keeper verifies local spawner run records and discovers local review witnesses directly from its `runs_dir` or the spawner state directory. Set `PLANGRAPH_HOST` for the Keeper service if the spawner records use an explicit host ID. Remote hosts continue to use the mirror.
