@@ -223,9 +223,11 @@ the route table, or from the operator's order; this section says how the work ru
 6. Merge by comparison. A claim two families report with sources stands. Where they differ,
    read the primary source or mark the claim open. A number that only one run reports, or that
    came through a page summary, is not used until the primary source confirms it.
-7. A research route that refuses or fails is a defect: file the lesson item in the same turn,
-   then launch the same prompt by hand in the native harness and record that the run went
-   around the spawner.
+7. A research route that refuses or fails is a defect: file the lesson item in the same turn
+   and send routing one BLOCKED line with the refusal, verbatim. The refusal is not worked
+   around (`skills/unattended-orchestration/SKILL.md`). A run outside the spawner starts only
+   on a routing decision that names the leg and the reason, because such a run skips the
+   spawner's quota and admission guards; its record says that it went around the spawner.
 
 **Plan file.** One file, named by the task, one part per operator question. Each part gives the
 answer first, then the evidence (report file and line), the proposal as items (the existing
@@ -233,15 +235,19 @@ keeper key, or a new item with its done check), the measurement that will show t
 risks, and the decisions left to the operator.
 
 **Review rounds**
-1. Strong seats of two non-Claude families review the plan, each in its native harness with
-   read access to the code and the rules.
+1. Strong seats of non-Claude families review the plan, each in its native harness with
+   read access to the code and the rules. The number of seats is the review count of the
+   registry policy block; step 4 of section 5 names the least a plan gets, and an operator
+   order for one plan can name more seats.
 2. Round 1 starts a reviewer session. Every later round resumes that same session with the
    revised plan, also after a part was split out, so the reviewer checks its own findings.
 3. A finding reads `SEVERITY (HIGH|MED|LOW) <part or file:line> - defect, evidence, proposed
    change`; the review ends with `FILES READ` and `VERDICT`. The reviewer verifies claims in the
    code and the rules before it judges them.
-4. Rounds continue until no HIGH and no MED finding is left. The no-progress stop of the rules
-   in force applies: rounds that do not lower HIGH plus MED end the loop and force a replan.
+4. Rounds continue until no HIGH and no MED finding is left. The no-progress stop is the one
+   `skills/batch-writer/SKILL.md` step 10 states for fix rounds: 3 rounds in a row that do not
+   bring HIGH plus MED below the best count so far end the loop and force a replan. A plan
+   review has no round ceiling beyond that stop.
    Split the stalled part into its own note, and build a multi-actor state machine as an
    executable model with its checks; do not review it as prose again.
 5. Each review is a file next to the plan (`reviews/<plan>-<seat>-r<n>.txt`). The plan's change
@@ -317,7 +323,7 @@ research and review. If only Claude is available, record that coverage in the re
 - [ ] Intent written at Layer 1; planning phase(s) scheduled by the operator
 - [ ] Plan graph read first; question batch and conflict follow-up before routed research; refinement recorded
 - [ ] Large plan (section 5a): two families per topic, reports as files, baselines measured, review rounds in one resumed session until no HIGH and no MED, checkpoint card written
-- [ ] Baselines recorded as evidence before the work; every landed improvement written up as an evidence article
+- [ ] For a plan that aims at throughput, speed, cost or quality: baselines recorded as evidence before the work; each change it lands written up as an evidence article
 - [ ] Every task passes the section 3 contract; file scopes disjoint; toolchain in each brief
 - [ ] Every task item has a card in the same batch; cards relative-pathed, risk tags explicit
 - [ ] One agent per task; implementers parallel only when independent
