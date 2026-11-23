@@ -15,19 +15,39 @@ LOG_PREFLIGHT = ("import json, os, sys\n"
                  "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text(json.dumps(sys.argv[1:]))\n")
 
 
-@pytest.mark.parametrize("provided", [False, True])
-def test_train_cli_uses_only_the_prebuilt_executable(tmp_path, monkeypatch, provided):
+def test_train_cli_uses_only_the_prebuilt_executable(tmp_path, monkeypatch, tmp_path_factory, pytestconfig):
     binary = tmp_path / "plangraph"
     binary.touch(mode=0o755)
-    monkeypatch.delenv("PLANGRAPH_TEST_CLI", raising=False)
-    if provided:
-        monkeypatch.setenv("PLANGRAPH_TEST_CLI", str(binary))
+    monkeypatch.setenv("PLANGRAPH_TEST_CLI", str(binary))
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("train_cli spawned a subprocess"))
-    if provided:
-        assert train_cli.__wrapped__() == binary
-    else:
-        with pytest.raises(pytest.skip.Exception, match="PLANGRAPH_TEST_CLI"):
-            train_cli.__wrapped__()
+    assert train_cli.__wrapped__(tmp_path_factory, pytestconfig) == binary
+
+
+def test_train_cli_builds_once_across_ci_workers_without_prebuilt(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.delenv("PLANGRAPH_TEST_CLI", raising=False)
+    monkeypatch.setenv("CI", "true")
+    binary = tmp_path / "plangraph"
+    binary.touch(mode=0o755)
+    builds = []
+
+    def run(command, **kwargs):
+        assert command[:2] == ["cargo", "build"]
+        assert command[command.index("-p") + 1] == "plangraph-cli"
+        builds.append(command)
+        artifact = {"reason": "compiler-artifact", "target": {"name": "plangraph"},
+                    "executable": str(binary)}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(artifact))
+
+    monkeypatch.setattr(subprocess, "run", run)
+    for name in ("gw0", "gw1"):
+        base = tmp_path / name
+        base.mkdir()
+        config = SimpleNamespace(workerinput={"workerid": name})
+        factory = SimpleNamespace(getbasetemp=lambda: base)
+        assert train_cli.__wrapped__(factory, config) == binary
+    assert len(builds) == 1
 
 
 def test_preflight_builds_train_cli_once_before_affected_tests(repo, monkeypatch, tools_importable):
