@@ -1,8 +1,9 @@
-//! Publish executable test fixtures without opening the destination for writing.
+//! Publish executable test fixtures atomically and retry transient busy execs.
 
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 
 /// Write and sync a temporary file, close it, then publish it as `dir/name`.
 pub fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
@@ -19,6 +20,11 @@ pub fn write_executable(path: impl AsRef<Path>, body: impl AsRef<[u8]>) {
 /// Publish an executable fixture readable and runnable by its owner only.
 pub fn write_private_executable(path: impl AsRef<Path>, body: impl AsRef<[u8]>) {
     publish(path.as_ref(), body.as_ref(), 0o700);
+}
+
+/// Spawn a fixture, retrying while a concurrent fork still holds its write descriptor.
+pub fn spawn(command: &mut Command) -> io::Result<Child> {
+    crate::stall::spawn_retrying(command)
 }
 
 fn publish(path: &Path, body: &[u8], mode: u32) {
