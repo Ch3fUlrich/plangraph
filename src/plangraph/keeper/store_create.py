@@ -20,7 +20,7 @@ from .credential_guard import guard
 from .item_fixes import check_fix_limit
 from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_definition_inputs, check_kg_refs, check_model_fields
 from .note_fold import fold_checked
-from .store_input import slice_parent
+from .store_input import _defined_payload, slice_parent
 from .store_tiers import (
     REVIEW_TIERS,
     _REVIEW_KEYWORD,
@@ -49,6 +49,7 @@ _MAX_BATCH = 500
 LE_DEFAULT_PRIORITY = 8
 _INCIDENT_LINE = re.compile(r"(?m)^\s*INCIDENT LOG\b")
 
+
 def incident_lines(*texts) -> int:
     """How many INCIDENT LOG lines the item texts carry."""
     return sum(len(_INCIDENT_LINE.findall(t)) for t in texts if isinstance(t, str))
@@ -56,6 +57,8 @@ def incident_lines(*texts) -> int:
 
 def _blank(value):
     return not (isinstance(value, str) and value.strip())
+
+
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
@@ -71,27 +74,6 @@ _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait",
                  "corrects", "state",
                  "epoch", "claimed_by", "delegate", "lease_until", "reviewer",
                  "model", "created_at", "updated_at", "design_ref")
-
-def _defined_payload(fields):
-    """``item_defined`` payload: the changed field names plus the new tier value.
-
-    The fold replays this to reconstruct ``review_tier``; it needs the value,
-    not just the name, so ``verify_integrity`` can agree with the table.  The
-    estimate pair rides along for the same reason: an event must say what the
-    edit actually stored.  ``fold`` ignores names it does not compare
-    (``estimate_h``/``estimate_src`` are definition columns, not cached ones),
-    so carrying them keeps the event honest without touching the replay.
-    """
-    payload = {"fields": sorted(fields)}
-    if "review_tier" in fields:
-        payload["review_tier"] = fields["review_tier"]
-    for name in SMALL_FIELDS:
-        if name in fields:
-            payload[name] = fields[name]
-    for name in ("estimate_h", "estimate_src"):
-        if name in fields:
-            payload[name] = fields[name]
-    return payload
 
 
 def _active_edit_only(fields):
@@ -320,7 +302,7 @@ class CreateMixin:
         if gate["state"] in ("done", "cancelled"):
             raise Refused("bad_state", f"{gate['key']} is {gate['state']}")
         self._assert_unlocked(gate)
-        self._check_slice_attachment(gate)
+        self._check_slice_attachment(gate, definition)
         return gate
 
     def _normalise_create(self, raw, principal, *, stored=False):
@@ -397,6 +379,7 @@ class CreateMixin:
         if state == "in_review":
             self._append(principal, definition["key"], "submitted",
                          {"legacy": True}, now)
+
     # ------------------------------------------------------ edit/priority
     def edit_definition(self, principal, key, fields):
         """Edit an item's definition (router-only on a claimed/in-review item).
@@ -670,6 +653,9 @@ class CreateMixin:
                 payload["who"] = principal.name
                 payload["before"] = audit_before
                 payload["after"] = audit_after
+            elif "done_criteria" in edit_fields:
+                payload["before"] = {"done_criteria": audit_before["done_criteria"]}
+                payload["after"] = {"done_criteria": audit_after["done_criteria"]}
             seq, _ = self._append(principal, key, "item_defined", payload, now)
             self._record_criteria_amendment(seq, principal, fresh, edit_fields, amendment, now)
             if has_priority:
