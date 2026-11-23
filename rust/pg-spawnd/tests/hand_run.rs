@@ -90,3 +90,81 @@ fn writer_refuses_missing_empty_or_checkout_local_target_before_spawn() {
         fixture.target.display().to_string()
     );
 }
+
+fn detached_fixture() -> Fixture {
+    let fixture = Fixture::new();
+    fixture.executable("git", "exit 0");
+    fixture.executable("cargo", "exit 0");
+    fixture.executable(
+        "systemd-run",
+        r#"
+        : > "$FIXTURE_MARKER"
+        export PATH=/manager/path
+        while [ "$1" != -- ]; do
+            [ "$#" -gt 0 ] || exit 2
+            case "$1" in
+                --setenv=*) export "${1#--setenv=}" ;;
+            esac
+            shift
+        done
+        shift
+        exec "$@"
+    "#,
+    );
+    fixture
+}
+
+#[test]
+fn missing_codex_is_refused_before_systemd_starts() {
+    let fixture = detached_fixture();
+    let output = fixture
+        .command(Some(&fixture.target))
+        .args(["--unit", "writer-fixture", "--result"])
+        .arg(fixture.root.path().join("result"))
+        .args(["--", "codex", "exec"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("codex"));
+    assert!(!fixture.root.path().join("spawned").exists());
+}
+
+#[test]
+fn detached_child_preserves_exit_127_and_reports_empty_review() {
+    let fixture = detached_fixture();
+    let result = fixture.root.path().join("result");
+    fixture.executable("codex", "git && cargo && exit 127");
+    let output = fixture
+        .command(Some(&fixture.target))
+        .args(["--unit", "writer-fixture", "--result"])
+        .arg(&result)
+        .args(["--", "codex", "exec"])
+        .output()
+        .unwrap();
+    let row = fs::read_to_string(&result).unwrap();
+    assert!(row.lines().last().unwrap().contains("rc=127"), "{row}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ALERT stuck-work"));
+
+    fixture.executable("codex", "exit 0");
+    let review = fixture.root.path().join("review");
+    let result = fixture.root.path().join("review-result");
+    fs::write(&review, "").unwrap();
+    let output = fixture
+        .command(None)
+        .args(["--unit", "review-fixture", "--result"])
+        .arg(&result)
+        .arg("--review-output")
+        .arg(&review)
+        .args(["--", "codex", "exec"])
+        .output()
+        .unwrap();
+    let row = fs::read_to_string(&result).unwrap();
+    assert!(
+        row.lines()
+            .last()
+            .unwrap()
+            .contains("rc=0 verdict=no_verdict"),
+        "{row}"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ALERT stuck-work"));
+}

@@ -1,7 +1,10 @@
 //! Resolve writer prerequisites in the target host's effective environment.
 use pg_worker_core::host_readiness::{Native, Probe, Runner, SandboxStatus, WRITER_SANDBOX};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 fn executable(path: &Path) -> bool {
     if !path.is_file() {
@@ -19,6 +22,18 @@ fn executable(path: &Path) -> bool {
     }
 }
 
+pub(crate) fn resolve_on_path(path: &OsStr, cwd: &Path, program: &str) -> Result<PathBuf, String> {
+    let executable_path = if Path::new(program).components().count() > 1 {
+        let candidate = cwd.join(program);
+        executable(&candidate).then_some(candidate)
+    } else {
+        std::env::split_paths(path)
+            .map(|directory| cwd.join(directory).join(program))
+            .find(|candidate| executable(candidate))
+    };
+    executable_path.ok_or_else(|| format!("tool_missing: {program}"))
+}
+
 pub(crate) fn snapshot(check_sandbox: bool) -> Result<Value, String> {
     let path = std::env::var_os("PATH").ok_or("tool_missing: cargo (PATH unset)")?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -32,11 +47,7 @@ pub(crate) fn snapshot(check_sandbox: bool) -> Result<Value, String> {
         .map_err(|_| "native tool PATH must be UTF-8")?;
     let mut tools = json!({});
     for tool in ["cargo", "git"] {
-        let resolved = directories
-            .iter()
-            .map(|directory| directory.join(tool))
-            .find(|path| executable(path))
-            .ok_or_else(|| format!("tool_missing: {tool}"))?;
+        let resolved = resolve_on_path(path.as_ref(), &cwd, tool)?;
         // Retain the invocation path: canonicalizing rustup's cargo link changes argv[0].
         tools[tool] = json!(resolved);
     }
