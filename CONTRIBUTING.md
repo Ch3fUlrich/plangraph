@@ -155,10 +155,10 @@ CI job ids stay fixed; each job's display name and the per-job audit are in [the
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
-The feeder's `deploy/feeder/house-rules.md` and policy are repository inputs to
-Rust tests. The feeder service is also a Rust contract-test input. Changes to
-these inputs select the Rust CI job through
-`tools/ci_select.py` so template and default-policy checks cannot be skipped.
+The feeder's `deploy/feeder/house-rules.md`, policy, and service are Rust test inputs.
+`tools/ci_select.py` selects Rust CI for changes to these inputs and to
+`src/plangraph/review/prompt.py`. Rust tests check the feeder templates and default
+policy, exercise the Python review brief, and compare the Rust and Python output delimiters.
 
 ## Setup and tests
 
