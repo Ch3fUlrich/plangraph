@@ -31,8 +31,8 @@ fn nextest_timeout_name(line: &str) -> Option<&str> {
     let (_, details) = timeout.strip_prefix('[')?.split_once(']')?;
     let (progress, name) = details.trim_start().split_once(") ")?;
     let (completed, total) = progress.strip_prefix('(')?.split_once('/')?;
-    completed.parse::<usize>().ok()?;
-    total.parse::<usize>().ok()?;
+    completed.trim_start_matches(' ').parse::<usize>().ok()?;
+    total.trim_start_matches(' ').parse::<usize>().ok()?;
     Some(name.trim_start())
 }
 
@@ -354,10 +354,14 @@ fn executable_fixture_retries_when_its_write_descriptor_is_open() {
 
 #[test]
 fn nextest_timeout_names_only_a_timed_out_test() {
-    assert_eq!(
-        nextest_timeout_name("     TIMEOUT [   2.017s] (1/1) example::unit nested::blocked\n"),
-        Some("example::unit nested::blocked"),
-    );
+    for counter in ["(1/1)", "( 1/12)", "(10/12)", "( 1/ 12)"] {
+        let line = format!("     TIMEOUT [   2.017s] {counter} example::unit nested::blocked\n");
+        assert_eq!(
+            nextest_timeout_name(&line),
+            Some("example::unit nested::blocked"),
+            "{counter}",
+        );
+    }
     assert_eq!(
         nextest_timeout_name("TIMEOUT [ 2s] unstructured output"),
         None
