@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 const TABLE: &str = include_str!("../../../src/plangraph/config/role_headers.json");
-const NATIVE_RULES: &str = concat!(
+pub(super) const NATIVE_RULES: &str = concat!(
     "Native writer rules: new code is Rust with Rust tests. ",
     "No new Python, shell or Node source files or additions to tools/new_code_allowlist.txt without an operator D-id; fixes inside existing Python files remain allowed until their port. ",
     "Do not push. Commit your work and end your turn: the driver runs the fast checks and an other-family review on your final HEAD and resumes this session with any failure or finding.\n",

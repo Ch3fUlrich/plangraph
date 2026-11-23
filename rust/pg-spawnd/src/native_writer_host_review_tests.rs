@@ -142,47 +142,54 @@ fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
         python_src: None,
     };
     host.git(&["init", "-q"]).unwrap();
-    host.git(&[
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "commit",
-        "--allow-empty",
-        "-qm",
-        "fixture",
-    ])
-    .unwrap();
-    let head = host.git(&["rev-parse", "HEAD"]).unwrap();
-    let base = head.clone();
-    let prompt = host
-        .review_prompt(
-            &base,
-            &head,
-            None,
-            &["openai".to_owned()],
-            "VERSIONED BRIEF",
-            "A nonempty review skill.",
-        )
+    let commit = |message| {
+        host.git(&[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            message,
+        ])
         .unwrap();
-    assert!(prompt.starts_with(TOOLS_ONLY_OPEN));
-    let open = 0;
-    let close = prompt.find(TOOLS_ONLY_CLOSE).unwrap();
-    let block = &prompt[open..close];
-    assert!(
-        block.contains("run read-only commands and the tests"),
-        "{block}"
-    );
-    // Nothing outside the block asks for a tool run or a file read.
-    assert!(
-        prompt.find("Writer brief").unwrap() > close,
-        "the block precedes the writer brief"
-    );
-    let outside = format!("{}{}", &prompt[..open], &prompt[close..]);
-    assert!(
-        !outside.contains("run read-only commands") && !outside.contains("Open callers"),
-        "{outside}"
-    );
+        host.git(&["rev-parse", "HEAD"]).unwrap()
+    };
+    let base = commit("base");
+    let earlier = commit("previous writer round");
+    let head = commit("current writer round");
+    for (previous, diff_base) in [
+        (None, &base),
+        (Some((earlier.as_str(), "previous review")), &earlier),
+        (Some((head.as_str(), "previous review")), &base),
+    ] {
+        let prompt = host
+            .review_prompt(
+                &base,
+                &head,
+                previous,
+                &["openai".to_owned()],
+                "VERSIONED BRIEF",
+                "A nonempty review skill.",
+            )
+            .unwrap();
+        assert!(prompt.starts_with(TOOLS_ONLY_OPEN));
+        let (block, outside) = prompt.split_once(TOOLS_ONLY_CLOSE).unwrap();
+        assert!(
+            block.contains("run read-only commands and the tests"),
+            "{block}"
+        );
+        let command = format!("git diff {diff_base} {head}");
+        assert!(block.lines().any(|line| line == command), "{block}");
+        assert!(outside.contains("Writer brief"), "{outside}");
+        assert!(
+            !outside.contains("run read-only commands")
+                && !outside.contains("Open callers")
+                && !outside.contains("git diff "),
+            "{outside}"
+        );
+    }
 }
 
 #[test]
