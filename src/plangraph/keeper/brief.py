@@ -137,6 +137,8 @@ def build(item, deps=None) -> dict:
         "description": brief_description(item.get("description")),
         "done_criteria": item.get("done_criteria"),
     }
+    if item.get("design_ref"):
+        brief["design_ref"] = item["design_ref"]
     if item.get("wait"):
         brief["wait"] = item.get("wait")
     note = latest_note_line(item.get("note"))
@@ -163,6 +165,8 @@ def brief_text(brief: dict) -> str:
         lines.append(f"desc {brief['description']}")
     if brief.get("done_criteria"):
         lines.append(f"done {brief['done_criteria']}")
+    if brief.get("design_ref"):
+        lines.append(f"design_ref {brief['design_ref']}")
     if brief.get("note"):
         lines.append(f"note {brief['note']}")
     # TASK-CONTEXT-GUARD: set by the store after the cap, never truncated.

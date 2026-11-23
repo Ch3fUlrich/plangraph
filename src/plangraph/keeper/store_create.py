@@ -18,7 +18,7 @@ from .brief import creation_error, superseded_contract
 from .errors import Refused
 from .credential_guard import guard
 from .item_fixes import check_fix_limit
-from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_kg_refs, check_model_fields, check_implementation_repo
+from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_definition_inputs, check_kg_refs, check_model_fields
 from .note_fold import fold_checked
 from .store_tiers import (
     REVIEW_TIERS,
@@ -40,7 +40,7 @@ _ACTIVE_EDITABLE = _TIER_FIELDS | frozenset(("done_criteria", "depends_on"))
 
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
              "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "estimate_src",
-             "done_criteria", "evidence_kinds",
+             "done_criteria", "design_ref", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 #: KEEPER-PRIORITY-LEVELS-AND-AGING: a lesson that happened once starts here;
@@ -61,7 +61,7 @@ KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
      "estimate_h", "estimate_src", "depends_on", "under", "corrects", "done_criteria",
-     "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
+     "evidence_kinds", "operator", "priority", "review_tier", "source", "note", "design_ref",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
                  "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner",
@@ -70,7 +70,7 @@ _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait",
                  "operator", "priority", "review_tier", "source", "note",
                  "corrects", "state",
                  "epoch", "claimed_by", "delegate", "lease_until", "reviewer",
-                 "model", "created_at", "updated_at")
+                 "model", "created_at", "updated_at", "design_ref")
 
 def _defined_payload(fields):
     """``item_defined`` payload: the changed field names plus the new tier value.
@@ -206,7 +206,7 @@ class CreateMixin:
                                   "import only honours open/claimed/in_review")
         else:
             for definition in defs:
-                check_implementation_repo(definition)
+                check_definition_inputs(definition)
                 check_named_review_model(definition, definition["key"])
                 check_seat_clause_tier(definition.get("done_criteria"),
                                        definition["review_tier"])
@@ -358,7 +358,7 @@ class CreateMixin:
             "owner_family": definition.get("owner_family"),
             "estimate_h": definition.get("estimate_h"),
             "estimate_src": definition.get("estimate_src"),
-            "done_criteria": definition.get("done_criteria"),
+            "done_criteria": definition.get("done_criteria"), "design_ref": definition.get("design_ref"),
             "evidence_kinds": json.dumps(definition.get("evidence_kinds") or ["any"]),
             "operator": 1 if definition.get("operator") else 0,
             "priority": int(definition.get("priority") or 0),
@@ -460,8 +460,6 @@ class CreateMixin:
             deps_derived = True
         edit_fields = dict(rest)
         self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
-        if "description" in edit_fields:
-            check_implementation_repo({**item, **edit_fields})
         check_named_review_model(edit_fields, key)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
         # audit-meta ``default`` marker keeps flagging the item forever.  An
@@ -600,6 +598,8 @@ class CreateMixin:
             else:
                 self._may_manage(principal, fresh["project"])
             bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
+            if {"description", "design_ref"} & edit_fields.keys():
+                check_definition_inputs({**fresh, **edit_fields})
             # Re-check tier/evidence under the lock, including open-item edits.
             validate_decision_edit(fresh, decision_fields, principal)
             if tier_edit:

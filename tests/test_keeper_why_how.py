@@ -354,7 +354,8 @@ def test_legacy_import_keeps_a_lane_without_done_criteria(w):
     "Fix router/bin/resume-digest.",
     "Patch handoffs/router/helper.py.",
     "Update ../other-repo/src/worker.rs.",
-    "Edit plangraph-data/router/bin/runner.",
+    "Edit data-repo/router/bin/runner.",
+    "Edit sibling-repo/src/runner.rs.",
     "Patch plan-order/helpers/package.rs.",
 ])
 def test_define_and_edit_refuse_implementation_outside_plangraph(w, how):
