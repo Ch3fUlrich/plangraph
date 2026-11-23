@@ -20,7 +20,7 @@ from pathlib import Path
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .schema_guards import RECEIPTS_DDL
-from .schema import ATTEMPTS_GUARDS, ATTEMPTS_TABLE, ATTEMPT_SPAWN_INDEXES
+from .schema import ATTEMPTS_GUARDS, ATTEMPTS_TABLE, ATTEMPT_SPAWN_INDEXES, CRITERIA_AMENDMENTS_DDL
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
 from .schema import (ALERTS_DDL, ALIASES_DDL, CLAIM_DEFINITION_INDEX_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, INCIDENTS_DDL, JEV_DDL,
                      LANDING_CLAIMS_DDL, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
@@ -111,7 +111,7 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
                   ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
                   ("items", "fixes", "TEXT"), ("items", "choices", "TEXT"),
-                  ("items", "kg_refs", "TEXT"),
+                  ("items", "kg_refs", "TEXT"), ("items", "design_ref", "TEXT"),
                   ("items", "exec_workflow_id", "TEXT"),
                   ("items", "exec_run_id", "TEXT"),
                   ("items", "exec_attempt", "INTEGER"),
@@ -266,6 +266,7 @@ def _upgrade(conn):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
         conn.executescript(INCIDENTS_DDL)
         conn.executescript(CLAIM_DEFINITION_INDEX_DDL)
+        conn.executescript(CRITERIA_AMENDMENTS_DDL)
 
 
 def open_db(path, *, create: bool = False,

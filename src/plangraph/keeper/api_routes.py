@@ -400,11 +400,26 @@ class MergeRefresh:
 
 def _close_merged_auto(store, principal, body, need):
     from . import timing
+
+    watch, apply = body.get("watch", False), body.get("apply", True)
+    project, repos_only = body.get("project"), body.get("repos_only", False)
+    limit, after = body.get("limit"), body.get("after")
+    if type(watch) is not bool or watch and (
+            apply is not False or repos_only or project is not None or limit is not None or after is not None):
+        raise Refused("validation", "watch requires a complete dry run across all repositories")
+    if not watch and limit is None:
+        limit = 25
     with timing.io_budget(90):
-        return store.close_merged_auto(
-            principal, body.get("project"), require_seats=body.get("require_seats"),
-            apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True,
-            limit=25 if body.get("limit") is None else body["limit"], after=body.get("after"))
+        report = store.close_merged_auto(
+            principal, project, require_seats=body.get("require_seats"),
+            apply=apply, repos_only=repos_only, frozen=True,
+            limit=limit, after=after)
+        if watch:
+            if report["scan_errors"] or report["next_after"] is not None:
+                raise Refused("evidence_unverified", "merged-open watcher scan incomplete")
+            store._add_decision_reconcile_rows(report)
+            report["alert"] = store._watch_merged_open(report)
+        return report
 
 
 #: Write verbs whose store method checks the role itself and admits more than the

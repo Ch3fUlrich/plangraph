@@ -18,8 +18,9 @@ from .brief import creation_error, superseded_contract
 from .errors import Refused
 from .credential_guard import guard
 from .item_fixes import check_fix_limit
-from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_kg_refs, check_model_fields
+from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_definition_inputs, check_kg_refs, check_model_fields
 from .note_fold import fold_checked
+from .store_input import _defined_payload
 from .store_tiers import (
     REVIEW_TIERS,
     _REVIEW_KEYWORD,
@@ -40,7 +41,7 @@ _ACTIVE_EDITABLE = _TIER_FIELDS | frozenset(("done_criteria", "depends_on"))
 
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
              "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "estimate_src",
-             "done_criteria", "evidence_kinds",
+             "done_criteria", "design_ref", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 #: KEEPER-PRIORITY-LEVELS-AND-AGING: a lesson that happened once starts here;
@@ -56,12 +57,14 @@ def incident_lines(*texts) -> int:
 
 def _blank(value):
     return not (isinstance(value, str) and value.strip())
+
+
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
-     "estimate_h", "estimate_src", "depends_on", "under", "corrects", "done_criteria",
-     "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
+     "estimate_h", "estimate_src", "depends_on", "under", "slice_parent", "corrects", "done_criteria",
+     "evidence_kinds", "operator", "priority", "review_tier", "source", "note", "design_ref",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
                  "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner",
@@ -70,28 +73,7 @@ _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait",
                  "operator", "priority", "review_tier", "source", "note",
                  "corrects", "state",
                  "epoch", "claimed_by", "delegate", "lease_until", "reviewer",
-                 "model", "created_at", "updated_at")
-
-def _defined_payload(fields):
-    """``item_defined`` payload: the changed field names plus the new tier value.
-
-    The fold replays this to reconstruct ``review_tier``; it needs the value,
-    not just the name, so ``verify_integrity`` can agree with the table.  The
-    estimate pair rides along for the same reason: an event must say what the
-    edit actually stored.  ``fold`` ignores names it does not compare
-    (``estimate_h``/``estimate_src`` are definition columns, not cached ones),
-    so carrying them keeps the event honest without touching the replay.
-    """
-    payload = {"fields": sorted(fields)}
-    if "review_tier" in fields:
-        payload["review_tier"] = fields["review_tier"]
-    for name in SMALL_FIELDS:
-        if name in fields:
-            payload[name] = fields[name]
-    for name in ("estimate_h", "estimate_src"):
-        if name in fields:
-            payload[name] = fields[name]
-    return payload
+                 "model", "created_at", "updated_at", "design_ref")
 
 
 def _active_edit_only(fields):
@@ -206,6 +188,7 @@ class CreateMixin:
                                   "import only honours open/claimed/in_review")
         else:
             for definition in defs:
+                check_definition_inputs(definition)
                 check_named_review_model(definition, definition["key"])
                 check_seat_clause_tier(definition.get("done_criteria"),
                                        definition["review_tier"])
@@ -264,12 +247,10 @@ class CreateMixin:
                     affected.add(gate["key"])
         self._validate_change(candidate, before, affected=affected)
         with self._write():
-            if any(definition["depends_on"] for definition in defs):
-                locked = {item["key"]: item for item in self._all_items()}
-                targets = {**locked, **{definition["key"]: definition for definition in defs}}
-                for definition in defs:
-                    self._check_dependency_cap(definition["key"],
-                                               definition["depends_on"], targets)
+            self._check_definition_dependency_caps(defs, attach)
+            for definition in defs:
+                if parent := definition["slice_parent"]:
+                    self._check_slice_parent(principal, parent)
             for definition in defs:
                 self._insert_item(principal, definition, now)
             for definition, gate in attach:
@@ -362,7 +343,7 @@ class CreateMixin:
             "owner_family": definition.get("owner_family"),
             "estimate_h": definition.get("estimate_h"),
             "estimate_src": definition.get("estimate_src"),
-            "done_criteria": definition.get("done_criteria"),
+            "done_criteria": definition.get("done_criteria"), "design_ref": definition.get("design_ref"),
             "evidence_kinds": json.dumps(definition.get("evidence_kinds") or ["any"]),
             "operator": 1 if definition.get("operator") else 0,
             "priority": int(definition.get("priority") or 0),
@@ -388,6 +369,8 @@ class CreateMixin:
         for name in SMALL_FIELDS:
             if row[name] is not None:
                 created[name] = row[name]
+        if parent := definition.get("slice_parent"):
+            created["slice_parent"] = parent
         if definition.get("rehomed_from"):
             created["rehomed_from"] = definition["rehomed_from"]
         self._append(principal, definition["key"], "item_created", created, now)
@@ -417,6 +400,7 @@ class CreateMixin:
         prio = fields["priority"] if has_priority else None
         rest = ({name: value for name, value in fields.items()
                  if name != "priority"} if has_priority else fields)
+        rest, amendment = self._criteria_amendment_fields(rest, key)
         if has_priority:
             # Same order as ``_priority``: role, value, then the item lookup.
             self._require_role(principal, "router", "oversight")
@@ -578,6 +562,7 @@ class CreateMixin:
         # cancelled-dropped) edge list, not the caller's raw input.
         audit_after = {name: (me["depends_on"] if name == "depends_on"
                               else edit_fields[name]) for name in edit_fields}
+        self._check_criteria_amendment(item, edit_fields, amendment)
         with self._write():
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
@@ -601,8 +586,11 @@ class CreateMixin:
             else:
                 self._may_manage(principal, fresh["project"])
             bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
+            if {"description", "design_ref"} & edit_fields.keys():
+                check_definition_inputs({**fresh, **edit_fields})
             # Re-check tier/evidence under the lock, including open-item edits.
             validate_decision_edit(fresh, decision_fields, principal)
+            self._check_criteria_amendment(fresh, edit_fields, amendment)
             if tier_edit:
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.
@@ -669,7 +657,11 @@ class CreateMixin:
                 payload["who"] = principal.name
                 payload["before"] = audit_before
                 payload["after"] = audit_after
-            self._append(principal, key, "item_defined", payload, now)
+            elif "done_criteria" in edit_fields:
+                payload["before"] = {"done_criteria": audit_before["done_criteria"]}
+                payload["after"] = {"done_criteria": audit_after["done_criteria"]}
+            seq, _ = self._append(principal, key, "item_defined", payload, now)
+            self._record_criteria_amendment(seq, principal, fresh, edit_fields, amendment, now)
             if has_priority:
                 self._apply_priority(principal, key, prio, now)
             else:

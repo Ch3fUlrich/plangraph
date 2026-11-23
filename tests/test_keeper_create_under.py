@@ -383,3 +383,127 @@ def test_define_file_reports_partial_refusal(w, tmp_path, capsys, json_mode):
         assert "refused" not in json.loads(out)
     else:
         assert "created 2 items" in out
+
+
+def test_define_under_gate_at_capacity_names_open_split(w):
+    router = w.p("router")
+    ids = [f"DEP-{n}" for n in range(200)]
+    w.store.create_items(router, [*(defn(key) for key in ids),
+                                 defn("GATE", ids, kind="gate", under="GOAL"),
+                                 defn("GATE-A", kind="gate", under="GOAL")])
+    before = _snapshot(w)
+    with pytest.raises(Refused, match="split gate demo:GATE-A"):
+        w.store.create_items(router, [defn("NEW", under="GATE")])
+    assert _snapshot(w) == before
+    assert w.store.create_items(router, [defn("NEW", under="GATE-A")])["created"] == ["demo:NEW"]
+
+
+def test_reap_raises_one_gate_capacity_alert_at_190_open_or_done(w):
+    router = w.p("router")
+    ids = [f"DEP-{n}" for n in range(190)]
+    w.store.create_items(router, [*(defn(key) for key in ids[:-1]),
+                                 defn(ids[-1], under="GOAL"),
+                                 defn("GATE", ids[:-1], kind="gate", under="GOAL")])
+    w.conn.execute("UPDATE items SET state='done' WHERE key='demo:DEP-0'")
+    system = w.p("system")
+    w.store.reap(system)
+    sql = "SELECT key FROM alerts WHERE code='gate_dependency_capacity' AND state='open'"
+    assert w.conn.execute(sql).fetchall() == []
+    w.store.edit_definition(router, "demo:GATE", {"depends_on": ids})
+    revision = getattr(w.store, "_reap_revision", 0)
+    w.store.reap(system)
+    assert w.store._reap_revision > revision
+    revision = w.store._reap_revision
+    w.store.reap(system)
+    assert w.store._reap_revision == revision
+    assert [row["key"] for row in w.conn.execute(sql)] == ["demo:GATE"]
+    w.store.edit_definition(router, "demo:GATE", {"depends_on": ids[:-1]})
+    revision = w.store._reap_revision
+    w.store.reap(system)
+    assert w.store._reap_revision > revision
+    assert w.conn.execute(sql).fetchall() == []
+
+
+@pytest.mark.parametrize("rehome", [False, True])
+def test_define_refuses_a_nested_slice_even_after_the_parent_criteria_are_edited(w, rehome):
+    router = w.p("router")
+    first = defn("X-S1", under="X", slice_parent="demo:X",
+                 done_criteria="The first part passes its regression test")
+    assert w.store.create_items(router, [first])["created"] == ["demo:X-S1"]
+    w.store.edit_definition(router, "demo:X-S1", {
+        "done_criteria": "Revised criteria",
+        "criteria_reason": "Clarify the first slice",
+        "criteria_evidence": "D-123",
+    })
+    parent = "demo:X-S1"
+    if rehome:
+        parent = w.store.rehome(router, parent, "other")["new"]
+    nested = defn("X-S1-S1", under="X-S1", slice_parent=parent,
+                  done_criteria="The inner part passes its regression test")
+    before = _snapshot(w)
+    with pytest.raises(Refused, match=f"parent {parent} is already a slice"):
+        w.store.create_items(router, [nested])
+    assert _snapshot(w) == before
+
+
+def test_define_attaches_a_non_slice_under_a_slice(w):
+    router = w.p("router")
+    first = defn("X-S1", under="X", slice_parent="X", done_criteria="Fix the first part")
+    w.store.create_items(router, [first])
+    result = w.store.create_items(router, [defn("FOLLOWUP", under="X-S1")])
+    assert result["attached"] == [{"key": "demo:FOLLOWUP", "under": "demo:X-S1"}]
+    assert w.store._item("demo:X-S1")["depends_on"] == ["demo:FOLLOWUP"]
+
+
+def test_define_requires_slice_parent_to_match_under(w):
+    """Keep the original pytest node ID while checking the new slice-source rule."""
+    router = w.p("router")
+    w.store.create_items(router, [
+        defn("LESSONS-ENFORCE", kind="gate", under="GOAL"),
+        defn("LEGACY", under="GOAL", done_criteria="Slice of demo:X: legacy criteria"),
+    ])
+    nested = defn("LEGACY-S1", under="LESSONS-ENFORCE", slice_parent="LEGACY")
+    before = _snapshot(w)
+    with pytest.raises(Refused, match="parent demo:LEGACY is already a slice"):
+        w.store.create_items(router, [nested])
+    assert _snapshot(w) == before
+    first = defn("X-S1", under="LESSONS-ENFORCE", slice_parent="X")
+    assert w.store.create_items(router, [first])["attached"] == [
+        {"key": "demo:X-S1", "under": "demo:LESSONS-ENFORCE"},
+    ]
+
+
+def test_define_writer_slices_requires_the_sliced_item_key(w, tmp_path):
+    from door_util import Doors
+
+    router = w.p("router")
+    w.store.create_items(router, [defn("ROUTING-GOAL", project="plangraph", kind="goal")])
+    w.store.create_items(router, [
+        defn("LESSONS-ENFORCE", project="plangraph", kind="gate", under="ROUTING-GOAL"),
+        defn("ORIGINAL", project="plangraph", under="ROUTING-GOAL"),
+        defn("LEGACY", project="plangraph", under="ROUTING-GOAL",
+             done_criteria="Slice of plangraph:ORIGINAL: legacy criteria"),
+    ])
+    path = tmp_path / "slices.json"
+    item = defn("FOLLOWUP", project="plangraph", under="LEGACY",
+                description="Why: split remaining work\nHow: cover its retry path.")
+    doors = Doors(w, tmp_path)
+    try:
+        argv = ("define", "--file", str(path))
+        path.write_text(json.dumps([item]), encoding="utf-8")
+        code, _, error = doors.pg("router", *argv)
+        assert code == 2
+        assert "plangraph:FOLLOWUP" in error
+        assert "slice_parent" in error
+        assert w.store._item("plangraph:FOLLOWUP") is None
+        item.update(under="plangraph:LESSONS-ENFORCE", slice_parent="plangraph:LEGACY")
+        path.write_text(json.dumps({"items": [item]}), encoding="utf-8")
+        code, _, error = doors.pg("router", *argv)
+        assert code == 2
+        assert "parent plangraph:LEGACY is already a slice" in error
+        item["slice_parent"] = "plangraph:ORIGINAL"
+        path.write_text(json.dumps({"items": [item]}), encoding="utf-8")
+        assert doors.pg("router", *argv)[0] == 0
+        assert w.store._item("plangraph:LESSONS-ENFORCE")["depends_on"] == ["plangraph:FOLLOWUP"]
+    finally:
+        doors.close()

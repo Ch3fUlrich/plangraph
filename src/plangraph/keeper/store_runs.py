@@ -11,7 +11,9 @@ import re
 
 from . import context_sources
 from .errors import Refused
+from .evidence_decisions import close_commit_scope, go_part_entries, go_part_tokens
 from .evidence_git import plan_items
+from .evidence_pr import indexed_revision, landed_go_part
 from .evidence_runs import RunRecordAdapter
 from .evidence_types import valid_commit_ref
 from ..review.family import model_family
@@ -20,10 +22,6 @@ __all__ = ["RunsMixin", "normalise_run"]
 
 _REVIEW_RUN = re.compile(r"Review-Run:[ \t]+(\S+)[ \t]+(run-\S+)[ \t]+([0-9a-f]{40})[ \t]*")
 _GO_HEAD_TOKEN = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
-# One part-table entry: "Batch 23, part head <sha>", "Batch 13, PR #1084, head <sha>", "Batch 26, heads <sha> and fix <sha>".
-_HEX = r"`?[0-9a-f]{7,40}(?![\w])`?"
-_PART_HEADS = re.compile(r"(?<![\w-])Batch\s+\d+\w*(?:\s*\([^)]*\))?,\s*(?:PR\s*#\d+,\s*)?(?:(?:part|lane)\s+)?heads?\s+"
-                         rf"({_HEX}(?:(?:,\s*|\s+and\s+(?:fix\s+)?){_HEX})*)")
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
 _VERDICTS = ("pass", "fail", "invalid", None)
@@ -37,6 +35,11 @@ _UTC_DATE_RE = re.compile(
 
 _GO_KEYS = re.compile(r"(?<![\w-])GO-KEYS\b")
 _GO_KEY = r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"
+_GO_PART_KEYS = re.compile(
+    rf"\s*,\s*keys(?:[ \t]*:[ \t]*|[ \t]+)"
+    rf"(?:\[({_GO_KEY}(?:\s*,\s*{_GO_KEY})*)\]|"
+    rf"({_GO_KEY}(?:(?:\s*,\s*|\s+){_GO_KEY})*))(?=$|[\s;,(])",
+    re.I)
 
 
 def go_key_tokens(statement):
@@ -96,6 +99,46 @@ def go_row_check(text, *, delivered=None, deferred=(), plan_key=None):
     if unbacked:
         return False, "go_row_keys_unbacked: keys with no trailered commit: " + ", ".join(unbacked)
     return True, "accept"
+
+
+def merged_decision_delivery(indexes, book, key, project):
+    """Match a landed revision explicitly scoped to the key in a decision row."""
+    from .store_waiver import _go_binding, _go_statement
+
+    for did in sorted(book["index"].get(key, ()), key=lambda value: int(value[2:]), reverse=True):
+        rows = book["rows"][did]
+        if len(rows) != 1 or did in book["superseded"]:
+            continue
+        cells = [cell.strip() for cell in rows[0].split("|")[1:]]
+        if len(cells) < 3:
+            continue
+        candidates = [index for name, index in indexes.items()
+                      if index and not index.get("origin_stale") and cells[1] in (project, name)]
+        if not candidates:
+            continue
+        if revision := close_commit_scope(cells[2]).get(key):
+            for index in candidates:
+                sha = indexed_revision(index, revision.lower())
+                commit = index.get("merged_history", {}).get(sha, ((), None))[1]
+                if commit and (commit.get("merge") or {}).get("sha") == sha:
+                    return {**commit, "source": f"Close decision {did}"}
+            return None
+        statement = _go_statement(cells[2]) or ""
+        pr, head = _go_binding(statement, cells[1])
+        scope = go_key_scope(statement)
+        if head is None or scope is not None and key not in scope:
+            continue
+        entries = list(go_part_entries(statement))
+        for n, entry in enumerate(entries):
+            end = entries[n + 1].start() if n + 1 < len(entries) else len(statement)
+            declared = _GO_PART_KEYS.match(statement, entry.end(), end)
+            if not declared or key not in re.findall(_GO_KEY, declared[1] or declared[2]):
+                continue
+            for index in candidates:
+                for token in go_part_tokens(entry):
+                    if match := landed_go_part(index, head, token, pr):
+                        return {**match, "source": f"GO part {did}"}
+    return None
 
 
 def _operator_authority(row):
@@ -453,8 +496,7 @@ class RunsMixin:
         from .store_waiver import _go_statement  # lazy: store_waiver imports this module
         text = _go_statement(text) or ""  # only the accepted GO ruling speaks, never a sibling ruling of the row
         go_heads = {h.lower() for h in _GO_HEAD_TOKEN.findall(text)}
-        tokens = list(dict.fromkeys(t for run in _PART_HEADS.findall(text)
-                                    for t in re.findall(r"[0-9a-f]{7,40}", run)))
+        tokens = list(dict.fromkeys(t for entry in go_part_entries(text) for t in go_part_tokens(entry)))
         if len(go_heads) != 1 or not tokens:
             return None
         go_head = go_heads.pop()

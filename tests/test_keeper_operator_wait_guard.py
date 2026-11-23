@@ -70,7 +70,11 @@ def test_v5_router_unchanged(w):
 @pytest.mark.parametrize("field,text", [("note", "IDLE until operator"), ("description", "waiting on OS-12"), ("done_criteria", "waiting_on: operator approval")])
 @pytest.mark.parametrize("state", ["claimed", "in_review"])
 def test_v6_unlinked_open_and_done_operator(w, field, text, state):
-    w.store.edit_definition(w.p("router"), "demo:WORK", {field: text})
+    fields = {field: text}
+    if field == "done_criteria":
+        fields.update(criteria_reason="Record the operator approval requirement",
+                      criteria_evidence="D-123")
+    w.store.edit_definition(w.p("router"), "demo:WORK", fields)
     to_claimed(w, "demo:WORK", "workerA")
     if state == "in_review":
         epoch = w.store._item("demo:WORK")["epoch"]

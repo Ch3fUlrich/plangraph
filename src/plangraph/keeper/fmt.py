@@ -123,6 +123,8 @@ def show_text(info: dict) -> str:
         lines.append(f"models writer={info.get('writer_model') or '-'} seats={seats}")
     if info.get("description"):
         lines.append(f"desc {info['description']}")
+    if info.get("design_ref"):
+        lines.append(f"design_ref {info['design_ref']}")
     if info.get("done_criteria"):
         lines.append(f"done {info['done_criteria']}")
     reviews = ", ".join(f"{r.get('reviewer')}({r.get('family') or '-'})"

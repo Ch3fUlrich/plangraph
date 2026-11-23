@@ -62,6 +62,36 @@ def test_round_trip(tmp_path):
     assert again == original
 
 
+def test_design_ref_survives_yaml_export_and_import(tmp_path):
+    ref = "docs/contracts/keeper.md"
+    out = tmp_path / "export"
+    world = World(tmp_path / "source")
+    try:
+        world.store.create_items(world.p("router"), [
+            defn("G", kind="goal", design_ref=ref, note="migration notes"),
+        ])
+        export_yaml(world.conn, out)
+    finally:
+        world.close()
+
+    items = load_dir(out)
+    assert items[0]["design_ref"] == ref and items[0]["note"] == "migration notes"
+    restored = World(tmp_path / "restored")
+    try:
+        restored.store.import_items(restored.p("router"), items)
+        assert restored.store.show(restored.p("reader"), "demo:G")["design_ref"] == ref
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("value", ["../escape.md", "/absolute.md", 123])
+def test_yaml_import_rejects_an_invalid_design_ref(tmp_path, value):
+    (tmp_path / "plan.yaml").write_text(
+        f"items:\n- {{project: demo, id: G, design_ref: {value}}}\n", encoding="utf-8")
+    with pytest.raises(Refused, match="design_ref must name a repository-relative path"):
+        load_dir(tmp_path)
+
+
 def test_export_accepts_raw_connection(tmp_path):
     world, _ = _imported(tmp_path)
     try:

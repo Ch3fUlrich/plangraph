@@ -552,7 +552,10 @@ def test_merge_close_reports_the_age_of_unproven_unit_and_live_work(env):
 
     env.store.edit_definition(env.p("router"), "demo:A", {"note": "Deploy-Hosts: fixture"})
     env.store.edit_definition(env.p("router"), "demo:B", {
-        "done_criteria": "Live: merge-close finishes under 120 seconds."})
+        "done_criteria": "Live: merge-close finishes under 120 seconds.",
+        "criteria_reason": "Require live timing evidence",
+        "criteria_evidence": "Merge-close timing fixture",
+    })
     _land_with_unit(env.repo.root, name="timer")
     env.repo.land("live-clause", "Plan-Item: demo:B", 97)
     env.clock.t = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main")) + 26 * 3600
@@ -579,7 +582,11 @@ def test_a_live_clause_requires_verified_evidence_from_after_the_merge(env):
     from plangraph.keeper.evidence_types import as_epoch
 
     key = "demo:A"
-    env.store.edit_definition(env.p("router"), key, {"done_criteria": "Live: observe the service in use."})
+    env.store.edit_definition(env.p("router"), key, {
+        "done_criteria": "Live: observe the service in use.",
+        "criteria_reason": "Require a live service observation",
+        "criteria_evidence": "Service deployment fixture",
+    })
     env.store.verifiers["deploy"] = VERIFIERS["deploy"]
     env.repo.land("live", f"Plan-Item: {key}", 98)
     merged = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main"))

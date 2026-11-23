@@ -223,7 +223,9 @@ The Claude writer launcher embeds `skills/batch-writer/SKILL.md`, so edits to th
 skill also select Rust CI. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
-and environment template they read. Add an explicit test case in
+and environment template they read. The merge-close test reads both the
+`pg-reconcile-merged.service` and `pg-reconcile-merged.timer` units.
+Add an explicit test case in
 `tests/test_ci_select_rust_inputs.py` for inputs the scan misses, such as unit
 filenames joined to a deployment directory by a helper. `rust/pg-spawnd/` and
 `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.

@@ -339,12 +339,46 @@ def test_edit_may_not_empty_done_criteria_of_a_lane(w):
         with pytest.raises(Refused) as exc:
             w.store.edit_definition(w.p("router"), "demo:L", {"done_criteria": blank})
         assert exc.value.code == "done_criteria_missing"
-    w.store.edit_definition(w.p("router"), "demo:L", {"done_criteria": "other"})
+    w.store.edit_definition(w.p("router"), "demo:L",
+                            {"done_criteria": "other", "criteria_reason": "Clarify criteria",
+                             "criteria_evidence": "D-123"})
     assert w.store._item("demo:L")["done_criteria"] == "other"
-    w.store.edit_definition(w.p("router"), "demo:G", {"done_criteria": None})
+    w.store.edit_definition(w.p("router"), "demo:G",
+                            {"done_criteria": None, "criteria_reason": "Clear optional criteria",
+                             "criteria_evidence": "D-123"})
 
 
 def test_legacy_import_keeps_a_lane_without_done_criteria(w):
     lane = defn("L", done_criteria=None, state="open")
     w.store.import_items(w.p("router"), [lane, defn("G", ["L"], kind="goal", state="open")])
     assert w.store._item("demo:L")["done_criteria"] in (None, "")
+
+
+@pytest.mark.parametrize("how", [
+    "Fix router/bin/resume-digest.",
+    "Patch handoffs/router/helper.py.",
+    "Update ../other-repo/src/worker.rs.",
+    "Edit data-repo/router/bin/runner.",
+    "Edit AutoOS/src/runner.rs.",
+    "Patch plan-order/helpers/package.rs.",
+])
+def test_define_and_edit_refuse_implementation_outside_plangraph(w, how):
+    router = w.p("router")
+    lane = defn("WORK", project="plangraph", description=f"Why: failure\nHow: {how}")
+    goal = defn("GOAL", ["WORK"], project="plangraph", kind="goal")
+    with pytest.raises(Refused, match="name the plangraph module or write a port item"):
+        w.store.create_items(router, [lane, goal])
+    lane["description"] = "Why: inspect router/bin/runner\nHow: Explain the local behavior."
+    assert w.store.create_items(router, [lane, goal])["created"][0] == "plangraph:WORK"
+    with pytest.raises(Refused, match="name the plangraph module or write a port item"):
+        w.store.edit_definition(router, "plangraph:WORK", {"description": f"Why: failure\nHow: {how}"})
+    w.store.edit_definition(router, "plangraph:WORK", {
+        "description": f"Why: failure\nHow: {how} Port it into rust/worker/src/main.rs."})
+
+
+@pytest.mark.parametrize("path", ["docs/tools/x.md", "docs/rust/x.md", "plangraph/src/plangraph/worker.py"])
+def test_definition_allows_local_paths_without_an_external_target(w, path):
+    router = w.p("router")
+    lane = defn("WORK", project="plangraph", description=f"Why: clarify behavior\nHow: Edit {path}.")
+    goal = defn("GOAL", ["WORK"], project="plangraph", kind="goal")
+    assert w.store.create_items(router, [lane, goal])["created"][0] == "plangraph:WORK"

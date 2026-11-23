@@ -19,6 +19,7 @@ import pytest
 
 from keeper_util import World, defn, seed, to_done
 from plangraph.keeper import api, brief as brief_mod, config, fmt, mcp
+from plangraph.keeper.errors import Refused
 
 BRIEF_KEYS = {"key", "title", "state", "kind", "owner", "review_tier",
               "evidence_kinds", "priority", "wait", "depends_on",
@@ -84,6 +85,8 @@ def test_brief_cap_and_truncation_marker(w):
 def test_brief_truncates_done_criteria_after_description(w):
     w.store.edit_definition(w.p("router"), "demo:B",
                             {"done_criteria": "c" * 600,
+                             "criteria_reason": "Exercise the criteria length limit",
+                             "criteria_evidence": "D-123",
                              "note": "n\n" + "x" * 1200})
     info = w.store.show(w.p("reader"), "demo:B", brief=True)
     text = brief_mod.brief_text(info)
@@ -264,3 +267,53 @@ def test_fmt_brief_text_is_the_capped_text(w):
     info = w.store.show(w.p("reader"), "demo:A", brief=True)
     assert fmt.brief_text(info) == brief_mod.brief_text(info)
     assert len(fmt.brief_text(info)) <= brief_mod.BRIEF_CAP
+
+
+def test_definition_requires_and_preserves_an_explicit_design_reference(w):
+    router = w.p("router")
+    key = "demo:WORK"
+    lane = defn("WORK", description="Why: missing input\nHow: Recover the approved v10 design.")
+    lane["under"] = "GOAL"
+    with pytest.raises(Refused, match="design_ref"):
+        w.store.create_items(router, [lane])
+    ref = "data-repo:docs/design-v10.md"
+    lane["design_ref"] = ref
+    assert w.store.create_items(router, [lane])["created"][0] == key
+    assert w.store.show(w.p("reader"), key)["design_ref"] == ref
+    assert w.store.show(w.p("reader"), key, brief=True)["design_ref"] == ref
+    snapshot = w.store.snapshot(w.p("reader"), fields="key,design_ref")
+    assert {"key": key, "design_ref": ref} in snapshot["items"]
+    with pytest.raises(Refused, match="design_ref"):
+        w.store.edit_definition(router, key, {"design_ref": None})
+    w.store.edit_definition(router, key, {
+        "description": "Why: input available\nHow: Obtain the roster contract.",
+        "design_ref": "docs/roster.md",
+    })
+    assert w.store.show(w.p("reader"), key)["design_ref"] == "docs/roster.md"
+    assert w.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("how", [
+    "Read the keeper store design before editing.",
+    "Follow the existing response contract.",
+    "Use tests to validate the storage design.",
+    "Flag examples such as 'Recover the design' in briefs.",
+    'Flag examples such as "Obtain the roster contract" in briefs.',
+    "Flag examples such as ‘Load the design’ and “Read the approved design”.",
+    "Flag examples such as `Follow the canonical roster contract` in briefs.",
+])
+def test_definition_allows_general_design_prose_without_a_reference(w, how):
+    lane = defn("WORK", under="GOAL", description=f"Why: fix storage\nHow: {how}")
+    assert w.store.create_items(w.p("router"), [lane])["created"] == ["demo:WORK"]
+
+
+@pytest.mark.parametrize("how", [
+    "Read the approved design.",
+    "Follow the v10 roster contract.",
+    "Use the design document.",
+    "Compare 'the summary' with the approved notes. Recover the design.",
+])
+def test_definition_requires_references_for_explicit_design_inputs(w, how):
+    lane = defn("WORK", under="GOAL", description=f"Why: fix storage\nHow: {how}")
+    with pytest.raises(Refused, match="design_ref"):
+        w.store.create_items(w.p("router"), [lane])

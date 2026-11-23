@@ -125,11 +125,17 @@ def cmd_grant_apply(args, session):
 
 def cmd_define(args, session):
     from .cli_verbs import _refuse, write
-    payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    path = Path(args.file)
+    payload = json.loads(path.read_text(encoding="utf-8"))
     if args.edit:
         fields = payload.get("fields", payload) if isinstance(payload, dict) else payload
         return write(session, "edit_definition", {"key": args.key, "fields": fields})
     items = payload.get("items") if isinstance(payload, dict) else payload
+    if path.name == "slices.json" and isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and item.get("slice_parent") is None:
+                return _refuse(f"validation: {item.get('project')}:{item.get('id')}: "
+                               "slices.json entries require slice_parent")
     # The store checks decisions after duplicate/conflict/lock refusals.
     checked = [item for item in items if isinstance(item, dict)
                and item.get("kind") != "decision"] if isinstance(items, list) else []

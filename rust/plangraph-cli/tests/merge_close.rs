@@ -272,3 +272,67 @@ fn scheduled_preview_fails_if_the_selected_project_scan_is_incomplete() {
     );
     keeper.assert_finished();
 }
+
+#[test]
+fn reconcile_persists_one_routing_batch_and_only_requests_a_watched_dry_run() {
+    use plangraph_cli::merge_close::reconcile_with;
+
+    let control = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+    ]);
+    let keeper = Script::new([(
+        json!({"apply":false,"watch":true,"require_seats":true}),
+        json!({
+            "merged_not_done": 8, "alert": true,
+            "would_close": [{"key":"demo:A"}],
+            "listed": [
+                {"key":"demo:B","reason":"evidence_unverified: unmerged_work_or_lanes_unknown"},
+                {"key":"demo:C","reason":"evidence_unverified: deploy_pending: service"},
+                {"key":"demo:D","reason":"evidence_unverified: decision_merge_only: demo abc"},
+                {"key":"demo:E","reason":"seats_missing: required review unavailable"},
+                {"key":"demo:F","reason":"evidence_unverified: NO-WITNESS demo:F: cited review unavailable or unwitnessed"},
+                {"key":"demo:G","reason":"evidence_unverified: merge_repo_ambiguous: demo, data"},
+                {"key":"demo:H","reason":"coverage: insufficient_seat_families: need 2"}
+            ]
+        }),
+    )]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("watch.json");
+    let line = reconcile_with(&keeper, &control, Some(true), &path, Duration::ZERO).unwrap();
+    assert_eq!(line.lines().count(), 1);
+    let batch: Value =
+        serde_json::from_str(line.strip_prefix("reconcile-merged\t").unwrap()).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
+        batch
+    );
+    assert_eq!(batch["alert"], true);
+    assert_eq!(batch["merged_not_done"], 8);
+    assert_eq!(
+        batch["refusals"],
+        json!({"deploy_pending":1,"decision_merge_only":1,"seats_missing":3,
+               "merge_repo_ambiguous":1,"unmerged_work_or_lanes_unknown":1})
+    );
+    assert_eq!(
+        batch["proposals"],
+        json!([
+            {"action":"CLOSE","item":{"key":"demo:A"}},
+            {"action":"SLICE-OPEN","item":{"key":"demo:B","reason":"evidence_unverified: unmerged_work_or_lanes_unknown"}},
+            {"action":"CLOSE","item":{"key":"demo:D","reason":"evidence_unverified: decision_merge_only: demo abc"}},
+            {"action":"RESCOPE","item":{"key":"demo:G","reason":"evidence_unverified: merge_repo_ambiguous: demo, data"}}
+        ])
+    );
+    control.assert_finished();
+    keeper.assert_finished();
+}
+
+#[test]
+fn hourly_reconcile_unit_invokes_only_the_dry_run() {
+    let service = include_str!("../../../deploy/systemd/pg-reconcile-merged.service");
+    let timer = include_str!("../../../deploy/systemd/pg-reconcile-merged.timer");
+    assert!(service.contains("Type=oneshot"));
+    assert!(service.contains(" reconcile-merged --dry-run --state "));
+    assert!(timer.contains("OnCalendar=hourly"));
+    assert!(timer.contains("Unit=pg-reconcile-merged.service"));
+}
