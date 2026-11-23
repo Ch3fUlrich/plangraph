@@ -9,9 +9,11 @@ import contextlib
 import json
 import re
 import time
+from bisect import bisect_left
 
 from . import context_sources
 from .errors import Refused
+from .evidence_decisions import close_commit_scope
 from .evidence_git import plan_items
 from .evidence_runs import RunRecordAdapter
 from .evidence_types import valid_commit_ref
@@ -39,6 +41,11 @@ _UTC_DATE_RE = re.compile(
 
 _GO_KEYS = re.compile(r"(?<![\w-])GO-KEYS\b")
 _GO_KEY = r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"
+_GO_PART_KEYS = re.compile(
+    rf"\s*,\s*keys(?:[ \t]*:[ \t]*|[ \t]+)"
+    rf"(?:\[({_GO_KEY}(?:\s*,\s*{_GO_KEY})*)\]|"
+    rf"({_GO_KEY}(?:(?:\s*,\s*|\s+){_GO_KEY})*))(?=$|[\s;,(])",
+    re.I)
 
 
 def go_key_scope(statement):
@@ -52,6 +59,78 @@ def go_key_scope(statement):
     if not block or not re.fullmatch(rf"{_GO_KEY}(?:\s*,\s*{_GO_KEY})*", block[1].strip()):
         return set()
     return {key.strip() for key in block[1].split(",")}
+
+
+def _part_tokens(entry):
+    return re.findall(r"[0-9a-f]{7,40}", entry[1])
+
+
+def _indexed_revision(index, token):
+    ordered = index.get("revision_order", ())
+    offset = bisect_left(ordered, token)
+    matches = [sha for sha in ordered[offset:offset + 2] if sha.startswith(token)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _landed_go_part(index, head, token, pr):
+    """Resolve an unambiguous part introduced with this default-branch GO head."""
+    graph = index.get("merged_history", {})
+    part = _indexed_revision(index, token)
+    if not part or part == head:
+        return None
+    landed = graph.get(head, ((), None))[1]
+    candidate = graph.get(part, ((), None))[1]
+    merge = (landed or {}).get("merge") or {}
+    if not candidate or merge.get("pr") != pr or candidate.get("merge") != merge:
+        return None
+    seen, todo = set(), [head]
+    while todo:
+        sha = todo.pop()
+        if sha == part:
+            return candidate
+        if sha not in seen:
+            seen.add(sha)
+            todo.extend(graph.get(sha, ((), None))[0])
+
+
+def merged_decision_delivery(indexes, book, key, project):
+    """Match a landed revision explicitly scoped to the key in a decision row."""
+    from .store_waiver import _go_binding, _go_statement
+
+    for did in sorted(book["index"].get(key, ()), key=lambda value: int(value[2:]), reverse=True):
+        rows = book["rows"][did]
+        if len(rows) != 1 or did in book["superseded"]:
+            continue
+        cells = [cell.strip() for cell in rows[0].split("|")[1:]]
+        if len(cells) < 3:
+            continue
+        candidates = [index for name, index in indexes.items()
+                      if index and not index.get("origin_stale") and cells[1] in (project, name)]
+        if not candidates:
+            continue
+        if revision := close_commit_scope(cells[2]).get(key):
+            for index in candidates:
+                sha = _indexed_revision(index, revision.lower())
+                commit = index.get("merged_history", {}).get(sha, ((), None))[1]
+                if commit and (commit.get("merge") or {}).get("sha") == sha:
+                    return {**commit, "source": f"Close decision {did}"}
+            return None
+        statement = _go_statement(cells[2]) or ""
+        pr, head = _go_binding(statement, cells[1])
+        scope = go_key_scope(statement)
+        if head is None or scope is not None and key not in scope:
+            continue
+        entries = list(_PART_HEADS.finditer(statement))
+        for n, entry in enumerate(entries):
+            end = entries[n + 1].start() if n + 1 < len(entries) else len(statement)
+            declared = _GO_PART_KEYS.match(statement, entry.end(), end)
+            if not declared or key not in re.findall(_GO_KEY, declared[1] or declared[2]):
+                continue
+            for index in candidates:
+                for token in _part_tokens(entry):
+                    if match := _landed_go_part(index, head, token, pr):
+                        return {**match, "source": f"GO part {did}"}
+    return None
 
 
 def _operator_authority(row):
@@ -386,8 +465,7 @@ class RunsMixin:
         from .store_waiver import _go_statement  # lazy: store_waiver imports this module
         text = _go_statement(text) or ""  # only the accepted GO ruling speaks, never a sibling ruling of the row
         go_heads = {h.lower() for h in _GO_HEAD_TOKEN.findall(text)}
-        tokens = list(dict.fromkeys(t for run in _PART_HEADS.findall(text)
-                                    for t in re.findall(r"[0-9a-f]{7,40}", run)))
+        tokens = list(dict.fromkeys(t for entry in _PART_HEADS.finditer(text) for t in _part_tokens(entry)))
         if len(go_heads) != 1 or not tokens:
             return None
         go_head = go_heads.pop()
