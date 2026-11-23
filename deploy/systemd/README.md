@@ -141,8 +141,9 @@ with the host's shared `CARGO_TARGET_DIR` in the environment. On the first
 rollout, build the entry point with
 `cargo build --manifest-path REPO/rust/Cargo.toml --release -p plangraph-cli --bin host-sync`.
 Use that entry point as the release step in the host-sync schedule. It installs
-`pg-spawnd`, `pg-disk-hygiene` and `plangraph` in `~/.local/bin` and records the installed Rust
-tree in `${XDG_STATE_HOME:-$HOME/.local/state}/plangraph/release-built-tree`.
+`pg-spawnd`, `pg-disk-hygiene`, `plangraph` and `turn-budget-hook` in
+`~/.local/bin` and records the installed Rust tree in
+`${XDG_STATE_HOME:-$HOME/.local/state}/plangraph/release-built-tree`.
 Keep `~/.local/bin` on the landing and pre-push workers' PATH.
 
 
