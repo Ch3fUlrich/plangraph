@@ -175,6 +175,41 @@ pub fn shared_cache(
 ) -> io::Result<()> {
     shared_cache_capped(path, guards, building, 0, true, apply, report)
 }
+
+/// Best-effort cap enforcement after a train check or writer has released its build lease.
+pub fn post_run_cargo(checkout: &Path) -> io::Result<Report> {
+    let target = crate::cargo_cache::shared_cache_roots()?.remove(0);
+    post_run_cargo_using(
+        checkout,
+        &target,
+        crate::cargo_pool::configured_cap_bytes(),
+        process_references,
+    )
+}
+
+fn post_run_cargo_using(
+    checkout: &Path,
+    target: &Path,
+    cap: u64,
+    processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
+) -> io::Result<Report> {
+    let guards = Guards {
+        pinned: vec![checkout.canonicalize()?],
+        live: vec![],
+    };
+    let mut report = Report::default();
+    shared_cache_using(
+        target,
+        &guards,
+        false,
+        cap,
+        false,
+        true,
+        &mut report,
+        processes,
+    )?;
+    Ok(report)
+}
 /// Above the cap, reclaim oldest idle candidates even without disk pressure.
 #[allow(clippy::too_many_arguments)]
 pub fn shared_cache_capped(
@@ -212,6 +247,10 @@ fn shared_cache_using(
     if !meta.is_dir() || meta.file_type().is_symlink() {
         return Err(io::Error::other("unsafe shared cache"));
     }
+    #[cfg(unix)]
+    if !crate::private_targets::owned(path)? {
+        return Err(io::Error::other("shared cache has a different owner"));
+    }
     let canonical = path.canonicalize()?;
     if guards.protects(path) || guards.protects(&canonical) {
         return Ok(());
@@ -229,11 +268,16 @@ fn shared_cache_using(
         return Ok(());
     }
     let mut bytes = crate::disk_hygiene::scan(path)?.0;
+    let mut projected = Vec::new();
     for (candidate, size) in crate::shared_target::candidates(path, std::time::SystemTime::now())? {
         if !pressure && bytes <= cap {
             break;
         }
         if guards.protects(&candidate) {
+            continue;
+        }
+        #[cfg(target_os = "linux")]
+        if crate::reap_journal::check_mounts(&candidate.canonicalize()?).is_err() {
             continue;
         }
         // Recheck eligibility before the final process probe, so a potentially
@@ -253,12 +297,45 @@ fn shared_cache_using(
             fs::remove_dir_all(&candidate)?;
             report.freed_bytes = report.freed_bytes.saturating_add(size);
         }
+        if !apply {
+            projected.push((candidate.clone(), size));
+        }
         bytes = bytes.saturating_sub(size);
         report.actions.push(format!(
             "{} {} bytes={size}",
             if apply { "removed" } else { "would-remove" },
             candidate.display()
         ));
+    }
+    if bytes > cap {
+        for (profile, mut size) in crate::shared_target::debug_profiles(path)? {
+            if bytes <= cap {
+                break;
+            }
+            if guards.protects(&profile) {
+                continue;
+            }
+            let (cwds, building) = process_reader()?;
+            if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
+                return Ok(());
+            }
+            if apply {
+                fs::remove_dir_all(&profile)?;
+                report.freed_bytes = report.freed_bytes.saturating_add(size);
+            } else {
+                for (entry, removed) in &projected {
+                    if entry.starts_with(&profile) {
+                        size = size.saturating_sub(*removed);
+                    }
+                }
+            }
+            bytes = bytes.saturating_sub(size);
+            report.actions.push(format!(
+                "{} {} bytes={size}",
+                if apply { "removed" } else { "would-remove" },
+                profile.display()
+            ));
+        }
     }
     Ok(())
 }

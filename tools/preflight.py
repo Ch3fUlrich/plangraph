@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Blocking local CI policy, Rust and affected-test preflight."""
 import argparse
-import asyncio
 import importlib.util
 import json
 import math
 import os
 import re
 import shlex
-import signal
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,7 +17,7 @@ import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
-from pgtest import test_environment
+from pgtest import run_test_process as run_bounded_test, selected_count, test_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb,
@@ -108,62 +106,7 @@ class FailFamily(ValueError):
 
 
 def run_test_process(command, **kwargs):
-    """Kill the command's tree on timeout/interruption, including nested Linux sessions."""
-    timeout = kwargs.pop('timeout')
-    input_text = kwargs.pop('input', None)
-    if input_text is not None:
-        kwargs['stdin'] = subprocess.PIPE
-    tree = None
-    if sys.platform.startswith('linux'):
-        # Reuse checkout-local helpers without requiring an installed package.
-        spec = importlib.util.spec_from_file_location(
-            'preflight_proc_kill', Path(__file__).resolve().parents[1]
-            / 'src/plangraph/spawner/proc_kill.py')
-        tree = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(tree)
-    with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
-        ident = tree.root_identity(process.pid) if tree else None
-        try:
-            if input_text is None:
-                stdout, stderr = process.communicate(timeout=timeout)
-            else:
-                stdout, stderr = process.communicate(input=input_text, timeout=timeout)
-        except BaseException:
-            if tree:
-                members = {}
-                try:
-                    os.killpg(process.pid, signal.SIGSTOP)
-                    # Freeze discovered sessions before rescanning: their children
-                    # must remain attached until every potential parent is stopped.
-                    while True:
-                        added = tree.snapshot(process.pid, ident).items() - members.items()
-                        if not added:
-                            break
-                        for pid, start in added:
-                            if tree.alive(pid, start):
-                                try:
-                                    os.kill(pid, signal.SIGSTOP)
-                                except ProcessLookupError:
-                                    pass
-                        members.update(added)
-                    asyncio.run(tree.finish(process.pid, ident, members))
-                finally:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-            elif os.name == 'posix':
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:
-                subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
-                               capture_output=True, timeout=CHECK_TIMEOUT)
-                process.kill()
-            process.communicate()
-            raise
-        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    return run_bounded_test(command, taskkill_timeout=CHECK_TIMEOUT, **kwargs)
 
 
 def run(command, cwd, env):
@@ -183,16 +126,6 @@ def run(command, cwd, env):
         return 1, f"check exceeded {timeout} second timeout{named}\n"
     except OSError as exc:
         return 1, f"unable to start check: {type(exc).__name__}\n"
-
-
-def selected_count(partial):
-    """Selected test count from the selector's first output line (JSON plan), else "unknown"."""
-    if isinstance(partial, bytes):
-        partial = partial.decode("utf-8", "replace")
-    try:
-        return len(json.loads((partial or "").splitlines()[0])["tests"])
-    except (ValueError, KeyError, IndexError, TypeError):
-        return "unknown"
 
 
 def lane_rust_commands(commands):
@@ -787,6 +720,19 @@ def _main(argv, root, cleanup):
                 stopped = args.fail_fast
         summary.append(f"{status} {family} {time.monotonic() - start:.3f}")
         print(summary[-1], flush=True)
+    if sys.platform.startswith('linux') and shared_cargo_target().is_dir():
+        spawnd = shutil.which('pg-spawnd', path=env.get('PATH'))
+        if spawnd is None:
+            print('cargo post-run trim skipped: pg-spawnd missing on PATH', flush=True)
+        else:
+            try:
+                code, output = run([spawnd, 'host', 'post-run-cargo'], root, env)
+                detail = output.strip()
+                legacy_usage = code == 2 and detail.startswith("Usage: pg-spawnd host <") and "post-run-cargo" not in detail
+                if not legacy_usage:
+                    print(f"cargo post-run trim {'skipped' if code else 'result'}: {detail}", flush=True)
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f'cargo post-run trim skipped: {exc}', flush=True)
     return exit_code
 
 

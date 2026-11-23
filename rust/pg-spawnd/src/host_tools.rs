@@ -19,6 +19,12 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
             let path = root.to_str().ok_or("worktree root is not UTF-8")?;
             serde_json::to_string(path).map_err(|error| error.to_string())?
         }
+        ["post-run-cargo"] => {
+            let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+            let report = pg_worker_core::disk_runtime::post_run_cargo(&cwd)
+                .map_err(|error| error.to_string())?;
+            serde_json::to_string(&report).map_err(|error| error.to_string())?
+        }
         ["wsl-cache-guard", "--help" | "-h"] => WSL_GUARD_USAGE.into(),
         ["wsl-cache-guard"] => wsl_guard(pg_worker_core::wsl::CACHE_GUARD_FLOOR_MB)?,
         ["wsl-cache-guard", "--min-free-mb", value] => {
@@ -30,7 +36,7 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
             wsl_guard(min)?
         }
         ["wsl-cache-guard", ..] => return Err(WSL_GUARD_USAGE.into()),
-        _ => return Err("Usage: pg-spawnd host <work-disk|wsl-cache-guard>".into()),
+        _ => return Err("Usage: pg-spawnd host <work-disk|post-run-cargo|wsl-cache-guard>".into()),
     };
     writeln!(out, "{line}").map_err(|error| error.to_string())
 }

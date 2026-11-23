@@ -19,6 +19,8 @@ pub mod cpu_linux;
 pub mod diffscan;
 pub mod disk_hygiene;
 pub mod disk_runtime;
+#[cfg(target_os = "linux")]
+pub mod disk_watermark;
 pub mod events;
 pub mod exit_class;
 pub mod exports;
@@ -128,6 +130,8 @@ mod test_repo_guard;
 #[doc(hidden)]
 pub mod git_test_support;
 
+#[cfg(target_os = "linux")]
+mod affected_scratch;
 pub mod cargo_cache;
 pub mod cargo_pool;
 mod cargo_pool_telemetry;

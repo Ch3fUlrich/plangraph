@@ -6,7 +6,7 @@ use std::io::Write;
 
 #[cfg(target_os = "linux")]
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local|session> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local|session|hand-run> [args]";
 #[cfg(not(target_os = "linux"))]
 pub(crate) const USAGE: &str =
     "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|worker-liveness|worker-maintenance|resume|writer-stop|writer-resume|steer-local> [args]";
@@ -147,6 +147,14 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
+    #[cfg(target_os = "linux")]
+    if verb.as_deref() == Some("hand-run") {
+        let code = crate::hand_run::execute(&rest)?;
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
+    }
     if verb.as_deref() == Some("host") {
         return crate::host_tools::execute(&rest, out);
     }

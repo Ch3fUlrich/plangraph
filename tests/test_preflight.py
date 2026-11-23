@@ -18,6 +18,27 @@ preflight = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(preflight)
 
 
+def test_bounded_runner_imports_without_preflight(tmp_path):
+    script = """
+import subprocess
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from pgtest import run_test_process
+
+assert "preflight" not in sys.modules
+child = run_test_process(
+    [sys.executable, "-c", "import sys; print(sys.stdin.read().strip())"],
+    input="fixture", stdout=subprocess.PIPE, text=True, timeout=5, taskkill_timeout=5,
+)
+assert child.returncode == 0
+assert child.stdout == "fixture\\n"
+"""
+    result = subprocess.run([sys.executable, "-I", "-c", script, str(Path(preflight.__file__).parent)],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("PREFLIGHT_TOOLS_DIR", raising=False)
@@ -667,3 +688,42 @@ def test_cargo_lease_is_shared_between_runs(tmp_path, monkeypatch):
         first.close()
         for lease in got:
             lease.close()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux disk hygiene")
+@pytest.mark.parametrize(("reply", "message"), [
+    ((0, "{}\n"), "cargo post-run trim result: {}"),
+    ((2, "Usage: pg-spawnd host <work-disk|wsl-cache-guard>\n"), None),
+    ((2, "process inventory unavailable\n"), "cargo post-run trim skipped: process inventory unavailable"),
+])
+def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch, capsys, reply, message):
+    from plangraph.spawner.host_ready import cargo_lease
+
+    target = repo.parent / (repo.name + "-post-run-cache")
+    target.mkdir()
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    monkeypatch.setattr(preflight, "trim_shared_target", lambda root: None)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *args: [["cargo", "fmt", "--check"]])
+    monkeypatch.setattr(preflight, "running_disk_refusal", lambda root: None)
+    calls = fake_runner(monkeypatch)
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda name, *args, **kw:
+                        "/fixture/pg-spawnd" if name == "pg-spawnd" else real_which(name, *args, **kw))
+    real_run = preflight.run
+
+    def run(command, cwd, env):
+        if command[0] == "/fixture/pg-spawnd":
+            assert calls[-1][0][:2] == ["cargo", "fmt"]
+            with cargo_lease(exclusive=True):
+                calls.append((command, cwd, env))
+            return reply
+        return real_run(command, cwd, env)
+
+    monkeypatch.setattr(preflight, "run", run)
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
+    assert calls[-1][0] == ["/fixture/pg-spawnd", "host", "post-run-cargo"]
+    output = capsys.readouterr().out
+    if message is None:
+        assert "cargo post-run trim" not in output
+    else:
+        assert message in output

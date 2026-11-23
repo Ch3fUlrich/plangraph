@@ -38,23 +38,41 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
     fixture(&target, false);
     let mut report = report();
     let guards = Guards::default();
-    reclaim(&target, &guards, None, true, &mut report, || {
-        panic!("recent target")
-    })
+    reclaim(
+        &target,
+        &guards,
+        None,
+        SystemTime::now(),
+        true,
+        &mut report,
+        || panic!("recent target"),
+    )
     .unwrap();
     fixture(&target, true);
     let lease = crate::cargo_cache::try_exclusive_lease(&target)
         .unwrap()
         .unwrap();
-    reclaim(&target, &guards, None, true, &mut report, || {
-        panic!("leased target")
-    })
+    reclaim(
+        &target,
+        &guards,
+        None,
+        SystemTime::now(),
+        true,
+        &mut report,
+        || panic!("leased target"),
+    )
     .unwrap();
     drop(lease);
     for facts in [(vec![], true), (vec![target.join("debug")], false)] {
-        reclaim(&target, &guards, None, true, &mut report, || {
-            Ok(facts.clone())
-        })
+        reclaim(
+            &target,
+            &guards,
+            None,
+            SystemTime::now(),
+            true,
+            &mut report,
+            || Ok(facts.clone()),
+        )
         .unwrap();
         assert!(target.exists());
     }
@@ -65,25 +83,44 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
             live: vec![],
         },
         None,
+        SystemTime::now(),
         true,
         &mut report,
         || panic!("pinned target"),
     )
     .unwrap();
-    reclaim(&target, &guards, None, true, &mut report, || {
-        Err(io::Error::other("unavailable"))
-    })
+    reclaim(
+        &target,
+        &guards,
+        None,
+        SystemTime::now(),
+        true,
+        &mut report,
+        || Err(io::Error::other("unavailable")),
+    )
     .unwrap_err();
     assert!(target.exists());
-    reclaim(&target, &guards, None, false, &mut report, || {
-        Ok((vec![], false))
-    })
+    reclaim(
+        &target,
+        &guards,
+        None,
+        SystemTime::now(),
+        false,
+        &mut report,
+        || Ok((vec![], false)),
+    )
     .unwrap();
     assert!(target.exists());
     assert_eq!(report.freed_bytes, 0);
-    reclaim(&target, &guards, None, true, &mut report, || {
-        Ok((vec![], false))
-    })
+    reclaim(
+        &target,
+        &guards,
+        None,
+        SystemTime::now(),
+        true,
+        &mut report,
+        || Ok((vec![], false)),
+    )
     .unwrap();
     assert!(!target.exists());
     assert_eq!(report.freed_bytes, 7);
@@ -117,6 +154,7 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
         &link.join("rust/target"),
         &Guards::default(),
         None,
+        SystemTime::now(),
         true,
         &mut report,
         || panic!("symlinked parent"),
@@ -128,6 +166,7 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
         Some(&temporary),
         std::slice::from_ref(&tree),
         &Guards::default(),
+        SystemTime::now(),
         true,
         &mut report,
         || Ok((vec![], false)),
@@ -142,6 +181,7 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
         Some(&temporary),
         std::slice::from_ref(&tree),
         &Guards::default(),
+        SystemTime::now(),
         true,
         &mut report,
         || Ok((vec![], false)),
@@ -156,6 +196,7 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
         Some(&temporary),
         std::slice::from_ref(&tree),
         &Guards::default(),
+        SystemTime::now(),
         true,
         &mut report,
         || Ok((vec![], false)),
@@ -168,6 +209,7 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
         &tree.join("rust/target"),
         &Guards::default(),
         None,
+        SystemTime::now(),
         true,
         &mut report,
         || panic!("source"),
@@ -223,6 +265,7 @@ fn worktree_target_older_than_last_commit_is_reclaimed_immediately() {
         Some(&temporary),
         std::slice::from_ref(&tree),
         &Guards::default(),
+        SystemTime::now(),
         true,
         &mut report,
         || Ok((vec![], false)),
@@ -239,6 +282,7 @@ fn worktree_target_older_than_last_commit_is_reclaimed_immediately() {
         Some(&temporary),
         std::slice::from_ref(&tree),
         &Guards::default(),
+        SystemTime::now(),
         true,
         &mut report,
         || Ok((vec![], false)),
@@ -258,4 +302,70 @@ fn vanished_entries_are_skipped_and_other_errors_stay_errors() {
         io::ErrorKind::PermissionDenied
     );
     assert_eq!(skip_vanished(Ok(3)).unwrap(), Some(3));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn affected_pytest_scratch_requires_owned_marker_age_and_idle_lease() {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let temp = tempfile::tempdir().unwrap();
+    let scratch = temp.path().canonicalize().unwrap();
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400);
+    let make = |name: &str, marker: &[u8], age: u64| {
+        let root = scratch.join(name);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let artifact = root.join("pytest-artifact");
+        let lease = root.join(".lease");
+        fs::write(&artifact, b"fixture").unwrap();
+        fs::write(&lease, marker).unwrap();
+        for path in [&root, &artifact, &lease] {
+            fs::File::open(path)
+                .unwrap()
+                .set_modified(now - Duration::from_secs(age))
+                .unwrap();
+        }
+        root
+    };
+    let marker = b"plangraph-affected-pytest-v1\n";
+    let stale = make("pg-affected-stale", marker, 1801);
+    let active = make("pg-affected-active", marker, 1801);
+    let recent = make("pg-affected-recent", marker, 1800);
+    let unrelated = make("pg-affected-unrelated", b"unrelated", 1801);
+    let public = make("pg-affected-public", marker, 1801);
+    fs::set_permissions(&public, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let active_lease = crate::cargo_cache::CacheLease::try_exclusive_file(
+        fs::File::open(active.join(".lease")).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    // A fork can retain this open file description until its child execs.
+    let inherited = active_lease.file().try_clone().unwrap();
+
+    let mut result = report();
+    let sweep = |result: &mut Report| {
+        sweep_using(
+            Some(&scratch),
+            &[],
+            &Guards::default(),
+            now,
+            true,
+            result,
+            || Ok((vec![], false)),
+        )
+        .unwrap();
+    };
+    sweep(&mut result);
+    assert!(!stale.exists());
+    assert!(active.exists());
+    assert_eq!(
+        result.skipped,
+        [format!("{}: pytest lease held", active.display())]
+    );
+    drop(active_lease);
+    sweep(&mut result);
+    assert!(!active.exists());
+    assert!(recent.exists() && unrelated.exists() && public.exists());
+    drop(inherited);
 }

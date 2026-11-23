@@ -12,7 +12,7 @@ fn cargo_target(path: &Path) -> bool {
         && !path.join("Cargo.toml").exists()
 }
 
-fn owned(path: &Path) -> io::Result<bool> {
+pub(crate) fn owned(path: &Path) -> io::Result<bool> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -48,6 +48,7 @@ pub fn sweep(
         temporary,
         worktrees,
         guards,
+        SystemTime::now(),
         apply,
         report,
         crate::disk_runtime::processes,
@@ -58,6 +59,7 @@ fn sweep_using(
     temporary: Option<&Path>,
     worktrees: &[std::path::PathBuf],
     guards: &Guards,
+    now: SystemTime,
     apply: bool,
     report: &mut Report,
     mut processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
@@ -74,6 +76,13 @@ fn sweep_using(
                 continue;
             }
             let path = entry.path();
+            #[cfg(target_os = "linux")]
+            if crate::affected_scratch::is_run(&path) {
+                skip_vanished(crate::affected_scratch::reclaim(
+                    &path, guards, now, apply, report,
+                ))?;
+                continue;
+            }
             if cargo_target(&path) {
                 targets.push((path, None));
             } else if let Some(children) = skip_vanished(fs::read_dir(&path))? {
@@ -117,7 +126,15 @@ fn sweep_using(
         }
     }
     for (target, last_commit) in targets {
-        reclaim(&target, guards, last_commit, apply, report, &mut processes)?;
+        reclaim(
+            &target,
+            guards,
+            last_commit,
+            now,
+            apply,
+            report,
+            &mut processes,
+        )?;
     }
     Ok(())
 }
@@ -126,6 +143,7 @@ fn reclaim(
     target: &Path,
     guards: &Guards,
     last_commit: Option<SystemTime>,
+    now: SystemTime,
     apply: bool,
     report: &mut Report,
     mut processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
@@ -146,7 +164,7 @@ fn reclaim(
     };
     let (bytes, newest) = scan(target)?;
     if last_commit.is_none_or(|commit| newest >= commit)
-        && SystemTime::now().duration_since(newest).unwrap_or_default() <= Duration::from_secs(1800)
+        && now.duration_since(newest).unwrap_or_default() <= Duration::from_secs(1800)
     {
         return Ok(());
     }

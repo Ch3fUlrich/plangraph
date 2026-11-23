@@ -16,6 +16,12 @@ shared cleanup lease. It checks the host cache cap before and after each Cargo
 command; never override this with a private target. See [disk limits and
 cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty.
 
+On Linux, preflight calls `pg-spawnd host post-run-cargo` after all checks
+finish and the build leases have been released. Older pg-spawnd installs
+skip this extra trim until upgraded. The helper trims idle
+build entries first and can reclaim an identified debug profile if the
+shared target still exceeds its cap.
+
 Rust packages outside the `rust/` workspace (including `rust/worker`) run through
 their owning `Cargo.toml` with `--manifest-path`, including excluded packages
 without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
@@ -25,6 +31,8 @@ file-only affected preflight has 240 seconds (`TEST_TIMEOUT`) for selection and 
 
 When the local affected selection includes the fleet projection tests, the selector
 builds `pg-spawnd` from the selected checkout before pytest starts.
+`tools/pgtest.py` runs the bounded test subprocess and handles process-tree
+cleanup when it times out. Preflight chooses the deadline and reports failures.
 When preflight selects `tests/test_hooks_prepush_paths.py`, it builds and stages
 one `plangraph` CLI before starting the 240-second step. Every pytest worker
 uses that executable through `PLANGRAPH_TEST_CLI`. Direct pytest and selector
@@ -189,6 +197,9 @@ at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suit
 build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Under `docs/` and `status/` only documentation files (`.md`, `.rst`, images) select no tests; any other file there (`docs/conf.py`, `status/x.toml`) goes through the normal mapping. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
 worktree and untracked changes; omit it to include checkout changes. The selector puts the tested checkout's `src/` before inherited `PYTHONPATH` entries for pytest.
+Each affected pytest invocation gets a separate basetemp under the selector's
+private run directory. The selector removes that directory on exit. On Linux,
+disk hygiene can reclaim an abandoned run directory after its lease is idle.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.

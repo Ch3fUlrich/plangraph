@@ -127,6 +127,18 @@ fn execute_with(
     if available.is_empty() {
         return Err(io::Error::other(report.skipped.join("; ")));
     }
+    let (mut scratch, shared) = caches()?;
+    if let Some(root) = tmp_root {
+        scratch = vec![root];
+    }
+    #[cfg(target_os = "linux")]
+    pg_worker_core::disk_watermark::record_configured(
+        state,
+        available.keys().cloned(),
+        &shared,
+        &scratch,
+        &mut report,
+    );
     let mut guards = Guards::load(&pins, state)?;
     // A worktree a user unit runs from keeps its caches: the build the unit starts needs them.
     let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
@@ -177,10 +189,6 @@ fn execute_with(
         report
             .skipped
             .push("build running: cache cleanup deferred".into());
-    }
-    let (mut scratch, shared) = caches()?;
-    if let Some(root) = tmp_root {
-        scratch = vec![root];
     }
     if !building {
         let mut private_guards = Guards {
