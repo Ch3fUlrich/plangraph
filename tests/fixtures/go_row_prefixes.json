@@ -1,0 +1,24 @@
+{
+  "about": "One table of GO-row decision cells and the keeper's verdict on each. Every reader of a GO row (the keeper close path, `pg go-row check`, and the plangraph-data callers go-row-gate, gocheck and merge-part) must give the same accept/refuse. Grammar: store_waiver.GO_PREFIX.",
+  "rows": [
+    {"name": "stamp and date -u", "row": "(18:30Z, date -u) GO #12 GO-HEAD {head}", "accept": true},
+    {"name": "stamp only", "row": "(18:30Z) GO #12 GO-HEAD {head}", "accept": true},
+    {"name": "x minute", "row": "(18:3xZ) GO #12 GO-HEAD {head}", "accept": true},
+    {"name": "x minute and date -u", "row": "(18:3xZ, date -u) GO #12 GO-HEAD {head}", "accept": true},
+    {"name": "approximate stamp", "row": "(~18:30Z, date -u) GO #12 GO-HEAD {head}", "accept": true},
+    {"name": "no stamp", "row": "GO #12 GO-HEAD {head}", "accept": true},
+    {"name": "one numbered ruling", "row": "(09:05Z, date -u) RULINGS. (1) GO #12 GO-HEAD {head}; (2) later", "accept": true},
+    {"name": "exact minute after date -u (D-6612)", "row": "(12:1xZ, date -u 12:10Z) GO #1101 GO-HEAD {head}", "accept": false, "reason": "go_row_not_go"},
+    {"name": "exact minute after date -u (D-6569)", "row": "(14:2xZ, date -u 14:28Z) GO #1095 GO-HEAD {head}", "accept": false, "reason": "go_row_not_go"},
+    {"name": "text inside the parentheses (D-6571)", "row": "(14:5xZ, date -u, train 6 close) GO #1095 GO-HEAD {head}", "accept": false, "reason": "go_row_not_go"},
+    {"name": "hour out of range", "row": "(25:00Z, date -u) GO #12 GO-HEAD {head}", "accept": false, "reason": "go_row_not_go"},
+    {"name": "no Z", "row": "(18:30, date -u) GO #12 GO-HEAD {head}", "accept": false, "reason": "go_row_not_go"},
+    {"name": "no space after the stamp", "row": "(18:30Z)GO #12 GO-HEAD {head}", "accept": false, "reason": "go_row_not_go"},
+    {"name": "NO GO", "row": "(18:30Z, date -u) NO GO #12", "accept": false, "reason": "go_row_not_go"},
+    {"name": "two numbered GO rulings", "row": "(09:05Z) RULINGS. (1) GO #12; (2) GO #13", "accept": false, "reason": "go_row_not_go"},
+    {"name": "key list ends in a period", "row": "(10:00Z, date -u) GO #1101 GO-HEAD {head}; GO-KEYS [plangraph:A,plangraph:WS-WORK-DRIVES.]", "accept": false, "reason": "go_row_key_token", "token": "plangraph:WS-WORK-DRIVES."},
+    {"name": "key list ends in a hyphen", "row": "(10:00Z) GO #1101 GO-HEAD {head}; GO-KEYS [plangraph:A-]", "accept": false, "reason": "go_row_key_token", "token": "plangraph:A-"},
+    {"name": "key list with a space token", "row": "(10:00Z) GO #1101 GO-HEAD {head}; GO-KEYS [plangraph:A plangraph:B]", "accept": false, "reason": "go_row_keys_malformed"},
+    {"name": "clean key list", "row": "(10:00Z, date -u) GO #1101 GO-HEAD {head}; GO-KEYS [plangraph:A,plangraph:WS-WORK-DRIVES]", "accept": true}
+  ]
+}

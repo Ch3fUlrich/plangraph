@@ -146,16 +146,42 @@ def active_train(st, head):
                 dropped=[rec for rec in st["merged"] if rec["pr"] in dropped])
 
 
-def train_keys(st):
-    keys = {key for rec in st["merged"] for key in part_items(st, rec, require_keys=False)}
+def train_key_lists(st):
+    """``(delivered, deferred)`` keys of the train: the Plan-Item trailers of its commits not on main.
+
+    The parts' own keys, resolver commits and extra slices all count; a key trailered only on
+    ``docs/checkpoints/**`` is deferred, not delivered; keys of dropped or skipped parts are left out.
+    """
+    from plangraph.keeper.evidence_git import GitAdapter  # the keeper's reading of the same trailers
+
+    kept = {key for rec in st["merged"] for key in part_items(st, rec, require_keys=False)}
+    delivered, deferred = set(kept), set()
+    base, head, wt = st.get("base_head"), st.get("head"), st.get("worktree")
+    if base and head and wt:
+        exclude = [base]
+        origin = f"origin/{st['base']}"
+        if git("rev-parse", "--verify", "-q", f"{origin}^{{commit}}", cwd=wt, ok=(0, 1)).returncode == 0:
+            exclude.append(origin)
+        found, held = GitAdapter().train_trailer_keys(wt, head, exclude)
+        gone = {key for rec in [*st.get("dropped", []), *st.get("skipped", [])]
+                for key in rec.get("items", [])} - kept
+        delivered |= set(found)
+        delivered -= gone | set(held)
+        deferred = set(held) - gone
     batch = st.get("plan")
     if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
-        keys.add(batch)
-    return sorted(keys)
+        delivered.add(batch)
+    return sorted(delivered), sorted(deferred)
+
+
+def train_keys(st):
+    return train_key_lists(st)[0]
 
 
 def go_key_block(st):
-    return "GO-KEYS [" + ",".join(train_keys(st)) + "]"
+    delivered, deferred = train_key_lists(st)
+    block = "GO-KEYS [" + ",".join(delivered) + "]"
+    return block + ("; GO-DEFERRED [" + ",".join(deferred) + "]" if deferred else "")
 
 
 def keeper_migration(st):

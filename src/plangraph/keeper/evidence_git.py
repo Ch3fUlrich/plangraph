@@ -675,6 +675,43 @@ class GitAdapter:
             return []
         return [v for record in _stdout(proc).split("\x1d") for v in plan_items(record)]
 
+    #: Work under this prefix only records items as deferred; it delivers nothing.
+    CHECKPOINT_PREFIX = "docs/checkpoints/"
+
+    def train_trailer_keys(self, repo: str, head: str, exclude=()) -> tuple[list[str], list[str]]:
+        """``(delivered, deferred)`` ``Plan-Item`` keys of the commits in *head* not in any *exclude* ref.
+
+        A key is deferred when it has non-merge commits, no trailered merge, and every one of those
+        commits touches only ``docs/checkpoints/**``: a checkpoint doc records it, nothing ships it.
+        """
+        refs = [head, *exclude]
+        if not all(isinstance(r, str) and valid_ref(r) for r in refs):
+            raise ValueError("invalid ref")
+        proc = self._run(repo, ["log", "--format=%H%x1e%P%x1e%B%x1d", "--end-of-options",
+                                head, *[f"^{r}" for r in exclude]])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read the train commits")
+        delivered: set[str] = set()
+        checkpoint_only: dict[str, bool] = {}
+        for record in _stdout(proc).split("\x1d"):
+            fields = record.strip("\n").split("\x1e", 2)
+            if len(fields) != 3 or not valid_commit_ref(fields[0]):
+                continue
+            sha, parents, body = fields
+            keys = plan_items(body)
+            if not keys:
+                continue
+            if len(parents.split()) > 1:
+                delivered.update(keys)
+                continue
+            paths = [path for _, path in self._name_status(repo, ["--root", "--end-of-options", sha])]
+            only = bool(paths) and all(path.startswith(self.CHECKPOINT_PREFIX) for path in paths)
+            for key in keys:
+                checkpoint_only[key] = checkpoint_only.get(key, True) and only
+        deferred = {key for key, only in checkpoint_only.items() if only and key not in delivered}
+        delivered.update(set(checkpoint_only) - deferred)
+        return sorted(delivered), sorted(deferred)
+
     def writer_trailers(self, repo: str, sha: str, ref: str | None = None) -> list[dict[str, str]]:
         """Trailer dicts of the commits that authored the change behind *sha*.
 

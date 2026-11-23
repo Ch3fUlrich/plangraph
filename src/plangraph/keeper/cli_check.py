@@ -193,3 +193,36 @@ def add_parser(sub, make):
     p = make(sub, "check", help="plan hygiene: cancelled gate deps, order-only edges, merged-but-open items")
     p.add_argument("--strict", action="store_true",
                    help="exit 1 when anything is found")
+
+
+def add_go_row_parser(sub):
+    p = sub.add_parser("go-row", help="check one GO row against the keeper's own grammar (offline)")
+    p.add_argument("go_row_command", choices=["check"])
+    p.add_argument("--row", help="the decision cell (else --file, else stdin)")
+    p.add_argument("--file", help="read the decision cell from this file")
+    p.add_argument("--repo", default=".", help="the repository whose train range is read")
+    p.add_argument("--head", help="train head: the row must name exactly the Plan-Item keys of its commits")
+    p.add_argument("--exclude", action="append", default=[],
+                   help="commits already landed (repeatable; origin/main for a train)")
+    return p
+
+
+def cmd_go_row(args):
+    """``pg go-row check``: prints ``accept`` or ``refuse: <code>: <reason>``; exit 0 or 2."""
+    from .evidence_git import GitAdapter
+    from .store_waiver import go_row_check
+
+    row = args.row
+    if row is None:
+        row = open(args.file, encoding="utf-8").read() if args.file else sys.stdin.read()
+    row = row.strip()
+    delivered = deferred = None
+    if args.head:
+        try:
+            delivered, deferred = GitAdapter().train_trailer_keys(args.repo, args.head, args.exclude)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"refuse: go_row_train_unreadable: {exc}")
+            return 2
+    ok, reason = go_row_check(row, delivered=delivered, deferred=deferred or ())
+    print("accept" if ok else f"refuse: {reason}")
+    return EXIT_OK if ok else 2

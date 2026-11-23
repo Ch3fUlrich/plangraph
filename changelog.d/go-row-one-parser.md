@@ -1,0 +1,1 @@
+Export the keeper's GO-row parser as `go_row_check` and `pg go-row check` (prefix grammar, key tokens ending in punctuation, and a train's Plan-Item trailer keys), generate the GO-REQ key list from the train's trailers with checkpoint-only keys deferred, and share one fixture table of row prefixes.

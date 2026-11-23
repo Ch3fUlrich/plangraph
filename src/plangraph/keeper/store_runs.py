@@ -41,6 +41,15 @@ _GO_KEYS = re.compile(r"(?<![\w-])GO-KEYS\b")
 _GO_KEY = r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"
 
 
+def go_key_tokens(statement):
+    """The raw tokens of the one ``GO-KEYS [...]`` block, or ``None`` without a single readable block."""
+    markers = list(_GO_KEYS.finditer(statement or ""))
+    if len(markers) != 1:
+        return None
+    block = re.match(r"\s+\[([^\]]*)\](?=$|[\s;])", statement[markers[0].end():])
+    return [token.strip() for token in block[1].split(",")] if block else None
+
+
 def go_key_scope(statement):
     """Explicit train scope, empty if malformed; None selects the legacy GO grammar."""
     markers = list(_GO_KEYS.finditer(statement or ""))
