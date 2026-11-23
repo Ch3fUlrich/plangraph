@@ -245,3 +245,25 @@ def test_unix_socket_guard_rejects_long_paths(encoded):
     with socket.socket(socket.AF_UNIX) as server:
         with pytest.raises(AssertionError, match="use short_socket_dir"):
             server.bind(os.fsencode(address) if encoded else address)
+
+
+def test_pytest_shards_balance_recorded_durations(tmp_path, monkeypatch, shard_selector):
+    import json
+    from types import SimpleNamespace
+
+    timings = {'a': 9, 'b': 6, 'c': 4, 'd': 3, 'e': 2}
+    path = tmp_path / 'durations.json'
+    path.write_text(json.dumps(timings))
+    monkeypatch.setenv('PYTEST_SHARD_DURATIONS_FILE', str(path))
+    items = [
+        SimpleNamespace(
+            nodeid=name,
+            get_closest_marker=lambda _, name=name: (
+                SimpleNamespace(args=('group',), kwargs={}) if name in ('c', 'e') else None
+            ),
+        )
+        for name in 'abcde'
+    ]
+    shards = [shard_selector(items, f'{index}/2') for index in range(2)]
+    assert [[item.nodeid for item in shard] for shard in shards] == [['a', 'd'], ['b', 'c', 'e']]
+    assert [sum(timings[item.nodeid] for item in shard) for shard in shards] == [12, 12]

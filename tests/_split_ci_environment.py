@@ -1,3 +1,5 @@
+import json
+import math
 import os
 import subprocess
 import sys
@@ -126,11 +128,39 @@ def shard_items(items, shard):
             raise ValueError
     except (ValueError, AttributeError):
         raise pytest.UsageError('PYTEST_SHARD must be INDEX/COUNT with 0 <= INDEX < COUNT') from None
-    def bucket(item):
+    def key(item):
         group = item.get_closest_marker('xdist_group')
-        key = str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
-        return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') % count
-    return [item for item in items if bucket(item) == index]
+        return str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
+
+    if duration_file := os.environ.get('PYTEST_SHARD_DURATIONS_FILE'):
+        return _weighted_shard(items, key, index, count, duration_file)
+    return [item for item in items
+            if int.from_bytes(hashlib.sha256(key(item).encode()).digest()[:8], 'big') % count == index]
+
+
+def _weighted_shard(items, key, index, count, duration_file):
+    try:
+        durations = json.loads(Path(duration_file).read_text(encoding='utf-8'))
+        if not isinstance(durations, dict) or any(
+            type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
+            for seconds in durations.values()
+        ):
+            raise ValueError('expected a JSON object mapping test IDs to nonnegative seconds')
+    except (OSError, ValueError, OverflowError) as exc:
+        raise pytest.UsageError(f'PYTEST_SHARD_DURATIONS_FILE: {exc}') from exc
+
+    weights = {}
+    for item in items:
+        group = key(item)
+        weights[group] = weights.get(group, 0) + max(durations.get(item.nodeid, 1), 0.001)
+    loads = [0] * count
+    buckets = {}
+    for group in sorted(weights, key=lambda group: (-weights[group], group)):
+        bucket = min(range(count), key=loads.__getitem__)
+        buckets[group] = bucket
+        loads[bucket] += weights[group]
+    return [item for item in items if buckets[key(item)] == index]
+
 
 @pytest.fixture
 def shard_selector():
