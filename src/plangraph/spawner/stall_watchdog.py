@@ -402,7 +402,14 @@ def main(argv=None, *, hung_config=None):
         return
     # Completion delivery must not be blocked by an unavailable keeper.
     from .runner import spawn_service
+    recovery_findings = []
     if not args.dry_run:
+        if (state / 'run-lifecycle').exists():
+            from .remote_ps import lifecycle_command
+            try:
+                lifecycle_command(state, 'record-recover', capture_output=True)
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                recovery_findings.append(dict(rule='run-lifecycle-recovery', reason=type(exc).__name__))
         spawn_service(state=state).retry_completions()
     budget = [max(1, int(probe_setting('PLANGRAPH_PROBE_MAX_PER_TICK', 25, 25))), 0]
     deliver = lambda e: deliver_event(state, e, budget=budget)
@@ -413,6 +420,7 @@ def main(argv=None, *, hung_config=None):
         _budget.reset(token)
     findings = tick(runs, [], lambda s: read_activity(state, s),
                     deliver=deliver, state=state, dry_run=args.dry_run, budget=budget, hung=hung, stuck=True)
+    findings.extend(recovery_findings)
     if not args.dry_run:
         from .notify import retry_spawn_attempts
         findings.extend(retry_spawn_attempts(state, runs))
