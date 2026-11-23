@@ -6,6 +6,7 @@ pub mod ci_watch;
 pub mod codex_readiness;
 pub mod env;
 pub mod evidence;
+mod fast_check_dispatch;
 mod fast_check_packages;
 pub mod fast_checks;
 pub mod feeder;

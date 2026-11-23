@@ -252,6 +252,7 @@ def test_affected_timeout_names_step_bound_and_count(monkeypatch, repo):
         raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output=b'{"tests": ["a", "b", "c"]}\n')
 
     monkeypatch.setattr(preflight, "run_test_process", timeout)
+    monkeypatch.setattr(preflight, "host_load", lambda: (0.0, 8))  # a busy host adds a reason line
     code, text = preflight.run(["python3", "tools/affected_tests.py"], repo, {})
     assert code == 1
     assert text == (f"tests: affected-tests step exceeded its {preflight.TEST_TIMEOUT} second bound "
