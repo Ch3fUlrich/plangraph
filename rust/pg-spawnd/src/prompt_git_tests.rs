@@ -84,6 +84,78 @@ fn review_fixture() -> (
     let args = serde_json::json!({"role":"review", "card":{"diff_ref":diff}});
     (root, launch, args, repos)
 }
+
+#[test]
+fn assembled_review_contract_stays_last_on_both_inline_paths() {
+    let (root, _, diff) = fixture();
+    let output = crate::test_python::command()
+        .args([
+            "-c",
+            r#"
+import json, sys
+from types import SimpleNamespace
+from plangraph.review.prompt import assemble, load_tail
+from plangraph.spawner.seat_spawn import SeatSpawnMixin
+from plangraph.spawner.env_redact import _redact_prompt
+
+repo, base, head = sys.argv[1:]
+brief = assemble(['check'], [('Evidence', 'fixture evidence')])
+seat = SeatSpawnMixin()
+seat.runner = SimpleNamespace(default_cwd=repo)
+card = dict(diff_ref=dict(repo=repo, base=base, head=head), context=['file:1-1'])
+leg = SimpleNamespace(harness='opencode', tool_mode='inline-only', max_request_tokens=100000)
+inline = seat._leg_prompt(brief, card, 'review', leg)
+redacted = _redact_prompt(inline, lambda text: text.replace('after', '[outside source]'))
+print(json.dumps(dict(brief=brief, tail=load_tail().strip(), inline=inline, redacted=redacted)))
+"#,
+        ])
+        .arg(&root)
+        .args([&diff.base_sha, &diff.head_sha])
+        .env_remove("PLANGRAPH_CONTEXT_STRICT")
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let prompts: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let tail = prompts["tail"].as_str().unwrap();
+    let rust = pg_worker_core::review_split::format_review_prompt(
+        prompts["brief"].as_str().unwrap(),
+        true,
+        None,
+        "+rust diff evidence",
+    );
+    for (label, text, diff_end) in [
+        ("Rust", rust.as_str(), "<!-- PLANGRAPH INLINE DIFF END -->"),
+        (
+            "Python",
+            prompts["inline"].as_str().unwrap(),
+            "=== END INLINE DIFF ===",
+        ),
+    ] {
+        assert!(
+            text.trim_end().ends_with(tail),
+            "{label} reminder did not come last"
+        );
+        assert_eq!(
+            text.matches(tail).count(),
+            1,
+            "{label} duplicated the reminder"
+        );
+        assert!(
+            text.find(diff_end).unwrap() < text.find(tail).unwrap(),
+            "{label}"
+        );
+    }
+    let inline = prompts["inline"].as_str().unwrap();
+    assert!(inline.find("=== END CONTEXT PACK ===").unwrap() < inline.find(tail).unwrap());
+    let redacted = prompts["redacted"].as_str().unwrap();
+    assert!(redacted.matches("after").count() >= 2, "{redacted}");
+}
+
 fn check_unknown_carrier_refused(
     args: &serde_json::Value,
     launch: &mut crate::launch::LaunchSpec,
