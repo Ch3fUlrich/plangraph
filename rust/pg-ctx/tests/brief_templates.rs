@@ -143,6 +143,63 @@ print(json.dumps(pairs))
 }
 
 #[test]
+fn claude_writer_brief_uses_the_fleet_record_and_rejects_the_legacy_trailer() {
+    let result = render(
+        r#"
+import json
+import os
+import tempfile
+from pathlib import Path
+from plangraph.review.prompt import render_brief
+from tools.ci_commit_gate import message_violations
+
+record = json.loads(Path('rust/pg-spawnd/tests/fixtures/fleet-launch/launch-record.json').read_text())
+ctx = {'item_key': 'plangraph:FIXTURE'}
+legacy = 'Writer: claude-sonnet-5-5 high writer fixture (Claude Code)'
+
+def render_trailer(model):
+    brief = render_brief('writer', ctx, launch_record=dict(record, name='writer', model=model))
+    prefix, context = brief.split('=== ITEM CONTEXT', 1)
+    assert prefix == render_brief('writer', ctx).split('=== ITEM CONTEXT', 1)[0]
+    trailer, = (line for line in context.splitlines() if line.startswith('Writer: '))
+    assert not message_violations('Fixture change\n\nPlan-Item: plangraph:FIXTURE\n' + trailer)
+    return trailer
+
+def refusal(**kwargs):
+    try:
+        render_brief('writer', ctx, **kwargs)
+    except ValueError as exc:
+        return str(exc)
+    raise AssertionError('invalid Writer trailer was accepted by the brief builder')
+
+with tempfile.TemporaryDirectory() as outside:
+    os.chdir(outside)
+    print(json.dumps({
+        'trailer': render_trailer('claude-sonnet-5-5'),
+        'alias': render_trailer(record['model']),
+        'refusals': [
+            refusal(rules=legacy),
+            refusal(rules=legacy, launch_record=record),
+            refusal(launch_record=dict(record, session_id=None)),
+            refusal(launch_record=dict(record, session_id=record['job_id'])),
+        ],
+    }))
+"#,
+    );
+    assert_eq!(
+        result["trailer"],
+        "Writer: claude-sonnet-5-5 12345678-1234-1234-1234-123456789abc"
+    );
+    assert_eq!(
+        result["alias"],
+        "Writer: claude-sonnet 12345678-1234-1234-1234-123456789abc"
+    );
+    for refused in result["refusals"].as_array().unwrap() {
+        assert!(refused.as_str().unwrap().contains("CLAUDE_WRITER_RE"));
+    }
+}
+
+#[test]
 fn judge_renders_in_an_uninstalled_checkout() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = test_python::command()
