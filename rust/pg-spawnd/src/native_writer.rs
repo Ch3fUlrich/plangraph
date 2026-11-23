@@ -334,7 +334,7 @@ fn writer_attempt(
     prompt: &str,
     saved_session: Option<&str>,
 ) -> Result<i32, (i32, String)> {
-    let base = match record["base_sha"].as_str() {
+    let mut base = match record["base_sha"].as_str() {
         Some(base) => base.to_owned(),
         // Older resume receipts can lack the admitted SHA.
         None => driver.head().map_err(|e| (6, e))?,
@@ -357,16 +357,34 @@ fn writer_attempt(
     let mut idle = 0;
     let mut base_retries = 0;
     loop {
-        let head = driver.head().map_err(|e| (6, e))?;
-        record["final_head"] = json!(head);
-        driver.save(record).map_err(|e| (6, e))?;
+        let mut head = driver.head().map_err(|e| (6, e))?;
         // A first check can use commits already on the worktree at the start of the turn.
         // Fix turns need a different head, unless review admission requested a base retry.
-        if (base_retries == 0 && checked_head.as_deref() == Some(head.as_str()))
-            || !driver
+        let needs_check = base_retries > 0 || checked_head.as_deref() != Some(head.as_str());
+        let mut has_commits = needs_check
+            && driver
                 .has_commits_beyond(&base, &head)
-                .map_err(|e| (7, e))?
-        {
+                .map_err(|e| (7, e))?;
+        if has_commits {
+            let preparation = driver
+                .prepare_review(&head)
+                .map_err(|e| (if e == STOPPED { 10 } else { 7 }, e))?;
+            if let Some(basis) = preparation {
+                let range_changed = base != basis.base || head != basis.head;
+                base.clone_from(&basis.base);
+                record["base_sha"] = json!(base);
+                record["review_base"] = json!(basis);
+                head = basis.head;
+                // Main can now contain the original writer head.
+                if range_changed {
+                    has_commits = driver
+                        .has_commits_beyond(&base, &head)
+                        .map_err(|e| (7, e))?;
+                }
+            }
+        }
+        record["final_head"] = json!(head);
+        if !has_commits {
             idle += 1;
             if idle > NO_COMMIT_RESUMES || session.is_empty() {
                 return Err((
@@ -376,22 +394,13 @@ fn writer_attempt(
                     ),
                 ));
             }
+            base_retries = 0;
+            driver.save(record).map_err(|e| (6, e))?;
             resume(driver, record, &session, &format!("No commit yet (HEAD is still {head}): continue with the items of your brief and the failures or findings above, commit your work and end your turn; keep this session."))?;
             continue;
         }
         idle = 0;
-        let preparation = driver
-            .prepare_review(&head)
-            .map_err(|e| (if e == STOPPED { 10 } else { 7 }, e))?;
-        let head = if let Some(basis) = preparation {
-            record["base_sha"] = json!(basis.base);
-            record["review_base"] = json!(basis);
-            basis.head
-        } else {
-            head
-        };
         checked_head = Some(head.clone());
-        record["final_head"] = json!(head);
         record["fast_checks"] = json!({"head":head,"status":"running"});
         driver.save(record).map_err(|e| (6, e))?;
         let started = stage::now();

@@ -5,11 +5,19 @@ struct MovingMain {
     upstream: PathBuf,
     conflict: bool,
     race: bool,
+    absorbed: bool,
     original_head: String,
 }
 
 impl MovingMain {
     fn advance_main(&self) {
+        if self.absorbed {
+            git_in(
+                &self.host.cwd,
+                &["push", "-q", "origin", "HEAD:refs/heads/main"],
+            );
+            return;
+        }
         let file = if self.conflict {
             "writer.txt"
         } else {
@@ -36,6 +44,9 @@ impl Driver for MovingMain {
         Ok(20)
     }
     fn execute(&mut self, session: Option<&str>, _: &str) -> Result<String, String> {
+        if self.absorbed && session.is_some() {
+            return Ok("fixture".into());
+        }
         assert!(session.is_none(), "the worker owns the rebase");
         fs::write(self.host.cwd.join("writer.txt"), "from writer\n").unwrap();
         git_in(&self.host.cwd, &["add", "writer.txt"]);
@@ -48,6 +59,9 @@ impl Driver for MovingMain {
     }
     fn head(&mut self) -> Result<String, String> {
         self.host.head()
+    }
+    fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String> {
+        self.host.has_commits_beyond(base, head)
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         self.host.fast_checks(head)?;
@@ -75,11 +89,12 @@ impl Driver for MovingMain {
 
 #[test]
 fn native_writer_reviews_and_publishes_when_main_moves() {
-    for (conflict, race, lane_base) in [
-        (false, false, false),
-        (true, false, false),
-        (false, true, false),
-        (false, false, true),
+    for (conflict, race, lane_base, absorbed) in [
+        (false, false, false, false),
+        (true, false, false, false),
+        (false, true, false, false),
+        (false, false, true, false),
+        (false, false, false, true),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let mut host = local_base_fixture(dir.path());
@@ -153,11 +168,20 @@ print(json.dumps(record))
             upstream: dir.path().join("train"),
             conflict,
             race,
+            absorbed,
             original_head: String::new(),
         };
         let record = json!({"run_id": driver.host.run_id, "run_kind": "native-codex", "role": "implement",
                             "status": "running", "repo": driver.host.repo});
         let record = native_writer::run(&mut driver, record, "fixture brief");
+        if absorbed {
+            assert_eq!(record["exit_code"], 7, "{record}");
+            assert!(record["reason"].as_str().unwrap().starts_with("no_commit:"));
+            assert_eq!(record["base_sha"], driver.original_head);
+            assert!(record["fast_checks"].is_null());
+            assert!(!dir.path().join("counted-seats").exists());
+            continue;
+        }
         assert_eq!(record["exit_code"], 0, "{record}");
         let head = driver.host.head().unwrap();
         let main = git_in(&origin, &["rev-parse", "refs/heads/main"]);
