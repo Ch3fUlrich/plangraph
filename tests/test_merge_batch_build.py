@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 
 from merge_batch_env import conflicting, env_fixture, first_parent, two
-from merge_batch_env import train_cli  # noqa: F401
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stubs")
 
@@ -61,22 +60,28 @@ def read(env, name):
     return json.loads(env.state_file(name).read_text())
 
 
-def install_pre_push(env):
+def install_pre_push(env, *, stub_train_gate=False):
     hook = env.repo / ".git/hooks/pre-push"
     source = Path(__file__).resolve().parents[1] / "tools/hooks/pre-push"
     hook.write_text("#!/usr/bin/env python3\nimport runpy\n"
                     f"hook = runpy.run_path({str(source)!r})\n"
                     "hook['main'].__globals__['hook_checkout_status'] = lambda: 0\n"
-                    "raise SystemExit(hook['main']())\n")
+                    + ("hook['main'].__globals__['train_gate'] = lambda *_: None\n" if stub_train_gate else "")
+                    + "raise SystemExit(hook['main']())\n")
     hook.chmod(0o755)
 
 
 @pytest.mark.parametrize("case", ["own", "train-pr", "train-head", "train-unrelated",
                                   "train-wrong-pr", "train-fenced", "lane", "fork", "no-gh"])
-def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, tmp_path, request, case):
+def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, tmp_path, case, monkeypatch):
+    run = subprocess.run
+
+    def run_without_cargo(command, *args, **kwargs):
+        assert command[0] != "cargo", "open-PR gate fixture started a Cargo build"
+        return run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_without_cargo)
     branch = "lane/topic" if case in ("lane", "fork") else "land/train-fixture"
-    if branch.startswith("land/train-"):
-        (env.stubs / "plangraph").symlink_to(request.getfixturevalue("train_cli"))
     writer = "\n\nWriter: codex/test"
     closed = env.branch_pr(1, {"closed": "closed\n"}, state="CLOSED", trailer=writer)
     part = env.branch_pr(2, {"part": "part\n"}, trailer=writer)
@@ -110,11 +115,12 @@ def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, tmp_path, reque
     manifest = tmp_path / "train-manifest.txt"
     manifest.write_text("\n".join(parts) + "\n")
     env.env["PLANGRAPH_TRAIN_MANIFEST"] = str(manifest)
-    install_pre_push(env)
+    # The dedicated hook-path tests exercise the real train-chain validator.
+    install_pre_push(env, stub_train_gate=True)
     if case == "no-gh":
         (env.stubs / "gh").unlink()
     result = subprocess.run(["git", "push", "origin", branch], cwd=env.repo, env=env.env,
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, timeout=8)
     output = result.stdout + result.stderr
     forbidden = {"train-unrelated": other, "train-wrong-pr": part,
                  "train-fenced": part, "lane": part, "fork": closed}
