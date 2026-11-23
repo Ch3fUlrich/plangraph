@@ -157,6 +157,8 @@ def test_every_harness_client_is_launched_with_the_explicit_cwd(
         tmp_path, monkeypatch, client, binary, model):
     from plangraph.spawner import resolver
     from plangraph.spawner.runner import SpawnerRunner
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client',
+                        lambda: ('codex', None))
     if client == 'qodercli':
         # Isolate cwd propagation from catalog admission for this synthetic model.
         monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: model)
