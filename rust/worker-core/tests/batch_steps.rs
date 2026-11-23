@@ -42,6 +42,16 @@ fn validate(value: Value) -> Result<(), String> {
         .validate()
 }
 
+fn add_failed_attempt(example: &mut Value, index: usize, reason: &str) {
+    let rows = example["rows"].as_array_mut().unwrap();
+    let mut failed = rows[index].clone();
+    failed["step"]["result"] = json!({"status":"failed","reason":reason});
+    rows[index]["stage"]["attempt"] = json!(2);
+    rows[index]["stage"]["started_at_ms"] = failed["stage"]["ended_at_ms"].clone();
+    rows[index]["stage"]["ended_at_ms"] = json!(1200 + index * 200);
+    rows.insert(index, failed);
+}
+
 #[test]
 fn sample_batch_validates_all_step_types_through_train_join() {
     let example = sample();
@@ -64,8 +74,12 @@ fn a_batch_rejects_stale_evidence_misordered_steps_and_invalid_stage_rows() {
         assert!(validate(example).is_err(), "step {index} accepted {field}");
     }
     let mut example = sample();
-    example["rows"].as_array_mut().unwrap().swap(3, 4);
-    assert!(validate(example).is_err());
+    let (earlier, later) = example["rows"].as_array_mut().unwrap().split_at_mut(4);
+    std::mem::swap(&mut earlier[3]["step"], &mut later[0]["step"]);
+    assert_eq!(
+        validate(example).unwrap_err(),
+        "step 3: step out of order or input does not match"
+    );
 
     let mut example = sample();
     example["rows"][2]["stage"]["ended_at_ms"] = json!(0);
@@ -74,4 +88,40 @@ fn a_batch_rejects_stale_evidence_misordered_steps_and_invalid_stage_rows() {
     let mut example = sample();
     example["rows"][0]["step"]["result"] = json!({"status":"failed","reason":"claim held"});
     assert!(validate(example).is_err());
+}
+
+#[test]
+fn claim_retry_validates_through_train_join() {
+    let mut example = sample();
+    add_failed_attempt(&mut example, 0, "claim held");
+    validate(example.clone()).unwrap();
+
+    example["rows"][1]["stage"]["attempt"] = json!(1);
+    assert_eq!(
+        validate(example).unwrap_err(),
+        "invalid stage row for step 0 attempt 2"
+    );
+}
+
+#[test]
+fn fix_retry_resumes_checks_and_validates_through_train_join() {
+    let mut example = sample();
+    add_failed_attempt(&mut example, 5, "writer unavailable");
+    validate(example.clone()).unwrap();
+
+    example["rows"][7]["stage"]["attempt"] = json!(3);
+    assert_eq!(
+        validate(example).unwrap_err(),
+        "invalid stage row for step 6 attempt 1"
+    );
+}
+
+#[test]
+fn failed_attempt_requires_a_nonblank_reason() {
+    let mut example = sample();
+    add_failed_attempt(&mut example, 0, " \t");
+    assert_eq!(
+        validate(example).unwrap_err(),
+        "step 0: failed attempt requires a reason"
+    );
 }
