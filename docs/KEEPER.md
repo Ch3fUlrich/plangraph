@@ -424,7 +424,11 @@ edit to the parent's criteria.
 Ready and claim include qualified Plan-Item matches from other repositories
 in the configured merge scan. A bare Plan-Item ID matches within its own
 project, and a merge message can carry a Plan-Item line in its body. Merged
-work can appear in `needs_reconcile` instead of the ready list.
+work can appear in `needs_reconcile` instead of the ready list. A GO part
+table can also identify the item when its named part belongs to the GO head
+and the matching PR landed on the default branch. A decision's explicit
+`Closes: KEY@SHA` also counts when its revision resolves to a landed merge.
+The watcher includes these decision-only cases as routing proposals.
 
 The reaper raises `gate_dependency_capacity` when a nonterminal gate or goal
 has at least 190 non-cancelled dependencies, including done dependencies.
