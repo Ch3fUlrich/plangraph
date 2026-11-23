@@ -1,6 +1,7 @@
 //! Caller-process launch for the fleet's session command.
 
 mod arguments;
+mod external_run;
 mod identity;
 mod paths;
 mod placement;
@@ -15,6 +16,7 @@ mod storage;
 mod tests;
 
 use arguments::{Arguments, ParseError};
+pub(crate) use external_run::agent_roster;
 use paths::{io_text, normalize, read_text, repr, resolve, shell_quote, var, Paths};
 use placement::Placement;
 use policy::{refused_role, Admission};
@@ -42,18 +44,6 @@ pub fn legacy_host(policy_path: &Path, explicit: Option<&str>) -> Result<String,
 /// Local kernel hostname used when the spawner host identity is unset.
 pub fn local_hostname() -> String {
     placement::fs_hostname()
-}
-
-pub(crate) fn agent_roster() -> io::Result<Vec<Value>> {
-    let output = process::capture(
-        Command::new("claude").args(["agents", "--json", "--all"]),
-        None,
-        std::time::Duration::from_secs(5),
-    )?;
-    if !output.status.success() {
-        return Err(io::Error::other("fleet agent roster failed"));
-    }
-    serde_json::from_slice(&output.stdout).map_err(io::Error::other)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -322,21 +312,7 @@ fn local(
         eprintln!("fleet-launch: fallback ledger unavailable; not starting");
         return Ok(2);
     }
-    let state =
-        crate::state::resolve_state(None, |key| std::env::var_os(key)).map_err(io::Error::other)?;
-    let role = match args.role.rsplit('-').next().unwrap_or_default() {
-        "writer" | "implement" => "implement",
-        role @ ("fix" | "review" | "judge" | "research") => role,
-        _ => "orchestrate",
-    };
-    let mut lifecycle = crate::external_run::Registered::start(
-        state,
-        json!({
-            "run_kind":"fleet-session", "fleet_session_name":name, "host":host, "role":role,
-            "harness":"claude", "requested_model":args.model, "effort":args.effort,
-            "item_key":admission.fields["card"],
-        }),
-    )?;
+    let mut lifecycle = external_run::register(args, admission, &name, host)?;
     let launched_ms = storage::epoch_millis();
     let output = Command::new(argv[0])
         .args(&argv[1..])

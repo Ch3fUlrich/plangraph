@@ -230,7 +230,6 @@ fn run_registered(command: &mut Command, role: &str) -> io::Result<ExitStatus> {
     };
     let registered = lifecycle.child(child.id());
     let exit = child.wait()?;
-    registered?;
     let status = if exit.success() {
         "completed"
     } else if matches!(
@@ -241,6 +240,10 @@ fn run_registered(command: &mut Command, role: &str) -> io::Result<ExitStatus> {
     } else {
         "failed"
     };
-    lifecycle.finish(status, status_code(exit), None)?;
+    let run_id = lifecycle.id().to_owned();
+    if let Err(error) = registered.and_then(|()| lifecycle.finish(status, status_code(exit), None))
+    {
+        eprintln!("hand-run: lifecycle publication failed for {run_id}: {error}");
+    }
     Ok(exit)
 }
