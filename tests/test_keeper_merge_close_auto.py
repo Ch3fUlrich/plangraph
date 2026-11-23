@@ -359,7 +359,8 @@ def test_a_warmed_scan_is_not_fetched_again_under_the_lock(env, monkeypatch):
     calls = []
     real = context_sources.work_index
     monkeypatch.setattr(context_sources, "work_index",
-                        lambda git, project, *, fresh=False, max_age=None, cached_only=False: calls.append(fresh) or real(git, project, fresh=fresh))
+                        lambda git, project, *, fresh=False, **kw:
+                        calls.append(fresh) or real(git, project, fresh=fresh, **kw))
     env.store.warm_merge_scan()
     assert calls == [True]
     result = auto(env, require_seats=False)
@@ -699,7 +700,7 @@ def test_refresh_reads_only_new_commit_history(env, monkeypatch):
 
     env.repo.land("old", "Plan-Item: demo:A", 93)
     adapter = env.store.ctx["git"]
-    previous = context_sources.work_index(adapter, "demo", fresh=True)
+    previous = context_sources.work_index(adapter, "demo", fresh=True, incremental=True)
     env.repo.land("new", "Plan-Item: demo:B", 94)
     read = []
     real = adapter._run
@@ -711,11 +712,13 @@ def test_refresh_reads_only_new_commit_history(env, monkeypatch):
         return result
 
     monkeypatch.setattr(adapter, "_run", track)
-    index = context_sources.work_index(adapter, "demo", fresh=True)
+    index = context_sources.work_index(adapter, "demo", fresh=True, incremental=True)
     assert len(read) == 1 and "^" + previous["target"] in read[0][0]
     assert "Plan-Item: demo:A" not in read[0][1]
     assert [context_sources.indexed_work(index, f"demo:{key}")["commits"][0]["merge"]["pr"]
             for key in "AB"] == [93, 94]
+    context_sources.work_index(adapter, "demo", fresh=True, incremental=True)
+    assert len(read) == 1
 
 
 def test_items_from_the_same_merge_share_immutable_proof_metadata(env, monkeypatch):
