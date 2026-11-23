@@ -449,7 +449,18 @@ def test_define_attaches_a_non_slice_under_a_slice(w):
     assert w.store._item("demo:X-S1")["depends_on"] == ["demo:FOLLOWUP"]
 
 
-@pytest.mark.parametrize("under", [None, "Y"])
-def test_define_requires_slice_parent_to_match_under(w, under):
-    with pytest.raises(Refused, match="slice_parent must match under"):
-        w.store.create_items(w.p("router"), [defn("X-S1", under=under, slice_parent="X")])
+def test_define_checks_the_sliced_item_independently_of_under(w):
+    router = w.p("router")
+    w.store.create_items(router, [
+        defn("LESSONS-ENFORCE", kind="gate", under="GOAL"),
+        defn("LEGACY", under="GOAL", done_criteria="Slice of demo:X: legacy criteria"),
+    ])
+    nested = defn("LEGACY-S1", under="LESSONS-ENFORCE", slice_parent="LEGACY")
+    before = _snapshot(w)
+    with pytest.raises(Refused, match="parent demo:LEGACY is already a slice"):
+        w.store.create_items(router, [nested])
+    assert _snapshot(w) == before
+    first = defn("X-S1", under="LESSONS-ENFORCE", slice_parent="X")
+    assert w.store.create_items(router, [first])["attached"] == [
+        {"key": "demo:X-S1", "under": "demo:LESSONS-ENFORCE"},
+    ]

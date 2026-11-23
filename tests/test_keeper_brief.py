@@ -297,6 +297,10 @@ def test_definition_requires_and_preserves_an_explicit_design_reference(w):
     "Read the keeper store design before editing.",
     "Follow the existing response contract.",
     "Use tests to validate the storage design.",
+    "Flag examples such as 'Recover the design' in briefs.",
+    'Flag examples such as "Obtain the roster contract" in briefs.',
+    "Flag examples such as ‘Load the design’ and “Read the approved design”.",
+    "Flag examples such as `Follow the canonical roster contract` in briefs.",
 ])
 def test_definition_allows_general_design_prose_without_a_reference(w, how):
     lane = defn("WORK", under="GOAL", description=f"Why: fix storage\nHow: {how}")
@@ -307,6 +311,7 @@ def test_definition_allows_general_design_prose_without_a_reference(w, how):
     "Read the approved design.",
     "Follow the v10 roster contract.",
     "Use the design document.",
+    "Compare 'the summary' with the approved notes. Recover the design.",
 ])
 def test_definition_requires_references_for_explicit_design_inputs(w, how):
     lane = defn("WORK", under="GOAL", description=f"Why: fix storage\nHow: {how}")
