@@ -10,16 +10,67 @@ pub(super) fn saved_prompt(host: &Host, head: &str, round: usize) -> String {
 const STATUS_LINE: &str = "SKIPPED plangraph:STATUS-ONLY Waiting for a fixture.";
 const SLICES_CONTENT: &str = r#"{"items":[{"id":"DEFERRED-SLICE"}]}"#;
 
+pub(super) fn save_writer_without_artifacts(host: &mut Host) {
+    host.save(&json!({"run_id": host.run_id, "status": "running"}))
+        .unwrap();
+    let record = crate::records::read_record_file(&host.record_path)
+        .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+    assert_eq!(
+        record["writer_status_path"],
+        json!(host.reviews.join("status.txt"))
+    );
+    assert_eq!(
+        record["writer_slices_path"],
+        json!(host.reviews.join("slices.json"))
+    );
+    assert!(!host.reviews.join("status.txt").exists());
+    assert!(!host.reviews.join("slices.json").exists());
+}
+
 pub(super) fn write_writer_artifacts(host: &Host) {
     let status = host.reviews.join("status.txt");
     let slices = host.reviews.join("slices.json");
     fs::write(&status, format!("{STATUS_LINE}\n")).unwrap();
     fs::write(&slices, SLICES_CONTENT).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn native_request_saves_explicit_writer_artifact_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let record_path = root.join("state/runs/run-artifacts/record.json");
+    fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    let status = root.join("review").join("writer-summary.txt");
+    let slices = root.join("review").join("writer-deferred.json");
+    let request = root.join("request.json");
     fs::write(
-        &host.record_path,
-        json!({"writer_status_path":status,"writer_slices_path":slices}).to_string(),
+        &request,
+        json!({
+            "record": {
+                "run_id": "run-artifacts",
+                "repo": root,
+                "base_ref":"refs/heads/main",
+                "tool_path": root.join("no-tools"),
+            },
+            "record_path": record_path,
+            "card": {
+                "review_dir": root.join("review"),
+                "writer_status_path": status,
+                "writer_slices_path": slices,
+            },
+            "prompt": "fixture"
+        })
+        .to_string(),
     )
     .unwrap();
+    // Missing tools stop execution before Codex starts, after the run is recorded.
+    execute(vec![request.to_string_lossy().into_owned()]).unwrap();
+    let record = crate::records::read_record_file(&record_path)
+        .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+    assert_eq!(record["writer_status_path"], json!(status));
+    assert_eq!(record["writer_slices_path"], json!(slices));
+    assert!(!record_path.with_file_name("native.log").exists());
 }
 
 pub(super) fn assert_writer_artifacts(host: &Host, head: &str) {
