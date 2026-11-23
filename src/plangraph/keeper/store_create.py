@@ -562,6 +562,7 @@ class CreateMixin:
         # cancelled-dropped) edge list, not the caller's raw input.
         audit_after = {name: (me["depends_on"] if name == "depends_on"
                               else edit_fields[name]) for name in edit_fields}
+        self._check_criteria_amendment(item, edit_fields, amendment)
         with self._write():
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
@@ -589,6 +590,7 @@ class CreateMixin:
                 check_definition_inputs({**fresh, **edit_fields})
             # Re-check tier/evidence under the lock, including open-item edits.
             validate_decision_edit(fresh, decision_fields, principal)
+            self._check_criteria_amendment(fresh, edit_fields, amendment)
             if tier_edit:
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.
