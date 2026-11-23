@@ -87,7 +87,11 @@ An empty route records `review_status: deferred_to_batch_seat` and the per-leg
 `review_causes`, exits successfully after final gates, and leaves the head for
 the batch review. Once a seat is admitted, normal verdict retries apply.
 The card's `review_dir` selects a target-host directory; the default is
-`<worktree>/reviews`.
+`<worktree>/reviews`. The run record stores `writer_status_path` and
+`writer_slices_path`. They default to `status.txt` and `slices.json` in that
+directory. A card can set either path explicitly using an absolute target-host
+path directly inside the review directory. Review prompts quote both files as writer evidence and mark absent
+artifacts as missing.
 
 When a native batch brief provides no status-file path, put one
 `SKIPPED <key> <reason>` line per skipped item in a commit body above its trailer
