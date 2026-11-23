@@ -205,3 +205,84 @@ fn usage() -> i32 {
     eprintln!("usage: plangraph merge-close [--count | --repos] [--project NAME]");
     2
 }
+
+/// Persist one routing proposal batch from the keeper's watched dry run.
+pub fn reconcile_with(
+    keeper: &dyn Transport,
+    seats: Option<bool>,
+    state: &std::path::Path,
+) -> Result<String, String> {
+    let mut request = json!({"apply": false, "watch": true});
+    if let Some(required) = seats {
+        request["require_seats"] = json!(required);
+    }
+    let report = keeper.call("close_merged_auto", Some(request))?;
+    let count = report["merged_not_done"]
+        .as_u64()
+        .ok_or("missing merged count")?;
+    let alert = report["alert"]
+        .as_bool()
+        .ok_or("missing watcher alert state")?;
+    let close = report["would_close"]
+        .as_array()
+        .ok_or("missing close proposals")?;
+    let listed = report["listed"]
+        .as_array()
+        .ok_or("missing refused proposals")?;
+    if count != (close.len() + listed.len()) as u64 {
+        return Err("merged count does not match the proposal rows".into());
+    }
+    let mut proposals = Vec::new();
+    let mut refusals = std::collections::BTreeMap::new();
+    for row in close {
+        proposals.push(json!({"action": "CLOSE", "item": row}));
+    }
+    for row in listed {
+        let reason = row["reason"].as_str().ok_or("missing refusal reason")?;
+        let (code, detail) = reason.split_once(": ").unwrap_or((reason, ""));
+        let tag = detail.split(':').next().unwrap_or_default();
+        let tag = if !tag.is_empty() && tag.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+            tag
+        } else {
+            code
+        };
+        *refusals.entry(tag).or_insert(0usize) += 1;
+        let action = if tag == "unmerged_work_or_lanes_unknown" {
+            "SLICE-OPEN"
+        } else {
+            "RESCOPE"
+        };
+        proposals.push(json!({"action": action, "item": row}));
+    }
+    let batch = json!({"merged_not_done": count, "alert": alert, "refusals": refusals,
+                       "proposals": proposals});
+    let text = batch.to_string();
+    pg_worker_core::run::record_io::atomic_write_private(state, text.as_bytes())
+        .map_err(|err| format!("write watcher state {}: {err}", state.display()))?;
+    Ok(format!("reconcile-merged\t{text}"))
+}
+
+pub fn reconcile(env: &Env, args: &[String]) -> i32 {
+    let [dry_run, flag, state] = args else {
+        eprintln!("usage: plangraph reconcile-merged --dry-run --state PATH");
+        return 2;
+    };
+    if dry_run != "--dry-run" || flag != "--state" {
+        eprintln!("usage: plangraph reconcile-merged --dry-run --state PATH");
+        return 2;
+    }
+    let keeper = SlowKeeper {
+        env,
+        max_time_secs: MAX_TIME_SECS,
+    };
+    match require_seats(env).and_then(|seats| reconcile_with(&keeper, seats, state.as_ref())) {
+        Ok(line) => {
+            println!("{line}");
+            0
+        }
+        Err(error) => {
+            eprintln!("reconcile-merged: {error}");
+            1
+        }
+    }
+}
