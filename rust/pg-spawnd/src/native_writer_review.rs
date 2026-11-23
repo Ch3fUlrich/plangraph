@@ -276,12 +276,10 @@ impl Host {
         let max_min = 60;
         let writer = crate::records::read_record_file(&self.record_path).unwrap_or(Value::Null);
         let brief_keys = context::item_keys(&self.brief);
-        let item = writer["item_key"]
-            .as_str()
-            .or_else(|| match brief_keys.as_slice() {
-                [key] => Some(key.as_str()),
-                _ => None,
-            });
+        let item = writer["item_key"].as_str().or(match brief_keys.as_slice() {
+            [key] => Some(key.as_str()),
+            _ => None,
+        });
         let mut card = json!({"estimate_tokens":300000, "max_min":max_min, "stall_min":20,
             "repository_review_required":true, "review_workspace":true,
             "native_writer_run":self.run_id,

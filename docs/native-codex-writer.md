@@ -38,9 +38,10 @@ git identity (`example.invalid`, `localhost`, unset) as not ready. A review is r
 that head. The worker then starts one review run through the spawner CLI (role
 `review`, one `--writer-family` per family in the Writer trailers of base..head plus the
 served writer model's family, read by `pg_worker_core::writer_families`, the reader
-`plangraph review` shares). Admission selects a registered worker with enough
-disk and RAM. The diff card transfers the exact commits to that worker, which
-owns the checkout and its Cargo target under one disposable run directory.
+`plangraph review` shares). Admission can run the review on the writer's host
+without a worker registry entry if the host has enough disk and RAM and its
+placement policy allows worker runs. The diff card binds the exact commits.
+The review worker owns the checkout and its Cargo target under one disposable run directory.
 The writer keeps its inherited target for preflight. The worker releases the
 directory at review teardown. `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
 `python3 -m plangraph.spawner.cli`. The review prompt uses the versioned review

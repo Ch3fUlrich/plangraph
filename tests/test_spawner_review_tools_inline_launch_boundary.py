@@ -192,14 +192,19 @@ def test_review_launch_refuses_placeholder_author(launch_leg_case):
     assert calls == []
 
 
-@pytest.mark.parametrize('outcome', ['completed', 'launch_failed', 'cancelled'])
+@pytest.mark.parametrize('outcome', [
+    'completed', 'launch_failed', 'cancelled', 'ordinary_review', 'orchestration_only',
+    'disk_low', 'memory_low',
+])
 def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkeypatch, outcome):
     import asyncio
     from pathlib import Path
     import subprocess
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner import host_ready, overflow, seat_spawn
     from plangraph.spawner.notify import completion_event
+    from plangraph.spawner.prompt_input import checkout_env
     from plangraph.spawner.runner import JobInfo
     from plangraph.spawner.runner import spawn_service
 
@@ -207,18 +212,34 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
     receiver.mkdir()
 
     def git(*args):
-        return subprocess.check_output(['git', '-C', str(receiver), *args], text=True).strip()
+        return subprocess.check_output(['git', '-C', str(receiver), *args],
+                                       env=checkout_env(), text=True).strip()
 
     git('init', '-qb', 'main')
-    for message in ('base', 'head'):
-        (receiver / 'source').write_text(message)
-        git('add', 'source')
-        git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', message)
-    base, head = git('rev-parse', 'HEAD^', 'HEAD').splitlines()
+    identity = ('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid')
+    git(*identity, 'commit', '--allow-empty', '-qm', 'base')
+    base = git('rev-parse', 'HEAD')
     git('checkout', '--detach', base)
+    (receiver / 'source').write_text('head')
+    git('add', 'source')
+    git(*identity, 'commit', '-qm', 'head')
+    head = git('rev-parse', 'HEAD')
+    git('checkout', '--detach', base)
+    assert not (receiver / 'source').exists()
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
     monkeypatch.delenv('PG_URL', raising=False)
     monkeypatch.delenv('PG_TOKEN_FILE', raising=False)
+    monkeypatch.delenv('PLANGRAPH_PLACED_HOST', raising=False)
+    monkeypatch.setenv('PLANGRAPH_HOST_NAME', 'worker')
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '0')
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {'hosts': []})
+    monkeypatch.setattr(overflow, 'placement_config', lambda *_: {
+        'hosts': {'worker': {'orchestration_only': True}} if outcome == 'orchestration_only' else {},
+        'public_repos': [],
+    })
+    monkeypatch.setattr(seat_spawn, 'resources', lambda _: (0, 0 if outcome == 'memory_low' else 50000))
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *_args, **_opts: (
+        None, 'disk_low: fixture' if outcome == 'disk_low' else None))
     service = spawn_service(state=tmp_path / 'state')
     service.runner.default_cwd = str(receiver)
     async def admit(*args, **kwargs):
@@ -234,8 +255,8 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
     ready = asyncio.Event()
     paths = []
 
-    async def launch(record, chosen, **options):
-        checkout = Path(options.get('cwd', record['cwd']))
+    async def launch(chosen, cwd, **options):
+        checkout = Path(cwd)
         assert checkout != receiver
         assert (checkout / 'source').read_text() == 'head'
         assert options['extra_env']['FIXTURE_HARNESS_ENV'] == 'keep'
@@ -251,15 +272,30 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         if outcome == 'cancelled':
             await asyncio.Future()
         return JobInfo('fixture', 'completed', 'review', chosen.model, role='review', exit_code=0,
-                       stdout='Reviewed source.\nFILES READ: ./source\nVERDICT: ACCEPT\n')
+                       cwd=cwd, stdout='Reviewed source.\nFILES READ: ./source\nVERDICT: ACCEPT\n')
 
-    monkeypatch.setattr(service, '_launch_leg', launch)
+    monkeypatch.setattr(service.runner, 'spawn', launch)
     async def run():
-        record = await service._spawn(
-            card={'review_workspace': True, 'native_writer_run': 'run-writer', 'item_key': 'demo:ITEM',
-                  'diff_ref': {'repo': str(receiver), 'base': base, 'head': head}},
+        card = {'review_workspace': True, 'repository_review_required': True, 'item_key': 'demo:ITEM',
+                'diff_ref': {'repo': str(receiver), 'base': base, 'head': head}}
+        if outcome != 'ordinary_review':
+            card['native_writer_run'] = 'run-writer'
+        record = await service.spawn(
+            card=card,
             prompt='fixture', role='review', writer_families=('openai',),
-            _plan=SpawnPlan((leg,), (), 'fixture', (), ()), _placement={'host': 'worker'})
+            _plan=SpawnPlan((leg,), (), 'fixture', (), ()))
+        refusal = {
+            'ordinary_review': 'review workspace requires a registered worker host',
+            'orchestration_only': 'review workspace requires a registered worker host',
+            'disk_low': 'disk_low: fixture',
+            'memory_low': 'memory:',
+        }.get(outcome)
+        if refusal:
+            assert record['status'] == 'refused'
+            assert refusal in record['reason']
+            assert not paths
+            return
+        assert record['status'] == 'running', record.get('reason')
         task = service.tasks[record['run_id']]
         if outcome == 'cancelled':
             await asyncio.wait_for(ready.wait(), 5)
@@ -268,6 +304,8 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         final = service.result(record['run_id'])
         assert final['status'] == {'launch_failed': 'failed'}.get(outcome, outcome), final.get('error')
         assert final['head_sha'] == head
+        if outcome == 'completed':
+            assert final['cwd'] == str(paths[0])
         assert final['host'] == 'worker'
         assert final['item_key'] == 'demo:ITEM'
         journal = service.state / 'runs' / record['run_id'] / 'verdict.json'
