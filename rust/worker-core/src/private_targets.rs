@@ -74,6 +74,13 @@ fn sweep_using(
                 continue;
             }
             let path = entry.path();
+            #[cfg(target_os = "linux")]
+            if crate::affected_scratch::is_run(&path) {
+                skip_vanished(crate::affected_scratch::reclaim(
+                    &path, guards, apply, report,
+                ))?;
+                continue;
+            }
             if cargo_target(&path) {
                 targets.push((path, None));
             } else if let Some(children) = skip_vanished(fs::read_dir(&path))? {

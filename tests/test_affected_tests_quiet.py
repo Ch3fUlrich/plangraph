@@ -307,3 +307,20 @@ def test_an_unreadable_recorder_file_means_no_outcomes_and_no_workers(tmp_path):
     deep = tmp_path / "deep.json"
     deep.write_text("[" * 100_000)
     assert module.read_record_file(deep) == ({}, False)
+
+
+def test_collection_attempt_and_retries_get_isolated_basetemps(fx):
+    fx.write(FLAKY)
+    fx.commit()
+    collection = fx.run("--collect-only")
+    assert collection.returncode == 0, collection.stdout + collection.stderr
+    run = fx.run()
+    assert run.returncode == 1, run.stdout + run.stderr
+
+    invocations = fx.invocations()
+    assert len(invocations) == 4
+    bases = [Path(args[args.index("--basetemp") + 1]) for args in invocations]
+    assert len(set(bases)) == 4
+    assert len({base.parent for base in bases[1:]}) == 1
+    assert all(base.parent.name.startswith("pg-affected-") for base in bases)
+    assert all(not base.parent.exists() for base in bases)

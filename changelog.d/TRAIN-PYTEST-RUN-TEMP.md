@@ -1,0 +1,1 @@
+- Give affected pytest collection, attempts and retries private basetemps. Clean them on exit and sweep abandoned run roots after the lease is idle.

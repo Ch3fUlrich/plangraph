@@ -128,6 +128,8 @@ mod test_repo_guard;
 #[doc(hidden)]
 pub mod git_test_support;
 
+#[cfg(target_os = "linux")]
+mod affected_scratch;
 pub mod cargo_cache;
 pub mod cargo_pool;
 mod cargo_pool_telemetry;

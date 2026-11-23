@@ -259,3 +259,57 @@ fn vanished_entries_are_skipped_and_other_errors_stay_errors() {
     );
     assert_eq!(skip_vanished(Ok(3)).unwrap(), Some(3));
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn affected_pytest_scratch_requires_owned_marker_age_and_idle_lease() {
+    use std::os::{fd::AsRawFd, unix::fs::DirBuilderExt};
+
+    let temp = tempfile::tempdir().unwrap();
+    let make = |name: &str, marker: &[u8], old: bool| {
+        let root = temp.path().join(name);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let artifact = root.join("pytest-artifact");
+        let lease = root.join(".lease");
+        fs::write(&artifact, b"fixture").unwrap();
+        fs::write(&lease, marker).unwrap();
+        if old {
+            let time = SystemTime::now() - Duration::from_secs(1801);
+            for path in [&root, &artifact, &lease] {
+                fs::File::open(path).unwrap().set_modified(time).unwrap();
+            }
+        }
+        root
+    };
+    let marker = b"plangraph-affected-pytest-v1\n";
+    let stale = make("pg-affected-stale", marker, true);
+    let active = make("pg-affected-active", marker, true);
+    let recent = make("pg-affected-recent", marker, false);
+    let unrelated = make("pg-affected-unrelated", b"unrelated", true);
+
+    let active_lease = fs::File::open(active.join(".lease")).unwrap();
+    // SAFETY: active_lease owns a live file descriptor.
+    assert_eq!(
+        unsafe { libc::flock(active_lease.as_raw_fd(), libc::LOCK_EX) },
+        0
+    );
+
+    let mut result = report();
+    let mut sweep = || {
+        sweep_using(
+            Some(temp.path()),
+            &[],
+            &Guards::default(),
+            true,
+            &mut result,
+            || Ok((vec![], false)),
+        )
+        .unwrap();
+    };
+    sweep();
+    assert!(!stale.exists());
+    assert!(active.exists() && recent.exists() && unrelated.exists());
+    drop(active_lease);
+    sweep();
+    assert!(!active.exists());
+}

@@ -12,12 +12,11 @@ import subprocess
 import shutil
 import shlex
 import sys
-import tempfile
 import time
 import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
+from pgtest import affected_pytest, keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
@@ -734,15 +733,15 @@ def main(root=None):
             env.pop("PYTEST_SHARD", None)
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
                     if not args.collect_only and importlib.util.find_spec("xdist") is not None else [])
-        if args.collect_only:
-            result = subprocess.run([sys.executable, "-m", "pytest", *parallel, "--durations=30",
+        quiet = [] if args.loud else QUIET_FLAGS
+        with affected_pytest() as (scratch, run_pytest):
+            if args.collect_only:
+                result = run_pytest([sys.executable, "-m", "pytest", *parallel, "--durations=30",
                                      "--collect-only",
                                      *(["--maxfail", str(args.maxfail)] if args.maxfail else []),
                                      *plan["tests"]], cwd=root, env=env)
-            print(f"affected wall seconds: {time.monotonic() - start:.3f}")
-            return result.returncode
-        quiet = [] if args.loud else QUIET_FLAGS
-        with tempfile.TemporaryDirectory(prefix="affected-") as scratch:
+                print(f"affected wall seconds: {time.monotonic() - start:.3f}")
+                return result.returncode
             Path(scratch, "affected_outcomes.py").write_text(OUTCOME_PLUGIN)
             runs = []
 
@@ -752,7 +751,7 @@ def main(root=None):
                 runs.append(outcomes)
                 run_env = dict(env, AFFECTED_OUTCOMES=str(outcomes), PYTHONPATH=os.pathsep.join(
                     part for part in (scratch, env.get("PYTHONPATH")) if part))
-                result = subprocess.run(
+                result = run_pytest(
                     [sys.executable, "-m", "pytest", "-p", "affected_outcomes", *options],
                     cwd=root, env=run_env,
                     **({"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}))
@@ -774,10 +773,10 @@ def main(root=None):
                 hashes.append(tree_hash(root))
                 for line in flake_labels(failed, low, high, hashes, parallel=ran_workers):
                     print(line)
-        if args.within is not None:
-            return code
-        postgres = run_keeper_postgres(root, changed, env)
-        return code or postgres
+            if args.within is not None:
+                return code
+            postgres = run_keeper_postgres(root, changed, env, runner=run_pytest)
+            return code or postgres
     return 0
 
 

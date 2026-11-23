@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run tests in a bounded Linux slice or a Windows kill-on-close job."""
+from contextlib import contextmanager
 import importlib.util
+from itertools import count
 import os
 import re
 from pathlib import Path
@@ -61,6 +63,35 @@ def test_environment(root, env, *, timeout=30):
     return {key: value for key, value in env.items()
             if key.upper() not in local
             and not key.upper().startswith("GIT_CONFIG")}
+
+
+@contextmanager
+def affected_pytest():
+    """Allocate a scratch root and a distinct basetemp for each pytest process."""
+    temporary = tempfile.TemporaryDirectory(prefix="pg-affected-")
+    with temporary as scratch:
+        with open(Path(scratch) / ".lease", "xb") as lease:
+            inherited = {}
+            if os.name == "posix":
+                import fcntl
+                fcntl.flock(lease, fcntl.LOCK_EX)
+                # A surviving pytest controller still protects its scratch if the selector dies.
+                inherited["pass_fds"] = (lease.fileno(),)
+            lease.write(b"plangraph-affected-pytest-v1\n")
+            lease.flush()
+            attempts = count()
+
+            def run(command, **kwargs):
+                basetemp = str(Path(scratch) / f"pytest-{next(attempts)}")
+                return subprocess.run([*command[:3], "--basetemp", basetemp, *command[3:]],
+                                      **inherited, **kwargs)
+
+            try:
+                yield scratch, run
+            finally:
+                # Keep the lease held until the scratch files have been removed.
+                if inherited:
+                    temporary.cleanup()
 
 
 KEEPER_TEST_RE = re.compile(r"^tests/test_keeper_[^/]+\.py$")
