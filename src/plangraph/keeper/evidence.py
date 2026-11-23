@@ -1,32 +1,18 @@
-"""Pluggable evidence verifiers (docs/KEEPER.md, "Evidence verifiers").
+"""Keeper evidence verifiers (see docs/KEEPER.md, "Evidence verifiers").
 
-Four kinds, one registry, one factory for the real adapters. Every verifier has
-the same shape ``verify(item, ref, ctx) -> Result`` and reads all I/O through the
-adapters on ``ctx`` (``git``, ``ci``, ``runs``, ``semaphore``, ``decisions``),
-which is what lets the tests run with fakes and no network.
-
-A ``commit+ci`` ref must be a full lowercase hex sha (40 for sha1, 64 for
-sha256); anything else is rejected *before* any git or gh call, so a ref can
-never become a git option. Commit dates are never used for binding (git lets an
-author forge them). Binding is by ancestry: the commit must reach the target ref
-through a merged PR (a first-parent merge commit, optionally by an allowed
-``merge_principals`` committer), carry the item's ``Plan-Item`` trailer, descend
-from the ancestry floor (the ref head sha recorded at the item's last release or
-re-claim by another principal; ``bind_floor_required`` defaults to True) and
-have a green CI result on that exact sha.
-
-Every verifier is wrapped by :func:`_guarded`: an unexpected exception (a
-subprocess timeout, an ``OSError``, a JSON error) becomes
-``Result(ok=False, detail=<exception class name>)`` -- it never raises and never
-passes. Detail text is reduced to the exception *type*; adapters never return a
-secret in it.
+Verifiers accept (item, ref, ctx) and use injectable I/O adapters. The guarded
+entry points turn exceptions into failed results containing only the exception
+class. Commit+CI binds a full SHA to the target ref through its introducing PR,
+the item's Plan-Item trailer and its ancestry floor (when required), then
+checks CI for that exact SHA.
 """
-
 from __future__ import annotations
 
 import functools
+import math
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from .evidence_ci import CIAdapter
@@ -64,9 +50,7 @@ __all__ = [
 ]
 
 
-# --------------------------------------------------------------------------- #
 # small helpers
-# --------------------------------------------------------------------------- #
 
 def _trailer(trailers: Any, name: str) -> str | None:
     """Case-insensitive trailer lookup (git trailer keys are case-insensitive)."""
@@ -104,9 +88,7 @@ def _guarded(fn):
     return wrapper
 
 
-# --------------------------------------------------------------------------- #
 # commit+ci
-# --------------------------------------------------------------------------- #
 
 def _ci_conclusion(runs: Any, commit: str) -> str | None:
     """Newest-run-per-group CI verdict: None means ok, else the fail detail. Plain groups are (suite, app, name); a workflow_dispatch run forms a ("wf", workflow_id, app, name) group across suites that a matching PR run joins. Inside a wf group the best run is the NEWEST COMPLETED run whose conclusion (stripped, lowercased) is not skipped/neutral, so a job-level `if:` skipping the newest run cannot mask an older real verdict; only when every completed run there is skipped/neutral does the newest of them win (so 'CI only skipped' still applies). A 'workflow' dict lacking a positive workflow_id or run_id counts as no 'workflow' at all. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
@@ -129,8 +111,7 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
             return None
         return value
 
-    # Pass 1: parse the runs and collect the (workflow, app, name) keys that have
-    # a workflow_dispatch run, so a PR run with the same key joins that wf group.
+    # Dispatch runs group with matching PR runs.
     parsed: list[dict] = []
     dispatch_keys: set = set()
     for run in runs:
@@ -151,12 +132,7 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
         wf = run.get("workflow")
         wf_id = _id_int(wf.get("workflow_id")) if isinstance(wf, dict) else 0
         wf_rid = _id_int(wf.get("run_id")) if isinstance(wf, dict) else 0
-        # A 'workflow' dict only counts with a real positive workflow_id AND a
-        # positive run_id (bool is not an id; digit strings rank as ints).
-        # Anything else -- missing, None, bool, junk -- is handled exactly like
-        # a missing key, so junk ids cannot merge unrelated runs into one
-        # ("wf", 0, ...) group where an unrelated success would mask a failure,
-        # and a run with no run_id can never be ranked inside a wf group.
+        # Require both IDs so invalid workflow data cannot group unrelated runs.
         in_wf = wf_id > 0 and wf_rid > 0
         event: str | None = None
         if in_wf:
@@ -171,9 +147,7 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
                        "event": event, "wf_id": wf_id, "in_wf": in_wf,
                        "key": (rid_int, started_str), "wf_rid": wf_rid})
 
-    # Pass 2: group. A wf group ranks by (workflow.run_id, check-run id,
-    # started_at) because check-run ids are NOT chronological across runs: a
-    # rerun gets new ids that can be lower or higher than other runs' ids.
+    # Rank workflow run IDs first because check-run IDs can go backwards on rerun.
     groups: dict[Any, dict] = {}
     for rec in parsed:
         is_wf = rec["event"] == "workflow_dispatch"
@@ -218,15 +192,8 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
     for gkey in sorted(groups, key=lambda k: (groups[k]["name"], str(groups[k]["sort"]), str(groups[k]["app"]))):
         g = groups[gkey]
         if g["wf"]:
-            # Only completed runs compete inside a wf group, and among them the
-            # newest whose conclusion (stripped, lowercased) is NOT skipped or
-            # neutral wins: a job-level `if:` can skip the newest run while an
-            # older run holds the real verdict, which a plain newest-wins rule
-            # would report as a false green. Only when every completed run of
-            # the group is skipped/neutral is there no real verdict to prefer,
-            # so the newest of them wins and 'CI only skipped' still applies.
-            # A non-completed run ranked newer than the chosen best (or no
-            # completed run at all) keeps the group pending.
+            # A skipped rerun cannot mask an older verdict. A newer incomplete
+            # run keeps the group pending.
             best: tuple[Any, dict] | None = None
             newest_completed: tuple[Any, dict] | None = None
             for rank, run in g["runs"]:
@@ -400,8 +367,7 @@ class CommitCiVerifier:
         if refusal is not None:
             return refusal
 
-        # The ancestry floor for the repo the commit resolved to: bind_floor_sha
-        # for the primary key, bases[track_key] for a track repo (D-3335).
+        # Use the ancestry floor of the resolved repository.
         refusal = check_floor(ctx, repo, commit, ref, project, item)
         if refusal is not None:
             return refusal
@@ -459,9 +425,7 @@ class ClaudeSeatVerifier:
                       dict(ref, seat=answer.get("seat")))
 
 
-# --------------------------------------------------------------------------- #
 # run-record
-# --------------------------------------------------------------------------- #
 
 class RunRecordVerifier:
     """``<runs_dir>/<run_id>/`` was produced for this item and exited 0."""
@@ -524,9 +488,7 @@ class RunRecordVerifier:
         return Result(True, detail, ref)
 
 
-# --------------------------------------------------------------------------- #
 # semaphore-task
-# --------------------------------------------------------------------------- #
 
 class SemaphoreTaskVerifier:
     """The Semaphore task finished ``success`` (and is the expected template).
@@ -579,8 +541,7 @@ class SemaphoreTaskVerifier:
         if not isinstance(data, dict):
             return _fail(f"semaphore task {task_id} returned no task object", ref)
 
-        # Both ids are required in the answer: a reply that omits them is not
-        # proof about *this* task (fail closed, seat finding).
+        # Both IDs bind the response to this task.
         if positive_int(data.get("id")) != task_id:
             return _fail(f"semaphore response is for a different task than {task_id}", ref)
         if positive_int(data.get("project_id")) != project_id:
@@ -621,9 +582,7 @@ class SemaphoreTaskVerifier:
             return False
 
 
-# --------------------------------------------------------------------------- #
 # decision
-# --------------------------------------------------------------------------- #
 
 class DecisionVerifier:
     """``| D-NNN |`` appears in the configured log on freshly fetched origin/main."""
@@ -647,9 +606,7 @@ class DecisionVerifier:
         return Result(True, f"decision {decision_id} is recorded", ref)
 
 
-# --------------------------------------------------------------------------- #
 # deploy proof (LE-MERGED-UNIT-NEVER-DEPLOYED)
-# --------------------------------------------------------------------------- #
 
 _UNIT_RE = re.compile(r"^deploy/systemd/([^/]+\.(?:service|timer|socket|path))$")
 _BIN_RE = re.compile(r"^rust/([^/]+)/src/(?:main\.rs|bin/([^/]+)\.rs)$")
@@ -657,13 +614,7 @@ _HOSTS_RE = re.compile(r"(?mi)^[ \t]*Deploy-Hosts:[ \t]*(.+?)[ \t]*$")
 
 
 def deploy_targets(changes) -> list[str]:
-    """Units and host binaries a diff ships: ``name.service`` / ``bin:<name>``.
-
-    *changes* holds ``(status, path)`` pairs (``A``/``M``/``D``) or bare paths. A unit
-    counts for any change; a binary only when its entry point was added: editing or
-    deleting an existing one ships no new host binary. A bare path has no status and
-    counts as added.
-    """
+    """Units and new binary entry points shipped by a diff of (status, path) pairs or added paths."""
     out = set()
     for change in changes or ():
         status, path = ("A", change) if isinstance(change, str) else change
@@ -686,18 +637,65 @@ def deploy_hosts(item: dict) -> list[str]:
     return deploy_host_names(_HOSTS_RE.findall(f"{item.get('description') or ''}\n{item.get('note') or ''}"))
 
 
+def _oneshot_timer(ref: dict) -> str | None:
+    unit = ref.get("unit")
+    if (ref.get("type") == "oneshot" and isinstance(unit, str)
+            and not unit.startswith("bin:") and unit.endswith(".service")):
+        return unit.removesuffix(".service") + ".timer"
+    return None
+
+
 def deploy_missing(targets, hosts, rows) -> list[str]:
     """``host:unit`` pairs with no verified ``deploy`` evidence; ``(hosts unnamed)`` when none are named."""
     if not hosts:
         return ["(hosts unnamed)"]
-    have = {(r["ref"].get("host"), r["ref"].get("unit"))
-            for r in rows if r.get("kind") == "deploy" and r.get("verified")}
+    verified = [r["ref"] for r in rows if r.get("kind") == "deploy" and r.get("verified")]
+    active = {(ref.get("host"), ref.get("unit")) for ref in verified
+              if ref.get("is_active") == "active"}
+    have = set()
+    for ref in verified:
+        host = ref.get("host")
+        timer = _oneshot_timer(ref)
+        if timer is None or (host, timer) in active:
+            have.add((host, ref.get("unit")))
     return [f"{host}:{unit}" for host in hosts for unit in targets
             if (host, unit) not in have]
 
 
+def _deploy_commit_time(item, ctx, unit, timer):
+    from .context_sources import MERGE_REPO_LINE
+
+    text = f"{item.get('description') or ''}\n{item.get('note') or ''}"
+    projects = {match[1] for line in text.splitlines()
+                if (match := MERGE_REPO_LINE.fullmatch(line))}
+    if len(projects) > 1 or ctx.git is None:
+        return None
+    project = next(iter(projects), item.get("project"))
+    repo = ctx.git.repo_path(project)
+    if not repo:
+        return None
+    # A merge is the deployed change even when the topic commit is much older.
+    proc = ctx.git._run(repo, ["log", "-1", "--first-parent", "--format=%ct",
+                              "--end-of-options", ctx.git.repo_ref(project), "--",
+                              f":(literal)deploy/systemd/{unit}",
+                              f":(literal)deploy/systemd/{timer}"])
+    return as_epoch(proc.stdout.strip()) if proc.returncode == 0 else None
+
+
+def _exec_main_exit_time(value):
+    epoch = as_epoch(value)
+    if epoch is None and isinstance(value, str):
+        # Also accept the C-locale output of systemctl --utc show.
+        try:
+            epoch = datetime.strptime(value, "%a %Y-%m-%d %H:%M:%S UTC").replace(
+                tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            pass
+    return epoch if epoch is not None and math.isfinite(epoch) else None
+
+
 class DeployVerifier:
-    """A host reports a unit ``systemctl --user is-active`` = active (a binary: installed)."""
+    """Check a host's active unit, installed binary, or recent successful oneshot."""
 
     kind = "deploy"
 
@@ -708,6 +706,19 @@ class DeployVerifier:
         if not (isinstance(host, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", host)
                 and isinstance(unit, str) and unit):
             return _fail("deploy requires 'host' and 'unit'", ref)
+        timer = _oneshot_timer(ref)
+        if timer is not None:
+            if "/" in unit or unit == ".service":
+                return _fail("deploy oneshot requires a service unit name", ref)
+            if ref.get("result") != "success":
+                return _fail(f"deploy {unit} on {host} must report result=success", ref)
+            exited = _exec_main_exit_time(ref.get("exec_main_exit_timestamp"))
+            if exited is None or exited > ctx.now:
+                return _fail(f"deploy {unit} on {host} requires a valid exec_main_exit_timestamp", ref)
+            deployed = _deploy_commit_time(item, ctx, unit, timer)
+            if deployed is None or exited <= deployed:
+                return _fail(f"deploy {unit} on {host} requires a successful run after the deploy commit", ref)
+            return Result(True, f"{unit} succeeded on {host}; deploy requires active {timer}", ref)
         want = "installed" if unit.startswith("bin:") else "active"
         if state != want:
             return _fail(f"deploy {unit} on {host} must report is_active={want}", ref)
@@ -715,7 +726,6 @@ class DeployVerifier:
 
 
 # registry and factory
-# --------------------------------------------------------------------------- #
 
 VERIFIERS: dict[str, Any] = {
     verifier.kind: verifier
@@ -768,17 +778,7 @@ def _principals(value: Any) -> tuple[str, ...]:
 
 
 def default_context(config: Any, *, now: float | None = None) -> Context:
-    """Build the real adapters from a keeper config mapping.
-
-    Expected keys: ``repos`` (project → path), ``ci`` (project → slug/path/
-    ``none``/``forgejo:owner/repo``), ``runs_dir``, ``decisions_file``,
-    optional ``merge_principals`` (allowed merge-commit committer emails) and
-    optional ``skew`` seconds. ``forgejo_url`` **and** ``forgejo_token_file``
-    together build the Forgejo status adapter a ``forgejo:`` ci value needs;
-    with either missing, no adapter is built and such a value fails closed in
-    ``CIAdapter.check_runs``. Nothing here performs I/O or connects anywhere;
-    the adapters only read when a verifier calls them.
-    """
+    """Build adapters lazily from the fields documented by keeper.config."""
     forgejo = None
     forgejo_url = _cfg(config, "forgejo_url")
     forgejo_token_file = _cfg(config, "forgejo_token_file")
@@ -791,7 +791,7 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
         semaphore=SemaphoreAdapter(),
         decisions=DecisionsAdapter(_cfg(config, "decisions_file"), from_origin=True),
         claude_projects_dir=_cfg(config, "claude_projects_dir"),
-        spawner_records=SpawnerRecordAdapter(_cfg(config, "spawner_records_dir")),
+        spawner_records=SpawnerRecordAdapter.for_keeper(_cfg(config, "spawner_records_dir"), _cfg(config, "runs_dir")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
         merge_principals=_principals(_cfg(config, "merge_principals")),
