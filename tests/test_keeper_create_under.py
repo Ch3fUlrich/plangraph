@@ -449,7 +449,8 @@ def test_define_attaches_a_non_slice_under_a_slice(w):
     assert w.store._item("demo:X-S1")["depends_on"] == ["demo:FOLLOWUP"]
 
 
-def test_define_checks_the_sliced_item_independently_of_under(w):
+def test_define_requires_slice_parent_to_match_under(w):
+    """Keep the original pytest node ID while checking the new slice-source rule."""
     router = w.p("router")
     w.store.create_items(router, [
         defn("LESSONS-ENFORCE", kind="gate", under="GOAL"),
