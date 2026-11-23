@@ -20,7 +20,11 @@ def main():
     guard = subprocess.call([*run, "--test-sources", str(manifest.parent.parent)])
     if guard:
         return guard
-    return subprocess.call([*run, *sys.argv[1:]])
+    guard = subprocess.call([*run, *sys.argv[1:]])
+    if guard:
+        return guard
+    base = os.environ.get("CLASS_SEARCH_BASE")
+    return subprocess.call([*run, "--class-search", "--range", base]) if base else 0
 
 
 if __name__ == "__main__":

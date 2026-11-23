@@ -371,6 +371,7 @@ fn execute(args: &[String]) -> Result<()> {
             .current_dir(&root)
             .env("FILESIZE_REQUIRE_BASE", &base)
             .env("NEWCODE_BASE", &base)
+            .env("CLASS_SEARCH_BASE", &base)
             .env("CHANGELOG_BASE", &base);
         let status = run_step(&mut command, &step.args[0], &target).map_err(|e| e.to_string())?;
         println!(
