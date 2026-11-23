@@ -294,3 +294,23 @@ def test_pytest_quarantine_expires(tmp_path, now, mode, expected):
     selected, active = quarantine_items(items, ledger, mode, datetime.fromisoformat(now))
     assert [item.nodeid for item in selected] == expected
     assert active == ({'test_flaky': 'plangraph:FIX-THE-FLAKE'} if now.startswith('2026-11-24') else {})
+
+
+def test_pytest_default_hang_diagnostic_dumps_the_blocked_test(tmp_path, request):
+    import subprocess
+    import sys
+
+    assert float(request.config.getini('faulthandler_timeout')) == 120
+    scenario = tmp_path / 'test_hang.py'
+    scenario.write_text('from threading import Event\n\ndef test_blocked():\n    Event().wait(0.5)\n')
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-o', 'faulthandler_timeout=0.05', str(scenario)],
+        cwd=tmp_path,
+        env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'),
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Timeout (' in result.stderr
+    assert 'test_hang.py' in result.stderr and 'in test_blocked' in result.stderr
