@@ -1,0 +1,1 @@
+Add `land-train deploy-plan`: derive each part's unit and binary families and authorized hosts from its own commits, run the host install dry run per target, list only passing targets for the GO-REQ and write a blocker item for each refused one.
