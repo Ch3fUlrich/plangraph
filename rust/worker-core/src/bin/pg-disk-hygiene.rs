@@ -212,6 +212,17 @@ fn execute_with(
             report.alarm = true;
             report.error = Some(error.to_string());
         }
+        if let Err(error) = pg_worker_core::main_target::sweep_main_checkout_target(
+            &repo,
+            &guards,
+            SystemTime::now(),
+            apply,
+            &mut report,
+            processes,
+        ) {
+            report.alarm = true;
+            report.error = Some(error.to_string());
+        }
         private_guards.pinned.extend(available.keys().cloned());
         private_guards.pinned.extend(configured.keys().cloned());
         for path in &scratch {
