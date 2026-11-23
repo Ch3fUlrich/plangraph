@@ -259,18 +259,27 @@ struct DeadlineKeeper<'a> {
 
 impl Transport for DeadlineKeeper<'_> {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
-        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        self.call_with(Instant::now(), |keeper| keeper.call(verb, body))
+    }
+}
+
+impl DeadlineKeeper<'_> {
+    fn call_with(
+        &self,
+        now: Instant,
+        request: impl FnOnce(SlowKeeper<'_>) -> Result<Value, String>,
+    ) -> Result<Value, String> {
+        let remaining = self.deadline.saturating_duration_since(now);
         if remaining.is_zero() {
             return Err(MERGE_INDEX_EXPIRED.into());
         }
         // curl takes whole seconds here. Round up within the unit's shutdown margin.
         let remaining_secs = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);
         let request_limit = u64::from(self.keeper.max_time_secs);
-        let result = SlowKeeper {
+        let result = request(SlowKeeper {
             env: self.keeper.env,
             max_time_secs: request_limit.min(remaining_secs) as u32,
-        }
-        .call(verb, body);
+        });
         match result {
             Err(_) if remaining_secs <= request_limit && Instant::now() >= self.deadline => {
                 Err(MERGE_INDEX_EXPIRED.into())
@@ -551,5 +560,50 @@ pub fn reconcile(env: &Env, args: &[String]) -> i32 {
             eprintln!("reconcile-merged: {error}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deadline_keeper_caps_the_timeout_passed_to_the_request() {
+        let env = Env::new();
+        let now = Instant::now();
+        for (request_limit, remaining, expected) in [
+            (10, Duration::from_secs(5), 5),
+            (10, Duration::from_secs(400), 10),
+            (MAX_TIME_SECS, Duration::from_secs(5), 5),
+            (MAX_TIME_SECS, Duration::from_millis(1), 1),
+        ] {
+            let transport = DeadlineKeeper {
+                keeper: SlowKeeper {
+                    env: &env,
+                    max_time_secs: request_limit,
+                },
+                deadline: now + remaining,
+            };
+            let reply = transport.call_with(now, |keeper| {
+                assert_eq!(keeper.max_time_secs, expected);
+                Ok(json!({"merged_not_done": 0}))
+            });
+            assert_eq!(reply, Ok(json!({"merged_not_done": 0})));
+        }
+    }
+
+    #[test]
+    fn deadline_keeper_does_not_call_the_request_at_the_deadline() {
+        let env = Env::new();
+        let deadline = Instant::now();
+        let transport = DeadlineKeeper {
+            keeper: SlowKeeper {
+                env: &env,
+                max_time_secs: MAX_TIME_SECS,
+            },
+            deadline,
+        };
+        let reply = transport.call_with(deadline, |_| panic!("request started at the deadline"));
+        assert_eq!(reply, Err(MERGE_INDEX_EXPIRED.into()));
     }
 }
