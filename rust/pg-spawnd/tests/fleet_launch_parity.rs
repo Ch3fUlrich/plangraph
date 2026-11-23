@@ -49,6 +49,7 @@ fn main() {
     use sandbox::Launcher;
     let rust = Launcher::Rust(None);
     check(&rust);
+    records::check_lifecycle(&rust);
     interrupted::check(&rust);
     interrupted::check_counter(&rust, false);
     interrupted::check_counter(&rust, true);

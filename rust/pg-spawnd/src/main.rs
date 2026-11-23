@@ -73,7 +73,7 @@ mod serve;
 mod serve_options;
 mod shim;
 mod spawn;
-mod state;
+use pg_spawnd::state;
 #[cfg(test)]
 mod state_tests;
 mod tools;
