@@ -162,6 +162,7 @@ class DispatchReader:
         self.status = getattr(reader, 'leg_status', reader) or fallback
         self.enabled = getattr(reader, 'enabled', False)
         self.store = getattr(reader, 'store', None)
+        self.last_probe_attempt_ts = getattr(reader, 'last_probe_attempt_ts', None)
 
     def leg_status(self, model, **scope):
         return read_status(self.status, model, **scope)
