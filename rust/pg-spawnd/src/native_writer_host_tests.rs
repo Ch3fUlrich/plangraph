@@ -601,7 +601,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
         .review(&head, None)
         .unwrap_err()
         .starts_with("review run returned no record"));
-    super::review_tests::assert_foreign_trailer_refused(&mut host, |args| git(&cwd, args));
+    super::review_tests::assert_item_trailers_bound_to_brief(&mut host, |args| git(&cwd, args));
 }
 
 #[cfg(unix)]
