@@ -32,9 +32,10 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: messages, v16 message nonces/envelopes, v17 placement rules, v18 write receipts,
 #: v19 landing stages, v20 landing settlement, v21 Actions job timings, v22 train claims, v23 item incident index,
 #: v24 card effort decisions and spawn attempt outcomes, v25 claim definition event index.
+#: v26 criteria amendment ledger, v27 definition design references.
 #: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
 #: this number at runtime.
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 LANDING_STAGES_DDL = files(__package__).joinpath("landing_stages.sql").read_text(encoding="utf-8")
 LANDING_TRAINS_DDL = files(__package__).joinpath("landing_trains.sql").read_text(encoding="utf-8")
@@ -371,7 +372,8 @@ CREATE TABLE items (
     exec_principal   TEXT,
     exec_retired_runs TEXT,
     created_at     TEXT,
-    updated_at     TEXT
+    updated_at     TEXT,
+    design_ref     TEXT
 );
 
 CREATE TABLE edges (
