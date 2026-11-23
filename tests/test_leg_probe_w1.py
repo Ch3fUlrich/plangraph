@@ -338,7 +338,8 @@ def test_probe_many_selection_errors():
 
 @pytest.mark.parametrize('scope', [{}, {'account': 'acct'}, {'account': 'acct', 'combo': 'review'}])
 @pytest.mark.parametrize('routed', [True, False])
-def test_scheduled_agy_probe_clears_a_model_limit_within_an_hour(tmp_path, monkeypatch, scope, routed):
+@pytest.mark.parametrize('retry_age', [3600, 3601])
+def test_scheduled_agy_probe_clears_a_model_limit_within_an_hour(tmp_path, monkeypatch, scope, routed, retry_age):
     from plangraph.planner import legs
     from plangraph.planner.routing import plan_spawn
     from plangraph.spawner import leg_probe
@@ -359,7 +360,8 @@ def test_scheduled_agy_probe_clears_a_model_limit_within_an_hour(tmp_path, monke
         store.record_provider_response(model, 429, 'quota', {'retry-after': '7200'}, 'fixture', now=clock[0])
     assert store.leg_status(model, now=clock[0], **scope)['state'] == 'limited'
     store.record_probe_pass(model, 'other-account', now=clock[0] + 0.5, account='other')
-    store.record_probe_fail(model, 'still limited', 'review-probe', now=clock[0] + 1)
+    failed_at = clock[0] + 1
+    store.record_probe_fail(model, 'still limited', 'review-probe', now=failed_at)
     calls = []
 
     async def spawn(**kwargs):
@@ -370,11 +372,11 @@ def test_scheduled_agy_probe_clears_a_model_limit_within_an_hour(tmp_path, monke
         pass
 
     runner = SimpleNamespace(leg_reader=store, spawn=spawn, cancel=cancel)
-    clock[0] += 3600
+    clock[0] = failed_at + 3599
     first = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
     assert [(row['id'], row.get('skipped')) for row in first['probes']] == [(leg.id, 'limited')]
     assert not calls
-    clock[0] += 1
+    clock[0] = failed_at + retry_age
     second = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
     assert second['probes'][0]['ok']
     assert calls == [('agy', leg.model, leg_probe.REVIEW_PROMPT)]
