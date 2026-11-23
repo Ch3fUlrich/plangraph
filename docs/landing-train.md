@@ -66,6 +66,11 @@ second parents must still match the manifest, including merges later reverted
 by a drop. Use `Dropped-Part: <key>` and the canonical revert body to record
 a dropped part.
 
+Run a hand-started train resolver from its worktree with
+`pg-spawnd hand-run -- PROGRAM [ARGS ...]`. Export `CARGO_TARGET_DIR` with the
+host's configured shared target before launching it. The launcher validates
+that setting before it starts the writer.
+
 ## A red train
 
 `land::split` (rust/plangraph-cli/src/land/split.rs) plans the retries of a red train; every retry is a new frozen
