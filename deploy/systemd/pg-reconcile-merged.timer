@@ -1,0 +1,10 @@
+[Unit]
+Description=Report merged Keeper items hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=pg-reconcile-merged.service
+
+[Install]
+WantedBy=timers.target
