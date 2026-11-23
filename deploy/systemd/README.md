@@ -141,6 +141,22 @@ with the host's shared `CARGO_TARGET_DIR` in the environment. On the first
 rollout, build the entry point with
 `cargo build --manifest-path REPO/rust/Cargo.toml --release -p plangraph-cli --bin host-sync`.
 Use that entry point as the release step in the host-sync schedule. It installs
-`pg-spawnd` and `plangraph` in `~/.local/bin` and records the installed Rust
+`pg-spawnd`, `pg-disk-hygiene` and `plangraph` in `~/.local/bin` and records the installed Rust
 tree in `${XDG_STATE_HOME:-$HOME/.local/state}/plangraph/release-built-tree`.
 Keep `~/.local/bin` on the landing and pre-push workers' PATH.
+
+
+On disk-hygiene workers, run `host-sync --install-env disk-hygiene` to create
+`~/.config/plangraph/disk-hygiene.env` with the checkout at `~/code/plangraph`,
+its `.claude/worktrees` directory and `~/.config/plangraph/pins.json`. The
+pins producer must publish that file before the first tick. Hosts also using
+the worktree sweep should provision its environment with the sweep bootstrap
+first, so the file includes the sweep settings.
+
+On the WSL worker, an operator installs the trusted release artifact at
+`/usr/local/bin/pg-spawnd` with `install -o root -g root -m 0755`, then runs
+`host-sync --install-wsl-guard POLICY HOST` as root. The installer checks
+that executable and writes the system units and the memory floor if the
+floor file is absent. The policy's default floor is 20480 MiB. Include
+retirement of the temporary WSL cache timer after replacement verification
+and check for overlap with existing disk cleanup timers in the deploy ask.
