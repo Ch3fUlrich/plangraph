@@ -89,6 +89,9 @@ impl Driver for Fake {
             },
         )
     }
+    fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String> {
+        Ok(base != head)
+    }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         if self.fast_failures > 0 {
             self.fast_failures -= 1;
@@ -714,6 +717,9 @@ impl Driver for CrashOnSecond<'_> {
     }
     fn head(&mut self) -> Result<String, String> {
         self.inner.head()
+    }
+    fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String> {
+        self.inner.has_commits_beyond(base, head)
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         self.inner.fast_checks(head)

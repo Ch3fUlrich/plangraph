@@ -5,7 +5,7 @@
 //! The job prints one line per closed item and one line per key the keeper refused or
 //! flagged, with the reason, so routing sees every merged key that stayed open.
 //! A timer runs it every ten minutes, and the batch land step calls [`run_once`].
-use crate::feeder::{Env, SlowKeeper, Transport};
+use crate::feeder::{Env, SlowKeeper, Transport, MERGE_INDEX_EXPIRED, MERGE_INDEX_RUNNING};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 /// Keep a bound on each keeper call, including a page of close results.
 const MAX_TIME_SECS: u32 = 300;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(95);
+// Leave time for process overhead and logging before the service's 420 s timeout.
+const PASS_BUDGET: Duration = Duration::from_secs(400);
 const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
 
 /// What one run did, as the keeper reported it.
@@ -21,6 +23,21 @@ const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
 pub struct Outcome {
     pub text: String,
     pub merged_not_done: u64,
+}
+
+/// The refresh limit and shared deadline for one scheduled pass.
+pub struct ScheduleTiming {
+    refresh_timeout: Duration,
+    deadline: Instant,
+}
+
+impl ScheduleTiming {
+    pub fn new(refresh_timeout: Duration, budget: Duration) -> Self {
+        Self {
+            refresh_timeout,
+            deadline: Instant::now() + budget,
+        }
+    }
 }
 
 /// The `require_seats` switch: unset leaves the keeper's own `require_seats` setting in force
@@ -47,7 +64,9 @@ pub fn run_with(
     project: Option<&str>,
 ) -> Result<Outcome, String> {
     let mut pass = ClosePass::default();
-    pass.collect(keeper, require_seats, apply, project)?;
+    pass.collect(require_seats, apply, project, |body| {
+        keeper.call("close_merged_auto", Some(body))
+    })?;
     Ok(pass.finish(false))
 }
 
@@ -55,6 +74,7 @@ pub fn run_with(
 struct ClosePass {
     text: String,
     merged_not_done: u64,
+    closed_any: bool,
     scan_errors: BTreeMap<String, String>,
     deployment_text: String,
     deployment_count: Option<usize>,
@@ -63,10 +83,10 @@ struct ClosePass {
 impl ClosePass {
     fn collect(
         &mut self,
-        keeper: &dyn Transport,
         require_seats: Option<bool>,
         apply: bool,
         project: Option<&str>,
+        mut page: impl FnMut(Value) -> Result<Value, String>,
     ) -> Result<(), String> {
         let mut body = json!({"apply": apply});
         if let Some(require_seats) = require_seats {
@@ -76,7 +96,7 @@ impl ClosePass {
             body["project"] = json!(project);
         }
         loop {
-            let result = keeper.call("close_merged_auto", Some(body.clone()))?;
+            let result = page(body.clone())?;
             self.merged_not_done += result["merged_not_done"]
                 .as_u64()
                 .ok_or("keeper reply has no merged_not_done count")?;
@@ -88,6 +108,9 @@ impl ClosePass {
                 }
             }
             page_text(&mut self.text, &result);
+            self.closed_any |= result["closed"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty());
             if let Some(deployments) = result["deployment_pending"].as_array() {
                 *self.deployment_count.get_or_insert(0) += deployments.len();
                 for row in deployments {
@@ -229,6 +252,43 @@ pub fn repos_with(keeper: &dyn Transport) -> Result<Vec<String>, String> {
         .collect()
 }
 
+struct DeadlineKeeper<'a> {
+    keeper: SlowKeeper<'a>,
+    deadline: Instant,
+}
+
+impl Transport for DeadlineKeeper<'_> {
+    fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
+        self.call_with(Instant::now(), |keeper| keeper.call(verb, body))
+    }
+}
+
+impl DeadlineKeeper<'_> {
+    fn call_with(
+        &self,
+        now: Instant,
+        request: impl FnOnce(SlowKeeper<'_>) -> Result<Value, String>,
+    ) -> Result<Value, String> {
+        let remaining = self.deadline.saturating_duration_since(now);
+        if remaining.is_zero() {
+            return Err(MERGE_INDEX_EXPIRED.into());
+        }
+        // curl takes whole seconds here. Round up within the unit's shutdown margin.
+        let remaining_secs = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);
+        let request_limit = u64::from(self.keeper.max_time_secs);
+        let result = request(SlowKeeper {
+            env: self.keeper.env,
+            max_time_secs: request_limit.min(remaining_secs) as u32,
+        });
+        match result {
+            Err(_) if remaining_secs <= request_limit && Instant::now() >= self.deadline => {
+                Err(MERGE_INDEX_EXPIRED.into())
+            }
+            result => result,
+        }
+    }
+}
+
 fn run_scheduled(
     env: &Env,
     apply: bool,
@@ -236,22 +296,19 @@ fn run_scheduled(
     deployment_only: bool,
 ) -> Result<Outcome, String> {
     let seats = require_seats(env)?;
-    let keeper = SlowKeeper {
-        env,
-        max_time_secs: MAX_TIME_SECS,
-    };
-    let control = SlowKeeper {
-        env,
-        max_time_secs: 10,
+    let timing = ScheduleTiming::new(REFRESH_TIMEOUT, PASS_BUDGET);
+    let transport = |max_time_secs| DeadlineKeeper {
+        keeper: SlowKeeper { env, max_time_secs },
+        deadline: timing.deadline,
     };
     run_scheduled_with(
-        &keeper,
-        &control,
+        &transport(MAX_TIME_SECS),
+        &transport(10),
         seats,
         apply,
         project,
         deployment_only,
-        REFRESH_TIMEOUT,
+        timing,
     )
 }
 
@@ -263,23 +320,62 @@ pub fn run_scheduled_with(
     apply: bool,
     project: Option<&str>,
     deployment_only: bool,
-    refresh_timeout: Duration,
+    timing: ScheduleTiming,
 ) -> Result<Outcome, String> {
+    let ScheduleTiming {
+        refresh_timeout,
+        deadline,
+    } = timing;
     refresh_index(control, refresh_timeout)?;
     let mut pass = ClosePass {
         deployment_count: Some(0),
         ..ClosePass::default()
     };
-    if let Some(project) = project {
-        pass.collect(keeper, seats, apply, Some(project))?;
+    let projects_reply;
+    let projects = if let Some(project) = project {
+        vec![project]
     } else {
-        let reply = control.call("close_merged_auto", Some(json!({"refresh": "projects"})))?;
-        for project in reply["projects"]
+        projects_reply = control.call("close_merged_auto", Some(json!({"refresh": "projects"})))?;
+        projects_reply["projects"]
             .as_array()
             .ok_or("keeper reply has no project list")?
-        {
-            let project = project.as_str().ok_or("keeper project name is not text")?;
-            pass.collect(keeper, seats, apply, Some(project))?;
+            .iter()
+            .map(|project| project.as_str().ok_or("keeper project name is not text"))
+            .collect::<Result<_, _>>()?
+    };
+    for (index, project) in projects.iter().enumerate() {
+        let result = pass.collect(seats, apply, Some(project), |body| {
+            let call = || {
+                if Instant::now() >= deadline {
+                    return Err(MERGE_INDEX_EXPIRED.into());
+                }
+                keeper.call("close_merged_auto", Some(body.clone()))
+            };
+            match call() {
+                Err(error)
+                    if apply && error == MERGE_INDEX_EXPIRED && Instant::now() < deadline =>
+                {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    refresh_index(control, refresh_timeout.min(remaining))
+                        .map_err(|reason| format!("{MERGE_INDEX_EXPIRED} ({reason})"))?;
+                    call()
+                }
+                result => result,
+            }
+        });
+        if let Err(error) = result {
+            if !apply
+                || !pass.closed_any
+                || !(error.starts_with(MERGE_INDEX_EXPIRED) || error == MERGE_INDEX_RUNNING)
+            {
+                return Err(error);
+            }
+            let remaining = projects.len() - index;
+            let _ = writeln!(
+                pass.text,
+                "continue\t{remaining} projects remaining\t{error}"
+            );
+            break;
         }
     }
     if !apply && !pass.scan_errors.is_empty() {
@@ -289,16 +385,19 @@ pub fn run_scheduled_with(
 }
 
 fn refresh_index(control: &dyn Transport, timeout: Duration) -> Result<(), String> {
-    control.call("close_merged_auto", Some(json!({"refresh": "start"})))?;
     let deadline = Instant::now() + timeout;
+    control.call("close_merged_auto", Some(json!({"refresh": "start"})))?;
     loop {
         let reply = control.call("close_merged_auto", Some(json!({"refresh": "status"})))?;
         match reply["scan"].as_str() {
             Some("ready") => return Ok(()),
-            Some("running") if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_secs(1))
+            Some("running") => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err("merge index refresh is still running".into());
+                }
+                std::thread::sleep(remaining.min(Duration::from_secs(1)));
             }
-            Some("running") => return Err("merge index refresh is still running".into()),
             _ => return Err("keeper reply has no valid merge index status".into()),
         }
     }
@@ -461,5 +560,50 @@ pub fn reconcile(env: &Env, args: &[String]) -> i32 {
             eprintln!("reconcile-merged: {error}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deadline_keeper_caps_the_timeout_passed_to_the_request() {
+        let env = Env::new();
+        let now = Instant::now();
+        for (request_limit, remaining, expected) in [
+            (10, Duration::from_secs(5), 5),
+            (10, Duration::from_secs(400), 10),
+            (MAX_TIME_SECS, Duration::from_secs(5), 5),
+            (MAX_TIME_SECS, Duration::from_millis(1), 1),
+        ] {
+            let transport = DeadlineKeeper {
+                keeper: SlowKeeper {
+                    env: &env,
+                    max_time_secs: request_limit,
+                },
+                deadline: now + remaining,
+            };
+            let reply = transport.call_with(now, |keeper| {
+                assert_eq!(keeper.max_time_secs, expected);
+                Ok(json!({"merged_not_done": 0}))
+            });
+            assert_eq!(reply, Ok(json!({"merged_not_done": 0})));
+        }
+    }
+
+    #[test]
+    fn deadline_keeper_does_not_call_the_request_at_the_deadline() {
+        let env = Env::new();
+        let deadline = Instant::now();
+        let transport = DeadlineKeeper {
+            keeper: SlowKeeper {
+                env: &env,
+                max_time_secs: MAX_TIME_SECS,
+            },
+            deadline,
+        };
+        let reply = transport.call_with(deadline, |_| panic!("request started at the deadline"));
+        assert_eq!(reply, Err(MERGE_INDEX_EXPIRED.into()));
     }
 }
