@@ -150,10 +150,35 @@ pub(super) fn check_on(
         .map(|p| p.trim().replace('\\', "/"))
         .collect();
     if date.is_none_or(|d| today >= d) {
+        let added = git(
+            root,
+            &[
+                "diff",
+                "--name-only",
+                "--diff-filter=A",
+                "--no-renames",
+                "-z",
+                base.trim(),
+                head,
+            ],
+        )?;
+        let fragment = Regex::new(r"\Adocs/(contributing|keeper|spawner)/[A-Z][A-Z0-9_-]*\.md\z")
+            .expect("valid fragment pattern");
+        let mut covered: std::collections::HashSet<_> = paths.iter().map(String::as_str).collect();
+        for path in added.split('\0') {
+            if let Some(captures) = fragment.captures(path) {
+                covered.insert(match &captures[1] {
+                    "contributing" => "CONTRIBUTING.md",
+                    "keeper" => "docs/KEEPER.md",
+                    "spawner" => "docs/SPAWNER.md",
+                    _ => unreachable!(),
+                });
+            }
+        }
         for (_, pattern, docs) in rules {
             let rx = glob_to_regex(&pattern)?;
             for path in &paths {
-                if rx.is_match(path) && !docs.iter().any(|d| paths.contains(d)) {
+                if rx.is_match(path) && !docs.iter().any(|d| covered.contains(d.as_str())) {
                     errors.push(format!(
                         "{path} -> {} (matches '{pattern}')",
                         docs.join(", ")
