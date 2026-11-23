@@ -218,7 +218,7 @@ def _attempt_pending(marker):
 
 
 def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
-    """Deliver terminal snapshots idempotently and retain retryable records."""
+    """Deliver terminal snapshots newest-first so the backlog cannot delay fresh runs."""
     from plangraph.fleet_snapshot import _projection_binary
 
     keeper = keeper if keeper is not None else KeeperSink()
@@ -239,7 +239,7 @@ def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
                 pending.setdefault(run_id, (run, marker))
         except (OSError, ValueError) as exc:
             findings.append(dict(rule="spawn-attempt-delivery", run_id=run_id, reason=type(exc).__name__))
-    for run, marker in sorted(pending.values(), key=lambda pair: pair[0]["ended"])[:limit]:
+    for run, marker in sorted(pending.values(), key=lambda pair: pair[0]["ended"], reverse=True)[:limit]:
         try:
             with inbox_lock(marker):
                 if not _attempt_pending(marker):

@@ -28,6 +28,42 @@ def test_old_history(tmp_path):
     assert w.tick(runs, [], lambda _: None, now=600000, state=tmp_path) == []
 
 
+def test_first_tick_delivers_fresh_attempt_during_historical_backlog(tmp_path, monkeypatch):
+    from plangraph.spawner import notify, runner
+
+    now = time.time()
+    completed = dict(status='completed', role='implement', exit_code=0)
+    old_ended = now - 7 * 86400
+    records(tmp_path, 26, started=old_ended - 60, ended=old_ended, **completed)
+    fresh = tmp_path / 'runs/run-fresh/record.json'
+    fresh.parent.mkdir()
+    fresh.write_text(json.dumps(dict(run_id='run-fresh', started=now - 120,
+                                     ended=now - 60, **completed)))
+    delivered = []
+
+    def project(argv, *, input, **kwargs):
+        assert argv == ['fixture-pg-spawnd', 'project-spawn-attempt']
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(
+            {'attempt_id': json.loads(input)['run_id']}))
+
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    monkeypatch.setenv('PG_URL', 'http://127.0.0.1:9090')
+    monkeypatch.setenv('PG_TOKEN_FILE', str(tmp_path / 'unused-token'))
+    monkeypatch.delenv('PLANGRAPH_ATTEMPT_COVERAGE', raising=False)
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_DELIVERY', raising=False)
+    monkeypatch.setattr(runner, 'spawn_service', lambda **kw: SimpleNamespace(retry_completions=lambda: None))
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    monkeypatch.setattr('plangraph.fleet_snapshot._projection_binary', lambda: 'fixture-pg-spawnd')
+    monkeypatch.setattr(subprocess, 'run', project)
+    monkeypatch.setattr(notify.KeeperSink, 'spawn_attempt',
+                        lambda self, attempt: delivered.append(attempt['attempt_id']))
+
+    assert w.main(['tick']) == 0
+    assert len(delivered) == 25
+    assert 'run-fresh' in delivered
+    assert fresh.with_name('attempt.delivered').read_text() == 'delivered\n'
+
+
 @pytest.mark.parametrize('ended,expected', [(96400, 1), (10000, 0), (None, 0),
                                           (100001, 0), ('bad', 0), (float('nan'), 0)])
 def test_finished_horizon(tmp_path, ended, expected):
