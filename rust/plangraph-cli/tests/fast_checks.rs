@@ -56,32 +56,58 @@ fn fast_checks_matches_ci_for_three_fixture_diffs() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .current_dir(root)
-        .args([
-            "fast-checks",
-            "--plan",
-            "--files",
-            "rust/worker-core/src/lib.rs",
-        ])
-        .output()
-        .unwrap();
-    assert!(result.status.success());
-    let plan = String::from_utf8(result.stdout).unwrap();
-    for required in [
-        "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
-        "pg-spawnd/clippy:",
-        "pg-worker/clippy:",
-        "pg-worker/test: cargo run",
-        "--bin ci-temporal -- cargo nextest run --config-file rust/.config/nextest.toml",
-        "--local --files-only --run",
+    let bin = tempfile::tempdir().unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin.path().to_owned())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    for (version_status, runner) in [
+        (
+            0,
+            "cargo nextest run --config-file rust/.config/nextest.toml",
+        ),
+        (101, "cargo test"),
     ] {
-        assert!(plan.contains(required), "missing {required}: {plan}");
+        pg_worker_core::executable_test_support::write_script(
+            bin.path(),
+            "cargo",
+            &format!("#!/bin/sh\n[ "$*" = 'nextest --version' ] || exit 1\nexit {version_status}\n"),
+        );
+        let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .current_dir(&root)
+            .env("PATH", &path)
+            .args([
+                "fast-checks",
+                "--plan",
+                "--files",
+                "rust/worker-core/src/lib.rs",
+            ])
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let plan = String::from_utf8(result.stdout).unwrap();
+        let diagnostics = String::from_utf8(result.stderr).unwrap();
+        assert_eq!(
+            diagnostics.contains("falling back to cargo test"),
+            version_status != 0,
+        );
+        for required in [
+            "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
+            "pg-spawnd/clippy:",
+            "pg-worker/clippy:",
+            "pg-worker/test: cargo run",
+            &format!("--bin ci-temporal -- {runner}"),
+            "--local --files-only --run",
+        ] {
+            assert!(plan.contains(required), "missing {required}: {plan}");
+        }
+        assert!(!plan.contains("temporal-spike/test:"));
     }
-    assert!(!plan.contains("temporal-spike/test:"));
 }
 
 #[test]
