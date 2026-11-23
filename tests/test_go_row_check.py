@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from plangraph.keeper import cli
-from plangraph.keeper.store_waiver import go_row_check
+from plangraph.keeper.store_runs import go_row_check
 
 ROOT = Path(__file__).resolve().parent.parent
 HEAD = "a" * 40
@@ -94,7 +94,8 @@ def _row(keys, plan="plangraph:BATCH"):
 
 def test_train_keys_come_from_the_trailers_with_checkpoint_only_keys_deferred(train_repo):
     from plangraph.keeper.evidence_git import GitAdapter
-    assert GitAdapter().train_trailer_keys(str(train_repo), "train", ["main"]) == (
+    from plangraph.keeper.evidence_pr import train_trailer_keys
+    assert train_trailer_keys(GitAdapter(), str(train_repo), "train", ["main"]) == (
         ["plangraph:PART-KEY", "plangraph:RESOLVER-KEY"], ["plangraph:LATER-KEY"])
 
 

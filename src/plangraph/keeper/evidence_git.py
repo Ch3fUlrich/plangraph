@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from . import timing
+from .evidence_pr import part_changes
 from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
 __all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "trailer_entries", "plan_items", "valid_ref",
@@ -562,30 +563,7 @@ class GitAdapter:
                     yield from self._train_deploy_changes(repo, parent, part, names)
                 continue
             if names.intersection(self.merge_plan_items(repo, merge)):
-                yield part, merge, self._part_changes(repo, parent, part, merge, names)
-
-    def _part_changes(self, repo, parent, part, merge, names):
-        """A part's changes as the key sees them: its own commits and the part's untagged ones.
-
-        Commits tagged only for other keys of the same part are left out. A key with no
-        non-merge commit of its own in the part (its tag sits on a merge) keeps the whole part.
-        """
-        proc = self._run(repo, ["log", "--no-merges", "--format=%H%x1e%B%x1d",
-                                "--end-of-options", part, f"^{parent}"])
-        if proc.returncode != 0:
-            raise RuntimeError("cannot read train part commits")
-        shas, named = [], False
-        for record in _stdout(proc).split("\x1d"):
-            sha, _, body = record.strip().partition("\x1e")
-            items = plan_items(body)
-            if valid_commit_ref(sha) and (not items or names.intersection(items)):
-                shas.append(sha)
-                named = named or bool(items)
-        if not named:
-            return self._name_status(repo, ["--end-of-options", parent, merge])
-        changes = {change for sha in shas
-                   for change in self._name_status(repo, ["--root", "--end-of-options", sha])}
-        return sorted(changes)
+                yield part, merge, part_changes(self, repo, parent, part, merge, names)
 
     _TRAIN_MERGE_SUBJECT = re.compile(
         r"Landing train [0-9]+\b|batch [A-Za-z0-9_-]+: (?:#[0-9]+ )+\(#[0-9]+\)$", re.I)
@@ -674,43 +652,6 @@ class GitAdapter:
         if proc.returncode != 0:
             return []
         return [v for record in _stdout(proc).split("\x1d") for v in plan_items(record)]
-
-    #: Work under this prefix only records items as deferred; it delivers nothing.
-    CHECKPOINT_PREFIX = "docs/checkpoints/"
-
-    def train_trailer_keys(self, repo: str, head: str, exclude=()) -> tuple[list[str], list[str]]:
-        """``(delivered, deferred)`` ``Plan-Item`` keys of the commits in *head* not in any *exclude* ref.
-
-        A key is deferred when it has non-merge commits, no trailered merge, and every one of those
-        commits touches only ``docs/checkpoints/**``: a checkpoint doc records it, nothing ships it.
-        """
-        refs = [head, *exclude]
-        if not all(isinstance(r, str) and valid_ref(r) for r in refs):
-            raise ValueError("invalid ref")
-        proc = self._run(repo, ["log", "--format=%H%x1e%P%x1e%B%x1d", "--end-of-options",
-                                head, *[f"^{r}" for r in exclude]])
-        if proc.returncode != 0:
-            raise RuntimeError("cannot read the train commits")
-        delivered: set[str] = set()
-        checkpoint_only: dict[str, bool] = {}
-        for record in _stdout(proc).split("\x1d"):
-            fields = record.strip("\n").split("\x1e", 2)
-            if len(fields) != 3 or not valid_commit_ref(fields[0]):
-                continue
-            sha, parents, body = fields
-            keys = plan_items(body)
-            if not keys:
-                continue
-            if len(parents.split()) > 1:
-                delivered.update(keys)
-                continue
-            paths = [path for _, path in self._name_status(repo, ["--root", "--end-of-options", sha])]
-            only = bool(paths) and all(path.startswith(self.CHECKPOINT_PREFIX) for path in paths)
-            for key in keys:
-                checkpoint_only[key] = checkpoint_only.get(key, True) and only
-        deferred = {key for key, only in checkpoint_only.items() if only and key not in delivered}
-        delivered.update(set(checkpoint_only) - deferred)
-        return sorted(delivered), sorted(deferred)
 
     def writer_trailers(self, repo: str, sha: str, ref: str | None = None) -> list[dict[str, str]]:
         """Trailer dicts of the commits that authored the change behind *sha*.

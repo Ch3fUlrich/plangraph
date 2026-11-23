@@ -63,6 +63,43 @@ def go_key_scope(statement):
     return {key.strip() for key in block[1].split(",")}
 
 
+def go_row_check(text, *, delivered=None, deferred=(), plan_key=None):
+    """``(accepted, reason)`` for one GO row's decision cell, by the grammar ``close_merged`` reads.
+
+    The reason of a refusal starts with its code (``go_row_not_go``, ``go_row_key_token``,
+    ``go_row_keys_malformed``, and with a train's *delivered* keys ``go_row_keys_missing`` or
+    ``go_row_keys_unbacked``). ``plan_key`` (the batch item, trailered only on the landing merge)
+    may be named without a trailered commit; a *deferred* key must not be named.
+    """
+    from .store_waiver import _go_statement  # lazy: store_waiver imports this module
+    statement = _go_statement(text)
+    if statement is None:
+        return False, ("go_row_not_go: no GO verdict in the row (it must open with GO, after at most "
+                       "'(HH:MMZ)' or '(HH:MMZ, date -u)', and name no NO GO)")
+    tokens = go_key_tokens(statement)
+    for token in tokens or ():
+        if token and not token[-1].isalnum():
+            return False, f"go_row_key_token: key token '{token}' ends in punctuation"
+    scope = go_key_scope(statement)
+    if scope is not None and not scope:
+        return False, "go_row_keys_malformed: GO-KEYS must be one [project:KEY,project:KEY] block"
+    if delivered is None:
+        return True, "accept"
+    if scope is None:
+        return False, "go_row_keys_missing: the row has no GO-KEYS block for this train"
+    named_plan = re.search(r"\bPLAN\s+(\S+)\s+conforms=", statement)
+    allowed = set(delivered) | {k for k in (plan_key, named_plan and named_plan[1]) if k}
+    missing, unbacked = sorted(set(delivered) - scope), sorted(scope - allowed)
+    held = sorted(scope & set(deferred))
+    if missing:
+        return False, "go_row_keys_missing: trailered keys left out of GO-KEYS: " + ", ".join(missing)
+    if held:
+        return False, "go_row_keys_unbacked: deferred (not delivered) keys named: " + ", ".join(held)
+    if unbacked:
+        return False, "go_row_keys_unbacked: keys with no trailered commit: " + ", ".join(unbacked)
+    return True, "accept"
+
+
 def _operator_authority(row):
     """The decisions log grants authority through comma/plus-separated BY tokens."""
     return "operator" in {token.strip().lower() for token in re.split(r"[,+]", row.get("by", ""))}

@@ -28,7 +28,7 @@ from . import auth, context_sources
 from .coverage import writer_families
 from .errors import Refused
 from .evidence_types import Result, as_epoch, valid_commit_ref
-from .store_runs import _WARM_S, go_key_scope, go_key_tokens
+from .store_runs import _WARM_S, go_key_scope
 from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
 
@@ -68,42 +68,6 @@ def _go_statement(text):
     start = marks[goes[0]].end()
     end = marks[goes[0] + 1].start() if goes[0] + 1 < len(marks) else len(text)
     return text[start:end].strip()
-
-
-def go_row_check(text, *, delivered=None, deferred=(), plan_key=None):
-    """``(accepted, reason)`` for one GO row's decision cell, by the grammar ``close_merged`` reads.
-
-    The reason of a refusal starts with its code (``go_row_not_go``, ``go_row_key_token``,
-    ``go_row_keys_malformed``, and with a train's *delivered* keys ``go_row_keys_missing`` or
-    ``go_row_keys_unbacked``). ``plan_key`` (the batch item, trailered only on the landing merge)
-    may be named without a trailered commit; a *deferred* key must not be named.
-    """
-    statement = _go_statement(text)
-    if statement is None:
-        return False, ("go_row_not_go: no GO verdict in the row (it must open with GO, after at most "
-                       "'(HH:MMZ)' or '(HH:MMZ, date -u)', and name no NO GO)")
-    tokens = go_key_tokens(statement)
-    for token in tokens or ():
-        if token and not token[-1].isalnum():
-            return False, f"go_row_key_token: key token '{token}' ends in punctuation"
-    scope = go_key_scope(statement)
-    if scope is not None and not scope:
-        return False, "go_row_keys_malformed: GO-KEYS must be one [project:KEY,project:KEY] block"
-    if delivered is None:
-        return True, "accept"
-    if scope is None:
-        return False, "go_row_keys_missing: the row has no GO-KEYS block for this train"
-    named_plan = re.search(r"\bPLAN\s+(\S+)\s+conforms=", statement)
-    allowed = set(delivered) | {k for k in (plan_key, named_plan and named_plan[1]) if k}
-    missing, unbacked = sorted(set(delivered) - scope), sorted(scope - allowed)
-    held = sorted(scope & set(deferred))
-    if missing:
-        return False, "go_row_keys_missing: trailered keys left out of GO-KEYS: " + ", ".join(missing)
-    if held:
-        return False, "go_row_keys_unbacked: deferred (not delivered) keys named: " + ", ".join(held)
-    if unbacked:
-        return False, "go_row_keys_unbacked: keys with no trailered commit: " + ", ".join(unbacked)
-    return True, "accept"
 
 
 def _go_binding(statement, project):

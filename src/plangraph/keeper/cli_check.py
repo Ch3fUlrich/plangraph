@@ -210,7 +210,8 @@ def add_go_row_parser(sub):
 def cmd_go_row(args):
     """``pg go-row check``: prints ``accept`` or ``refuse: <code>: <reason>``; exit 0 or 2."""
     from .evidence_git import GitAdapter
-    from .store_waiver import go_row_check
+    from .evidence_pr import train_trailer_keys
+    from .store_runs import go_row_check
 
     row = args.row
     if row is None:
@@ -219,7 +220,7 @@ def cmd_go_row(args):
     delivered = deferred = None
     if args.head:
         try:
-            delivered, deferred = GitAdapter().train_trailer_keys(args.repo, args.head, args.exclude)
+            delivered, deferred = train_trailer_keys(GitAdapter(), args.repo, args.head, args.exclude)
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             print(f"refuse: go_row_train_unreadable: {exc}")
             return 2

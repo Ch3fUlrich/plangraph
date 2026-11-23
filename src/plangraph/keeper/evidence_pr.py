@@ -147,3 +147,58 @@ def validate_merge(ctx, project, merge_info, target_ref, ref):
     except Exception:
         pass
     return Result(False, "merged_pr_unproven: no authoritative merged PR association", ref)
+
+
+#: Work under this prefix only records items as deferred; it delivers nothing.
+CHECKPOINT_PREFIX = "docs/checkpoints/"
+
+
+def part_changes(git, repo, parent, part, merge, names):
+    """A train part's changes as one key sees them: its own commits and the part's untagged ones.
+
+    Commits tagged only for other keys of the same part are left out. A key with no
+    non-merge commit of its own in the part (its tag sits on a merge) keeps the whole part.
+    """
+    from .evidence_git import plan_items
+    proc = git._run(repo, ["log", "--no-merges", "--format=%H%x1e%B%x1d", "--end-of-options", part, f"^{parent}"])
+    if proc.returncode != 0:
+        raise RuntimeError("cannot read train part commits")
+    shas, named = [], False
+    for record in (proc.stdout or "").split("\x1d"):
+        sha, _, body = record.strip().partition("\x1e")
+        items = plan_items(body)
+        if valid_commit_ref(sha) and (not items or names.intersection(items)):
+            shas.append(sha)
+            named = named or bool(items)
+    if not named:
+        return git._name_status(repo, ["--end-of-options", parent, merge])
+    return sorted({change for sha in shas for change in git._name_status(repo, ["--root", "--end-of-options", sha])})
+
+
+def train_trailer_keys(git, repo, head, exclude=()):
+    """``(delivered, deferred)`` ``Plan-Item`` keys of the commits in *head* not in any *exclude* ref.
+
+    A key is deferred when it has non-merge commits, no trailered merge, and every one of those
+    commits touches only ``docs/checkpoints/**``: a checkpoint doc records it, nothing ships it.
+    """
+    from .evidence_git import plan_items, valid_ref
+    if not all(isinstance(r, str) and valid_ref(r) for r in (head, *exclude)):
+        raise ValueError("invalid ref")
+    proc = git._run(repo, ["log", "--format=%H%x1e%P%x1e%B%x1d", "--end-of-options",
+                           head, *[f"^{r}" for r in exclude]])
+    if proc.returncode != 0:
+        raise RuntimeError("cannot read the train commits")
+    delivered, checkpoint_only = set(), {}
+    for record in (proc.stdout or "").split("\x1d"):
+        fields = record.strip("\n").split("\x1e", 2)
+        if len(fields) != 3 or not valid_commit_ref(fields[0]) or not (keys := plan_items(fields[2])):
+            continue
+        if len(fields[1].split()) > 1:
+            delivered.update(keys)
+            continue
+        paths = [path for _, path in git._name_status(repo, ["--root", "--end-of-options", fields[0]])]
+        only = bool(paths) and all(path.startswith(CHECKPOINT_PREFIX) for path in paths)
+        for key in keys:
+            checkpoint_only[key] = checkpoint_only.get(key, True) and only
+    deferred = {key for key, only in checkpoint_only.items() if only and key not in delivered}
+    return sorted(delivered | (set(checkpoint_only) - deferred)), sorted(deferred)
