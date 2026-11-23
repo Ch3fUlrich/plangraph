@@ -3,5 +3,7 @@ Description=Check worker disk and clean idle rebuildable state
 
 [Service]
 Type=oneshot
-EnvironmentFile=%h/.config/plangraph/disk-hygiene.env
+# Existing sweep deployments supply disk settings through the shared file.
+EnvironmentFile=-%h/.config/plangraph/disk-hygiene.env
+EnvironmentFile=-%h/.config/plangraph/disk-hygiene-service.env
 ExecStart=%h/.local/bin/pg-disk-hygiene --repo ${PG_REPO} --root ${PG_WORKTREES} --pins ${PG_PINS} --apply

@@ -148,11 +148,13 @@ Keep `~/.local/bin` on the landing and pre-push workers' PATH.
 
 
 On disk-hygiene workers, run `host-sync --install-env disk-hygiene` to create
-`~/.config/plangraph/disk-hygiene.env` with the checkout at `~/code/plangraph`,
-its `.claude/worktrees` directory and `~/.config/plangraph/pins.json`. The
-pins producer must publish that file before the first tick. Hosts also using
-the worktree sweep should provision its environment with the sweep bootstrap
-first, so the file includes the sweep settings.
+`~/.config/plangraph/disk-hygiene-service.env` with the checkout at
+`~/code/plangraph`, its `.claude/worktrees` directory and
+`~/.config/plangraph/pins.json`. The pins producer must publish that file
+before the first tick. The disk service still reads an existing
+`disk-hygiene.env` and the installer preserves it. The sweep bootstrap
+provisions that shared file independently. When both files exist, the
+disk service uses `disk-hygiene-service.env` for keys present in both.
 
 On the WSL worker, an operator installs the trusted release artifact at
 `/usr/local/bin/pg-spawnd` with `install -o root -g root -m 0755`, then runs
