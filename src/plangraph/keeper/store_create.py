@@ -249,6 +249,9 @@ class CreateMixin:
         with self._write():
             self._check_definition_dependency_caps(defs, attach)
             for definition in defs:
+                if parent := definition["slice_parent"]:
+                    self._check_slice_parent(principal, parent)
+            for definition in defs:
                 self._insert_item(principal, definition, now)
             for definition, gate in attach:
                 # Re-read the gate under the lock: it may have been done or
@@ -302,7 +305,6 @@ class CreateMixin:
         if gate["state"] in ("done", "cancelled"):
             raise Refused("bad_state", f"{gate['key']} is {gate['state']}")
         self._assert_unlocked(gate)
-        self._check_slice_attachment(gate, definition)
         return gate
 
     def _normalise_create(self, raw, principal, *, stored=False):

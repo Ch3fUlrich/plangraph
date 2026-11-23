@@ -38,8 +38,8 @@ def test_a_slice_without_its_parent_has_no_path_to_a_goal(tmp_path):
         w.store.create_items(w.p("router"), [item])
 
 
-def test_a_slice_requires_matching_under_to_attach_it_to_the_parent(tmp_path):
+def test_slice_parent_alone_does_not_attach_a_slice_to_the_graph(tmp_path):
     w = _world(tmp_path)
     item = {k: v for k, v in json.loads(FIXTURE.read_text())["items"][0].items() if k != "under"}
-    with pytest.raises(Refused, match="slice_parent must match under"):
+    with pytest.raises(Refused, match="unreachable_goal"):
         w.store.create_items(w.p("router"), [item])

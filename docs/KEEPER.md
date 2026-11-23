@@ -426,11 +426,13 @@ The generated brief embeds the selected files verbatim and reports the
 reference if a file cannot be read. If a plangraph lane's How names external
 code, it must also name the plangraph implementation target.
 
-Each slice definition, including entries in writer-authored `slices.json` and
-definitions emitted by the replanner, sets `slice_parent` to the same Keeper key
-as `under`. Keeper records `slice_parent` in the creation event. Attaching a new
-slice under an existing slice is refused with the parent key, including after
-an edit to the parent's criteria. Ordinary items can attach under a slice.
+When running `pg define --file slices.json`, each entry must set `slice_parent`
+to the Keeper key of the item being sliced. Use
+`under: plangraph:LESSONS-ENFORCE` to attach writer slices to the lessons gate.
+The round replanner attaches its slices
+under the item it slices. Keeper records `slice_parent` in the creation event
+and refuses slicing an existing slice, naming its key. Older slices with
+`Slice of …` criteria are also recognized. Ordinary items can attach under a slice.
 
 Ready and claim include qualified Plan-Item matches from other repositories
 in the configured merge scan. A bare Plan-Item ID matches within its own

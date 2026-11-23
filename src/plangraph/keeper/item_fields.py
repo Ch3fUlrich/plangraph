@@ -29,10 +29,13 @@ _HOW = re.compile(r"^[ \t]*How:[ \t]*(.*?)(?=^[ \t]*(?:Why|Done when|Checked aga
 _PATH = re.compile(r"(?<![\w./-])(?:\.\.?/)?(?:[\w.-]+/)+[\w.-]+")
 _EXTERNAL = re.compile(
     r"(?:\.\./|(?:[\w.-]+/)?(?:router/bin|handoffs|plan-order/helpers)/"
-    r"|[\w.-]+/(?:src|rust|tools|deploy)/)")
+    r"|(?i:AutoOS|plan-order)/(?:src|rust|tools|deploy)/)")
 _LOCAL_MODULE = re.compile(r"(?:plangraph/)?(?:src/plangraph|rust|tools|deploy)/[\w./-]+")
 
 
+_QUOTED_SPAN = re.compile(
+    r"""(?<!\w)'(?:[^'\n]|'(?=\w))*'(?!\w)|"[^"\n]*"|`+[^`\n]*`+"""
+    r"|‘(?:[^’\n]|’(?=\w))*’(?!\w)|“[^”\n]*”")
 _DESIGN_DEPENDENCY = re.compile(
     r"\b(?:"
     r"(?:recover|obtain|load|retrieve)[ \t]+(?:[\w.-]+[ \t]+){0,6}(?:design|contract)\b"
@@ -55,7 +58,7 @@ def check_definition_inputs(item):
     how = _HOW.search(item.get("description") or "")
     if not how:
         return
-    if _DESIGN_DEPENDENCY.search(how[1]) and not item.get("design_ref"):
+    if not item.get("design_ref") and _DESIGN_DEPENDENCY.search(_QUOTED_SPAN.sub("\n", how[1])):
         raise Refused("validation", f"{item['key']}: name the design or contract in design_ref")
     if item["project"] != "plangraph" or item["kind"] != "lane":
         return

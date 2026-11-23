@@ -359,7 +359,7 @@ def test_legacy_import_keeps_a_lane_without_done_criteria(w):
     "Patch handoffs/router/helper.py.",
     "Update ../other-repo/src/worker.rs.",
     "Edit data-repo/router/bin/runner.",
-    "Edit sibling-repo/src/runner.rs.",
+    "Edit AutoOS/src/runner.rs.",
     "Patch plan-order/helpers/package.rs.",
 ])
 def test_define_and_edit_refuse_implementation_outside_plangraph(w, how):
@@ -374,3 +374,11 @@ def test_define_and_edit_refuse_implementation_outside_plangraph(w, how):
         w.store.edit_definition(router, "plangraph:WORK", {"description": f"Why: failure\nHow: {how}"})
     w.store.edit_definition(router, "plangraph:WORK", {
         "description": f"Why: failure\nHow: {how} Port it into rust/worker/src/main.rs."})
+
+
+@pytest.mark.parametrize("path", ["docs/tools/x.md", "docs/rust/x.md", "plangraph/src/plangraph/worker.py"])
+def test_definition_allows_local_paths_without_an_external_target(w, path):
+    router = w.p("router")
+    lane = defn("WORK", project="plangraph", description=f"Why: clarify behavior\nHow: Edit {path}.")
+    goal = defn("GOAL", ["WORK"], project="plangraph", kind="goal")
+    assert w.store.create_items(router, [lane, goal])["created"][0] == "plangraph:WORK"
