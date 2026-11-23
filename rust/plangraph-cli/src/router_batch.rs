@@ -12,9 +12,12 @@ use std::path::Path;
 #[path = "router_batch_tests.rs"]
 mod tests;
 
-/// One required review seat of a part (rule 3.66 (f)): its review file and reviewer family.
+/// One review seat of a part (rule 3.66 (f)): the review leg that ran, its review file and
+/// reviewer family.
 #[derive(Debug, Deserialize)]
 pub struct Seat {
+    /// The route leg id of the review (`opencode-go-glm-5.3-flash`, ...).
+    pub leg: String,
     pub review_file: String,
     pub reviewer_family: String,
 }
@@ -32,6 +35,13 @@ pub struct Part {
 
 /// Seats every part needs (D-6652, rule 3.66 (f)).
 const REQUIRED_SEATS: usize = 2;
+/// The two required OpenCode review legs with their model family (`REVIEW_REQUIRED` in
+/// `plangraph.planner.legs`). Both must be among a part's seats, except a leg whose family wrote
+/// part of the diff (a writer never reviews its own work; other seats then fill its slot).
+const REQUIRED_LEGS: [(&str, &str); 2] = [
+    ("opencode-go-deepseek-v4-flash", "deepseek"),
+    ("opencode-go-glm-5.3-flash", "glm"),
+];
 
 #[derive(Debug, Deserialize)]
 pub struct GoInput {
@@ -138,6 +148,8 @@ pub fn go_row(
             Some("CI is not green")
         } else if part.seats.len() < REQUIRED_SEATS {
             Some("needs two required review seats")
+        } else if part.seats.iter().any(|seat| !token(&seat.leg)) {
+            Some("review leg missing")
         } else if part.seats.iter().any(|seat| !token(&seat.review_file)) {
             Some("review file missing")
         } else if !token(&part.writer_family)
@@ -162,6 +174,11 @@ pub fn go_row(
                 .any(|b| a.review_file == b.review_file)
         }) {
             Some("review seats share a review file")
+        } else if REQUIRED_LEGS.iter().any(|(leg, model_family)| {
+            family(model_family) != family(&part.writer_family)
+                && !part.seats.iter().any(|seat| seat.leg == *leg)
+        }) {
+            Some("required review seat missing (opencode-go deepseek and glm)")
         } else {
             None
         };
@@ -176,8 +193,8 @@ pub fn go_row(
                 return Err(format!("part {}: {why}", part.name));
             }
             seats.push(format!(
-                "review {} reviewer {}",
-                seat.review_file, seat.reviewer_family
+                "review {} leg {} reviewer {}",
+                seat.review_file, seat.leg, seat.reviewer_family
             ));
         }
         table.push(format!(
@@ -271,13 +288,13 @@ fn read_review(path: &str) -> Result<String, String> {
 fn keeper_family_table(
     input: &GoInput,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let mut names: Vec<String> = input
-        .parts
+    let mut names: Vec<String> = REQUIRED_LEGS
         .iter()
-        .flat_map(|p| {
+        .map(|(_, family)| family.to_string())
+        .chain(input.parts.iter().flat_map(|p| {
             std::iter::once(p.writer_family.clone())
                 .chain(p.seats.iter().map(|s| s.reviewer_family.clone()))
-        })
+        }))
         .collect();
     names.sort();
     names.dedup();

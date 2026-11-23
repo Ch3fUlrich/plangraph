@@ -3,20 +3,25 @@ use super::*;
 const H: &str = "0123456789abcdef0123456789abcdef01234567";
 const G: &str = "fedcba9876543210fedcba9876543210fedcba98";
 
-fn seat(name: &str, n: u8, reviewer: &str) -> Seat {
+const DEEPSEEK: &str = "opencode-go-deepseek-v4-flash";
+const GLM: &str = "opencode-go-glm-5.3-flash";
+
+fn seat(name: &str, n: u8, leg: &str, reviewer: &str) -> Seat {
     Seat {
+        leg: leg.into(),
         review_file: format!("review-{name}-{n}.txt"),
         reviewer_family: reviewer.into(),
     }
 }
-/// A part with its two required seats: `reviewer` and a fixed second family.
+/// A part with its two required seats (deepseek and glm legs); the first seat's family is
+/// `reviewer`, the second's is glm.
 fn part(name: &str, head: &str, writer: &str, reviewer: &str) -> Part {
     Part {
         name: name.into(),
         head: head.into(),
         ci: "green".into(),
         writer_family: writer.into(),
-        seats: vec![seat(name, 1, reviewer), seat(name, 2, "glm")],
+        seats: vec![seat(name, 1, DEEPSEEK, reviewer), seat(name, 2, GLM, "glm")],
     }
 }
 /// Review files by name: every seat's file accepts the head the part names, with FILES READ.
@@ -71,8 +76,8 @@ fn a_batch_pr_with_two_parts_yields_one_go_row_naming_both_heads_reviews_and_fam
     assert_eq!(row.lines().count(), 1);
     assert!(row.starts_with("| D-6400 | demo | GO #1090 GO-HEAD 0123456789abcdef"));
     for needle in [
-        format!("alpha head {H} ci green writer claude review review-alpha-1.txt reviewer gemini review review-alpha-2.txt reviewer glm"),
-        format!("beta head {G} ci green writer claude review review-beta-1.txt reviewer deepseek review review-beta-2.txt reviewer glm"),
+        format!("alpha head {H} ci green writer claude review review-alpha-1.txt leg opencode-go-deepseek-v4-flash reviewer gemini review review-alpha-2.txt leg opencode-go-glm-5.3-flash reviewer glm"),
+        format!("beta head {G} ci green writer claude review review-beta-1.txt leg opencode-go-deepseek-v4-flash reviewer deepseek review review-beta-2.txt leg opencode-go-glm-5.3-flash reviewer glm"),
         "parts 2".to_string(),
     ] {
         assert!(row.contains(&needle), "{needle} in {row}");
@@ -223,6 +228,36 @@ fn a_review_file_that_is_missing_for_another_head_or_not_an_accept_refuses_the_p
     assert!(go_row(&input, &read_review)
         .unwrap_err()
         .contains("review file unreadable"));
+}
+
+#[test]
+fn both_required_opencode_legs_must_be_among_the_seats() {
+    // A gemini seat beside the glm seat is not the two required seats.
+    let mut gemini_glm = part("alpha", H, "claude", "gemini");
+    gemini_glm.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    assert_eq!(
+        go_row_ok(&go(vec![gemini_glm])).unwrap_err(),
+        "part alpha: required review seat missing (opencode-go deepseek and glm)"
+    );
+    // Both required legs plus a credential-diff Sonnet seat pass.
+    let mut with_sonnet = part("alpha", H, "gpt", "deepseek");
+    with_sonnet
+        .seats
+        .push(seat("alpha", 3, "claude-sonnet-5-5-high", "claude"));
+    let row = go_row_ok(&go(vec![with_sonnet])).unwrap();
+    assert!(
+        row.contains("leg claude-sonnet-5-5-high reviewer claude"),
+        "{row}"
+    );
+    // A deepseek-written part cannot seat the deepseek leg: glm plus another seat passes.
+    let mut writer_deepseek = part("alpha", H, "deepseek", "gemini");
+    writer_deepseek.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    assert!(go_row_ok(&go(vec![writer_deepseek])).is_ok());
+    // But the glm leg cannot be dropped for it.
+    let mut no_glm = part("alpha", H, "deepseek", "gemini");
+    no_glm.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    no_glm.seats[1].leg = "gpt-6.2-sol-medium".into();
+    assert!(go_row_ok(&go(vec![no_glm])).is_err());
 }
 
 #[test]

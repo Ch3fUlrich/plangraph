@@ -649,6 +649,13 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             sorted(ordered, key=lambda leg: seat_order.get(leg.id, len(seat_order))), writer_set, high=high)
     if native_review:
         seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
+        # D-6652: both required OpenCode seats stay in the seat set; a credential diff's Sonnet seat is an extra.
+        missing = [leg for leg in ordered if leg.id in REVIEW_REQUIRED and leg not in seats
+                   and seat_family(leg.family) not in {seat_family(s.family) for s in seats}]
+        if missing:
+            seats = [*seats, *missing]
+            coverage = (*coverage, *({"leg": leg.id, "covers": [w for w in sorted({seat_family(w) for w in writer_set if w})
+                                                                if w != seat_family(leg.family)]} for leg in missing))
     error = None
     if role == "review" and len(seats) < 2:   # rule 3.66 (f): two seats on every head
         error = "two distinct review families unavailable"

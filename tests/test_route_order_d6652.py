@@ -97,6 +97,20 @@ def test_a_credential_tagged_diff_gets_the_claude_seat():
     assert "claude-sonnet-5-5-high" not in [leg.id for leg in review().legs]
 
 
+def test_a_credential_diff_keeps_both_required_seats_and_adds_sonnet():
+    for card in ({"risk_tags": ["secrets"]}, {"paths": ["src/auth/session.rs"]}):
+        plan = review(card)
+        ids = [leg.id for leg in plan.review_seats]
+        assert ids[0] == "claude-sonnet-5-5-high" and set(REVIEW_REQUIRED) <= set(ids), (card, ids)
+        assert len(ids) == 3 and plan.error is None
+    # A deepseek-written credential diff fences that required seat; the other stays beside Sonnet.
+    plan = review({"risk_tags": ["secrets"]}, writers=("deepseek",))
+    ids = [leg.id for leg in plan.review_seats]
+    assert ids[0] == "claude-sonnet-5-5-high" and REVIEW_REQUIRED[1] in ids and REVIEW_REQUIRED[0] not in ids
+    # Without a credential tag the seats stay the two required ones.
+    assert [leg.id for leg in review().review_seats] == list(REVIEW_REQUIRED)
+
+
 def test_the_claude_seat_serves_only_when_both_required_seats_are_out():
     assert not any(leg.claude_family for leg in review(down=REQUIRED_MODELS - {BY_ID[REVIEW_REQUIRED[0]].model}).legs)
     assert any(leg.id == "claude-sonnet-5-5-high" for leg in review(down=REQUIRED_MODELS).legs)

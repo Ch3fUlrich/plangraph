@@ -54,8 +54,8 @@ reply that lists what was applied and what was refused.
    applied and refused entries, never "refused" alone. Fix the file and run it again.
    Do not split a batch to get around one entry.
 2. **GO for a batch PR.** Write the input (D-id, project, PR number, batch head, one part per
-   writer branch: name, head, CI state, writer family and two `seats`, each a review file and a
-   reviewer family; rule 3.66 (f)) and run
+   writer branch: name, head, CI state, writer family and its `seats`, each the review leg id, a review file and a
+   reviewer family; rule 3.66 (f): the glm-5.3-flash and deepseek-v4-flash legs must both be there) and run
    `plangraph router go-row INPUT.json`. It refuses, naming the part, when a head is not 40
    hex, CI is not green, a part has fewer than two seats, a family is missing, a reviewer family
    is the writer's or two seats share one (families compare as keeper families: gpt and openai are one) or share a review file, or a review file is missing, names another head than
