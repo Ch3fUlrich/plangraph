@@ -144,10 +144,9 @@ class InputMixin:
         if "wait" in fields:
             check_wait(fields["wait"])
 
-    def _check_slice_attachment(self, gate, definition):
-        if definition["slice_parent"] is None:
-            return
-        key = gate["key"]
+    def _check_slice_parent(self, principal, key):
+        parent = self._get_or_refuse(key)
+        self._may_manage(principal, parent["project"])
         # Rehoming creates a new key, but the original creation event still
         # identifies the slice.
         history = self.conn.execute(
@@ -156,7 +155,7 @@ class InputMixin:
             " SELECT a.old_key FROM aliases a JOIN lineage l ON a.new_key=l.key"
             ") SELECT e.payload FROM events e JOIN lineage l ON e.key=l.key"
             " WHERE e.type='item_created'", (key,))
-        if _LEGACY_SLICE_CRITERIA.match(gate.get("done_criteria") or "") or any(
+        if _LEGACY_SLICE_CRITERIA.match(parent.get("done_criteria") or "") or any(
                 json.loads(row["payload"]).get("slice_parent") for row in history):
             raise Refused("validation", f"parent {key} is already a slice")
 
@@ -205,8 +204,6 @@ class InputMixin:
             if not isinstance(slice_parent, str) or not slice_parent.strip():
                 raise Refused("validation", f"{key}: slice_parent must be a non-empty key")
             slice_parent = self._qualify(project, slice_parent)
-            if slice_parent != under:
-                raise Refused("validation", f"{key}: slice_parent must match under")
         return {
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),

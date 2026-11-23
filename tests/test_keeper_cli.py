@@ -64,6 +64,35 @@ def out_json(capsys):
     return json.loads(capsys.readouterr().out)
 
 
+def test_define_writer_slices_requires_the_sliced_item_key(live, tmp_path, capsys):
+    _, w, tokens, _, _ = live
+    router = w.p("router")
+    w.store.create_items(router, [defn("ROUTING-GOAL", project="plangraph", kind="goal")])
+    w.store.create_items(router, [
+        defn("LESSONS-ENFORCE", project="plangraph", kind="gate", under="ROUTING-GOAL"),
+        defn("ORIGINAL", project="plangraph", under="ROUTING-GOAL"),
+        defn("LEGACY", project="plangraph", under="ROUTING-GOAL",
+             done_criteria="Slice of plangraph:ORIGINAL: legacy criteria"),
+    ])
+    path = tmp_path / "slices.json"
+    item = defn("FOLLOWUP", project="plangraph", under="LEGACY",
+                description="Why: split remaining work\nHow: cover its retry path.")
+    argv = ("define", "--file", str(path))
+    path.write_text(json.dumps([item]), encoding="utf-8")
+    assert run(tokens["router"], *argv) == 2
+    assert "plangraph:FOLLOWUP" in (error := capsys.readouterr().err)
+    assert "slice_parent" in error
+    assert w.store._item("plangraph:FOLLOWUP") is None
+    item.update(under="plangraph:LESSONS-ENFORCE", slice_parent="plangraph:LEGACY")
+    path.write_text(json.dumps({"items": [item]}), encoding="utf-8")
+    assert run(tokens["router"], *argv) == 2
+    assert "parent plangraph:LEGACY is already a slice" in capsys.readouterr().err
+    item["slice_parent"] = "plangraph:ORIGINAL"
+    path.write_text(json.dumps({"items": [item]}), encoding="utf-8")
+    assert run(tokens["router"], *argv) == 0
+    assert w.store._item("plangraph:LESSONS-ENFORCE")["depends_on"] == ["plangraph:FOLLOWUP"]
+
+
 def test_cli_full_lifecycle(live, capsys):
     _, w, tokens, _, _ = live
     assert run(tokens["l1main"], "claim", "demo:A") == 0
