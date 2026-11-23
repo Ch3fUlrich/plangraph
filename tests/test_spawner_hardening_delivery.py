@@ -203,6 +203,23 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     caplog.set_level(logging.WARNING)
 
+    delivered = []
+
+    class StubResponse:
+        status = 200
+        def read(self):
+            return b'{}'
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def stub_open(self, request, *args, **kwargs):
+        delivered.append((request.selector, json.loads(request.data)))
+        return StubResponse()
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, 'open', stub_open)
+
     service = spawn_service(runner=SpawnerRunner(), state=tmp_path)
     run_ids = ['run-t1', 'run-t2', 'run-t3']
     for run_id in run_ids:
@@ -243,7 +260,11 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
     assert 'completion delivery skipped: keeper not configured (queued)' in warnings[1].message
     assert not any(r.exc_info for r in caplog.records)
     for run_id in run_ids:
-        assert not (tmp_path / 'runs' / run_id / 'keeper.delivered').exists()
+        run_dir = tmp_path / 'runs' / run_id
+        assert not (run_dir / 'keeper.delivered').exists()
+        assert not (run_dir / 'attempt.delivered').exists()
+    assert delivered == []
+    assert 'spawn-attempt-delivery' not in (tmp_path / 'watchdog/status.txt').read_text(encoding='utf-8')
 
     # b. after setting a token file + url with a fake/stub delivery (monkeypatch the HTTP call the sink makes)
     #    the next _save/tick delivers and writes the marker.
@@ -252,32 +273,18 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
     monkeypatch.setenv('PG_URL', 'http://127.0.0.1:9090')
     monkeypatch.setenv('PG_TOKEN_FILE', str(token_file))
 
-    delivered = []
-    class StubResponse:
-        status = 200
-        def read(self):
-            return b'{}'
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-
-    def stub_open(self, request, *args, **kwargs):
-        delivered.append(request)
-        return StubResponse()
-
-    monkeypatch.setattr(urllib.request.OpenerDirector, 'open', stub_open)
-
     # Next watchdog tick delivers completions and writes keeper.delivered
     w.main(['tick'])
 
     for run_id in run_ids:
         assert (tmp_path / 'runs' / run_id / 'keeper.delivered').read_text() == 'delivered\n'
-    assert len(delivered) == 3
+    completions = [body['run']['run_id'] for path, body in delivered if path == '/v1/record_run']
+    assert sorted(completions) == run_ids
 
     # Subsequent tick does not re-deliver
+    delivered.clear()
     w.main(['tick'])
-    assert len(delivered) == 3
+    assert delivered == []
 
     # Direct _save also delivers immediately when configured
     rec4 = dict(run_id='run-t4', status='completed', exit_code=0,
@@ -286,7 +293,7 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
                 item='plangraph:STALL-WD-DELIVERY-QUIET')
     spawn_service(runner=SpawnerRunner(), state=tmp_path)._save(rec4)
     assert (tmp_path / 'runs' / 'run-t4' / 'keeper.delivered').read_text() == 'delivered\n'
-    assert len(delivered) == 4
+    assert [(path, body['run']['run_id']) for path, body in delivered] == [('/v1/record_run', 'run-t4')]
 
 
 @pytest.mark.parametrize('exit_code', [0, 1])
