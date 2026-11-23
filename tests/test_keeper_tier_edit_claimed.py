@@ -321,7 +321,8 @@ def test_router_edits_done_criteria_of_claimed_item(w):
     """F4: the router's active-item exception covers ``done_criteria`` too."""
     epoch = to_claimed(w, KEY)
     out = w.store.edit_definition(w.p("router"), KEY,
-                                  {"done_criteria": "tighter criteria"})
+                                  {"done_criteria": "tighter criteria",
+                                   "criteria_reason": "Cover retries", "criteria_evidence": "D-123"})
     assert out == {"key": KEY, "epoch": epoch + 1}
     item = w.store._item(KEY)
     assert (item["state"], item["epoch"]) == ("claimed", epoch + 1)
@@ -398,6 +399,7 @@ def test_router_active_edit_event_carries_before_and_after(tmp_path):
     epoch = to_in_review(w, KEY)               # submit bumped round to 1
     out = w.store.edit_definition(w.p("router"), KEY,
                                   {"done_criteria": "revised",
+                                   "criteria_reason": "Cover retries", "criteria_evidence": "D-123",
                                    "depends_on": ["demo:B"]})
     assert out == {"key": KEY, "epoch": epoch + 1}
     item = w.store._item(KEY)

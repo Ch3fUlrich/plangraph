@@ -85,6 +85,8 @@ def test_brief_cap_and_truncation_marker(w):
 def test_brief_truncates_done_criteria_after_description(w):
     w.store.edit_definition(w.p("router"), "demo:B",
                             {"done_criteria": "c" * 600,
+                             "criteria_reason": "Exercise the criteria length limit",
+                             "criteria_evidence": "D-123",
                              "note": "n\n" + "x" * 1200})
     info = w.store.show(w.p("reader"), "demo:B", brief=True)
     text = brief_mod.brief_text(info)
@@ -289,3 +291,24 @@ def test_definition_requires_and_preserves_an_explicit_design_reference(w):
     })
     assert w.store.show(w.p("reader"), key)["design_ref"] == "docs/roster.md"
     assert w.store.verify_integrity() == []
+
+
+@pytest.mark.parametrize("how", [
+    "Read the keeper store design before editing.",
+    "Follow the existing response contract.",
+    "Use tests to validate the storage design.",
+])
+def test_definition_allows_general_design_prose_without_a_reference(w, how):
+    lane = defn("WORK", under="GOAL", description=f"Why: fix storage\nHow: {how}")
+    assert w.store.create_items(w.p("router"), [lane])["created"] == ["demo:WORK"]
+
+
+@pytest.mark.parametrize("how", [
+    "Read the approved design.",
+    "Follow the v10 roster contract.",
+    "Use the design document.",
+])
+def test_definition_requires_references_for_explicit_design_inputs(w, how):
+    lane = defn("WORK", under="GOAL", description=f"Why: fix storage\nHow: {how}")
+    with pytest.raises(Refused, match="design_ref"):
+        w.store.create_items(w.p("router"), [lane])

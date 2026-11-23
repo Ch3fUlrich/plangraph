@@ -13,6 +13,7 @@ from plangraph.keeper import events as keeper_events
 from plangraph.keeper.errors import Refused
 
 KEY = "demo:A"
+RATIONALE = {"criteria_reason": "Cover the retry path", "criteria_evidence": "D-123"}
 
 
 @pytest.fixture
@@ -40,7 +41,7 @@ def test_done_criteria_edit_bumps_epoch_on_claimed_item(w):
     epoch = to_claimed(w, KEY)
     before = w.store._item(KEY)
     out = w.store.edit_definition(w.p("router"), KEY,
-                                  {"done_criteria": "tighter criteria"})
+                                  {**RATIONALE, "done_criteria": "tighter criteria"})
     assert out == {"key": KEY, "epoch": epoch + 1}
     item = w.store._item(KEY)
     assert item["epoch"] == epoch + 1
@@ -67,7 +68,7 @@ def test_depends_on_edit_bumps_epoch_on_claimed_item(w):
 def test_done_criteria_edit_bumps_epoch_on_in_review_item(w):
     epoch = to_in_review(w, KEY)
     out = w.store.edit_definition(w.p("router"), KEY,
-                                  {"done_criteria": "revised criteria"})
+                                  {**RATIONALE, "done_criteria": "revised criteria"})
     assert out == {"key": KEY, "epoch": epoch + 1}
     item = w.store._item(KEY)
     assert item["epoch"] == epoch + 1
@@ -102,7 +103,7 @@ def test_evidence_before_the_edit_stops_counting(w):
     epoch = to_claimed(w, KEY)
     w.store.add_evidence(w.p("l1main"), KEY, epoch, "decision", {"id": "D-1"})
     w.store.edit_definition(w.p("router"), KEY,
-                            {"done_criteria": "tighter criteria"})
+                            {**RATIONALE, "done_criteria": "tighter criteria"})
     new_epoch = w.store._item(KEY)["epoch"]
     assert new_epoch == epoch + 1
 
@@ -119,7 +120,7 @@ def test_evidence_before_the_edit_stops_counting(w):
 def test_fold_equals_cache_after_the_edit(w):
     epoch = to_claimed(w, KEY)
     w.store.edit_definition(w.p("router"), KEY,
-                            {"done_criteria": "tighter criteria"})
+                            {**RATIONALE, "done_criteria": "tighter criteria"})
     w.store.edit_definition(w.p("router"), KEY,
                             {"depends_on": ["demo:B"]})
     item = w.store._item(KEY)
@@ -135,7 +136,7 @@ def test_fold_equals_cache_after_the_edit(w):
 def test_event_carries_who_before_after_and_new_epoch(w):
     epoch = to_claimed(w, KEY)
     w.store.edit_definition(w.p("router"), KEY,
-                            {"done_criteria": "newer"})
+                            {**RATIONALE, "done_criteria": "newer"})
     event = last_defined(w, KEY)
     payload = event["payload"]
     assert payload["who"] == "router"
@@ -148,7 +149,7 @@ def test_event_carries_who_before_after_and_new_epoch(w):
 def test_claimants_stale_epoch_is_refused_after_the_edit(w):
     epoch = to_claimed(w, KEY)
     out = w.store.edit_definition(w.p("router"), KEY,
-                                  {"done_criteria": "tighter criteria"})
+                                  {**RATIONALE, "done_criteria": "tighter criteria"})
     new_epoch = out["epoch"]
 
     with pytest.raises(Refused) as exc_info:
@@ -189,3 +190,69 @@ def test_criteria_amendments_are_append_only(w, active):
     ):
         with pytest.raises(db_errors.INTEGRITY, match="criteria amendments are append-only"):
             w.conn.execute(sql, (KEY,))
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_verify_reports_a_missing_criteria_amendment(w, monkeypatch, active):
+    if active:
+        to_claimed(w, KEY)
+    with monkeypatch.context() as broken:
+        broken.setattr(w.store, "_record_criteria_amendment", lambda *_: None)
+        w.store.edit_definition(w.p("router"), KEY, {
+            "done_criteria": "revised criteria",
+            "criteria_reason": "Cover the retry path",
+            "criteria_evidence": "D-123",
+        })
+    missing = last_defined(w)["seq"]
+    w.store.edit_definition(w.p("router"), KEY, {
+        "done_criteria": "final criteria",
+        "criteria_reason": "Cover the recovery path",
+        "criteria_evidence": "D-124",
+    })
+    assert [(p["key"], p["seq"], p["code"]) for p in w.store.verify_integrity()] == [
+        (KEY, missing, "criteria_amendment_missing"),
+    ]
+
+
+def test_verify_reports_legacy_criteria_edits_without_inventing_text(w):
+    with w.store._write():
+        w.conn.execute("UPDATE items SET done_criteria=? WHERE key=?", ("legacy edit", KEY))
+        seq, _ = w.store._append(w.p("router"), KEY, "item_defined",
+                                 {"fields": ["done_criteria"]}, w.clock())
+    w.store.edit_definition(w.p("router"), KEY, {**RATIONALE, "done_criteria": "current"})
+    assert [(p["key"], p["seq"], p["code"]) for p in w.store.verify_integrity()] == [
+        (KEY, seq, "criteria_amendment_unverifiable"),
+    ]
+    assert w.store.verify_chain() == []
+
+
+def test_verify_reports_criteria_text_that_disagrees_with_the_event(w, monkeypatch):
+    record = w.store._record_criteria_amendment
+
+    def record_wrong_original(seq, principal, item, fields, amendment, now):
+        record(seq, principal, {**item, "done_criteria": "wrong"}, fields, amendment, now)
+
+    monkeypatch.setattr(w.store, "_record_criteria_amendment", record_wrong_original)
+    w.store.edit_definition(w.p("router"), KEY, {**RATIONALE, "done_criteria": "current"})
+    assert w.store.verify_integrity() == [{
+        "key": KEY, "seq": last_defined(w)["seq"], "code": "criteria_amendment_mismatch",
+        "field": "done_criteria", "expected": ("criteria", "current"), "got": ("wrong", "current"),
+    }]
+
+
+@pytest.mark.parametrize("metadata", [{}, {"criteria_reason": "Cover retries"},
+                                     {"criteria_evidence": "D-123"}])
+def test_criteria_change_requires_reason_and_evidence(w, metadata):
+    before = keeper_events.read_events(w.conn)
+    with pytest.raises(Refused, match="criteria_(reason|evidence)") as exc:
+        w.store.edit_definition(w.p("router"), KEY, {"done_criteria": "new", **metadata})
+    assert exc.value.code == "validation"
+    assert w.store._item(KEY)["done_criteria"] == "criteria"
+    assert keeper_events.read_events(w.conn) == before
+    assert w.conn.execute("SELECT COUNT(*) FROM criteria_amendments").fetchone()[0] == 0
+
+
+def test_unchanged_criteria_need_no_amendment(w):
+    w.store.edit_definition(w.p("router"), KEY, {"done_criteria": "criteria"})
+    assert w.conn.execute("SELECT COUNT(*) FROM criteria_amendments").fetchone()[0] == 0
+    assert w.store.verify_integrity() == []

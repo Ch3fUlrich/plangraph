@@ -13,7 +13,7 @@ import re
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
-from .item_fields import (MODEL_FIELDS, check_choices, check_design_ref, check_host, check_kg_refs, check_kind, check_model_fields,
+from .item_fields import (MODEL_FIELDS, SMALL_FIELDS, check_choices, check_design_ref, check_host, check_kg_refs, check_kind, check_model_fields,
                           check_wait, kind_defaults)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
@@ -39,6 +39,28 @@ def _unfinished_dependencies(keys, items):
     return {key for key in keys if items.get(key, {}).get("state") not in ("done", "cancelled")}
 
 
+def _defined_payload(fields):
+    """``item_defined`` payload: the changed field names plus the new tier value.
+
+    The fold replays this to reconstruct ``review_tier``; it needs the value,
+    not just the name, so ``verify_integrity`` can agree with the table.  The
+    estimate pair rides along for the same reason: an event must say what the
+    edit actually stored.  ``fold`` ignores names it does not compare
+    (``estimate_h``/``estimate_src`` are definition columns, not cached ones),
+    so carrying them keeps the event honest without touching the replay.
+    """
+    payload = {"fields": sorted(fields)}
+    if "review_tier" in fields:
+        payload["review_tier"] = fields["review_tier"]
+    for name in SMALL_FIELDS:
+        if name in fields:
+            payload[name] = fields[name]
+    for name in ("estimate_h", "estimate_src"):
+        if name in fields:
+            payload[name] = fields[name]
+    return payload
+
+
 class InputMixin:
     """``_check_text``, ``_normalise`` and ``_qualify`` for :class:`Store`."""
 
@@ -61,13 +83,15 @@ class InputMixin:
         original = item.get("done_criteria")
         if "done_criteria" not in fields or original == fields["done_criteria"]:
             return
+        for name in ("criteria_reason", "criteria_evidence"):
+            if name not in amendment:
+                raise Refused("validation", f"{name} is required when done_criteria changes")
         self.conn.execute(
             "INSERT INTO criteria_amendments"
             "(seq,key,original_text,new_text,reason,evidence,authority,ts)"
             " VALUES(?,?,?,?,?,?,?,?)",
             (seq, item["key"], original, fields["done_criteria"],
-             amendment.get("criteria_reason", "Criteria edited through Keeper"),
-             amendment.get("criteria_evidence", f"event:{seq}"),
+             amendment["criteria_reason"], amendment["criteria_evidence"],
              principal.name, self._iso(now)))
 
     @staticmethod
@@ -92,7 +116,9 @@ class InputMixin:
         if "wait" in fields:
             check_wait(fields["wait"])
 
-    def _check_slice_attachment(self, gate):
+    def _check_slice_attachment(self, gate, definition):
+        if not slice_parent(definition):
+            return
         key = gate["key"]
         if slice_parent(gate) or any(
                 json.loads(row["payload"]).get("slice_parent")
