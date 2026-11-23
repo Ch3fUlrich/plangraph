@@ -27,6 +27,8 @@ NO_TOOLS_PREAMBLE = (
     "Answer in plain text; never emit tool calls."
 )
 REVIEW_OUTPUT_SECTION = "\n\n=== REVIEW OUTPUT\n"
+_WRITER_ARTIFACT_MAX_BYTES = 1024 * 1024
+_WRITER_ARTIFACT_EXCERPT_BYTES = 32 * 1024
 
 
 def _claude_writer_trailer(rules: str, launch_record: dict | None) -> str:
@@ -79,8 +81,8 @@ def _writer_artifacts(record: dict) -> str:
             with os.fdopen(fd, "rb") as artifact:
                 if not stat.S_ISREG(os.fstat(artifact.fileno()).st_mode):
                     raise ValueError("expected a regular artifact file")
-                data = artifact.read(1024 * 1024 + 1)
-            if len(data) > 1024 * 1024:
+                data = artifact.read(_WRITER_ARTIFACT_MAX_BYTES + 1)
+            if len(data) > _WRITER_ARTIFACT_MAX_BYTES:
                 raise ValueError("artifact exceeds 1 MiB")
             content = data.decode("utf-8")
         except FileNotFoundError:
@@ -88,8 +90,14 @@ def _writer_artifacts(record: dict) -> str:
         except (KeyError, OSError, TypeError, ValueError):
             sections.append(f"{label}: unreadable")
         else:
-            sections.append(f"{label}: included\n"
-                            + "\n".join("> " + line for line in content.splitlines()))
+            truncated = len(data) > _WRITER_ARTIFACT_EXCERPT_BYTES
+            if truncated:
+                # Validation above means only a partial final character can be dropped.
+                content = data[:_WRITER_ARTIFACT_EXCERPT_BYTES].decode("utf-8", errors="ignore")
+            quoted = ["> " + line for line in content.splitlines()]
+            if truncated:
+                quoted.append(f"> [artifact truncated at {_WRITER_ARTIFACT_EXCERPT_BYTES // 1024} KiB]")
+            sections.append(f"{label}: included\n" + "\n".join(quoted))
     return "\n".join(sections) + "\n\n"
 
 
