@@ -1,0 +1,14 @@
+[
+  {
+    "id": "evidence-article-structure",
+    "prompt": "You are asked to write up a change that cut train wait time. Where does the article go, what files does its folder hold, and what comes first in the text?",
+    "must": ["One folder per measured change", "The result in one paragraph", "No number without a"],
+    "must_not": ["put the article in the public repository", "write the numbers from the chat"]
+  },
+  {
+    "id": "evidence-article-supersede",
+    "prompt": "A new measurement contradicts an accepted article. What do you do with the old article and with the index?",
+    "must": ["An accepted article's result is never edited", "superseded_by", "is generated from the front matter"],
+    "must_not": ["overwrite the old number", "edit the index by hand"]
+  }
+]

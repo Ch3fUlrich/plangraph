@@ -1,0 +1,1 @@
+The planning skill gains section 5a: how a large plan is researched (two model families per topic, reports as files, measured baselines) and reviewed (one resumed reviewer session per seat until no HIGH and no MED finding is left), with a checkpoint card so a sudden stop loses nothing.
