@@ -16,7 +16,8 @@ import time
 import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
+from ci_select import (MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, is_nextest, planned_test_binaries,
+                       running_test_binary, rust_bound, rust_test_runner)
 from pgtest import run_test_process as run_bounded_test, selected_count, test_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -85,10 +86,6 @@ def build_jobs(env, cores, load):
     if configured:
         return MIN_BUILD_JOBS
     return max(MIN_BUILD_JOBS, min(cores, int(cores - load)))
-
-
-def is_nextest(command):
-    return command[:3] == ["cargo", "nextest", "run"]
 
 
 def check_timeout(command, cwd=None, env=None):
@@ -183,23 +180,6 @@ def rust_path_dependencies(manifest, data, workspace_dir, workspace):
     return dependencies
 
 
-def rust_test_runner(root, env):
-    config = root / 'rust/.config/nextest.toml'
-    if config.is_file():
-        try:
-            probe = subprocess.run(["cargo", "nextest", "--version"], cwd=root / "rust", env=env,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=CHECK_TIMEOUT)
-            if probe.returncode == 0:
-                return ["cargo", "nextest", "run", "--config-file", str(config),
-                        "--no-fail-fast", "--color", "never"]
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        print("rust: cargo-nextest unavailable; falling back to cargo test (no per-test deadline)",
-              file=sys.stderr, flush=True)
-    return ["cargo", "test"]
-
-
 def changed_rust_paths(root, base, head):
     try:
         changed = subprocess.check_output(
@@ -259,7 +239,7 @@ def rust_commands(root, base, head, env=None, run_tests=True):
         if dependents <= selected:
             break
         selected.update(dependents)
-    test = rust_test_runner(root, env) if run_tests else ["cargo", "test"]
+    test = rust_test_runner(root, env, CHECK_TIMEOUT) if run_tests else ["cargo", "test"]
     packages = [arg for p in sorted(selected & manifests.keys()) for arg in ("-p", manifests[p])]
     commands = ([["cargo", "fmt", "--check"],
                  ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],

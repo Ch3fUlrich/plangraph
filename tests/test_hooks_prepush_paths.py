@@ -11,6 +11,11 @@ import pytest
 from merge_batch_env import train_cli  # noqa: F401
 from test_hooks_prepush import HOOK, commit_file, fake_ip, git, push_line, repo, run_hook  # noqa: F401
 
+pytestmark = pytest.mark.long_test_deadline(
+    360, reason="Hosted CI run 45260747564 was still building the shared train CLI at 120 s. "
+    "A prior cold run took 141 s, and the hook subprocess has its own 120 s bound.",
+)
+
 LOG_PREFLIGHT = ("import json, os, sys\n"
                  "from pathlib import Path\n"
                  "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text(json.dumps(sys.argv[1:]))\n")

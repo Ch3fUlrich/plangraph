@@ -297,42 +297,48 @@ def test_pytest_quarantine_expires(tmp_path, now, mode, expected):
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='checks an isolated Linux process group')
-@pytest.mark.parametrize('parallel', [False, True])
-def test_pytest_deadline_reports_hang_and_kills_its_group(tmp_path, parallel):
+@pytest.mark.parametrize(('parallel', 'phase'), [(False, 'call'), (True, 'call'), (True, 'setup'), (True, 'teardown')])
+def test_pytest_deadline_reports_hang_and_keeps_running(tmp_path, parallel, phase):
     import signal
     import subprocess
 
     from plangraph.spawner.proc_kill import alive
 
     root = Path(__file__).resolve().parents[1]
-    (tmp_path / 'conftest.py').write_text(
-        'from _split_ci_environment import pytest_addoption, pytest_runtest_protocol\n',
-    )
-    scenario = tmp_path / 'test_hang.py'
-    scenario.write_text(
+    (tmp_path / 'conftest.py').write_text('pytest_plugins = ("_split_ci_environment",)\n')
+    (tmp_path / 'test_hang.py').write_text(
         'from pathlib import Path\n'
-        'import subprocess, sys\n'
+        'import os, subprocess, sys, pytest\n'
         'from threading import Event\n\n'
-        'def test_blocked():\n'
+        'def block():\n'
         '    child = subprocess.Popen([sys.executable, "-c", "from threading import Event; Event().wait()"])\n'
         '    Path("child.pid").write_text(str(child.pid))\n'
-        '    Event().wait()\n',
+        '    Path("worker.pid").write_text(str(os.getpid()))\n'
+        '    Event().wait()\n'
+        '@pytest.fixture\ndef fixture():\n'
+        + {'setup': '    block()\n', 'teardown': '    yield\n    block()\n', 'call': '    return block\n'}[phase]
+        + f'def test_blocked(fixture):\n    {"fixture()" if phase == "call" else "pass"}\n'
+        'def test_after_hang():\n'
+        '    assert int(Path("worker.pid").read_text()) == os.getpid()\n',
     )
+    (tmp_path / 'test_other_scope.py').write_text('def test_other_scope(): pass\n')
     worker_args = []
     if parallel:
         pytest.importorskip('xdist')
-        worker_args = ['-p', 'xdist.plugin', '-n', '2']
+        worker_args = ['-p', 'xdist.plugin', '-n', '2', '--dist', 'loadscope']
     command = subprocess.Popen(
-        [sys.executable, '-m', 'pytest', '-q', '-o', 'test_deadline=2', *worker_args, str(scenario)],
+        [sys.executable, '-m', 'pytest', '-q', '-o', 'test_deadline=2', *worker_args, str(tmp_path)],
         cwd=tmp_path, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
                  PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
     )
     try:
         output, _ = command.communicate(timeout=20)
-        assert command.returncode != 0, output
+        assert command.returncode == pytest.ExitCode.TESTS_FAILED, output
+        expected = {'call': '1 failed, 2 passed', 'setup': '2 passed, 1 error', 'teardown': '3 passed, 1 error'}
+        assert expected[phase] in output and 'INTERNALERROR' not in output
         assert 'HUNG test_hang.py::test_blocked' in output
-        assert 'in test_blocked' in output
+        assert 'in block' in output
         assert not alive(int((tmp_path / 'child.pid').read_text()), None)
     finally:
         if command.poll() is None:

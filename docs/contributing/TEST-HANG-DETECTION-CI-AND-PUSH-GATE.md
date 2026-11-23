@@ -1,3 +1,13 @@
+## Pytest deadlines
+
+The default 120-second deadline covers setup, call and teardown. On POSIX,
+an interruptible phase that times out reports `HUNG <nodeid>` with thread
+stacks through pytest, so the xdist worker can run the next case. Teardown
+gets a fresh deadline after an earlier phase times out. On platforms without
+thread-directed signals, the watchdog dumps stacks and the enclosing job or
+command provides the stop. The pre-push path module has a 360-second override
+to accommodate the measured cold build of its shared train CLI fixture.
+
 ## Rust test deadlines in local checks
 
 Preflight modes that run Rust tests and the Rust steps in `plangraph
