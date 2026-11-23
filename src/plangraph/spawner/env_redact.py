@@ -259,6 +259,26 @@ def _join_prompt(parts, separator=''):
     return _SourcePrompt(text, spans) if spans else text
 
 
+def _before_review_output(prompt, block):
+    """Insert review evidence before the closing contract, preserving producer spans.
+
+    For an unmarked hand-written prompt, append the evidence. The Rust inline
+    formatter also supplies a generic verdict reminder after the diff in this case.
+    """
+    from plangraph.review.prompt import REVIEW_OUTPUT_SECTION
+
+    spans = prompt.spans if type(prompt) is _SourcePrompt else ()
+    at = prompt.rfind(REVIEW_OUTPUT_SECTION)
+    while at >= 0 and any(start < at + len(REVIEW_OUTPUT_SECTION) and at < end
+                          for start, end in spans):
+        at = prompt.rfind(REVIEW_OUTPUT_SECTION, 0, at)
+    if at < 0:
+        return prompt + block
+    before = _SourcePrompt(prompt[:at], ((start, end) for start, end in spans if end <= at))
+    after = _SourcePrompt(prompt[at:], ((start - at, end - at) for start, end in spans if start >= at))
+    return _join_prompt((before, block, after))
+
+
 def _source_block(text):
     """Called only at the git-diff and tracked-context producers."""
     text = redact_source(text)

@@ -155,9 +155,7 @@ fn lifecycle(
     record["base_admitted"] = json!(true);
     driver.save(record).map_err(|e| (6, e))?;
     let skill = driver.skill(crate::role_header::skill_name(brief)).ok();
-    let brief = crate::role_header::compose("codex", brief, skill.as_deref());
-    let prompt = format!("{brief}\nNative writer rules: new code is Rust with Rust tests. No new Python, shell or Node source files or additions to tools/new_code_allowlist.txt without an operator D-id; fixes inside existing Python files remain allowed until their port. Do not push. Commit your work and end your turn: the driver runs the fast checks and an other-family review on your final HEAD and resumes this session with any failure or finding.\n");
-    let prompt = format!("{prompt}\nUse the inherited shared CARGO_TARGET_DIR for every Cargo command, including reviews and preflight. Never override it with a private /tmp or worktree target, --target-dir, or Cargo configuration.\n");
+    let prompt = crate::role_header::compose("codex", brief, skill.as_deref());
     for attempt in 1..=3 {
         record["manifest"]["try_count"] = json!(attempt);
         driver.save(record).map_err(|e| (6, e))?;

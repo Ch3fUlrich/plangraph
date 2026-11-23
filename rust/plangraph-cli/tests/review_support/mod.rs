@@ -125,7 +125,8 @@ with LOG.open("a", encoding="utf-8") as fh:
     fh.write(json.dumps({{"verb": verb, "writer_families": opts["writer_family"], "seat_family": SEAT_FAMILY, "diff_ref": card.get("diff_ref")}}) + "\n")
 
 if verb == "route":
-    max_tok = 400 if MODE in ("split_pass", "split_fail_beta", "single_too_big") else 200000
+    # Budget for the review contract and one small patch while still forcing multiple patches to split.
+    max_tok = 450 if MODE in ("split_pass", "split_fail_beta", "single_too_big") else 200000
     if MODE == "null_leg":
         print(json.dumps({{"first_leg": None, "legs": []}}))
         sys.exit(0)
