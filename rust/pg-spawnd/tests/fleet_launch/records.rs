@@ -248,3 +248,24 @@ pub fn check_id_resolution(launcher: &Launcher) {
     );
     assert!(!s.path("oom").exists() && !s.path("guard").exists());
 }
+
+pub fn check_router_prompt(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let out = s.launch("routing").output().unwrap();
+    s.expect(
+        &out,
+        0,
+        &format!("{SID}\nfleet-launch: session routing-0001\nfleet-launch: started {SID}\n"),
+        "",
+    );
+    let child = s.json("child.json");
+    let args = child["argv"].as_array().unwrap();
+    let system = args
+        .iter()
+        .position(|arg| arg == "--append-system-prompt")
+        .unwrap()
+        + 1;
+    let system = args[system].as_str().unwrap();
+    assert!(system.contains("skills/router-core/SKILL.md"), "{system}");
+    assert_eq!(args.last(), Some(&json!(PROMPT)));
+}
