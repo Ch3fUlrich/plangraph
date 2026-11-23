@@ -368,7 +368,8 @@ def test_silent_agy_is_not_a_gateway_leg_and_its_printed_refusal_ends_the_run_at
     asyncio.run(run())
 
 
-def test_agy_model_limit_keeps_siblings_other_harnesses_and_accounts_available(tmp_path):
+def test_agy_account_limit_keeps_other_harnesses_and_accounts_available(tmp_path):
+    """An AgY booking is scoped to its account and model."""
     from dataclasses import replace
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import plan_spawn
