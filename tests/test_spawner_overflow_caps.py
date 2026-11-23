@@ -775,6 +775,9 @@ def test_cap_comes_from_the_host_config_file_and_the_environment_wins(tmp_path, 
     assert h.cargo_target_cap_gb() == 48
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '7')
     assert h.cargo_target_cap_gb() == 7
-    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_CAP_GB')
-    (tmp_path / 'plangraph' / 'cargo-target-cap-gb').write_text('junk')
-    assert h.cargo_target_cap_gb() == h.DEFAULT_CARGO_TARGET_CAP_GB
+    for invalid in ('', 'junk', 'nan', 'inf', '-1', '4_8', '４８'):
+        monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', invalid)
+        assert h.cargo_target_cap_gb() == 48
+    for invalid in (b'junk', b'\xff'):
+        (tmp_path / 'plangraph' / 'cargo-target-cap-gb').write_bytes(invalid)
+        assert h.cargo_target_cap_gb() == h.DEFAULT_CARGO_TARGET_CAP_GB

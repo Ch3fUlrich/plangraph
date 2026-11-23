@@ -395,11 +395,11 @@ fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_on
         path
     };
     let stale: Vec<_> = (0..50)
-        .map(|n| unit(&format!("pg-worker-core-{n:016x}"), 61 + n))
+        .map(|n| unit(&format!("pg-worker-core-{n:016x}"), 361 + n))
         .collect();
     // Held by a running build: touched minutes ago, and the crate's newest variant.
     let live = unit("pg-worker-core-ffffffffffffffff", 5);
-    let other = unit("other-crate-0000000000000001", 90);
+    let other = unit("other-crate-0000000000000001", 390);
     // 52 units of 100 B; cap 5200 leaves the watermark at 3900 B.
     let cap = 5200;
     assert_eq!(crate::cargo_pool::watermark_bytes(cap), 3900);

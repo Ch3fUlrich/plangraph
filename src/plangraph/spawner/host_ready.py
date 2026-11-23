@@ -279,26 +279,27 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
 
 
 def _cap_gb(raw):
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw.isascii() or '_' in raw:
+        return None
     try:
         cap = float(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         return None
     return cap if math.isfinite(cap) and cap >= 0 else None
 
 
 def cargo_target_cap_gb():
-    """Environment, then the host file ``cargo-target-cap-gb`` in the config directory (Rust
-    ``cap_bytes_from`` reads the same file), then the default; an unusable file value falls through. An invalid variable raises."""
-    env = os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB')
-    if env is not None:
-        cap = float(env)
-        if not math.isfinite(cap) or cap < 0:
-            raise ValueError('invalid cache cap')
+    """Use the first valid cap from the environment, host config file, or default."""
+    cap = _cap_gb(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB'))
+    if cap is not None:
         return cap
     config = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
     try:
-        cap = _cap_gb((config / 'plangraph' / 'cargo-target-cap-gb').read_text())
-    except OSError:
+        cap = _cap_gb((config / 'plangraph' / 'cargo-target-cap-gb').read_text(encoding='utf-8'))
+    except (OSError, UnicodeError):
         cap = None
     return DEFAULT_CARGO_TARGET_CAP_GB if cap is None else cap
 
