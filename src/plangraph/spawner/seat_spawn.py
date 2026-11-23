@@ -721,7 +721,9 @@ class SeatSpawnMixin:
             admit_toolless(prompt, role, leg, SpawnRefused)
         if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
             from . import context_pack
-            prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
+            prompt = context_pack.pack_prompt(
+                prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(),
+                pack, review=role == 'review')
         if ((role == 'review' or role == 'judge' and card.get('diff_ref') is not None
              and getattr(leg, 'tool_mode', 'tools') in ('prompt-only', 'inline-only'))
                 and _needs_inline_diff(leg, card)):

@@ -26,6 +26,7 @@ NO_TOOLS_PREAMBLE = (
     "The full material is inline below. "
     "Answer in plain text; never emit tool calls."
 )
+REVIEW_OUTPUT_SECTION = "\n\n=== REVIEW OUTPUT\n"
 
 
 def _claude_writer_trailer(rules: str, launch_record: dict | None) -> str:
