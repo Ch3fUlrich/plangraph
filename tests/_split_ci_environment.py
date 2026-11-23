@@ -1,3 +1,4 @@
+import _thread
 import faulthandler
 import json
 import math
@@ -9,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 from contextlib import contextmanager
-from threading import Thread, Timer, get_ident
+from threading import get_ident
 from time import monotonic
 import pytest
 
@@ -218,9 +219,49 @@ def pytest_addoption(parser):
     parser.addini('test_deadline', 'Default per-test deadline in seconds', default='120')
 
 
-_START_INFRASTRUCTURE_THREAD = Thread.start
+# The deadline alarm uses bare _thread primitives captured at import: tests may patch
+# threading.Thread, Thread.__init__ or Thread.daemon, and a Thread/Timer object built
+# per phase would then fail to arm and leave that patch unrestored for later tests.
+_START_ALARM_THREAD = _thread.start_new_thread
+_NEW_LOCK = _thread.allocate_lock
+_PTHREAD_KILL = getattr(signal, 'pthread_kill', None)
 _SET_SIGNAL_HANDLER = signal.signal
 _DEADLINE = pytest.StashKey()
+
+
+class _Alarm:
+    """Send `sig` to thread `target` after `delay` seconds unless cancelled."""
+
+    def __init__(self, delay, target, sig):
+        self._cancelled = _NEW_LOCK()
+        self._cancelled.acquire()
+        self._finished = _NEW_LOCK()
+        self._finished.acquire()
+        self._delay = min(max(0, delay), _thread.TIMEOUT_MAX)
+        self._target = target
+        self._sig = sig
+        self.started = False
+
+    def _run(self):
+        try:
+            # The lock is only released by cancel(); a timeout means the deadline passed.
+            if not self._cancelled.acquire(timeout=self._delay):
+                _PTHREAD_KILL(self._target, self._sig)
+        finally:
+            self._finished.release()
+
+    def start(self):
+        _START_ALARM_THREAD(self._run, ())
+        self.started = True
+
+    def cancel(self):
+        if self._cancelled.locked():
+            self._cancelled.release()
+
+    def join(self):
+        if self.started:
+            self._finished.acquire()
+            self._finished.release()
 
 
 class _TestHung(BaseException):
@@ -298,21 +339,31 @@ def _watch_test_phase(item, teardown=False):
 
     # SIGALRM belongs to tests that install their own subprocess alarms.
     sig = signal.SIGUSR2
-    timer = Timer(max(0, remaining), signal.pthread_kill, args=(get_ident(), sig))
-    timer.daemon = True
+    alarm = _Alarm(remaining, get_ident(), sig)
+    arm_failure = None
     previous = _SET_SIGNAL_HANDLER(sig, interrupt)
     try:
-        _START_INFRASTRUCTURE_THREAD(timer)
-        armed = True
-        if monotonic() >= expires:
+        try:
+            alarm.start()
+            armed = True
+        except Exception as exc:
+            # The phase still runs, so the other hooks and fixtures can finish and
+            # only this test reports the failure.
+            arm_failure = exc
+            faulthandler.dump_traceback_later(max(0.001, remaining))
+        if armed and monotonic() >= expires:
             interrupt(sig, None)
-        return (yield)
+        result = yield
     finally:
         armed = False
-        timer.cancel()
-        if timer.ident is not None:
-            timer.join()
+        alarm.cancel()
+        alarm.join()
+        if arm_failure is not None:
+            faulthandler.cancel_dump_traceback_later()
         _SET_SIGNAL_HANDLER(sig, previous)
+    if arm_failure is not None:
+        raise RuntimeError(f'could not arm the test deadline: {arm_failure!r}') from arm_failure
+    return result
 
 
 pytest_runtest_setup = pytest_runtest_call = pytest.hookimpl(wrapper=True, tryfirst=True)(_watch_test_phase)
