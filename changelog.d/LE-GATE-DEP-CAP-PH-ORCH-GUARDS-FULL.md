@@ -1,0 +1,1 @@
+Keeper alerts routing when an open gate reaches 190 non-cancelled dependencies. Define checks the unfinished-dependency cap for attachments inside the write transaction and names an available split gate when one exists.
