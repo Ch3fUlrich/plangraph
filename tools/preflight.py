@@ -629,7 +629,7 @@ def _main(argv, root, cleanup):
     if words:
         scrub.extend(["--words", words])
     tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
-                   "--root", str(root), "--files-only", "--local", "--parts-union", "--run")
+                   "--root", str(root), "--files-only", "--local", "--parts-union", "--keep-local-bound", "--run")
     if importlib.util.find_spec("xdist") is not None:
         tests += ["--workers", str(affected_workers())]
     size_options = ["--doc-headroom"] if args.lane else []

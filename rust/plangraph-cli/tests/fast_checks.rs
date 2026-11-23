@@ -299,6 +299,26 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
     }
 }
 
+#[test]
+fn fast_checks_plan_for_a_spawner_python_change_tests_pg_spawnd() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for path in [
+        "src/plangraph/spawner/target.py",
+        "src/plangraph/planner/legs.py",
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .current_dir(&root)
+            .args(["fast-checks", "--plan", "--files", path])
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let plan = String::from_utf8(result.stdout).unwrap();
+        for required in ["pg-spawnd/clippy:", "pg-spawnd/test: cargo test"] {
+            assert!(plan.contains(required), "{path} misses {required}: {plan}");
+        }
+    }
+}
+
 fn registry(dir: &Path, mem_floor_mb: u64) -> std::path::PathBuf {
     let doc = serde_json::json!({"version": 1, "self": "prox", "hosts": [{
         "id": "prox", "class": "worker", "aliases": [],
