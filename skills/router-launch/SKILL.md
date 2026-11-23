@@ -14,6 +14,12 @@ launch record for host placement and interactive session ownership.
 ## Hierarchy is mandatory (D-971)
 Every L1 launch or relaunch prompt starts with: "Invoke the skill unattended-orchestration before anything else; apply the depth rule as in force (no Claude L2 sessions, D-5193; workers, seats and research runs only through the plangraph spawner route table, D-2749; L1 holds plan graph, merges, designs and live steps; writers get batches of related items, one writer session per batch with its own review loop, via the agent-neutral writer.sh/review.sh, rule 3.56; lessons go to plan-order as `LESSON <what> <evidence>`). Reply 'SKILL-READ unattended-orchestration' with the 3 rules you apply." The skill is the plangraph copy under `skills/` in the plangraph checkout, linked at the user skills folder; the spawner MCP is the plangraph one configured for the lane (OPERATOR D-5648, D-5668, D-5671). L1 models: `claude-opus-5-5` low or `claude-sonnet-5-5` xhigh by role (D-5658).
 
+## Router startup
+
+The fleet launcher adds an instruction to read `skills/router-core/SKILL.md`
+to the `routing` role's system prompt on launch and recycle. The Batch mode
+section gives the procedure for work spanning multiple items.
+
 ## Quiet fleet (D-1364, D-1377)
 Every launch prompt says: no recurring cron in any session (wait via one background command that exits); keep a card of at most 40 lines next to the handoff, refreshed before 230k, then `CARD-READY <path>` to the router; messages only for BLOCKED, DONE, GO, incident, launch; no ALIVE or ack messages (check the job state yourself). The router sends no acks either.
 

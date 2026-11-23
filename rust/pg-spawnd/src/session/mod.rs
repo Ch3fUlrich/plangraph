@@ -214,6 +214,15 @@ fn local(
     }
     let style = read_text(&paths.ops.join("terse-style.txt")).unwrap_or_default();
     let style = style.trim_end_matches('\n');
+    let routing_style;
+    let style = if args.role == "routing" {
+        routing_style = format!(
+            "{style}\n\nRead skills/router-core/SKILL.md at startup. Follow its Batch mode procedure for multi-item router work."
+        );
+        &routing_style
+    } else {
+        style
+    };
     let _lock = if !args.dry && var("FLEET_DEFER_RECORD").as_deref() != Some("1") {
         match storage::role_lock(&paths.state, &args.role) {
             Ok(file) => Some(file),
