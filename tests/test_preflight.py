@@ -751,9 +751,10 @@ def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch,
 
 
 
-def test_preflight_names_nextest_timeouts(monkeypatch, repo):
+@pytest.mark.parametrize("counter", ["(1/1)", "( 1/12)", "(10/12)", "( 1/ 12)"])
+def test_preflight_names_nextest_timeouts(monkeypatch, repo, counter):
     command = ["cargo", "nextest", "run"]
-    message = "     TIMEOUT [   2.017s] (1/1) example::unit nested::blocked\n"
+    message = f"     TIMEOUT [   2.017s] {counter} example::unit nested::blocked\n"
     monkeypatch.setattr(preflight, "check_timeout", lambda *args: 60)
     monkeypatch.setattr(preflight, "run_test_process", lambda *args, **kwargs:
                         subprocess.CompletedProcess(command, 100, message * 2))
@@ -761,5 +762,5 @@ def test_preflight_names_nextest_timeouts(monkeypatch, repo):
     assert code == 100
     assert output.count("HUNG example::unit nested::blocked") == 1
     assert preflight.failing_tests(
-        output + "        FAIL [   0.016s] (2/2) example::unit nested::failed\n"
+        output + f"        FAIL [   0.016s] {counter} example::unit nested::failed\n"
     ) == ["example::unit nested::blocked", "example::unit nested::failed"]

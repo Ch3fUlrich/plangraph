@@ -26,7 +26,7 @@ from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_ta
 from plangraph.spawner.overflow import available_memory_mb
 
 NEXTEST_TEST_RESULT = (r"^[ \t]*(?P<status>FAIL|TIMEOUT) +\[[^\n]*?\] +"
-                       r"\(\d+/\d+\) +(?P<name>[^\r\n]+)")
+                       r"\( *\d+/ *\d+\) +(?P<name>[^\r\n]+)")
 CHECK_TIMEOUT = 60
 MIN_BUILD_JOBS = 4
 # A normal affected run takes around 50 s, with a larger bound for hundreds of test paths.
