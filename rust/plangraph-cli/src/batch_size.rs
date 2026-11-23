@@ -11,6 +11,7 @@
 use crate::paths::{paths_overlap, repo_relative};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
 
 #[cfg(test)]
 #[path = "batch_size_tests.rs"]
@@ -44,6 +45,7 @@ pub struct Item {
     /// Repository-relative files or module paths from the planner's file list.
     #[serde(default)]
     pub files: Vec<String>,
+    pub design_ref: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -68,6 +70,9 @@ pub struct Last {
 pub struct Input {
     pub writer: Writer,
     pub items: Vec<Item>,
+    /// Checkout roots keyed by the qualifier used in a design reference.
+    #[serde(default)]
+    pub design_roots: BTreeMap<String, PathBuf>,
     /// File lists of the parts already assigned to this train, combined by the caller.
     #[serde(default)]
     pub prior_part_files: Vec<String>,
@@ -230,6 +235,43 @@ fn check_unique_keys(input: &Input) -> Result<(), String> {
     }
 }
 
+fn read_design(input: &Input, item: &Item, reference: &str) -> Result<String, String> {
+    let invalid = || format!("item {} has unreadable design_ref {reference}", item.key);
+    let (root, path) = match reference.split_once(':') {
+        Some((repository, path)) => (
+            input
+                .design_roots
+                .get(repository)
+                .map(PathBuf::as_path)
+                .ok_or_else(invalid)?,
+            path,
+        ),
+        None => {
+            let project = item.key.split_once(':').map(|(project, _)| project);
+            let root = project.and_then(|project| input.design_roots.get(project));
+            (
+                root.map_or_else(|| Path::new("."), PathBuf::as_path),
+                reference,
+            )
+        }
+    };
+    let relative = Path::new(path);
+    if path.is_empty()
+        || path.contains(['\\', ':'])
+        || !relative
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Err(invalid());
+    }
+    let root = root.canonicalize().map_err(|_| invalid())?;
+    let file = root.join(relative).canonicalize().map_err(|_| invalid())?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return Err(invalid());
+    }
+    std::fs::read_to_string(file).map_err(|_| invalid())
+}
+
 /// The batch brief of the plan: a size block (how many of how many items and why, what waits
 /// for the next batch), the selected items in order with their text, and the run values. The
 /// `# Items` and `# Run values` headings are the ones the spawner recognises as a batch brief.
@@ -252,13 +294,36 @@ pub fn brief(input: &Input, plan: &Plan) -> Result<String, String> {
     }
     out.push_str("\n# Items\n");
     for key in &plan.keys {
-        let item = input.items.iter().find(|i| &i.key == key);
+        let missing_text = || format!("item {key} has no text for the brief");
+        let item = input
+            .items
+            .iter()
+            .find(|i| &i.key == key)
+            .ok_or_else(missing_text)?;
         let text = item
-            .and_then(|i| i.text.as_deref())
+            .text
+            .as_deref()
             .map(str::trim)
             .filter(|t| !t.is_empty())
-            .ok_or_else(|| format!("item {key} has no text for the brief"))?;
+            .ok_or_else(missing_text)?;
         out.push_str(&format!("\n## {key}\n{text}\n"));
+        if let Some(reference) = item.design_ref.as_deref() {
+            let design = read_design(input, item, reference)?;
+            let fence = "`".repeat(
+                3 + design
+                    .split(|ch| ch != '`')
+                    .map(str::len)
+                    .max()
+                    .unwrap_or(0),
+            );
+            out.push_str(&format!(
+                "\nDesign input (`{reference}`)\n{fence}\n{design}"
+            ));
+            if !design.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&format!("{fence}\n"));
+        }
     }
     out.push_str("\n# Run values\n");
     for (name, value) in &input.run_values {
