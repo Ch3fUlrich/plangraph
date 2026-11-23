@@ -52,6 +52,7 @@ renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-rout
 
 `payment_order(..., order_class="standard"|"high"|"complex")` selects catalog
 positions after registered role filtering; it never grants roles or capabilities.
+Hydrogen high is enabled by D-5903.
 The D-5696/D-5706 opt-in table originally listed Sol xhigh, Hydrogen high and
 non-Claude-Code Sonnet high. See [D-6310 and D-6667](#route-order-and-family-admission-d-6310--rule-353)
 for current registrations and implementation priority.
