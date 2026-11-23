@@ -21,7 +21,19 @@ fn local_base_fixture(dir: &Path) -> Host {
     let origin = dir.join("origin.git");
     let repo = dir.join("repo");
     git_in(dir, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
-    git_in(dir, &["clone", "-q", origin.to_str().unwrap(), "repo"]);
+    git_in(
+        dir,
+        &[
+            "clone",
+            "-q",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            origin.to_str().unwrap(),
+            "repo",
+        ],
+    );
     git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
     git_in(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     git_in(&repo, &["checkout", "-q", "-b", "lane/local"]);
@@ -180,3 +192,65 @@ fn native_creation_waits_for_the_reaper_lock() {
     host.prepare().unwrap();
     assert!(host.cwd.exists());
 }
+
+#[test]
+fn native_review_base_gate_binds_the_writer_record_to_one_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.base_ref = "refs/heads/main".into();
+    let base = host.prepare().unwrap();
+    git_in(
+        &host.cwd,
+        &["commit", "-qm", "writer result", "--allow-empty"],
+    );
+    let head = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    git_in(&host.repo, &["checkout", "-q", "main"]);
+    git_in(&host.repo, &["commit", "-qm", "train", "--allow-empty"]);
+    git_in(&host.repo, &["push", "-q", "origin", "main"]);
+    let main = git_in(&host.repo, &["rev-parse", "HEAD"]);
+
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let output = crate::test_python::command()
+        .env("PYTHONPATH", src)
+        .args(["-c", r#"
+import asyncio, sys
+from types import SimpleNamespace
+from plangraph.spawner.base_fresh import admit_base
+
+repo, base, head, main = sys.argv[1:]
+writer = dict(run_id='run-fixture', run_kind='native-codex', role='implement', status='running',
+              base_admitted=True, repo=repo, base_sha=base, final_head=head,
+              fast_checks=dict(head=head, status='passed'),
+              review_base=dict(head=head, base=base, main=base, observed_main=main, mode='conflict'))
+service = SimpleNamespace(result=lambda _: writer, _save=lambda _: None)
+card = dict(review_workspace=True, native_writer_run='run-fixture',
+            diff_ref=dict(repo=repo, base=base, head=head))
+def check(card, launch=False):
+    record = dict(role='review', cwd=repo)
+    return asyncio.run(admit_base(service, record, card, launch=launch)), record
+for launch in (False, True):
+    assert check(dict(card, native_writer_run=None), launch)[1]['reason'] == 'base_stale: behind=1'
+    ok, row = check(card, launch)
+    assert ok, row
+    assert row['base_sha'] == base and row['checked_base_sha'] == head, row
+    assert row['review_base'] == writer['review_base'], row
+    assert check(dict(card, diff_ref=dict(card['diff_ref'], head=base)), launch)[0] is False
+    assert check(dict(card, diff_ref=dict(card['diff_ref'], base=main)), launch)[0] is False
+    assert check(dict(card, native_writer_run='run-wrong'), launch)[0] is False
+    writer['fast_checks']['status'] = 'failed'
+    assert check(card, launch)[0] is False
+    writer['fast_checks']['status'] = 'passed'
+"#])
+        .arg(&host.repo)
+        .args([&base, &head, &main])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[path = "native_writer_moving_main_tests.rs"]
+mod moving_main;

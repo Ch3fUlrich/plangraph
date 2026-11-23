@@ -10,6 +10,9 @@ mod timing;
 pub(crate) trait Driver {
     fn prepare(&mut self) -> Result<String, String>;
     fn refresh_base(&mut self) -> Result<String, String>;
+    fn prepare_review(&mut self, _head: &str) -> Result<Option<ReviewBase>, String> {
+        Ok(None)
+    }
     fn disk_gb(&mut self) -> Result<u64, String>;
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String>;
     fn head(&mut self) -> Result<String, String>;
@@ -35,6 +38,14 @@ pub(crate) trait Driver {
     fn skill(&mut self, _name: &str) -> Result<String, String> {
         Err("skill unavailable".into())
     }
+}
+#[derive(serde::Serialize)]
+pub(crate) struct ReviewBase {
+    pub head: String,
+    pub base: String,
+    pub main: String,
+    pub observed_main: String,
+    pub mode: &'static str,
 }
 /// Review attempts per round before the run ends BLOCKED for want of a verdict.
 const REVIEW_TRIES: usize = 3;
@@ -148,6 +159,7 @@ fn lifecycle(
         )
     } else {
         record["base_sha"] = json!(driver.prepare().map_err(|e| (5, e))?);
+        record["admitted_base_sha"] = record["base_sha"].clone();
         None
     };
     // Worktree creation can consume disk after placement admitted this host.
@@ -282,6 +294,9 @@ fn review_round(
                         .to_owned(),
                 ));
             }
+            Ok(review) if review["head"] == head && review["status"] == "base_stale" => {
+                return Ok(review);
+            }
             Ok(review) if review["status"] == "review_running" => {
                 return Err((
                     4,
@@ -332,14 +347,13 @@ fn writer_attempt(
     };
     let mut fixes = 0;
     let mut idle = 0;
+    let mut base_retries = 0;
     loop {
         let head = driver.head().map_err(|e| (6, e))?;
-        record["final_head"] = json!(head);
-        driver.save(record).map_err(|e| (6, e))?;
         // No new commit since the turn began: the gates would rerun on the same head, or only
         // report an empty range. Send the writer back to its items instead of resuming it on
         // a failure it did not cause, or spending a review round on the same commit.
-        if head == turn_start {
+        if head == turn_start && base_retries == 0 {
             idle += 1;
             if idle > NO_COMMIT_RESUMES || session.is_empty() {
                 return Err((
@@ -353,7 +367,20 @@ fn writer_attempt(
             continue;
         }
         idle = 0;
-        turn_start = head.clone();
+        let preparation = driver
+            .prepare_review(&head)
+            .map_err(|e| (if e == STOPPED { 10 } else { 7 }, e))?;
+        let head = if let Some(basis) = preparation {
+            record["base_sha"] = json!(basis.base);
+            record["review_base"] = json!(basis);
+            basis.head
+        } else {
+            head
+        };
+        turn_start.clone_from(&head);
+        record["final_head"] = json!(head);
+        record["fast_checks"] = json!({"head":head,"status":"running"});
+        driver.save(record).map_err(|e| (6, e))?;
         let started = stage::now();
         let checked = driver.fast_checks(&head);
         if matches!(&checked, Err(error) if error == STOPPED) {
@@ -366,17 +393,34 @@ fn writer_attempt(
             if fixes > FAST_CHECK_FIXES || session.is_empty() {
                 return Err((7, format!("fast checks failed on {head}: {failure}")));
             }
+            base_retries = 0;
             resume(driver, record, &session, &format!("The fast checks failed on your head {head}:\n{failure}\nFix the cause, commit and end your turn; keep this session."))?;
             continue;
         }
         fixes = 0;
         record["fast_checks"] = json!({"head":head, "status":"passed"});
+        driver.save(record).map_err(|e| (6, e))?;
         let previous =
             (record["review"]["verdict"] == "REQUEST_CHANGES").then(|| record["review"].clone());
         let started = stage::now();
         let review = review_round(driver, &head, previous.as_ref());
         stage::record(record, "review", &head, started);
         let review = review?;
+        if review["status"] == "base_stale" {
+            base_retries += 1;
+            record["review_base_retry"] = review;
+            if base_retries >= REVIEW_TRIES {
+                return Err((
+                    7,
+                    record["review_base_retry"]["reason"]
+                        .as_str()
+                        .unwrap_or("base_stale")
+                        .to_owned(),
+                ));
+            }
+            continue;
+        }
+        base_retries = 0;
         if review["status"] == REVIEW_DEFERRED {
             final_gates(driver, &head)?;
             record["review_status"] = json!(REVIEW_DEFERRED);
@@ -386,7 +430,8 @@ fn writer_attempt(
         }
         record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
         let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"],
-            "host":review["host"], "leg":review["leg"], "harness":review["harness"]});
+            "host":review["host"], "leg":review["leg"], "harness":review["harness"],
+            "review_base":record["review_base"]});
         record["review"] = review;
         if record["reviews"].as_array().is_none() {
             record["reviews"] = json!([]);
