@@ -736,7 +736,8 @@ def test_v25_sqlite_upgrade_installs_criteria_amendments(tmp_path):
     try:
         store = Store(conn, clock=Clock())
         store.edit_definition(auth.authenticate(conn, token), "demo:A",
-                              {"done_criteria": "revised criteria"})
+                              {"done_criteria": "revised criteria",
+                               "criteria_reason": "Cover retries", "criteria_evidence": "D-123"})
         assert tuple(conn.execute(
             "SELECT original_text, new_text FROM criteria_amendments WHERE key='demo:A'"
         ).fetchone()) == ("criteria", "revised criteria")
