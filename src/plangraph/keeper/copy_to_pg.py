@@ -32,7 +32,7 @@ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_
           # which skips it like every other table the source does not have.
           "bus_hosts", "placement_rule_revision", "placement_rule_values", "placement_rule_audit",
           "apply_grants", "event_audience", "landing_stages", "landing_trains", "landing_ci_jobs",
-          "landing_claim_bases")
+          "landing_claim_bases", "criteria_amendments")
 _BATCH = 500
 
 
