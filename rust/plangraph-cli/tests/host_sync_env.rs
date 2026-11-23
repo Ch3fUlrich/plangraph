@@ -176,3 +176,78 @@ fn quota_alarms_uses_gateway_mount_before_a_cli_store() {
         format!("QUOTA_SNAPSHOT_DB=\"{}\"\n", database.display())
     );
 }
+
+#[test]
+fn state_shadow_stages_both_instances_and_registers_measurement_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let settings = [home.join("plan-order.json"), home.join("routing.json")];
+    let unit = include_str!("../../../deploy/systemd/plangraph-state-shadow@.service");
+    let bin = home.join(".local/bin");
+    fs::create_dir_all(&bin).unwrap();
+    for name in ["plangraph", "turn-budget-hook"] {
+        std::os::unix::fs::symlink("/bin/true", bin.join(name)).unwrap();
+    }
+    for path in &settings {
+        fs::write(path, r#"{"permissions":{"defaultMode":"default"},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"existing"}]}]}}"#).unwrap();
+    }
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_host-sync"))
+            .env_clear()
+            .env("HOME", home)
+            .args(["--install-env", "state-shadow"])
+            .args(&settings)
+            .output()
+            .unwrap()
+    };
+    for _ in 0..2 {
+        let output = run();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let config = home.join(".config/plangraph/state-shadow");
+    for (role, settings) in ["plan-order", "routing"].into_iter().zip(settings) {
+        let content = fs::read_to_string(config.join(format!("{role}.env"))).unwrap();
+        for (key, suffix) in [
+            ("PG_TOKEN_FILE", "token"),
+            ("PLANGRAPH_STATE_CONFIG", "json"),
+        ] {
+            assert!(content.contains(&format!(
+                "{key}=\"{}\"\n",
+                config.join(format!("{role}.{suffix}")).display()
+            )));
+        }
+        let props: serde_json::Value =
+            serde_json::from_slice(&fs::read(settings).unwrap()).unwrap();
+        assert_eq!(props["permissions"]["defaultMode"], "default");
+        assert_eq!(props["hooks"]["Stop"][0]["hooks"][0]["command"], "existing");
+        for event in [
+            "UserPromptSubmit",
+            "Notification",
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+        ] {
+            let groups = props["hooks"][event].as_array().unwrap();
+            let matching: Vec<_> = groups
+                .iter()
+                .flat_map(|group| group["hooks"].as_array().unwrap())
+                .filter(|hook| {
+                    hook["command"] == "\"$HOME/.local/bin/turn-budget-hook\" --measure-only"
+                })
+                .collect();
+            assert_eq!(matching.len(), 1, "{event}: {groups:?}");
+        }
+        if Path::new("/usr/bin/systemd-analyze").is_file() {
+            let service = temp
+                .path()
+                .join(format!("plangraph-state-shadow@{role}.service"));
+            fs::write(&service, unit.replace("%h", home.to_str().unwrap())).unwrap();
+            let verify = Command::new("/usr/bin/systemd-analyze")
+                .arg("verify")
+                .arg(service)
+                .output()
+                .unwrap();
+            assert!(verify.status.success(), "{verify:?}");
+        }
+    }
+}
