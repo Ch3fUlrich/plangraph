@@ -1,6 +1,8 @@
 //! The merge-close job against a fake keeper: no network, no keeper mutation.
 use plangraph_cli::feeder::{Env, Transport};
-use plangraph_cli::merge_close::{repos_with, require_seats, run_scheduled_with, run_with};
+use plangraph_cli::merge_close::{
+    repos_with, require_seats, run_scheduled_with, run_with, ScheduleTiming,
+};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -225,7 +227,7 @@ fn scheduled_close_refreshes_then_reads_each_project_page_in_order() {
         true,
         None,
         false,
-        Duration::from_secs(95),
+        ScheduleTiming::new(Duration::from_secs(95), Duration::from_secs(400)),
     )
     .unwrap();
     assert_eq!(outcome.merged_not_done, 1);
@@ -242,8 +244,16 @@ fn scheduled_close_stops_at_the_refresh_deadline_without_paging() {
         (json!({"refresh":"status"}), json!({"scan":"running"})),
     ]);
     let keeper = Script::new([]);
-    let error =
-        run_scheduled_with(&keeper, &control, None, true, None, false, Duration::ZERO).unwrap_err();
+    let error = run_scheduled_with(
+        &keeper,
+        &control,
+        None,
+        true,
+        None,
+        false,
+        ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400)),
+    )
+    .unwrap_err();
     assert_eq!(error, "merge index refresh is still running");
     control.assert_finished();
     keeper.assert_finished();
@@ -278,12 +288,57 @@ fn expiry_refreshes_and_retries_the_same_cursor() {
         true,
         Some("demo"),
         false,
-        Duration::ZERO,
+        ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400)),
     )
     .unwrap();
     assert!(out.text.starts_with("closed\tdemo:A\t\nclosed\tdemo:B\t\n"));
     assert!(!out.text.contains("continue\t"));
     keeper.assert_finished();
+}
+
+#[test]
+fn successful_pages_stop_at_the_pass_deadline_after_recovery() {
+    const MERGE_INDEX_EXPIRED: &str = "item_refused:conflict:merge index expired; start a refresh";
+    struct DelayedRetry(Script);
+    impl Transport for DelayedRetry {
+        fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
+            let result = self.0.call(verb, body)?;
+            if result["next_after"] == "demo:32" {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            Ok(result)
+        }
+    }
+    let closed = |keys: std::ops::RangeInclusive<u32>| {
+        keys.map(|n| json!({"key":format!("demo:{n:02}")}))
+            .collect::<Vec<_>>()
+    };
+    let start = (json!({"refresh":"start"}), json!({"scan":"running"}));
+    let ready = (json!({"refresh":"status"}), json!({"scan":"ready"}));
+    let page = json!({"apply":true,"project":"demo","after":"demo:25"});
+    let keeper = DelayedRetry(Script::new([
+        start.clone(),
+        ready.clone(),
+        (
+            json!({"apply":true,"project":"demo"}),
+            json!({"closed":closed(1..=25),"merged_not_done":0,"next_after":"demo:25"}),
+        ),
+        (page.clone(), json!(MERGE_INDEX_EXPIRED)),
+        start,
+        ready,
+        (
+            page,
+            json!({"closed":closed(26..=32),"merged_not_done":0,"next_after":"demo:32"}),
+        ),
+    ]));
+    let timing = ScheduleTiming::new(Duration::ZERO, Duration::from_secs(1));
+    let out =
+        run_scheduled_with(&keeper, &keeper, None, true, Some("demo"), false, timing).unwrap();
+    assert_eq!(out.text.matches("closed\tdemo:").count(), 32);
+    assert!(out.text.contains(&format!(
+        "continue\t1 projects remaining\t{MERGE_INDEX_EXPIRED}\n"
+    )));
+    keeper.0.assert_finished();
 }
 
 #[test]
@@ -306,8 +361,16 @@ fn expiry_after_a_close_exits_successfully_if_refresh_cannot_finish() {
         (json!({"refresh":"start"}), json!({"scan":"running"})),
         (json!({"refresh":"status"}), json!({"scan":"running"})),
     ]);
-    let out =
-        run_scheduled_with(&keeper, &keeper, None, true, None, false, Duration::ZERO).unwrap();
+    let out = run_scheduled_with(
+        &keeper,
+        &keeper,
+        None,
+        true,
+        None,
+        false,
+        ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400)),
+    )
+    .unwrap();
     assert!(out.text.contains("closed\tdemo:A\t\n"));
     assert!(out.text.contains("continue\t2 projects remaining\t"));
     keeper.assert_finished();
@@ -331,7 +394,7 @@ fn running_refresh_conflict_without_a_close_is_an_error() {
             true,
             Some("demo"),
             false,
-            Duration::ZERO
+            ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400))
         )
         .unwrap_err(),
         "item_refused:conflict:merge index refresh is running",
@@ -356,7 +419,7 @@ fn scheduled_preview_fails_if_the_selected_project_scan_is_incomplete() {
         false,
         Some("demo"),
         false,
-        Duration::ZERO,
+        ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400)),
     )
     .unwrap_err();
     assert_eq!(
