@@ -22,13 +22,11 @@ fn ssh_agent_socket_reaches_transport_only() {
         }
         return;
     }
-    use std::os::unix::fs::PermissionsExt;
     assert_eq!(GIT_PASSTHROUGH_ENV, &["SSH_AUTH_SOCK"]);
     let f = Fixture::new();
     let script = f.dir.path().join("ssh-probe");
     let record = f.dir.path().join("socket-record");
-    fs::write(&script, format!("#!/bin/sh\nprintf '%s' \"${{SSH_AUTH_SOCK-unset}}\" > '{}'\nexit 1\n", record.display())).unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    crate::executable_test_support::write_private_executable(&script, format!("#!/bin/sh\nprintf '%s' \"${{SSH_AUTH_SOCK-unset}}\" > '{}'\nexit 1\n", record.display()));
     assert!(git(&f.remote(), &["config", "core.sshCommand", script.to_str().unwrap()]).unwrap().status.success());
     let remote = Remote { root: f.dir.path(), name: "git@host:repo.git" };
     for args in [vec!["ls-remote", remote.name], vec!["fetch", remote.name], vec!["push", remote.name, &f.head]] {

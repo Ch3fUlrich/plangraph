@@ -196,9 +196,7 @@ fn a_delivery_command_is_killed_at_its_lease() {
     use super::batch_failure::{Deliver, FailureRecord};
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("slow.sh");
-    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(&script, "#!/bin/sh\nsleep 30\n");
     let _env = ENV.lock().unwrap();
     std::env::set_var("CI_WATCH_DELIVER_CMD", &script);
     let record = FailureRecord {
@@ -453,9 +451,10 @@ fn preparation_time_counts_against_the_deliverys_deadline_and_a_spent_budget_nev
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("ran");
     let script = dir.path().join("mark.sh");
-    std::fs::write(&script, format!("#!/bin/sh\ntouch {}\n", marker.display())).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &script,
+        format!("#!/bin/sh\ntouch {}\n", marker.display()),
+    );
     let _env = ENV.lock().unwrap();
     std::env::set_var("CI_WATCH_DELIVER_CMD", &script);
     let record = FailureRecord {

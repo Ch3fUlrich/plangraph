@@ -22,8 +22,10 @@ fn native_spawn_refuses_each_missing_tool_before_record_creation() {
         for tool in ["cargo", "git", "codex"] {
             if tool != missing {
                 let path = bin.join(tool);
-                fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
-                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+                pg_worker_core::executable_test_support::write_executable(
+                    &path,
+                    "#!/bin/sh\nexit 0\n",
+                );
             }
         }
         let out = Command::new(python.trim())
@@ -70,8 +72,7 @@ fn native_tools_record_absolute_paths_and_refuse_nonexecutables() {
     fs::create_dir(&bin).unwrap();
     for tool in ["cargo", "git", "codex"] {
         let path = bin.join(tool);
-        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(&path, "#!/bin/sh\nexit 0\n");
     }
     let probe = || {
         Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
@@ -112,8 +113,7 @@ fn native_spawn_refuses_a_failed_sandbox_probe_before_worktree_creation() {
         } else {
             "#!/bin/sh\nexit 0\n"
         };
-        fs::write(&path, body).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(&path, body);
     }
     let out = test_python::command()
         .current_dir(tmp.path())

@@ -145,7 +145,6 @@ fn run_command_input(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     // PG_SPAWND_ADAPTER is process-global: the tests that set it run one at a time.
     static ADAPTER_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
@@ -155,15 +154,13 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let script = dir.join("adapter");
         let pidfile = dir.join("pid");
-        std::fs::write(
+        pg_worker_core::executable_test_support::write_executable(
             &script,
             format!(
                 "#!/bin/sh\necho $$ > '{}'\nsleep 30 &\nwait\n",
                 pidfile.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         std::env::set_var("PG_SPAWND_ADAPTER", &script);
         let start = Instant::now();
         let error = Adapter(&dir)
@@ -187,7 +184,7 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let script = dir.join("adapter");
         {
-            std::fs::write(
+            pg_worker_core::executable_test_support::write_executable(
                 &script,
                 format!(
                     "#!/bin/sh\nsetsid sleep 30 &\necho $! > '{}'\nprintf '{{}}'\n{}\n",
@@ -198,9 +195,7 @@ mod tests {
                         "sleep 30"
                     }
                 ),
-            )
-            .unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            );
             std::env::set_var("PG_SPAWND_ADAPTER", &script);
             let start = Instant::now();
             let result = Adapter(&dir).run(&[], timeout);
@@ -235,12 +230,10 @@ mod tests {
         let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
         std::fs::create_dir(&dir).unwrap();
         let script = dir.join("adapter");
-        std::fs::write(
+        pg_worker_core::executable_test_support::write_executable(
             &script,
             "#!/bin/sh\necho \"host banner\" >&2\necho \"deprecated config\" >&2\necho \"refused: accepted names: codex\" >&2\necho >&2\nexit 2\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         std::env::set_var("PG_SPAWND_ADAPTER", &script);
         let result = Adapter(&dir).run(&[], Duration::from_secs(5));
         std::env::remove_var("PG_SPAWND_ADAPTER");

@@ -171,8 +171,7 @@ UNIT_SETTING='configured value' exec "$@"
 "#,
         ),
     ] {
-        fs::write(&path, script).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(&path, script);
     }
     let config = root.path().join("keeper.json");
     let dsn_file = root.path().join("migration.dsn");
