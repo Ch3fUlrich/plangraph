@@ -154,10 +154,12 @@ Scheduled review probes (`--all-reviewers`, `caller='review-probe'`, source `rev
 
 ## AGY quota scope
 
-An `Individual quota reached` refusal with a future reset applies to Antigravity
-legs with the event's account. An omitted account matches an event recorded
-without an account. Route evidence identifies the event, harness and account.
-A model-specific refusal applies to that model and its effort variants.
+An Antigravity 429, including `Individual quota reached`, applies to the model
+that made the call and its effort variants. The event retains its account and
+combo scope. Historical account-wide events cannot establish a model limit.
+The scheduled review sweep re-probes limited AgY models at most once per hour
+with a one-word `OK` request. A successful reply clears the model's limit.
+Route quota states include the latest probe attempt as `last_probe_at`.
 
 Launch admission rereads quota evidence rather than trusting an earlier plan. `QuotaGate` reads the configured local `QUOTA_SNAPSHOT_DB` read-only on every check, even when gateway liveness discovery is disabled; only management API reads are cached for 60 seconds. A provider pool is skipped while every account is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1), until the earliest account reset. A reset-less row holds for 30 minutes from its timestamp or first observation.
 

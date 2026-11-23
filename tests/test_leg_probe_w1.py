@@ -336,6 +336,44 @@ def test_probe_many_selection_errors():
     assert str(unknown.value) == 'unknown legs: zz/nope'
 
 
+def test_scheduled_agy_probe_clears_a_model_limit_within_an_hour(tmp_path, monkeypatch):
+    from plangraph.planner import legs
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.spawner import leg_probe
+
+    leg = next(row for row in legs.routed_review_legs() if row.id == 'agy-gemini-4-argon-low')
+    monkeypatch.setattr(legs, 'routed_review_legs', lambda: (leg,))
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/agy' if name == 'agy' else None)
+    clock = [10_000]
+    monkeypatch.setattr(leg_probe.time, 'time', lambda: clock[0])
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    model = leg_probe.key(leg)
+    store.record_provider_response(model, 429, 'quota', {'retry-after': '7200'}, 'fixture', now=clock[0])
+    store.record_probe_fail(model, 'still limited', 'review-probe', now=clock[0] + 1)
+    calls = []
+
+    async def spawn(**kwargs):
+        calls.append((kwargs['client'], kwargs['model_or_combo'], kwargs['prompt']))
+        return SimpleNamespace(job_id='probe', status='completed', exit_code=0, stdout='OK')
+
+    async def cancel(job_id):
+        pass
+
+    runner = SimpleNamespace(leg_reader=store, spawn=spawn, cancel=cancel)
+    clock[0] += 3600
+    first = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+    assert first['probes'][0]['skipped'] == 'limited' and not calls
+    clock[0] += 1
+    second = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+    assert second['probes'][0]['ok']
+    assert calls == [('agy', leg.model, leg_probe.REVIEW_PROMPT)]
+    assert store.leg_status(model, now=clock[0])['state'] == 'ok'
+    plan = plan_spawn({'estimate_tokens': 1000}, role='review', writer_families=('gpt',),
+                      legs=(leg,), leg_reader=store, now=clock[0], catalog_rows=())
+    assert plan.agy_quota_states['agy:gemini-4-argon']['last_probe_at'] == clock[0]
+    assert plan.candidates[0]['last_probe_at'] == clock[0]
+
+
 def test_probe_many_skips_a_limited_leg(tmp_path, monkeypatch):
     """D-3685: probe_many skips a leg booked limited and writes no row for it;
     an unbooked leg still probes."""

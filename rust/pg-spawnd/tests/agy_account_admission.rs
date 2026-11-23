@@ -12,7 +12,9 @@ fn agy_limit_admission_distinguishes_account_and_model() {
         .env("XDG_STATE_HOME", state.path())
         .env("PLANGRAPH_OMNIROUTE_LEG_STATE", "0")
         .env_remove("QUOTA_SNAPSHOT_DB")
-        .args(["-c", r#"
+        .args([
+            "-c",
+            r#"
 import os, time
 from plangraph.planner.routing import plan_spawn
 from plangraph.routing_support.leg_state import record_harness_limit
@@ -37,22 +39,24 @@ assert argon in served(model), model
 assert model['agy_quota_states']['agy:gemini-4-hydrogen']['evidence']['reset_at'] == now + 7200
 record_harness_limit('agy/gemini-4-hydrogen-high', '429 Individual quota reached. Resets in 3h',
                      'fixture', now=now, account='primary')
+h = 'agy-gemini-4-hydrogen-high'
 account = route(now)
-assert not any(leg['id'].startswith('agy-') for leg in account['legs']), account
-assert next(s for s in account['skipped'] if s['leg'] == argon)['reason'].startswith('limited_until ')
-assert argon in served(route(now, 'secondary'))
-assert argon in served(route(now + 10800))
+assert argon in served(account), account
+assert next(s for s in account['skipped'] if s['leg'] == h)['reason'].startswith('limited_until ')
+assert h in served(route(now, 'secondary'))
+assert h in served(route(now + 10800))
 
-# A sibling was selected in an earlier plan, before the failure was booked.
+# Hydrogen was selected in an earlier plan, before the failure was booked.
 try:
-    build(dict(state=state, cwd=state, role='review', dry_run=False, leg={'id': argon},
+    build(dict(state=state, cwd=state, role='review', dry_run=False, leg={'id': h},
                card=dict(card, account='primary'), prompt='review the card',
                run_id='run-' + 'a'*32, job_id='fixture', writer_families=['gpt']))
 except LaunchRefused as exc:
     assert 'limited_until ' in str(exc), exc
 else:
     raise AssertionError('stale route passed launch admission')
-"#])
+"#,
+        ])
         .output()
         .unwrap();
     assert!(

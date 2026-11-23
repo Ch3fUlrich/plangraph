@@ -217,14 +217,18 @@ class LegStateStore:
         except sqlite3.Error:
             return None
 
-    def last_probe_attempt_ts(self, leg):
+    def last_probe_attempt_ts(self, leg, now=None):
         """The newest probe attempt (pass or fail); single-flight reuse only."""
         leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
             with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
-                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','review-liveness-probe','provider-probe','probe_failed_leg_serving')", (leg,)).fetchone()[0]
+                return db.execute(
+                    "SELECT max(ts) FROM leg_events WHERE leg_key=? AND ts<=? "
+                    "AND source IN ('liveness-probe','review-liveness-probe','provider-probe','probe_failed_leg_serving')",
+                    (leg, time.time() if now is None else now),
+                ).fetchone()[0]
         except sqlite3.Error:
             return None
 
@@ -238,9 +242,6 @@ class LegStateStore:
         leg = quota_key(leg) if is_agy_harness else leg
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
-        if (reset is not None and is_agy_harness and leg.startswith(('agy:', 'agy/'))
-                and 'individual quota reached' in line.lower()):
-            leg, combo = 'agy:account-wide', None
         if reset is None and down_s is not None:
             # D-3605 (a): no provider reset time; _down_seconds is capped, so
             # the fallback stays inside RESET_CAP_S like every other booking.
@@ -265,15 +266,6 @@ class LegStateStore:
         try:  # Read-only: no database creation or expiry mutation.
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
-                if is_agy_harness and leg.startswith(('agy:', 'agy/')):
-                    pool = db.execute(
-                        "SELECT * FROM leg_events WHERE leg_key='agy:account-wide' "
-                        "AND account IS ? AND ts<=? AND reset_at>? "
-                        "ORDER BY reset_at DESC,id DESC LIMIT 1", (account, now, now)).fetchone()
-                    if pool is not None:
-                        return {"state": "limited", "evidence": dict(
-                            {k: pool[k] for k in ('status', 'body_excerpt', 'reset_at', 'ts', 'caller')},
-                            event_id=pool['id'], quota_scope='account', harness='agy', account=pool['account'])}
                 rows = db.execute(
                     "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
                     (*keys, account, combo, now))
@@ -299,9 +291,9 @@ class LegStateStore:
                         else:
                             behind = older
                             break
-                    # Probe failures never hide an older provider limit with a future reset (D-3685, D-6082).
+                    # A failed recovery probe leaves the active provider window in force.
                     if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
-                            and behind['reset_at'] is not None and now < behind['reset_at']):
+                            and now < _limit_end(behind)):
                         evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}
@@ -313,8 +305,7 @@ class LegStateStore:
                 if row['source'] not in ('harness-stderr', 'provider-response') and now >= row['ts'] + ttl:
                     return {'state': 'reprobe', 'evidence': evidence}
                 reset = row["reset_at"]
-                state = (("limited" if now < reset else "ok") if reset is not None
-                         else ("limited" if now < row["ts"] + REPROBE_MINUTES * 60 else "reprobe"))
+                state = "limited" if now < _limit_end(row) else ("ok" if reset is not None else "reprobe")
                 return {"state": state, "evidence": evidence}
         except (sqlite3.Error, OSError):
             return {"state": "ok", "evidence": None}
@@ -352,6 +343,11 @@ class LegStateStore:
         return dict(ok=ok, reason='' if ok else (row['body_excerpt'] or 'probe failed'), ts=row['ts'])
 
 
+def _limit_end(row):
+    reset = row["reset_at"]
+    return row["ts"] + REPROBE_MINUTES * 60 if reset is None else reset
+
+
 def _default_store():
     return LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
 
@@ -378,6 +374,10 @@ def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, 
 
 def last_probe_ts(leg):
     return _default_store().last_probe_ts(leg)
+
+
+def last_probe_attempt_ts(leg, now=None):
+    return _default_store().last_probe_attempt_ts(leg, now=now)
 
 
 def last_probe_outcome(leg):

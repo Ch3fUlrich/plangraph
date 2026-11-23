@@ -52,6 +52,7 @@ def service_plan(service, **kwargs):
             store = getattr(reader, 'store', None)
             return store.leg_status(model, **scope) if store is not None else status
         return status
+    read.last_probe_attempt_ts = getattr(reader, 'last_probe_attempt_ts', None)
     plan = plan_spawn(**kwargs, leg_reader=read)
     by_id = {leg.id: leg.model for leg in plan.legs}
     details = tuple(dict(c, leg_state_reason=reasons[by_id[c['leg']]])

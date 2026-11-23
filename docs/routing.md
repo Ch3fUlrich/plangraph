@@ -243,6 +243,8 @@ For native Codex, routing and launch admission check quota and availability inde
 of the OpenCode model listing.
 Missing models and inactive or unreachable providers keep their own skip reasons
 and cannot satisfy the quota fallback.
+AgY quota evidence applies to the model that made the call. Route quota states
+show the last probe time, including a successful recovery probe before reset.
 Credential, authentication and secrets changes prefer the Claude Sonnet high review
 seat, subject to availability and cross-family review.
 D-6652 (rule 3.66 (f), corrected 2026-11-23) changes the review order above and the Claude writer
