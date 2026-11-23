@@ -88,8 +88,11 @@ def test_import_items_is_router_only_and_honours_legacy_state(kp):
 def test_edit_definition_rules(kp):
     plan = make_plan(kp, 2, chain=True)
     first, second = plan.lanes
+    err(kp.post("edit_definition", "lead", {"key": first, "fields": {
+        "done_criteria": "c2", "criteria_reason": "Cover the retry path"}}), 400, "validation")
     ok(kp.post("edit_definition", "lead", {"key": first, "fields": {
-        "title": "retitled", "description": "new text", "done_criteria": "c2"}}), "KeyOnly")
+        "title": "retitled", "description": "new text", "done_criteria": "c2",
+        "criteria_reason": "Cover the retry path", "criteria_evidence": "D-123"}}), "KeyOnly")
     row = show(kp, first)
     assert (row["title"], row["description"], row["done_criteria"]) == ("retitled", "new text", "c2")
     err(kp.post("edit_definition", "lead_other", {"key": first, "fields": {"title": "x"}}), 403, "forbidden")
