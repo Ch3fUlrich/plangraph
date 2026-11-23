@@ -42,7 +42,7 @@ pub(crate) fn resolve_leg(
     {
         return Err(RefError::Invalid);
     }
-    if !["implement", "review", "orchestrate"].contains(&role) {
+    if !["implement", "review", "orchestrate", "research"].contains(&role) {
         return Err(RefError::Role);
     }
     let eligible = |leg: &&LegRef| leg.roles.iter().any(|r| r == role);

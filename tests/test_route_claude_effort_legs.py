@@ -156,6 +156,21 @@ def test_other_writers_still_refused(tmp_path):
             override_reason='operator 2026-11-09 explicit writer'))
 
 
+@pytest.mark.parametrize('selector', [
+    {'leg': 'agy-opus-5.5'},
+    {'model': 'claude-opus-5-5-high'},
+    {'leg': 'cx-gpt-6.2-sol-medium'},
+])
+def test_research_pin_checks_web_on_the_launch_harness(tmp_path, selector):
+    service = _svc(tmp_path)
+    service.client_probe = lambda client: client in ('agy', 'opencode')
+    with pytest.raises(SpawnRefused, match='web_access_unavailable'):
+        asyncio.run(service.spawn(
+            card={'estimate_tokens': 20_000, 'web_required': True},
+            prompt='Research public sources', role='research', dry_run=True,
+            override_reason='Test explicit research pin', **selector))
+
+
 @pytest.mark.parametrize('leg_id', sorted(CLAUDE))
 def test_agy_prefixed_model_resolves_to_its_leg(leg_id):
     from plangraph.spawner.target import resolve_target
