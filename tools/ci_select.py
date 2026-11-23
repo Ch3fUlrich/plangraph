@@ -45,6 +45,7 @@ RUST_WORKER_INPUTS: tuple[str, ...] = (
 RUST_INPUTS: tuple[str, ...] = (
     "pyproject.toml",  # pg-mainff verifies the keeper console-entry inventory.
     "src/plangraph/catalog_data.py",
+    "src/plangraph/review/prompt.py",  # Rust checks the review output contract against Python.
     "src/plangraph/routing_errors.py",
     "deploy/feeder/**",
     "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
