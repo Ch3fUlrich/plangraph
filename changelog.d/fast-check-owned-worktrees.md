@@ -1,0 +1,1 @@
+Committed-head fast checks can use a disposable worktree and publish an exact-head review stamp in shared Git state. Disk hygiene removes old idle fast-check worktrees while protecting active work and unique data.

@@ -714,6 +714,8 @@ from a checkout. Use `--base <revision>` to override `origin/main`, or
 `--plan --files <paths...>` to inspect fixture selection without executing checks.
 The command delegates job selection to `tools/ci_select.py`, includes committed,
 tracked local and untracked changes, and prints CI job booleans before its steps.
+Use `--owned-worktree` for committed-head checks. It runs in a disposable
+checkout and saves a review stamp by commit SHA in the repository's shared Git state.
 It runs the four always-required tree guards, commit and whitespace gates,
 affected Python tests with the existing full-suite refusal, and fmt/clippy/tests
 for touched Rust crates and local reverse dependencies in their own workspaces.
@@ -722,6 +724,11 @@ checking that Rust-launched Python snippets have no pytest dependencies. Changed
 inputs with CRLF fail early with a normalization diagnostic. Worker tests use
 the existing CI Temporal wrapper and require the Temporal CLI and protobuf tools.
 Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
+The fleet snapshot selection builds `pg-spawnd` from the checkout under the
+Cargo pool lease before pytest. Fast checks and the native writer gate validate
+Class-Search body lines in the commit range using `pg-policy`.
+A non-Rust lane push can reuse a current cached policy executable even when
+the shared target is at the build cap.
 Each step and the total report wall seconds; exceeding 300 seconds emits a
 warning and returns failure after checks, without interrupting or weakening them.
 Affected tests and base replays run with context, session and Python path
