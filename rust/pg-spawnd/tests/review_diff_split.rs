@@ -8,7 +8,6 @@ mod placement;
 use common::{ChildGuard, McpClient, TempDir};
 use placement::payload;
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
 
 struct ReviewFixture {
     state: TempDir,
@@ -57,15 +56,13 @@ impl ReviewFixture {
         });
         let plan = json!({"legs": [leg.clone()], "first_leg": leg, "skipped": []});
         let route = state.path().join("route");
-        std::fs::write(
+        pg_worker_core::executable_test_support::write_executable(
             &route,
             format!(
                 "#!/bin/sh\nprintf '%s' '{}'\n",
                 plan.to_string().replace('\'', "'\\''")
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&route, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
         let launch = state.path().join("launch");
         let spec = json!({
@@ -75,15 +72,13 @@ impl ReviewFixture {
             "prompt": "review",
             "stdin": "review"
         });
-        std::fs::write(
+        pg_worker_core::executable_test_support::write_executable(
             &launch,
             format!(
                 "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{}'\n",
                 spec.to_string().replace('\'', "'\\''")
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
         let cfg_dir = state.path().join("xdg/plangraph");
         std::fs::create_dir_all(&cfg_dir).unwrap();

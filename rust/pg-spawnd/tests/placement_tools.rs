@@ -4,7 +4,6 @@ mod binary;
 mod common;
 use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
 struct Fixture {
     state: TempDir,
     _guard: ChildGuard,
@@ -17,11 +16,9 @@ impl Fixture {
     fn with_host(output: &str, code: i32, stderr: &str, host: &str) -> Self {
         let state = TempDir::new();
         let script = state.path().join("adapter");
-        std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'/argv\nprintf '%s' '{}'\nprintf '%s\\n' '{}' >&2\nexit {}\n",state.path().display(),output,stderr,code)).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(&script, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'/argv\nprintf '%s' '{}'\nprintf '%s\\n' '{}' >&2\nexit {}\n",state.path().display(),output,stderr,code));
         let launch = state.path().join("launch");
-        std::fs::write(&launch, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{{\"argv\":[\"/bin/true\"],\"cwd\":\"{}\",\"env\":{{}},\"prompt\":\"fixture prompt\",\"stdin\":\"fixture prompt\"}}'\n", std::env::current_dir().unwrap().display())).unwrap();
-        std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(&launch, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{{\"argv\":[\"/bin/true\"],\"cwd\":\"{}\",\"env\":{{}},\"prompt\":\"fixture prompt\",\"stdin\":\"fixture prompt\"}}'\n", std::env::current_dir().unwrap().display()));
         let socket = state.path().join("socket");
         let child = std::process::Command::new(binary::spawnd())
             .arg("serve")

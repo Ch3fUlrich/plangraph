@@ -106,7 +106,6 @@ fn fixture_quota_db(path: &Path) {
 
 #[test]
 fn quota_alarms_uses_gateway_mount_before_a_cli_store() {
-    use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     fixture_quota_db(&home.join(".omniroute/storage.sqlite"));
@@ -114,12 +113,10 @@ fn quota_alarms_uses_gateway_mount_before_a_cli_store() {
     let database = mount.join("storage.sqlite");
     fixture_quota_db(&database);
     let docker = home.join("docker");
-    fs::write(
+    pg_worker_core::executable_test_support::write_executable(
         &docker,
         "#!/bin/sh\n[ \"$1\" = inspect ] || exit 1\nprintf '%s\\n' \"$FIXTURE_MOUNTS\"\n",
-    )
-    .unwrap();
-    fs::set_permissions(docker, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_host-sync"))
         .env_clear()
         .env("HOME", home)

@@ -523,8 +523,10 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
     fs::create_dir_all(tmp.path().join("tmp-sweep")).unwrap();
     // Hosts without readable /proc entries fall back to this reader: no process cwds.
     let reader = tmp.path().join("process-cwds");
-    fs::write(&reader, "#!/bin/sh\necho '[[],false]'\n").unwrap();
-    fs::set_permissions(&reader, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &reader,
+        "#!/bin/sh\necho '[[],false]'\n",
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
         .args(["--apply", "--shared-target-cap-bytes", "2048", "--repo"])
         .arg(&repo)
