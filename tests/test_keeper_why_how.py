@@ -348,3 +348,24 @@ def test_legacy_import_keeps_a_lane_without_done_criteria(w):
     lane = defn("L", done_criteria=None, state="open")
     w.store.import_items(w.p("router"), [lane, defn("G", ["L"], kind="goal", state="open")])
     assert w.store._item("demo:L")["done_criteria"] in (None, "")
+
+
+@pytest.mark.parametrize("how", [
+    "Fix router/bin/resume-digest.",
+    "Patch handoffs/router/helper.py.",
+    "Update ../other-repo/src/worker.rs.",
+    "Edit plangraph-data/router/bin/runner.",
+    "Patch plan-order/helpers/package.rs.",
+])
+def test_define_and_edit_refuse_implementation_outside_plangraph(w, how):
+    router = w.p("router")
+    lane = defn("WORK", project="plangraph", description=f"Why: failure\nHow: {how}")
+    goal = defn("GOAL", ["WORK"], project="plangraph", kind="goal")
+    with pytest.raises(Refused, match="name the plangraph module or write a port item"):
+        w.store.create_items(router, [lane, goal])
+    lane["description"] = "Why: inspect router/bin/runner\nHow: Explain the local behavior."
+    assert w.store.create_items(router, [lane, goal])["created"][0] == "plangraph:WORK"
+    with pytest.raises(Refused, match="name the plangraph module or write a port item"):
+        w.store.edit_definition(router, "plangraph:WORK", {"description": f"Why: failure\nHow: {how}"})
+    w.store.edit_definition(router, "plangraph:WORK", {
+        "description": f"Why: failure\nHow: {how} Port it into rust/worker/src/main.rs."})
