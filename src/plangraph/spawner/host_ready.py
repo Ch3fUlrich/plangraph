@@ -31,6 +31,42 @@ _sccache_missing_warned = False
 DEFAULT_CARGO_TARGET_CAP_GB = 12
 
 
+def _node_version(entry):
+    version = re.fullmatch(r'v([0-9]+)\.([0-9]+)\.([0-9]+)(-.+)?', entry.name)
+    if not version:
+        return (), False, entry.name
+    return tuple(map(int, version.groups()[:3])), version[4] is None, entry.name
+
+
+def harness_path(env, *, native_writer=False):
+    """Find user-installed tools for a bare system PATH or native Codex admission."""
+    inherited = env.get('PATH', os.defpath)
+    system_dirs = {'/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin'}
+    path = inherited.split(os.pathsep)
+    if os.name != 'posix':
+        return inherited
+    custom_path = any(entry and entry not in system_dirs for entry in path)
+    if custom_path and (not native_writer or shutil.which('codex', path=inherited)):
+        return inherited
+    home = Path(env.get('HOME') or Path.home())
+    versions = Path(env.get('NVM_DIR') or home / '.nvm') / 'versions/node'
+    try:
+        node = [entry / 'bin' for entry in sorted(
+            (entry for entry in versions.iterdir() if not entry.name.startswith('.')),
+            key=_node_version, reverse=True)]
+    except OSError:
+        node = []
+    installed = [home / '.local/bin', *node, home / '.qoder/entry']
+    added = [str(entry) for entry in installed if entry.is_dir() and str(entry) not in path]
+    system_start = next((i for i, entry in enumerate(path) if entry in system_dirs), len(path))
+    path[system_start:system_start] = added
+    if native_writer and not shutil.which('cargo', path=os.pathsep.join(path)):
+        cargo_bin = home / '.cargo/bin'
+        if cargo_bin.is_dir() and str(cargo_bin) not in path:
+            path.append(str(cargo_bin))
+    return os.pathsep.join(path)
+
+
 def shared_cargo_target():
     return Path(os.environ.get('PLANGRAPH_CARGO_TARGET_DIR',
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()

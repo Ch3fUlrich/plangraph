@@ -212,8 +212,11 @@ CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 select both `rust` and `rust-windows` via the shared `rust` output without changing
 other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
-inputs must be added to `RUST_INPUTS`, not inline to the workflow. `rust/pg-spawnd/`
-and `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
+inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
+and environment template they read. Add an explicit test case in
+`tests/test_ci_select_rust_inputs.py` for inputs the scan misses, such as unit
+filenames joined to a deployment directory by a helper. `rust/pg-spawnd/` and
+`rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
 Python files executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
 The router liveness installation test selects Rust CI when its deployed config or watchdog changes.
 `skills/router-core/SKILL.md` selects Rust CI because the batch CLI tests check its command examples; `tests/fixtures/replan_slice_definition.json` does because the spawner's replan test asserts it.
@@ -727,6 +730,8 @@ Notification smoke: `tools/smoke-run-exit-notify.sh` targets
 `omniroute/cx-gpt-6.2-sol-medium` (D-6310).
 
 Claude transcript census: see [usage and classification limits](docs/claude-census.md).
+
+The GO-REQ key list (`tools/merge_batch_util.py` `go_key_block`) is generated from the `Plan-Item` trailers of the train's commits not on main; keys trailered only on `docs/checkpoints/**` print as `GO-DEFERRED [..]`. Check a GO row against it with `pg go-row check` (see `docs/KEEPER.md`).
 
 ## Bash guard rules (`tools/hooks/bash_guard.py`)
 

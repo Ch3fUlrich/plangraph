@@ -33,6 +33,13 @@ def _passing_review(text, *, require_explicit_accept=False):
                         for line in lines[verdicts[-1][0] + 1:]))
 
 
+def _required_seat(record):
+    """D-6652 (rule 3.66 (f)): a record of one of the two required OpenCode seats must name files it read."""
+    from ..planner.legs import REVIEW_REQUIRED
+    leg = record.get("chosen_leg")
+    return isinstance(leg, dict) and leg.get("id") in REVIEW_REQUIRED
+
+
 def _quota_refusal(text):
     """Read only provider-shaped quota evidence; keeper never imports runtime."""
     text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text).replace('\r', '\n')
@@ -106,6 +113,7 @@ class SpawnerRecordAdapter:
                      require_diff_head=False, require_explicit_accept=False, train_delta=None):
         """Read cited review witnesses without inferring a served model."""
         from ..review.family import model_family
+        from ..review.verdict import has_files_read
         ids = json.loads(item.get("run_ids") or "[]")
         if not isinstance(ids, list) or any(not isinstance(r, str) for r in ids):
             raise ValueError("invalid item run citations")
@@ -201,6 +209,7 @@ class SpawnerRecordAdapter:
                     or any(value not in ("stop", "end_turn") for value in finishes)
                     or not _one_serving_attempt(attempts, model)
                     or not _passing_review(text, require_explicit_accept=require_explicit_accept)
+                    or (_required_seat(record) and not has_files_read(text))
                     or record.get("served_family", family) != family):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")
             seats.append({"model": model, "verdict": "pass", "run_id": run_id,

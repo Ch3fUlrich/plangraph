@@ -37,15 +37,18 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
     service = SpawnService(state=tmp_path, leg_reader=reader)
     plan = service.route(card, role="implement")
     expected = WRITERS if state == "available" else WRITERS[1:]
+    if state == "limited":   # D-6652: Sonnet high serves while the Codex lead is limited
+        expected = ["claude-sonnet-5-5-high", *expected]
     if card.get("risk_tags"):
-        expected = [lid for lid in expected if not next(l for l in DEFAULT_LEGS if l.id == lid).trains_on_data]
+        expected = [lid for lid in expected if lid == "claude-sonnet-5-5-high"
+                    or not next(l for l in DEFAULT_LEGS if l.id == lid).trains_on_data]
     assert [leg.id for leg in plan.legs] == expected
     assert all(not leg.claude_family and leg.family not in ("claude", "anthropic")
                and not any(name in leg.model.lower() for name in ("claude", "fable", "opus", "sonnet", "haiku"))
-               for leg in plan.legs)
+               for leg in plan.legs if leg.id != "claude-sonnet-5-5-high")
     record = asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))
     assert record["chosen_leg"]["id"] == expected[0]
-    assert record["chosen_leg"]["effort"] == "medium"
+    assert record["chosen_leg"]["effort"] == ("high" if state == "limited" else "medium")
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 

@@ -665,3 +665,44 @@ def test_go_req_copies_the_train_part_keys_without_dropped_or_skipped_parts(env,
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 0 and block in result.stdout
     assert "#2 sha=" not in result.stdout and "#4 sha=" not in result.stdout
+
+
+def test_go_req_key_list_is_generated_from_the_train_trailers(env):
+    """A resolver commit's key is named, a key trailered only on a checkpoint doc is deferred, not delivered."""
+    st = go_ready(env)
+    wt = Path(st["worktree"])
+    (wt / "resolver.txt").write_text("fix\n")
+    env.git("add", "-A", cwd=wt)
+    env.git("commit", "-qm", "resolver slice\n\nPlan-Item: plangraph:RESOLVER-KEY", cwd=wt)
+    (wt / "docs/checkpoints").mkdir(parents=True)
+    (wt / "docs/checkpoints/cp.md").write_text("deferred\n")
+    env.git("add", "-A", cwd=wt)
+    env.git("commit", "-qm", "checkpoint\n\nPlan-Item: plangraph:DEFERRED-KEY", cwd=wt)
+    env.load()["runs"]["42"]["headSha"] = env.git("rev-parse", "HEAD", cwd=wt)
+    env.save()
+    assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 0, result.stderr
+    assert ("GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B,plangraph:RESOLVER-KEY]; "
+            "GO-DEFERRED [plangraph:DEFERRED-KEY];") in result.stdout
+
+
+def test_go_req_key_list_works_for_a_land_state_without_a_base_name(env):
+    """Older land states carry no ``base``: the default branch is main, as the rest of the landing reads it."""
+    st = go_ready(env)
+    st.pop("base")
+    env.state_file("g1").write_text(json.dumps(st))
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 0, result.stderr
+    assert "GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B]" in result.stdout
+
+
+def test_push_renders_the_pr_body_key_list_at_the_new_head(env):
+    """A resolver commit added before a second push is in the PR body of that push, not the next one."""
+    st = go_ready(env)
+    wt = Path(st["worktree"])
+    (wt / "resolver.txt").write_text("fix\n")
+    env.git("add", "-A", cwd=wt)
+    env.git("commit", "-qm", "resolver slice\n\nPlan-Item: plangraph:RESOLVER-KEY", cwd=wt)
+    assert env.run("push", "--name", "g1").returncode == 0
+    assert "GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B,plangraph:RESOLVER-KEY]" in env.load()["prs"]["100"]["body"]

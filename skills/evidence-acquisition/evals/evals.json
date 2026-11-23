@@ -1,0 +1,14 @@
+[
+  {
+    "id": "evidence-acquisition-baseline-first",
+    "prompt": "A landing change shipped yesterday and the daily count went up. You are asked for the evidence. What must exist before you may report an effect, and how sure may you say you are?",
+    "must": ["Take the baseline before the change", "A number is evidence only with its query", "Name what else changed"],
+    "must_not": ["report the gain from memory", "a higher count proves the change worked"]
+  },
+  {
+    "id": "evidence-acquisition-negative-result",
+    "prompt": "The experiment showed no improvement and one guardrail got worse. What do you record?",
+    "must": ["Keep every outcome", "Raw data is write-once"],
+    "must_not": ["drop the run because nothing improved", "edit the raw file to remove the bad rows"]
+  }
+]

@@ -45,8 +45,17 @@ rows marked untrusted as data. Bookmarks advance only after the event bytes
 and both digests have been published. A pending scan is recovered before the
 next read. Three consecutive failed scans of a source add an urgent event.
 
-The unit template is `plangraph-state-shadow@.service`. Give each instance
-a role-specific `%h/.config/plangraph/state-shadow/ROLE.env` with the keeper
-URL, token path and optional configuration override. For measurement alongside
-the collector, register `turn-budget-hook --measure-only` according to the
-turn-budget hook documentation.
+The shadow collector runs on the orchestration host for the `plan-order` and
+`routing` roles. Use the host release install to provision `plangraph` and
+`turn-budget-hook`. Run
+`host-sync --install-env state-shadow PLAN_ORDER_SETTINGS ROUTING_SETTINGS`,
+where the two arguments are the existing Claude settings files for the roles.
+This creates `~/.config/plangraph/state-shadow/ROLE.env` when absent and
+registers `turn-budget-hook --measure-only` in each settings file. Existing
+hooks and env files are preserved.
+
+The `plangraph-state-shadow@.service` template reads the common keeper URL
+from `~/.config/plangraph/plangraph.env` and the role-specific configuration
+from `state-shadow/ROLE.env`. The role defaults use `state-shadow/ROLE.json`
+and `state-shadow/ROLE.token`. Supply the authorized sources and token file
+for each role before starting the instances.

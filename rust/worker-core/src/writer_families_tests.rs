@@ -156,3 +156,16 @@ fn a_range_where_nothing_resolves_is_refused_once_for_every_caller() {
         );
     }
 }
+
+#[test]
+fn keeper_families_fold_spellings_into_the_keeper_table() {
+    let names: Vec<String> = ["claude", "anthropic", "gpt", "openai", "deepseek"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let table = keeper_families(&names, &python).unwrap();
+    assert_eq!(table["claude"], table["anthropic"]);
+    assert_eq!(table["gpt"], table["openai"]);
+    assert_ne!(table["claude"], table["gpt"]);
+    assert_eq!(table["deepseek"], "deepseek");
+}

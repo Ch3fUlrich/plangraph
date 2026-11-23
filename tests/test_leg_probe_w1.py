@@ -419,7 +419,7 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     from plangraph.spawner.service import SpawnService
 
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
-    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: None if name == 'pg-spawnd' else '/bin/' + name)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: None if name == 'pg-spawnd' else '/bin/' + name)
     store = LegStateStore(tmp_path / 'legs.sqlite')
     # Argon efforts share one agy quota key (D-5966): a failing argon probes down both.
     failing = {'gemini-4-argon-low', 'gemini-4-argon-medium'}
@@ -456,7 +456,8 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
     plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=store, catalog_rows=())
     assert not {'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium'} & {leg.id for leg in plan.legs}
-    assert plan.legs[0].id == 'agy-gemini-4-hydrogen-high'
+    assert [leg.id for leg in plan.legs[:3]] == [
+        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-hydrogen-high']
     assert any(s['leg'] == 'agy-gemini-4-argon-low' and s['reason'] == 'down' for s in plan.skipped)
 
     # Shared LegAdapter must honor the stored down probe even when the gateway snapshot is healthy.
@@ -473,14 +474,14 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     svc = SpawnService(runner=runner, state=tmp_path, leg_reader=adapter)
     routed = svc.route(card, role='review', writer_families=('openai',), benchmark={})
     assert not {'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium'} & {leg.id for leg in routed.legs}
-    assert routed.legs[0].id == 'agy-gemini-4-hydrogen-high'
+    assert [leg.id for leg in routed.legs[:3]] == ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-hydrogen-high']
 
     failing.clear()
     recovered = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
     assert recovered['ok'] is True
     assert store.leg_status('agy/gemini-4-argon-low')['state'] == 'ok'
     after = svc.route(card, role='review', writer_families=('openai',), benchmark={})
-    assert after.legs[0].id == 'agy-gemini-4-hydrogen-high'
+    assert after.legs[2].id == 'agy-gemini-4-hydrogen-high'
     assert 'agy-gemini-4-argon-low' in [leg.id for leg in after.legs]
 
 
@@ -502,7 +503,7 @@ def test_cli_probe_all_reviewers(tmp_path, monkeypatch, capsys):
 
 def test_review_probe_flags_caller_repo_leak(tmp_path, monkeypatch):
     from plangraph.spawner import leg_probe
-    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/' + name)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: '/bin/' + name)
     heads = iter([{'cwd': 'a', 'env': 'a'}, {'cwd': 'b', 'env': 'a'}])
     monkeypatch.setattr(leg_probe, 'caller_heads', lambda: next(heads))
 
@@ -549,6 +550,7 @@ def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkey
         return dict(ok=leg.id != writer.id, reason='' if leg.id != writer.id else 'boom', seconds=0.0)
 
     monkeypatch.setattr(leg_probe, 'probe', fake_probe)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: '/bin/true')
     monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
     runner = SimpleNamespace(leg_reader=store, state=tmp_path)
     asyncio.run(leg_probe.probe_many(runner, [writer.id], all_reviewers=True, timeout=5))
@@ -576,7 +578,7 @@ def test_hung_probes_fail_over_leg_by_leg_inside_the_admission_window(monkeypatc
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '180')
     monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.5)  # 0.5 s per probe, 0.75 s in all
-    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/true')
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: '/bin/true')
 
     class Runner:
         def __init__(self):

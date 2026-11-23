@@ -142,20 +142,36 @@ def active_train(st, head):
             part_target = target and (part["merge"].startswith(target) or part["head"].startswith(target))
             if part_target or keys.intersection(part["items"]):
                 dropped.add(part["pr"])
-    return dict(st, merged=[rec for rec in st["merged"] if rec["pr"] not in skipped | dropped],
+    return dict(st, head=head, merged=[rec for rec in st["merged"] if rec["pr"] not in skipped | dropped],
                 dropped=[rec for rec in st["merged"] if rec["pr"] in dropped])
 
 
+def train_key_lists(st):
+    """``(delivered, deferred)``: the Plan-Item trailers of the train's commits not on main (resolver
+    commits and extra slices count; checkpoint-doc-only keys are deferred; reverted work is netted out)."""
+    from plangraph.keeper.evidence_git import GitAdapter
+    from plangraph.keeper.evidence_pr import train_trailer_keys
+
+    kept = {key for rec in st["merged"] for key in part_items(st, rec, require_keys=False)}
+    delivered, deferred = set(kept), set()
+    base, head, wt = st.get("base_head"), st.get("head"), st.get("worktree")
+    if base and head and wt:
+        origin = f"origin/{st.get('base') or 'main'}"
+        known = git("rev-parse", "--verify", "-q", f"{origin}^{{commit}}", cwd=wt, ok=(0, 1)).returncode == 0
+        found, held = train_trailer_keys(GitAdapter(), wt, head, [base, *([origin] if known else [])])
+        delivered, deferred = (delivered | set(found)) - set(held), set(held)
+    if re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", st.get("plan") or ""):
+        delivered.add(st["plan"])
+    return sorted(delivered), sorted(deferred)
+
+
 def train_keys(st):
-    keys = {key for rec in st["merged"] for key in part_items(st, rec, require_keys=False)}
-    batch = st.get("plan")
-    if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
-        keys.add(batch)
-    return sorted(keys)
+    return train_key_lists(st)[0]
 
 
 def go_key_block(st):
-    return "GO-KEYS [" + ",".join(train_keys(st)) + "]"
+    delivered, deferred = train_key_lists(st)
+    return "GO-KEYS [" + ",".join(delivered) + "]" + ("; GO-DEFERRED [" + ",".join(deferred) + "]" if deferred else "")
 
 
 def keeper_migration(st):

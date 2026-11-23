@@ -340,6 +340,27 @@ fn dry_run_timestamp_round_trips_through_json() {
 }
 
 #[test]
+fn a_claude_fallback_route_records_reason_codex_limited() {
+    let leg = json!({"id":"claude-sonnet-5-5-high","harness":"claude","model":"claude-sonnet-5-5-high","family":"claude"});
+    for (reasons, expected) in [
+        (json!(["codex_limited"]), json!("codex_limited")),
+        (json!([]), Value::Null),
+    ] {
+        let plan = json!({"legs":[leg.clone()],"first_leg":leg.clone(),"reasons":reasons});
+        let mut f = Fixture::new(&plan.to_string(), 0, "");
+        let args = json!({"prompt":"p","card":{"x":1},"dry_run":true,"writer_families":["writer"],"risk":"high","no_fallthrough":true});
+        let r = f.call("spawn", args);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        let row: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(row["route_reason"], expected);
+        let id = row["run_id"].as_str().unwrap();
+        let file =
+            std::fs::read_to_string(f.state.path().join("runs").join(id).join("record.json"));
+        assert_eq!(text, file.unwrap());
+    }
+}
+
+#[test]
 fn spawn_dry_run_and_no_launch() {
     let plan = json!({"legs":[],"first_leg":{"id":"leg","harness":"h","model":"m","family":"f"}});
     let mut f = Fixture::new(&plan.to_string(), 0, "");

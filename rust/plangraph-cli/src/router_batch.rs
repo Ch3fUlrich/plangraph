@@ -12,16 +12,36 @@ use std::path::Path;
 #[path = "router_batch_tests.rs"]
 mod tests;
 
+/// One review seat of a part (rule 3.66 (f)): the review leg that ran, its review file and
+/// reviewer family.
+#[derive(Debug, Deserialize)]
+pub struct Seat {
+    /// The route leg id of the review (`opencode-go-glm-5.3-flash`, ...).
+    pub leg: String,
+    pub review_file: String,
+    pub reviewer_family: String,
+}
+
 /// One part of a batch PR: a writer branch that was merged into the batch branch.
 #[derive(Debug, Deserialize)]
 pub struct Part {
     pub name: String,
     pub head: String,
     pub ci: String,
-    pub review_file: String,
     pub writer_family: String,
-    pub reviewer_family: String,
+    /// The two required review seats; both must ACCEPT the part head with FILES READ.
+    pub seats: Vec<Seat>,
 }
+
+/// Seats every part needs (D-6652, rule 3.66 (f)).
+const REQUIRED_SEATS: usize = 2;
+/// The two required OpenCode review legs with their model family (`REVIEW_REQUIRED` in
+/// `plangraph.planner.legs`). Both must be among a part's seats, except a leg whose family wrote
+/// part of the diff (a writer never reviews its own work; other seats then fill its slot).
+const REQUIRED_LEGS: [(&str, &str); 2] = [
+    ("opencode-go-deepseek-v4-flash", "deepseek"),
+    ("opencode-go-glm-5.3-flash", "glm"),
+];
 
 #[derive(Debug, Deserialize)]
 pub struct GoInput {
@@ -74,7 +94,8 @@ fn token(value: &str) -> bool {
 }
 
 /// Why `text` is no accepted review of `head`: every `HEAD:` line names that head, there is at
-/// least one, and the last `VERDICT:` line is `ACCEPT`.
+/// least one, the last `VERDICT:` line is `ACCEPT` and a `FILES READ:` line names repository paths
+/// (a review of the diff alone is no seat, D-6652).
 fn review_refusal(text: &str, head: &str) -> Option<&'static str> {
     let heads: Vec<&str> = text
         .lines()
@@ -89,17 +110,24 @@ fn review_refusal(text: &str, head: &str) -> Option<&'static str> {
         .rev()
         .find_map(|l| l.trim().strip_prefix("VERDICT:"))
         .map(str::trim);
-    (verdict != Some("ACCEPT")).then_some("review file is not an ACCEPT")
+    if verdict != Some("ACCEPT") {
+        return Some("review file is not an ACCEPT");
+    }
+    (!pg_worker_core::review_split::has_files_read(text)).then_some("review file has no FILES READ")
 }
 
 /// The one GO row of a batch PR in the decisions-log schema (`| ID | project | decision | by |
 /// why |`): the decision cell holds the GO and its binding (`GO #PR GO-HEAD head`), the why
 /// cell the per-part evidence table. Refuses, naming the part, when a head is not 40 hex, CI is
-/// not green, the review file is missing, unreadable, not for the part's head or not an ACCEPT,
-/// or the reviewer family is the writer's. `read` returns the text of a review file.
+/// not green, the part has fewer than two review seats, a seat's review file is missing,
+/// unreadable, not for the part's head, not an ACCEPT or without FILES READ, a reviewer family is
+/// the writer's, or two seats share a review file or a keeper family. `read` returns the text of
+/// a review file; `family` maps a family name to its keeper family (claude and anthropic are one,
+/// gpt and openai are one), so spelling cannot make two seats look independent.
 pub fn go_row(
     input: &GoInput,
     read: &dyn Fn(&str) -> Result<String, String>,
+    family: &dyn Fn(&str) -> String,
 ) -> Result<String, String> {
     if !decision_id(&input.decision)
         || !token(&input.project)
@@ -118,31 +146,64 @@ pub fn go_row(
             Some("head is not 40 hex")
         } else if part.ci != "green" {
             Some("CI is not green")
-        } else if !token(&part.review_file) {
+        } else if part.seats.len() < REQUIRED_SEATS {
+            Some("needs two required review seats")
+        } else if part.seats.iter().any(|seat| !token(&seat.leg)) {
+            Some("review leg missing")
+        } else if part.seats.iter().any(|seat| !token(&seat.review_file)) {
             Some("review file missing")
-        } else if !token(&part.writer_family) || !token(&part.reviewer_family) {
+        } else if !token(&part.writer_family)
+            || part.seats.iter().any(|seat| !token(&seat.reviewer_family))
+        {
             Some("family missing")
-        } else if part.writer_family == part.reviewer_family {
+        } else if part
+            .seats
+            .iter()
+            .any(|seat| family(&seat.reviewer_family) == family(&part.writer_family))
+        {
             Some("reviewer family is the writer family")
+        } else if part.seats.iter().enumerate().any(|(i, a)| {
+            part.seats[..i]
+                .iter()
+                .any(|b| family(&a.reviewer_family) == family(&b.reviewer_family))
+        }) {
+            Some("review seats share a family")
+        } else if part.seats.iter().enumerate().any(|(i, a)| {
+            part.seats[..i]
+                .iter()
+                .any(|b| a.review_file == b.review_file)
+        }) {
+            Some("review seats share a review file")
+        } else if REQUIRED_LEGS.iter().any(|(leg, model_family)| {
+            family(model_family) != family(&part.writer_family)
+                && !part.seats.iter().any(|seat| seat.leg == *leg)
+        }) {
+            Some("required review seat missing (opencode-go deepseek and glm)")
         } else {
             None
         };
         if let Some(why) = why {
             return Err(format!("part {}: {why}", part.name));
         }
-        let review = read(&part.review_file)
-            .map_err(|e| format!("part {}: review file unreadable: {e}", part.name))?;
-        if let Some(why) = review_refusal(&review, &part.head) {
-            return Err(format!("part {}: {why}", part.name));
+        let mut seats = Vec::new();
+        for seat in &part.seats {
+            let review = read(&seat.review_file)
+                .map_err(|e| format!("part {}: review file unreadable: {e}", part.name))?;
+            if let Some(why) = review_refusal(&review, &part.head) {
+                return Err(format!("part {}: {why}", part.name));
+            }
+            seats.push(format!(
+                "review {} leg {} reviewer {}",
+                seat.review_file, seat.leg, seat.reviewer_family
+            ));
         }
         table.push(format!(
-            "{} head {} ci {} review {} writer {} reviewer {}",
+            "{} head {} ci {} writer {} {}",
             part.name,
             part.head,
             part.ci,
-            part.review_file,
             part.writer_family,
-            part.reviewer_family
+            seats.join(" ")
         ));
     }
     Ok(format!(
@@ -223,6 +284,26 @@ fn read_review(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
+/// The keeper family of every family name the input uses, from the Python family table.
+fn keeper_family_table(
+    input: &GoInput,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut names: Vec<String> = REQUIRED_LEGS
+        .iter()
+        .map(|(_, family)| family.to_string())
+        .chain(input.parts.iter().flat_map(|p| {
+            std::iter::once(p.writer_family.clone())
+                .chain(p.seats.iter().map(|s| s.reviewer_family.clone()))
+        }))
+        .collect();
+    names.sort();
+    names.dedup();
+    let root = std::env::current_dir().ok();
+    pg_worker_core::writer_families::keeper_families(&names, &|| {
+        pg_worker_core::writer_families::python_command(root.as_deref())
+    })
+}
+
 /// `plangraph router (go-row|grant-rows|ask-group) INPUT.json [OUT]`.
 pub fn run(args: &[String]) -> i32 {
     let (Some(verb), Some(input)) = (args.first(), args.get(1)) else {
@@ -231,7 +312,12 @@ pub fn run(args: &[String]) -> i32 {
     };
     let text = match verb.as_str() {
         "go-row" => read(input)
-            .and_then(|i: GoInput| go_row(&i, &read_review))
+            .and_then(|i: GoInput| {
+                let table = keeper_family_table(&i)?;
+                go_row(&i, &read_review, &|name| {
+                    table.get(name).cloned().unwrap_or_else(|| name.to_owned())
+                })
+            })
             .map(|t| t + "\n"),
         "grant-rows" => read(input).and_then(|i: GrantInput| grant_rows(&i)),
         "ask-group" => read(input).and_then(|i: AskInput| ask_group(&i)),

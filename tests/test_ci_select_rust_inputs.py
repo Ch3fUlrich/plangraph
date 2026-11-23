@@ -95,6 +95,24 @@ def test_rust_repository_inputs_are_selected():
             "tools/check_changelog_docs.py", "tools/probe_admission_policy_guard.py"} <= inputs.keys()
 
 
+@pytest.mark.parametrize("name", [
+    "disk-hygiene.env.example",
+    "keeper-backup.env.example",
+    "pg-disk-hygiene.service",
+    "pg-keeper-backup.service",
+    "pg-keeper-backup.timer",
+    "pg-throughput.service",
+    "pg-worktree-sweep.service",
+    "plangraph-state-shadow@.service",
+])
+def test_deployment_inputs_read_by_rust_are_explicitly_selected(name):
+    # Cover split directory and file literals, including the backup unit tests.
+    path = f"deploy/systemd/{name}"
+    assert (ROOT / path).is_file()
+    assert path in ci_select.RUST_INPUTS
+    assert ci_select.select([path])["rust"]
+
+
 def test_schema_change_cli_outputs(tmp_path, monkeypatch, capsys):
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
