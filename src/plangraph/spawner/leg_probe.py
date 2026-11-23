@@ -196,6 +196,12 @@ def _is_review_probe(leg, role=None):
     return 'review' in roles and 'implement' not in roles and 'fix' not in roles
 
 
+def _missing_harness(harness, seconds_elapsed=0.0):
+    return dict(ok=False, state='host-not-ready',
+                reason='host-not-ready: harness missing: ' + harness,
+                infra=True, seconds=seconds_elapsed)
+
+
 async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
     """One real commit task (or tiny OK prompt for reviews) in a disposable dir; infra failures book no leg state.
 
@@ -209,9 +215,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
     # Missing executables describe this host, not the remote leg. Check each
     # harness independently, before creating a repo or attempting any leg.
     if shutil.which(leg.harness, path=harness_path(os.environ)) is None:
-        return dict(ok=False, state='host-not-ready',
-                    reason='host-not-ready: harness missing: ' + leg.harness,
-                    infra=True, seconds=time.monotonic() - start)
+        return _missing_harness(leg.harness, time.monotonic() - start)
     deadline = start + timeout
     previous = await asyncio.to_thread(_run_logs, runner)
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
@@ -506,6 +510,9 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
     if all_reviewers:
         for leg in routed_review_legs():
             add(leg, review=True)
+    path = harness_path(os.environ)
+    if selected and not any(shutil.which(harness, path=path) for harness in {leg.harness for leg in selected}):
+        return dict(ok=False, probes=[dict(id=leg.id, **_missing_harness(leg.harness)) for leg in selected])
     manage_key = await asyncio.to_thread(_check_manage_key, runner) if (all_reviewers or role == 'review') else None
     results = []
     state = _store_for(runner)

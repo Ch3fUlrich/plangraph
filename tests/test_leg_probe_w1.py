@@ -549,6 +549,7 @@ def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkey
         return dict(ok=leg.id != writer.id, reason='' if leg.id != writer.id else 'boom', seconds=0.0)
 
     monkeypatch.setattr(leg_probe, 'probe', fake_probe)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: '/bin/true')
     monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
     runner = SimpleNamespace(leg_reader=store, state=tmp_path)
     asyncio.run(leg_probe.probe_many(runner, [writer.id], all_reviewers=True, timeout=5))

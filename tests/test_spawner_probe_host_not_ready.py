@@ -134,3 +134,9 @@ def test_review_probe_cli_has_distinct_exit_when_no_harness_exists(tmp_path, mon
     assert all(row['state'] == 'host-not-ready' for row in reply['probes'])
     assert not runner.attempts
     assert not store.path.exists()
+
+    monkeypatch.setattr(store, 'leg_status', lambda key: {'state': 'limited'})
+    assert cli.main(['--state', str(tmp_path), 'probe', '--all-reviewers', '--json']) == 3
+    reply = json.loads(capsys.readouterr().out)
+    assert all(row['state'] == 'host-not-ready' for row in reply['probes'])
+    assert not store.path.exists()
