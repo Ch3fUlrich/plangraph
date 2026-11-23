@@ -653,28 +653,37 @@ def test_stuck_initiating_probe_is_a_leg_skip_not_an_admission_timeout(repositor
 
 
 def test_probe_budget_counts_routing_time_spent_before_the_run_record(repository, dispatch, monkeypatch):
-    """Slow routing eats the admission window: the probe gets what is left, not a fresh budget."""
+    """Routing before run record creation consumes the probe budget."""
+    from types import SimpleNamespace
     from plangraph.spawner import base_fresh, leg_probe
     monkeypatch.setattr(leg_probe, 'before_launch', _REAL_BEFORE_LAUNCH)
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
     monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.8)
-    async def stuck(runner, leg, **kwargs):
-        await asyncio.sleep(30)
-        return dict(ok=True, reason='', seconds=0)
-    monkeypatch.setattr(leg_probe, 'probe', stuck)
+    now = 100.0
+    clock = SimpleNamespace(monotonic=lambda: now, time=lambda: 0.0)
+    monkeypatch.setattr(base_fresh, 'time', clock)
+    monkeypatch.setattr(leg_probe, 'time', clock)
+
+    async def unexpected_probe(*args, **kwargs):
+        pytest.fail('routing already exhausted the probe budget')
+
+    monkeypatch.setattr(leg_probe, 'probe', unexpected_probe)
     service, calls = dispatch[0](True), dispatch[1]
+
     async def slow_plan(plan, **kwargs):
-        await asyncio.sleep(1.35)  # routing, before the run record exists
+        nonlocal now
+        now += 1.9  # Before the run record exists.
         return plan
+
     monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', slow_plan)
+
     async def main():
-        started = time.monotonic()
         record = await base_fresh.admitted_spawn(service, dict(
             card=dict(estimate_tokens=100), prompt='Implement a tested change', role='implement'))
         await asyncio.gather(*service.tasks.values(), return_exceptions=True)
-        return record, time.monotonic() - started
-    record, elapsed = asyncio.run(main())
-    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+        return record
+
+    record = asyncio.run(main())
     assert 'base_admission_timeout' not in json.dumps(record), record
     attempts = service.result(record['run_id'])['attempts']
     assert [a['skip_reason'] for a in attempts] == ['probe_budget_exhausted'], attempts
