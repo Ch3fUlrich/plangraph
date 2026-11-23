@@ -415,8 +415,15 @@ that the edit came through Keeper and links to the definition event.
 A definition whose How asks the writer to use a design or contract needs a
 `design_ref`. Set it to a repository-relative path or use
 `REPOSITORY:PATH` for a file in another repository. Show, short briefs
-and snapshots expose the stored reference. If a plangraph lane's How names
-external code, it must also name the plangraph implementation target.
+and snapshots expose the stored reference. The native batch-size input accepts
+`design_ref` on each item and `design_roots` indexed by repository qualifier.
+The generated brief embeds the selected files verbatim and reports the
+reference if a file cannot be read. If a plangraph lane's How names external
+code, it must also name the plangraph implementation target.
+
+Keeper records slice ancestry from the replanner's definition. A definition
+attached under a slice is refused with the parent key, including after an
+edit to the parent's criteria.
 
 Ready and claim include qualified Plan-Item matches from other repositories
 in the configured merge scan. A bare Plan-Item ID matches within its own

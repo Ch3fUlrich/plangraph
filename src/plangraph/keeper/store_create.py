@@ -20,6 +20,7 @@ from .credential_guard import guard
 from .item_fixes import check_fix_limit
 from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_definition_inputs, check_kg_refs, check_model_fields
 from .note_fold import fold_checked
+from .store_input import slice_parent
 from .store_tiers import (
     REVIEW_TIERS,
     _REVIEW_KEYWORD,
@@ -47,7 +48,6 @@ _MAX_BATCH = 500
 #: each repeat INCIDENT LOG line raises it one level (10 at most).
 LE_DEFAULT_PRIORITY = 8
 _INCIDENT_LINE = re.compile(r"(?m)^\s*INCIDENT LOG\b")
-
 
 def incident_lines(*texts) -> int:
     """How many INCIDENT LOG lines the item texts carry."""
@@ -320,6 +320,7 @@ class CreateMixin:
         if gate["state"] in ("done", "cancelled"):
             raise Refused("bad_state", f"{gate['key']} is {gate['state']}")
         self._assert_unlocked(gate)
+        self._check_slice_attachment(gate)
         return gate
 
     def _normalise_create(self, raw, principal, *, stored=False):
@@ -384,6 +385,8 @@ class CreateMixin:
         for name in SMALL_FIELDS:
             if row[name] is not None:
                 created[name] = row[name]
+        if (parent := slice_parent(definition)) and self.resolve_key(parent) == definition.get("under"):
+            created["slice_parent"] = definition["under"]
         if definition.get("rehomed_from"):
             created["rehomed_from"] = definition["rehomed_from"]
         self._append(principal, definition["key"], "item_created", created, now)
@@ -394,7 +397,6 @@ class CreateMixin:
         if state == "in_review":
             self._append(principal, definition["key"], "submitted",
                          {"legacy": True}, now)
-
     # ------------------------------------------------------ edit/priority
     def edit_definition(self, principal, key, fields):
         """Edit an item's definition (router-only on a claimed/in-review item).
