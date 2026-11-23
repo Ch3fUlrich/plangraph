@@ -8,11 +8,12 @@ If the probe fails, both commands log a fallback to `cargo test`, which runs
 without per-test deadlines. The enclosing preflight deadline covers the
 entire Rust test command, including compilation.
 
-With cargo-nextest on PATH, run this Linux integration test from `rust/` to
-verify both the `HUNG` message and cleanup of the test's child process:
+The Linux integration test covers the `HUNG` message and cleanup of the
+test's child process when cargo-nextest is on PATH. The focused command
+from `rust/` is
 
 ```sh
-cargo test -p plangraph-cli --test fast_checks preflight_reports_a_hanging_rust_test_and_reaps_its_child -- --ignored
+cargo test -p plangraph-cli --test fast_checks preflight_reports_a_hanging_rust_test_and_reaps_its_child
 ```
 
 `LE-CI-HUNG-TEST-RUNNER-ENFORCEMENT` in the batch's `slices.json` tracks
