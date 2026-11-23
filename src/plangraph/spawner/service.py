@@ -7,6 +7,7 @@ from .git_guard import annotate_tree, prepare_worktree, selected_checkout, write
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 from plangraph.planner.seats import with_head_writers
+from plangraph.planner.routing import CODEX_LIMITED
 from dataclasses import asdict, replace
 from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
@@ -468,7 +469,8 @@ class SpawnService(SeatSpawnMixin):
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=self._given_writers(card, role, writer_families, review_of),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
-            cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
+            cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}),
+            **({'route_reason': CODEX_LIMITED} if CODEX_LIMITED in plan.reasons else {}))   # D-6652: a Sonnet writer served while Codex is limited
         if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(record['run_id'])
         if role == 'review' and card.get('review_workspace') is True and _placement and _placement.get('host'):
             record['host'] = _placement['host']

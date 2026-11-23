@@ -4,7 +4,7 @@ from dataclasses import asdict, replace
 
 import pytest
 
-from plangraph.planner.legs import load_legs, spawnable_legs
+from plangraph.planner.legs import REVIEW_ORDER, load_legs, spawnable_legs
 from plangraph.planner.review_order import payment_order
 
 
@@ -55,11 +55,11 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
 def test_standard_review_order_efforts_and_writer_fence(catalog):
     result = ordered(catalog.values(), 'review', writer_families=('gpt',), diff_tokens=99999)
     assert signature(result) == [
+        ('opencode-go-deepseek-v4-flash', None),   # D-6652 required seats lead
+        ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-hydrogen-high', 'high'),
         ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
-        ('opencode-go-deepseek-v4-flash', None),
-        ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
@@ -74,17 +74,18 @@ def test_standard_review_order_efforts_and_writer_fence(catalog):
 def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
     from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
     assert OPERATOR_ROUTE_ORDERS['review'][order_class] == (
+        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
         'agy-gemini-4-hydrogen-high', 'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-neon-medium',
+        'agy-gemini-4-neon-medium',
         'claude-sonnet-5-5-high', 'mimo-v2.6-flash', 'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium')
     result = ordered(catalog.values(), 'review', order_class=order_class,
                      writer_families=('gpt',), diff_tokens=1000)
     assert signature(result) == [
+        ('opencode-go-deepseek-v4-flash', None),   # D-6652 required seats lead
+        ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-hydrogen-high', 'high'),
         ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
-        ('opencode-go-deepseek-v4-flash', None),
-        ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
@@ -110,17 +111,19 @@ def test_explicit_upstream_roles_keep_full_high_review_order(catalog, order_clas
     admitted = [replace(catalog[id], roles=('review',)) for id in ids]
     result = ordered(admitted, 'review', order_class=order_class, writer_families=('gpt',))
     assert signature(result) == [
-        ('mimo-v2.6-pro', None),
-        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None),
+        ('mimo-v2.6-pro', None),
+        ('opencode-deepseek-v4.1-flash-free', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
         ('agy-gemini-4-argon-low', 'low'),
         ('agy-gemini-4-argon-medium', 'medium'),
     ]
-    assert ordered(admitted, 'review', order_class=order_class, writer_families=('claude',)) == tuple(admitted[:6] + admitted[7:])
+    assert ordered(admitted, 'review', order_class=order_class, writer_families=('claude',)) == tuple(
+        next(leg for leg in admitted if leg.id == id) for id in REVIEW_ORDER
+        if id in ids and id != 'claude-sonnet-5-5-high')
 
 
 def test_payment_order_unmodified_registry_names_every_drop(catalog):
@@ -130,7 +133,7 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
         'role': '''openrouter-free cx-gpt-6.2-sol-medium cx-gpt-6.2-astra deepseek cx-gpt-6.2-sol
             cx-gpt-6.2-sol-low cx-gpt-6.2-sol-high cx-gpt-6.2-sol-xhigh cx-gpt-6.2-sol-max
             cx-gpt-6.1-terra-medium
-            cx-gpt-6.1-terra-xhigh muse-ember-max claude-fable-5.2-high''',
+            cx-gpt-6.1-terra-xhigh muse-ember-max claude-fable-5.2-high claude-sonnet-5-5-xhigh''',
         'not_in_order': '''            console-deepseek-flash opencode-go-beam-free agy-gemini-4-hydrogen-medium qodercli-qwen3.8-flash
             opencode-glm-5.3-flash-free cx-gpt-6-luna opencode-flint-40b-free
             opencode-big-pickle agy-gpt-oss-120b agy-sonnet-5.5 agy-claude-opus agy-opus-5.5
@@ -142,11 +145,11 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
             cx-gpt-6-luna-medium cx-gpt-6-luna-high cx-gpt-6-luna-xhigh cx-gpt-6-luna-max''',
         'writer_family': 'agy-gemini-4-hydrogen-high agy-gemini-4-neon-medium agy-gemini-4-argon-low agy-gemini-4-argon-medium'}
     dropped = {id: reason for reason, ids in reasons.items() for id in ids.split()}
-    assert signature(result) == [('gpt-6.2-sol-medium', 'medium'),
+    assert signature(result) == [('opencode-go-deepseek-v4-flash', None),
+                                 ('opencode-go-glm-5.3-flash', None),
+                                 ('gpt-6.2-sol-medium', 'medium'),
                                  ('mimo-v2.6-pro', None),
                                  ('opencode-deepseek-v4.1-flash-free', None),
-                                 ('opencode-go-deepseek-v4-flash', None),
-                                 ('opencode-go-glm-5.3-flash', None),
                                  ('claude-sonnet-5-5-high', 'high'),
                                  ('mimo-v2.6-flash', None)]
     assert catalog.keys() - {leg.id for leg in result} == dropped.keys()

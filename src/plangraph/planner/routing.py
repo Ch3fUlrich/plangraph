@@ -17,7 +17,7 @@ from plangraph.model_admission import validate_model  # compatibility re-export
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_for_leg, benchmark_rows_from_db)
-from .legs import CODEX_FALLBACK_WRITERS, DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
+from .legs import CODEX_FALLBACK_WRITERS, SONNET_WRITERS, SONNET_WRITER_HARD, DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .readiness import WINDOW_TOKENS, USABLE_FRACTION
 from .review_order import review_key, catalog_tiers
@@ -314,6 +314,10 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
     return ("park", None)
 
 
+#: Route reason (and run-record ``route_reason``) of a Sonnet writer served while the Codex lead is limited.
+CODEX_LIMITED = "codex_limited"
+
+
 @dataclass(frozen=True)
 class SpawnPlan:
     legs: tuple[Leg, ...]
@@ -362,7 +366,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT
+    from .legs import REVIEW_ORDER, REVIEW_REQUIRED, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT
     if native_review:
         legs = review_route_pool(legs)
     if native_implement:
@@ -382,7 +386,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if field in card and (not isinstance(card[field], (list, tuple)) or
                               not all(isinstance(v, str) for v in card[field])):
             raise SpawnRefused(f'{field} must be a list of strings')
-    for field in ('has_tests', 'is_pure_doc', 'is_docs_only', 'repository_review_required'):
+    for field in ('has_tests', 'is_pure_doc', 'is_docs_only', 'repository_review_required', 'hard'):
         if field in card and type(card[field]) is not bool:
             raise SpawnRefused(f'{field} must be boolean')
     for field in ('estimate_tokens', 'reviewer_count', 'fanout'):
@@ -451,7 +455,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                                 required_gaps)
     if native_implement:   # Claude writers join the route behind Codex (rule 3.58); subject to the dual quota guard.
         from .legs import EXPLICIT_LEGS   # Added after the strict gap check: explicit legs carry no benchmark row.
-        fallbacks = tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
+        fallbacks = tuple(l for l in EXPLICIT_LEGS if l.id in (*SONNET_WRITERS, *CODEX_FALLBACK_WRITERS)
+                          and (l.id != SONNET_WRITER_HARD or card.get('hard'))   # xhigh only for a hard card
                           and role in l.roles and leg_active(l, now=now))
         if installed is not None:   # the Claude fallback writers need their client too
             from .legs import resolve_legs
@@ -497,10 +502,17 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         return state["state"] == "limited" and (state.get("evidence") or {}).get("kind") != "auth_refused"
 
     claude_quota_fallback = False
-    if (native_implement or native_review) and quota_limited(quota_states["agy:gemini-4-hydrogen"]):
-        writer_model = next(leg.model for leg in DEFAULT_LEGS if leg.id == LEAD_WRITER)
+    writer_model = next(leg.model for leg in DEFAULT_LEGS if leg.id == LEAD_WRITER)
+    # D-6652 correction: the Sonnet writers serve only while the Codex lead is limited (429 or quota).
+    codex_limited = native_implement and any(
+        quota_limited(read_status(key)) for key in (writer_model, LEAD_WRITER))
+    if native_implement and quota_limited(quota_states["agy:gemini-4-hydrogen"]):
         claude_quota_fallback = any(
             quota_limited(read_status(key)) for key in (writer_model, LEAD_WRITER, REVIEW_GPT))
+    # D-6652: the Claude review seat only when both required OpenCode seats are out of the route.
+    required_seats_out = native_review and not any(
+        leg.id in REVIEW_REQUIRED and leg.id not in limited and leg.family not in excluded
+        and not policy.skip_reason(leg, role) for leg in candidates)
 
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
@@ -516,8 +528,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         row = benchmark_for_leg(rows, leg)
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if (not reason and (native_implement or native_review) and leg.claude_family
-                and not claude_quota_fallback and not (sensitive_review and leg.id == REVIEW_SONNET)):
-            reason = "claude_requires_gpt_and_hydrogen_limits"
+                and not (native_implement and leg.id in SONNET_WRITERS and codex_limited)
+                and not (native_implement and leg.id not in SONNET_WRITERS and claude_quota_fallback)
+                and not (native_review and leg.id == REVIEW_SONNET and (sensitive_review or required_seats_out))):
+            reason = ("claude_requires_codex_limited" if native_implement and leg.id in SONNET_WRITERS
+                      else "claude_requires_gpt_and_hydrogen_limits")
         if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
             reason = 'auth_refused'
         if reason == 'limited' and leg.harness == 'agy':
@@ -561,6 +576,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
         "review_route_excluded", "low_risk_only", "claude_requires_gpt_and_hydrogen_limits",
+        "claude_requires_codex_limited",
         "repository_review_tools_unavailable", "benchmark_unmeasured", "opencode_tools_denied")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
@@ -570,7 +586,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                          tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement, agy_quota_states=quota_states)
     ordered = list(route.legs)
     reasons, source = [*route.reasons, *bench_reasons], "operator-order"
-    preferred = LEAD_WRITER if role == 'implement' else REVIEW_ORDER[0] if role == 'review' else None
+    if native_implement and any(leg.id in SONNET_WRITERS for leg in ordered):
+        reasons.insert(0, CODEX_LIMITED)   # D-6652: the Sonnet writers are routed only while Codex is limited
+    preferred = SONNET_WRITERS[0] if role == 'implement' else REVIEW_ORDER[0] if role == 'review' else None
     if any(s['leg'] == preferred and s['reason'] == 'window_class' for s in skipped):
         reasons.insert(0, f'{preferred}: window_class (estimate exceeds {USABLE_FRACTION_PCT}% of leg context)')
     if benchmark is not None:
@@ -591,6 +609,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         from .route_policy import implement_key
         order = {leg.id: i for i, leg in enumerate(ordered)}
         ordered.sort(key=lambda leg: implement_key(leg, TIERS.index(leg.tier), order[leg.id]))
+        if card.get('hard'):   # D-6652: xhigh for a hard card, high behind it
+            ordered.sort(key=lambda leg: leg.id != SONNET_WRITER_HARD)
     if role == "review":
         # Benchmarks rank families, not interchangeable seats within a family.
         # Restore table order only in each family's measured slots, retaining
@@ -630,7 +650,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     if native_review:
         seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
     error = None
-    if role == "review" and len(seats) < (1 if native_review and not high else 2):
+    if role == "review" and len(seats) < 2:   # rule 3.66 (f): two seats on every head
         error = "two distinct review families unavailable"
     elif open_parts:
         error = "seat coverage unmet for writer parts: " + ", ".join(open_parts)

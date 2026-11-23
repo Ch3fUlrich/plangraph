@@ -197,9 +197,11 @@ REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-m
 REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
 REVIEW_SONNET = "claude-sonnet-5-5-high"
 REVIEW_GPT = "gpt-6.2-sol-medium"
-REVIEW_ORDER = (REVIEW_HYDROGEN, REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK,
-                "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", REVIEW_NEON,
-                REVIEW_SONNET, REVIEW_MIMO_FLASH, REVIEW_ARGON_LOW, REVIEW_ARGON)
+# D-6652 (rule 3.66 (f)): every head needs these two OpenCode seats with file access, each
+# outside every writer family of the diff; both must ACCEPT with FILES READ.  They lead the route.
+REVIEW_REQUIRED = ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash")
+REVIEW_ORDER = (*REVIEW_REQUIRED, REVIEW_HYDROGEN, REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK,
+                REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH, REVIEW_ARGON_LOW, REVIEW_ARGON)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
     Leg(REVIEW_GPT, "subscription", "codex", "gpt-6.2-sol-medium", "gpt",
@@ -215,7 +217,17 @@ REVIEW_FALLBACK_LEGS = (
         ("128k",), 100000, False, roles=("review",)),
     Leg(REVIEW_SONNET, "subscription", "claude", "claude-sonnet-5-5-high", "claude",
         ("128k", "256k", "1m"), 900000, False, claude_family=True,
-        roles=("review",), effort="high"),
+        roles=("review", "implement"), effort="high",
+        note="D-6652: implement only while the Codex lead is limited; review only for credential diffs or when both required seats are out"),
+)
+#: D-6652 (operator correction 2026-11-23): the Sonnet writer legs, eligible only while the Codex lead is
+#: limited. ``claude-sonnet-5-5-xhigh`` serves cards marked ``hard``.
+SONNET_WRITER, SONNET_WRITER_HARD = REVIEW_SONNET, "claude-sonnet-5-5-xhigh"
+SONNET_WRITERS: tuple[str, ...] = (SONNET_WRITER, SONNET_WRITER_HARD)
+CLAUDE_WRITER_LEGS = (
+    Leg(SONNET_WRITER_HARD, "subscription", "claude", "claude-sonnet-5-5-xhigh", "claude",
+        ("128k", "256k", "1m"), 900000, False, claude_family=True,
+        roles=("implement",), effort="xhigh", note="D-6652: Sonnet xhigh for cards marked hard"),
 )
 
 # Preserve role-neutral keeper admission before applying implement-only policy.
@@ -226,6 +238,7 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
                        if leg.id != 'cx-gpt-6.2-sol' else leg for leg in DEFAULT_LEGS)
 
 # Rule 3.53 (OPERATOR D-6310): implement legs priority and opencode implementation fallback.
+# The Sonnet writers (SONNET_WRITERS) sit outside this order: they serve only while the Codex lead is limited.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.2-sol-medium",
     "cx-gpt-6.2-astra",
@@ -257,7 +270,7 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           tool_mode="inline-only")
       for e in CX_EFFORTS),
 )
-EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS
+EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS + CLAUDE_WRITER_LEGS
 
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
 _plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.2-sol")
@@ -298,7 +311,7 @@ def explicit_only_skips(role: str) -> tuple[dict, ...]:
         "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
         for leg in EXPLICIT_LEGS if role in leg.roles
         and not (role == "review" and leg.id in REVIEW_ORDER)
-        and not (role == "implement" and leg.id in CODEX_FALLBACK_WRITERS))
+        and not (role == "implement" and leg.id in (*CODEX_FALLBACK_WRITERS, *SONNET_WRITERS)))
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",

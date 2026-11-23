@@ -66,7 +66,7 @@ def payment_order(legs, role, *, order_class=None, writer_families=(), diff_toke
     Unknown payment classes retain their original slots. No admission or I/O.
     Explicit order_class opts into catalog order without changing live defaults.
     """
-    from .legs import TIERS, WRITER_ORDER
+    from .legs import SONNET_WRITERS, TIERS, WRITER_ORDER
     from .route_policy import implement_key
     ordered = list(legs)
     from plangraph.retired_models import check_route_targets
@@ -93,7 +93,8 @@ def payment_order(legs, role, *, order_class=None, writer_families=(), diff_toke
         by_id = {leg.id: leg for leg in ordered if effective_role in leg.roles}
         if role == 'implement':
             for leg in by_id.values():
-                if 'sonnet' in (leg.id + leg.model).lower() and leg.harness == 'claude':
+                if ('sonnet' in (leg.id + leg.model).lower() and leg.harness == 'claude'
+                        and leg.id not in SONNET_WRITERS):   # D-6652 admits the Sonnet writer legs
                     raise ValueError(IMPLEMENT_SONNET_REFUSAL)
         # Non-table registrations are dropped, not treated as requested aliases.
         for id in table:

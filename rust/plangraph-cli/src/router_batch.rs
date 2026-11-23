@@ -12,16 +12,26 @@ use std::path::Path;
 #[path = "router_batch_tests.rs"]
 mod tests;
 
+/// One required review seat of a part (rule 3.66 (f)): its review file and reviewer family.
+#[derive(Debug, Deserialize)]
+pub struct Seat {
+    pub review_file: String,
+    pub reviewer_family: String,
+}
+
 /// One part of a batch PR: a writer branch that was merged into the batch branch.
 #[derive(Debug, Deserialize)]
 pub struct Part {
     pub name: String,
     pub head: String,
     pub ci: String,
-    pub review_file: String,
     pub writer_family: String,
-    pub reviewer_family: String,
+    /// The two required review seats; both must ACCEPT the part head with FILES READ.
+    pub seats: Vec<Seat>,
 }
+
+/// Seats every part needs (D-6652, rule 3.66 (f)).
+const REQUIRED_SEATS: usize = 2;
 
 #[derive(Debug, Deserialize)]
 pub struct GoInput {
@@ -74,7 +84,8 @@ fn token(value: &str) -> bool {
 }
 
 /// Why `text` is no accepted review of `head`: every `HEAD:` line names that head, there is at
-/// least one, and the last `VERDICT:` line is `ACCEPT`.
+/// least one, the last `VERDICT:` line is `ACCEPT` and a `FILES READ:` line names repository paths
+/// (a review of the diff alone is no seat, D-6652).
 fn review_refusal(text: &str, head: &str) -> Option<&'static str> {
     let heads: Vec<&str> = text
         .lines()
@@ -89,14 +100,18 @@ fn review_refusal(text: &str, head: &str) -> Option<&'static str> {
         .rev()
         .find_map(|l| l.trim().strip_prefix("VERDICT:"))
         .map(str::trim);
-    (verdict != Some("ACCEPT")).then_some("review file is not an ACCEPT")
+    if verdict != Some("ACCEPT") {
+        return Some("review file is not an ACCEPT");
+    }
+    (!pg_worker_core::review_split::has_files_read(text)).then_some("review file has no FILES READ")
 }
 
 /// The one GO row of a batch PR in the decisions-log schema (`| ID | project | decision | by |
 /// why |`): the decision cell holds the GO and its binding (`GO #PR GO-HEAD head`), the why
 /// cell the per-part evidence table. Refuses, naming the part, when a head is not 40 hex, CI is
-/// not green, the review file is missing, unreadable, not for the part's head or not an ACCEPT,
-/// or the reviewer family is the writer's. `read` returns the text of a review file.
+/// not green, the part has fewer than two review seats, a seat's review file is missing,
+/// unreadable, not for the part's head, not an ACCEPT or without FILES READ, a reviewer family is
+/// the writer's, or two seats share a family. `read` returns the text of a review file.
 pub fn go_row(
     input: &GoInput,
     read: &dyn Fn(&str) -> Result<String, String>,
@@ -118,31 +133,51 @@ pub fn go_row(
             Some("head is not 40 hex")
         } else if part.ci != "green" {
             Some("CI is not green")
-        } else if !token(&part.review_file) {
+        } else if part.seats.len() < REQUIRED_SEATS {
+            Some("needs two required review seats")
+        } else if part.seats.iter().any(|seat| !token(&seat.review_file)) {
             Some("review file missing")
-        } else if !token(&part.writer_family) || !token(&part.reviewer_family) {
+        } else if !token(&part.writer_family)
+            || part.seats.iter().any(|seat| !token(&seat.reviewer_family))
+        {
             Some("family missing")
-        } else if part.writer_family == part.reviewer_family {
+        } else if part
+            .seats
+            .iter()
+            .any(|seat| seat.reviewer_family == part.writer_family)
+        {
             Some("reviewer family is the writer family")
+        } else if part.seats.iter().enumerate().any(|(i, a)| {
+            part.seats[..i]
+                .iter()
+                .any(|b| a.reviewer_family == b.reviewer_family)
+        }) {
+            Some("review seats share a family")
         } else {
             None
         };
         if let Some(why) = why {
             return Err(format!("part {}: {why}", part.name));
         }
-        let review = read(&part.review_file)
-            .map_err(|e| format!("part {}: review file unreadable: {e}", part.name))?;
-        if let Some(why) = review_refusal(&review, &part.head) {
-            return Err(format!("part {}: {why}", part.name));
+        let mut seats = Vec::new();
+        for seat in &part.seats {
+            let review = read(&seat.review_file)
+                .map_err(|e| format!("part {}: review file unreadable: {e}", part.name))?;
+            if let Some(why) = review_refusal(&review, &part.head) {
+                return Err(format!("part {}: {why}", part.name));
+            }
+            seats.push(format!(
+                "review {} reviewer {}",
+                seat.review_file, seat.reviewer_family
+            ));
         }
         table.push(format!(
-            "{} head {} ci {} review {} writer {} reviewer {}",
+            "{} head {} ci {} writer {} {}",
             part.name,
             part.head,
             part.ci,
-            part.review_file,
             part.writer_family,
-            part.reviewer_family
+            seats.join(" ")
         ));
     }
     Ok(format!(

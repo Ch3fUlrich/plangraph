@@ -70,7 +70,8 @@ def test_explicit_legs_stay_out_of_every_route():
     declarations = {'cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh',
                     'muse-ember-max', 'claude-fable-5.2-high'}
     from plangraph.planner.legs import REVIEW_FALLBACK_LEGS
-    assert {leg.id for leg in EXPLICIT_LEGS} == MANUAL | declarations | {l.id for l in REVIEW_FALLBACK_LEGS}
+    from plangraph.planner.legs import CLAUDE_WRITER_LEGS
+    assert {leg.id for leg in EXPLICIT_LEGS} == MANUAL | declarations | {l.id for l in REVIEW_FALLBACK_LEGS} | {l.id for l in CLAUDE_WRITER_LEGS}
     assert all(leg.disabled and not leg.roles and leg.expires is None
                for leg in EXPLICIT_LEGS if leg.id in declarations)
     assert {leg.id for leg in DEFAULT_LEGS} & set(NEW) == {LEAD_WRITER}
@@ -86,13 +87,13 @@ def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
     assert spawnable_legs() == fake + EXPLICIT_LEGS
     from plangraph.spawner.target import resolve_target
     assert resolve_target('zz-test')[1].id == 'zz-test'
-    assert EXPLICIT_WRITERS == (frozenset(CLAUDE) | frozenset(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER}
+    assert EXPLICIT_WRITERS == (frozenset(CLAUDE) | frozenset(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER} | {'claude-sonnet-5-5-high', 'claude-sonnet-5-5-xhigh'}
 
 
 @pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA,
                                                     'console-deepseek-flash': 'console-deepseek/deepseek-flash'}),
                                          ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER}
-                                                      - {'agy-claude-sonnet-5-5-high'})])
+                                                      - {'agy-claude-sonnet-5-5-high'})])   # D-6652 Sonnet writers are routed, not explicit-only
 def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     writers = ('xiaomi',) if role == 'review' else ()
     routed = _svc(tmp_path).route({'estimate_tokens': 1000}, role=role, writer_families=writers)
