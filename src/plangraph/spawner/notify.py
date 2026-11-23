@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import socket
 import subprocess
 import urllib.error
 import urllib.request
@@ -170,10 +171,16 @@ class KeeperSink:
         self._post("record_spawn_attempt", attempt, token)
 
     def item(self, key):
+        return self._get("show", {"key": key, "fmt": "json"})
+
+    def attempt_coverage(self, day):
+        return self._get("spawn_attempt_coverage", {"day": day})
+
+    def _get(self, verb, query):
         from urllib.parse import urlencode
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
         request = urllib.request.Request(
-            self.url.rstrip('/') + '/v1/show?' + urlencode({'key': key, 'fmt': 'json'}),
+            self.url.rstrip('/') + '/v1/' + verb + '?' + urlencode(query),
             headers={'Authorization': 'Bearer ' + token})
         with urllib.request.build_opener(_NoRedirectHandler()).open(request, timeout=10) as response:
             return json.load(response)
@@ -203,39 +210,62 @@ class KeeperSink:
         request['verdict_binding'] = binding
 
 
+def _attempt_pending(marker):
+    try:
+        return marker.read_text(encoding="utf-8") == "not_launched\n"
+    except FileNotFoundError:
+        return True
+
+
 def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
-    """Deliver terminal snapshots idempotently and retain undelivered records."""
-    import re
+    """Deliver terminal snapshots newest-first so the backlog cannot delay fresh runs."""
     from plangraph.fleet_snapshot import _projection_binary
 
     keeper = keeper if keeper is not None else KeeperSink()
     if not keeper.url or not keeper.token_file:
         return []
-    pending = []
+    pending = {}
+    findings = []
     for run in runs:
         run_id = run.get("run_id", "")
-        if (run.get("attempt_capture") != 1 or not run.get("ended")
-                or run.get("status") in ("queued", "running", "queue_claimed")
-                or not re.fullmatch(r"run-[A-Za-z0-9-]+", run_id)):
+        # The terminal() function in attempt_outcome.rs owns the non-terminal status list.
+        if (type(run.get("ended")) not in (int, float)
+                or run.get("status") in (None, "queued", "running", "queue_claimed", "dry_run")
+                or not isinstance(run_id, str) or not re.fullmatch(r"run-[A-Za-z0-9-]+", run_id)):
             continue
         marker = Path(state) / "runs" / run_id / "attempt.delivered"
-        if not marker.exists():
-            pending.append((run, marker))
-    findings = []
-    for run, marker in sorted(pending, key=lambda pair: pair[0]["ended"])[:limit]:
         try:
-            result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
-                                    input=json.dumps(run, allow_nan=False), text=True,
-                                    encoding="utf-8", errors="replace", capture_output=True, timeout=5, check=True)
-            attempt = json.loads(result.stdout)
-            if attempt is not None:
+            if _attempt_pending(marker):
+                pending.setdefault(run_id, (run, marker))
+        except (OSError, ValueError) as exc:
+            findings.append(dict(rule="spawn-attempt-delivery", run_id=run_id, reason=type(exc).__name__))
+    for run, marker in sorted(pending.values(), key=lambda pair: pair[0]["ended"], reverse=True)[:limit]:
+        try:
+            with inbox_lock(marker):
+                if not _attempt_pending(marker):
+                    continue
+                if not run.get("host"):
+                    run = dict(run, host=os.environ.get("PLANGRAPH_HOST") or socket.gethostname())
+                result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
+                                        input=json.dumps(run, allow_nan=False), text=True,
+                                        encoding="utf-8", errors="replace", capture_output=True, timeout=5)
+                # attempt_outcome.rs reserves exit 3 for invalid snapshot contents.
+                if result.returncode == 3:
+                    atomic_write_private(marker, "unprojectable\n")
+                    findings.append(dict(rule="spawn-attempt-delivery", run_id=run["run_id"],
+                                         reason="unprojectable"))
+                    continue
+                result.check_returncode()
+                attempt = json.loads(result.stdout)
+                if attempt is None:
+                    continue
                 try:
                     keeper.spawn_attempt(attempt)
                 except KeeperRefused as refusal:
                     settle_refusal(marker, f"keeper (attempt {run['run_id']})",
                                    refusal, final_statuses=(400, 422))
                     raise
-            atomic_write_private(marker, "delivered\n" if attempt is not None else "not_launched\n")
+                atomic_write_private(marker, "delivered\n")
         except (OSError, ValueError, RuntimeError, KeeperRefused, subprocess.SubprocessError) as exc:
             findings.append(dict(rule="spawn-attempt-delivery", run_id=run["run_id"],
                                  reason=type(exc).__name__))

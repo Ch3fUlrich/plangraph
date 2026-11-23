@@ -5,6 +5,7 @@ mod test_python;
 mod adapter;
 mod agent_view;
 mod agent_view_projection;
+mod attempt_coverage;
 mod attempt_outcome;
 mod cli;
 mod cli_review;
@@ -73,7 +74,7 @@ mod serve;
 mod serve_options;
 mod shim;
 mod spawn;
-mod state;
+use pg_spawnd::state;
 #[cfg(test)]
 mod state_tests;
 mod tools;

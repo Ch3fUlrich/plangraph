@@ -5,6 +5,12 @@ use std::io::{Read, Write};
 pub(crate) fn execute(verb: &str, args: &[String], out: &mut dyn Write) -> Result<(), String> {
     let state = crate::state::resolve_state(None, |name| std::env::var_os(name))?;
     let result = match (verb, args) {
+        ("record-recover", []) => {
+            lifecycle::recover(&state).map_err(|error| error.to_string())?;
+            #[cfg(target_os = "linux")]
+            pg_spawnd::external_run::recover(&state).map_err(|error| error.to_string())?;
+            Ok(())
+        }
         ("runs", [flag, cursor]) if flag == "--changed-since" => {
             let cursor = cursor.parse().map_err(|_| "invalid run lifecycle cursor")?;
             let page = lifecycle::page(&state, cursor).map_err(|error| error.to_string())?;
@@ -24,7 +30,12 @@ pub(crate) fn execute(verb: &str, args: &[String], out: &mut dyn Write) -> Resul
             let path = record::run_dir(&state, id).map_err(|error| error.to_string())?;
             lifecycle::publish(&state, &path.join("record.json"), &value)
         }
-        _ => return Err("usage: pg-spawnd runs --changed-since CURSOR | record-publish".into()),
+        _ => {
+            return Err(
+                "usage: pg-spawnd runs --changed-since CURSOR | record-publish | record-recover"
+                    .into(),
+            )
+        }
     };
     result.map_err(|error| error.to_string())
 }

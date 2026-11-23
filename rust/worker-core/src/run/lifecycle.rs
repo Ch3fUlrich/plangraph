@@ -96,6 +96,26 @@ impl<'a> Journal<'a> {
         }
         let path = self.state.join(&entry.path);
         durable_write(&path, &serde_json::to_vec_pretty(&entry.record)?)?;
+        if let Some(id) = entry.record["run_id"]
+            .as_str()
+            .filter(|id| valid_run_id(id))
+        {
+            if entry.record["external_owner"].is_object() {
+                let active = self.dir.join("external").join(id);
+                if entry.record["ended"].is_null() {
+                    durable_write(&active, b"")?;
+                } else {
+                    match fs::remove_file(&active) {
+                        Ok(()) => {
+                            #[cfg(unix)]
+                            fs::File::open(active.parent().unwrap())?.sync_all()?;
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+        }
         #[cfg(unix)]
         for parent in path.ancestors().skip(2).take_while(|p| *p != self.state) {
             fs::File::open(parent)?.sync_all()?;
@@ -165,6 +185,25 @@ pub fn recover(state: &Path) -> io::Result<()> {
 }
 
 pub fn publish(state: &Path, path: &Path, record: &Value) -> io::Result<()> {
+    publish_snapshot(state, path, record, None)
+}
+
+/// Apply a recovered outcome only while the published snapshot still matches its evidence.
+pub fn publish_recovered(
+    state: &Path,
+    path: &Path,
+    before: &Value,
+    after: &Value,
+) -> io::Result<()> {
+    publish_snapshot(state, path, after, Some(before))
+}
+
+fn publish_snapshot(
+    state: &Path,
+    path: &Path,
+    record: &Value,
+    expected: Option<&Value>,
+) -> io::Result<()> {
     let relative = path
         .strip_prefix(state)
         .map_err(|_| invalid("record outside state root"))?;
@@ -175,6 +214,9 @@ pub fn publish(state: &Path, path: &Path, record: &Value) -> io::Result<()> {
     let published = journal.recover()?;
     let previous =
         read_optional(path)?.and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    if expected.is_some() && previous.as_ref() != expected {
+        return Ok(());
+    }
     if previous
         .as_ref()
         .is_some_and(|previous| projection(previous) == projection(record))

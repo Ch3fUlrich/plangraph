@@ -13,6 +13,8 @@ def probe_setting(name, default, maximum):
 
 def probe_run(state, record, now, *, dry_run=False, hung=None):
     """Independent host sampling; missing evidence never authorizes cancellation."""
+    if record.get('run_kind') in ('fleet-session', 'external-harness'):
+        return None  # The external lifecycle journal owns these registrations.
     if record.get('run_kind') == 'native-codex' and record.get('overflow_remote'):
         return None  # Target-host watchdogs own remote liveness, even for older receipts.
     if hung is not None and hung.enabled:
