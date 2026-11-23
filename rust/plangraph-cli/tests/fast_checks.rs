@@ -320,8 +320,8 @@ fn fast_checks_plan_for_a_spawner_python_change_tests_pg_spawnd() {
 }
 
 fn registry(dir: &Path, mem_floor_mb: u64) -> std::path::PathBuf {
-    let doc = serde_json::json!({"version": 1, "self": "prox", "hosts": [{
-        "id": "prox", "class": "worker", "aliases": [],
+    let doc = serde_json::json!({"version": 1, "self": "worker-a", "hosts": [{
+        "id": "worker-a", "class": "worker", "aliases": [],
         "transport": "keeper", "os": "linux", "state_dir": "/fixture/state",
         "caps": {"max_runs": 4, "max_writers": 2, "max_seats": 2,
                  "max_sessions": 5, "mem_floor_mb": mem_floor_mb},
@@ -378,6 +378,6 @@ fn dispatch_refuses_a_host_below_its_memory_floor() {
     let result = dispatch(dir.path(), u64::MAX, &["true"]);
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(stderr.contains("prox: MemAvailable"), "{stderr}");
+    assert!(stderr.contains("worker-a: MemAvailable"), "{stderr}");
     assert!(!dir.path().join("dispatch.log").exists());
 }
