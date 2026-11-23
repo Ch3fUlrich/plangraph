@@ -97,13 +97,17 @@ fn hook_git_environment_fixture_child() {
 
 #[test]
 fn native_writer_pushed_base_handshake_review_resume_and_record() {
-    native_writer_fixture(false);
+    native_writer_fixture(false, false);
 }
 #[test]
 fn native_writer_ignores_host_admission_policy() {
-    native_writer_fixture(true);
+    native_writer_fixture(true, false);
 }
-fn native_writer_fixture(hostile_policy: bool) {
+#[test]
+fn native_writer_spawn_finds_nvm_codex_outside_systemd_path() {
+    native_writer_fixture(false, true);
+}
+fn native_writer_fixture(hostile_policy: bool, systemd_path: bool) {
     let fixture = tempfile::Builder::new()
         .prefix("native-writer-e2e-")
         .tempdir()
@@ -153,9 +157,28 @@ for tool in ('cargo', 'git', 'codex'):
     let base = git(&repo, &["rev-parse", "HEAD"]);
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    let codex = bin.join("codex");
-    fs::write(&codex, codex_fixture::CODEX).unwrap();
-    std::os::unix::fs::symlink(binary::spawnd(), bin.join("fixture-spawnd")).unwrap();
+    let home = dir.join("home");
+    let codex = if systemd_path {
+        let node_bin = home.join(".nvm/versions/node/v24.19.0/bin");
+        fs::create_dir_all(&node_bin).unwrap();
+        let node = node_bin.join("node");
+        fs::write(&node, "#!/bin/sh\nexec /usr/bin/env python3 \"$@\"\n").unwrap();
+        fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+        let codex = node_bin.join("codex");
+        let (_, script) = codex_fixture::CODEX.split_once('\n').unwrap();
+        fs::write(&codex, format!("#!/usr/bin/env node\n{script}")).unwrap();
+        codex
+    } else {
+        let codex = bin.join("codex");
+        fs::write(&codex, codex_fixture::CODEX).unwrap();
+        codex
+    };
+    let spawnd = if systemd_path {
+        env!("CARGO_BIN_EXE_pg-spawnd")
+    } else {
+        binary::spawnd()
+    };
+    std::os::unix::fs::symlink(spawnd, bin.join("fixture-spawnd")).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
     let review_cli = dir.join("review-cli.py");
@@ -205,7 +228,6 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
     fs::write(&cargo, "#!/bin/sh\necho 'fixture cargo'\n").unwrap();
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let home = dir.join("home");
     let runtime = home.join("runtime");
     fs::create_dir_all(&runtime).unwrap();
     let mut python = test_python::command();
@@ -238,15 +260,22 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
             .env("PLANGRAPH_HOST_NAME", "fixture")
             .env("PLANGRAPH_OVERFLOW_HOSTS", config);
     }
+    let inherited_path = if systemd_path {
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into()
+    } else {
+        std::env::var("PATH").unwrap()
+    };
     let out = python.current_dir(&root).env("PYTHONPATH", root.join("src"))
         .env("HOME", &home).env("XDG_CONFIG_HOME", home.join(".config"))
         .env("XDG_STATE_HOME", home.join(".local/state")).env("XDG_DATA_HOME", home.join(".local/share"))
         .env("XDG_CACHE_HOME", home.join(".cache")).env("XDG_RUNTIME_DIR", &runtime)
         .env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", home.join(".gitconfig")).env("FIXTURE_HOME", &home)
-        .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
+        .env("PATH", format!("{}:{inherited_path}", bin.display()))
+        .env_remove("NVM_DIR").env("FIXTURE_CODEX", &codex)
+        .env("FIXTURE_SYSTEMD_PATH", if systemd_path { "1" } else { "0" })
         .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-        .env("NATIVE_BINARY", binary::spawnd())
+        .env("NATIVE_BINARY", spawnd)
         .env("PLANGRAPH_NATIVE_REVIEW_CLI", serde_json::json!(["python3", review_cli]).to_string())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base).env("PLANGRAPH_HOST_NAME", "fixture")
         .args(["-c", r#"
@@ -292,6 +321,12 @@ async def check():
     assert record['review']['leg'] == 'claude-sonnet-5-5-high' and record['review']['harness'] == 'claude' and record['status_line'] == 'DONE', record
     assert record['fast_checks'] == {'head': record['final_head'], 'status': 'passed'}, record
     assert pathlib.Path(record['cwd']).is_dir(), record
+    if os.environ['FIXTURE_SYSTEMD_PATH'] == '1':
+        expected = pathlib.Path(os.environ['FIXTURE_CODEX'])
+        assert str(expected.parent) not in os.environ['PATH'].split(os.pathsep)
+        assert pathlib.Path(record['resolved_tools']['codex']) == expected, record
+        assert str(expected.parent) in record['tool_path'].split(os.pathsep), record
+        return
     # A remote ref that is absent must never resolve the local-only branch.
     subprocess = __import__('subprocess')
     prompt_file = root/'external-fix.md'
@@ -443,6 +478,7 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
     // writer-path, one line each; the kill-marker relaunch also keeps the killed
     // attempt's partial.txt.
     completed.sort_unstable();
-    assert_eq!(completed, [2, 2, 2, 3]);
+    let expected: &[u64] = if systemd_path { &[2] } else { &[2, 2, 2, 3] };
+    assert_eq!(completed, expected);
     fixture.close().unwrap();
 }

@@ -518,3 +518,45 @@ def test_review_probe_systemd_units():
     assert tim.get('Install', 'WantedBy') == 'timers.target'
     readme = (units / 'README.md').read_text(encoding='utf-8')
     assert 'plangraph-review-probe.service' in readme
+
+
+def test_harness_units_supply_tool_resolution(tmp_path, monkeypatch):
+    import re
+    import shlex
+
+    units = Path(__file__).resolve().parents[1] / 'deploy' / 'systemd'
+    direct = re.compile(r'^Exec\w*=\S*?(?:/|=)(?:codex|opencode|claude|agy|qodercli|node|npm|npx)(?:\s|$)')
+    covered = set()
+    for unit in units.rglob('*.service*'):
+        if not unit.is_file():
+            continue
+        lines = unit.read_text(encoding='utf-8').splitlines()
+        if any(direct.match(line) for line in lines):
+            assert any(line.startswith('Environment=PATH=%h/.local/bin:') for line in lines), unit
+            covered.add(unit.name)
+        probe = next((line for line in lines if 'plangraph.spawner.cli' in line and ' probe ' in line), None)
+        if probe:
+            from plangraph.spawner import cli, leg_probe
+            resolved = []
+            searched = []
+            empty_bin = str(tmp_path / 'empty-bin')
+            manager_path = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+
+            def harness_path(env):
+                resolved.append(env['PATH'])
+                return empty_bin
+
+            def which(name, *, path=None):
+                searched.append(path)
+                return None
+
+            monkeypatch.setenv('PATH', manager_path)
+            monkeypatch.setattr(leg_probe, 'harness_path', harness_path)
+            monkeypatch.setattr(leg_probe.shutil, 'which', which)
+            monkeypatch.setattr(cli, 'SpawnService', lambda **kwargs: SimpleNamespace(runner=object()))
+            args = shlex.split(probe.split('=', 1)[1])[3:]
+            assert cli.main([arg.replace('%S', str(tmp_path)) for arg in args]) == 3
+            assert resolved == [manager_path]
+            assert searched and set(searched) == {empty_bin}
+            covered.add(unit.name)
+    assert {'claude-daemon.service', 'plangraph-review-probe.service'} <= covered

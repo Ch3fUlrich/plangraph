@@ -48,11 +48,19 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_errors.py",
     "deploy/feeder/**",
     "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
+    "deploy/systemd/disk-hygiene.env.example",
+    "deploy/systemd/keeper-backup.env.example",
     "deploy/systemd/pg-ci-watch.service",  # a ci_watch test pins its flags.
     "docs/ci-watch.md",  # the same test pins the documented command.
+    "deploy/systemd/pg-disk-hygiene.service",
     "deploy/systemd/pg-feeder.service",
+    "deploy/systemd/pg-keeper-backup.service",
+    "deploy/systemd/pg-keeper-backup.timer",
+    "deploy/systemd/pg-throughput.service",
+    "deploy/systemd/pg-worktree-sweep.service",
     "deploy/systemd/pg-wsl-cache-guard.service",
     "deploy/systemd/pg-wsl-cache-guard.timer",
+    "deploy/systemd/plangraph-state-shadow@.service",
     "deploy/liveness/router.toml",
     "tools/liveness_watchdog.py",
     "src/plangraph/keeper/errors.py",

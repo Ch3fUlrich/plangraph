@@ -419,7 +419,7 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     from plangraph.spawner.service import SpawnService
 
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
-    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: None if name == 'pg-spawnd' else '/bin/' + name)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: None if name == 'pg-spawnd' else '/bin/' + name)
     store = LegStateStore(tmp_path / 'legs.sqlite')
     # Argon efforts share one agy quota key (D-5966): a failing argon probes down both.
     failing = {'gemini-4-argon-low', 'gemini-4-argon-medium'}
@@ -503,7 +503,7 @@ def test_cli_probe_all_reviewers(tmp_path, monkeypatch, capsys):
 
 def test_review_probe_flags_caller_repo_leak(tmp_path, monkeypatch):
     from plangraph.spawner import leg_probe
-    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/' + name)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: '/bin/' + name)
     heads = iter([{'cwd': 'a', 'env': 'a'}, {'cwd': 'b', 'env': 'a'}])
     monkeypatch.setattr(leg_probe, 'caller_heads', lambda: next(heads))
 
@@ -550,6 +550,7 @@ def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkey
         return dict(ok=leg.id != writer.id, reason='' if leg.id != writer.id else 'boom', seconds=0.0)
 
     monkeypatch.setattr(leg_probe, 'probe', fake_probe)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: '/bin/true')
     monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
     runner = SimpleNamespace(leg_reader=store, state=tmp_path)
     asyncio.run(leg_probe.probe_many(runner, [writer.id], all_reviewers=True, timeout=5))
@@ -577,7 +578,7 @@ def test_hung_probes_fail_over_leg_by_leg_inside_the_admission_window(monkeypatc
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '180')
     monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.5)  # 0.5 s per probe, 0.75 s in all
-    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/true')
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: '/bin/true')
 
     class Runner:
         def __init__(self):

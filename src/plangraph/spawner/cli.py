@@ -314,6 +314,9 @@ def main(argv=None):
                         print(f"{row['id']} skipped=limited until {reset_iso(row.get('reset_at'))}")
                     else:
                         print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
+            rows = result['probes']
+            if rows and all(row.get('state') == 'host-not-ready' for row in rows):
+                return 3
             return 0 if result['ok'] else 1
         from .bench_entry import benchmark_options
         try:

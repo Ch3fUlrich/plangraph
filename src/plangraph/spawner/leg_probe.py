@@ -16,6 +16,8 @@ from plangraph.routing_support import leg_state
 from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
+from .host_ready import harness_path
+
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
 REVIEW_PROMPT = 'Reply with the single word OK. Do not create a plan or any other file.'
 
@@ -194,6 +196,12 @@ def _is_review_probe(leg, role=None):
     return 'review' in roles and 'implement' not in roles and 'fix' not in roles
 
 
+def _missing_harness(harness, seconds_elapsed=0.0):
+    return dict(ok=False, state='host-not-ready',
+                reason='host-not-ready: harness missing: ' + harness,
+                infra=True, seconds=seconds_elapsed)
+
+
 async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
     """One real commit task (or tiny OK prompt for reviews) in a disposable dir; infra failures book no leg state.
 
@@ -206,10 +214,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
     start = time.monotonic()
     # Missing executables describe this host, not the remote leg. Check each
     # harness independently, before creating a repo or attempting any leg.
-    if shutil.which(leg.harness) is None:
-        return dict(ok=False, state='host-not-ready',
-                    reason='host-not-ready: harness missing: ' + leg.harness,
-                    infra=True, seconds=time.monotonic() - start)
+    if shutil.which(leg.harness, path=harness_path(os.environ)) is None:
+        return _missing_harness(leg.harness, time.monotonic() - start)
     deadline = start + timeout
     previous = await asyncio.to_thread(_run_logs, runner)
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
@@ -504,6 +510,9 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
     if all_reviewers:
         for leg in routed_review_legs():
             add(leg, review=True)
+    path = harness_path(os.environ)
+    if selected and not any(shutil.which(harness, path=path) for harness in {leg.harness for leg in selected}):
+        return dict(ok=False, probes=[dict(id=leg.id, **_missing_harness(leg.harness)) for leg in selected])
     manage_key = await asyncio.to_thread(_check_manage_key, runner) if (all_reviewers or role == 'review') else None
     results = []
     state = _store_for(runner)
