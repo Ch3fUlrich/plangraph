@@ -1,2 +1,3 @@
 - Router batch mode: `tools/apply_batch.py` lists every refused entry and applies nothing when one is refused; `plangraph router go-row|grant-rows|ask-group` write one GO row with a per-part evidence table, one grant row file and one grouped ask; `skills/router-core` holds the procedure.
 - Changes to the router-core skill run the Rust batch CLI checks. Its evals cover repeated incidents and hook refusals in one scenario.
+The fleet launcher includes the router-core skill and its batch procedure in the routing role's startup instructions.
