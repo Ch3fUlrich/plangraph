@@ -76,7 +76,10 @@ fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
         pg_worker_core::executable_test_support::write_script(
             bin.path(),
             "cargo",
-            &format!("#!/bin/sh\n[ "$*" = 'nextest --version' ] || exit 1\nexit {version_status}\n"),
+            format!(
+                "#!/bin/sh\n[ \"$*\" = 'nextest --version' ] || exit 1\nexit {version_status}\n"
+            )
+            .as_str(),
         );
         let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
             .current_dir(&root)
