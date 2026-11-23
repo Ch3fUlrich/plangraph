@@ -77,6 +77,12 @@ def test_verifier_context_uses_configured_adapters(tmp_path):
     assert ctx.runs is not None
 
 
+@pytest.mark.parametrize("value", [0, -1, "30", 4.5, True, None])
+def test_claim_preflight_budget_requires_positive_integer(tmp_path, value):
+    with pytest.raises(config.ConfigError, match="claim_preflight_s"):
+        config.load_config(write_config(tmp_path, {"claim_preflight_s": value}))
+
+
 @pytest.mark.parametrize("key", ["default_lease", "lease_warn_s", "review_overdue_s"])
 @pytest.mark.parametrize("value", [0, -1, "abc", 1.5, 600.0, "600", True, False, None, [], {}])
 def test_lease_settings_require_positive_integers_at_load(tmp_path, key, value):

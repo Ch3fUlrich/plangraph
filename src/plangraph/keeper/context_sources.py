@@ -125,24 +125,30 @@ def _cancelled_delivery(git, repo, candidates, reverts):
     return cancelled
 
 
-def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
+_WORK_INDEX_CACHE_LOCK = threading.Lock()
+
+
+def work_index(git, project, *, fresh=False, max_age=None, cached_only=False, verified_only=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
     Read all commit trailers and topology together, including hosted open PR
-    heads. Unknown inputs remain unknown, as in the claim guard.
+    heads. A claim can reuse a TTL-valid snapshot only if it was verified.
     """
     repo, ref = _repo_ref(git, project)
     if repo is None:
         return None
-    cache = getattr(git, "_context_work_index", {})
     cache_key = (repo, ref)
-    hit = cache.get(cache_key)
+    hit = getattr(git, "_context_work_index", {}).get(cache_key)
+    warm = hit is not None and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age)
     if cached_only:  # a caller holding the keeper lock: the warm answer or nothing, never git or the forge
-        if hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
+        if warm:
             return hit[1]
         raise Refused("evidence_unverified", f"merge_index_not_warm: {project}")
-    if not fresh and hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
+    if not fresh and warm and (
+            not verified_only or not (hit[1].get("stale") or hit[1].get("prs_unverified"))):
         return hit[1]
+    step = f"work index for {project}"
+    timing.check_io_deadline(step)
     problems = []
     verified_at = (hit[1].get("verified_at") if hit else None)
     prs = None
@@ -187,9 +193,8 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
     out = _ok(git, repo, ["log", "--all", "--date-order", "--no-show-signature",
                          "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
+    timing.check_io_deadline(step)
     if refs_out is None or target is None or out is None:
-        if timing.io_expired():
-            raise Refused("conflict", "claim authority refresh exceeded its deadline")
         if not origin:
             return None
         origin_stale = True
@@ -268,8 +273,11 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
               "stale": bool(problems), "origin_stale": origin_stale,
               "reason": "; ".join(problems),
               "verified_at": verified_at}
-    cache[cache_key] = (time.monotonic(), result)
-    git._context_work_index = cache
+    timing.check_io_deadline(step)
+    with _WORK_INDEX_CACHE_LOCK:
+        cache = getattr(git, "_context_work_index", {})
+        cache[cache_key] = (time.monotonic(), result)
+        git._context_work_index = cache
     return result
 
 

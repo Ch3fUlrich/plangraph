@@ -482,11 +482,21 @@ def test_incident_migration_on_existing_sqlite_store(tmp_path):
         conn.close()
 
 
-def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch):
+def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch, tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from contextlib import contextmanager
+    from subprocess import run
     from time import perf_counter, sleep
     from plangraph.keeper import context_sources
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    repos = {name: tmp_path / name for name in ("demo", "related")}
+    for repo in repos.values():
+        repo.mkdir()
+        run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        run(["git", "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+             "commit", "--allow-empty", "-qm", "base"], cwd=repo, check=True)
+    w.store.ctx = {"git": GitAdapter({name: str(repo) for name, repo in repos.items()})}
 
     ids = [f"LOAD-{i}" for i in range(16)]
     w.store.create_items(w.p("router"), [*(defn(key) for key in ids),
@@ -504,9 +514,11 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch)
                 phases[name].append(perf_counter() - start)
         return run
 
+    index_barrier = threading.Barrier(len(repos))
+
     def work_index(*args, **kwargs):
-        if kwargs.get("fresh"):
-            sleep(.75)  # Simulate a responsive remote fetch and forge inventory.
+        index_barrier.wait(timeout=2)
+        sleep(.75)  # Keep the real index build in flight while requests overlap.
         return original(*args, **kwargs)
 
     @contextmanager
@@ -541,6 +553,7 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch)
     print("HTTP p95", round(samples[-1], 3),
           "phase maxima", {name: round(max(values), 4) for name, values in phases.items()})
     assert samples[-1] < 5
+    assert len(phases["index"]) == len(repos)
 
 
 def test_batch_claim_and_heartbeat_commit_once_and_replay(srv, w, monkeypatch):
@@ -583,31 +596,81 @@ def test_batch_claim_and_heartbeat_commit_once_and_replay(srv, w, monkeypatch):
     assert commits == ["commit", "commit"]
 
 
-@pytest.mark.parametrize("verb", ["claim", "claim_batch"])
-def test_claim_preflight_deadline_refuses_without_claiming(srv, w, monkeypatch, verb):
+def _slow_claim_request(srv, w, monkeypatch, verb, budget=None):
     from types import SimpleNamespace
     from keeper_util import Clock
     from plangraph.keeper import context_sources, timing
 
     clock = Clock(0)
     monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic=clock))
+    if budget is not None:
+        w.store.claim_preflight_s = budget
 
     def work_index(*args, **kwargs):
-        assert timing.io_timeout(30) == 3.0
-        clock.advance(3.1)
+        assert timing.io_timeout(60) == (budget or 30)
+        clock.advance(4)
         return None
 
     monkeypatch.setattr(context_sources, "work_index", work_index)
     body = {"key": "demo:A"} if verb == "claim" else {"keys": ["demo:A"]}
     status, _, raw = call(srv, f"/v1/{verb}", method="POST", body=body,
                           token=w.tok("l1main"))
-    result = {"error": "conflict", "msg": "claim preflight exceeded its deadline"}
+    return status, jbody(raw)
+
+
+@pytest.mark.parametrize("verb", ["claim", "claim_batch"])
+def test_claim_preflight_deadline_refuses_without_claiming(srv, w, monkeypatch, verb):
+    status, body = _slow_claim_request(srv, w, monkeypatch, verb, budget=3)
+    result = {"error": "conflict", "msg": "claim preflight exceeded its deadline during work index for demo"}
     if verb == "claim_batch":
-        assert (status, jbody(raw)) == (200, {"results": [{"key": "demo:A", **result}]})
+        assert (status, body) == (200, {"results": [{"key": "demo:A", **result}]})
     else:
-        assert (status, jbody(raw)) == (409, result)
+        assert (status, body) == (409, result)
     assert w.store._item("demo:A")["state"] == "open"
     assert not w.conn.execute("SELECT 1 FROM events WHERE type='claimed'").fetchone()
+
+
+@pytest.mark.parametrize("verb", ["claim", "claim_batch"])
+def test_four_second_claim_preflight_succeeds(srv, w, monkeypatch, verb):
+    status, body = _slow_claim_request(srv, w, monkeypatch, verb)
+    assert status == 200
+    row = body["results"][0] if verb == "claim_batch" else body
+    assert row["epoch"] == 1
+    assert w.store._item("demo:A")["state"] == "claimed"
+
+
+def test_claim_uses_verified_work_index_until_it_expires(srv, w, monkeypatch, tmp_path):
+    from subprocess import CompletedProcess
+    from plangraph.keeper import context_sources, timing
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    repo = str(tmp_path)
+    adapter = GitAdapter({"demo": repo})
+    now = timing.time.monotonic()
+    index = {"commits": {}, "prs": None, "branches": [], "stale": False, "prs_unverified": False}
+    adapter._context_work_index = {(repo, "main"): (now, index)}
+    w.store.ctx = {"git": adapter}
+    refreshes = []
+
+    def run(repo, args, **kwargs):
+        if args[0] == "rev-parse":
+            return CompletedProcess(args, 0, "a" * 40)
+        refreshes.append(args[0])
+        return CompletedProcess(args, 0, "")
+
+    monkeypatch.setattr(adapter, "_run", run)
+    world = w.p("l1main")
+    w.store.claim(world, "demo:A")
+    assert refreshes == []
+    w.store.release(world, "demo:A", 1)
+    index["stale"] = True
+    w.store.claim(world, "demo:A")
+    assert refreshes.count("log") == 1
+    w.store.release(world, "demo:A", 2)
+    stamp, current = adapter._context_work_index[repo, "main"]
+    adapter._context_work_index[repo, "main"] = (stamp - context_sources._REFS_TTL, current)
+    w.store.claim(world, "demo:A")
+    assert refreshes.count("log") == 2
 
 
 @pytest.mark.parametrize("verb", ["claim_batch", "heartbeat_batch"])
