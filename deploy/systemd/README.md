@@ -132,3 +132,15 @@ SSH transport failures up to three checks and reports the confirmed outage
 time when the monitor has one. Use `ssh-status` to guard steps with side effects.
 `pg-package-host --state` uses the same state directory to queue launches when
 the selected SSH route has a confirmed outage.
+
+
+## Host release binaries
+
+After fast-forwarding the main checkout, run `host-sync --install-release REPO`
+with the host's shared `CARGO_TARGET_DIR` in the environment. On the first
+rollout, build the entry point with
+`cargo build --manifest-path REPO/rust/Cargo.toml --release -p plangraph-cli --bin host-sync`.
+Use that entry point as the release step in the host-sync schedule. It installs
+`pg-spawnd` and `plangraph` in `~/.local/bin` and records the installed Rust
+tree in `${XDG_STATE_HOME:-$HOME/.local/state}/plangraph/release-built-tree`.
+Keep `~/.local/bin` on the landing and pre-push workers' PATH.
