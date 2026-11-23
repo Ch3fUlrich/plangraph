@@ -45,6 +45,13 @@ def quota_key(leg):
                   r'agy:\1', leg)
 
 
+def _event_keys(leg, agy):
+    if not agy:
+        return (leg,)
+    base = "agy/" + leg[4:]
+    return (leg, base, *(base + "-" + e for e in ("low", "medium", "high", "xhigh", "max")))
+
+
 def _down_seconds(down_s):
     """Validated PLANGRAPH_LEG_DOWN_S, capped at RESET_CAP_S; never raises.
 
@@ -258,10 +265,7 @@ class LegStateStore:
         leg = quota_key(leg) if is_agy_harness else leg
         agy = is_agy_harness and isinstance(leg, str) and leg.startswith("agy:")
         ttl = RESET_CAP_S if agy else EVIDENCE_TTL_S
-        keys = [leg]
-        if agy:
-            base = "agy/" + leg[4:]
-            keys += [base, *(base + "-" + e for e in ("low", "medium", "high", "xhigh", "max"))]
+        keys = _event_keys(leg, agy)
         now = time.time() if now is None else now
         if not self.path.exists() or self.path.stat().st_size == 0:
             return {"state": "ok", "evidence": None}
@@ -311,6 +315,31 @@ class LegStateStore:
                 return {"state": state, "evidence": evidence}
         except (sqlite3.Error, OSError):
             return {"state": "ok", "evidence": None}
+
+    def agy_probe_status(self, leg, now=None):
+        """Find a booked 429 for the model across the exact routing scopes."""
+        now = time.time() if now is None else now
+        leg = quota_key(leg)
+        status = self.leg_status(leg, now=now)
+        if status['state'] == 'limited' or not self.path.exists():
+            return status
+        keys = _event_keys(leg, leg.startswith("agy:"))
+        placeholders = ",".join("?" for _ in keys)
+        try:
+            with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
+                scopes = db.execute(
+                    f"SELECT DISTINCT account, combo FROM leg_events WHERE leg_key IN ({placeholders}) "
+                    "AND status=429 AND (account IS NOT NULL OR combo IS NOT NULL) "
+                    "AND ts<=? AND COALESCE(reset_at, ts+?)>?",
+                    (*keys, now, REPROBE_MINUTES * 60, now),
+                ).fetchall()
+        except (sqlite3.Error, OSError):
+            return status
+        for account, combo in scopes:
+            scoped = routing_status(self.leg_status(leg, now=now, account=account, combo=combo))
+            if scoped['state'] == 'limited' and scoped['evidence']['status'] == 429:
+                return scoped
+        return status
 
     def active_limit_window(self, now=None):
         """Age of the oldest active provider limit so run-record scans reach uncapped resets."""
@@ -368,6 +397,10 @@ def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, 
 
 def leg_status(leg, now=None, account=None, combo=None, *, harness=None):
     return _default_store().leg_status(leg, now, account, combo, harness=harness)
+
+
+def agy_probe_status(leg, now=None):
+    return _default_store().agy_probe_status(leg, now=now)
 
 
 def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):

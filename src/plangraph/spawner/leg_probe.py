@@ -526,12 +526,13 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
             if leg.harness != 'agy' or not leg_active(leg):
                 continue
             model = leg_state.quota_key(key(leg))
-            if model not in selected_models and state.leg_status(model).get('state') == 'limited':
+            if model not in selected_models and state.agy_probe_status(model)['state'] == 'limited':
                 add(leg, review=True)
                 selected_models.add(model)
     for leg in selected:
         model = key(leg)
-        status = state.leg_status(model)
+        status = (state.agy_probe_status(model)
+                  if scheduled and leg.harness == 'agy' else state.leg_status(model))
         evidence = status.get('evidence') or {}
         limited = status.get('state') == 'limited'
         quota_reprobe = False
