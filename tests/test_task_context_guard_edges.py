@@ -398,3 +398,36 @@ def test_unverified_pr_inventory_in_another_repo_blocks_ready_and_claims(
     with pytest.raises(Refused, match=message):
         w.store.claim(w.p("l1main"), key)
     assert w.store._item(key)["epoch"] == 0
+
+
+@pytest.mark.parametrize("source", ["trailer", "merge-body", "foreign-bare"])
+def test_ready_and_claim_check_merged_work_in_all_repositories(w, repo, tmp_path, source):
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    data = tmp_path / "data"
+    _git(tmp_path, "clone", "-q", "--no-local", str(repo), str(data))
+    _git(data, "remote", "remove", "origin")
+    _git(data, "config", "user.email", "t@example.invalid")
+    _git(data, "config", "user.name", "t")
+    _git(data, "config", "commit.gpgsign", "false")
+    key, = seed(w, [("CROSS-REPO", [])])
+    if source == "merge-body":
+        _git(data, "checkout", "-qb", "part")
+        _commit(data, "delivery", "work")
+        _git(data, "checkout", "-q", "main")
+        _git(data, "merge", "-q", "--no-ff", "-m",
+             f"Land train (#7)\n\nPlan-Item: {key}\n\nTrain summary follows.", "part")
+    else:
+        trailer = key if source == "trailer" else "CROSS-REPO"
+        _commit(data, "delivery", f"work\n\nPlan-Item: {trailer}")
+    w.store.ctx["git"] = GitAdapter({"demo": str(repo), "plangraph-data": str(data)})
+
+    ready = w.store.ready_data(w.p("reader"), "demo")
+    if source == "foreign-bare":
+        assert [row["key"] for row in ready["items"]] == [key]
+        assert w.store.claim(w.p("l1main"), key)["epoch"] == 1
+    else:
+        assert ready["items"] == []
+        assert [row["key"] for row in ready["needs_reconcile"]] == [key]
+        with pytest.raises(Refused, match="stale: already merged"):
+            w.store.claim(w.p("l1main"), key)
