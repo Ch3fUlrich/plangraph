@@ -686,8 +686,22 @@ def test_hung_probes_fail_over_leg_by_leg_inside_the_admission_window(monkeypatc
     from plangraph.spawner import base_fresh, leg_probe
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '180')
-    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.5)  # 0.5 s per probe, 0.75 s in all
     monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: '/bin/true')
+    now = 100.0
+    clock = SimpleNamespace(monotonic=lambda: now, time=lambda: 0.0)
+    monkeypatch.setattr(leg_probe, 'time', clock)
+    # Advance the probe clock once the harness is running so the real timeout
+    # and cleanup paths can run without waiting out each probe's full share.
+    await_completion = leg_probe._await_completion
+    timeouts = []
+
+    async def reach_deadline(runner, job, deadline):
+        nonlocal now
+        timeouts.append(deadline - now)
+        now = deadline
+        await await_completion(runner, job, deadline)
+
+    monkeypatch.setattr(leg_probe, '_await_completion', reach_deadline)
 
     class Runner:
         def __init__(self):
@@ -708,16 +722,16 @@ def test_hung_probes_fail_over_leg_by_leg_inside_the_admission_window(monkeypatc
     legs = [SimpleNamespace(model='agy/model%d' % n, harness='agy') for n in range(3)]
 
     async def run():
-        started, budget, skips = time.monotonic(), leg_probe.ProbeBudget(), []
+        budget = leg_probe.ProbeBudget()
+        skips = []
         for leg in legs:  # what the runner does for each leg it tries
-            skips.append(await asyncio.wait_for(
-                leg_probe.before_launch(runner, leg, 'implement', False, budget),
-                base_fresh.ADMISSION_TIMEOUT))
-        return skips, time.monotonic() - started
+            skips.append(await leg_probe.before_launch(runner, leg, 'implement', False, budget))
+        return skips
 
-    skips, elapsed = asyncio.run(run())
+    skips = asyncio.run(run())
     assert skips == ['down: timeout', 'down: timeout', 'probe_budget_exhausted']
-    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+    window = base_fresh.ADMISSION_TIMEOUT
+    assert timeouts == pytest.approx([window / 3, window / 2 - window / 3])
     assert runner.cancelled == ['hung0', 'hung1']  # hung harnesses are killed, not orphaned
 
 
