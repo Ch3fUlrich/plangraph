@@ -1,0 +1,15 @@
+# Run values
+NAME: fixture-batch
+WORKTREE: fixture-checkout
+BASE: 1111111111111111111111111111111111111111
+WRITER_FAMILY: gpt
+STATUS_FILE: fixture-status
+FAST_CHECKS:
+- git diff --check
+- cargo fmt --check
+REVIEW_CMD: fixture-review
+REVIEW_WAIT_SECONDS: 60
+ROUND_CAP: 3
+Trailers:
+Plan-Item: demo:FIXTURE
+Writer: fixture
