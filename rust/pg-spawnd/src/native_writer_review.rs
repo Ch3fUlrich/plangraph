@@ -238,12 +238,13 @@ impl Host {
         versioned: &str,
         skill: &str,
     ) -> Result<String, String> {
+        let diff_base = review_diff_base(base, head, previous);
         let skill_block = if skill.is_empty() {
             String::new()
         } else {
             format!("[review-skill]\n{skill}\n[/review-skill]\n\n")
         };
-        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR. Inspect the diff for the range named below.{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR. To read the review diff, run:\ngit diff {diff_base} {head}\n{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
         let messages = self.git(&[
             "log",
             "--reverse",
