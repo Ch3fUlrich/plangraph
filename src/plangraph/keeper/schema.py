@@ -34,7 +34,7 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: v24 card effort decisions and spawn attempt outcomes, v25 claim definition event index.
 #: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
 #: this number at runtime.
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 LANDING_STAGES_DDL = files(__package__).joinpath("landing_stages.sql").read_text(encoding="utf-8")
 LANDING_TRAINS_DDL = files(__package__).joinpath("landing_trains.sql").read_text(encoding="utf-8")
@@ -446,7 +446,31 @@ CLAIM_DEFINITION_INDEX_DDL = (
     f"WHERE {DEFINITION_EVENTS};"
 )
 
+CRITERIA_AMENDMENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS criteria_amendments (
+    seq BIGINT PRIMARY KEY NOT NULL REFERENCES events(seq),
+    key TEXT NOT NULL REFERENCES items(key),
+    original_text TEXT,
+    new_text TEXT,
+    reason TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    authority TEXT NOT NULL,
+    ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_criteria_amendments_key ON criteria_amendments(key, seq);
+"""
+
+CRITERIA_AMENDMENTS_DDL = CRITERIA_AMENDMENTS_TABLE + """
+CREATE TRIGGER IF NOT EXISTS trg_criteria_amendments_update
+BEFORE UPDATE ON criteria_amendments
+BEGIN SELECT RAISE(ABORT, 'criteria amendments are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_criteria_amendments_delete
+BEFORE DELETE ON criteria_amendments
+BEGIN SELECT RAISE(ABORT, 'criteria amendments are append-only'); END;
+"""
+
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + RECEIPTS_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
           + GRANTS_DDL + ALERTS_DDL + LANDING_STAGES_DDL + LANDING_TRAINS_DDL + LANDING_JOBS_DDL
-          + LANDING_CLAIMS_DDL + EVENT_AUDIENCE_DDL + INCIDENTS_DDL + CLAIM_DEFINITION_INDEX_DDL)
+          + LANDING_CLAIMS_DDL + EVENT_AUDIENCE_DDL + INCIDENTS_DDL + CLAIM_DEFINITION_INDEX_DDL
+          + CRITERIA_AMENDMENTS_DDL)
