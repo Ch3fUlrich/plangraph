@@ -88,6 +88,14 @@ fn install(family: &str, home: &Path, args: &[OsString]) -> io::Result<()> {
             "state-shadow requires PLAN_ORDER_SETTINGS ROUTING_SETTINGS",
         )),
         ("disk-hygiene", []) => {
+            let env_file = config.join("disk-hygiene-service.env");
+            let legacy = config.join("disk-hygiene.env");
+            for path in [&env_file, &legacy] {
+                if exists(path)? {
+                    println!("SAME {}", path.display());
+                    return Ok(());
+                }
+            }
             let repo = home.join("code/plangraph");
             let values = [
                 ("PG_REPO", repo.clone()),
@@ -98,7 +106,7 @@ fn install(family: &str, home: &Path, args: &[OsString]) -> io::Result<()> {
             for (key, path) in values {
                 content.push_str(&assignment(key, &path)?);
             }
-            create(&config.join("disk-hygiene.env"), content.as_bytes())
+            create(&env_file, content.as_bytes())
         }
         ("throughput", []) => install_throughput(home, &config.join("throughput.env")),
         ("quota-alarms", []) => quota::install(home, &config.join("quota-alarms.env")),
