@@ -208,6 +208,13 @@ impl Runs {
                 "paths": paths,
             });
         }
+        // D-6652: a Claude writer routed only while the Codex lead is limited records why.
+        if plan["reasons"]
+            .as_array()
+            .is_some_and(|reasons| reasons.iter().any(|r| r == "codex_limited"))
+        {
+            base["route_reason"] = json!("codex_limited");
+        }
         if role == "review" {
             base["review_base"] = args["card"]["diff_ref"]
                 .get("base_sha")

@@ -1,9 +1,12 @@
 from dataclasses import replace
 from pathlib import Path
 
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_REQUIRED
 from plangraph.planner.route_policy import load_route_policy
 from plangraph.planner.routing import plan_spawn, route_card
+
+
+REQUIRED_MODELS = {leg.model for leg in DEFAULT_LEGS if leg.id in REVIEW_REQUIRED}
 
 
 def test_qoder_off_for_review_even_with_old_active_leg():
@@ -58,18 +61,29 @@ def test_d6550_routes_native_writer_hydrogen_and_sensitive_review():
     review = plan("review")
     sensitive = plan("review", dict(card, paths=["src/auth/session.rs"]))
     assert (writer.first_leg.id, writer.first_leg.harness) == ("cx-gpt-6.2-sol-medium", "codex")
-    assert review.first_leg.id == "agy-gemini-4-hydrogen-high"
-    assert all(not leg.claude_family for leg in (*writer.legs, *review.legs))
+    assert all(not leg.claude_family for leg in writer.legs)
+    assert [leg.id for leg in review.review_seats] == list(REVIEW_REQUIRED)
+    assert all(not leg.claude_family for leg in review.legs)
     assert sensitive.first_leg.id == "claude-sonnet-5-5-high"
 
     def limited(model, **kwargs):
         state = available(model)
-        if model in {"gpt-6.2-sol-medium", "gemini-4-hydrogen-high"}:
+        if model in {"gpt-6.2-sol-medium", "gemini-4-hydrogen-high", "omniroute/cx-gpt-6.2-sol-medium"}:
             state["state"] = "limited"
         return state
 
-    assert any(leg.claude_family for leg in plan("review", reader=limited).legs)
-    assert any(leg.claude_family for leg in plan("implement", reader=limited).legs)
+    def required_out(model, **kwargs):
+        state = available(model)
+        if model in REQUIRED_MODELS:
+            state["state"] = "limited"
+        return state
+
+    assert not any(leg.claude_family for leg in plan("review", reader=limited).legs)
+    assert any(leg.claude_family for leg in plan("review", reader=required_out).legs)
+    limited_writer = plan("implement", reader=limited)
+    assert limited_writer.first_leg.id == "claude-sonnet-5-5-high"   # Codex limited: Sonnet high writes
+    assert any(leg.id == "agy-claude-sonnet-5-5-high" for leg in limited_writer.legs)
+    assert not any(leg.id == "agy-claude-sonnet-5-5-high" for leg in writer.legs)
 
 
 def test_d6550_claude_fallback_reads_booked_provider_quotas(tmp_path):
@@ -86,14 +100,18 @@ def test_d6550_claude_fallback_reads_booked_provider_quotas(tmp_path):
                               installed=lambda harness: agy_installed or harness != "agy")
             return any(leg.claude_family for leg in plan.legs)
 
+        def agy_writer_admitted():
+            plan = plan_spawn({"estimate_tokens": 1000}, role="implement", leg_reader=store, now=100,
+                              catalog_rows=(), installed=lambda harness: True)
+            return any(leg.id == "agy-claude-sonnet-5-5-high" for leg in plan.legs)
+
         store.record_provider_response(gpt_key, 429, "quota", {"Retry-After": "60"}, "fixture", now=100)
-        assert not fallback_admitted("implement")
+        assert not agy_writer_admitted()
         assert not fallback_admitted("review")
         store.record_provider_response("agy/gemini-4-hydrogen-high", 429, "quota",
                                        {"Retry-After": "60"}, "fixture", now=100)
-        assert fallback_admitted("implement"), gpt_key
-        assert fallback_admitted("review"), gpt_key
-        assert fallback_admitted("review", agy_installed=False), gpt_key
+        assert agy_writer_admitted(), gpt_key   # the agy Sonnet fallback keeps the dual quota guard
+        assert not fallback_admitted("review"), gpt_key   # D-6652: Claude review needs both required seats out
 
 
 def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys):
@@ -122,7 +140,7 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
 
     for role, base, head, expected in (
         ("implement", None, None, ("cx-gpt-6.2-sol-medium", "codex")),
-        ("review", "HEAD~2", "HEAD~1", ("agy-gemini-4-hydrogen-high", "agy")),
+        ("review", "HEAD~2", "HEAD~1", ("opencode-go-deepseek-v4-flash", "opencode")),
         ("review", "HEAD~1", "HEAD", ("claude-sonnet-5-5-high", "claude")),
     ):
         card = {"estimate_tokens": 1000}
@@ -142,7 +160,7 @@ def test_native_review_route_requires_repository_tools():
                       role="review", writer_families=("gpt",), installed=lambda _: True,
                       leg_reader=lambda *_args, **_kwargs: {"state": "available", "evidence": None},
                       catalog_rows=())
-    assert plan.first_leg.id == "agy-gemini-4-hydrogen-high"
+    assert plan.first_leg.id == "opencode-go-deepseek-v4-flash"
     assert all(leg.tool_mode == "tools" for leg in plan.legs)
     assert {leg.id for leg in plan.legs if leg.harness == "opencode"} == {
         "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",

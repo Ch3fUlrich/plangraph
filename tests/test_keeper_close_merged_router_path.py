@@ -380,3 +380,26 @@ def test_review_seats_accepts_one_witnessed_completion_after_skips(unseated_w, t
     else:
         assert adapter.review_seats(item, HEAD, "") == [
             {"model": "gemini-test", "verdict": "pass", "run_id": "run-one", "head": HEAD}]
+
+
+@pytest.mark.parametrize("leg,tail,accepted", [
+    ("opencode-go-deepseek-v4-flash", "FILES READ: src/lib.rs\nTEST_GAMING: no\nVERDICT: ACCEPT\n", True),
+    ("opencode-go-glm-5.3-flash", "FILES READ: src/lib.rs:3\nTEST_GAMING: no\nVERDICT: ACCEPT\n", True),
+    ("opencode-go-deepseek-v4-flash", "FILES READ: diff only\nTEST_GAMING: no\nVERDICT: ACCEPT\n", False),
+    ("opencode-go-glm-5.3-flash", "TEST_GAMING: no\nVERDICT: ACCEPT\n", False),
+    ("agy-gemini-4-hydrogen-high", "TEST_GAMING: no\nVERDICT: ACCEPT\n", True),   # not a required seat
+])
+def test_required_opencode_seat_counts_only_with_files_read(unseated_w, tmp_path, leg, tail, accepted):
+    """D-6652 (rule 3.66 (f)): an ACCEPT of a required OpenCode seat without FILES READ is no seat."""
+    root = mirrored_reviews(unseated_w, tmp_path)
+    path = root / "fixture" / "run-one" / "record.json"
+    record = json.loads(path.read_text())
+    record.update(chosen_leg={"id": leg}, stdout_tail=tail)
+    path.write_text(json.dumps(record))
+    item = {"key": "demo:H", "run_ids": '["run-one"]'}
+    adapter = SpawnerRecordAdapter(root)
+    if accepted:
+        assert [s["run_id"] for s in adapter.review_seats(item, HEAD, "")] == ["run-one"]
+    else:
+        with pytest.raises(ValueError, match="not a passing witnessed seat"):
+            adapter.review_seats(item, HEAD, "")

@@ -3,21 +3,38 @@ use super::*;
 const H: &str = "0123456789abcdef0123456789abcdef01234567";
 const G: &str = "fedcba9876543210fedcba9876543210fedcba98";
 
+const DEEPSEEK: &str = "opencode-go-deepseek-v4-flash";
+const GLM: &str = "opencode-go-glm-5.3-flash";
+
+fn seat(name: &str, n: u8, leg: &str, reviewer: &str) -> Seat {
+    Seat {
+        leg: leg.into(),
+        review_file: format!("review-{name}-{n}.txt"),
+        reviewer_family: reviewer.into(),
+    }
+}
+/// A part with its two required seats (deepseek and glm legs); the first seat's family is
+/// `reviewer`, the second's is glm.
 fn part(name: &str, head: &str, writer: &str, reviewer: &str) -> Part {
     Part {
         name: name.into(),
         head: head.into(),
         ci: "green".into(),
-        review_file: format!("review-{name}.txt"),
         writer_family: writer.into(),
-        reviewer_family: reviewer.into(),
+        seats: vec![seat(name, 1, DEEPSEEK, reviewer), seat(name, 2, GLM, "glm")],
     }
 }
-/// Review files by name: every part's file accepts the head the part names.
+/// Review files by name: every seat's file accepts the head the part names, with FILES READ.
 fn accepting(path: &str) -> Result<String, String> {
-    let name = path.trim_start_matches("review-").trim_end_matches(".txt");
+    let name = path
+        .trim_start_matches("review-")
+        .split('-')
+        .next()
+        .unwrap();
     let head = if name == "beta" { G } else { H };
-    Ok(format!("HEAD: {head}\nHARNESS: codex\nVERDICT: ACCEPT\n"))
+    Ok(format!(
+        "FILES READ: src/lib.rs\nHEAD: {head}\nHARNESS: opencode\nVERDICT: ACCEPT\n"
+    ))
 }
 fn go(parts: Vec<Part>) -> GoInput {
     GoInput {
@@ -27,6 +44,22 @@ fn go(parts: Vec<Part>) -> GoInput {
         head: H.into(),
         parts,
     }
+}
+
+/// The keeper family table in miniature: claude is anthropic, gpt and codex are openai.
+fn fam(name: &str) -> String {
+    match name {
+        "claude" => "anthropic",
+        "gpt" | "codex" => "openai",
+        other => other,
+    }
+    .to_owned()
+}
+fn go_row(
+    input: &GoInput,
+    read: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    super::go_row(input, read, &fam)
 }
 
 fn go_row_ok(input: &GoInput) -> Result<String, String> {
@@ -43,8 +76,8 @@ fn a_batch_pr_with_two_parts_yields_one_go_row_naming_both_heads_reviews_and_fam
     assert_eq!(row.lines().count(), 1);
     assert!(row.starts_with("| D-6400 | demo | GO #1090 GO-HEAD 0123456789abcdef"));
     for needle in [
-        format!("alpha head {H} ci green review review-alpha.txt writer claude reviewer gemini"),
-        format!("beta head {G} ci green review review-beta.txt writer claude reviewer deepseek"),
+        format!("alpha head {H} ci green writer claude review review-alpha-1.txt leg opencode-go-deepseek-v4-flash reviewer gemini review review-alpha-2.txt leg opencode-go-glm-5.3-flash reviewer glm"),
+        format!("beta head {G} ci green writer claude review review-beta-1.txt leg opencode-go-deepseek-v4-flash reviewer deepseek review review-beta-2.txt leg opencode-go-glm-5.3-flash reviewer glm"),
         "parts 2".to_string(),
     ] {
         assert!(row.contains(&needle), "{needle} in {row}");
@@ -67,6 +100,11 @@ fn any_bad_part_refuses_the_whole_row_and_names_the_part() {
         go_row_ok(&go(vec![part("alpha", "abc", "claude", "gemini")])).unwrap_err(),
         "part alpha: head is not 40 hex"
     );
+    assert_eq!(
+        go_row_ok(&go(vec![part("alpha", H, "claude", "glm")])).unwrap_err(),
+        "part alpha: review seats share a family"
+    );
+    assert!(go_row_ok(&go(vec![part("alpha", H, "claude", "gemini")])).is_ok());
     assert!(go_row_ok(&go(vec![])).is_err());
     let mut bad_head = go(vec![part("a", H, "x", "y")]);
     bad_head.head = "short".into();
@@ -186,10 +224,119 @@ fn a_review_file_that_is_missing_for_another_head_or_not_an_accept_refuses_the_p
     // The same path through the real file reader: a missing path is refused.
     let nowhere = part("alpha", H, "claude", "gemini");
     let mut input = go(vec![nowhere]);
-    input.parts[0].review_file = "/nonexistent/review-alpha.txt".into();
+    input.parts[0].seats[1].review_file = "/nonexistent/review-alpha.txt".into();
     assert!(go_row(&input, &read_review)
         .unwrap_err()
         .contains("review file unreadable"));
+}
+
+#[test]
+fn both_required_opencode_legs_must_be_among_the_seats() {
+    // A gemini seat beside the glm seat is not the two required seats.
+    let mut gemini_glm = part("alpha", H, "claude", "gemini");
+    gemini_glm.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    assert_eq!(
+        go_row_ok(&go(vec![gemini_glm])).unwrap_err(),
+        "part alpha: required review seat missing (opencode-go deepseek and glm)"
+    );
+    // Both required legs plus a credential-diff Sonnet seat pass.
+    let mut with_sonnet = part("alpha", H, "gpt", "deepseek");
+    with_sonnet
+        .seats
+        .push(seat("alpha", 3, "claude-sonnet-5-5-high", "claude"));
+    let row = go_row_ok(&go(vec![with_sonnet])).unwrap();
+    assert!(
+        row.contains("leg claude-sonnet-5-5-high reviewer claude"),
+        "{row}"
+    );
+    // A deepseek-written part cannot seat the deepseek leg: glm plus another seat passes.
+    let mut writer_deepseek = part("alpha", H, "deepseek", "gemini");
+    writer_deepseek.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    assert!(go_row_ok(&go(vec![writer_deepseek])).is_ok());
+    // But the glm leg cannot be dropped for it.
+    let mut no_glm = part("alpha", H, "deepseek", "gemini");
+    no_glm.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    no_glm.seats[1].leg = "gpt-6.2-sol-medium".into();
+    assert!(go_row_ok(&go(vec![no_glm])).is_err());
+}
+
+#[test]
+fn two_seats_need_two_review_files_and_two_keeper_families() {
+    // The same review file cited twice is one seat.
+    let mut same_file = part("alpha", H, "claude", "gemini");
+    same_file.seats[1].review_file = same_file.seats[0].review_file.clone();
+    assert_eq!(
+        go_row_ok(&go(vec![same_file])).unwrap_err(),
+        "part alpha: review seats share a review file"
+    );
+    // Spelling cannot make one keeper family two seats: gpt and openai are one family.
+    let mut spelled = part("alpha", H, "claude", "gpt");
+    spelled.seats[1].reviewer_family = "openai".into();
+    assert_eq!(
+        go_row_ok(&go(vec![spelled])).unwrap_err(),
+        "part alpha: review seats share a family"
+    );
+    // Nor can a spelling hide the writer: an anthropic seat for a claude writer is the writer.
+    let mut writer = part("alpha", H, "claude", "gemini");
+    writer.seats[1].reviewer_family = "anthropic".into();
+    assert_eq!(
+        go_row_ok(&go(vec![writer])).unwrap_err(),
+        "part alpha: reviewer family is the writer family"
+    );
+    assert!(go_row_ok(&go(vec![part("alpha", H, "claude", "gpt")])).is_ok());
+}
+
+#[test]
+fn a_part_needs_both_required_seats_to_accept_with_files_read() {
+    // One seat, even a good one, is not a part (rule 3.66 (f)).
+    let mut single = part("alpha", H, "claude", "gemini");
+    single.seats.truncate(1);
+    assert_eq!(
+        go_row_ok(&go(vec![single])).unwrap_err(),
+        "part alpha: needs two required review seats"
+    );
+    let two = go(vec![part("alpha", H, "claude", "gemini")]);
+    // An ACCEPT without a FILES READ line, or one that read only the diff, is no seat.
+    for text in [
+        format!("HEAD: {H}\nVERDICT: ACCEPT\n"),
+        format!("FILES READ: diff only\nHEAD: {H}\nVERDICT: ACCEPT\n"),
+        format!("FILES READ: none\nHEAD: {H}\nVERDICT: ACCEPT\n"),
+        format!("> FILES READ: src/lib.rs\nHEAD: {H}\nVERDICT: ACCEPT\n"),
+    ] {
+        let refused = go_row(&two, &|_| Ok(text.clone()));
+        assert_eq!(
+            refused.unwrap_err(),
+            "part alpha: review file has no FILES READ",
+            "{text}"
+        );
+    }
+    // The second seat alone failing refuses the part: both must ACCEPT.
+    let second_declines = go_row(&two, &|path| {
+        if path.ends_with("-2.txt") {
+            Ok(format!(
+                "FILES READ: src/lib.rs\nHEAD: {H}\nVERDICT: REQUEST_CHANGES\n"
+            ))
+        } else {
+            accepting(path)
+        }
+    });
+    assert_eq!(
+        second_declines.unwrap_err(),
+        "part alpha: review file is not an ACCEPT"
+    );
+    let second_diff_only = go_row(&two, &|path| {
+        if path.ends_with("-2.txt") {
+            Ok(format!(
+                "FILES READ: diff only\nHEAD: {H}\nVERDICT: ACCEPT\n"
+            ))
+        } else {
+            accepting(path)
+        }
+    });
+    assert_eq!(
+        second_diff_only.unwrap_err(),
+        "part alpha: review file has no FILES READ"
+    );
 }
 
 /// The keeper's own reader takes the generated row as one GO bound to the PR and the head.

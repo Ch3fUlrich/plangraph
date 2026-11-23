@@ -97,7 +97,8 @@ def review_diff_ref(tmp_path):
 
 def test_service_route_review_for_claude_diff_runs_gpt_in_codex(tmp_path, review_diff_ref):
     plan = review_route(tmp_path, ALL, review_diff_ref)
-    assert [(leg.id, leg.harness) for leg in plan.legs[:2]] == [
+    assert [(leg.id, leg.harness) for leg in plan.legs[:4]] == [
+        ("opencode-go-deepseek-v4-flash", "opencode"), ("opencode-go-glm-5.3-flash", "opencode"),
         ("agy-gemini-4-hydrogen-high", "agy"), ("gpt-6.2-sol-medium", "codex")]
 
 
@@ -150,8 +151,8 @@ def test_probe_failure_across_the_three_families_through_the_route(tmp_path, rev
     assert "agy-gemini-4-hydrogen-high" not in [leg.id for leg in plan.legs]
     assert any(row["leg"] == "agy-gemini-4-hydrogen-high" and row["reason"] == "client_missing" for row in plan.skipped)
     review = review_route(tmp_path, NONE, review_diff_ref)
-    assert review.legs[0].id == "gpt-6.2-sol-medium"
-    assert (review.legs[0].harness, review.legs[0].harness_fallback) == ("opencode", "client_missing")
+    gpt = next(leg for leg in review.legs if leg.id == "gpt-6.2-sol-medium")
+    assert (gpt.harness, gpt.harness_fallback) == ("opencode", "client_missing")
     ids = [leg.id for leg in review.legs]
     assert "claude-sonnet-5-5-high" not in ids
     assert any(row["leg"] == "claude-sonnet-5-5-high" and row["reason"] == "client_missing" for row in review.skipped)
@@ -189,7 +190,9 @@ def test_agy_claude_fallback_writer_needs_its_client_when_codex_is_limited():
     from plangraph.planner.routing import plan_spawn
     card = {"estimate_tokens": 20000, "risk_tags": []}
     served = plan_spawn(card, role="implement", leg_reader=codex_limited, installed=ALL)
-    assert served.first_leg.id == "agy-claude-sonnet-5-5-high" and served.first_leg.harness == "agy"
+    assert served.first_leg.id == "claude-sonnet-5-5-high"   # D-6652: native Sonnet serves while Codex is limited
+    agy = next(leg for leg in served.legs if leg.id == "agy-claude-sonnet-5-5-high")
+    assert agy.harness == "agy"
     missing = plan_spawn(card, role="implement", leg_reader=codex_limited, installed=NONE)
     assert "agy-claude-sonnet-5-5-high" not in [leg.id for leg in missing.legs]
     assert any(row["leg"] == "agy-claude-sonnet-5-5-high" and row["reason"] == "client_missing"

@@ -59,7 +59,10 @@ def test_role_automatically_falls_back(role, state, monkeypatch):
     def reader(model, **kwargs):
         return {'state': state if model == blocked else 'ok', 'evidence': None}
     fallback = plan_spawn(card, leg_reader=reader, catalog_rows=(), **kwargs)
-    assert fallback.legs[0] == first.legs[1]
+    if role == 'implement' and state == 'limited':   # D-6652: Sonnet high serves while the Codex lead is limited
+        assert fallback.legs[0].id == 'claude-sonnet-5-5-high' and fallback.legs[1] == first.legs[1]
+    else:
+        assert fallback.legs[0] == first.legs[1]
     assert all(leg.model != blocked for leg in fallback.legs)
     assert any(s['leg'] == first.legs[0].id and s['reason'] == state
                for s in fallback.skipped)

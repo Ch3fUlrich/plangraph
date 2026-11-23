@@ -239,6 +239,18 @@ can still use the registered OpenCode gateway leg. Claude is eligible
 for automatic writer and review fallback when both GPT Sol and Hydrogen are rate-limited.
 Credential, authentication and secrets changes prefer the Claude Sonnet high review
 seat, subject to availability and cross-family review.
+D-6652 (rule 3.66 (f), corrected 2026-11-23) changes the review order above and the Claude writer
+rule. Implement keeps the Codex lead first; `claude-sonnet-5-5-high` (`claude-sonnet-5-5-xhigh`
+for a card with `hard: true`) is routed only while the Codex lead is limited (429 or quota),
+with reason `codex_limited` in the plan and `route_reason` in the run record, and the route
+returns to Codex when it serves again. Review serves the two
+required OpenCode seats (`opencode-go-deepseek-v4-flash`, `opencode-go-glm-5.3-flash`, tools
+mode with checkout reads) ahead of every other leg, each outside the diff's writer families,
+and plans two seats on every head. The Claude review seat serves only for credential,
+authentication and secrets diffs or when both required seats are out of the route.
+`plangraph router go-row` accepts a part only with two seats that each ACCEPT its head with a
+`FILES READ` line naming files, and the keeper reads a required-seat record without
+`FILES READ` as no seat.
 GPT implement and review legs default to medium effort (D-6397); elevated
 effort requires matching `card.effort` and an operator `card.effort_decision`
 of the form `D-<number>`. Native Codex package sessions pass

@@ -115,7 +115,8 @@ def test_default_database_cli_mcp(tmp_path, monkeypatch, capsys):
         assert result['p_source'] == 'benchmark'
         for candidate in result['candidates']:
             reason = candidate.get('reason', '')
-            unmeasured = reason.startswith('disabled:') or reason == 'claude_requires_gpt_and_hydrogen_limits'
+            unmeasured = (reason.startswith('disabled:')
+                          or reason in ('claude_requires_gpt_and_hydrogen_limits', 'claude_requires_codex_limited'))
             assert candidate['p_source'] == ('prior' if unmeasured else 'measured')
             score = candidate['u_core']
             assert score is None if unmeasured else isinstance(score, float)

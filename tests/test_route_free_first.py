@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from plangraph.planner.legs import (DEFAULT_LEGS, REVIEW_ORDER, REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH,
-                                    REVIEW_HYDROGEN, REVIEW_NEON, REVIEW_BEAM, review_route_pool)
+                                    REVIEW_HYDROGEN, REVIEW_NEON, REVIEW_BEAM, REVIEW_REQUIRED, review_route_pool)
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 from registry_route_util import _repo
@@ -22,6 +22,7 @@ FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "ope
 DISABLED_FREE = {"opencode-glm-5.3-flash-free"}
 ACTIVE_FREE = ["opencode-deepseek-v4.1-flash-free", "openrouter-free"]
 SUBS = ["cx-gpt-6.2-sol-medium", "agy-gemini-4-hydrogen-high", "mimo-v2.6-pro", "mimo-v2.6-flash"]
+SONNET = "claude-sonnet-5-5-high"   # D-6652: implement only while Codex is limited
 WRITERS = [SUBS[0], "cx-gpt-6.2-astra", "agy-gemini-4-hydrogen-high",
            "opencode-deepseek-v4.1-flash-free", "opencode-go-deepseek-v4-flash",
            "opencode-go-glm-5.3-flash", "openrouter-free", "mimo-v2.6-flash", "mimo-v2.6-pro",
@@ -167,12 +168,12 @@ def test_route_and_refusal(tmp_path, capsys):
 
 def test_review_order_rule_350_mimo_pro_then_flash_then_326():
     assert REVIEW_ORDER == (
+        "opencode-go-deepseek-v4-flash",   # D-6652 required seats lead
+        "opencode-go-glm-5.3-flash",
         REVIEW_HYDROGEN,
         "gpt-6.2-sol-medium",
         "mimo-v2.6-pro",
         "opencode-deepseek-v4.1-flash-free",
-        "opencode-go-deepseek-v4-flash",
-        "opencode-go-glm-5.3-flash",
         "agy-gemini-4-neon-medium",
         "claude-sonnet-5-5-high",
         "mimo-v2.6-flash",
@@ -190,11 +191,11 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
     gem_plan = plan_spawn(CARD, role="review", writer_families=("gemini",),
                           leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
     assert [leg.id for leg in gem_plan.legs] == [
+        "opencode-go-deepseek-v4-flash",
+        "opencode-go-glm-5.3-flash",
         "gpt-6.2-sol-medium",
         "mimo-v2.6-pro",
         "opencode-deepseek-v4.1-flash-free",
-        "opencode-go-deepseek-v4-flash",
-        "opencode-go-glm-5.3-flash",
         "mimo-v2.6-flash",
         "cx-gpt-6-luna",
         "agy-gpt-oss-120b",
@@ -259,7 +260,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high" and id not in argon],
                    "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
     assert DISABLED_FREE.isdisjoint(ids)
-    assert ids[:3] == [REVIEW_HYDROGEN, "gpt-6.2-sol-medium", "mimo-v2.6-pro"]
+    assert ids[:3] == [*REVIEW_REQUIRED, REVIEW_HYDROGEN]
 
 
 def test_route_sol_unavailable_keeps_tier_writer_order():
@@ -493,11 +494,11 @@ def test_d6310_route_orders_low_risk_and_families():
 
     rev = plan_spawn(CARD, role='review', writer_families=('gpt',))
     assert [(l.id, l.effort) for l in rev.legs] == [
+        ('opencode-go-deepseek-v4-flash', None),   # D-6652 required seats lead
+        ('opencode-go-glm-5.3-flash', None),
         (REVIEW_HYDROGEN, 'high'),
         ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
-        ('opencode-go-deepseek-v4-flash', None),
-        ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('mimo-v2.6-flash', None),
         ('agy-gemini-4-argon-low', 'low'),
@@ -505,11 +506,11 @@ def test_d6310_route_orders_low_risk_and_families():
     ]
     rev_diff = plan_spawn(CARD, role='review', writer_families=('gemini',))
     assert [(l.id, l.effort) for l in rev_diff.legs] == [
+        ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-go-glm-5.3-flash', None),
         ('gpt-6.2-sol-medium', 'medium'),
         ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
-        ('opencode-go-deepseek-v4-flash', None),
-        ('opencode-go-glm-5.3-flash', None),
         ('mimo-v2.6-flash', None),
         ('cx-gpt-6-luna', 'medium'),
         ('agy-gpt-oss-120b', None),
@@ -556,8 +557,8 @@ def test_claude_writer_fallback_only_while_every_codex_leg_unavailable():
         plan = plan_spawn(CARD, role="implement", leg_reader=reader)
         reasons = {s["leg"]: s["reason"] for s in plan.skipped}
         if limits == sol | hydrogen:
-            assert plan.first_leg.id == fallback
-            assert fallback not in reasons
+            assert plan.first_leg.id == SONNET   # D-6652: native Sonnet serves while Codex is limited
+            assert fallback in {leg.id for leg in plan.legs} and fallback not in reasons
         else:
             assert fallback not in {leg.id for leg in plan.legs}
             assert reasons[fallback] == "claude_requires_gpt_and_hydrogen_limits"
