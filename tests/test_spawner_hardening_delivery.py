@@ -189,6 +189,7 @@ def test_keeper_redirect_is_never_an_acknowledgement(tmp_path, monkeypatch):
 def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, caplog):
     """Three terminal records without keeper token log exactly one warning without traceback."""
     import logging
+    import subprocess
     import time
     import urllib.request
     from plangraph.spawner import runner
@@ -219,6 +220,20 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
         return StubResponse()
 
     monkeypatch.setattr(urllib.request.OpenerDirector, 'open', stub_open)
+
+    # Exercise watchdog replay independently of the installed projector version.
+    run_command = subprocess.run
+    projected = []
+
+    def project_attempt(argv, *args, **kwargs):
+        if argv != ['fixture-pg-spawnd', 'project-spawn-attempt']:
+            return run_command(argv, *args, **kwargs)
+        record = json.loads(kwargs['input'])
+        projected.append(record['run_id'])
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({'attempt_id': record['run_id']}))
+
+    monkeypatch.setattr('plangraph.fleet_snapshot._projection_binary', lambda: 'fixture-pg-spawnd')
+    monkeypatch.setattr(subprocess, 'run', project_attempt)
 
     service = spawn_service(runner=SpawnerRunner(), state=tmp_path)
     run_ids = ['run-t1', 'run-t2', 'run-t3']
@@ -264,6 +279,7 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
         assert not (run_dir / 'keeper.delivered').exists()
         assert not (run_dir / 'attempt.delivered').exists()
     assert delivered == []
+    assert projected == []
     assert 'spawn-attempt-delivery' not in (tmp_path / 'watchdog/status.txt').read_text(encoding='utf-8')
 
     # b. after setting a token file + url with a fake/stub delivery (monkeypatch the HTTP call the sink makes)
@@ -273,13 +289,18 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
     monkeypatch.setenv('PG_URL', 'http://127.0.0.1:9090')
     monkeypatch.setenv('PG_TOKEN_FILE', str(token_file))
 
-    # Next watchdog tick delivers completions and writes keeper.delivered
+    # The first configured tick delivers both kinds of records.
     w.main(['tick'])
 
-    for run_id in run_ids:
-        assert (tmp_path / 'runs' / run_id / 'keeper.delivered').read_text() == 'delivered\n'
     completions = [body['run']['run_id'] for path, body in delivered if path == '/v1/record_run']
+    attempts = [body['attempt_id'] for path, body in delivered if path == '/v1/record_spawn_attempt']
     assert sorted(completions) == run_ids
+    assert sorted(attempts) == run_ids
+    assert len(delivered) == 2 * len(run_ids)
+    for run_id in run_ids:
+        run_dir = tmp_path / 'runs' / run_id
+        assert (run_dir / 'keeper.delivered').read_text() == 'delivered\n'
+        assert (run_dir / 'attempt.delivered').read_text() == 'delivered\n'
 
     # Subsequent tick does not re-deliver
     delivered.clear()
