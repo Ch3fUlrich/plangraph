@@ -39,6 +39,11 @@ def hook(command, cwd):
     "nice -n 10 cargo check", "env FOO=1 cargo run", "bash -c 'cargo build'",
     "CARGO_TARGET_DIR=rust/target cargo build", "cargo build --target-dir rust/target",
     "cargo test --target-dir=./rust/target",
+    "cargo -q build", "cargo --locked test", "cargo --offline clippy", "cargo +nightly --color never build",
+    "cargo -Z unstable-options check", "cargo --config build.jobs=2 test",
+    "nice bash -c 'cargo build'", "timeout 600 bash -c 'cargo test'", "eval 'cargo build'",
+    "nice -n 5 eval 'cargo -q build'", "time sh -c 'cargo check'", "env FOO=1 bash -lc 'cargo test'",
+    "CARGO_TARGET_DIR=rust/target nice bash -c 'cargo build'",
 ])
 def test_cargo_without_a_shared_target_is_refused_in_a_main_checkout(repos, command):
     main, _ = repos
@@ -51,6 +56,10 @@ def test_cargo_without_a_shared_target_is_refused_in_a_main_checkout(repos, comm
     "CARGO_TARGET_DIR=/var/cache/shared cargo build", "env CARGO_TARGET_DIR=/var/cache/shared cargo test",
     "cargo build --target-dir /var/cache/shared", "cargo fmt --check", "cargo --version",
     "echo cargo build", "bash -c 'CARGO_TARGET_DIR=/var/cache/shared cargo test'",
+    "cargo -q fmt", "cargo --locked --version", "nice bash -c 'cargo fmt --check'",
+    "CARGO_TARGET_DIR=/var/cache/shared nice bash -c 'cargo build'",
+    "env CARGO_TARGET_DIR=/var/cache/shared timeout 9 bash -c 'cargo test'",
+    "eval 'CARGO_TARGET_DIR=/var/cache/shared cargo -q build'",
 ])
 def test_cargo_with_an_outside_target_or_no_build_is_allowed(repos, command):
     main, _ = repos

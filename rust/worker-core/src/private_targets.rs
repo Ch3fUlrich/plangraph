@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-fn cargo_target(path: &Path) -> bool {
+pub(crate) fn cargo_target(path: &Path) -> bool {
     path.join(".rustc_info.json").is_file()
         && ["debug", "release"].iter().any(|p| path.join(p).is_dir())
         && !path.join("Cargo.toml").exists()

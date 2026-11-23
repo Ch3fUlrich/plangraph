@@ -6,6 +6,17 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
+/// Cargo's own markers, never the directory name: its CACHEDIR.TAG or the `.rustc_info.json`
+/// beside a profile directory.
+fn identified(target: &Path) -> bool {
+    let tag = target.join("CACHEDIR.TAG");
+    fs::symlink_metadata(&tag).is_ok_and(|m| m.is_file() && m.len() <= 1 << 20)
+        && fs::read(&tag).is_ok_and(|b| b.starts_with(CACHEDIR_SIGNATURE))
+        || crate::private_targets::cargo_target(target)
+}
+
 /// A target nothing wrote to for this long belongs to no running build.
 pub const IDLE_AFTER: Duration = Duration::from_secs(3600);
 
@@ -27,6 +38,13 @@ pub fn sweep_main_checkout_target(
     };
     // Only a plain directory inside a main checkout (`.git` is a directory, not a worktree file).
     if !meta.is_dir() || !repo.join(".git").is_dir() {
+        return Ok(());
+    }
+    if !identified(&target) {
+        report.skipped.push(format!(
+            "{}: not an identified cargo target; not touched",
+            target.display()
+        ));
         return Ok(());
     }
     let (bytes, newest) = scan(&target)?;
@@ -79,8 +97,18 @@ mod tests {
         let debug = repo.join("rust/target/debug");
         fs::create_dir_all(&debug).unwrap();
         fs::write(debug.join("blob"), [0u8; 64]).unwrap();
+        fs::write(
+            repo.join("rust/target/CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55\n# cargo",
+        )
+        .unwrap();
         let old = SystemTime::now() - Duration::from_secs(age_secs);
-        for p in [debug.join("blob"), debug.clone(), repo.join("rust/target")] {
+        for p in [
+            debug.join("blob"),
+            repo.join("rust/target/CACHEDIR.TAG"),
+            debug.clone(),
+            repo.join("rust/target"),
+        ] {
             fs::File::open(p).unwrap().set_modified(old).unwrap();
         }
         (tmp, repo)
@@ -107,7 +135,7 @@ mod tests {
         assert!(dry.actions.iter().any(|a| a.starts_with("would-remove")));
         assert!(repo.join("rust/target").exists());
         let applied = run(&repo, true, false);
-        assert_eq!(applied.freed_bytes, 64);
+        assert_eq!(applied.freed_bytes, 64 + 51); // blob + CACHEDIR.TAG
         assert!(!repo.join("rust/target").exists());
         assert!(repo.join(".git").exists());
     }
@@ -122,6 +150,34 @@ mod tests {
         let (_tmp, repo) = fixture(7200);
         assert_eq!(run(&repo, true, true).freed_bytes, 0);
         assert!(repo.join("rust/target").exists());
+    }
+
+    #[test]
+    fn a_directory_named_target_without_cargo_markers_is_never_removed() {
+        let (_tmp, repo) = fixture(7200);
+        fs::remove_file(repo.join("rust/target/CACHEDIR.TAG")).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(7200);
+        for p in [repo.join("rust/target/debug"), repo.join("rust/target")] {
+            fs::File::open(p).unwrap().set_modified(old).unwrap();
+        }
+        let report = run(&repo, true, false);
+        assert_eq!(report.freed_bytes, 0);
+        assert!(repo.join("rust/target/debug/blob").exists());
+        assert!(report.skipped[0].contains("not an identified cargo target"));
+        // A forged tag with the wrong signature is no evidence either.
+        fs::write(repo.join("rust/target/CACHEDIR.TAG"), b"hello").unwrap();
+        assert_eq!(run(&repo, true, false).freed_bytes, 0);
+        // The rustc info file plus a profile directory is.
+        fs::write(repo.join("rust/target/.rustc_info.json"), b"{}").unwrap();
+        fs::remove_file(repo.join("rust/target/CACHEDIR.TAG")).unwrap();
+        for p in [
+            repo.join("rust/target/.rustc_info.json"),
+            repo.join("rust/target"),
+        ] {
+            fs::File::open(p).unwrap().set_modified(old).unwrap();
+        }
+        assert!(run(&repo, true, false).freed_bytes > 0);
+        assert!(!repo.join("rust/target").exists());
     }
 
     #[test]
