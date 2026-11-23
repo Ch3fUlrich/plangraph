@@ -131,6 +131,15 @@ fn page_text(text: &mut String, result: &Value) {
             );
         }
     }
+    for row in rows("parts") {
+        let _ = writeln!(
+            text,
+            "merged-part\t{}\t{}\t{}",
+            row["key"].as_str().unwrap_or("?"),
+            row["pr"],
+            row["merge_sha"].as_str().unwrap_or("?")
+        );
+    }
     for row in rows("listed") {
         let _ = writeln!(
             text,
