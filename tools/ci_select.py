@@ -57,6 +57,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/pg-feeder.service",
     "deploy/systemd/pg-keeper-backup.service",
     "deploy/systemd/pg-keeper-backup.timer",
+    "deploy/systemd/pg-reconcile-merged.service",
+    "deploy/systemd/pg-reconcile-merged.timer",
     "deploy/systemd/pg-throughput.service",
     "deploy/systemd/pg-worktree-sweep.service",
     "deploy/systemd/pg-wsl-cache-guard.service",

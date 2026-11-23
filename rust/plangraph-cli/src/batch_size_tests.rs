@@ -341,3 +341,27 @@ fn selected_design_files_are_embedded_verbatim_and_missing_refs_name_the_path() 
         .unwrap_err()
         .contains("data:contract.md"));
 }
+
+#[test]
+fn unqualified_design_refs_require_the_items_project_root() {
+    let root = tempfile::tempdir().unwrap();
+    let design = "The project's design contract\n";
+    std::fs::write(root.path().join("Cargo.toml"), design).unwrap();
+    assert!(std::path::Path::new("Cargo.toml").is_file());
+    let mut input: Input = serde_json::from_value(serde_json::json!({
+        "writer": {},
+        "items": [{"key": "demo:A", "kind": "lane", "text": "How: use the contract",
+                   "design_ref": "Cargo.toml"}],
+        "design_roots": {"other": root.path()}
+    }))
+    .unwrap();
+    let plan = plan(&input);
+    let error = brief(&input, &plan).unwrap_err();
+    assert!(error.contains("Cargo.toml"));
+    assert!(error.contains("no design root configured for demo"));
+
+    input
+        .design_roots
+        .insert("demo".into(), root.path().to_path_buf());
+    assert!(brief(&input, &plan).unwrap().contains(design));
+}
