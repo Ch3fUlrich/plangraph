@@ -192,6 +192,32 @@ def test_criteria_amendments_are_append_only(w, active):
             w.conn.execute(sql, (KEY,))
 
 
+@pytest.mark.parametrize("missing", ["criteria_reason", "criteria_evidence"])
+@pytest.mark.parametrize("active", [False, True])
+def test_refused_criteria_edit_leaves_item_and_events_unchanged(w, monkeypatch, active, missing):
+    if active:
+        to_claimed(w, KEY)
+    before = w.store._item(KEY)
+    events = "SELECT seq FROM events WHERE key=? AND type='item_defined' ORDER BY seq"
+    defined = w.conn.execute(events, (KEY,)).fetchall()
+    fields = {**RATIONALE, "done_criteria": "revised criteria"}
+    del fields[missing]
+    append = w.store._append
+    attempted = []
+
+    def track_append(principal, key, event, *args, **kwargs):
+        if key == KEY and event == "item_defined":
+            attempted.append(event)
+        return append(principal, key, event, *args, **kwargs)
+
+    monkeypatch.setattr(w.store, "_append", track_append)
+    with pytest.raises(Refused, match=f"{missing} is required"):
+        w.store.edit_definition(w.p("router"), KEY, fields)
+    assert w.store._item(KEY) == before
+    assert w.conn.execute(events, (KEY,)).fetchall() == defined
+    assert attempted == []
+
+
 @pytest.mark.parametrize("active", [False, True])
 def test_verify_reports_a_missing_criteria_amendment(w, monkeypatch, active):
     if active:

@@ -27,6 +27,7 @@ _TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
 _MAX_DEPS = 200
 GATE_DEPENDENCY_WARNING = 190
 GATE_KINDS = ("gate", "goal")
+_CRITERIA_AMENDMENT_FIELDS = ("criteria_reason", "criteria_evidence")
 _LEGACY_SLICE_CRITERIA = re.compile(r"^Slice of [\w.-]+:[\w.-]+:")
 
 
@@ -98,7 +99,7 @@ class InputMixin:
             return fields, {}
         fields = dict(fields)
         amendment = {}
-        for name in ("criteria_reason", "criteria_evidence"):
+        for name in _CRITERIA_AMENDMENT_FIELDS:
             if name in fields:
                 value = fields.pop(name)
                 if not isinstance(value, str) or not value.strip() or len(value) > 600:
@@ -107,13 +108,17 @@ class InputMixin:
                 amendment[name] = value
         return fields, amendment
 
+    @staticmethod
+    def _check_criteria_amendment(item, fields, amendment):
+        if "done_criteria" in fields and fields["done_criteria"] != item["done_criteria"]:
+            for name in _CRITERIA_AMENDMENT_FIELDS:
+                if name not in amendment:
+                    raise Refused("validation", f"{name} is required when done_criteria changes")
+
     def _record_criteria_amendment(self, seq, principal, item, fields, amendment, now):
         original = item.get("done_criteria")
         if "done_criteria" not in fields or original == fields["done_criteria"]:
             return
-        for name in ("criteria_reason", "criteria_evidence"):
-            if name not in amendment:
-                raise Refused("validation", f"{name} is required when done_criteria changes")
         self.conn.execute(
             "INSERT INTO criteria_amendments"
             "(seq,key,original_text,new_text,reason,evidence,authority,ts)"
