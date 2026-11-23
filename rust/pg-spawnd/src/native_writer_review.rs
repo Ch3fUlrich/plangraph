@@ -496,6 +496,14 @@ pub(crate) fn review_record_verdict(
     } else {
         review_verdict(&text, head, paths)
     };
+    if verdict["verdict"] == "ACCEPT"
+        && crate::review_test_evidence::required(chosen)
+        && verdict["tested"] != true
+    {
+        verdict["verdict"] = json!("no_verdict");
+        verdict["status"] = json!("no_verdict");
+        verdict["reason"] = json!("review_tests_unavailable");
+    }
     verdict["files_read"] = json!(pg_worker_core::review_split::files_read_text(&text));
     verdict["run_id"] = record["run_id"].clone();
     verdict["leg"] = chosen["id"].clone();

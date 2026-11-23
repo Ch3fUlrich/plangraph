@@ -211,3 +211,24 @@ fn review_tests_evidence_distinguishes_untested_accepts() {
         assert_eq!(review["tested"], expected, "{text}");
     }
 }
+
+#[test]
+fn native_sonnet_pass_requires_reported_tests() {
+    let state = tempfile::tempdir().unwrap();
+    let head = "b".repeat(40);
+    let paths = ["src/lib.rs".to_owned()];
+    for (summary, expected) in [
+        ("permission denied", "no_verdict"),
+        ("1 passed in 0.1s", "ACCEPT"),
+    ] {
+        let record = json!({
+            "head_sha": head,
+            "host": "fixture",
+            "overflow_remote": true,
+            "chosen_leg": {"harness":"claude","model":"claude-sonnet-5-5-high"},
+            "stdout_tail": format!("FILES READ: src/lib.rs\nTESTS: pytest -q tests/test_fixture.py — {summary}\nVERDICT: ACCEPT"),
+        });
+        let verdict = review_record_verdict(state.path(), &record, &head, &paths, None).unwrap();
+        assert_eq!(verdict["verdict"], expected, "{verdict}");
+    }
+}

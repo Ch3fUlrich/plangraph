@@ -371,7 +371,7 @@ fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind
         .env("PYTHONPATH", root.join("src")).env("XDG_STATE_HOME", dir.path())
         .env("PLANGRAPH_OMNIROUTE_LEG_STATE", "0")
         .args(["-c", r#"
-import asyncio, json, sys
+import asyncio, json, shlex, subprocess, sys
 from pathlib import Path
 from plangraph.spawner.launch_spec import build
 from plangraph.spawner.service import SpawnService
@@ -395,11 +395,34 @@ argv = spec['argv']
 assert argv[0] == 'claude', argv
 assert argv[argv.index('--model')+1] == 'claude-sonnet-5-5', argv
 assert argv[argv.index('--effort')+1] == 'high', argv
-allowed = argv[argv.index('--allowedTools')+1].split(',')
-assert {'Bash(cargo test -p *)', 'Bash(pytest *)', 'Bash(git diff *)', 'Bash(rg *)'} <= set(allowed), argv
-denied = argv[argv.index('--disallowedTools')+1].split(',')
-assert {'Write', 'Edit', 'Bash(git push *)'} <= set(denied), argv
-sandbox = json.loads(argv[argv.index('--settings')+1])['sandbox']
+settings = json.loads(argv[argv.index('--settings')+1])
+allowed = settings['permissions']['allow']
+assert {'Bash(cargo test -p *)', 'Bash(pytest *)', 'Bash(plangraph fast-checks --base *)'} <= set(allowed), argv
+hook = settings['hooks']['PreToolUse'][0]['hooks'][0]
+assert hook['onFailure'] == 'block'
+for command, cwd, background, expected in [
+    ('pytest -q tests/test_keeper_pg_unit.py', checkout := Path.cwd(), False, 0),
+    ('python3 -m pytest -q tests/test_keeper_pg_unit.py', checkout, False, 0),
+    ('cargo test -p pg-spawnd cli_review', checkout, False, 0),
+    ('cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --lib', checkout, False, 0),
+    ('plangraph fast-checks --base ' + 'a'*40, checkout, False, 0),
+    ('pytest -q tests/test_keeper_pg_unit.py', checkout.parent, False, 2),
+    ('pytest -q tests/test_keeper_pg_unit.py', checkout, True, 2),
+    ('pytest -q ../tests/test_keeper_pg_unit.py', checkout, False, 2),
+    ('pytest -q tests/test_keeper_pg_unit.py; pwd', checkout, False, 2),
+    ('pytest', checkout, False, 2),
+    ('pytest -p arbitrary tests/test_keeper_pg_unit.py', checkout, False, 2),
+    ('cargo test -p pg-spawnd --config fixture', checkout, False, 2),
+    ('cargo build -p pg-spawnd', checkout, False, 2),
+    ('git diff', checkout, False, 2),
+    ('ls', checkout, False, 2),
+]:
+    payload = dict(hook_event_name='PreToolUse', tool_name='Bash', cwd=str(cwd),
+                   tool_input=dict(command=command, run_in_background=background))
+    result = subprocess.run(shlex.split(hook['command']), input=json.dumps(payload),
+                            text=True, capture_output=True, cwd=cwd)
+    assert result.returncode == expected, (command, result)
+sandbox = settings['sandbox']
 assert sandbox['enabled'] and sandbox['failIfUnavailable'] and not sandbox['allowUnsandboxedCommands'], sandbox
 assert not sandbox['autoAllowBashIfSandboxed'] and sandbox['excludedCommands'] == [], sandbox
 assert sandbox['filesystem']['denyWrite'] == ['.'], sandbox

@@ -343,6 +343,16 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, card: 
         ["FAIL"] => "fail",
         _ => return,
     };
+    if verdict == "pass"
+        && crate::review_test_evidence::required(leg)
+        && crate::review_test_evidence::reported(&text).is_none()
+    {
+        record.set("stdout_tail", json!(text));
+        record.set("verdict", json!("no_verdict"));
+        record.set("review_status", json!("no_verdict"));
+        record.set("reason", json!("review_tests_unavailable"));
+        return;
+    }
     let paths =
         crate::review_citation::diff_paths(Path::new(cwd), value["review_base"].as_str(), head);
     if verdict == "pass" && !crate::review_citation::names_file(&text, &paths) {
