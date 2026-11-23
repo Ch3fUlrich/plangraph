@@ -359,10 +359,17 @@ def test_go_req_checks_each_workflow_touching_commit(env, trailer, accepted):
 
 @pytest.mark.parametrize("trailer,accepted", [("", False), ("\n\nGate-Edit: D-5952", True)])
 def test_build_refuses_a_pr_head_with_an_unauthorized_workflow_edit(env, trailer, accepted):
-    env.branch_pr(1, {".github/workflows/tests.yml": "on: push\n"}, trailer=trailer)
+    head = env.branch_pr(1, {".github/workflows/tests.yml": "on: push\n"}, trailer=trailer)
+    env.state["full_dispatch_runs"] = {head: [
+        {"id": 51, "head_sha": head, "head_branch": "lane/p1", "event": "workflow_dispatch",
+         "status": "completed", "conclusion": "success"}]}
+    env.save()
     result = env.run("build", "--name", "w1", "--prs", "1")
     assert (result.returncode == 0) == accepted, result.stderr
-    if not accepted:
+    if accepted:
+        state = json.loads(env.state_file("w1").read_text())
+        assert state["prs"]["1"]["full_ci_run"] == 51
+    else:
         assert "Gate-Edit" in result.stderr and "#1" not in result.stdout
         assert not env.state_file("w1").exists()
 

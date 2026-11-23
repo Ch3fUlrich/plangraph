@@ -77,6 +77,11 @@ and the unit reports a stuck-work alert for a failed child or empty review.
 
 ## A red train
 
+Changes to shared test execution or setup need a successful full Tests workflow on their
+own head before `merge_batch.py build` admits them. The part table records the run ID.
+If a runner-wide part causes a train CI failure, drop it for its next train after its own
+CI passes, unless a single commit fixes it. Track pre-existing races as fixes on main.
+
 `land::split` (rust/plangraph-cli/src/land/split.rs) plans the retries of a red train; every retry is a new frozen
 candidate (rule 3.52 (8), D-6535).
 
