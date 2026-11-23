@@ -73,6 +73,24 @@ fn daily_coverage_joins_by_run_and_host_at_the_exact_boundary() {
 }
 
 #[test]
+fn daily_coverage_rejects_conflicting_hosts_within_an_evidence_source() {
+    for source in ["runs", "fleet", "keeper"] {
+        let mut input = json!({"day":"2026-11-22", "runs":[], "fleet":[], "keeper":[]});
+        input[source] = json!([
+            {"run_id":"run-shared", "host":"a"},
+            {"run_id":"run-shared", "host":"b"}
+        ]);
+        let output = call("attempt-coverage", &input);
+        assert!(!output.status.success(), "{source}");
+        assert!(output.stdout.is_empty(), "{source}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            "conflicting hosts for one attempt coverage run ID"
+        );
+    }
+}
+
+#[test]
 fn daily_inventory_includes_separate_fleet_evidence_and_uses_utc_end_time() {
     let state = tempfile::tempdir().unwrap();
     let midnight = 1_700_006_400;
