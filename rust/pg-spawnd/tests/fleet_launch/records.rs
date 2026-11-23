@@ -266,7 +266,12 @@ pub fn check_router_prompt(launcher: &Launcher) {
         .unwrap()
         + 1;
     let system = args[system].as_str().unwrap();
+    assert!(
+        system.contains("Invoke the skill router-core at startup"),
+        "{system}"
+    );
     assert!(system.contains("skills/router-core/SKILL.md"), "{system}");
+    assert!(system.contains("Batch mode procedure"), "{system}");
     assert_eq!(args.last(), Some(&json!(PROMPT)));
 }
 

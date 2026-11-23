@@ -33,7 +33,7 @@ pub fn check(launcher: &Launcher) {
                 },
             );
         let expected = if case.role == "routing" && matches!(launcher, Launcher::Rust(_)) {
-            expected.replace("<881 chars>", "<987 chars>")
+            expected.replace("<881 chars>", "<1039 chars>")
         } else {
             expected
         };
