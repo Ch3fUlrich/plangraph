@@ -524,3 +524,29 @@ def test_launch_accepts_a_registered_repository_diff_ref(request_data):
     request_data['card'] = {'diff_ref': {'repo_id': 'demo', 'base_sha': 'a' * 40, 'head_sha': 'b' * 40}}
     code, out, err = invoke(request_data)
     assert code == 0, (out, err)
+
+
+def test_review_launch_resolves_latest_nvm_harness_under_user_manager_path(
+        request_data, tmp_path, monkeypatch):
+    import shutil
+    from plangraph.routing_support.clients import build_child_env
+
+    manager_path = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('PATH', manager_path)
+    monkeypatch.delenv('NVM_DIR', raising=False)
+    monkeypatch.setattr(spec.runner, 'build_child_env', build_child_env)
+    node = tmp_path / '.nvm/versions/node'
+    for version in ('v9.0.0', 'v24.19.0'):
+        bin_dir = node / version / 'bin'
+        bin_dir.mkdir(parents=True)
+        (bin_dir / 'opencode').symlink_to('/bin/true')
+    expected = str(node / 'v24.19.0/bin/opencode')
+    request_data.update(leg={'id': 'opencode-glm-5.3-flash-free'})
+
+    code, out, err = invoke(request_data)
+    assert (code, err) == (0, '')
+    launch = json.loads(out)
+    assert str(node / 'v24.19.0/bin') in launch['env']['PATH'].split(os.pathsep)
+    assert launch['argv'][0] == expected
+    assert shutil.which('opencode', path=launch['env']['PATH']) == expected

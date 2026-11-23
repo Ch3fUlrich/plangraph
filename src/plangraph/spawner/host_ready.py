@@ -31,6 +31,13 @@ _sccache_missing_warned = False
 DEFAULT_CARGO_TARGET_CAP_GB = 12
 
 
+def _node_version(entry):
+    version = re.fullmatch(r'v([0-9]+)\.([0-9]+)\.([0-9]+)(-.+)?', entry.name)
+    if not version:
+        return (), False, entry.name
+    return tuple(map(int, version.groups()[:3])), version[4] is None, entry.name
+
+
 def harness_path(env, *, native_writer=False):
     """Find user-installed tools for a bare system PATH or native Codex admission."""
     inherited = env.get('PATH', os.defpath)
@@ -44,8 +51,9 @@ def harness_path(env, *, native_writer=False):
     home = Path(env.get('HOME') or Path.home())
     versions = Path(env.get('NVM_DIR') or home / '.nvm') / 'versions/node'
     try:
-        node = sorted((entry / 'bin' for entry in versions.iterdir()
-                       if not entry.name.startswith('.')), reverse=True)
+        node = [entry / 'bin' for entry in sorted(
+            (entry for entry in versions.iterdir() if not entry.name.startswith('.')),
+            key=_node_version, reverse=True)]
     except OSError:
         node = []
     installed = [home / '.local/bin', *node, home / '.qoder/entry']
