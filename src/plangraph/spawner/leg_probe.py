@@ -485,6 +485,7 @@ def _check_manage_key(runner):
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_reviewers=False, role=None):
+    """Probe selected legs and report quota skips separately from probe failures."""
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active, routed_review_legs, spawnable_legs
     SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
@@ -514,7 +515,8 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
             add(leg, review=True)
     path = harness_path(os.environ)
     if selected and not any(shutil.which(harness, path=path) for harness in {leg.harness for leg in selected}):
-        return dict(ok=False, probes=[dict(id=leg.id, **_missing_harness(leg.harness)) for leg in selected])
+        return dict(ok=False, probes=[dict(id=leg.id, **_missing_harness(leg.harness)) for leg in selected],
+                    limited_legs=[])
     manage_key = await asyncio.to_thread(_check_manage_key, runner) if (all_reviewers or role == 'review') else None
     results = []
     state = _store_for(runner)
@@ -554,7 +556,9 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
         if quota_reprobe:
             probe_kwargs['quota_reprobe'] = True
         results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)))
-    reply = dict(ok=all(row['ok'] for row in results), probes=results)
+    reply = dict(ok=all(row['ok'] for row in results if row.get('skipped') != 'limited'),
+                 probes=results,
+                 limited_legs=[row['id'] for row in results if row.get('skipped') == 'limited'])
     if manage_key is not None:
         reply['manage_key_alert'] = manage_key
     return reply

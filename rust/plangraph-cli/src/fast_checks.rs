@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 pub(super) type Result<T> = std::result::Result<T, String>;
 
+#[path = "fast_check_worktree.rs"]
+mod owned;
 #[path = "fast_check_target.rs"]
 mod target;
 use target::{jail_binary, resolve_cargo_target, run_step};
@@ -201,6 +203,41 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
         for path in paths {
             affected.args.extend(["--changed".into(), path.clone()]);
         }
+        if root.join("tests/test_fleet_snapshot.py").is_file() {
+            let mut select = affected.args.clone();
+            select.retain(|arg| arg != "--run");
+            let selected = output(root, &select)?;
+            let plan: serde_json::Value = serde_json::from_str(
+                selected
+                    .lines()
+                    .next()
+                    .ok_or("missing affected test plan")?,
+            )
+            .map_err(|error| error.to_string())?;
+            if plan["tests"]
+                .as_array()
+                .ok_or("invalid affected test plan")?
+                .iter()
+                .any(|path| path == "tests/test_fleet_snapshot.py")
+            {
+                // Cargo verifies the sources even when another checkout built the cache last.
+                steps.push(step(
+                    "fleet-spawnd",
+                    &[
+                        "cargo",
+                        "build",
+                        "--locked",
+                        "--manifest-path",
+                        "rust/Cargo.toml",
+                        "-p",
+                        "pg-spawnd",
+                        "--bin",
+                        "pg-spawnd",
+                    ],
+                ));
+                affected.args.push("--fleet-spawnd-prebuilt".into());
+            }
+        }
         steps.push(affected);
     }
     Ok((selection, steps))
@@ -226,11 +263,13 @@ fn execute(args: &[String]) -> Result<()> {
     );
     let mut base = "origin/main".to_string();
     let mut dry = false;
+    let mut owned = false;
     let mut files = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--plan" => dry = true,
+            "--owned-worktree" => owned = true,
             "--base" => {
                 index += 1;
                 base = args.get(index).ok_or("--base requires a revision")?.clone();
@@ -243,6 +282,12 @@ fn execute(args: &[String]) -> Result<()> {
         }
         index += 1;
     }
+    if owned {
+        if dry || files.is_some() {
+            return Err("--owned-worktree checks the committed HEAD and cannot be used with --plan or --files".into());
+        }
+        return owned::run(&root, args);
+    }
     let paths = match files {
         Some(files) if dry => files,
         Some(_) => {
@@ -251,44 +296,7 @@ fn execute(args: &[String]) -> Result<()> {
                     .into(),
             )
         }
-        None => {
-            let merge_base = output(
-                &root,
-                &[
-                    "git".into(),
-                    "merge-base".into(),
-                    base.clone(),
-                    "HEAD".into(),
-                ],
-            )?;
-            let tracked = output(
-                &root,
-                &[
-                    "git".into(),
-                    "diff".into(),
-                    "--name-only".into(),
-                    "--no-renames".into(),
-                    "-z".into(),
-                    merge_base.trim().into(),
-                ],
-            )?;
-            let untracked = output(
-                &root,
-                &[
-                    "git".into(),
-                    "ls-files".into(),
-                    "--others".into(),
-                    "--exclude-standard".into(),
-                    "-z".into(),
-                ],
-            )?;
-            tracked
-                .split('\0')
-                .chain(untracked.split('\0'))
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
-        }
+        None => owned::diff_paths(&root, &base)?,
     };
     let (selection, steps) = plan(&root, &base, &paths)?;
     print!("{selection}");
@@ -330,6 +338,9 @@ fn execute(args: &[String]) -> Result<()> {
             command
                 .env("PG_JAIL", "off")
                 .env("PG_TEST_ALLOW_UNJAILED", "1");
+        }
+        if step.label == "new-code-lang" {
+            command.env("CLASS_SEARCH_BASE", &base);
         }
         command
             .args(&step.args[1..])

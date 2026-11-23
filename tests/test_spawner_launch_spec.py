@@ -185,6 +185,28 @@ def test_dry(request_data, monkeypatch):
     assert json.loads(out)['argv'][0] == 'qodercli'
 
 
+@pytest.mark.parametrize('installed', [True, False])
+def test_review_uses_resolved_codex_client(request_data, tmp_path, monkeypatch, installed):
+    from plangraph.planner.legs import REVIEW_GPT
+    from plangraph.routing_support.clients import CODEX_REVIEW_CLIENT_MISSING
+
+    executable = tmp_path / 'resolved-codex'
+    executable.symlink_to('/bin/true')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client',
+                        lambda: (str(executable) if installed else None, 'fixture search'))
+    request_data.update(leg={'id': REVIEW_GPT, 'harness': 'codex'},
+                        writer_families=['gemini'])
+
+    code, out, err = invoke(request_data)
+    if installed:
+        assert (code, err) == (0, '')
+        assert json.loads(out)['argv'][0] == str(executable)
+    else:
+        assert (code, out, err) == (
+            CODEX_REVIEW_CLIENT_MISSING, '',
+            f"REVIEW {request_data['run_id']} FAIL client_missing fixture search\n")
+
+
 @pytest.mark.parametrize('explicit', [None, False])
 def test_inline_only_review_without_diff_refused(request_data, explicit):
     # A routed leg id alone is not an explicit document review: fail closed.

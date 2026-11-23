@@ -150,6 +150,23 @@ pub fn mutation_lock(repo: &Path) -> Result<crate::lockfile::LockGuard, GitError
         .map_err(|e| std::io::Error::other(e).into())
 }
 
+/// Locate the shared receipt for an exact-head fast check across linked worktrees.
+pub fn fast_check_stamp(repo: &Path, head: &str) -> Result<PathBuf, GitError> {
+    if !matches!(head.len(), 40 | 64) || !head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(GitError::BadRev(head.to_owned()));
+    }
+    Ok(fast_check_state_dir(repo)?.join(head))
+}
+
+/// Locate the shared directory for fast-check receipts and disposable worktrees.
+pub fn fast_check_state_dir(repo: &Path) -> Result<PathBuf, GitError> {
+    git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .map(|common| Path::new(&common).join("plangraph-state/fast-checks"))
+}
+
 /// Create a worktree at `dest` for `id`, on a new branch starting at `base_sha`.
 pub fn create(
     repo: &Path,

@@ -500,7 +500,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         st = read_leg_model(read_status, leg_obj, leg_obj.model)
         if leg_obj.harness == "agy" and "/" not in leg_obj.model:
             alt = read_status(leg_key(leg_obj))
-            if unavailable(alt) and (not unavailable(st) or (alt.get('evidence') or {}).get('quota_scope') == 'account'):
+            if unavailable(alt) and not unavailable(st):
                 return alt
         return st
 

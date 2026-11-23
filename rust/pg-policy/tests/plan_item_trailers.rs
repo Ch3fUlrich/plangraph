@@ -240,3 +240,56 @@ fn class_search_exempts_resolutions_during_train_delta_review() {
         assert!(!check(&["--train-delta"]).status.success(), "{subject}");
     }
 }
+
+#[test]
+fn class_search_accepts_repair_of_malformed_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    git(repo, &["commit", "--allow-empty", "-qm", "Base"]);
+    let base = git(repo, &["rev-parse", "HEAD"]);
+    git(repo, &["commit", "--allow-empty", "-qm", "Ordinary commit"]);
+    let malformed = "Class-Search: fixture -> 1 hit, 1 changed";
+    git(
+        repo,
+        &["commit", "--allow-empty", "-qm", "Fix", "-m", malformed],
+    );
+    let sha = git(repo, &["rev-parse", "HEAD"]);
+    let check = || {
+        Command::new(env!("CARGO_BIN_EXE_pg-policy"))
+            .current_dir(repo)
+            .args(["--class-search", &sha])
+            .output()
+            .unwrap()
+    };
+    let check_range = || {
+        Command::new(env!("CARGO_BIN_EXE_pg-policy"))
+            .current_dir(repo)
+            .args(["--class-search", "--range", &base])
+            .output()
+            .unwrap()
+    };
+    let failed = check();
+    assert!(!failed.status.success(), "{failed:?}");
+    let failed_range = check_range();
+    let output = String::from_utf8_lossy(&failed_range.stdout);
+    assert!(
+        !failed_range.status.success() && output.contains(&sha) && output.contains(malformed),
+        "{failed_range:?}"
+    );
+    git(
+        repo,
+        &[
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "Repair audit",
+            "-m",
+            &format!("Class-Search: {} fixture -> 1 hits, 1 changed", &sha[..8]),
+        ],
+    );
+    let repaired = check();
+    assert!(repaired.status.success(), "{repaired:?}");
+    let repaired_range = check_range();
+    assert!(repaired_range.status.success(), "{repaired_range:?}");
+}

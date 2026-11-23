@@ -32,11 +32,7 @@ def read_leg_model(read, leg, model, **scope):
     foreign = harness not in (None, "agy")
     if harness == "codex" or (foreign and model.startswith(("agy:", "agy/"))):
         scope["harness"] = harness
-    state = read(model, **scope)
-    evidence = state.get("evidence") or {}
-    if foreign and evidence.get("quota_scope") == "account" and evidence.get("harness") == "agy":
-        return {"state": "ok", "evidence": None}
-    return state
+    return read(model, **scope)
 
 
 def require_available(leg, reader, card):
