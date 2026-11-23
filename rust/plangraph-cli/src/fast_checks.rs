@@ -2,7 +2,7 @@
 use crate::fast_check_packages::packages;
 #[path = "fast_check_replay.rs"]
 mod replay;
-use pg_worker_core::cargo_cache;
+use pg_worker_core::{cargo_cache, stall};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -44,6 +44,28 @@ fn output(root: &Path, args: &[String]) -> Result<String> {
     }
     String::from_utf8(result.stdout).map_err(|e| e.to_string())
 }
+fn nextest_available(root: &Path) -> bool {
+    if !root.join(NEXTEST_CONFIG).is_file() {
+        return false;
+    }
+    let mut probe = Command::new("cargo");
+    probe.args(["nextest", "--version"]).current_dir(root);
+    let opts = stall::Opts {
+        timeout: Some(Duration::from_secs(5)),
+        grace: Duration::from_millis(200),
+        ..Default::default()
+    };
+    if stall::supervise(probe, &opts)
+        .is_ok_and(|result| result.code == Some(0) && !result.timed_out)
+    {
+        return true;
+    }
+    eprintln!(
+        "fast-checks: cargo-nextest unavailable; falling back to cargo test (no per-test deadline)"
+    );
+    false
+}
+
 fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)> {
     let mut selector = vec![
         "python3".into(),
@@ -138,6 +160,7 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
                 ],
             ));
         }
+        let use_nextest = !selected.is_empty() && nextest_available(root);
         for (manifest, name) in selected {
             if manifest.starts_with("rust/worker/") && !enabled("rust-worker")
                 || manifest.starts_with("rust/spikes/") && !enabled("rust-spike")
@@ -155,7 +178,7 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
                 ("clippy", vec!["--all-targets", "--", "-D", "warnings"]),
                 ("test", vec![]),
             ] {
-                let mut args = if verb == "test" && root.join(NEXTEST_CONFIG).is_file() {
+                let mut args = if verb == "test" && use_nextest {
                     [
                         "cargo",
                         "nextest",

@@ -294,13 +294,13 @@ def test_default_root_is_script_relative(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("pin_only", [False, True])
-@pytest.mark.parametrize("bounded", [False, True])
-def test_rust_selection(repo, monkeypatch, pin_only, bounded):
+@pytest.mark.parametrize("nextest", ["unconfigured", "installed", "missing"])
+def test_rust_selection(repo, monkeypatch, capsys, pin_only, nextest):
     crate = repo / "rust/one"
     crate.mkdir(parents=True)
     (crate / "Cargo.toml").write_text('[package]\nname = "one"\n')
     (crate / "lib.rs").write_text("// changed\n")
-    if bounded:
+    if nextest != "unconfigured":
         config = repo / "rust/.config/nextest.toml"
         config.parent.mkdir()
         config.write_text('[profile.default]\nslow-timeout = { period = "2m", terminate-after = 1 }\n')
@@ -313,11 +313,24 @@ def test_rust_selection(repo, monkeypatch, pin_only, bounded):
         subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                         "commit", "-qm", "pin"], cwd=repo, check=True)
     monkeypatch.setattr(preflight.shutil, "which", lambda _: "/fake/cargo")
+    real_run = subprocess.run
+    probes = []
+
+    def run(command, *args, **kwargs):
+        if command[1:] == ["nextest", "--version"]:
+            probes.append(command)
+            assert kwargs["cwd"] == repo / "rust"
+            return subprocess.CompletedProcess(command, int(nextest != "installed"))
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(preflight.subprocess, "run", run)
     commands = preflight.rust_commands(repo, "HEAD~1", "HEAD")
+    assert len(probes) == int(nextest != "unconfigured")
+    assert ("falling back to cargo test" in capsys.readouterr().err) == (nextest == "missing")
     assert commands[1] == ["cargo", "clippy", "-p", "one", "--all-targets", "--", "-D", "warnings"]
     expected = (["cargo", "nextest", "run", "--config-file", str(config), "--no-fail-fast",
                  "--color", "never", "-p", "one"]
-                if bounded else ["cargo", "test", "-p", "one"])
+                if nextest == "installed" else ["cargo", "test", "-p", "one"])
     assert commands[2] == expected
 
 
