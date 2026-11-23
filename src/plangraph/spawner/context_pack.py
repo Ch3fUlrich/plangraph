@@ -41,7 +41,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
-from .env_redact import redact_source, _source_block, _join_prompt, PrivateKeyScan, PEM_MARKER, marker_carry
+from .env_redact import (
+    redact_source, _before_review_output, _source_block, _join_prompt,
+    PrivateKeyScan, PEM_MARKER, marker_carry,
+)
 from .inline_diff import InlineDiffError
 
 LANGUAGE_RULE = ('new code is Rust with Rust tests; no new Python or shell file; '
@@ -378,11 +381,12 @@ def bound_prompt(prompt: str, max_request_tokens: int) -> str:
     return prompt
 
 
-def pack_prompt(prompt: str, card, cwd, pack: Pack | None = None) -> str:
+def pack_prompt(prompt: str, card, cwd, pack: Pack | None = None, *, review=False) -> str:
     """The prompt plus a CONTEXT PACK section no longer than the cap (framing and ``omitted:`` included).  ``pack``
     is the spawn's :func:`build` result; strict admission also scans the brief when built here."""
     brief = prompt if os.environ.get('PLANGRAPH_CONTEXT_STRICT') == '1' else ''
-    return prompt + (pack if pack is not None else build(brief, card, cwd)).text
+    text = (pack if pack is not None else build(brief, card, cwd)).text
+    return _before_review_output(prompt, text) if review and text else prompt + text
 
 
 def warnings(prompt: str, card, cwd) -> list[str]:
