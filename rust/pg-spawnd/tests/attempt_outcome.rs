@@ -5,6 +5,9 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 fn call(verb: &str, value: &Value) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
         .arg(verb)
@@ -139,6 +142,24 @@ fn terminal_records_project_without_routed_legs() {
             "worker_crash",
         ),
         (
+            "spawner",
+            "implement",
+            "codex",
+            "refused",
+            2,
+            "codex",
+            "contract_defect",
+        ),
+        (
+            "spawner",
+            "implement",
+            "codex",
+            "stalled_no_leg",
+            1,
+            "codex",
+            "stall",
+        ),
+        (
             "native-codex",
             "implement",
             "codex",
@@ -172,6 +193,38 @@ fn terminal_records_project_without_routed_legs() {
         assert_eq!(row["task_class"], "adhoc");
         assert_eq!(row["exit_class"], outcome);
     }
+}
+
+#[test]
+fn null_projection_leaves_delivery_pending() {
+    let state = tempfile::tempdir().unwrap();
+    let output = test_python::command()
+        .args([
+            "-c",
+            r#"
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.spawner.notify import retry_spawn_attempts
+
+state = Path(sys.argv[1])
+run = dict(run_id='run-fixture', ended=2, status=True)
+keeper = SimpleNamespace(url='fixture', token_file='fixture')
+with patch('plangraph.fleet_snapshot._projection_binary', return_value=sys.argv[2]):
+    assert retry_spawn_attempts(state, [run], keeper=keeper) == []
+assert not (state / 'runs/run-fixture/attempt.delivered').exists()
+"#,
+        ])
+        .arg(state.path())
+        .arg(env!("CARGO_BIN_EXE_pg-spawnd"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
