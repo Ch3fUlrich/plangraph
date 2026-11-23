@@ -32,16 +32,18 @@ DEFAULT_CARGO_TARGET_CAP_GB = 12
 
 
 def harness_path(env):
-    """Include host-installed tools when the launcher has no login-shell PATH."""
-    home = Path(env.get('HOME') or env.get('USERPROFILE') or Path.home())
+    """Extend the system PATH for launches without a login shell."""
+    inherited = env.get('PATH', os.defpath)
+    system_dirs = {'/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin'}
+    path = inherited.split(os.pathsep)
+    if os.name != 'posix' or any(entry and entry not in system_dirs for entry in path):
+        return inherited
+    home = Path(env.get('HOME') or Path.home())
     versions = Path(env.get('NVM_DIR') or home / '.nvm') / 'versions/node'
     try:
         node = sorted((entry / 'bin' for entry in versions.iterdir()
                        if not entry.name.startswith('.')), reverse=True)
     except OSError:
-        node = []
-    path = env.get('PATH', os.defpath).split(os.pathsep)
-    if any(str(entry) in path for entry in node):
         node = []
     installed = [home / '.local/bin', *node, home / '.qoder/entry']
     added = [str(entry) for entry in installed if entry.is_dir() and str(entry) not in path]
