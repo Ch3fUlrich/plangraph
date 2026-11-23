@@ -321,11 +321,35 @@ fn executable_fixture_keeps_an_existing_staging_path() {
     let script = executable_test_support::write_script(tmp.path(), "cargo", "#!/bin/sh\nexit 0\n");
 
     assert_eq!(std::fs::read_to_string(other).unwrap(), "sibling fixture");
-    assert!(spawn_retrying(&mut Command::new(script))
+    assert!(executable_test_support::spawn(&mut Command::new(script))
         .unwrap()
         .wait()
         .unwrap()
         .success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn executable_fixture_retries_when_its_write_descriptor_is_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = executable_test_support::write_script(tmp.path(), "busy", "#!/bin/sh\nexit 0\n");
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&script)
+        .unwrap();
+    let mut command = Command::new(script);
+    assert!(pg_worker_core::stall::is_text_busy(
+        &command.spawn().unwrap_err()
+    ));
+
+    let closer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(70));
+        drop(writer);
+    });
+    let child = executable_test_support::spawn(&mut command);
+    closer.join().unwrap();
+
+    assert!(child.unwrap().wait().unwrap().success());
 }
 
 #[test]
