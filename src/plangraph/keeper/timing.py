@@ -102,7 +102,7 @@ def outside_request_lock():
             _request_timer.reset(token)
 
 
-_fields = ("build_ms", "encode_ms", "sign_ms", "write_ms", "tick_ms", "record_ms", "submit_ms")
+_fields = ("build_ms", "encode_ms", "sign_ms", "write_ms", "tick_ms", "record_ms", "submit_ms", "fleet_ms")
 _events = {"request_timing", "writer_timing", "reaper_timing", "snapshot_timing",
            "changelog_timing"}
 
@@ -156,7 +156,7 @@ def _emit(event, kind, wait, hold, parts):
             return  # a failed clock sample leaves None and its line is dropped here
         verb = getattr(parts, "verb", None)
         if verb not in _LATENCY_VERBS and (event in {"snapshot_timing", "changelog_timing", "reaper_timing"}
-                or event == "request_timing" and kind in {"read", "write"}) and wait + hold < THRESHOLD_MS:
+                or event == "request_timing" and kind in {"read", "write"}) and max(wait + hold, parts.get("fleet_ms", 0)) < THRESHOLD_MS:
             return
         names = ("wait_ms", "hold_ms", *_fields)
         line = f"keeper: {event} kind={kind} " + " ".join(
