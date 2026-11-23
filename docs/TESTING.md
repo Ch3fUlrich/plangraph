@@ -61,6 +61,13 @@ Browser tests retain their separate explicit invocation and dependencies.
 Targets: typical affected run under 3 minutes; full parallel run under 8 minutes.
 These are performance goals, not assertions to weaken when a host is overloaded.
 
+## Rust doctests
+
+Local preflight and `plangraph fast-checks` use nextest with the configured
+test deadlines when it is available. Nextest skips doctests. Run them
+explicitly from `rust/` with `cargo test --workspace --doc`, or use
+`cargo test --manifest-path <manifest> --doc` for a standalone crate.
+
 ## Preflight Rust target and sccache
 
 `tools/preflight.py` runs its Rust family with a private `CARGO_TARGET_DIR`
