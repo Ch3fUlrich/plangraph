@@ -380,3 +380,20 @@ def test_review_seats_accepts_one_witnessed_completion_after_skips(unseated_w, t
     else:
         assert adapter.review_seats(item, HEAD, "") == [
             {"model": "gemini-test", "verdict": "pass", "run_id": "run-one", "head": HEAD}]
+
+
+_TABLE = json.loads((__import__("pathlib").Path(__file__).parent / "fixtures/go_row_prefixes.json").read_text())["rows"]
+_PREFIX_ROWS = [e for e in _TABLE if "GO-KEYS" not in e["row"] and "RULINGS" not in e["row"]
+                and e.get("reason", "go_row_not_go") == "go_row_not_go"]
+
+
+@pytest.mark.parametrize("entry", _PREFIX_ROWS, ids=[e["name"] for e in _PREFIX_ROWS])
+def test_the_close_path_gives_the_shared_fixture_tables_verdict(w, entry):
+    """close_merged and ``pg go-row check`` read a GO row's prefix with one grammar."""
+    row = entry["row"].replace("{head}", HEAD).replace("#12", "#786").replace("#1101", "#786") \
+        .replace("#1095", "#786")
+    w.decision_path.write_text(f"| D-5504 | demo | {row} |\n", encoding="utf-8")
+    if entry["accept"]:
+        assert _close(w)["state"] == "done"
+    else:
+        _refused(w, "evidence_unverified", "go_row_not_go")

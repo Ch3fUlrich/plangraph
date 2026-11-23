@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from . import timing
+from .evidence_pr import part_changes
 from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
 __all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "trailer_entries", "plan_items", "valid_ref",
@@ -562,7 +563,7 @@ class GitAdapter:
                     yield from self._train_deploy_changes(repo, parent, part, names)
                 continue
             if names.intersection(self.merge_plan_items(repo, merge)):
-                yield part, merge, self._name_status(repo, ["--end-of-options", parent, merge])
+                yield part, merge, part_changes(self, repo, parent, part, merge, names)
 
     _TRAIN_MERGE_SUBJECT = re.compile(
         r"Landing train [0-9]+\b|batch [A-Za-z0-9_-]+: (?:#[0-9]+ )+\(#[0-9]+\)$", re.I)
