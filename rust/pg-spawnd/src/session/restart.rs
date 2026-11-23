@@ -1,8 +1,8 @@
 mod card;
 
 use super::{
-    paths::{io_text, read_text, Paths},
-    policy, settings, Caps, Request,
+    paths::{io_text, Paths},
+    policy, read_writer_prompt, settings, Caps, Request,
 };
 use regex::Regex;
 use serde_json::Value;
@@ -31,8 +31,8 @@ pub(super) fn prepare(
     };
     let caps = policy::select_caps(active_policy, &args.role, request.override_cap.as_ref()).caps;
     let supplied = Path::new(&args.prompt);
-    let supplied =
-        read_text(supplied).map_err(|e| format!("prompt file: {}", io_text(&e, supplied)))?;
+    let supplied = read_writer_prompt(supplied)
+        .map_err(|e| format!("prompt file: {}", io_text(&e, supplied)))?;
     let window = settings::effective_window(caps.hard);
     let cwd = Path::new(&args.cwd);
     for named in handoff_paths(&supplied) {

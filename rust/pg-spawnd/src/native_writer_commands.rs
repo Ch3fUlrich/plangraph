@@ -74,6 +74,10 @@ impl Host {
         {
             return Err("push_ref must name refs/heads/...".into());
         }
+        self.brief = pg_spawnd::batch_writer_brief::render(
+            request["prompt"].as_str().ok_or("prompt missing")?,
+        )?
+        .into_owned();
         self.effort = writer_effort(&request["card"])?;
         self.review_override = super::review_route::review_override(&request["card"])?;
         Ok(())
@@ -180,11 +184,8 @@ fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
     }
     record["cwd"] = json!(host.cwd);
     host.save(&record)?;
-    native_writer::run(
-        &mut host,
-        record,
-        request["prompt"].as_str().ok_or("prompt missing")?,
-    );
+    let brief = host.brief.clone();
+    native_writer::run(&mut host, record, &brief);
     Ok(())
 }
 
