@@ -11,7 +11,7 @@ from ..views_progress import progress
 FIELDS = tuple((
     "project id key title description host wait choices kg_refs waits_on_operator "
     "kind track owner state estimate_h estimate_src depends_on corrects "
-    "done_criteria evidence_kinds operator priority review_tier source note epoch "
+    "done_criteria design_ref evidence_kinds operator priority review_tier source note epoch "
     "claimed_by worker_run reviewer_run lease_until model review_waiver reviews "
     "evidence updated_at corrected_by fixes fixed_by writer_model seat_models "
     "run_ids created_at done_at reviewed merged answer incidents"
@@ -147,6 +147,7 @@ def _full(store, now, values=None):
             "estimate_h": item["estimate_h"], "estimate_src": item["estimate_src"],
             "depends_on": item["depends_on"], "corrects": item["corrects"],
             "done_criteria": item["done_criteria"],
+            **({"design_ref": item["design_ref"]} if item.get("design_ref") else {}),
             "evidence_kinds": item["evidence_kinds"],
             "operator": item["operator"], "priority": item["priority"],
             "review_tier": item["review_tier"],
