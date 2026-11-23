@@ -17,6 +17,8 @@ def test_attempt_coverage_alert_is_once_per_utc_day_even_after_replay(tmp_path, 
 
     def project(state, verb, **kwargs):
         assert state == tmp_path and verb == "attempt-coverage"
+        assert kwargs.get("encoding") == "utf-8"
+        assert kwargs.get("errors") == "replace"
         data = json.loads(kwargs["input"])
         calls.append(data["day"])
         return SimpleNamespace(stdout=json.dumps(dict(day=data["day"], below_threshold=True)))

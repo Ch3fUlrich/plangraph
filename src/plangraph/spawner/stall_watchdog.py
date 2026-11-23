@@ -336,7 +336,7 @@ def attempt_coverage_tick(state, *, now=None):
         inputs['keeper'] = keeper.attempt_coverage(day)
         report = json.loads(lifecycle_command(
             state, 'attempt-coverage', input=json.dumps(inputs), text=True,
-            capture_output=True).stdout)
+            encoding='utf-8', errors='replace', capture_output=True).stdout)
         findings = []
         if report['below_threshold']:
             event = dict(report, rule='spawn-attempt-coverage', kind='alert',
