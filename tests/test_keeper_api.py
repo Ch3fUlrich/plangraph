@@ -482,21 +482,87 @@ def test_incident_migration_on_existing_sqlite_store(tmp_path):
         conn.close()
 
 
-def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch, tmp_path):
-    from concurrent.futures import ThreadPoolExecutor
-    from contextlib import contextmanager
+def _claim_checkouts(tmp_path, names):
     from subprocess import run
-    from time import perf_counter, sleep
-    from plangraph.keeper import context_sources, timing
     from plangraph.keeper.evidence_git import GitAdapter
 
-    repos = {name: tmp_path / name for name in ("demo", *(f"related-{i}" for i in range(4)))}
+    repos = {name: tmp_path / name for name in names}
     for repo in repos.values():
         repo.mkdir()
         run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
         run(["git", "-c", "user.name=T", "-c", "user.email=t@example.invalid",
              "commit", "--allow-empty", "-qm", "base"], cwd=repo, check=True)
-    w.store.ctx = {"git": GitAdapter({name: str(repo) for name, repo in repos.items()})}
+    return GitAdapter({name: str(repo) for name, repo in repos.items()})
+
+
+@pytest.mark.parametrize(("failure", "force_stale"), [
+    ("refusal", False), ("timeout", False), ("timeout", True),
+])
+def test_parallel_claim_refuses_if_any_work_index_fails(
+        srv, w, tmp_path, monkeypatch, failure, force_stale):
+    from types import SimpleNamespace
+    from keeper_util import Clock
+    from plangraph.keeper import context_sources, timing
+    from plangraph.keeper.errors import Refused
+
+    git = _claim_checkouts(tmp_path, ("demo", "related"))
+    w.store.ctx = {"git": git}
+    clock = Clock(0)
+    monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic=clock))
+    slow_started, good_finished = threading.Event(), threading.Event()
+    request_indexes = []
+    read_index = context_sources.work_index
+    share = timing.share_inflight
+    work_indexes = w.store._work_indexes
+    step = "work index for related"
+
+    def read(git, project, **kwargs):
+        if project == "demo":
+            assert slow_started.wait(8)
+            return read_index(git, project, **kwargs)
+        slow_started.set()
+        assert good_finished.wait(8)
+        if failure == "refusal":
+            raise Refused("conflict", f"{step}: refresh refused")
+        clock.advance(w.store.claim_preflight_s + 1)
+        return read_index(git, project, **kwargs)
+
+    def observe_share(key, fetch, **kwargs):
+        result = share(key, fetch, **kwargs)
+        if key == ("work", id(git), "demo"):
+            assert result is not None and not result["stale"]
+            good_finished.set()
+        return result
+
+    def observe_indexes(projects, *, fresh=False, shared=None):
+        if fresh:
+            request_indexes.append(shared)
+        return work_indexes(projects, fresh=fresh, shared=shared)
+
+    monkeypatch.setattr(context_sources, "work_index", read)
+    monkeypatch.setattr(timing, "share_inflight", observe_share)
+    monkeypatch.setattr(w.store, "_work_indexes", observe_indexes)
+    body = {"key": "demo:A"}
+    if force_stale:
+        body["force_stale"] = "reviewed stale evidence"
+    status, _, raw = call(srv, "/v1/claim", method="POST", body=body, token=w.tok("l1main"))
+    message = (f"{step}: refresh refused" if failure == "refusal"
+               else f"claim preflight exceeded its deadline during {step}")
+    assert (status, jbody(raw)) == (409, {"error": "conflict", "msg": message})
+    assert good_finished.is_set()
+    assert request_indexes == [{}]
+    assert w.store._item("demo:A")["state"] == "open"
+    assert not w.conn.execute("SELECT 1 FROM events WHERE type='claimed'").fetchone()
+
+
+def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
+    from time import perf_counter, sleep
+    from plangraph.keeper import context_sources, timing
+
+    names = ("demo", *(f"related-{i}" for i in range(4)))
+    w.store.ctx = {"git": _claim_checkouts(tmp_path, names)}
 
     ids = [f"LOAD-{i}" for i in range(16)]
     w.store.create_items(w.p("router"), [*(defn(key) for key in ids),
@@ -526,7 +592,7 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch,
             peak_indexes = max(peak_indexes, active_indexes)
         try:
             if project != "related-3":
-                index_barrier.wait(timeout=2)
+                index_barrier.wait(timeout=8)
             sleep(.75)  # Keep real refreshes in flight while requests overlap.
             return original(git, project, **kwargs)
         finally:
@@ -565,7 +631,7 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch,
     print("HTTP p95", round(samples[-1], 3),
           "phase maxima", {name: round(max(values), 4) for name, values in phases.items()})
     assert samples[-1] < 5
-    assert len(phases["index"]) == len(repos)
+    assert len(phases["index"]) == len(names)
     assert peak_indexes == 4
 
 
