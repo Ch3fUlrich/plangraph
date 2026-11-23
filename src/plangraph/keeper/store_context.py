@@ -36,6 +36,7 @@ from .. import views
 from . import context_sources as src, timing
 from .brief import ensure_cap, superseded_contract
 from .errors import Refused
+from .store_runs import _WARM_S, merged_decision_delivery
 from .schema import DEFINITION_EVENTS
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
@@ -289,7 +290,7 @@ class ContextMixin:
             return {name: index for job in jobs for name, index in job.result().items()}
 
     @staticmethod
-    def _indexed_delivery(indexes, key, project):
+    def _indexed_delivery(indexes, key, project, book):
         """Keep bare IDs local and match qualified deliveries across repositories."""
         work = src.indexed_work(indexes[project], key)
         commits = {commit["sha"]: commit for commit in work["commits"] or ()}
@@ -300,7 +301,33 @@ class ContextMixin:
                 commits.setdefault(commit["sha"], commit)
         if commits:
             work["commits"] = list(commits.values())[:src.COMMIT_LIMIT]
+        elif proof := merged_decision_delivery(indexes, book, key, project):
+            work["commits"] = [proof]
         return work
+
+    def _add_decision_reconcile_rows(self, report):
+        """Include decision-only merge candidates in the routing preview without applying a close."""
+        git = self._adapter("git")
+        indexes = {}
+        for name in report["repos"]:
+            if not self._warm(name):
+                raise Refused("evidence_unverified", f"merge_index_not_warm: {name}")
+            indexes[name] = src.work_index(git, name, max_age=_WARM_S, cached_only=True)
+        with timing.outside_request_lock():
+            book = src.decision_book(self._adapter("decisions"))
+        if not book["rows"]:
+            return
+        listed = report["listed"]
+        covered = {row["key"] for row in listed + report["would_close"]}
+        for item in self._all_items():
+            key, project = item["key"], item["project"]
+            if (key in covered or item["state"] not in self.AUTO_STATES
+                    or item["kind"] in ("goal", "operator_task")):
+                continue
+            if proof := merged_decision_delivery(indexes, book, key, project):
+                listed.append({"key": key, "state": item["state"],
+                               "reason": f"evidence_unverified: decision_merge_only: {proof['source']} {proof['sha']}"})
+                report["merged_not_done"] += 1
 
     def _ready_items(self, project=None, n=10, owner=None, agent=False):
         """Candidate rows with shared claim facts and presentation status."""
@@ -341,7 +368,7 @@ class ContextMixin:
                     "age_seconds": work_index["built_age_s"],
                     "reason": "work index built "
                               f"{work_index['built_age_s']}s ago, refresh running"}
-            ctx["work_exists"] = self._indexed_delivery(indexes, row["key"], row["project"])
+            ctx["work_exists"] = self._indexed_delivery(indexes, row["key"], row["project"], inputs["book"])
             prs = src.indexed_open_pulls(indexes, row["key"], row["project"])
             if prs:
                 ctx["work_exists"]["prs"] = prs
@@ -420,10 +447,13 @@ class ContextMixin:
         unknown = [name for name, entry in indexes.items()
                    if entry and entry.get("prs_unverified")]
         if not stale_checks:
-            work = self._indexed_delivery(indexes, item["key"], project)
+            adapter = self._adapter("decisions")
+            with timing.outside_request_lock():
+                book = src.decision_book(adapter)
+            work = self._indexed_delivery(indexes, item["key"], project, book)
             if work["commits"]:
                 raise Refused("bad_state", f"{item['key']} stale: already merged: "
-                              f"Plan-Item commit {work['commits'][0]['sha'][:8]}")
+                              f"{work['commits'][0].get('source', 'Plan-Item commit')} {work['commits'][0]['sha'][:8]}")
             if unknown:
                 raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
             return None
@@ -448,7 +478,7 @@ class ContextMixin:
             "graph": _graph(index), "book": shared["book"], "clock": shared["clock"]}, git=False)
         timing.check_io_deadline("task context")
         work_index = indexes[project]
-        ctx["work_exists"] = self._indexed_delivery(indexes, item["key"], project)
+        ctx["work_exists"] = self._indexed_delivery(indexes, item["key"], project, shared["book"])
         facts = self._claim_staleness(ctx)
         if work_index is not None and work_index.get("stale"):
             facts.append("work index unverified: " + work_index["reason"])
@@ -467,11 +497,11 @@ class ContextMixin:
         facts = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
-        if commits and not lanes:
+        if commits and (not lanes or commits[0].get("source")):
             head = commits[0]
             merge = head.get("merge") or {}
             facts.append(
-                f"already merged: Plan-Item commit {head['sha'][:8]} ({head['date']})"
+                f"already merged: {head.get('source', 'Plan-Item commit')} {head['sha'][:8]} ({head['date']})"
                 + (f" via PR #{merge['pr']}" if merge.get("pr") else "")
                 + " is on the default branch; attach evidence/submit instead")
         if ctx["newer_decisions"]:

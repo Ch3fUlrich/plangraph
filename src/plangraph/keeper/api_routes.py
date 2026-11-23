@@ -254,6 +254,7 @@ def _close_merged_auto(store, principal, body, need):
         principal, project, require_seats=body.get("require_seats"),
         apply=apply, repos_only=repos_only, frozen=True)
     if watch:
+        store._add_decision_reconcile_rows(report)
         report["alert"] = store._watch_merged_open(report)
     return report
 
