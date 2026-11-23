@@ -213,6 +213,31 @@ class SupportMixin:
                 "UPDATE alerts SET msg=?, last_seen=?, n=n+1 WHERE id=?",
                 (msg, ts, row["id"]))
 
+    def _watch_merged_open(self, report):
+        """Store one successful scan observation and alert after two nonzero passes."""
+        if any("merge_index_" in row["reason"] for row in report["listed"]):
+            raise Refused("evidence_unverified", "merged-open watcher scan incomplete")
+        count = report["merged_not_done"]
+        code, now = "merged_open_reconcile", self.now()
+        ts = iso(now)
+        message = f"{count} merged items need routing reconciliation"
+        with self._write():
+            prior = self._alert_row("finding", None, code)
+            if count and prior and prior["n"]:
+                self._alerts_raise_finding(None, code, message, now)
+                return True
+            if prior is None:
+                self.conn.execute(
+                    "INSERT INTO alerts(kind,code,msg,first_seen,last_seen,n,state)"
+                    " VALUES('finding',?,?,?,?,?,'resolved')", (code, message, ts, ts, int(bool(count))))
+            else:
+                self.conn.execute(
+                    "UPDATE alerts SET msg=?,last_seen=?,n=?,state='resolved' WHERE id=?",
+                    (message, ts, int(bool(count)), prior["id"]))
+                if prior["state"] == "open":
+                    self._alert_telemetry("alert_cleared", None, code, now)
+            return False
+
     def _refusal_times(self, row):
         """Epoch seconds of the refusals a refusal row remembers, oldest first.
 
