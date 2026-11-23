@@ -1,5 +1,6 @@
 #![cfg(target_os = "linux")]
 
+use serde_json::Value;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -23,6 +24,7 @@ impl Fixture {
         for dir in [&checkout, &target, &bin] {
             fs::create_dir(dir).unwrap();
         }
+        fs::create_dir(checkout.join(".git")).unwrap();
         Self {
             root,
             checkout,
@@ -112,6 +114,61 @@ fn detached_fixture() -> Fixture {
     "#,
     );
     fixture
+}
+
+#[test]
+fn hand_writer_and_external_review_record_terminal_outcomes() {
+    let fixture = detached_fixture();
+    let state = fixture.root.path().join("spawner");
+    let writer = fixture.executable("codex", "exit 0");
+    let reviewer = fixture.executable("agy", "kill -TERM $$");
+    let run = |target| {
+        let mut command = fixture.command(target);
+        command
+            .env("PLANGRAPH_SPAWN_STATE", &state)
+            .env("PLANGRAPH_HOST", "workstation");
+        command
+    };
+    assert!(run(Some(fixture.target.as_path()))
+        .arg("--")
+        .arg(writer)
+        .status()
+        .unwrap()
+        .success());
+    let review = fixture.root.path().join("review");
+    assert_eq!(
+        run(None)
+            .args([
+                "--unit-child",
+                fixture.root.path().join("result").to_str().unwrap(),
+                review.to_str().unwrap(),
+                "--"
+            ])
+            .arg(reviewer)
+            .status()
+            .unwrap()
+            .code(),
+        Some(143)
+    );
+    let mut rows: Vec<Value> = fs::read_dir(state.join("runs"))
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice(&fs::read(entry.unwrap().path().join("record.json")).unwrap())
+                .unwrap()
+        })
+        .collect();
+    rows.sort_by_key(|v| v["role"].as_str().unwrap().to_owned());
+    assert_eq!(rows.len(), 2);
+    for (row, role, harness, status) in [
+        (&rows[0], "implement", "codex", "completed"),
+        (&rows[1], "review", "agy", "cancelled"),
+    ] {
+        assert_eq!(row["role"], role);
+        assert_eq!(row["host"], "workstation");
+        assert_eq!(row["harness"], harness);
+        assert_eq!(row["status"], status);
+        assert!(row["ended"].is_number());
+    }
 }
 
 #[test]

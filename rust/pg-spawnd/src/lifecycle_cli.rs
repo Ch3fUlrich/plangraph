@@ -5,7 +5,12 @@ use std::io::{Read, Write};
 pub(crate) fn execute(verb: &str, args: &[String], out: &mut dyn Write) -> Result<(), String> {
     let state = crate::state::resolve_state(None, |name| std::env::var_os(name))?;
     let result = match (verb, args) {
-        ("record-recover", []) => lifecycle::recover(&state),
+        ("record-recover", []) => {
+            lifecycle::recover(&state).map_err(|error| error.to_string())?;
+            #[cfg(target_os = "linux")]
+            pg_spawnd::external_run::recover(&state).map_err(|error| error.to_string())?;
+            Ok(())
+        }
         ("runs", [flag, cursor]) if flag == "--changed-since" => {
             let cursor = cursor.parse().map_err(|_| "invalid run lifecycle cursor")?;
             let page = lifecycle::page(&state, cursor).map_err(|error| error.to_string())?;
