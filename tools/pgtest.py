@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Run tests in a bounded Linux slice or a Windows kill-on-close job."""
+import asyncio
+from contextlib import contextmanager
 import importlib.util
+from itertools import count
+import json
 import os
 import re
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -51,6 +56,75 @@ def main(argv=None, *, platform=None, job_api=None):
     os.execvp(args[0], args + command)
 
 
+def run_test_process(command, *, taskkill_timeout, **kwargs):
+    """Kill the command's tree on timeout/interruption, including nested Linux sessions."""
+    timeout = kwargs.pop('timeout')
+    input_text = kwargs.pop('input', None)
+    if input_text is not None:
+        kwargs['stdin'] = subprocess.PIPE
+    tree = None
+    if sys.platform.startswith('linux'):
+        # Reuse checkout-local helpers without requiring an installed package.
+        spec = importlib.util.spec_from_file_location(
+            'preflight_proc_kill', Path(__file__).resolve().parents[1]
+            / 'src/plangraph/spawner/proc_kill.py')
+        tree = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tree)
+    with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
+        ident = tree.root_identity(process.pid) if tree else None
+        try:
+            if input_text is None:
+                stdout, stderr = process.communicate(timeout=timeout)
+            else:
+                stdout, stderr = process.communicate(input=input_text, timeout=timeout)
+        except BaseException:
+            if tree:
+                members = {}
+                try:
+                    os.killpg(process.pid, signal.SIGSTOP)
+                    # Freeze discovered sessions before rescanning: their children
+                    # must remain attached until every potential parent is stopped.
+                    while True:
+                        added = tree.snapshot(process.pid, ident).items() - members.items()
+                        if not added:
+                            break
+                        for pid, start in added:
+                            if tree.alive(pid, start):
+                                try:
+                                    os.kill(pid, signal.SIGSTOP)
+                                except ProcessLookupError:
+                                    pass
+                        members.update(added)
+                    asyncio.run(tree.finish(process.pid, ident, members))
+                finally:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            elif os.name == 'posix':
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            else:
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                               capture_output=True, timeout=taskkill_timeout)
+                process.kill()
+            process.communicate()
+            raise
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def selected_count(partial):
+    """Selected test count from the selector's first output line (JSON plan), else "unknown"."""
+    if isinstance(partial, bytes):
+        partial = partial.decode("utf-8", "replace")
+    try:
+        return len(json.loads((partial or "").splitlines()[0])["tests"])
+    except (ValueError, KeyError, IndexError, TypeError):
+        return "unknown"
+
+
 def test_environment(root, env, *, timeout=30):
     """A pre-push caller's Git context must not select a fixture's repository."""
     local = set(subprocess.check_output(
@@ -61,6 +135,35 @@ def test_environment(root, env, *, timeout=30):
     return {key: value for key, value in env.items()
             if key.upper() not in local
             and not key.upper().startswith("GIT_CONFIG")}
+
+
+@contextmanager
+def affected_pytest():
+    """Allocate a scratch root and a distinct basetemp for each pytest process."""
+    temporary = tempfile.TemporaryDirectory(prefix="pg-affected-")
+    with temporary as scratch:
+        with open(Path(scratch) / ".lease", "xb") as lease:
+            inherited = {}
+            if os.name == "posix":
+                import fcntl
+                fcntl.flock(lease, fcntl.LOCK_EX)
+                # A surviving pytest controller still protects its scratch if the selector dies.
+                inherited["pass_fds"] = (lease.fileno(),)
+            lease.write(b"plangraph-affected-pytest-v1\n")
+            lease.flush()
+            attempts = count()
+
+            def run(command, **kwargs):
+                basetemp = str(Path(scratch) / f"pytest-{next(attempts)}")
+                return subprocess.run([*command[:3], "--basetemp", basetemp, *command[3:]],
+                                      **inherited, **kwargs)
+
+            try:
+                yield scratch, run
+            finally:
+                # Keep the lease held until the scratch files have been removed.
+                if inherited:
+                    temporary.cleanup()
 
 
 KEEPER_TEST_RE = re.compile(r"^tests/test_keeper_[^/]+\.py$")

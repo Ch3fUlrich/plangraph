@@ -22,6 +22,62 @@ fn directories(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+#[cfg(target_os = "linux")]
+fn cargo_output(root: &Path) -> bool {
+    let marker = |name| {
+        let path = root.join(name);
+        let meta = fs::symlink_metadata(&path).ok()?;
+        (meta.is_file() && meta.len() <= 1 << 20)
+            .then(|| fs::read(path).ok())
+            .flatten()
+    };
+    !root.join(".git").exists()
+        && (marker("CACHEDIR.TAG")
+            .is_some_and(|tag| tag.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55"))
+            || marker(".rustc_info.json").is_some_and(|info| {
+                serde_json::from_slice::<serde_json::Value>(&info)
+                    .is_ok_and(|value| value.get("rustc_fingerprint").is_some())
+            }))
+}
+
+/// Recognize debug output by Cargo's target and profile markers before whole-profile eviction.
+#[cfg(target_os = "linux")]
+pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
+    if !cargo_output(root) {
+        return Ok(vec![]);
+    }
+    let mut candidates = vec![];
+    let triples = directories(root)?.into_iter().filter(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.split('-').count() >= 3)
+    });
+    for parent in std::iter::once(root.to_path_buf()).chain(triples) {
+        let profile = parent.join("debug");
+        if !fs::symlink_metadata(&profile).is_ok_and(|meta| meta.is_dir())
+            || ![".cargo-lock", ".cargo-build-lock"].iter().any(|name| {
+                fs::symlink_metadata(profile.join(name)).is_ok_and(|meta| meta.is_file())
+            })
+            || !crate::private_targets::owned(&profile)?
+            || crate::reap_journal::check_mounts(&profile.canonicalize()?).is_err()
+        {
+            continue;
+        }
+        let (bytes, newest) = crate::disk_hygiene::scan(&profile)?;
+        candidates.push((newest, profile, bytes));
+    }
+    candidates.sort();
+    Ok(candidates
+        .into_iter()
+        .map(|(_, path, bytes)| (path, bytes))
+        .collect())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn debug_profiles(_: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
+    Ok(vec![])
+}
+
 fn hash(value: &str) -> bool {
     value.len() == 16 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }

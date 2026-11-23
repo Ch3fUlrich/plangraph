@@ -245,7 +245,7 @@ fn strip_git(cmd: &mut Command) {
 }
 
 // Resolve existing ancestors even when the slot's cache directory is not created yet.
-fn resolved(path: &Path) -> Result<PathBuf, ResolveError> {
+pub(crate) fn resolved(path: &Path) -> Result<PathBuf, ResolveError> {
     require(
         path.is_absolute()
             && !path

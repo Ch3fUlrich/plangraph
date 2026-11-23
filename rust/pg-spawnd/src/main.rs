@@ -17,6 +17,8 @@ mod evidence;
 mod evidence_row;
 mod fleet_snapshot;
 mod gitconfig_guard;
+#[cfg(target_os = "linux")]
+mod hand_run;
 mod health_cli;
 mod health_report;
 mod health_report_rows;

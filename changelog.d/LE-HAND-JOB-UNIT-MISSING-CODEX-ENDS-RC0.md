@@ -1,0 +1,1 @@
+- Run detached hand jobs with `pg-spawnd hand-run --unit NAME --result PATH [--review-output PATH] -- PROGRAM [ARGS ...]`. Verify the tool PATH before starting the unit and record the child exit status and missing review output.

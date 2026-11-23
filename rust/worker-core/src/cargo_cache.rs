@@ -17,6 +17,32 @@ pub fn shared_cache_roots() -> io::Result<Vec<PathBuf>> {
     )
 }
 
+/// Check the actual child setting against the host's configured writer target.
+pub fn require_writer_target(checkout: &Path, value: Option<&OsStr>) -> io::Result<PathBuf> {
+    let refuse = |reason: &str| io::Error::other(format!("CARGO_TARGET_DIR: {reason}"));
+    let value = value
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| refuse("writer requires an explicit shared target"))?;
+    let actual = crate::workspace_launch::resolved(Path::new(value))
+        .map_err(|_| refuse("expected an absolute, resolvable shared target"))?;
+    let configured = crate::workspace_launch::resolved(&shared_cache_roots()?.remove(0))
+        .map_err(|_| refuse("configured shared target cannot be resolved"))?;
+    let cwd = checkout.canonicalize()?;
+    let checkout = cwd
+        .ancestors()
+        .find(|path| path.join(".git").exists())
+        .unwrap_or(&cwd);
+    if actual.starts_with(checkout) || checkout.starts_with(&actual) {
+        return Err(refuse("the writer target overlaps the checkout"));
+    }
+    if actual != configured || (actual.exists() && !actual.is_dir()) {
+        return Err(refuse(
+            "writer target must match the configured shared directory",
+        ));
+    }
+    Ok(actual)
+}
+
 fn cache_roots(configured: Option<&OsStr>, home: &Path, cwd: &Path) -> io::Result<Vec<PathBuf>> {
     let configured = Path::new(configured.unwrap_or(OsStr::new("~/.cache/plangraph/cargo-target")));
     let mut target = configured.to_path_buf();
@@ -81,9 +107,21 @@ fn user_home(_: &str) -> io::Result<PathBuf> {
 
 #[cfg(unix)]
 #[derive(Debug)]
-pub struct ExclusiveLease(File);
+pub struct CacheLease(File);
+#[cfg(target_os = "linux")]
+impl CacheLease {
+    /// Lock a validated lease file until the caller has finished reclaiming.
+    pub(crate) fn try_exclusive_file(file: File) -> io::Result<Option<Self>> {
+        try_lock_file(file, libc::LOCK_EX)
+    }
+
+    pub(crate) fn file(&self) -> &File {
+        &self.0
+    }
+}
+
 #[cfg(unix)]
-impl Drop for ExclusiveLease {
+impl Drop for CacheLease {
     fn drop(&mut self) {
         use std::os::fd::AsRawFd;
         // Closing alone leaves the flock held if a concurrent fork inherited
@@ -92,6 +130,8 @@ impl Drop for ExclusiveLease {
         unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
     }
 }
+#[cfg(unix)]
+pub type ExclusiveLease = CacheLease;
 #[cfg(not(unix))]
 pub type ExclusiveLease = File;
 
@@ -99,7 +139,26 @@ pub type ExclusiveLease = File;
 /// Keep the returned guard alive for the entire reclaim; never unlink the lock.
 #[cfg(unix)]
 pub fn try_exclusive_lease(target: &Path) -> io::Result<Option<ExclusiveLease>> {
-    use std::os::fd::AsRawFd;
+    try_lease(target, libc::LOCK_EX)
+}
+
+/// Guard a writer from start through child exit using the same lease as preflight.
+#[cfg(target_os = "linux")]
+pub fn writer_lease(target: &Path) -> io::Result<CacheLease> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| io::Error::other("cache root needs a parent"))?;
+    std::fs::create_dir_all(parent)?;
+    try_lease(target, libc::LOCK_SH)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "CARGO_TARGET_DIR: shared cache is being reclaimed",
+        )
+    })
+}
+
+#[cfg(unix)]
+fn try_lease(target: &Path, mode: libc::c_int) -> io::Result<Option<CacheLease>> {
     let mut name = target
         .components()
         .next_back()
@@ -118,9 +177,15 @@ pub fn try_exclusive_lease(target: &Path) -> io::Result<Option<ExclusiveLease>> 
                 .ok_or_else(|| io::Error::other("cache root needs a parent"))?
                 .join(name),
         )?;
+    try_lock_file(lease, mode)
+}
+
+#[cfg(unix)]
+fn try_lock_file(lease: File, mode: libc::c_int) -> io::Result<Option<CacheLease>> {
+    use std::os::fd::AsRawFd;
     // SAFETY: lease owns a valid descriptor; flock does not retain pointers.
-    if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        return Ok(Some(ExclusiveLease(lease)));
+    if unsafe { libc::flock(lease.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
+        return Ok(Some(CacheLease(lease)));
     }
     let error = io::Error::last_os_error();
     if error.kind() == io::ErrorKind::WouldBlock {
@@ -137,6 +202,25 @@ pub fn try_exclusive_lease(_: &Path) -> io::Result<Option<ExclusiveLease>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn writer_lease_allows_another_writer_and_protects_from_cleanup() {
+        let parent = tempfile::tempdir().unwrap();
+        let cache = parent.path().join("target");
+        let first = writer_lease(&cache).unwrap();
+        let second = writer_lease(&cache).unwrap();
+        assert!(try_exclusive_lease(&cache).unwrap().is_none());
+        drop(first);
+        assert!(try_exclusive_lease(&cache).unwrap().is_none());
+        drop(second);
+        let cleanup = try_exclusive_lease(&cache).unwrap().unwrap();
+        assert_eq!(
+            writer_lease(&cache).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        drop(cleanup);
+        assert!(writer_lease(&cache).is_ok());
+    }
     #[test]
     #[cfg(unix)]
     fn reclaim_releases_lease_even_with_an_inherited_descriptor() {

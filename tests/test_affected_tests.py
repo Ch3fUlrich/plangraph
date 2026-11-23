@@ -438,9 +438,10 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
         path.write_text(text)
     argv = {}
 
-    def fake_run(cmd, cwd=None, env=None):
+    def fake_run(cmd, cwd=None, env=None, *, pass_fds=()):
         argv["env"] = env
         argv["cmd"] = list(cmd)
+        argv["pass_fds"] = pass_fds
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setenv('GIT_DIR', 'caller-binding')
@@ -464,6 +465,7 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
     assert argv["env"]["PYTHONPATH"].split(os.pathsep)[-2:] == [
         str(tmp_path / 'src'), str(installed)]
     cmd = argv["cmd"]
+    assert bool(argv["pass_fds"]) == (os.name == "posix")
     assert "--dist" in cmd
     assert cmd[cmd.index("--dist") + 1] == "loadgroup"
 
