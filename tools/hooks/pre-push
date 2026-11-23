@@ -446,10 +446,6 @@ def push_main():
             print("pre-push: malformed push record: push refused", file=sys.stderr)
             return 1
         _, local_sha, remote_ref, remote_sha = rec
-        if skip_tests and not remote_ref.startswith(("refs/heads/land/", "refs/heads/phase/")):
-            print(f"pre-push: PREFLIGHT_SKIP=1 is not allowed for {remote_ref}: push refused",
-                  file=sys.stderr)
-            return 1
         if is_zero(local_sha):
             print(f"pre-push: refused delete of {remote_ref}", file=sys.stderr)
             return 1
@@ -471,6 +467,13 @@ def push_main():
             print(f"pre-push: refused non-fast-forward update of {remote_ref}",
                   file=sys.stderr)
             return 1
+    # Ref-safety diagnostics take precedence across the whole push.
+    if skip_tests:
+        for _, _, remote_ref, _ in refs:
+            if not remote_ref.startswith(("refs/heads/land/", "refs/heads/phase/")):
+                print(f"pre-push: PREFLIGHT_SKIP=1 is not allowed for {remote_ref}: push refused",
+                      file=sys.stderr)
+                return 1
     refs = [rec for rec in refs if not is_zero(rec[1])]
     if not refs:
         return 0

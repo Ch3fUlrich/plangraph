@@ -66,7 +66,8 @@ def test_merge_main_scrubs_only_branch_additions(repo, tmp_path, case):
                                         "refs/custom/review"])
 @pytest.mark.parametrize("case", ["non-ff", "delete", "missing"])
 @pytest.mark.parametrize("unsafe_first", [False, True])
-def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case, unsafe_first):
+@pytest.mark.parametrize("skip", [False, True])
+def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case, unsafe_first, skip):
     r, base = repo
     remote = commit_file(r, "app/other.py", "y = 2\n")
     local = base
@@ -78,7 +79,8 @@ def test_hook_refuses_unsafe_ref_updates(repo, tmp_path, remote_ref, case, unsaf
              f"refs/heads/main {local} {remote_ref} {remote}"]
     if unsafe_first:
         lines.reverse()
-    res = run_hook(r, lines, {"PLANGRAPH_SCRUB_WORDS": str(tmp_path / "missing")})
+    res = run_hook(r, lines, {"PLANGRAPH_SCRUB_WORDS": str(tmp_path / "missing"),
+                             "PREFLIGHT_SKIP": "1" if skip else "0"})
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
     action = "delete" if case == "delete" else "non-fast-forward update"
@@ -194,7 +196,8 @@ def test_hook_ignores_replace_objects(repo):
     ("non-ff", "pre-push: refused non-fast-forward update of refs/heads/main"),
     ("delete", "pre-push: refused delete of refs/heads/main"),
 ])
-def test_script_push_uses_installed_hook(repo, tmp_path, case, expected):
+@pytest.mark.parametrize("skip", ["0", "1"])
+def test_script_push_uses_installed_hook(repo, tmp_path, monkeypatch, case, expected, skip):
     r, base = repo
     remote = tmp_path / "remote.git"
     git(r, "init", "--bare", str(remote))
@@ -204,6 +207,7 @@ def test_script_push_uses_installed_hook(repo, tmp_path, case, expected):
     script = tmp_path / "push.sh"
     script.write_text('#!/bin/bash\ngit push --force "$1" "$2:refs/heads/main"\n')
     source = base if case == "non-ff" else ""
+    monkeypatch.setenv("PREFLIGHT_SKIP", skip)
     res = subprocess.run(["bash", str(script), str(remote), source], cwd=r,
                          capture_output=True, text=True, timeout=120)
     assert res.returncode != 0
