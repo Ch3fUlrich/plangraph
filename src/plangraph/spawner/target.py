@@ -1,5 +1,6 @@
 """Resolve explicit spawn targets before admission or provider rendering."""
 from collections.abc import Mapping
+from dataclasses import replace
 import os
 from pathlib import Path
 import re
@@ -92,14 +93,22 @@ def resolve_target(target, *, chosen=None):
     return target, leg
 
 
-def resolve_launch_target(target, *, chosen=None):
-    """Resolve the local harness for a launch without an already selected leg."""
+def resolve_launch_target(target, *, chosen=None, client=None):
+    """Resolve the local harness for a direct launch, respecting a pinned client."""
     if chosen is not None:
         return resolve_target(target, chosen=chosen)
     model, leg = resolve_target(target)
     if leg is None or leg.family != 'gpt' or leg.harness != 'codex':
         return model, leg
-    from plangraph.planner.legs import resolve_harness
+    from plangraph.planner.legs import own_harness_enabled, resolve_harness
+    if client == 'opencode':
+        # Reuse the registered counterpart. An explicit pin is not a missing-client fallback.
+        counterpart = resolve_harness(leg, installed=lambda _: False).leg
+        if counterpart is not None:
+            return counterpart.model, replace(counterpart, harness_fallback=None)
+        return model, leg
+    if client is not None or not own_harness_enabled():
+        return model, leg
     choice = resolve_harness(leg)
     if choice.leg is None:
         raise SpawnRefused('client_missing: ' + leg.id)
