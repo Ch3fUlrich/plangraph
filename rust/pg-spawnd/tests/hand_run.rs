@@ -1,5 +1,9 @@
 #![cfg(target_os = "linux")]
 
+mod spawn_attempt_delivery;
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::Value;
 use std::{
     fs,
@@ -122,6 +126,7 @@ fn hand_writer_and_external_review_record_terminal_outcomes() {
     let state = fixture.root.path().join("spawner");
     let writer = fixture.executable("codex", "exit 0");
     let reviewer = fixture.executable("agy", "kill -TERM $$");
+    let foreground_reviewer = fixture.executable("claude", "kill -TERM $$");
     let run = |target| {
         let mut command = fixture.command(target);
         command
@@ -150,6 +155,15 @@ fn hand_writer_and_external_review_record_terminal_outcomes() {
             .code(),
         Some(143)
     );
+    assert_eq!(
+        run(None)
+            .args(["--review", "--"])
+            .arg(foreground_reviewer)
+            .status()
+            .unwrap()
+            .code(),
+        Some(143)
+    );
     let mut rows: Vec<Value> = fs::read_dir(state.join("runs"))
         .unwrap()
         .map(|entry| {
@@ -157,11 +171,12 @@ fn hand_writer_and_external_review_record_terminal_outcomes() {
                 .unwrap()
         })
         .collect();
-    rows.sort_by_key(|v| v["role"].as_str().unwrap().to_owned());
-    assert_eq!(rows.len(), 2);
+    rows.sort_by_key(|v| v["harness"].as_str().unwrap().to_owned());
+    assert_eq!(rows.len(), 3);
     for (row, role, harness, status) in [
-        (&rows[0], "implement", "codex", "completed"),
-        (&rows[1], "review", "agy", "cancelled"),
+        (&rows[0], "review", "agy", "cancelled"),
+        (&rows[1], "review", "claude", "cancelled"),
+        (&rows[2], "implement", "codex", "completed"),
     ] {
         assert_eq!(row["role"], role);
         assert_eq!(row["host"], "workstation");
@@ -169,6 +184,14 @@ fn hand_writer_and_external_review_record_terminal_outcomes() {
         assert_eq!(row["status"], status);
         assert!(row["ended"].is_number());
     }
+    spawn_attempt_delivery::check(
+        &state,
+        &[
+            ("implement", "workstation", "codex", "ok"),
+            ("review", "workstation", "agy", "cancelled"),
+            ("review", "workstation", "claude", "cancelled"),
+        ],
+    );
 }
 
 #[test]
