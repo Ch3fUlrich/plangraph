@@ -2,6 +2,33 @@
 use super::*;
 
 #[test]
+fn cherry_picked_head_beyond_the_base_is_reviewed_and_pushed() {
+    let mut driver = Fake {
+        head_script: vec!["picked-head"],
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 0, "{record}");
+    assert_eq!(record["base_sha"], "base");
+    assert_eq!(record["review"]["head"], "picked-head");
+    assert_eq!(record["pushed"], "refs/heads/lane/fixture");
+    assert_eq!(driver.pushed, ["picked-head"]);
+    assert_eq!(driver.calls, [None]);
+}
+
+#[test]
+fn returning_to_the_base_does_not_review_or_push_an_empty_range() {
+    let mut driver = Fake {
+        head_script: vec!["picked-head", "base"],
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 7, "{record}");
+    assert!(record["reason"].as_str().unwrap().starts_with("no_commit"));
+    assert!(driver.stamped.is_empty() && driver.reviews.is_empty() && driver.pushed.is_empty());
+}
+
+#[test]
 fn a_turn_without_a_commit_resumes_on_the_items_and_runs_no_gate() {
     let mut driver = Fake {
         uncommitted_turns: 1,
@@ -42,6 +69,9 @@ fn a_fix_turn_without_a_commit_is_resumed_not_reviewed_again() {
             }
             .into())
         }
+        fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String> {
+            self.0.has_commits_beyond(base, head)
+        }
         fn fast_checks(&mut self, head: &str) -> Result<(), String> {
             self.0.fast_checks(head)
         }
@@ -75,7 +105,7 @@ fn a_fix_turn_without_a_commit_is_resumed_not_reviewed_again() {
     assert_eq!(driver.0.reviews.len(), 2);
 }
 #[test]
-fn a_relaunch_turn_without_a_commit_compares_against_the_head_before_it() {
+fn a_relaunch_turn_without_a_commit_does_not_repeat_the_last_review() {
     // Attempt 1 commits h1 and its fix turn crashes; the relaunch keeps h1 and its first turn
     // changes nothing: it is resumed on its items, h1 is not reviewed a second time.
     let mut driver = Fake {

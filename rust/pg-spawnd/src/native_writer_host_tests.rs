@@ -272,6 +272,9 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
         fn head(&mut self) -> Result<String, String> {
             Ok(if self.0 { "head" } else { "base" }.into())
         }
+        fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String> {
+            Ok(base != head)
+        }
         fn fast_checks(&mut self, _: &str) -> Result<(), String> {
             Ok(())
         }

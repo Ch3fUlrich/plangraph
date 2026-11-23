@@ -315,6 +315,16 @@ impl Driver for Host {
     fn head(&mut self) -> Result<String, String> {
         self.git(&["rev-parse", "HEAD"])
     }
+    fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String> {
+        self.git(&[
+            "rev-list",
+            "--max-count=1",
+            "--end-of-options",
+            &format!("{base}..{head}"),
+            "--",
+        ])
+        .map(|commits| !commits.is_empty())
+    }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         if self.git(&["rev-parse", "HEAD"])? != head {
