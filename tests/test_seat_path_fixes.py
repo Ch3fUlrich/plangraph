@@ -141,7 +141,7 @@ def test_inline_only_review_leg_requires_diff_ref(monkeypatch, tmp_path):
     # explicit --leg document review proceeds with the prompt unchanged.
     from plangraph.spawner.seat_spawn import SeatSpawnMixin
     monkeypatch.setattr("plangraph.spawner.context_pack.pack_prompt",
-                        lambda prompt, card, cwd, pack: prompt)
+                        lambda prompt, card, cwd, pack=None, *, review=False: prompt)
 
     class _Seat(SeatSpawnMixin):
         def __init__(self):
