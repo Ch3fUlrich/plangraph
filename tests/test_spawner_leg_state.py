@@ -54,6 +54,22 @@ def test_provider_exhaustion_counts_limits_on_the_eligible_legs(reason):
     assert provider_exhausted([unavailable, {'reason': 'limited'}])
 
 
+@pytest.mark.parametrize(('line', 'reason'), [
+    ('model_unavailable: model is unavailable', 'model_unavailable'),
+    ('HTTP 503: temporarily unavailable', 'provider_busy'),
+    ('Error: overloaded', 'provider_busy'),
+])
+def test_provider_exhaustion_counts_temporary_harness_outages(store, line, reason):
+    from plangraph.routing_support.liveness import provider_exhausted
+    model = 'opencode-go/glm-5.3-flash'
+    store.record_harness_limit(model, line, 'spawner:harness', now=100)
+    status = ls.routing_status(store.leg_status(model, now=101))
+    assert status['reason'] == reason
+    outage = {'reason': status['reason']}
+    assert provider_exhausted([outage, {'reason': 'not_listed'}])
+    assert not provider_exhausted([outage, {'reason': 'auth_refused'}])
+
+
 @pytest.mark.parametrize('role', ('implement', 'review', 'orchestrate'))
 @pytest.mark.parametrize('state', ('limited', 'down'))
 def test_role_automatically_falls_back(role, state, monkeypatch):
