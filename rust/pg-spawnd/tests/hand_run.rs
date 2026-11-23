@@ -210,6 +210,64 @@ fn missing_codex_is_refused_before_systemd_starts() {
 }
 
 #[test]
+fn lifecycle_failure_preserves_harness_exit_status() {
+    let fixture = Fixture::new();
+    let state = fixture.root.path().join("spawner");
+    for code in [42, 0] {
+        let state = state.join(code.to_string());
+        let reviewer = fixture.executable(
+            "claude",
+            &format!(
+                "printf corrupt > \"$PLANGRAPH_SPAWN_STATE/run-lifecycle/published\"\nexit {code}"
+            ),
+        );
+        let output = fixture
+            .command(None)
+            .env("PLANGRAPH_SPAWN_STATE", &state)
+            .args(["--review", "--"])
+            .arg(reviewer)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("invalid lifecycle publication watermark"),
+            "{stderr}"
+        );
+        assert_eq!(output.status.code(), Some(code), "{stderr}");
+    }
+}
+
+#[test]
+fn watchdog_skips_external_registrations() {
+    let state = tempfile::tempdir().unwrap();
+    let output = test_python::command()
+        .args([
+            "-c",
+            r#"
+import sys
+from types import SimpleNamespace
+from plangraph.spawner.stall_probe import probe_run
+
+state = sys.argv[1]
+run = dict(run_id='run-fixture', status='running', started=1)
+assert probe_run(state, run, 2000)['rule'] == 'unknown'
+hung = SimpleNamespace(enabled=True, probe=lambda *args, **kwargs: {'rule': 'unknown'})
+for kind in ('fleet-session', 'external-harness'):
+    for mode in (None, hung):
+        assert probe_run(state, dict(run, run_kind=kind), 2000, hung=mode) is None, kind
+"#,
+        ])
+        .arg(state.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn detached_child_preserves_exit_127_and_reports_empty_review() {
     let fixture = detached_fixture();
     let result = fixture.root.path().join("result");
