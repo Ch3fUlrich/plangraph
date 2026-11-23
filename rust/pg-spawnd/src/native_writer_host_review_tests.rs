@@ -1,5 +1,22 @@
 use super::*;
 
+pub(super) fn assert_foreign_trailer_refused(host: &mut Host, git: impl Fn(&[&str]) -> String) {
+    host.brief
+        .push_str("\nWhy: depends on plangraph:UNASSIGNED\n");
+    git(&[
+        "commit",
+        "--allow-empty",
+        "-m",
+        "outside assignment\n\nPlan-Item: plangraph:UNASSIGNED",
+    ]);
+    let wrong = git(&["rev-parse", "HEAD"]);
+    assert_eq!(
+        host.fast_checks(&wrong).unwrap_err(),
+        format!("commit {wrong}: Plan-Item outside writer brief: plangraph:UNASSIGNED")
+    );
+    assert!(!host.stamped(&wrong));
+}
+
 #[test]
 fn same_head_re_review_diffs_against_the_batch_base() {
     use super::review_diff_base;

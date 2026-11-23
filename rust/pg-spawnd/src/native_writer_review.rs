@@ -72,6 +72,7 @@ impl Host {
     pub(super) fn checks(&self) -> Result<String, String> {
         let mut log = String::new();
         let pin = self.base_pin();
+        self.check_item_trailers(&pin)?;
         let range = |extra: &[&str]| {
             let mut args: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
             args.extend(["--base".into(), pin.clone(), "--head".into(), "HEAD".into()]);
@@ -117,6 +118,35 @@ impl Host {
             log.push_str(&format!("== {gate} ({})\n{both}\n", result.status));
         }
         Ok(log)
+    }
+    fn check_item_trailers(&self, pin: &str) -> Result<(), String> {
+        let assigned = context::item_keys(&self.brief);
+        let range = format!("{pin}..HEAD");
+        let mut args = vec![
+            "log",
+            "-z",
+            "--format=%H%x00%(trailers:key=Plan-Item,valueonly,unfold)",
+            &range,
+        ];
+        // A base refresh can import upstream commits after the original pin.
+        let upstream = self
+            .git(&["rev-parse", "--verify", "refs/remotes/origin/main"])
+            .ok()
+            .map(|sha| format!("^{sha}"));
+        args.extend(upstream.as_deref());
+        args.push("--");
+        let log = self.git(&args)?;
+        let mut records = log.split_terminator('\0');
+        while let (Some(commit), Some(trailers)) = (records.next(), records.next()) {
+            for item in trailers.lines().map(str::trim) {
+                if !assigned.iter().any(|key| key == item) && !item.is_empty() {
+                    return Err(format!(
+                        "commit {commit}: Plan-Item outside writer brief: {item}"
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
     /// Item-context evidence of the versioned review brief, from the writer brief and the
     /// exact diff: item keys, whole done criteria, invariants, both SHAs, the public symbols
