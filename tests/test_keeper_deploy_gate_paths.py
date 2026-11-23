@@ -574,7 +574,7 @@ def test_merge_close_reports_the_age_of_unproven_unit_and_live_work(env):
             if row["code"] == "deploy_pending"] == [("demo:A", "deploy_pending")]
 
 
-def test_a_live_clause_reports_missing_evidence_from_after_the_merge(env):
+def test_a_live_clause_requires_verified_evidence_from_after_the_merge(env):
     from plangraph.keeper.evidence import VERIFIERS
     from plangraph.keeper.evidence_types import as_epoch
 
