@@ -225,42 +225,89 @@ fn run() -> Result<Vec<String>, String> {
     Ok(errors)
 }
 
-fn class_search(revisions: &[String]) -> Result<Vec<String>, String> {
+fn class_search(args: &[String]) -> Result<Vec<String>, String> {
+    let train_delta = args.first().is_some_and(|arg| arg == "--train-delta");
+    let revisions = if train_delta { &args[1..] } else { args };
     if revisions.is_empty() {
         return Err("--class-search needs at least one fix revision".into());
     }
-    let format = Regex::new(r"^Class-Search: (\S.*) -> ([0-9]+) hits, ([0-9]+) changed$").unwrap();
+    let format =
+        Regex::new(r"^Class-Search: (?:([0-9a-f]{8}) )?(\S.*) -> ([0-9]+) hits, ([0-9]+) changed$")
+            .unwrap();
+    let resolution = Regex::new(r"^Train [0-9]+: resolve(?:\s|$)").unwrap();
+    let valid_counts = |fields: &regex::Captures<'_>| {
+        let hits = fields[3].parse::<usize>();
+        let changed = fields[4].parse::<usize>();
+        matches!((hits, changed), (Ok(hits), Ok(changed)) if changed <= hits)
+    };
+
     let mut findings = Vec::new();
     for revision in revisions {
         let message = git(&[
             "show",
             "--no-patch",
             "--no-notes",
-            "--format=%H%x00%b",
+            "--format=%H%x00%P%x00%s%x00%b",
             "--end-of-options",
             &format!("{revision}^{{commit}}"),
             "--",
         ])?;
-        let (sha, body) = message.split_once('\0').ok_or("malformed commit message")?;
-        let entries: Vec<_> = body
+        let mut fields = message.splitn(4, '\0');
+        let [Some(sha), Some(parents), Some(subject), Some(body)] =
+            std::array::from_fn(|_| fields.next())
+        else {
+            return Err("malformed commit message".into());
+        };
+        if train_delta && parents.split_whitespace().count() == 1 && resolution.is_match(subject) {
+            continue;
+        }
+        let mut inline = false;
+        let mut malformed = false;
+        for line in body
             .lines()
             .filter(|line| line.starts_with("Class-Search:"))
-            .collect();
-        if entries.is_empty()
-            || entries.iter().any(|line| {
-                format.captures(line).is_none_or(|fields| {
-                    let hits = fields[2].parse::<usize>();
-                    let changed = fields[3].parse::<usize>();
-                    !matches!((hits, changed), (Ok(hits), Ok(changed)) if changed <= hits)
-                })
-            })
         {
-            findings.push(format!(
-                "{sha}: missing or invalid Class-Search in fix commit body"
-            ));
+            match format.captures(line) {
+                Some(record) if record.get(1).is_some() => {}
+                Some(record) if valid_counts(&record) => inline = true,
+                _ => malformed = true,
+            }
         }
+        if !malformed && (inline || later_class_search(&format, sha, valid_counts)?) {
+            continue;
+        }
+        findings.push(format!(
+            "{sha}: missing or invalid Class-Search in fix commit body or a later commit on HEAD"
+        ));
     }
     Ok(findings)
+}
+
+fn later_class_search(
+    format: &Regex,
+    sha: &str,
+    valid_counts: impl Fn(&regex::Captures<'_>) -> bool,
+) -> Result<bool, String> {
+    let prefix = &sha[..8];
+    let later = git(&[
+        "log",
+        "--no-notes",
+        "--ancestry-path",
+        "--format=%b",
+        "--fixed-strings",
+        &format!("--grep=Class-Search: {prefix} "),
+        &format!("{sha}..HEAD"),
+        "--",
+    ])?;
+    if !later.lines().any(|line| {
+        format.captures(line).is_some_and(|record| {
+            record.get(1).is_some_and(|short| short.as_str() == prefix) && valid_counts(&record)
+        })
+    }) {
+        return Ok(false);
+    }
+    let matches = git(&["rev-parse", &format!("--disambiguate={prefix}")])?;
+    Ok(matches.trim() == sha)
 }
 
 fn main() {

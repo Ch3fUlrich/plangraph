@@ -135,7 +135,7 @@ def parse_trailers(text: str) -> dict[str, str | list[str]]:
 
     ``%(trailers)`` emits one ``Key: value`` line per trailer (possibly with
     leading blank lines), exactly the shape parsed here. Repeated Plan-Item
-    values bind a phase merge to each card; other keys retain last-value wins.
+    and Deploy values are preserved; other keys retain last-value wins.
     """
     trailers: dict[str, str | list[str]] = {}
     last: str | None = None
@@ -153,8 +153,8 @@ def parse_trailers(text: str) -> dict[str, str | list[str]]:
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
         if key and re.fullmatch(r"[A-Za-z0-9-]+", key):
-            if key.lower() == "plan-item":
-                previous = next((k for k in trailers if k.lower() == "plan-item"), None)
+            if key.lower() in {"plan-item", "deploy"}:
+                previous = next((k for k in trailers if k.lower() == key.lower()), None)
                 if previous is not None:
                     existing = trailers[previous]
                     trailers[previous] = [*(existing if isinstance(existing, list) else [existing]), value]
@@ -552,8 +552,6 @@ class GitAdapter:
                                 "--end-of-options", f"{first}..{tip}"])
         if proc.returncode != 0:
             raise RuntimeError("cannot read train parts")
-        changes = []
-        found = False
         for line in proc.stdout.splitlines():
             match = re.fullmatch(r"([0-9a-f]{40}) ([0-9a-f]{40}) ([0-9a-f]{40}) (.*)", line)
             if not match:
@@ -561,25 +559,23 @@ class GitAdapter:
             parent, part, merge, subject = match.groups()
             if re.match(r"Train [0-9]+: merge (?:train|origin/main)\b", subject, re.I):
                 if not re.match(r"Train [0-9]+: merge origin/main\b", subject, re.I):
-                    nested, attributed = self._train_deploy_changes(repo, parent, part, names)
-                    changes.extend(nested)
-                    found |= attributed
+                    yield from self._train_deploy_changes(repo, parent, part, names)
                 continue
             if names.intersection(self.merge_plan_items(repo, merge)):
-                changes.extend(self._name_status(repo, ["--end-of-options", parent, merge]))
-                found = True
-        return changes, found
+                yield part, merge, self._name_status(repo, ["--end-of-options", parent, merge])
 
     _TRAIN_MERGE_SUBJECT = re.compile(
         r"Landing train [0-9]+\b|batch [A-Za-z0-9_-]+: (?:#[0-9]+ )+\(#[0-9]+\)$", re.I)
 
     def deploy_changes(self, repo: str, sha: str, ref: str, item_key=None) -> list[tuple[str, str]]:
-        """``(status, path)`` pairs the work of *sha* landed on *ref*.
+        """Changes landed by *sha* on *ref*, including any untagged work in its merge."""
+        return self._deploy_work(repo, sha, ref, item_key)[0]
 
-        The commit's own diff plus, when a merge on *ref* brought it in, the diff of
-        that merge against its first parent: an untagged follow-up commit of the same
-        PR counts as landed work. Raises on any unreadable diff.
-        """
+    def deploy_part_changes(self, repo, sha, ref, item_key):
+        """Train part heads, their merges and each part's landed changes for the item."""
+        return self._deploy_work(repo, sha, ref, item_key)[1]
+
+    def _deploy_work(self, repo, sha, ref, item_key):
         if not valid_commit_ref(sha):
             raise ValueError("invalid commit")
         # A merge commit is read against its first parent only: against the second one every
@@ -603,10 +599,10 @@ class GitAdapter:
             landed = parents.split()
             if len(landed) == 2 and all(valid_commit_ref(p) for p in landed):
                 if item_key and self._TRAIN_MERGE_SUBJECT.match(subject):
-                    changes, found = self._train_deploy_changes(
-                        repo, *landed, {item_key, item_key.rsplit(":", 1)[-1]})
-                    if found:
-                        return changes
+                    parts = list(self._train_deploy_changes(
+                        repo, *landed, {item_key, item_key.rsplit(":", 1)[-1]}))
+                    if parts:
+                        return [change for _, _, paths in parts for change in paths], parts
                     # A key carried only by the aggregate merge keeps its whole-diff scan.
             else:
                 landed = []
@@ -615,7 +611,7 @@ class GitAdapter:
             else ["--root", "--end-of-options", sha])
         if landed and merge[0] != sha:
             changes += self._name_status(repo, ["--end-of-options", landed[0], merge[0]])
-        return changes
+        return changes, []
 
     def changelog_only_edit(self, repo: str, sha: str) -> bool:
         """Prove a non-merge addition/modification of the root changelog."""

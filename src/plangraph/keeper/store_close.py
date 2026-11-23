@@ -44,7 +44,7 @@ import time
 
 from . import context_sources
 from .errors import Refused
-from .evidence import deploy_hosts, deploy_missing, deploy_targets
+from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
 from .evidence_types import valid_commit_ref
 from .store_runs import _WARM_S
@@ -486,7 +486,29 @@ class CloseMixin:
         named = self._named_merge_proof(item)
         landed = tagged | {named["landed"]} if named else tagged
         changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head, item["key"])}
-        return (head, tagged), changes
+        per_unit = (self._part_deploy_hosts(git, repo, landed, head, item["key"])
+                    if deploy_targets(changes) and not deploy_hosts(item) and hasattr(git, "deploy_part_changes")
+                    else {})
+        return (head, tagged, per_unit), changes
+
+    @staticmethod
+    def _part_deploy_hosts(git, repo, landed, head, key):
+        def declarations(commit):
+            values = [value for name, value in git.trailers(repo, commit).items() if name.lower() == "deploy"]
+            return deploy_host_names(value for group in values for value in ([group] if isinstance(group, str) else group))
+
+        parts = {}
+        for sha in landed:
+            for part, merge, paths in git.deploy_part_changes(repo, sha, head, key):
+                parts[merge] = (part, paths)
+        per_unit = {}
+        for merge, (part, paths) in parts.items():
+            units = deploy_targets(paths)
+            if units:
+                hosts = declarations(merge) or declarations(part)
+                for unit in units:
+                    per_unit.setdefault(unit, set()).update(hosts)
+        return per_unit
 
     def _merged_go_deploy_changes(self, item, head):
         git, project = self._adapter("git"), self._merge_project(item)
@@ -495,12 +517,17 @@ class CloseMixin:
         except Exception:  # noqa: BLE001 - an unreadable diff cannot clear the deploy gate
             raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
 
-    def _deploy_pending(self, item, changes):
+    def _deploy_pending(self, item, changes, token):
         """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for."""
         targets = deploy_targets(changes)
         if not targets:
             return []
-        return deploy_missing(targets, deploy_hosts(item), self._evidence(item["key"]))
+        hosts, evidence = deploy_hosts(item), self._evidence(item["key"])
+        per_unit = token[2] if token is not None else {}
+        if hosts or not per_unit:
+            return deploy_missing(targets, hosts, evidence)
+        return sorted({pair for unit in targets
+                       for pair in deploy_missing([unit], sorted(per_unit.get(unit, ())), evidence)})
 
     @staticmethod
     def _merge_text(item):
@@ -530,7 +557,7 @@ class CloseMixin:
     def _deploy_scan_current(self, item, token):
         """Keep a scan across first-parent extensions that add no work for this item."""
         git, project = self._adapter("git"), self._merge_project(item)
-        pinned, tagged = token
+        pinned, tagged, _ = token
         try:
             repo, ref = git.repo_path(project), git.repo_ref(project)
             current = git.ref_commit(repo, ref)

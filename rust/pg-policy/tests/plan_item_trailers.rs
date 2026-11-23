@@ -152,3 +152,91 @@ fn review_checklist_reports_fix_commits_without_a_class_search() {
     );
     assert!(output.status.success(), "{output:?}");
 }
+
+#[test]
+fn class_search_accepts_a_record_from_a_later_commit_on_the_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    git(repo, &["commit", "--allow-empty", "-qm", "Fix fixture"]);
+    let sha = git(repo, &["rev-parse", "HEAD"]);
+    let check = || {
+        Command::new(env!("CARGO_BIN_EXE_pg-policy"))
+            .current_dir(repo)
+            .args(["--class-search", &sha])
+            .output()
+            .unwrap()
+    };
+    assert!(!check().status.success());
+    for record in [
+        "00000000 fixture -> 2 hits, 1 changed".into(),
+        format!("{} fixture -> 1 hits, 2 changed", &sha[..8]),
+    ] {
+        git(
+            repo,
+            &[
+                "commit",
+                "--allow-empty",
+                "-qm",
+                &format!("Audit\n\nClass-Search: {record}"),
+            ],
+        );
+        assert!(!check().status.success());
+    }
+    git(
+        repo,
+        &[
+            "commit",
+            "--allow-empty",
+            "-qm",
+            &format!(
+                "Audit fixture fixes\n\nClass-Search: {} fixture -> 2 hits, 1 changed",
+                &sha[..8]
+            ),
+        ],
+    );
+    let output = check();
+    assert!(output.status.success(), "{output:?}");
+    git(repo, &["checkout", "-qb", "other", &sha]);
+    assert!(
+        !check().status.success(),
+        "a record on a different branch counted"
+    );
+}
+
+#[test]
+fn class_search_exempts_resolutions_during_train_delta_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    git(repo, &["commit", "--allow-empty", "-qm", "Fixture base"]);
+    let check = |flags: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_pg-policy"))
+            .current_dir(repo)
+            .arg("--class-search")
+            .args(flags)
+            .arg("HEAD")
+            .output()
+            .unwrap()
+    };
+    git(
+        repo,
+        &[
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "Train 12: resolve fixture",
+        ],
+    );
+    assert!(!check(&[]).status.success());
+    let output = check(&["--train-delta"]);
+    assert!(output.status.success(), "{output:?}");
+    for subject in [
+        "Train 12: drop fixture",
+        "Train 12: resolved fixture",
+        "Fix fixture",
+    ] {
+        git(repo, &["commit", "--allow-empty", "-qm", subject]);
+        assert!(!check(&["--train-delta"]).status.success(), "{subject}");
+    }
+}

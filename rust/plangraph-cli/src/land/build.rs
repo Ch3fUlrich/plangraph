@@ -57,17 +57,59 @@ fn base_date(repo: &Path, base: &str) -> Result<String, String> {
     git::out(repo, &["show", "-s", "--format=%cI", base])
 }
 
-fn own_commits(repo: &Path, base: &str, part: &PartIn) -> Result<Vec<String>, String> {
-    let from = part.parent.as_ref().map_or(base, |q| q.head.as_str());
-    // For a child the diff base is the parent head Q; for a bottom part the train base, minus what it contains.
-    if part
-        .parent
-        .as_ref()
-        .is_some_and(|q| git::is_ancestor(repo, &q.head, base).unwrap_or(false))
-    {
-        return git::commits(repo, &format!("{base}..{}", part.head));
+fn part_base<'a>(repo: &Path, base: &'a str, parent: Option<&'a Parent>) -> &'a str {
+    // An already-landed stack parent is covered by the current train base.
+    match parent {
+        Some(parent) if !in_base(repo, base, &parent.head) => &parent.head,
+        _ => base,
     }
+}
+
+fn own_commits(repo: &Path, base: &str, part: &PartIn) -> Result<Vec<String>, String> {
+    let from = part_base(repo, base, part.parent.as_ref());
     git::commits(repo, &format!("{from}..{}", part.head))
+}
+
+/// Report source paths found in more than one included part's own diff.
+pub(super) fn shared_part_paths(repo: &Path, manifest: &Manifest) -> Result<Vec<String>, String> {
+    let mut owners: BTreeMap<Vec<u8>, Vec<u64>> = BTreeMap::new();
+    for part in &manifest.parts {
+        let from = part_base(repo, &manifest.base, part.parent.as_ref());
+        let paths = git::bytes(
+            repo,
+            &[
+                "diff",
+                "--merge-base",
+                "--no-ext-diff",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                from,
+                &part.head,
+                "--",
+            ],
+        )?;
+        for path in paths
+            .split(|&byte| byte == 0)
+            .filter(|path| !path.is_empty())
+        {
+            if crate::batch_size::part_source_path(&String::from_utf8_lossy(path)) {
+                owners.entry(path.to_vec()).or_default().push(part.pr);
+            }
+        }
+    }
+    Ok(owners
+        .into_iter()
+        .filter(|(_, parts)| parts.len() > 1)
+        .map(|(path, parts)| {
+            let ids: Vec<_> = parts.into_iter().map(|pr| format!("#{pr}")).collect();
+            format!(
+                "warning: train parts {} share {:?}",
+                ids.join(", "),
+                String::from_utf8_lossy(&path)
+            )
+        })
+        .collect())
 }
 
 fn in_base(repo: &Path, base: &str, sha: &str) -> bool {

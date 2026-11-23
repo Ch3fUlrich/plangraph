@@ -1,0 +1,1 @@
+- Class-Search accepts a later audit commit for a pushed fix and supports an explicit exemption in train delta reviews.

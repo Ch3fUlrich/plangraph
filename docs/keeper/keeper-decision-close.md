@@ -164,13 +164,21 @@ run bundle and each family verdict before passing the item atomically.
 `pg close-merged KEY D-NNNN [--family FAMILY]` selects the proof checks from the
 item's current state and previews the transition. Use `--apply` to close after
 the same checks. `--from-open` limits the command to open or claimed items and
-emits `key`, `class`, `reason` TSV. For open or claimed items, the keeper scans the
-complete default-ref Plan-Item history after refreshing the configured remote ref
-(`merged_default_ref_refresh_failed` on failure), requires every introducing PR to have
-a head-bound GO (additional GO rows must name the same project and item), and refuses unmerged lanes or unavailable lane information.
-It uses the same seat rules (including cited-run recovery when families are
-omitted), records all PR numbers, heads and GO decisions in evidence, and
-atomically submits then passes the item. It does not require a new claim.
+emits `key`, `class`, `reason` TSV. For open or claimed items and for a train GO
+with `GO-KEYS`, Keeper scans the complete default-ref Plan-Item history after
+refreshing the configured remote ref (`merged_default_ref_refresh_failed` on failure).
+It refuses unmerged lanes or unavailable lane information. A GO that names the
+item, PR and exact head can authorize the final delivery. Earlier partial PRs
+need to be on the final delivery's default-branch history. Reverted deliveries
+are excluded. Head-only GO rows use the per-PR GO proof.
+Keeper records the authorizing PR evidence, applies the seat rules and closes
+the item atomically without a new claim.
+
+If the item omits `Deploy-Hosts:`, Keeper reads `Deploy: host-a, host-b` trailers
+from the train part merge, or from the part head when its merge has no
+declaration. Each declaration applies to the units or new binaries shipped by
+that part for the item. Missing deployment evidence keeps the item pending.
+A part that ships no unit or new binary requires no deployment evidence.
 HTTP `/v1/close_merged` accepts boolean `dry_run` to preview and boolean `from_open`
 to select the proof path explicitly.
 

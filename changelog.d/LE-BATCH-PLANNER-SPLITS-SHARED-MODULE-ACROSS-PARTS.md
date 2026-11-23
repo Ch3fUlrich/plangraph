@@ -1,0 +1,1 @@
+- Defer batch items that share source paths with an earlier part of the train, and show shared source paths when a train is built.
