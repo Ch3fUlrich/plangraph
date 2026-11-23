@@ -264,12 +264,7 @@ class CreateMixin:
                     affected.add(gate["key"])
         self._validate_change(candidate, before, affected=affected)
         with self._write():
-            if any(definition["depends_on"] for definition in defs):
-                locked = {item["key"]: item for item in self._all_items()}
-                targets = {**locked, **{definition["key"]: definition for definition in defs}}
-                for definition in defs:
-                    self._check_dependency_cap(definition["key"],
-                                               definition["depends_on"], targets)
+            self._check_definition_dependency_caps(defs, attach)
             for definition in defs:
                 self._insert_item(principal, definition, now)
             for definition, gate in attach:

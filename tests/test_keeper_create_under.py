@@ -383,3 +383,36 @@ def test_define_file_reports_partial_refusal(w, tmp_path, capsys, json_mode):
         assert "refused" not in json.loads(out)
     else:
         assert "created 2 items" in out
+
+
+def test_define_under_gate_at_capacity_names_open_split(w):
+    router = w.p("router")
+    ids = [f"DEP-{n}" for n in range(200)]
+    w.store.create_items(router, [*(defn(key) for key in ids),
+                                 defn("GATE", ids, kind="gate", under="GOAL"),
+                                 defn("GATE-A", kind="gate", under="GOAL")])
+    before = _snapshot(w)
+    with pytest.raises(Refused, match="split gate demo:GATE-A"):
+        w.store.create_items(router, [defn("NEW", under="GATE")])
+    assert _snapshot(w) == before
+    assert w.store.create_items(router, [defn("NEW", under="GATE-A")])["created"] == ["demo:NEW"]
+
+
+def test_reap_raises_one_gate_capacity_alert_at_190_open_or_done(w):
+    router = w.p("router")
+    ids = [f"DEP-{n}" for n in range(190)]
+    w.store.create_items(router, [*(defn(key) for key in ids[:-1]),
+                                 defn(ids[-1], under="GOAL"),
+                                 defn("GATE", ids[:-1], kind="gate", under="GOAL")])
+    w.conn.execute("UPDATE items SET state='done' WHERE key='demo:DEP-0'")
+    system = w.p("system")
+    w.store.reap(system)
+    sql = "SELECT key FROM alerts WHERE code='gate_dependency_capacity' AND state='open'"
+    assert w.conn.execute(sql).fetchall() == []
+    w.store.edit_definition(router, "demo:GATE", {"depends_on": ids})
+    w.store.reap(system)
+    w.store.reap(system)
+    assert [row["key"] for row in w.conn.execute(sql)] == ["demo:GATE"]
+    w.store.edit_definition(router, "demo:GATE", {"depends_on": ids[:-1]})
+    w.store.reap(system)
+    assert w.conn.execute(sql).fetchall() == []
