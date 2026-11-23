@@ -92,6 +92,7 @@ done
     let output = run();
     assert!(output.status.success(), "{output:?}");
     assert!(bin.join("pg-spawnd").is_file());
+    assert!(bin.join("pg-disk-hygiene").is_file());
     assert_eq!(
         fs::read_to_string(&stamp).unwrap().trim(),
         git(&["rev-parse", "HEAD:rust"])

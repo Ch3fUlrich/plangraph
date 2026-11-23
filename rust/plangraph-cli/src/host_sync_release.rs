@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
-const BINARIES: &[(&str, &str)] = &[("pg-spawnd", "pg-spawnd"), ("plangraph-cli", "plangraph")];
+const BINARIES: &[(&str, &str)] = &[
+    ("pg-spawnd", "pg-spawnd"),
+    ("plangraph-cli", "plangraph"),
+    ("pg-worker-core", "pg-disk-hygiene"),
+];
 
 fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
     let mut command = Command::new("git");
