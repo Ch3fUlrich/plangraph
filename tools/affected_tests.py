@@ -647,6 +647,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--fleet-spawnd-prebuilt", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--collect-only", action="store_true", help="validate the unsharded selection without running tests")
     parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
@@ -716,7 +717,8 @@ def main(root=None):
         env["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(root / "src"), env.get("PYTHONPATH")) if part)
         start = time.monotonic()
-        if args.local and not args.collect_only and 'tests/test_fleet_snapshot.py' in plan['tests']:
+        if (args.local and not args.collect_only and not args.fleet_spawnd_prebuilt
+                and 'tests/test_fleet_snapshot.py' in plan['tests']):
             # Push preflight runs in a detached checkout, even when the writer
             # already built pg-spawnd in the worktree that launched the hook.
             print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
