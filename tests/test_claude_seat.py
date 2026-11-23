@@ -195,7 +195,7 @@ def test_sandbox_smoke_result_is_cached(tmp_path, monkeypatch, exit_code):
     ("python3 -m pytest -q tests/test_claude_seat.py::test_package_resource", True),
     ("pytest -q tests/../tests/test_claude_seat.py", False),
     ("pytest -q tests\\test_claude_seat.py", False),
-    ("pytest -q /etc/passwd", False),
+    ("pytest -q /opt/outside/test_x.py", False),
 ])
 def test_review_pytest_paths_are_judged_by_text_not_platform_path_text(
         command, allowed, tmp_path, monkeypatch):
