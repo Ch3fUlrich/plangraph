@@ -108,7 +108,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
 
 
 def test_schema_version_is_sixteen():
-    assert schema.SCHEMA_VERSION == 25
+    assert schema.SCHEMA_VERSION == 26
 
 
 def test_v24_sqlite_upgrade_installs_claim_definition_index(tmp_path):
@@ -163,7 +163,7 @@ def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 25
+    assert schema.SCHEMA_VERSION == 26
     assert "message_nonces" in tables(conn)
     assert "message_envelopes" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
@@ -203,7 +203,7 @@ def test_v14_db_upgrades_to_v15_creates_messages_and_keeps_chain(tmp_path):
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 25
+    assert schema.SCHEMA_VERSION == 26
     assert "messages" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert {"trg_messages_no_update", "trg_messages_no_delete"} <= triggers
@@ -239,7 +239,7 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     conn = kdb.open_db(path, backend="sqlite")
     # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
     # production upgrades detect missing columns without reading/writing the pragma.
-    assert schema.SCHEMA_VERSION == 25
+    assert schema.SCHEMA_VERSION == 26
     row = dict(Store(conn, clock=Clock())._item("demo:A"))
     for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
         assert column in row and row.pop(column) is None
@@ -403,7 +403,7 @@ OVERSIGHT_TABLES = {"oversight_tokens", "oversight_ops"}
 
 def test_fresh_sqlite_db_is_v16_with_oversight_and_bus_tables(tmp_path):
     conn = kdb.open_db(tmp_path / "fresh.db", create=True, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 25
+    assert schema.SCHEMA_VERSION == 26
     assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
     conn.close()
 
@@ -716,3 +716,26 @@ def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypat
                 conn.close()
         finally:
             raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+
+
+def test_v25_sqlite_upgrade_installs_criteria_amendments(tmp_path):
+    path = tmp_path / "v25.db"
+    conn = kdb.open_db(path, create=True, backend="sqlite")
+    token = auth.add_principal(conn, "router", "router", [])
+    store = Store(conn, clock=Clock())
+    store.create_items(auth.authenticate(conn, token), [defn("A"), defn("GOAL", ["A"], kind="goal")])
+    conn.close()
+
+    with sqlite3.connect(path) as raw:
+        raw.execute("DROP TABLE criteria_amendments")
+
+    conn = kdb.open_db(path, backend="sqlite")
+    try:
+        store = Store(conn, clock=Clock())
+        store.edit_definition(auth.authenticate(conn, token), "demo:A",
+                              {"done_criteria": "revised criteria"})
+        assert tuple(conn.execute(
+            "SELECT original_text, new_text FROM criteria_amendments WHERE key='demo:A'"
+        ).fetchone()) == ("criteria", "revised criteria")
+    finally:
+        conn.close()

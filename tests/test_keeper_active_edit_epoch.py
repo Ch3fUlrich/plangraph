@@ -161,3 +161,31 @@ def test_claimants_stale_epoch_is_refused_after_the_edit(w):
 
     w.store.heartbeat(w.p("l1main"), KEY, new_epoch)
     assert w.store._item(KEY)["state"] == "claimed"
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_criteria_amendments_are_append_only(w, active):
+    from plangraph.keeper import db_errors
+
+    if active:
+        to_claimed(w, KEY)
+    fields = {
+        "done_criteria": "revised criteria",
+        "criteria_reason": "Cover the retry path",
+        "criteria_evidence": "D-123",
+    }
+    for _ in range(2):
+        w.store.edit_definition(w.p("router"), KEY, fields)
+    rows = w.conn.execute(
+        "SELECT original_text, new_text, reason, evidence, authority, ts "
+        "FROM criteria_amendments WHERE key=? ORDER BY seq", (KEY,)).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("criteria", "revised criteria", "Cover the retry path",
+         "D-123", "router", w.store._iso(w.clock())),
+    ]
+    for sql in (
+        "UPDATE criteria_amendments SET reason='rewritten' WHERE key=?",
+        "DELETE FROM criteria_amendments WHERE key=?",
+    ):
+        with pytest.raises(db_errors.INTEGRITY, match="criteria amendments are append-only"):
+            w.conn.execute(sql, (KEY,))
