@@ -9,6 +9,7 @@
 mod test_python;
 
 pub mod activity;
+pub mod batch_steps;
 pub mod budget;
 pub mod check;
 pub mod config;

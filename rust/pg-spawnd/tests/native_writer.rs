@@ -273,6 +273,8 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
         .env("PATH", format!("{}:{inherited_path}", bin.display()))
         .env_remove("NVM_DIR").env("FIXTURE_CODEX", &codex)
         .env("FIXTURE_SYSTEMD_PATH", if systemd_path { "1" } else { "0" })
+        .env("FIXTURE_BATCH_INPUT", include_str!("fixtures/batch-writer-input.txt"))
+        .env("FIXTURE_BATCH_RUN_VALUES", include_str!("fixtures/batch-writer-run-values.txt"))
         .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
         .env("NATIVE_BINARY", spawnd)
@@ -302,7 +304,8 @@ async def check():
     card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main', item_key='demo:FIXTURE',
                 review_leg='claude-sonnet-5-5-high', review_override_reason='D-6550 fixture credential review')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
-        run = await admitted_spawn(service, dict(card=card, prompt='brief marker'))
+        prompt = os.environ['FIXTURE_BATCH_INPUT'] if os.environ['FIXTURE_SYSTEMD_PATH'] == '1' else 'brief marker'
+        run = await admitted_spawn(service, dict(card=card, prompt=prompt))
         assert run.get('base_admitted') or run['status'] != 'running', run
         assert run['run_id'] in service.tasks, run
         await service.tasks[run['run_id']]
@@ -322,6 +325,9 @@ async def check():
     assert record['fast_checks'] == {'head': record['final_head'], 'status': 'passed'}, record
     assert pathlib.Path(record['cwd']).is_dir(), record
     if os.environ['FIXTURE_SYSTEMD_PATH'] == '1':
+        brief = record['manifest']['brief']
+        assert '\n# Items\n' in brief, brief
+        assert '# Run values' + brief.split('# Run values', 1)[1] == os.environ['FIXTURE_BATCH_RUN_VALUES'], brief
         expected = pathlib.Path(os.environ['FIXTURE_CODEX'])
         assert str(expected.parent) not in os.environ['PATH'].split(os.pathsep)
         assert pathlib.Path(record['resolved_tools']['codex']) == expected, record
