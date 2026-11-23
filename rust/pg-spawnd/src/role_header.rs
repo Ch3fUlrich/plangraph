@@ -11,7 +11,8 @@ pub const NATIVE_RULES: &str = concat!(
     "Use the inherited shared CARGO_TARGET_DIR for every Cargo command, including reviews and preflight. Never override it with a private /tmp or worktree target, --target-dir, or Cargo configuration.",
 );
 
-pub(crate) fn header(agent: &str, role: &str) -> String {
+/// Render the configured header for an agent and role.
+pub fn header(agent: &str, role: &str) -> String {
     let table: Value = serde_json::from_str(TABLE).expect("role_headers.json is valid");
     let name = table["agents"][agent]
         .as_str()
