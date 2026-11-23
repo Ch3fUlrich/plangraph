@@ -218,7 +218,7 @@ fn local(
     let routing_style;
     let style = if args.role == "routing" {
         routing_style = format!(
-            "{style}\n\nRead skills/router-core/SKILL.md at startup. Follow its Batch mode procedure for multi-item router work."
+            "{style}\n\nInvoke the skill router-core at startup (skills/router-core/SKILL.md in the plangraph checkout). Follow its Batch mode procedure for multi-item router work."
         );
         &routing_style
     } else {
