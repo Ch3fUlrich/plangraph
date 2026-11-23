@@ -336,3 +336,36 @@ def test_spawnd_build_failure_fails_with_cargo_diagnostics(monkeypatch):
         returncode=101, stdout=stdout + '\n{"reason":"build-finished","success":false}', stderr=''))
     with pytest.raises(pytest.fail.Exception, match=r'(?s)E0432.*src/main\.rs:1:5'):
         _spawnd.build_spawnd()
+
+
+def test_fast_checks_rebuilds_after_cargo_leaves_a_stale_shared_binary(tmp_path, monkeypatch):
+    import _spawnd
+
+    root = tmp_path / 'checkout'
+    source = root / 'rust/pg-spawnd/src/main.rs'
+    source.parent.mkdir(parents=True)
+    source.touch()
+    os.utime(source, (200, 200))
+    target = tmp_path / 'cargo-target'
+    binary = target / 'debug/pg-spawnd'
+    binary.parent.mkdir(parents=True)
+    binary.touch()
+    os.utime(binary, (100, 100))
+    binary.with_suffix('.d').write_text(f'{binary}: {source}\n')
+    monkeypatch.setattr(_spawnd, '__file__', str(root / 'tests/_spawnd.py'))
+    monkeypatch.setenv('CARGO_TARGET_DIR', str(target))
+    calls = []
+
+    def rebuild(command, *, cwd):
+        calls.append((command, cwd))
+        os.utime(binary, (300, 300))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(_spawnd.subprocess, 'run', rebuild)
+    assert _spawnd.ensure_fleet_spawnd() == 0
+    assert len(calls) == 1
+    command, cwd = calls[0]
+    assert command[:2] == ['cargo', 'rustc'] and cwd == root
+    assert any(arg.startswith('metadata=') for arg in command)
+    assert _spawnd.ensure_fleet_spawnd() == 0
+    assert len(calls) == 1

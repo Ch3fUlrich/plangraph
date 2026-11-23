@@ -1,1 +1,1 @@
-Fast checks build pg-spawnd for the selected checkout under the Cargo pool lease before running the fleet snapshot tests.
+Fast checks build pg-spawnd for the selected checkout under the Cargo pool lease before running the fleet snapshot tests. The check relinks the binary if Cargo leaves an older public executable in the shared target.
