@@ -34,8 +34,11 @@ _LOCAL_MODULE = re.compile(r"(?:plangraph/)?(?:src/plangraph|rust|tools|deploy)/
 
 
 _DESIGN_DEPENDENCY = re.compile(
-    r"\b(?:recover|obtain|use|follow|read|consult|load|retrieve)\s+"
-    r"(?:(?:the|an?)\s+)?(?:[\w.-]+[ \t]+){0,5}(?:design|contract)\b", re.I)
+    r"\b(?:"
+    r"(?:recover|obtain|load|retrieve)[ \t]+(?:[\w.-]+[ \t]+){0,6}(?:design|contract)\b"
+    r"|(?:use|follow|read|consult)[ \t]+(?:(?:the|an?)[ \t]+)?(?:"
+    r"(?:approved|canonical|versioned|v\d+)[ \t]+(?:[\w.-]+[ \t]+){0,4}(?:design|contract)\b"
+    r"|(?:[\w.-]+[ \t]+){0,5}(?:design|contract)[ \t]+(?:document|file)\b))", re.I)
 _DESIGN_REF = re.compile(r"(?:[A-Za-z0-9][\w.-]*:)?(?:[\w.-]+/)*[\w.-]+")
 
 

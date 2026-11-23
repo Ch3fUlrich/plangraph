@@ -339,9 +339,13 @@ def test_edit_may_not_empty_done_criteria_of_a_lane(w):
         with pytest.raises(Refused) as exc:
             w.store.edit_definition(w.p("router"), "demo:L", {"done_criteria": blank})
         assert exc.value.code == "done_criteria_missing"
-    w.store.edit_definition(w.p("router"), "demo:L", {"done_criteria": "other"})
+    w.store.edit_definition(w.p("router"), "demo:L",
+                            {"done_criteria": "other", "criteria_reason": "Clarify criteria",
+                             "criteria_evidence": "D-123"})
     assert w.store._item("demo:L")["done_criteria"] == "other"
-    w.store.edit_definition(w.p("router"), "demo:G", {"done_criteria": None})
+    w.store.edit_definition(w.p("router"), "demo:G",
+                            {"done_criteria": None, "criteria_reason": "Clear optional criteria",
+                             "criteria_evidence": "D-123"})
 
 
 def test_legacy_import_keeps_a_lane_without_done_criteria(w):

@@ -407,13 +407,15 @@ audited stale-claim override procedure.
 
 An edit that changes `done_criteria` appends a row to `criteria_amendments`
 in the same transaction as the definition event. The row links to that event
-and records the before and after text, editing principal and time. Supply
-`criteria_reason` and `criteria_evidence` in the edit fields to record the
-rationale and supporting evidence. With those fields omitted, the row records
-that the edit came through Keeper and links to the definition event.
+and records the before and after text, editing principal and time. A change
+requires nonblank `criteria_reason` and `criteria_evidence` in the edit fields.
+`pg verify` reports missing or mismatched rows by item key and event sequence.
+Older events that list the criterion field without its values or a matching
+ledger row appear as `criteria_amendment_unverifiable`.
 
-A definition whose How asks the writer to use a design or contract needs a
-`design_ref`. Set it to a repository-relative path or use
+A definition whose How asks the writer to obtain a design or contract, or
+explicitly calls for a design document, contract file, or approved or versioned
+input, needs a `design_ref`. Set it to a repository-relative path or use
 `REPOSITORY:PATH` for a file in another repository. Show, short briefs
 and snapshots expose the stored reference. The native batch-size input accepts
 `design_ref` on each item and `design_roots` indexed by repository qualifier.
@@ -421,9 +423,9 @@ The generated brief embeds the selected files verbatim and reports the
 reference if a file cannot be read. If a plangraph lane's How names external
 code, it must also name the plangraph implementation target.
 
-Keeper records slice ancestry from the replanner's definition. A definition
-attached under a slice is refused with the parent key, including after an
-edit to the parent's criteria.
+Keeper records slice ancestry from the replanner's definition. Attaching a new
+slice under an existing slice is refused with the parent key, including after
+an edit to the parent's criteria. Ordinary items can attach under a slice.
 
 Ready and claim include qualified Plan-Item matches from other repositories
 in the configured merge scan. A bare Plan-Item ID matches within its own
