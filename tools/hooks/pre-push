@@ -9,6 +9,8 @@ cargo fmt) and no test; the affected tests run once, in CI. A push to refs/heads
 train: its first-parent chain must carry the merges listed in the manifest in order, with
 attributed resolution or drop commits allowed between merges. PLANGRAPH_TRAIN_MANIFEST
 names the file of part heads. The manifest check replaces the open-PR parent check.
+PREFLIGHT_SKIP=1 records a local test skip on land/* pushes; all other gates still run.
+Phase pushes still run affected preflight with legacy flags. Other refs refuse the flag.
 When origin/main is available, identical upstream/base blobs and inherited lines
 are excluded; without it the stricter whole-file scan remains in effect.
 PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit
@@ -182,8 +184,10 @@ def train_gate(local_sha, manifest):
              "--head", local_sha, "--heads", manifest],
             capture_output=True, text=True, timeout=30,
         )
+    except FileNotFoundError:
+        return "plangraph binary not found on PATH (required for land-train check-chain)"
     except OSError as exc:
-        return f"train validator unavailable: {exc}"
+        return f"cannot run plangraph land-train check-chain: {exc}"
     return None if result.returncode == 0 else result.stderr.strip() or "train chain validation failed"
 
 
@@ -433,6 +437,7 @@ def push_main():
     refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
     if not refs:
         return 0
+    skip_tests = os.environ.get("PREFLIGHT_SKIP") == "1"
     for rec in refs:
         if (len(rec) != 4 or
                 not all(re.fullmatch(r"[0-9a-fA-F]+", rec[i]) for i in (1, 3)) or
@@ -462,6 +467,13 @@ def push_main():
             print(f"pre-push: refused non-fast-forward update of {remote_ref}",
                   file=sys.stderr)
             return 1
+    # Ref-safety diagnostics take precedence across the whole push.
+    if skip_tests:
+        for _, _, remote_ref, _ in refs:
+            if not remote_ref.startswith(("refs/heads/land/", "refs/heads/phase/")):
+                print(f"pre-push: PREFLIGHT_SKIP=1 is not allowed for {remote_ref}: push refused",
+                      file=sys.stderr)
+                return 1
     refs = [rec for rec in refs if not is_zero(rec[1])]
     if not refs:
         return 0
@@ -557,6 +569,9 @@ def push_main():
     # Prune deleted heads too: stale tracking refs cannot vouch for parts.
     fetched = refresh_origin()
     for _, local_sha, remote_ref, remote_sha in refs:
+        if skip_tests and remote_ref.startswith("refs/heads/land/"):
+            print(f"pre-push: skipping local preflight tests for {remote_ref} (PREFLIGHT_SKIP=1)",
+                  file=sys.stderr)
         batch_base = (base_commit(remote_sha, local_sha) if is_zero(remote_sha)
                       else pushed_base_commit(remote_sha, local_sha))
         with preflight_checkout(local_sha) as root:

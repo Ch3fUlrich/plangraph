@@ -198,11 +198,11 @@ fn post_run_cargo_using(
         live: vec![],
     };
     let mut report = Report::default();
-    shared_cache_using(
+    shared_cache_levels(
         target,
         &guards,
         false,
-        cap,
+        (crate::cargo_pool::watermark_bytes(cap), cap),
         false,
         true,
         &mut report,
@@ -231,6 +231,30 @@ fn shared_cache_using(
     guards: &Guards,
     building: bool,
     cap: u64,
+    pressure: bool,
+    apply: bool,
+    report: &mut Report,
+    process_reader: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
+) -> io::Result<()> {
+    shared_cache_levels(
+        path,
+        guards,
+        building,
+        (cap, cap),
+        pressure,
+        apply,
+        report,
+        process_reader,
+    )
+}
+
+/// `levels` = (stale build variants go until the target is under .0, whole debug profiles only above .1).
+#[allow(clippy::too_many_arguments)]
+fn shared_cache_levels(
+    path: &Path,
+    guards: &Guards,
+    building: bool,
+    (variant_cap, cap): (u64, u64),
     pressure: bool,
     apply: bool,
     report: &mut Report,
@@ -270,7 +294,7 @@ fn shared_cache_using(
     let mut bytes = crate::disk_hygiene::scan(path)?.0;
     let mut projected = Vec::new();
     for (candidate, size) in crate::shared_target::candidates(path, std::time::SystemTime::now())? {
-        if !pressure && bytes <= cap {
+        if !pressure && bytes <= variant_cap {
             break;
         }
         if guards.protects(&candidate) {

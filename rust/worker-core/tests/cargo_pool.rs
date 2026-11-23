@@ -223,10 +223,13 @@ fn pool_discovery_counts_slots_and_enforce_pool_trims_idle_slots_without_slot_lo
 }
 
 #[test]
+#[serial_test::serial(cap_env)]
 fn configured_cap_ignores_non_finite_and_negative_values() {
     use pg_worker_core::cargo_pool::{configured_cap_bytes, DEFAULT_CARGO_TARGET_CAP_GB};
     let default = DEFAULT_CARGO_TARGET_CAP_GB * 1024 * 1024 * 1024;
-    // The variable is read only by this test in this process.
+    // The variables are read only by this test in this process; no host file may leak in.
+    let config = tempfile::tempdir().unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", config.path());
     for (value, expected) in [
         ("inf", default),
         ("-1", default),
@@ -237,4 +240,42 @@ fn configured_cap_ignores_non_finite_and_negative_values() {
         assert_eq!(configured_cap_bytes(), expected, "{value}");
     }
     std::env::remove_var("PLANGRAPH_CARGO_TARGET_CAP_GB");
+}
+
+#[test]
+fn default_cap_sits_above_one_full_workspace_debug_build() {
+    use pg_worker_core::cargo_pool::{
+        cap_bytes_from, watermark_bytes, DEFAULT_CARGO_TARGET_CAP_GB,
+    };
+    let gib = 1u64 << 30;
+    // Measured: 20.87 GB and 25.90 GB for one cold full-workspace cargo test (LE-CARGO-CAP-BELOW-FULL-WORKSPACE-BUILD).
+    assert!(DEFAULT_CARGO_TARGET_CAP_GB * gib > 26 * gib);
+    let cap = cap_bytes_from(None, None);
+    assert_eq!(cap, DEFAULT_CARGO_TARGET_CAP_GB * gib);
+    assert!(watermark_bytes(cap) < cap && watermark_bytes(cap) >= 20 * gib);
+}
+
+#[test]
+fn host_config_file_sets_the_cap_and_the_environment_overrides_it() {
+    use pg_worker_core::cargo_pool::{cap_bytes_from, DEFAULT_CARGO_TARGET_CAP_GB};
+    let default = DEFAULT_CARGO_TARGET_CAP_GB << 30;
+    assert_eq!(cap_bytes_from(None, Some("40\n")), 40 << 30);
+    assert_eq!(cap_bytes_from(Some("2"), Some("40")), 2 << 30);
+    assert_eq!(cap_bytes_from(Some("nan"), Some("40")), 40 << 30);
+    assert_eq!(cap_bytes_from(None, Some("-3")), default);
+    assert_eq!(cap_bytes_from(None, Some("garbage")), default);
+}
+
+#[test]
+#[serial_test::serial(cap_env)]
+fn config_file_is_read_from_the_config_home() {
+    use pg_worker_core::cargo_pool::{cap_config_file, configured_cap_bytes};
+    let config = tempfile::tempdir().unwrap();
+    std::env::set_var("XDG_CONFIG_HOME", config.path());
+    std::env::remove_var("PLANGRAPH_CARGO_TARGET_CAP_GB");
+    let file = cap_config_file().unwrap();
+    assert!(file.starts_with(config.path()));
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "48\n").unwrap();
+    assert_eq!(configured_cap_bytes(), 48 << 30);
 }

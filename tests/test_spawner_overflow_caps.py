@@ -561,11 +561,12 @@ def test_pool_slots_are_cache_roots_cleaned_over_the_cap(tmp_path, monkeypatch):
     assert not slot.exists() and (target / 'artifact').exists()
 
 
-def test_cap_default_is_one_value_shared_with_the_rust_pool(monkeypatch):
+def test_cap_default_is_one_value_shared_with_the_rust_pool(monkeypatch, tmp_path):
     import re
     from pathlib import Path
     from plangraph.spawner import host_ready as h
     monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_CAP_GB', raising=False)
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
     source = (Path(__file__).parents[1] / 'rust/worker-core/src/cargo_pool.rs').read_text()
     rust = int(re.search(r'DEFAULT_CARGO_TARGET_CAP_GB: u64 = (\d+);', source).group(1))
     assert h.cargo_target_cap_gb() == rust == h.DEFAULT_CARGO_TARGET_CAP_GB
@@ -760,3 +761,23 @@ def test_remote_work_drives_selects_eligible_drive_or_overflows(tmp_path):
     no_host = o.decide(10000, 2048, 3000, {'a': low_drive_only}, True,
                        local_refusal='disk_low: free 2 GB')
     assert no_host.host is None and 'disk_low' in no_host.reason
+
+
+def test_cap_comes_from_the_host_config_file_and_the_environment_wins(tmp_path, monkeypatch):
+    """LE-CARGO-CAP-BELOW-FULL-WORKSPACE-BUILD: the cap is host config above a full debug build, not a constant."""
+    from plangraph.spawner import host_ready as h
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_CAP_GB', raising=False)
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    assert h.DEFAULT_CARGO_TARGET_CAP_GB > 26      # one cold full-workspace test build measured 25.9 GB
+    assert h.cargo_target_cap_gb() == h.DEFAULT_CARGO_TARGET_CAP_GB
+    (tmp_path / 'plangraph').mkdir()
+    (tmp_path / 'plangraph' / 'cargo-target-cap-gb').write_text('48\n')
+    assert h.cargo_target_cap_gb() == 48
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '7')
+    assert h.cargo_target_cap_gb() == 7
+    for invalid in ('', 'junk', 'nan', 'inf', '-1', '4_8', '４８'):
+        monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', invalid)
+        assert h.cargo_target_cap_gb() == 48
+    for invalid in (b'junk', b'\xff'):
+        (tmp_path / 'plangraph' / 'cargo-target-cap-gb').write_bytes(invalid)
+        assert h.cargo_target_cap_gb() == h.DEFAULT_CARGO_TARGET_CAP_GB

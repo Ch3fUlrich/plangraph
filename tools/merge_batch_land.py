@@ -21,7 +21,7 @@ from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_con
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, keeper_migration, part_review, run, write_landing, write_landing_records,
                               cleanup_landed, close_merged_items, active_train, go_key_block, part_items, train_keys)
-from merge_batch_plan import windows_commands, windows_gate, windows_needed, windows_report, windows_script
+from merge_batch_plan import windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -73,9 +73,12 @@ def cell(text):
 def render_body(st):
     rows = ["| PR | Plan-Item | Head | Merge | Title |", "|---|---|---|---|---|"]
     for rec in st["merged"]:
-        title = st["prs"][str(rec["pr"])]["title"]
+        pr = st["prs"][str(rec["pr"])]
+        title = cell(pr["title"])
+        if run_id := pr.get("full_ci_run"):
+            title += f" (Full CI run {run_id})"
         rows.append(f"| #{rec['pr']} | {cell(', '.join(rec['items']) or '-')} | `{short(rec['head'])}` | "
-                    f"`{short(rec['merge'])}` | {cell(title)} |")
+                    f"`{short(rec['merge'])}` | {title} |")
     body = [f"Merge batch `{st['name']}` into `{st['base']}`: {len(st['merged'])} PRs, merged with `--no-ff` "
             "in this order.", "", *rows, "", go_key_block(st)]
     if st.get("dropped"):
@@ -242,6 +245,17 @@ def require_green(repo, number, names):
                               "not trusting the output")
 
 
+def full_job_problems(jobs):
+    """Require every full-workflow job and shard to finish successfully."""
+    seen = {j["name"] for j in jobs}
+    missing = {key for key in JOB_DISPLAY if not job_named(seen, key)}
+    missing.update(f"{suite} (shard {i + 1})" for suite in SHARD_DISPLAY for i in range(3)
+                   if not shard_named(seen, suite, i))
+    bad = [f"{j['name']}={j.get('conclusion') or j.get('status')}" for j in jobs
+           if j.get("status") != "completed" or j.get("conclusion") != "success"]
+    return [*(f"{n}=missing" for n in sorted(missing)), *bad]
+
+
 def require_full_run(repo, head, branch, batch_key=None):
     """Use Actions evidence at the batch SHA, independent of branch protection/--checks."""
     endpoint = f"repos/{repo}/actions"
@@ -255,25 +269,9 @@ def require_full_run(repo, head, branch, batch_key=None):
         raise MergeBatchError(f"full_ci: tests run {run['id']} is not green on exact batch head {head}")
     attempt = run.get("run_attempt", 1)
     def jobs_for(number, run_id=None):
-        run_id = run["id"] if run_id is None else run_id
-        jobs, page = [], 1
-        while True:
-            data = gh_json("api", f"{endpoint}/runs/{run_id}/attempts/{number}/jobs?per_page=100&page={page}")
-            jobs.extend(data["jobs"])
-            if len(jobs) >= data["total_count"]:
-                return jobs
-            if not data["jobs"]:
-                raise MergeBatchError("full_ci: incomplete job pagination")
-            page += 1
-    jobs = jobs_for(attempt)
-    seen = {j["name"] for j in jobs}
-    missing = {key for key in JOB_DISPLAY if not job_named(seen, key)}
-    missing.update(f"{suite} (shard {i + 1})" for suite in SHARD_DISPLAY for i in range(3)
-                   if not shard_named(seen, suite, i))
-    bad = [f"{j['name']}={j.get('conclusion') or j.get('status')}" for j in jobs
-           if j.get("status") != "completed" or j.get("conclusion") != "success"]
-    if missing or bad:
-        raise MergeBatchError("full_ci: " + ", ".join([*(f"{n}=missing" for n in sorted(missing)), *bad]))
+        return workflow_attempt_jobs(endpoint, run_id or run["id"], number, gh_json)
+    if problems := full_job_problems(jobs_for(attempt)):
+        raise MergeBatchError("full_ci: " + ", ".join(problems))
     reruns = []
     for previous in runs:
         if previous["id"] != run["id"]:

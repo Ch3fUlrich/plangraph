@@ -20,7 +20,12 @@ pub use crate::cargo_pool_telemetry::{
 pub use crate::cargo_pool_trim::enforce_pool_cap;
 use crate::cargo_pool_trim::slot_size;
 
-pub const DEFAULT_CARGO_TARGET_CAP_GB: u64 = 12;
+/// Above the measured size of one full-workspace debug test build (25.9 GB on the
+/// busiest host); a host overrides it with `cargo-target-cap-gb` in its plangraph
+/// config directory or `PLANGRAPH_CARGO_TARGET_CAP_GB`.
+pub const DEFAULT_CARGO_TARGET_CAP_GB: u64 = 32;
+/// After each run the post-run trim evicts stale build variants down to this share of the cap.
+pub const WATERMARK_PERCENT: u64 = 75;
 pub const DEFAULT_POOL_SLOTS: usize = 3;
 const GIB: u64 = 1024 * 1024 * 1024;
 
@@ -53,13 +58,39 @@ fn unix_secs() -> u64 {
         .as_secs()
 }
 
-pub fn configured_cap_bytes() -> u64 {
-    let raw = std::env::var("PLANGRAPH_CARGO_TARGET_CAP_GB").ok();
-    raw.as_deref()
-        .and_then(|s| s.trim().parse::<f64>().ok())
+fn parse_cap_gb(raw: &str) -> Option<u64> {
+    raw.trim()
+        .parse::<f64>()
+        .ok()
         .filter(|gb| gb.is_finite() && *gb >= 0.0)
         .map(|gb| (gb * GIB as f64).round() as u64)
+}
+
+/// Host config file holding the cap in GB (one number), beside the `pgtest-required` marker.
+pub fn cap_config_file() -> Option<PathBuf> {
+    let root = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(root.join("plangraph").join("cargo-target-cap-gb"))
+}
+
+/// The environment wins, then the host config file, then the default; an unusable value falls through.
+pub fn cap_bytes_from(env: Option<&str>, file: Option<&str>) -> u64 {
+    env.and_then(parse_cap_gb)
+        .or_else(|| file.and_then(parse_cap_gb))
         .unwrap_or(DEFAULT_CARGO_TARGET_CAP_GB * GIB)
+}
+
+pub fn configured_cap_bytes() -> u64 {
+    let raw = std::env::var("PLANGRAPH_CARGO_TARGET_CAP_GB").ok();
+    let file = cap_config_file().and_then(|path| fs::read_to_string(path).ok());
+    cap_bytes_from(raw.as_deref(), file.as_deref())
+}
+
+/// Level the post-run trim leaves a target at: below the cap, so the next build starts with room.
+pub fn watermark_bytes(cap_bytes: u64) -> u64 {
+    cap_bytes / 100 * WATERMARK_PERCENT + cap_bytes % 100 * WATERMARK_PERCENT / 100
 }
 
 /// Number of pool slots that fit in free disk, clamped to `[1, default_slots]`.

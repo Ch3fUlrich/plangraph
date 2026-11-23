@@ -1,0 +1,1 @@
+- Raise the shared cargo target cap to 32 GiB, read it from the host file `cargo-target-cap-gb` before the default, and trim the target to 75% of the cap after each run, so a cold full-workspace build is not refused by its own output.
