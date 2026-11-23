@@ -228,6 +228,7 @@ def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
     findings = []
     for run in runs:
         run_id = run.get("run_id", "")
+        # The terminal() function in attempt_outcome.rs owns the non-terminal status list.
         if (type(run.get("ended")) not in (int, float)
                 or run.get("status") in (None, "queued", "running", "queue_claimed", "dry_run")
                 or not isinstance(run_id, str) or not re.fullmatch(r"run-[A-Za-z0-9-]+", run_id)):
@@ -250,7 +251,6 @@ def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
                                         encoding="utf-8", errors="replace", capture_output=True, timeout=5, check=True)
                 attempt = json.loads(result.stdout)
                 if attempt is None:
-                    atomic_write_private(marker, "ineligible\n")
                     continue
                 try:
                     keeper.spawn_attempt(attempt)
