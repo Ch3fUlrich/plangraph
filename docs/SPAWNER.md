@@ -64,7 +64,7 @@ Exact word-boundary 40-hex commit SHAs (either case) resolved from `card.diff_re
 ### Prompt delivery
 
 Prompts travel by stdin or file on every launch path (D-5233). The [spawner prompt rules](operations/spawner-prompt-rules.md)
-cover transport contracts, carrier validation, failures, fixer reports, and retry bounds. Tool-less review prompts use inline instructions.
+cover transport contracts, validation, failures, fixer reports, and retries. Tool-less reviews place the context pack and diff before the closing output contract.
 An explicit read request in a tool-less review or judge needs the requested material in the prompt or receives `toolless_needs_inline`. Context paths can remain as references.
 
 ### MiMo seat timeouts and reasoning-only output
