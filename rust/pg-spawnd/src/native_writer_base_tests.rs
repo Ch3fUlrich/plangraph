@@ -85,6 +85,26 @@ fn host_reaps_a_writer_when_disk_crosses_the_stop_floor() {
 }
 
 #[test]
+fn commit_range_counts_a_cherry_pick_and_excludes_base_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.cwd = host.repo.clone();
+    let main = git_in(&host.cwd, &["rev-parse", "main"]);
+    let base = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    git_in(&host.cwd, &["checkout", "-qb", "old-lane", &main]);
+    git_in(&host.cwd, &["commit", "-qm", "work", "--allow-empty"]);
+    let original = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    git_in(&host.cwd, &["checkout", "-q", "lane/local"]);
+    git_in(&host.cwd, &["cherry-pick", "--allow-empty", &original]);
+    let picked = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+
+    assert_ne!(original, picked);
+    assert!(host.has_commits_beyond(&base, &picked).unwrap());
+    assert!(!host.has_commits_beyond(&base, &base).unwrap());
+    assert!(!host.has_commits_beyond(&base, &main).unwrap());
+}
+
+#[test]
 fn base_ref_that_exists_only_in_the_host_repo_starts_and_pushes_its_result() {
     let dir = tempfile::tempdir().unwrap();
     let mut host = local_base_fixture(dir.path());
