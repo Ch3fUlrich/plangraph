@@ -374,10 +374,16 @@ def test_scheduled_agy_probe_clears_a_model_limit_within_an_hour(tmp_path, monke
     runner = SimpleNamespace(leg_reader=store, spawn=spawn, cancel=cancel)
     clock[0] = failed_at + 3599
     first = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
-    assert [(row['id'], row.get('skipped')) for row in first['probes']] == [(leg.id, 'limited')]
+    assert [(row['id'], row.get('skipped')) for row in first['probes']] == (
+        [(leg.id, 'limited')] if routed else [])
     assert not calls
     clock[0] = failed_at + retry_age
     second = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+    if not routed:
+        assert second['ok'] and second['probes'] == []
+        assert calls == []
+        assert store.agy_probe_status(model, now=clock[0])['state'] == 'limited'
+        return
     assert second['probes'][0]['ok']
     assert calls == [('agy', leg.model, leg_probe.REVIEW_PROMPT)]
     assert store.leg_status(model, now=clock[0], **scope)['state'] == 'ok'
@@ -385,6 +391,58 @@ def test_scheduled_agy_probe_clears_a_model_limit_within_an_hour(tmp_path, monke
                       legs=(leg,), leg_reader=store, now=clock[0], catalog_rows=())
     assert plan.agy_quota_states['agy:gemini-4-argon']['last_probe_at'] == clock[0]
     assert plan.candidates[0]['last_probe_at'] == clock[0]
+
+
+@pytest.mark.parametrize('diagnostic', [
+    'AGY_ERROR RESOURCE_EXHAUSTED: quota resets in 2h',
+    'AGY_ERROR RESOURCE_EXHAUSTED',
+])
+def test_scheduled_agy_probe_books_quota_and_skips_next_run(tmp_path, monkeypatch, diagnostic):
+    from plangraph.planner import legs
+    from plangraph.spawner import leg_probe
+
+    leg = next(row for row in legs.routed_review_legs() if row.id == 'agy-gemini-4-argon-low')
+    monkeypatch.setattr(legs, 'routed_review_legs', lambda: (leg,))
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *args, **kwargs: '/bin/agy')
+    monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
+    monkeypatch.setattr(leg_probe.time, 'time', lambda: 10_000)
+    monkeypatch.setenv('PLANGRAPH_LEG_DOWN_S', '1800')
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    calls = []
+
+    async def spawn(**kwargs):
+        calls.append(kwargs['model_or_combo'])
+        return SimpleNamespace(job_id='j', status='failed', exit_code=7,
+                               stdout='', stderr=diagnostic)
+
+    async def cancel(job_id):
+        pass
+
+    runner = SimpleNamespace(leg_reader=store, spawn=spawn, cancel=cancel)
+    first = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+    assert first['ok'] and first['limited_legs'] == [leg.id]
+    reset = 17_200 if '2h' in diagnostic else 11_800
+    evidence = store.agy_probe_status(leg_probe.key(leg))['evidence']
+    assert evidence['status'] == 429 and evidence['reset_at'] == reset
+    second = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+    assert second['ok'] and second['probes'][0]['skipped'] == 'limited'
+    assert second['probes'][0]['reset_at'] == reset
+    assert calls == [leg.model]
+
+
+def test_review_probe_reports_spawn_infrastructure_cause(tmp_path, monkeypatch):
+    from plangraph.spawner import leg_probe
+
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *args, **kwargs: '/bin/claude')
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    leg = SimpleNamespace(model='claude-sonnet-5-5-high', harness='claude', roles=('review',))
+
+    async def spawn(**kwargs):
+        raise OSError('fixture spawn cause')
+
+    result = asyncio.run(leg_probe.probe(SimpleNamespace(spawn=spawn), leg, timeout_s=5, store=store))
+    assert result['infra'] and result['reason'] == 'probe infra: spawn: OSError: fixture spawn cause'
+    assert store.leg_status(leg_probe.key(leg))['state'] == 'ok'
 
 
 def test_probe_many_skips_a_limited_leg(tmp_path, monkeypatch):

@@ -183,32 +183,52 @@ def landed_go_part(index, head, token, pr):
             todo.extend(graph.get(sha, ((), None))[0])
 
 
-def part_changes(git, repo, parent, part, merge, names):
-    """A train part's net change as one key sees it: the paths its own commits, the part's untagged
-    commits and the part merge itself (conflict resolutions) touch, with the part's net status.
+def landed_deploy_work(git, repo, parent, tip, merge, key, *, train):
+    """Use the landed diff because a topic's first-parent diff can include main syncs."""
+    names = {key, key.rsplit(":", 1)[-1]}
+    changes = part_changes(git, repo, parent, tip, merge, names, train_resolution=train)
+    parts = list(git._train_deploy_changes(repo, parent, tip, names)) if train else []
+    changes.extend(change for _, _, paths in parts for change in paths)
+    return changes, parts
 
-    Commits tagged only for other keys of the same part are left out. A key with no
-    non-merge commit of its own in the part (its tag sits on a merge) keeps the whole part.
-    """
+
+def part_changes(git, repo, parent, part, merge, names, *, train_resolution=False):
+    """Attribute landed paths to an item with their net status against the landing base."""
     from .evidence_git import plan_items
-    proc = git._run(repo, ["log", "--no-merges", "--format=%H%x1e%B%x1d", "--end-of-options", part, f"^{parent}"])
+    scope = ["--first-parent"] if train_resolution else []
+    proc = git._run(repo, ["log", *scope, "--format=%H %P%x1e%B%x1d",
+                          "--end-of-options", part, f"^{parent}"])
     if proc.returncode != 0:
-        raise RuntimeError("cannot read train part commits")
-    shas, named = [], False
+        raise RuntimeError("cannot read landed commits")
+    own, untagged, own_merges, tagged = [], [], [merge], False
     for record in (proc.stdout or "").split("\x1d"):
-        sha, _, body = record.strip().partition("\x1e")
+        header, _, body = record.strip().partition("\x1e")
+        commits = header.split()
+        if not commits or not valid_commit_ref(commits[0]):
+            continue
+        sha, *parents = commits
         items = plan_items(body)
-        if valid_commit_ref(sha) and (not items or names.intersection(items)):
-            shas.append(sha)
-            named = named or bool(items)
+        tagged = tagged or bool(items)
+        if names.intersection(items):
+            (own_merges if len(parents) > 1 else own).append(sha)
+        elif not items and len(parents) < 2:
+            untagged.append(sha)
     net = git._name_status(repo, ["--end-of-options", parent, merge])
-    if not named:
+    if not train_resolution and not tagged:
+        # Legacy and explicitly named deliveries can have only untagged topic commits.
         return net
+    # An untagged follow-up belongs to a part with work for the key. The
+    # aggregate train's trailers also list keys absent from its delivered parts.
+    has_own_work = own or len(own_merges) > 1
+    shas = own + untagged if has_own_work and not train_resolution else own
     touched = {path for sha in shas for _, path in git._name_status(repo, ["--root", "--end-of-options", sha])}
-    own = git._run(repo, ["diff-tree", "--no-commit-id", "--name-only", "-c", "-r", "-z", "--end-of-options", merge])
-    if own.returncode != 0:
-        raise RuntimeError("cannot read the part merge")
-    touched.update(path for path in (own.stdout or "").split("\0") if path)
+    for sha in own_merges:
+        # A merge changes only paths whose result differs from all its parents.
+        diff = git._run(repo, ["diff-tree", "--no-commit-id", "--name-only", "-c", "-r", "-z",
+                               "--end-of-options", sha])
+        if diff.returncode != 0:
+            raise RuntimeError("cannot read the landed merge")
+        touched.update(path for path in diff.stdout.split("\0") if path)
     return sorted(change for change in net if change[1] in touched)
 
 

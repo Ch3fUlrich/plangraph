@@ -60,6 +60,35 @@ def _leg():
     return SimpleNamespace(model='gemini-4-neon-medium', harness='agy')
 
 
+def test_codex_review_probe_starts_in_disposable_git_directory(tmp_path, monkeypatch):
+    from plangraph.spawner import leg_probe
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *args, **kwargs: '/bin/codex')
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    visited = []
+
+    async def spawn(**kwargs):
+        cwd = kwargs['cwd']
+        visited.append(cwd)
+        git = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=cwd,
+                             env=leg_probe.probe_env(), capture_output=True, text=True)
+        trusted = git.returncode == 0 and Path(git.stdout.strip()) == Path(cwd)
+        return SimpleNamespace(job_id='j', status='completed' if trusted else 'failed',
+                               exit_code=0 if trusted else 1, stdout='OK' if trusted else '',
+                               stderr='' if trusted else 'Not inside a trusted directory')
+
+    async def cancel(job_id):
+        pass
+
+    leg = SimpleNamespace(model='gpt-6.2-sol-medium', harness='codex', roles=('review',))
+    runner = SimpleNamespace(spawn=spawn, cancel=cancel)
+    result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=5, store=store))
+    assert result['ok'], result
+    assert visited and not Path(visited[0]).exists()
+    assert not (tmp_path / '.git').exists()
+
+
 # The measured incident's writer: asked to create and commit ok.txt, a real
 # writer resolves the repo with `git rev-parse --show-toplevel`, so a hijacked
 # repo resolution makes it commit into the CALLER's worktree.

@@ -351,7 +351,8 @@ _QUOTA_MARKER = re.compile(
 #: next to a quota/rate-limit name.
 _RESET_AFTER = re.compile(r'\(reset after \d', re.I)
 # Gateway (omniroute) and agy refusal lines are quota evidence by shape alone (no "Error:" prefix, no marker word).
-_GATEWAY = re.compile(r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:RESOURCE_EXHAUSTED(?: \(code \d{3}\):|:|$)|quota policy filtered \d+ account'
+_GATEWAY = re.compile(r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:AGY_ERROR:?\s+RESOURCE_EXHAUSTED\b'
+                      r'|RESOURCE_EXHAUSTED(?: \(code \d{3}\):|:|$)|quota policy filtered \d+ account'
                       r'|All \S+ accounts reached configured quota)', re.I)
 _ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)|' + _GATEWAY.pattern, re.I)
 _USAGE_LIMIT = re.compile(

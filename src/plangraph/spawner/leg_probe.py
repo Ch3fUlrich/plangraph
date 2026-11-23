@@ -209,6 +209,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
     repo"; the caller's repo is never auto-reset.
     """
+    from .env_redact import harness_limit_line, redact_env_values, redact_output
+    from .exit_outcome import _booking_seconds
+
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True, parameter='timeout_s')
     state = store if store is not None else leg_state
     review_mode = _is_review_probe(leg, role)
@@ -233,19 +236,19 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
         caller_before = await asyncio.to_thread(caller_heads)
         ok = reason = None
         infra = False
-        if not review_mode:
+        if not review_mode or leg.harness == 'codex':
             try:
-                hooks = Path(root) / 'probe-hooks'
-                hooks.mkdir()
                 await asyncio.to_thread(git, 'init')
-                await asyncio.to_thread(git, 'config', 'user.name', 'Plangraph probe')
-                await asyncio.to_thread(git, 'config', 'user.email', 'probe@plangraph.invalid')
-                # Repo-local, not only on this commit: the writer's own commit must
-                # also survive a hostile global gpgsign/hooksPath (M11).
-                await asyncio.to_thread(git, 'config', 'commit.gpgsign', 'false')
-                await asyncio.to_thread(git, 'config', 'core.hooksPath', str(hooks))
-                await asyncio.to_thread(git, 'commit', '--allow-empty', '-m', 'initial')
-                before = await asyncio.to_thread(git, 'rev-parse', 'HEAD')
+                if not review_mode:
+                    hooks = Path(root) / 'probe-hooks'
+                    hooks.mkdir()
+                    await asyncio.to_thread(git, 'config', 'user.name', 'Plangraph probe')
+                    await asyncio.to_thread(git, 'config', 'user.email', 'probe@plangraph.invalid')
+                    # Repo-local settings also apply to the writer's own commit.
+                    await asyncio.to_thread(git, 'config', 'commit.gpgsign', 'false')
+                    await asyncio.to_thread(git, 'config', 'core.hooksPath', str(hooks))
+                    await asyncio.to_thread(git, 'commit', '--allow-empty', '-m', 'initial')
+                    before = await asyncio.to_thread(git, 'rev-parse', 'HEAD')
             except (OSError, subprocess.CalledProcessError):
                 ok, reason, infra = False, 'probe infra: git', True
         if ok is None:
@@ -265,8 +268,11 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             except asyncio.TimeoutError:
                 ok, reason = False, 'timeout'
             except (ValueError, RuntimeError, OSError) as exc:
-                ok, reason, infra = False, 'probe infra: spawn', True
-                stderr = getattr(exc, 'stderr', '') or ''
+                cause = redact_output(redact_env_values(str(exc), os.environ))
+                cause = ' '.join(leg_state._redact(cause, limit=400).splitlines())
+                ok, reason, infra = False, f'probe infra: spawn: {type(exc).__name__}', True
+                if cause:
+                    reason += ': ' + cause
         if ok is None:
             try:
                 await _await_completion(runner, job, deadline)
@@ -302,9 +308,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
         if leaked:
             # Report the leak; NEVER auto-reset the caller's repo here.
             ok, reason, infra = False, 'probe leaked into caller repo', False
-        excerpt, serving = '', False
+        excerpt, serving, quota = '', False, None
         if not ok and not infra:
-            from .env_redact import redact_output, redact_env_values
             diagnostic = job or next((j for jid, j in getattr(runner, 'jobs', {}).items() if jid in owned_ids), None)
             stderr = getattr(diagnostic, 'stderr', '') or stderr
             if isinstance(stderr, bytes):
@@ -312,11 +317,25 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             env = dict(os.environ)
             env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
             excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
-            serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
+            if review_mode and leg.harness == 'agy' and not leaked and diagnostic is not None:
+                quota = harness_limit_line(getattr(diagnostic, 'exit_code', None),
+                                           getattr(diagnostic, 'stdout', '') or '', stderr)
+                if quota:
+                    quota = redact_output(redact_env_values(quota, env))
+            if not quota:
+                serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
         if not infra:
             caller = 'review-probe' if review_mode else 'leg-probe'
             if ok:
                 state.record_probe_pass(key(leg), caller=caller)
+            elif quota:
+                state.record_harness_limit(key(leg), quota, caller, harness=leg.harness,
+                                           down_s=_booking_seconds())
+                status = state.leg_status(key(leg))
+                if status['state'] == 'limited':
+                    return dict(ok=False, reason='limited', skipped='limited', infra=False,
+                                seconds=time.monotonic() - start, stderr_excerpt=excerpt,
+                                reset_at=status['evidence']['reset_at'])
             else:
                 state.record_probe_fail(key(leg), reason, caller=caller, serving=serving, stderr_excerpt=excerpt)
         reason += ': ' + excerpt if excerpt and not leaked else ''
@@ -522,15 +541,6 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
     state = _store_for(runner)
     state = state.store if getattr(state, 'enabled', False) else state
     scheduled = all_reviewers and not all_writers and not ids
-    if scheduled:
-        selected_models = {leg_state.quota_key(key(leg)) for leg in selected if leg.harness == 'agy'}
-        for leg in SPAWNABLE_LEGS:
-            if leg.harness != 'agy' or not leg_active(leg):
-                continue
-            model = leg_state.quota_key(key(leg))
-            if model not in selected_models and state.agy_probe_status(model)['state'] == 'limited':
-                add(leg, review=True)
-                selected_models.add(model)
     for leg in selected:
         model = key(leg)
         status = (state.agy_probe_status(model)
@@ -542,6 +552,8 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
                 and leg_state.routing_status(status).get('state') == 'limited'):
             now = time.time()
             last_attempt = state.last_probe_attempt_ts(model, now=now)
+            if evidence.get('caller') == 'review-probe':
+                last_attempt = max(last_attempt or 0, evidence['ts'])
             quota_reprobe = last_attempt is None or now - last_attempt >= 3600
         if limited and not quota_reprobe:
             # Same row shape as a probed result (reason/seconds/infra included):

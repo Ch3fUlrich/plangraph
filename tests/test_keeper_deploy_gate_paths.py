@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from plangraph.keeper import context_sources
+from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_git import GitAdapter
 from test_keeper_close_merged_scan import HEADER, _git, merged_repo
 from test_keeper_merge_close_auto import auto, env, git  # noqa: F401 - env is a fixture
@@ -417,9 +418,12 @@ def test_train_deploy_gate_attributes_units_to_their_part(env, subject):  # noqa
         git(root, "checkout", "-q", "train")
         git(root, "merge", "-q", "--no-ff", "-m", f"Train 9: merge {branch}", branch)
         git(root, "branch", "-D", branch)
+    (root / "deploy/systemd/resolution.socket").write_text("[Socket]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "train resolution\n\nPlan-Item: demo:BATCH")
     git(root, "checkout", "-q", "main")
     git(root, "merge", "-q", "--no-ff", "-m",
-        f"{subject}\n\nPlan-Item: demo:A\nPlan-Item: demo:B\nPlan-Item: demo:BATCH", "train")
+        f"{subject}\n\nPlan-Item: demo:A\nPlan-Item: demo:B\nPlan-Item: demo:BATCH\nPlan-Item: demo:C", "train")
     git(root, "branch", "-D", "train")
 
     store = env.store
@@ -428,9 +432,10 @@ def test_train_deploy_gate_attributes_units_to_their_part(env, subject):  # noqa
     assert store._deploy_changes(docs)[1] == set()
     assert store._deploy_changes(unit)[1] == {("A", "deploy/systemd/train.service")}
     assert store._deploy_changes(dict(docs, key="demo:BATCH"))[1] == {
-        ("A", "deploy/systemd/train.service"),
+        ("A", "deploy/systemd/resolution.socket"),
     }
-    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+    assert store._deploy_changes(dict(docs, key="demo:C"))[1] == set()
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A", "demo:C"]
 
 
 def test_train_deploy_hosts_are_read_from_the_part_that_ships_the_unit(env):  # noqa: F811
@@ -465,7 +470,8 @@ def test_train_deploy_hosts_are_read_from_the_part_that_ships_the_unit(env):  # 
     assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:B"]
 
 
-def test_train_deploy_gate_keeps_other_keys_units_out_of_a_shared_part(env):  # noqa: F811
+@pytest.mark.parametrize("subject", ["Landing train 9: 1 batch (#57)", "Old batch delivery (#57)"])
+def test_train_deploy_gate_keeps_other_keys_units_out_of_a_shared_part(env, subject):  # noqa: F811
     """Two keys share one part: only the key whose own commit adds a unit, or the untagged
     follow-up of the part, is deploy-pending (LE-DEPLOY-ATTRIBUTION-OLD-TRAINS-BLOCKS-UNITLESS-KEYS)."""
     root = env.repo.root
@@ -483,7 +489,7 @@ def test_train_deploy_gate_keeps_other_keys_units_out_of_a_shared_part(env):  # 
     git(root, "merge", "-q", "--no-ff", "-m", "Train 9: merge shared", "shared")
     git(root, "branch", "-D", "shared")
     git(root, "checkout", "-q", "main")
-    git(root, "merge", "-q", "--no-ff", "-m", "Landing train 9: 1 batch (#57)", "train")
+    git(root, "merge", "-q", "--no-ff", "-m", subject, "train")
     git(root, "branch", "-D", "train")
 
     store = env.store
@@ -493,6 +499,57 @@ def test_train_deploy_gate_keeps_other_keys_units_out_of_a_shared_part(env):  # 
     result = auto(env, require_seats=False)
     assert [c["key"] for c in result["closed"]] == ["demo:A"]
     assert "deploy_pending" in next(r["reason"] for r in result["listed"] if r["key"] == "demo:B")
+
+
+@pytest.mark.parametrize("new_target,resolution,cross_repo", [
+    ("deploy/systemd/new.service", False, False),
+    ("rust/demo/src/main.rs", False, False),
+    ("deploy/systemd/new.service", True, False),
+    ("rust/demo/src/main.rs", True, False),
+    ("deploy/systemd/new.service", False, True),
+])
+def test_direct_pr_deploy_gate_ignores_main_sync_and_other_keys(
+        env, monkeypatch, tmp_path, new_target, resolution, cross_repo):
+    root = env.repo.root
+    git(root, "checkout", "-qb", "topic")
+    git(root, "commit", "--allow-empty", "-qm", "notes\n\nPlan-Item: demo:A")
+    git(root, "checkout", "-q", "main")
+    unit_dir = root / "deploy/systemd"
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "already.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "unrelated main delivery")
+    git(root, "checkout", "-q", "topic")
+    git(root, "merge", "--no-ff", "--no-commit", "-q", "main")
+    target = root / new_target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("fixture\n")
+    if not resolution:
+        git(root, "commit", "-qm", "sync main\n\nPlan-Item: demo:A")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "unit\n\nPlan-Item: demo:B")
+    head = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-qm", "Merge pull request #57 from x/topic", "topic")
+    git(root, "branch", "-D", "topic")
+    decision_path = tmp_path / "decisions.md"
+    decision_path.write_text(
+        HEADER + f"| D-5504 | demo | GO #57 demo:A; GO-HEAD {head} | ROUTER | 2026-11-05 |\n")
+    env.store.ctx["decisions"] = DecisionsAdapter(decision_path)
+    monkeypatch.setattr(context_sources, "open_lanes", lambda *args, **kwargs: [])
+    if cross_repo:
+        empty = tmp_path / "primary"
+        merged_repo(empty, [])
+        env.store.ctx["git"] = GitAdapter({"demo": str(empty), "other": str(root)})
+        env.store.edit_definition(env.p("router"), "demo:A", {"note": "Merge-Repo: other"})
+
+    preview = env.store.close_merged(env.p("router"), "demo:A", "D-5504", ["google"],
+                                     from_open=True, require_seats=False)
+    assert preview.get("would_close") is True, preview
+    if not cross_repo:
+        result = auto(env, require_seats=False, apply=False)
+        assert [row["key"] for row in result["would_close"]] == ["demo:A"]
+        assert "deploy_pending" in next(row["reason"] for row in result["listed"] if row["key"] == "demo:B")
 
 
 def _train_with_part(env, build, *, evil=None):
