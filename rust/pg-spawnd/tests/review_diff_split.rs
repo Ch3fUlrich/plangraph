@@ -285,15 +285,17 @@ fn mcp_response_wait_stops_at_its_deadline() {
 
 #[test]
 fn oversize_diff_splits_into_group_seats_covering_full_diff_and_fitting_limit() {
+    // Allow for the inline verdict contract while keeping the combined diff over budget.
+    let max_request_tokens = 250;
     let mut f = ReviewFixture::new(
-        220, // 660 chars max per seat prompt
+        max_request_tokens,
         r#"cat >/dev/null; printf '%s\n' '{"type":"result","is_error":false,"result":"Reviewed.\nFILES READ: alpha/a.txt, beta/b.txt\nVERDICT: ACCEPT\n"}'"#,
     );
     let base = f.git(&["rev-parse", "HEAD"]);
     std::fs::create_dir_all(f.repo.join("alpha")).unwrap();
     std::fs::create_dir_all(f.repo.join("beta")).unwrap();
     std::fs::create_dir_all(f.repo.join("gamma")).unwrap();
-    // alpha has two 180-char files: together > 660, each alone fits < 660.
+    // The alpha diffs fit individually and exceed the seat budget together.
     std::fs::write(
         f.repo.join("alpha/one.txt"),
         format!("1:{}\n", "line-one ".repeat(20)),
@@ -331,7 +333,7 @@ fn oversize_diff_splits_into_group_seats_covering_full_diff_and_fitting_limit() 
             std::fs::read_to_string(f.state.path().join("runs").join(run_id).join("prompt.txt"))
                 .unwrap();
         assert!(
-            prompt.chars().count() <= 220 * 3,
+            prompt.chars().count() <= max_request_tokens as usize * 3,
             "seat {} exceeded prompt limit: {} chars",
             idx + 1,
             prompt.chars().count()
@@ -434,7 +436,8 @@ else
   printf '%s\n' '{"type":"result","is_error":false,"result":"LGTM.\nFILES READ: alpha/a.txt\nVERDICT: ACCEPT\n"}'
 fi
 "#;
-    let mut f = ReviewFixture::new(220, cmd);
+    // Each group needs room for its diff and the inline verdict contract.
+    let mut f = ReviewFixture::new(250, cmd);
     let base = f.git(&["rev-parse", "HEAD"]);
     std::fs::create_dir_all(f.repo.join("alpha")).unwrap();
     std::fs::create_dir_all(f.repo.join("beta")).unwrap();

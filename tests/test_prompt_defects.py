@@ -75,8 +75,9 @@ def test_tail_standing_question(mode):
                    '--- a/src/example.py\n+++ b/src/example.py\n@@ -1 +1 @@\n-value = 0\n+value = 1\n'))
     assert prompts
     for prompt in prompts:
-        assert text.rstrip() in prompt
-        assert prompt.index(text.rstrip()) < prompt.index("=== ITEM CONTEXT")
+        assert prompt.rstrip().endswith(text.rstrip())
+        assert prompt.index("=== ITEM CONTEXT") < prompt.index("=== FILE-PART MAP")
+        assert prompt.index("value = 1") < prompt.index(text.rstrip())
         assert prompt.count('Does the change game tests') == 1
 
 def test_claude_skill_pointers():
@@ -162,3 +163,63 @@ def test_review_seat_brief_requires_test_gaming_line():
 
     brief = render_brief("review", {"item_key": "demo:SEAT"})
     assert "TEST-GAMING:" in brief.split("=== ITEM CONTEXT", 1)[0]
+
+
+@pytest.mark.parametrize("kind", ["outside", "relative", "symlink", "directory",
+                                  "over-1-mib", "invalid-utf8"])
+def test_review_brief_rejects_unreadable_writer_artifacts(tmp_path, monkeypatch, kind):
+    from plangraph.review.prompt import render_brief
+
+    review_dir = tmp_path / "review"
+    review_dir.mkdir()
+    status = review_dir / "status.txt"
+    sentinel = b"ARTIFACT CONTENT MUST STAY OUT"
+    if kind == "outside":
+        status = tmp_path / status.name
+        status.write_bytes(sentinel)
+    elif kind == "relative":
+        status.write_bytes(sentinel)
+        monkeypatch.chdir(tmp_path)
+        status = status.relative_to(tmp_path)
+        review_dir = status.parent
+    elif kind == "symlink":
+        target = review_dir / "target.txt"
+        target.write_bytes(sentinel)
+        status.symlink_to(target)
+    elif kind == "directory":
+        status.mkdir()
+        (status / "child.txt").write_bytes(sentinel)
+    elif kind == "over-1-mib":
+        status.write_bytes(sentinel.ljust(1024 * 1024 + 1, b"x"))
+    elif kind == "invalid-utf8":
+        status.write_bytes(sentinel.ljust(32 * 1024, b"x") + b"\xff")
+
+    brief = render_brief("review", {"writer_run": {
+        "review_dir": str(review_dir), "writer_status_path": str(status),
+    }})
+    assert "writer status: unreadable" in brief
+    assert sentinel.decode("ascii") not in brief
+
+
+@pytest.mark.parametrize("artifact_size", [32 * 1024, 32 * 1024 + 64])
+def test_review_brief_limits_included_writer_artifact(tmp_path, artifact_size):
+    from plangraph.review.prompt import render_brief
+
+    status = tmp_path / "status.txt"
+    limit = 32 * 1024
+    suffix = "é\nEXCLUDED TAIL".encode("utf-8")
+    if artifact_size == limit:
+        content = b"x" * (limit - len(suffix)) + suffix
+    else:
+        # The two-byte character straddles the excerpt limit.
+        content = (b"x" * (limit - 1) + suffix).ljust(artifact_size, b"x")
+    status.write_bytes(content)
+
+    brief = render_brief("review", {"writer_run": {
+        "review_dir": str(tmp_path), "writer_status_path": str(status),
+    }})
+    evidence = brief.split("writer status: included\n", 1)[1].split("\nwriter slices:", 1)[0]
+    if artifact_size == limit:
+        assert evidence.endswith("é\n> EXCLUDED TAIL")
+    else:
+        assert evidence == "> " + "x" * (limit - 1) + "\n> [artifact truncated at 32 KiB]"
