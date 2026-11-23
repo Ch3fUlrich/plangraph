@@ -405,6 +405,25 @@ class DiscoveryFailed(list):
         self.reason = reason
 
 
+def routing_status(status):
+    """Keep legacy harness cooldowns for outages and auth distinct from quota."""
+    evidence = status.get('evidence') or {}
+    if status['state'] != 'limited' or evidence.get('caller') != 'spawner:harness':
+        return status
+    body = (evidence.get('body_excerpt') or '').lower()
+    if body.startswith('model_unavailable:'):
+        return dict(status, state='down', reason='model_unavailable')
+    if body.startswith(('http 429:', 'http 402:')):
+        return status
+    from plangraph.spawner.env_redact import CREDIT_AUTH_MARKER, busy_refusal
+    if body.startswith('http 503:') or busy_refusal(body):
+        return dict(status, state='down', reason='provider_busy')
+    auth = CREDIT_AUTH_MARKER.search(body)
+    if auth and auth[0].startswith(('unauthori', 'authentication ', 'invalid api key')):
+        return dict(status, state='down', reason='auth_refused')
+    return status
+
+
 class LegAdapter:
     """Explicit opt-in reader; one cached boundary shared by routing and probes.
 
@@ -418,6 +437,7 @@ class LegAdapter:
         self.models = self.standalone_models if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
+        self._quarantined = set()
     def __getattr__(self, name):
         return getattr(self.store, name)
     @staticmethod
@@ -442,9 +462,10 @@ class LegAdapter:
     def quarantine(self, leg):
         if self.enabled:
             self.leg_status(leg)
-            self._served.discard(self.identity(leg))
+            self._quarantined.add(self.identity(leg))
     def leg_status(self, leg, **kwargs):
-        if not self.enabled or leg.startswith(("agy:", "agy/")) or leg.startswith(("gemini-4-hydrogen-", "gemini-4-argon-", "gemini-4-neon-", "claude-sonnet-5-5")):
+        if (not self.enabled or kwargs.get('harness') == 'codex' or leg.startswith((
+                "agy:", "agy/", "gemini-4-hydrogen-", "gemini-4-argon-", "gemini-4-neon-", "claude-sonnet-5-5"))):
             return self.store.leg_status(leg, **kwargs)
         from .resolver import OPERATOR_REMOVED_MODELS
         if leg in OPERATOR_REMOVED_MODELS:
@@ -461,6 +482,7 @@ class LegAdapter:
                     raise RuntimeError(f'model discovery failed: {listed.reason}')
                 served = {self.identity(mid) for mid in listed}
                 self._states, self._served = states, served
+                self._quarantined.clear()
                 self._error = None if states else 'unreachable'
             except OmniRouteAuthRefused as exc:
                 self._error = str(exc)
@@ -468,23 +490,32 @@ class LegAdapter:
             except Exception as exc:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
-        state = self._error
-        if not state:
-            identity = self.identity(leg)
-            provider = self._states.get(leg.split('/')[0])
-            if identity not in self._served:
-                state = 'not_listed'
-            elif provider is None:
-                state = 'unreachable'
-            elif provider.stale:
-                state = 'stale'
-            else:
-                state = 'ok' if provider.available else 'unavailable'
-        if state == 'ok' and self.store is not None:
+        if self._error:
+            return dict(state='down' if self._auth_error else 'unknown', reason=self._error,
+                        evidence=dict(self._auth_error) if self._auth_error else None)
+        identity = self.identity(leg)
+        if identity in self._quarantined and self.store is not None:
+            stored = routing_status(self.store.leg_status(leg, **kwargs))
+            if stored['state'] in ('limited', 'down'):
+                return stored
+        if identity not in self._served or identity in self._quarantined:
+            return dict(state='down', reason='not_listed', evidence=None)
+        provider = self._states.get(leg.split('/')[0])
+        if provider is None:
+            return dict(state='down', reason='unreachable', evidence=None)
+        if provider.stale:
+            return dict(state='unknown', reason='stale', evidence=None)
+        if not provider.available:
+            if getattr(provider, 'reason', '') == 'rate_limited':
+                from .quota_snapshots import _ts
+                reset = _ts(provider.until)
+                wall_now = kwargs.get('now')
+                if reset is not None and reset > (time.time() if wall_now is None else wall_now):
+                    return dict(state='limited', reason='rate_limited', evidence=dict(reset_at=reset))
+            return dict(state='down', reason='provider_inactive', evidence=None)
+        if self.store is not None:
             stored = self.store.leg_status(leg, **kwargs)
             # Only a scheduled review-probe down booking overrides a healthy snapshot.
             if stored.get('state') == 'down' and (stored.get('evidence') or {}).get('caller') == 'review-probe':
                 return dict(stored, reason=stored.get('reason') or 'down')
-        # Legacy planner understands limited/down only; preserve explicit reason.
-        return dict(state='ok' if state == 'ok' else 'limited',
-                    reason=state, evidence=dict(self._auth_error) if self._auth_error else None)
+        return dict(state='ok', reason='ok', evidence=None)
