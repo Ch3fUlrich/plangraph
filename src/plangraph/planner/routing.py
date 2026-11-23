@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, asdict, field, replace
+from dataclasses import dataclass, asdict, field
 from plangraph.routing_support.liveness import read_leg_model, unavailable
 from plangraph.routing_support.risk import evaluate_risk, measure_card_shape
 import json
@@ -369,10 +369,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     from .legs import REVIEW_ORDER, REVIEW_REQUIRED, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT
     if native_review:
         legs = review_route_pool(legs)
-    if native_implement:
-        # The route picks Codex. Direct callers still resolve the registered gateway leg.
-        legs = tuple(replace(leg, harness="codex") if leg.id == LEAD_WRITER else leg
-                     for leg in legs)
     harness_skipped = []
     if installed is not None:
         from .legs import resolve_legs

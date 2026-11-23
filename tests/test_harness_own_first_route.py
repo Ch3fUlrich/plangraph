@@ -17,6 +17,16 @@ def test_own_harness_table():
     assert OWN_HARNESS == {"gpt": ("codex",), "gemini": ("agy",), "claude": ("claude", "agy")}
 
 
+def test_all_registered_gpt_legs_use_codex_with_explicit_opencode_fallback():
+    for leg in CATALOG.values():
+        if leg.family == 'gpt':
+            assert leg.harness == 'codex'
+            assert resolve_harness(leg, ALL).harness == 'codex'
+            fallback = resolve_harness(leg, lambda name: name == 'opencode')
+            assert fallback.leg.harness == 'opencode'
+            assert fallback.leg.harness_fallback == 'client_missing'
+
+
 @pytest.mark.parametrize("leg_id,harness", [
     ("cx-gpt-6.2-sol-medium", "codex"), ("agy-gemini-4-hydrogen-high", "agy"),
     ("agy-claude-sonnet-5-5-high", "agy"), ("claude-sonnet-5-5-high", "claude")])
@@ -59,7 +69,7 @@ def test_families_without_own_client_stay_on_opencode():
 
 
 def test_foreign_pin_needs_an_override_reason_while_the_own_client_is_installed():
-    gpt = CATALOG["cx-gpt-6.2-astra"]
+    gpt = replace(CATALOG["cx-gpt-6.2-astra"], harness="opencode")
     with pytest.raises(SpawnRefused, match="override"):
         refuse_foreign_pin(gpt, None, ALL)
     with pytest.raises(SpawnRefused, match="override"):
@@ -102,7 +112,7 @@ def test_service_route_review_for_claude_diff_runs_gpt_in_codex(tmp_path, review
         ("agy-gemini-4-hydrogen-high", "agy"), ("gpt-6.2-sol-medium", "codex")]
 
 
-def test_service_spawn_refuses_a_foreign_pin_without_a_reason(tmp_path):
+def test_service_spawn_admits_registered_codex_pin(tmp_path):
     import asyncio
     from types import SimpleNamespace
 
@@ -110,14 +120,15 @@ def test_service_spawn_refuses_a_foreign_pin_without_a_reason(tmp_path):
     service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
                            state=tmp_path / "state")
     service.client_probe = ALL
-    with pytest.raises(SpawnRefused, match="foreign-harness pin refused"):
+    with pytest.raises(SpawnRefused, match="spawn by card; --override-reason required"):
         asyncio.run(service.spawn(card={"estimate_tokens": 1000}, prompt="x", role="implement",
                                   leg="cx-gpt-6.2-sol", dry_run=True))
 
 
-def test_inline_only_leg_keeps_its_opencode_harness():
+def test_inline_only_gpt_leg_keeps_its_codex_harness():
     leg = CATALOG["cx-gpt-6-luna"]
-    assert leg.tool_mode == "inline-only" and own_harness_legs((leg,), ALL)[0] == leg
+    assert leg.harness == "codex" and leg.tool_mode == "inline-only"
+    assert own_harness_legs((leg,), ALL)[0] == leg
 
 
 def test_switch_off_keeps_registered_harness(tmp_path, monkeypatch):
@@ -131,7 +142,7 @@ def test_switch_off_keeps_registered_harness(tmp_path, monkeypatch):
     monkeypatch.delenv("PLANGRAPH_OWN_HARNESS")
     from plangraph.planner.legs import client_installed, service_probe
     assert service_probe(service) is client_installed
-    assert resolve_harness(CATALOG["cx-gpt-6.2-sol-medium"], None).harness == "opencode"
+    assert resolve_harness(CATALOG["cx-gpt-6.2-sol-medium"], None).harness == "codex"
 
 
 def test_native_legs_with_a_missing_client_fall_back_or_leave_the_route():

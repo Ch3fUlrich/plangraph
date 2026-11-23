@@ -96,6 +96,12 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
+    if leg.family == 'gpt' and leg.harness == 'codex':
+        from plangraph.planner.legs import resolve_harness
+        choice = resolve_harness(leg)
+        if choice.leg is None:
+            raise LaunchRefused('client_missing', 'Codex client unavailable for ' + leg.id)
+        leg = choice.leg
     from plangraph.routing_support.clients import codex_review_client
     codex, missing_client = (None, None) if request['dry_run'] else codex_review_client(
         leg.harness, request['role'], request['run_id'])
@@ -117,14 +123,14 @@ def build(request: dict) -> dict:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     service = SpawnService(state=request['state'])
     reader = getattr(service, 'leg_reader', None)
-    if leg.harness == 'agy':
+    if leg.harness in ('agy', 'codex'):
         from plangraph.routing_support.liveness import require_available
         try:
             require_available(leg, reader, request['card'])
         except SpawnRefused as exc:
             raise LaunchRefused('leg_unavailable', str(exc)) from None
     from plangraph.routing_support.quota_snapshots import pool_of, skip_reason
-    if reader is not None and pool_of(leg.model):
+    if reader is not None and leg.harness != 'codex' and pool_of(leg.model):
         card = request['card']
         status = reader.leg_status(leg.model, account=card.get('account'), combo=card.get('combo'))
         if reason := skip_reason(status):
