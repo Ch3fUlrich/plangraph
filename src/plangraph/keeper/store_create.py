@@ -417,6 +417,7 @@ class CreateMixin:
         prio = fields["priority"] if has_priority else None
         rest = ({name: value for name, value in fields.items()
                  if name != "priority"} if has_priority else fields)
+        rest, amendment = self._criteria_amendment_fields(rest, key)
         if has_priority:
             # Same order as ``_priority``: role, value, then the item lookup.
             self._require_role(principal, "router", "oversight")
@@ -669,7 +670,8 @@ class CreateMixin:
                 payload["who"] = principal.name
                 payload["before"] = audit_before
                 payload["after"] = audit_after
-            self._append(principal, key, "item_defined", payload, now)
+            seq, _ = self._append(principal, key, "item_defined", payload, now)
+            self._record_criteria_amendment(seq, principal, fresh, edit_fields, amendment, now)
             if has_priority:
                 self._apply_priority(principal, key, prio, now)
             else:
