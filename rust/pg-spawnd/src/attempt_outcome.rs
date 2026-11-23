@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, io::Write};
 
+// The watchdog settles this input-specific failure. CLI and I/O errors stay retryable.
+const UNPROJECTABLE_EXIT: i32 = 3;
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Rejected {
@@ -190,7 +193,10 @@ pub(crate) fn execute(verb: &str, args: Vec<String>, out: &mut dyn Write) -> Res
     }
     let input = serde_json::from_reader(std::io::stdin().lock()).map_err(|e| e.to_string())?;
     let value = match verb {
-        "project-spawn-attempt" => project(input)?,
+        "project-spawn-attempt" => project(input).unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(UNPROJECTABLE_EXIT);
+        }),
         "validate-attempt-route" => json!(route_from_json(input)?),
         _ => return Err("unknown attempt command".into()),
     };
