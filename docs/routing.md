@@ -75,8 +75,14 @@ pin their absence and missing roles (plus permanent disables for declarations).
 
 Run `plangraph route-shadow --since YYYY-MM-DD` for a tab-separated report, or
 add `--json` for the same rows and coverage counts in JSON. The date starts at
-midnight UTC. The command reads Keeper with the configured `PG_URL` and
-`PG_TOKEN_FILE` and opens `PLANGRAPH_CATALOG_DB` read-only. The catalog defaults
+midnight UTC. Set `PG_URL` and provide an unscoped Keeper reader token via
+`PG_TELEMETRY_TOKEN_FILE`. If that variable is unset, the command uses
+`PG_TOKEN_FILE`. The telemetry scope includes attempts from every project,
+ad hoc runs, and older rows without a route. The report header counts rows
+read and exclusions for the UTC cutoff, missing routes, pins, and missing
+task classes.
+
+The command opens `PLANGRAPH_CATALOG_DB` read-only. The catalog defaults
 to `~/.cache/plangraph/spawner_catalog.db` and can also be set with `--catalog`.
 To run against a read-only export, pass `--attempts FILE` with a JSON array in
 Keeper's `attempts --json` row format. Add `verified` to each exported row when

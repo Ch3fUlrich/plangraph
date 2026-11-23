@@ -83,6 +83,10 @@ fn compares_fixed_baseline_and_benchmark_utility_with_observed_outcomes() {
     let output = run("--text");
     assert!(output.status.success(), "{:?}", output);
     let table = String::from_utf8(output.stdout).unwrap();
+    assert!(table.starts_with("Since "));
+    assert!(table.lines().next().unwrap().contains(
+        "rows read 6 | in window 6 | dropped before since 0 | dropped missing route 0 | dropped pinned 1 | dropped unclassified 0"
+    ));
     assert!(table.contains("medium_change"));
     assert!(table.contains("below floor"));
     assert!(table.contains("small_change"));
@@ -135,6 +139,8 @@ fn keeps_partial_catalog_coverage_and_unknown_verification_visible() {
     assert!(output.status.success(), "{:?}", output);
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["bench_source"], "legacy");
+    assert_eq!(report["rows_read"], 3);
+    assert_eq!(report["excluded_before_since"], 1);
     assert_eq!(report["excluded_unclassified"], 1);
     assert_eq!(report["rows"][0]["n"], 1);
     let row = &report["rows"][0];
@@ -157,12 +163,27 @@ fn uses_keeper_read_endpoints_and_matches_verified_run_evidence() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
-    let attempts = json!([{
+    let sample = json!({
         "attempt_id":"that-run", "card_key":"demo:K", "role":"implement",
         "task_class":"small_change", "leg":"a", "requested_model":"a", "harness":"codex",
         "started_at":"2026-11-22T00:00:00Z", "exit_class":"ok", "cost":5.0,
         "route":{"eligible_n":1,"pin":false,"top5":[{"leg":"a"}],"baselines":{"static_v0":"a"}}
-    }]);
+    });
+    let mut attempts = vec![sample.clone()];
+    for n in 1..20 {
+        let mut attempt = sample.clone();
+        attempt["attempt_id"] = json!(format!("fixture-{n}"));
+        attempt["card_key"] = json!(format!("project{}:K", n % 3));
+        if n < 10 {
+            attempt["route"]["pin"] = json!(true);
+        } else if n < 19 {
+            attempt["task_class"] = Value::Null;
+        } else {
+            attempt["route"] = Value::Null;
+            attempt["role"] = json!("unknown");
+        }
+        attempts.push(attempt);
+    }
     let evidence = json!({"evidence":[
         {"kind":"run-record","verified":true,"ref":{"run_id":"other"}},
         {"kind":"run-record","verified":true,"ref":{"run_id":"that-run"}}
@@ -170,7 +191,10 @@ fn uses_keeper_read_endpoints_and_matches_verified_run_evidence() {
     let serve = std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
         for (prefix, body) in [
-            ("GET /v1/attempts?since=", attempts),
+            (
+                "GET /v1/attempts?scope=telemetry&since=",
+                json!({"rows": attempts}),
+            ),
             ("GET /v1/show?fmt=json&key=%64%65%6D%6F%3A%4B ", evidence),
         ] {
             let mut stream = loop {
@@ -194,6 +218,9 @@ fn uses_keeper_read_endpoints_and_matches_verified_run_evidence() {
                 .take_while(|line| !line.is_empty())
                 .collect();
             assert!(lines[0].starts_with(prefix), "{}", lines[0]);
+            assert!(lines
+                .iter()
+                .any(|line| line.eq_ignore_ascii_case("authorization: Bearer telemetry-token")));
             let body = body.to_string();
             write!(stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
@@ -202,7 +229,7 @@ fn uses_keeper_read_endpoints_and_matches_verified_run_evidence() {
 
     let tmp = tempfile::tempdir().unwrap();
     let token = tmp.path().join("token");
-    std::fs::write(&token, "fixture-token").unwrap();
+    std::fs::write(&token, "telemetry-token").unwrap();
     let catalog = tmp.path().join("catalog.db");
     Connection::open(&catalog)
         .unwrap()
@@ -214,7 +241,8 @@ fn uses_keeper_read_endpoints_and_matches_verified_run_evidence() {
     let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
         .env("PLANGRAPH_ENV_FILE", tmp.path().join("env"))
         .env("PG_URL", format!("http://{address}"))
-        .env("PG_TOKEN_FILE", token)
+        .env("PG_TOKEN_FILE", tmp.path().join("scoped-token"))
+        .env("PG_TELEMETRY_TOKEN_FILE", token)
         .args([
             "route-shadow",
             "--since",
@@ -228,6 +256,12 @@ fn uses_keeper_read_endpoints_and_matches_verified_run_evidence() {
     assert!(output.status.success(), "{:?}", output);
     serve.join().unwrap();
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["rows_read"], 20);
+    assert_eq!(report["input_n"], 20);
+    assert_eq!(report["excluded_before_since"], 0);
+    assert_eq!(report["excluded_missing_route"], 1);
+    assert_eq!(report["excluded_pinned"], 9);
+    assert_eq!(report["excluded_unclassified"], 9);
     assert_eq!(report["rows"][0]["fixed"]["verified_n"], 1);
     assert_eq!(
         report["rows"][0]["utility"]["cost_per_verified_success_usd"],

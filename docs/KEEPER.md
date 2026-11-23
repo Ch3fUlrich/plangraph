@@ -610,5 +610,12 @@ lower it below the computed level.
 A spawn without a keeper card has a null `card_key`. The display item preserves
 the supplied item key and uses `adhoc` when the spawn has no item key. The migration
 preserves foreign keys and legacy attempt rows.
+
+`GET /v1/attempts?scope=telemetry&since=1d` requires a `reader` principal with
+an empty project list. Its `rows` array includes every timestamped attempt
+in the window across projects, including ad hoc and legacy attempts.
+Legacy rows carry a `legacy:<id>` identifier and a null route. The default
+HTTP response remains a project-scoped array of terminal spawn rows.
+
 Spawn delivery retries through the watchdog, and the keeper deduplicates by
 spawn ID. An unwitnessed serving model and unknown usage remain explicit.
