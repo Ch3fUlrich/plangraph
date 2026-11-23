@@ -752,6 +752,16 @@ def _main(argv, root, cleanup):
                 stopped = args.fail_fast
         summary.append(f"{status} {family} {time.monotonic() - start:.3f}")
         print(summary[-1], flush=True)
+    if sys.platform.startswith('linux') and shared_cargo_target().is_dir():
+        spawnd = shutil.which('pg-spawnd', path=env.get('PATH'))
+        if spawnd is None:
+            print('cargo post-run trim skipped: pg-spawnd missing on PATH', flush=True)
+        else:
+            try:
+                code, output = run([spawnd, 'host', 'post-run-cargo'], root, env)
+                print(f"cargo post-run trim {'skipped' if code else 'result'}: {output.strip()}", flush=True)
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f'cargo post-run trim skipped: {exc}', flush=True)
     return exit_code
 
 

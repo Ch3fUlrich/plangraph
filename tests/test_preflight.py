@@ -667,3 +667,32 @@ def test_cargo_lease_is_shared_between_runs(tmp_path, monkeypatch):
         first.close()
         for lease in got:
             lease.close()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux disk hygiene")
+def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch):
+    from plangraph.spawner.host_ready import cargo_lease
+
+    target = repo.parent / (repo.name + "-post-run-cache")
+    target.mkdir()
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    monkeypatch.setattr(preflight, "trim_shared_target", lambda root: None)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *args: [["cargo", "fmt", "--check"]])
+    monkeypatch.setattr(preflight, "running_disk_refusal", lambda root: None)
+    calls = fake_runner(monkeypatch)
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda name, *args, **kw:
+                        "/fixture/pg-spawnd" if name == "pg-spawnd" else real_which(name, *args, **kw))
+    real_run = preflight.run
+
+    def run(command, cwd, env):
+        if command[0] == "/fixture/pg-spawnd":
+            assert calls[-1][0][:2] == ["cargo", "fmt"]
+            with cargo_lease(exclusive=True):
+                calls.append((command, cwd, env))
+            return 0, "{}\n"
+        return real_run(command, cwd, env)
+
+    monkeypatch.setattr(preflight, "run", run)
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
+    assert calls[-1][0] == ["/fixture/pg-spawnd", "host", "post-run-cargo"]

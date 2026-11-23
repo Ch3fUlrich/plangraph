@@ -130,5 +130,18 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         let _ = child.kill();
         let _ = child.wait();
     }
+    #[cfg(target_os = "linux")]
+    if let Ok(mut log) = fs::OpenOptions::new().append(true).open(&log_path) {
+        let trim = pg_worker_core::disk_runtime::post_run_cargo(&host.cwd)
+            .and_then(|report| serde_json::to_string(&report).map_err(std::io::Error::other));
+        match trim {
+            Ok(report) => {
+                let _ = writeln!(log, "cargo post-run trim: {report}");
+            }
+            Err(error) => {
+                let _ = writeln!(log, "cargo post-run trim skipped: {error}");
+            }
+        }
+    }
     result
 }

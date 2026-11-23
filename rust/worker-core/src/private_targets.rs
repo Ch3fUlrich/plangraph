@@ -12,7 +12,7 @@ fn cargo_target(path: &Path) -> bool {
         && !path.join("Cargo.toml").exists()
 }
 
-fn owned(path: &Path) -> io::Result<bool> {
+pub(crate) fn owned(path: &Path) -> io::Result<bool> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;

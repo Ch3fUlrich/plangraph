@@ -332,3 +332,38 @@ fn reaper_inventory_includes_open_files_and_executables() {
     assert!(paths.contains(&PathBuf::from("/candidate/file")));
     assert!(paths.iter().all(|p| p.is_absolute()));
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn post_run_caps_identified_debug_only_when_idle() {
+    let parent = tempfile::tempdir().unwrap();
+    let checkout = parent.path().join("checkout");
+    let target = parent.path().join("target");
+    let profile = target.join("debug");
+    let sibling = target.join("unrelated");
+    fs::create_dir_all(&profile).unwrap();
+    fs::create_dir(&sibling).unwrap();
+    fs::create_dir(&checkout).unwrap();
+    fs::write(profile.join(".cargo-lock"), []).unwrap();
+    fs::write(profile.join("new-artifact"), [0; 100]).unwrap();
+    fs::write(sibling.join("data"), [0; 12]).unwrap();
+    fs::write(
+        target.join("CACHEDIR.TAG"),
+        b"Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+
+    let run =
+        |building| post_run_cargo_using(&checkout, &target, 80, || Ok((vec![], building))).unwrap();
+    let lease = crate::cargo_cache::try_exclusive_lease(&target)
+        .unwrap()
+        .unwrap();
+    assert!(run(false).actions.is_empty());
+    drop(lease);
+    assert!(run(true).actions.is_empty());
+    assert!(profile.exists());
+
+    assert_eq!(run(false).freed_bytes, 100);
+    assert!(crate::disk_hygiene::scan(&target).unwrap().0 <= 80);
+    assert!(sibling.join("data").exists());
+}

@@ -1,0 +1,1 @@
+- Recheck the shared Cargo target cap after train preflight and native writer turns. Evict old build entries first, then reclaim identified debug profiles under the exclusive lease if the target is still over cap.
