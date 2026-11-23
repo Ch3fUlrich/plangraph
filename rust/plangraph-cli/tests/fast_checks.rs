@@ -222,9 +222,18 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
 
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "requires cargo-nextest on PATH; protected CI rollout is tracked separately"]
 fn preflight_reports_a_hanging_rust_test_and_reaps_its_child() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if !Command::new("cargo")
+        .current_dir(&root)
+        .args(["nextest", "--version"])
+        .output()
+        .is_ok_and(|probe| probe.status.success())
+    {
+        eprintln!("skipping hang test: cargo nextest --version failed");
+        return;
+    }
+
     let fixture = tempfile::tempdir().unwrap();
     let path = fixture.path();
     std::fs::create_dir(path.join("src")).unwrap();
