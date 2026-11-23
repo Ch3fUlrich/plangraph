@@ -79,8 +79,6 @@ mod tests {
 
     #[test]
     fn train_push_uses_the_built_manifest_and_runs_the_hook() {
-        use std::os::unix::fs::PermissionsExt;
-
         let fx = Fx::new();
         let base = fx.base();
         let head = fx.commit(&base, "part.txt", "part\n");
@@ -105,8 +103,7 @@ mod tests {
              test \"$(cat \"$PLANGRAPH_TRAIN_MANIFEST\")\" = {head} || exit 1\n\
              touch .git/hook-ran\n"
         );
-        std::fs::write(&hook, script).unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+        pg_worker_core::executable_test_support::write_private_executable(&hook, script);
         let args = [
             "push",
             "--repo",

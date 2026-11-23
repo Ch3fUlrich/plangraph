@@ -38,14 +38,11 @@ fn fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         fs::create_dir(tmp.path().join("bin")).unwrap();
-        fs::write(tmp.path().join("bin/systemctl"), "#!/bin/sh\nexit 0\n").unwrap();
-        fs::set_permissions(
+        pg_worker_core::executable_test_support::write_executable(
             tmp.path().join("bin/systemctl"),
-            fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
+            "#!/bin/sh\nexit 0\n",
+        );
     }
     let seed = tmp.path().join("source");
     fs::create_dir(&seed).unwrap();
@@ -194,21 +191,18 @@ fn nested_path_never_fetches_or_reads_parent_config() {
 #[cfg(unix)]
 #[test]
 fn bounded_status_continues_to_next_repository() {
-    use std::os::unix::fs::PermissionsExt;
     let tmp = fixture();
     let bin = tmp.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
     let real = Command::new("which").arg("git").output().unwrap();
     let real = String::from_utf8(real.stdout).unwrap();
-    fs::write(
+    pg_worker_core::executable_test_support::write_executable(
         bin.join("git"),
         format!(
             "#!/bin/sh\ncase \"$*\" in *checkout*status*) sleep 3;; esac\nexec {} \"$@\"\n",
             real.trim()
         ),
-    )
-    .unwrap();
-    fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
+    );
     git(tmp.path(), &["clone", "-q", "source", "next"]);
     let start = std::time::Instant::now();
     let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
@@ -234,12 +228,10 @@ fn bounded_status_continues_to_next_repository() {
 #[cfg(unix)]
 #[test]
 fn live_unit_checkout_is_reported_and_unchanged() {
-    use std::os::unix::fs::PermissionsExt;
     let tmp = fixture();
     let bin = tmp.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
-    fs::write(bin.join("systemctl"), format!("#!/bin/sh\ncase \"$*\" in *list-units*) echo 'keeper.service loaded active running Keeper';; *show*) echo '{}';; esac\n", tmp.path().join("checkout").display())).unwrap();
-    fs::set_permissions(bin.join("systemctl"), fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(bin.join("systemctl"), format!("#!/bin/sh\ncase \"$*\" in *list-units*) echo 'keeper.service loaded active running Keeper';; *show*) echo '{}';; esac\n", tmp.path().join("checkout").display()));
     let before = git(&tmp.path().join("checkout"), &["rev-parse", "HEAD"]);
     let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
         .current_dir(tmp.path())
@@ -278,7 +270,6 @@ fn excluded_alias_or_pinned_checkout_is_reported_without_fetch() {
 #[cfg(unix)]
 #[test]
 fn systemd_optional_and_home_directories_do_not_disable_sync() {
-    use std::os::unix::fs::PermissionsExt;
     for value in ["!", "~", "!/no-such-pg-repo-sync-directory"] {
         let tmp = fixture();
         let value = if value == "!" {
@@ -286,12 +277,7 @@ fn systemd_optional_and_home_directories_do_not_disable_sync() {
         } else {
             value.into()
         };
-        fs::write(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\ncase \"$*\" in --user*list-units*) echo 'other.service loaded active running Other';; *show*) echo '{}';; esac\n", value)).unwrap();
-        fs::set_permissions(
-            tmp.path().join("bin/systemctl"),
-            fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
+        pg_worker_core::executable_test_support::write_executable(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\ncase \"$*\" in --user*list-units*) echo 'other.service loaded active running Other';; *show*) echo '{}';; esac\n", value));
         let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
             .current_dir(tmp.path())
             .args(["--repo", "checkout"])

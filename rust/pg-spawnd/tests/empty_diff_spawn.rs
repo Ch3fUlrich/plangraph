@@ -6,7 +6,7 @@ mod binary;
 mod common;
 use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
-use std::{os::unix::fs::PermissionsExt, path::Path};
+use std::path::Path;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
@@ -26,15 +26,13 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 fn marker_script(path: &Path, marker: &Path) {
-    std::fs::write(
+    pg_worker_core::executable_test_support::write_executable(
         path,
         format!(
             "#!/bin/sh\ntouch '{}'\ncat >/dev/null\nexit 1\n",
             marker.display()
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
 }
 
 #[test]
