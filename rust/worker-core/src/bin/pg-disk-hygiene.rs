@@ -87,9 +87,10 @@ fn execute_with(
         .map(|mount| (work_disks::worktree_root(&mount), mount))
         .collect();
     roots.extend(configured.keys().cloned());
+    let fast_checks =
+        pg_worker_core::worktree::fast_check_state_dir(&repo).map_err(io::Error::other)?;
     roots.extend(
-        ["runs", "worktrees"]
-            .map(|name| state.join(name))
+        [state.join("runs"), state.join("worktrees"), fast_checks]
             .into_iter()
             .filter(|path| path.is_dir()),
     );
@@ -228,14 +229,14 @@ fn execute_with(
         }
     }
     {
-        for cache in shared {
-            let pressure = match disk_runtime::disk_space(&cache) {
+        for cache in &shared {
+            let pressure = match disk_runtime::disk_space(cache) {
                 Ok(space) => space.free < thresholds.for_filesystem(space.total).cleanup_free_bytes,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error),
             };
             if let Err(error) = disk_runtime::shared_cache_capped(
-                &cache,
+                cache,
                 &guards,
                 building,
                 cap,
@@ -249,7 +250,7 @@ fn execute_with(
         }
         // Pool slots are guarded by their own leases, so idle ones are trimmed even while
         // another build runs; the primary target also waits for the process scan.
-        if let Some(primary) = pg_worker_core::cargo_cache::shared_cache_roots()?.first() {
+        if let Some(primary) = shared.first() {
             let mut slots = pg_worker_core::cargo_pool::existing_pool_slots(primary);
             if building {
                 slots.remove(0);
@@ -334,16 +335,19 @@ mod tests {
         git(&["commit", "-qm", "fixture"]);
         let mut expected = Vec::new();
         let roots = [path("first"), path("second")];
-        for root in &roots {
-            fs::create_dir(root).unwrap();
-            let tree = root.join("lane");
+        let head = disk_hygiene::git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        let stamp = pg_worker_core::worktree::fast_check_stamp(&repo, head.trim()).unwrap();
+        let stranded = stamp.with_file_name("check-stranded-fast");
+        let siblings = [roots[0].join("lane"), roots[1].join("lane")];
+        for tree in siblings.iter().chain([&stranded]) {
+            fs::create_dir_all(tree.parent().unwrap()).unwrap();
             git(&["worktree", "add", "--detach", tree.to_str().unwrap()]);
             let target = tree.join("target");
             fs::create_dir(&target).unwrap();
             fs::write(target.join("cache"), "cached").unwrap();
             let past = SystemTime::now() - Duration::from_secs(25 * 3600);
             for file in [
-                &tree,
+                tree,
                 &tree.join(".git"),
                 &tree.join(".gitignore"),
                 &target,
@@ -351,7 +355,9 @@ mod tests {
             ] {
                 fs::File::open(file).unwrap().set_modified(past).unwrap();
             }
-            expected.push(target);
+            if tree != &stranded {
+                expected.push(target);
+            }
         }
         let pins = path("pins.json");
         fs::write(&pins, "[]").unwrap();
@@ -392,5 +398,20 @@ mod tests {
                 .any(|message| message.contains(target.to_str().unwrap())));
             assert!(target.is_dir());
         }
+        fs::write(&stamp, &head).unwrap();
+        let mut args = args;
+        *args.last_mut().unwrap() = "--apply".into();
+        let report = execute_with(
+            &args,
+            fixture.path(),
+            vec![],
+            || Ok((vec![], false)),
+            || Ok((vec![], vec![])),
+        )
+        .unwrap();
+        assert!(!stranded.exists(), "{report:?}");
+        assert_eq!(fs::read_to_string(&stamp).unwrap(), head);
+        let listing = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"]).unwrap();
+        assert!(!listing.contains("check-stranded-fast"), "{listing}");
     }
 }
