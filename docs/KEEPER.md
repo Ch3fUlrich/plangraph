@@ -405,9 +405,10 @@ An edit that changes `done_criteria` appends a row to `criteria_amendments`
 in the same transaction as the definition event. The row links to that event
 and records the before and after text, editing principal and time. A change
 requires nonblank `criteria_reason` and `criteria_evidence` in the edit fields.
-`pg verify` reports missing or mismatched rows by item key and event sequence.
-Older events that list the criterion field without its values or a matching
-ledger row appear as `criteria_amendment_unverifiable`.
+`pg admin verify` checks criteria edits from the first ledger row onward and
+any definition event marked as ledger-backed. It reports missing, mismatched
+or unverifiable amendments by item key and event sequence. Legacy criteria
+edits before the ledger started are accepted.
 
 A definition whose How asks the writer to obtain a design or contract, or
 explicitly calls for a design document, contract file, or approved or versioned
