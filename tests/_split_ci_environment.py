@@ -6,6 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 from contextlib import contextmanager
+from threading import Thread, Timer
 import pytest
 
 def python_test_env(env=None):
@@ -207,3 +208,93 @@ def quarantine_items(items, ledger, mode, now):
         if bool(owner) == (mode == 'quarantine'):
             selected.append(item)
     return selected, matched
+
+
+def pytest_addoption(parser):
+    parser.addini('test_deadline', 'Default per-test deadline in seconds', default='120')
+
+
+_EXIT = os._exit
+_START_INFRASTRUCTURE_THREAD = Thread.start
+
+
+def _stop_hung_test(item):
+    import asyncio
+    import faulthandler
+    import signal
+
+    pid = os.getpid()
+    try:
+        capture = item.config.pluginmanager.get_plugin('capturemanager')
+        if capture is not None:
+            capture.suspend(in_=True)
+        os.write(2, f'\nHUNG {_ci_nodeid(item.nodeid)}\n'.encode(errors='backslashreplace'))
+        faulthandler.dump_traceback(file=2, all_threads=True)
+    finally:
+        try:
+            if sys.platform == 'linux':
+                from plangraph.spawner import proc_kill
+                table = proc_kill._scan()
+                seeds = {pid}
+                if os.getpgrp() == pid:
+                    seeds.update(child for child, info in table.items() if info[2] == pid)
+                children = proc_kill.descendants(table, seeds) - {pid}
+                members = {child: table[child][4] for child in children if table[child][0] != 'Z'}
+                proc_kill.kill_identities(members)
+                asyncio.run(proc_kill.verify_gone(members, wait_s=2))
+            elif os.name == 'nt':
+                subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], timeout=5, check=False)
+        finally:
+            if os.name == 'posix' and os.getpgrp() == pid:
+                os.killpg(pid, signal.SIGKILL)
+            _EXIT(124)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_protocol(item):
+    try:
+        default = float(item.config.getini('test_deadline'))
+        marker = item.get_closest_marker('long_test_deadline')
+        seconds = float(marker.args[0]) if marker else default
+        reason = marker.kwargs.get('reason') if marker else None
+        if not math.isfinite(default) or default <= 0:
+            raise ValueError
+        if marker and (not math.isfinite(seconds) or seconds <= default or
+                       not isinstance(reason, str) or not reason.strip()):
+            raise ValueError
+    except (IndexError, TypeError, ValueError) as exc:
+        raise pytest.UsageError(
+            f'{item.nodeid}: test_deadline must be positive; longer overrides need a reason',
+        ) from exc
+    timer = Timer(seconds, _stop_hung_test, args=(item,))
+    timer.daemon = True
+    # The watchdog outlives fixture teardown and has its own join in this hook.
+    _START_INFRASTRUCTURE_THREAD(timer)
+    try:
+        return (yield)
+    finally:
+        timer.cancel()
+        timer.join()
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus):
+    """Publish complete, canonical setup/call/teardown timings for this shard."""
+    destination = os.environ.get('PYTEST_SHARD_DURATIONS_OUT')
+    if not destination or exitstatus != pytest.ExitCode.OK:
+        return
+    durations = {}
+    for reports in terminalreporter.stats.values():
+        for report in reports:
+            if isinstance(report, pytest.TestReport):
+                nodeid = _ci_nodeid(report.nodeid)
+                durations[nodeid] = durations.get(nodeid, 0) + report.duration
+    target = Path(destination)
+    fd, name = tempfile.mkstemp(dir=target.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(durations, stream, sort_keys=True)
+            stream.write('\n')
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
