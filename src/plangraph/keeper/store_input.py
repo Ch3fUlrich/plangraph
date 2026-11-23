@@ -10,7 +10,7 @@ from __future__ import annotations
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
-from .item_fields import (MODEL_FIELDS, check_choices, check_host, check_kg_refs, check_kind, check_model_fields,
+from .item_fields import (MODEL_FIELDS, check_choices, check_design_ref, check_host, check_kg_refs, check_kind, check_model_fields,
                           check_wait, kind_defaults)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
@@ -76,6 +76,7 @@ class InputMixin:
                 raise Refused("validation", f"{field} must be a string")
             if len(value) > cap:
                 raise Refused("validation", f"{field} exceeds {cap} characters")
+        check_design_ref(fields.get("design_ref"), key)
         if "host" in fields:
             check_host(fields["host"])
         if "wait" in fields:
@@ -129,7 +130,7 @@ class InputMixin:
             "track": raw.get("track"), "owner": raw.get("owner"),
             "owner_family": auth.norm_family(raw.get("owner_family")),
             "estimate_h": raw.get("estimate_h"), "estimate_src": raw.get("estimate_src"),
-            "done_criteria": raw.get("done_criteria"),
+            "done_criteria": raw.get("done_criteria"), "design_ref": raw.get("design_ref"),
             "evidence_kinds": list(raw.get("evidence_kinds") or ["any"]),
             "operator": bool(operator),
             "priority": int(raw.get("priority") or 0),

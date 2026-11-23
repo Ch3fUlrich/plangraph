@@ -19,6 +19,7 @@ import pytest
 
 from keeper_util import World, defn, seed, to_done
 from plangraph.keeper import api, brief as brief_mod, config, fmt, mcp
+from plangraph.keeper.errors import Refused
 
 BRIEF_KEYS = {"key", "title", "state", "kind", "owner", "review_tier",
               "evidence_kinds", "priority", "wait", "depends_on",
@@ -264,3 +265,27 @@ def test_fmt_brief_text_is_the_capped_text(w):
     info = w.store.show(w.p("reader"), "demo:A", brief=True)
     assert fmt.brief_text(info) == brief_mod.brief_text(info)
     assert len(fmt.brief_text(info)) <= brief_mod.BRIEF_CAP
+
+
+def test_definition_requires_and_preserves_an_explicit_design_reference(w):
+    router = w.p("router")
+    key = "demo:WORK"
+    lane = defn("WORK", description="Why: missing input\nHow: Recover the approved v10 design.")
+    lane["under"] = "GOAL"
+    with pytest.raises(Refused, match="design_ref"):
+        w.store.create_items(router, [lane])
+    ref = "data-repo:docs/design-v10.md"
+    lane["design_ref"] = ref
+    assert w.store.create_items(router, [lane])["created"][0] == key
+    assert w.store.show(w.p("reader"), key)["design_ref"] == ref
+    assert w.store.show(w.p("reader"), key, brief=True)["design_ref"] == ref
+    snapshot = w.store.snapshot(w.p("reader"), fields="key,design_ref")
+    assert {"key": key, "design_ref": ref} in snapshot["items"]
+    with pytest.raises(Refused, match="design_ref"):
+        w.store.edit_definition(router, key, {"design_ref": None})
+    w.store.edit_definition(router, key, {
+        "description": "Why: input available\nHow: Obtain the roster contract.",
+        "design_ref": "docs/roster.md",
+    })
+    assert w.store.show(w.p("reader"), key)["design_ref"] == "docs/roster.md"
+    assert w.store.verify_integrity() == []

@@ -420,7 +420,7 @@ def test_ready_and_claim_check_merged_work_in_all_repositories(w, repo, tmp_path
     else:
         trailer = key if source == "trailer" else "CROSS-REPO"
         _commit(data, "delivery", f"work\n\nPlan-Item: {trailer}")
-    w.store.ctx["git"] = GitAdapter({"demo": str(repo), "plangraph-data": str(data)})
+    w.store.ctx["git"] = GitAdapter({"demo": str(repo), "data-repo": str(data)})
 
     ready = w.store.ready_data(w.p("reader"), "demo")
     if source == "foreign-bare":
