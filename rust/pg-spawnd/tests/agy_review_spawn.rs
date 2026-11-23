@@ -98,7 +98,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
         format!(
             "{}\n{}",
             json!({"type":"system", "subtype":"init", "model":"claude-sonnet-5-5-high"}),
-            json!({"type":"result", "is_error":false, "result":format!("No findings in src/lib.rs:1.\nFILES READ: src/lib.rs\nHEAD: {head}\nVERDICT: PASS\nTEST_GAMING: no\n")})
+            json!({"type":"result", "is_error":false, "result":format!("No findings in src/lib.rs:1.\nFILES READ: src/lib.rs\nTESTS: cargo test -p fixture: ok\nHEAD: {head}\nVERDICT: PASS\nTEST_GAMING: no\n")})
         )
     } else {
         frame.to_string()

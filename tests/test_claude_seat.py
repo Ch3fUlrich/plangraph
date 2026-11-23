@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from plangraph.routing_support import claude_seat
 from plangraph.routing_support.claude_seat import (
     REVIEW_DENIED,
     REVIEW_TOOLS,
@@ -187,3 +188,24 @@ def test_sandbox_smoke_result_is_cached(tmp_path, monkeypatch, exit_code):
     (tmp_path / "socat").unlink()
     assert claude_seat.sandbox_available(env) is False
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("command, allowed", [
+    ("pytest -q tests/test_claude_seat.py", True),
+    ("python3 -m pytest -q tests/test_claude_seat.py::test_package_resource", True),
+    ("pytest -q tests/../tests/test_claude_seat.py", False),
+    ("pytest -q tests\\test_claude_seat.py", False),
+    ("pytest -q /etc/passwd", False),
+])
+def test_review_pytest_paths_are_judged_by_text_not_platform_path_text(
+        command, allowed, tmp_path, monkeypatch):
+    # Windows renders Path text with backslashes; the policy regex is slash-only (CI Windows job).
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_claude_seat.py").write_text("")
+
+    class BackslashPath(type(tmp_path)):
+        def __str__(self):
+            return super().__str__().replace("/", "\\")
+
+    monkeypatch.setattr(claude_seat, "Path", BackslashPath)
+    assert claude_seat._review_command(command, tmp_path) is allowed
