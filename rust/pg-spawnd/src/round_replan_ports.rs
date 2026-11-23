@@ -233,6 +233,7 @@ impl Ports for CommandPorts<'_> {
             "estimate_h":1, "depends_on":[], "operator":false,
             // The parent depends on its slices, so they reach the goal through it.
             "under":slice.parent,
+            "slice_parent":slice.parent,
             "done_criteria":format!("Slice of {}: {} changed lines in {} files; every finding below fixed",
                 slice.parent, slice.lines, slice.files.len()),
             "evidence_kinds":["any"],
