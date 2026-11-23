@@ -271,8 +271,8 @@ def test_pytest_shards_balance_recorded_durations(tmp_path, monkeypatch, shard_s
 
 @pytest.mark.parametrize(('now', 'mode', 'expected'), [
     ('2026-11-24T09:00:00+00:00', 'blocking', ['test_regular']),
-    ('2026-11-24T09:00:00+00:00', 'quarantine', ['test_flaky']),
-    ('2026-11-25T09:00:00+00:00', 'blocking', ['test_regular', 'test_flaky']),
+    ('2026-11-24T09:00:00+00:00', 'quarantine', ['test_flaky[user@example.invalid]']),
+    ('2026-11-25T09:00:00+00:00', 'blocking', ['test_regular', 'test_flaky[user@example.invalid]']),
     ('2026-11-25T09:00:00+00:00', 'quarantine', []),
 ])
 def test_pytest_quarantine_expires(tmp_path, now, mode, expected):
@@ -284,16 +284,16 @@ def test_pytest_quarantine_expires(tmp_path, now, mode, expected):
 
     ledger = tmp_path / 'quarantine.json'
     ledger.write_text(json.dumps({
-        'test_flaky': {
+        'test_flaky[user@example.invalid]': {
             'owner': 'plangraph:FIX-THE-FLAKE',
             'starts': '2026-11-23T09:00:00+00:00',
             'expires': '2026-11-25T09:00:00+00:00',
         }
     }))
-    items = [SimpleNamespace(nodeid=nodeid) for nodeid in ['test_regular', 'test_flaky']]
+    items = [SimpleNamespace(nodeid=nodeid) for nodeid in ['test_regular', 'test_flaky[user@example.invalid]@contract']]
     selected, active = quarantine_items(items, ledger, mode, datetime.fromisoformat(now))
-    assert [item.nodeid for item in selected] == expected
-    assert active == ({'test_flaky': 'plangraph:FIX-THE-FLAKE'} if now.startswith('2026-11-24') else {})
+    assert [item.nodeid.removesuffix('@contract') for item in selected] == expected
+    assert active == ({'test_flaky[user@example.invalid]': 'plangraph:FIX-THE-FLAKE'} if now.startswith('2026-11-24') else {})
 
 
 def test_pytest_default_hang_diagnostic_dumps_the_blocked_test(tmp_path, request):
