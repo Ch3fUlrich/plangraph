@@ -14,7 +14,7 @@ import subprocess
 import pytest
 
 from keeper_util import World, defn, seed
-from plangraph.keeper import fmt, mcp
+from plangraph.keeper import auth, fmt, mcp
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_git import GitAdapter
@@ -196,6 +196,29 @@ def test_force_stale_claims_and_is_audited_on_the_event(w, repo):
     payload = json.loads(row["payload"])
     assert payload["force_stale"]["reason"] == "slice 2 of 2 (Plan-Slice)"
     assert "already merged" in payload["force_stale"]["overrode"][0]
+
+
+def test_force_stale_for_router_preflight_and_phase_worker_claim(w, repo):
+    key, = seed(w, [("A", [])])
+    sha = _merge_lane(repo, key)
+    token = auth.add_principal(w.conn, "phase-worker", "phase-worker", ["demo"])
+    worker = auth.authenticate(w.conn, token)
+    router = w.p("router")
+    reason = "Verify the remaining merged work"
+    merged = f"already merged: Plan-Item commit {sha[:8]}"
+
+    with pytest.raises(Refused, match=merged):
+        w.store._prepare_claim(router, key, None, {})
+    with pytest.raises(Refused, match=merged):
+        w.store.claim(worker, key)
+    assert w.store._item(key)["state"] == "open"
+
+    _, override, _ = w.store._prepare_claim(router, key, reason, {})
+    assert override == {"reason": reason, "overrode": [merged]}
+    assert w.store.claim(worker, key, force_stale=reason)["epoch"] == 1
+    row = w.conn.execute(
+        "SELECT payload FROM events WHERE key=? AND type='claimed'", (key,)).fetchone()
+    assert json.loads(row["payload"])["force_stale"] == override
 
 
 def test_force_stale_must_be_a_string(w, repo):
