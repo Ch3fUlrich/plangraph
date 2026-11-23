@@ -450,20 +450,32 @@ def _install_marker_preflight(r, marker):
     return {"TEST_PREFLIGHT_MARKER": str(marker)}
 
 
-@pytest.mark.parametrize("ref", ["phase/x", "phase/nested/y", "land/x", "feat/x", "lane/x", "main", "phase-x"])
-def test_preflight_skip_scope_allows_only_land_and_preserves_phase(repo, tmp_path, ref):
+@pytest.mark.parametrize("ref", ["phase/x", "phase/nested/y"])
+def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref):
+    """Phase pushes keep their affected tests even when the legacy flags are present."""
     r, base = repo
     marker = tmp_path / "preflight-ran"
     env = _install_marker_preflight(r, marker)
     head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
     res = run_hook(r, [push_line(ref, head, base)],
                    {**env, "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1"})
-    if ref.startswith(("phase/", "land/")):
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert marker.read_text() == "affected tests\n"
+    assert "skipping local preflight tests" not in res.stderr
+
+
+@pytest.mark.parametrize("ref", ["land/x", "feat/x", "lane/x", "main", "phase-x"])
+def test_preflight_skip_scope_allows_land_and_refuses_off_scope_refs(repo, tmp_path, ref):
+    r, base = repo
+    marker = tmp_path / "preflight-ran"
+    env = _install_marker_preflight(r, marker)
+    head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
+    res = run_hook(r, [push_line(ref, head, base)],
+                   {**env, "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1"})
+    if ref == "land/x":
         assert res.returncode == 0, res.stdout + res.stderr
-        expected = "fast gates only\n" if ref.startswith("land/") else "affected tests\n"
-        assert marker.read_text() == expected
-        skipped = f"skipping local preflight tests for refs/heads/{ref} (PREFLIGHT_SKIP=1)"
-        assert (skipped in res.stderr) == ref.startswith("land/")
+        assert marker.read_text() == "fast gates only\n"
+        assert "skipping local preflight tests for refs/heads/land/x (PREFLIGHT_SKIP=1)" in res.stderr
     else:
         assert res.returncode == 1, res.stdout + res.stderr
         assert f"PREFLIGHT_SKIP=1 is not allowed for refs/heads/{ref}" in res.stderr
