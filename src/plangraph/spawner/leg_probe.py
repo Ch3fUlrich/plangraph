@@ -16,6 +16,8 @@ from plangraph.routing_support import leg_state
 from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
+from .host_ready import harness_path
+
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
 REVIEW_PROMPT = 'Reply with the single word OK. Do not create a plan or any other file.'
 
@@ -206,7 +208,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
     start = time.monotonic()
     # Missing executables describe this host, not the remote leg. Check each
     # harness independently, before creating a repo or attempting any leg.
-    if shutil.which(leg.harness) is None:
+    if shutil.which(leg.harness, path=harness_path(os.environ)) is None:
         return dict(ok=False, state='host-not-ready',
                     reason='host-not-ready: harness missing: ' + leg.harness,
                     infra=True, seconds=time.monotonic() - start)

@@ -295,7 +295,8 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
-        from .host_ready import cargo_child_env
+        from .host_ready import cargo_child_env, harness_path
+        child_env["PATH"] = harness_path(child_env)
         review_target = (extra_env or {}).get('CARGO_TARGET_DIR') if role == 'review' else None
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.

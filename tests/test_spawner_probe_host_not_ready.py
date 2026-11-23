@@ -89,3 +89,48 @@ def test_partial_host_only_marks_missing_harness(tmp_path, monkeypatch):
     reason = asyncio.run(leg_probe.before_launch(runner, absent, 'implement', False))
     assert reason.startswith('host-not-ready:')
     assert events(store) == 2
+
+
+def test_review_probe_finds_harnesses_with_user_manager_path(tmp_path, monkeypatch):
+    from plangraph.planner import legs
+
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.delenv('NVM_DIR', raising=False)
+    monkeypatch.setenv('PATH', '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')
+    names = ('codex', 'opencode', 'claude')
+    for name in names:
+        root = tmp_path / ('.local/bin' if name == 'claude' else '.nvm/versions/node/v24.0.0/bin')
+        root.mkdir(parents=True, exist_ok=True)
+        binary = root / name
+        binary.symlink_to(shutil.which('true'))
+    monkeypatch.setattr(legs, 'routed_review_legs', lambda: [leg(name) for name in names])
+    monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
+    runner = FailingRunner(LegStateStore(tmp_path / 'legs.sqlite'))
+    reply = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True))
+    assert runner.attempts == list(names), reply
+    assert all(not row['infra'] for row in reply['probes'])
+
+
+def test_review_probe_cli_has_distinct_exit_when_no_harness_exists(tmp_path, monkeypatch, capsys):
+    import json
+    from plangraph.spawner import cli
+
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    runner = FailingRunner(store)
+    monkeypatch.setattr(shutil, 'which', lambda *a, **kw: None)
+    monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
+
+    class Service:
+        def __init__(self, **kwargs):
+            self.runner = runner
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(cli, 'SpawnService', Service)
+    assert cli.main(['--state', str(tmp_path), 'probe', '--all-reviewers', '--json']) == 3
+    reply = json.loads(capsys.readouterr().out)
+    assert reply['probes']
+    assert all(row['state'] == 'host-not-ready' for row in reply['probes'])
+    assert not runner.attempts
+    assert not store.path.exists()
