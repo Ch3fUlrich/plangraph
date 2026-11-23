@@ -430,8 +430,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             not assessment.review_exempt or card.get('risk', 'normal') in ('high', 'critical')
             ):
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
-    from plangraph.routing_support.leg_state import leg_status
+    from plangraph.routing_support.leg_state import leg_status, last_probe_attempt_ts
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
+    probe_time = (getattr(leg_reader, "last_probe_attempt_ts", None)
+                  if leg_reader is not None else last_probe_attempt_ts)
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
     catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
     legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
@@ -471,7 +473,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
-    from plangraph.routing_support.leg_state import leg_key, routing_status
+    from plangraph.routing_support.leg_state import leg_key, quota_key, routing_status
     def read_status(model, **scope):
         return routing_status(reader(model, now=now, account=card.get("account"),
                                      combo=card.get("combo"), **scope))
@@ -493,6 +495,12 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
                              ("gemini-4-argon", REVIEW_ARGON_LOW),
                              ("claude-sonnet-5-5", REVIEW_SONNET))}
+    agy_models = {leg.id: quota_key(leg_key(leg)) for leg in candidates if leg.harness == "agy"}
+    probe_times = ({model: stamp for model in set(quota_states) | set(agy_models.values())
+                    if (stamp := probe_time(model, now=now)) is not None}
+                   if probe_time is not None else {})
+    quota_states = {model: dict(status, last_probe_at=probe_times[model])
+                    if model in probe_times else status for model, status in quota_states.items()}
     blocked = {key for key, state in states.items() if unavailable(state)
                or (state["state"] == "unknown" and state.get("reason"))}
     def quota_limited(state):
@@ -569,6 +577,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                   "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
                   "p_source": "measured" if row is not None else "prior"}
+        if agy_models.get(leg.id) in probe_times:
+            detail["last_probe_at"] = probe_times[agy_models[leg.id]]
         if row is not None:
             detail.update(intelligence=row.get("aa_intelligence"), cost_per_task=row.get("cost_per_task_usd"))
         if reason:

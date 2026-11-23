@@ -30,8 +30,9 @@ def test_quota_state_and_compound_reset(tmp_path, monkeypatch):
     assert state['state'] == 'limited'
     assert state['evidence']['reset_at'] == 1000 + 38426
     store.record_harness_limit('agy/other', 'Resets in 2h 5m', 'test', now=1000)
-    assert store.leg_status('agy/other', now=1000)['evidence']['reset_at'] == 1000 + 38426
-    assert store.leg_status('agy/other', now=1000 + 38426)['state'] == 'ok'
+    assert store.leg_status('agy/other', now=1000)['evidence']['reset_at'] == 1000 + 7500
+    assert store.leg_status('agy/other', now=1000 + 7500)['state'] == 'ok'
+    assert store.leg_status('agy/model', now=1000 + 7500)['state'] == 'limited'
     assert first_reason('\x1b[0m\n\nactual error') == 'actual error'
     assert harness_limit_line(0, '', QUOTA) is None
     # Agent prose on stdout never marks a leg; an error-shaped stdout line does.
@@ -247,7 +248,8 @@ def test_review_quota_booking_retains_the_card_account(tmp_path):
     record = {"role": "review"}
     fallthrough_reason(SimpleNamespace(leg_reader=store), leg, job, record,
                        card={"account": "fixture-A"})
-    other_model = "agy:gemini-4-argon"
-    assert store.leg_status(other_model, account="fixture-A")["state"] == "limited"
-    assert store.leg_status(other_model, account="fixture-B")["state"] == "ok"
-    assert store.leg_status(other_model)["state"] == "ok"
+    model = "agy:gemini-4-hydrogen"
+    assert store.leg_status(model, account="fixture-A")["state"] == "limited"
+    assert store.leg_status(model, account="fixture-B")["state"] == "ok"
+    assert store.leg_status(model)["state"] == "ok"
+    assert store.leg_status("agy:gemini-4-argon", account="fixture-A")["state"] == "ok"
