@@ -285,6 +285,7 @@ fn mcp_response_wait_stops_at_its_deadline() {
 
 #[test]
 fn oversize_diff_splits_into_group_seats_covering_full_diff_and_fitting_limit() {
+    // Allow for the inline verdict contract while keeping the combined diff over budget.
     let max_request_tokens = 250;
     let mut f = ReviewFixture::new(
         max_request_tokens,
@@ -435,6 +436,7 @@ else
   printf '%s\n' '{"type":"result","is_error":false,"result":"LGTM.\nFILES READ: alpha/a.txt\nVERDICT: ACCEPT\n"}'
 fi
 "#;
+    // Each group needs room for its diff and the inline verdict contract.
     let mut f = ReviewFixture::new(250, cmd);
     let base = f.git(&["rev-parse", "HEAD"]);
     std::fs::create_dir_all(f.repo.join("alpha")).unwrap();
