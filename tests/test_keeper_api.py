@@ -323,6 +323,24 @@ def test_show_text_and_json(srv, w):
     assert jbody(raw)["key"] == "demo:A"
 
 
+@pytest.mark.parametrize("failure", ["driver setup", "database open"])
+def test_committed_read_connection_failure_returns_503(srv, w, monkeypatch, capsys, failure):
+    from plangraph.keeper import db_errors
+
+    def unavailable():
+        error = RuntimeError if failure == "driver setup" else db_errors.OPERATIONAL[0]
+        raise error("private connection detail")
+
+    monkeypatch.setattr(srv, "read_store", unavailable)
+    status, _, raw = call(srv, "/v1/show/demo:A", token=w.tok("reader"))
+    assert status == 503
+    assert jbody(raw) == {"error": "unavailable", "msg": "keeper read connection unavailable"}
+    assert call(srv, "/v1/health")[0] == 200
+    log = capsys.readouterr().err
+    assert log.count("keeper: request failed:") == 1
+    assert "private connection detail" not in log
+
+
 def test_unexpected_exception_is_500_without_internals(srv, w, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("SECRET-INTERNAL-DETAIL")
