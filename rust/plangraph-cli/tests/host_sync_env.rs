@@ -55,3 +55,53 @@ fn disk_hygiene_environment_matches_unit_and_preserves_existing_configuration() 
     assert!(install(&home, "disk-hygiene").status.success());
     assert_eq!(fs::read_to_string(env).unwrap(), "PG_REPO=existing\n");
 }
+
+#[test]
+fn keeper_backup_installs_only_empty_connection_keys_with_private_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let output = install(home, "keeper-backup");
+    assert!(output.status.success(), "{output:?}");
+    let env = home.join(".config/plangraph/keeper-backup.env");
+    let text = fs::read_to_string(&env).unwrap();
+    let docker = include_str!("../../pg-keeper-backup/src/docker.rs");
+    let keys = docker
+        .split_once("pub const PG_ENV:")
+        .unwrap()
+        .1
+        .split_once("= [")
+        .unwrap()
+        .1
+        .split_once("];")
+        .unwrap()
+        .0;
+    let expected: Vec<_> = keys
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.trim_end_matches(',').trim_matches('"'))
+        .collect();
+    let entries: Vec<_> = text
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .map(|line| line.split_once('=').unwrap())
+        .collect();
+    assert_eq!(
+        entries,
+        expected
+            .into_iter()
+            .map(|key| (key, ""))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        fs::metadata(&env).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    fs::write(&env, "# existing operator file\n").unwrap();
+    assert!(install(home, "keeper-backup").status.success());
+    assert_eq!(
+        fs::read_to_string(env).unwrap(),
+        "# existing operator file\n"
+    );
+}

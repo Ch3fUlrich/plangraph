@@ -48,7 +48,11 @@ pub(super) fn publish(source: &Path, destination: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn install(repo: &Path, home: &Path) -> io::Result<()> {
+fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
+    let mut binaries = BINARIES.to_vec();
+    if keeper {
+        binaries.push(("pg-keeper-backup", "pg-keeper-backup"));
+    }
     let repo = repo.canonicalize()?;
     let bin = home.join(".local/bin");
     let state = env::var_os("XDG_STATE_HOME")
@@ -60,10 +64,14 @@ fn install(repo: &Path, home: &Path) -> io::Result<()> {
     let _lock = pg_worker_core::lockfile::try_lock(&state.join("release-install.lock"))
         .map_err(io::Error::other)?
         .ok_or_else(|| io::Error::other("another host release install is running"))?;
-    let stamp = state.join("release-built-tree");
+    let stamp = state.join(if keeper {
+        "release-keeper-built-tree"
+    } else {
+        "release-built-tree"
+    });
     let tree = git(&repo, &["rev-parse", "HEAD:rust"])?;
     if fs::read_to_string(&stamp).is_ok_and(|saved| saved.trim() == tree)
-        && BINARIES
+        && binaries
             .iter()
             .all(|(_, name)| is_executable(&bin.join(executable(name))))
     {
@@ -83,8 +91,8 @@ fn install(repo: &Path, home: &Path) -> io::Result<()> {
     build
         .current_dir(repo.join("rust"))
         .args(["build", "--release", "--locked"]);
-    for (package, name) in BINARIES {
-        build.args(["-p", package, "--bin", name]);
+    for (package, name) in &binaries {
+        build.args(["-p", *package, "--bin", *name]);
     }
     let status = build.status()?;
     if !status.success() {
@@ -98,7 +106,7 @@ fn install(repo: &Path, home: &Path) -> io::Result<()> {
         ));
     }
     let artifacts = target.join("release");
-    for (_, name) in BINARIES {
+    for (_, name) in &binaries {
         let path = artifacts.join(executable(name));
         if !is_executable(&path) {
             return Err(io::Error::other(format!(
@@ -108,7 +116,7 @@ fn install(repo: &Path, home: &Path) -> io::Result<()> {
         }
     }
     fs::create_dir_all(&bin)?;
-    for (_, name) in BINARIES {
+    for (_, name) in &binaries {
         let path = executable(name);
         let out = bin.join(&path);
         publish(&artifacts.join(path), &out)?;
@@ -126,14 +134,18 @@ fn executable(name: &str) -> String {
 }
 
 pub(super) fn run(args: &[OsString]) -> i32 {
-    let [repo] = args else {
-        eprintln!("usage: host-sync --install-release REPO");
-        return 2;
+    let (repo, keeper) = match args {
+        [repo] => (repo, false),
+        [repo, flag] if flag == "--with-keeper-backup" => (repo, true),
+        _ => {
+            eprintln!("usage: host-sync --install-release REPO [--with-keeper-backup]");
+            return 2;
+        }
     };
     let result = Env::from_process()
         .home
         .ok_or_else(|| io::Error::other("HOME is not set"))
-        .and_then(|home| install(Path::new(repo), &home));
+        .and_then(|home| install(Path::new(repo), &home, keeper));
     match result {
         Ok(()) => 0,
         Err(error) => {

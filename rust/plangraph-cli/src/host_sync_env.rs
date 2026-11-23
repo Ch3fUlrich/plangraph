@@ -69,6 +69,10 @@ fn install(family: &str, home: &Path) -> io::Result<()> {
             }
             create(&config.join("disk-hygiene.env"), content.as_bytes())
         }
+        "keeper-backup" => create(
+            &config.join("keeper-backup.env"),
+            include_bytes!("../../../deploy/systemd/keeper-backup.env.example"),
+        ),
         _ => Err(io::Error::other(format!("unknown unit family {family}"))),
     }
 }

@@ -160,3 +160,10 @@ that executable and writes the system units and the memory floor if the
 floor file is absent. The policy's default floor is 20480 MiB. Include
 retirement of the temporary WSL cache timer after replacement verification
 and check for overlap with existing disk cleanup timers in the deploy ask.
+
+
+On the keeper host, include `--with-keeper-backup` in the release install and
+run `host-sync --install-env keeper-backup`. It creates the mode-0600 env file
+from the empty connection fields in `keeper-backup.env.example`. The approved
+key-placement session supplies the database credentials before the backup
+unit is verified or enabled.

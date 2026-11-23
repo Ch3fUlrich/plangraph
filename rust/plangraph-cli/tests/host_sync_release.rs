@@ -77,7 +77,7 @@ done
         Path::new("/bin"),
     ])
     .unwrap();
-    let run = || {
+    let run = |options: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_host-sync"))
             .env_clear()
             .env("HOME", home)
@@ -86,10 +86,11 @@ done
             .env("FIXTURE_BINARY", env!("CARGO_BIN_EXE_plangraph"))
             .arg("--install-release")
             .arg(&repo)
+            .args(options)
             .output()
             .unwrap()
     };
-    let output = run();
+    let output = run(&[]);
     assert!(output.status.success(), "{output:?}");
     assert!(bin.join("pg-spawnd").is_file());
     assert!(bin.join("pg-disk-hygiene").is_file());
@@ -97,7 +98,14 @@ done
         fs::read_to_string(&stamp).unwrap().trim(),
         git(&["rev-parse", "HEAD:rust"])
     );
-    assert!(String::from_utf8_lossy(&run().stdout).contains("SAME"));
+    assert!(String::from_utf8_lossy(&run(&[]).stdout).contains("SAME"));
+
+    let backup = bin.join("pg-keeper-backup");
+    assert!(!backup.exists());
+    let output = run(&["--with-keeper-backup"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(backup.is_file());
+    assert!(String::from_utf8_lossy(&run(&["--with-keeper-backup"]).stdout).contains("SAME"));
 
     let heads = home.join("heads");
     let part = git(&["rev-parse", "HEAD"]);
