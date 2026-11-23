@@ -105,3 +105,74 @@ fn keeper_backup_installs_only_empty_connection_keys_with_private_mode() {
         "# existing operator file\n"
     );
 }
+
+#[test]
+fn quota_alarms_discover_the_store_and_report_missing_candidates() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let db = home.join(".omniroute/storage.sqlite");
+    let alternate = home.join(".local/share/omniroute/storage.sqlite");
+    let target = home.join(".config/plangraph/quota-alarms.env");
+    let missing = install(home, "quota-alarms");
+    assert!(!missing.status.success());
+    let message = String::from_utf8_lossy(&missing.stderr);
+    for path in [&db, &alternate] {
+        assert!(message.contains(path.to_str().unwrap()), "{message}");
+    }
+    assert!(!target.exists());
+
+    fixture_quota_db(&db);
+    let output = install(home, "quota-alarms");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(target).unwrap(),
+        format!("QUOTA_SNAPSHOT_DB=\"{}\"\n", db.display())
+    );
+}
+
+fn fixture_quota_db(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE quota_snapshots(id INTEGER, provider TEXT, connection_id TEXT,
+            window_key TEXT, remaining_percentage REAL, is_exhausted INTEGER,
+            next_reset_at TEXT, created_at TEXT)",
+        )
+        .unwrap();
+}
+
+#[test]
+fn quota_alarms_uses_gateway_mount_before_a_cli_store() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    fixture_quota_db(&home.join(".omniroute/storage.sqlite"));
+    let mount = home.join("gateway mount");
+    let database = mount.join("storage.sqlite");
+    fixture_quota_db(&database);
+    let docker = home.join("docker");
+    fs::write(
+        &docker,
+        "#!/bin/sh\n[ \"$1\" = inspect ] || exit 1\nprintf '%s\\n' \"$FIXTURE_MOUNTS\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(docker, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_host-sync"))
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", home)
+        .env("QUOTA_GATEWAY_CONTAINER", "fixture")
+        .env(
+            "FIXTURE_MOUNTS",
+            serde_json::json!([{"Source": mount, "Destination": "/app/data"}]).to_string(),
+        )
+        .args(["--install-env", "quota-alarms"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(home.join(".config/plangraph/quota-alarms.env")).unwrap(),
+        format!("QUOTA_SNAPSHOT_DB=\"{}\"\n", database.display())
+    );
+}
