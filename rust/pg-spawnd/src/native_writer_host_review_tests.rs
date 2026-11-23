@@ -1,5 +1,33 @@
 use super::*;
 
+pub(super) fn saved_prompt(host: &Host, head: &str, round: usize) -> String {
+    let path = host
+        .reviews
+        .join(format!("review-{}-{round}.prompt.txt", &head[..8]));
+    fs::read_to_string(path).unwrap()
+}
+
+const STATUS_LINE: &str = "SKIPPED plangraph:STATUS-ONLY Waiting for a fixture.";
+const SLICES_CONTENT: &str = r#"{"items":[{"id":"DEFERRED-SLICE"}]}"#;
+
+pub(super) fn write_writer_artifacts(host: &Host) {
+    let status = host.reviews.join("status.txt");
+    let slices = host.reviews.join("slices.json");
+    fs::write(&status, format!("{STATUS_LINE}\n")).unwrap();
+    fs::write(&slices, SLICES_CONTENT).unwrap();
+    fs::write(
+        &host.record_path,
+        json!({"writer_status_path":status,"writer_slices_path":slices}).to_string(),
+    )
+    .unwrap();
+}
+
+pub(super) fn assert_writer_artifacts(host: &Host, head: &str) {
+    let prompt = saved_prompt(host, head, 2);
+    assert!(prompt.contains(&format!("> {STATUS_LINE}")));
+    assert!(prompt.contains(&format!("> {SLICES_CONTENT}")));
+}
+
 pub(super) fn assert_foreign_trailer_refused(host: &mut Host, git: impl Fn(&[&str]) -> String) {
     host.brief
         .push_str("\nWhy: depends on plangraph:UNASSIGNED\n");

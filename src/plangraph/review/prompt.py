@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
 from string import Template
 from pathlib import Path
 
@@ -25,6 +27,37 @@ NO_TOOLS_PREAMBLE = (
 )
 
 
+def _writer_artifacts(record: dict) -> str:
+    sections = ["\n=== WRITER RUN EVIDENCE"]
+    for label, field in (("writer status", "writer_status_path"),
+                         ("writer slices", "writer_slices_path")):
+        value = record.get(field)
+        if value is None:
+            sections.append(f"{label}: missing")
+            continue
+        try:
+            path = Path(value)
+            if not path.is_absolute() or path.parent != Path(record["review_dir"]):
+                raise ValueError("artifact must be directly inside the review directory")
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_NONBLOCK", 0))
+            with os.fdopen(fd, "rb") as artifact:
+                if not stat.S_ISREG(os.fstat(artifact.fileno()).st_mode):
+                    raise ValueError("expected a regular artifact file")
+                data = artifact.read(1024 * 1024 + 1)
+            if len(data) > 1024 * 1024:
+                raise ValueError("artifact exceeds 1 MiB")
+            content = data.decode("utf-8")
+        except FileNotFoundError:
+            sections.append(f"{label}: missing")
+        except (KeyError, OSError, TypeError, ValueError):
+            sections.append(f"{label}: unreadable")
+        else:
+            sections.append(f"{label}: included\n"
+                            + "\n".join("> " + line for line in content.splitlines()))
+    return "\n".join(sections) + "\n\n"
+
+
 def render_brief(role: str, context: dict | None = None, *, rules: str = "") -> str:
     """Render a versioned brief; substitution never interprets item text."""
     if role not in ("review", "writer"):
@@ -32,11 +65,14 @@ def render_brief(role: str, context: dict | None = None, *, rules: str = "") -> 
     fields = ("item_key", "done_criteria", "invariants", "base_sha", "head_sha",
               "public_symbols", "callers", "test_output_paths")
     values = {field: "unavailable (request before acceptance)" for field in fields}
-    values.update({key: str(value) for key, value in (context or {}).items()
+    context = context or {}
+    values.update({key: str(value) for key, value in context.items()
                    if key in fields})
     text = Path(__file__).with_name(role + "_brief.md").read_text(encoding="utf-8")
     prefix, marker, item = text.partition("=== ITEM CONTEXT")
-    return prefix + rules + "\n" + marker + Template(item).substitute(values)
+    writer_run = context.get("writer_run")
+    evidence = _writer_artifacts(writer_run) if role == "review" and isinstance(writer_run, dict) else ""
+    return prefix + rules + "\n" + evidence + marker + Template(item).substitute(values)
 
 
 def load_tail() -> str:
