@@ -280,7 +280,7 @@ class RunsMixin:
             try:
                 if not self._refresh_merged_default_ref(git, project):
                     raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
-                index = context_sources.work_index(git, project, fresh=True)
+                index = context_sources.work_index(git, project, fresh=True, incremental=True)
                 if index is None or index.get("stale") or index.get("origin_stale"):
                     raise Refused("evidence_unverified", (index or {}).get("reason") or "repository index unavailable")
                 self.__dict__["_warmed"][project] = index

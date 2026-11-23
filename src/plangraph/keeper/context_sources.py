@@ -143,7 +143,7 @@ def _work_log(git, repo, refs, target, previous):
     """Keep old commit records and read only history outside the previous ref tips."""
     if refs is None or target is None:
         return None
-    heads = {target, *[line.rsplit(" ", 1)[-1] for line in refs.splitlines()]}
+    heads = {target, *refs.values()}
     old_heads, old_records = previous or (set(), {})
     if heads == old_heads:
         return heads, old_records
@@ -171,11 +171,12 @@ def _work_log(git, repo, refs, target, previous):
 _WORK_INDEX_CACHE_LOCK = threading.Lock()
 
 
-def work_index(git, project, *, fresh=False):
+def work_index(git, project, *, fresh=False, incremental=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
     Read all commit trailers and topology together, including hosted open PR
-    heads. Unknown inputs remain unknown, as in the claim guard.
+    heads. Fresh reads revalidate the complete log. The merge-close scan may
+    reuse immutable commit history when current fetched refs attest PR heads.
     """
     repo, ref = _repo_ref(git, project)
     if repo is None:
@@ -230,7 +231,9 @@ def work_index(git, project, *, fresh=False):
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
     target = (target or "").strip()
-    log = _work_log(git, repo, refs_out, target or None, hit[1].get("_log") if hit else None)
+    refs = dict(line.split(" ", 1) for line in refs_out.splitlines()) if refs_out is not None else None
+    previous = hit[1].get("_log") if incremental and hit else None
+    log = _work_log(git, repo, refs, target or None, previous)
     timing.check_io_deadline(step)
     if log is None:
         if not origin:
@@ -255,7 +258,10 @@ def work_index(git, project, *, fresh=False):
             todo.extend(records.get(sha, ([],))[0])
         return seen
 
-    if prs is not None and any(p["headRefOid"] not in records for p in prs):
+    if prs is not None and any(
+            p["headRefOid"] not in records
+            or (incremental and (refs or {}).get(f"refs/keeper/pull/{p['number']}/head") != p["headRefOid"])
+            for p in prs):
         prs = None
         problems.append("PR head commit unavailable")
     merged = ancestors((target or "").strip())
@@ -299,8 +305,7 @@ def work_index(git, project, *, fresh=False):
             for name in records.get(sha, ([], {}, []))[2]:
                 pulls.setdefault(name.strip(), []).append(pr["number"])
     branches = []
-    for line in (refs_out or "").splitlines():
-        name, sha = line.split(" ", 1)
+    for name, sha in (refs or {}).items():
         if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
             branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
     prs_unverified = prs_expected and (prs is None or origin_stale)
