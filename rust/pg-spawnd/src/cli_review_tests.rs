@@ -409,7 +409,7 @@ for command, cwd, background, expected in [
     ('pytest -q tests/test_keeper_pg_unit.py', checkout.parent, False, 2),
     ('pytest -q tests/test_keeper_pg_unit.py', checkout, True, 2),
     ('pytest -q ../tests/test_keeper_pg_unit.py', checkout, False, 2),
-    ('pytest -q tests/test_keeper_pg_unit.py; pwd', checkout, False, 2),
+    ('pytest -q tests/test_keeper_pg_unit.py; true', checkout, False, 2),
     ('pytest', checkout, False, 2),
     ('pytest -p arbitrary tests/test_keeper_pg_unit.py', checkout, False, 2),
     ('cargo test -p pg-spawnd --config fixture', checkout, False, 2),
