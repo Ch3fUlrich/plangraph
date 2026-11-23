@@ -90,3 +90,18 @@ pub(super) fn packages(root: &Path, paths: &[String], full: bool) -> Result<Vec<
         .map(|(m, n, _)| (m, n))
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nextest_config_alone_selects_all_packages() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let paths = [NEXTEST_CONFIG.into()];
+        assert_eq!(
+            packages(&root, &paths, false).unwrap(),
+            packages(&root, &paths, true).unwrap()
+        );
+    }
+}
