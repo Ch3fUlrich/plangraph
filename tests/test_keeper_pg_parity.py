@@ -404,12 +404,13 @@ def test_pg_v25_upgrade_records_and_protects_criteria_amendments(tmp_path, monke
                     " JOIN events e ON e.seq=a.seq").fetchone()
                 assert tuple(row)[1:] == ("criteria", "revised criteria", "Cover the retry path",
                                           "D-123", "router", "demo:A", "item_defined")
-                with pytest.raises(psycopg.errors.ForeignKeyViolation, match="\\(seq\\)"):
+                with pytest.raises(psycopg.errors.ForeignKeyViolation) as exc:
                     conn.execute(
                         "INSERT INTO criteria_amendments"
                         " (seq,key,original_text,new_text,reason,evidence,authority,ts)"
                         " SELECT ?,key,original_text,new_text,reason,evidence,authority,ts"
                         " FROM criteria_amendments", (-1,))
+                assert exc.value.diag.constraint_name == "criteria_amendments_seq_fkey"
                 assert store.verify_integrity() == []
             table = f'"{name}".criteria_amendments'
             for sql in (f"UPDATE {table} SET reason='rewritten'", f"DELETE FROM {table}",
