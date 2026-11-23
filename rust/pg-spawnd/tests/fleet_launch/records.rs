@@ -167,6 +167,10 @@ pub fn check_lifecycle(launcher: &Launcher) {
         fs::read_to_string(s.path("xdg/plangraph/run-lifecycle/published")).unwrap(),
         "2"
     );
+    crate::spawn_attempt_delivery::check(
+        &s.path("xdg/plangraph"),
+        &[("implement", LOCAL, "claude", "ok")],
+    );
 }
 
 fn check_respawn(s: &Sandbox, original: Value) {

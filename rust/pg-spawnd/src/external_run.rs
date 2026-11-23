@@ -189,3 +189,90 @@ fn fleet_outcome(record: &Value, agents: &[Value], observed: f64) -> Option<Valu
     let ended = row["endedAt"].as_f64().map_or(observed, |ts| ts / 1000.0);
     Some(terminal(record, status, code, None, ended))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reaped_process() -> Value {
+        let mut child = process::Command::new("/bin/sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let identity = process_identity(child.id());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(identity["start"].is_number());
+        identity
+    }
+
+    #[test]
+    fn roster_terminal_states_use_exit_and_timestamp_when_reported() {
+        let record = json!({"session_id":"fixture","started":1000,"status":"running"});
+        for (state, reported, status, code) in [
+            ("done", None, "completed", 0),
+            ("finished", None, "completed", 0),
+            ("stopped", None, "cancelled", 130),
+            ("cancelled", Some(143), "cancelled", 143),
+            ("failed", None, "failed", 1),
+            ("crashed", Some(17), "failed", 17),
+        ] {
+            let row = json!({"kind":"background","sessionId":"fixture","state":state,
+                             "exitCode":reported,"endedAt":1_045_000});
+            let outcome = fleet_outcome(&record, &[row], 1070.0).unwrap();
+            assert_eq!(outcome["status"], status, "{state}");
+            assert_eq!(outcome["exit_code"], code, "{state}");
+            assert_eq!(outcome["ended"], 1045.0, "{state}");
+        }
+        let live = json!({"kind":"background","sessionId":"fixture","state":"working"});
+        assert!(fleet_outcome(&record, &[live], 1070.0).is_none());
+    }
+
+    #[test]
+    fn unobserved_fleet_launch_requires_dead_owner_and_grace_period() {
+        let mut record = json!({"started":1000,"status":"running","fleet_session_name":"writer-0001",
+                                "external_owner":reaped_process()});
+        assert!(fleet_outcome(&record, &[], 1059.0).is_none());
+        let outcome = fleet_outcome(&record, &[], 1060.0).unwrap();
+        assert_eq!(outcome["status"], "failed");
+        assert_eq!(outcome["exit_code"], 1);
+        assert_eq!(outcome["reason"], "fleet_start_unobserved");
+        assert_eq!(outcome["ended"], 1060.0);
+
+        record["session_id"] = json!("fixture");
+        assert!(fleet_outcome(&record, &[], 1060.0).is_none());
+        record["session_id"] = Value::Null;
+        record["external_owner"] = process_identity(process::id());
+        assert!(fleet_outcome(&record, &[], 1060.0).is_none());
+    }
+
+    #[test]
+    fn external_recovery_keeps_a_live_child_and_records_a_dead_one_once() {
+        let state = tempfile::tempdir().unwrap();
+        let mut run = Registered::start(
+            state.path().to_owned(),
+            json!({
+                "run_kind":"external-harness","role":"implement","host":"fixture","harness":"codex",
+            }),
+        )
+        .unwrap();
+        let gone = reaped_process();
+        run.save("external_owner", gone.clone()).unwrap();
+        run.child(process::id()).unwrap();
+        recover(state.path()).unwrap();
+        let path = run.path.clone();
+        let snapshot = || serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(snapshot()["status"], "running");
+
+        run.save("external_child", gone).unwrap();
+        recover(state.path()).unwrap();
+        let finished = snapshot();
+        assert_eq!(finished["status"], "failed");
+        assert_eq!(finished["reason"], "orphaned");
+        assert_eq!(finished["exit_code"], 1);
+        assert!(finished["ended"].is_number());
+        recover(state.path()).unwrap();
+        assert_eq!(snapshot(), finished);
+        assert_eq!(lifecycle::page(state.path(), 0).unwrap()["next_cursor"], 2);
+    }
+}
