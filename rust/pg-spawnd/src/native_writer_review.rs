@@ -97,7 +97,11 @@ impl Host {
                 continue;
             }
             let mut command = self.command(if cfg!(windows) { "python" } else { "python3" });
-            command.arg(path).args(args).current_dir(&self.cwd);
+            command
+                .arg(path)
+                .args(args)
+                .current_dir(&self.cwd)
+                .env("CLASS_SEARCH_BASE", &pin);
             // Both streams of a passing gate are evidence too (a skipped check is reported
             // on stderr).
             let result = command.output().map_err(|e| format!("{gate}: {e}"))?;

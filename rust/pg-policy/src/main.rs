@@ -227,10 +227,29 @@ fn run() -> Result<Vec<String>, String> {
 
 fn class_search(args: &[String]) -> Result<Vec<String>, String> {
     let train_delta = args.first().is_some_and(|arg| arg == "--train-delta");
-    let revisions = if train_delta { &args[1..] } else { args };
-    if revisions.is_empty() {
-        return Err("--class-search needs at least one fix revision".into());
-    }
+    let validate_range = args.first().is_some_and(|arg| arg == "--range");
+    let range_commits;
+    let revisions = if validate_range {
+        let [_, base] = args else {
+            return Err("--class-search --range needs a base revision".into());
+        };
+        range_commits = git(&[
+            "log",
+            "--no-notes",
+            "--format=%H",
+            "--grep=^Class-Search:",
+            "--end-of-options",
+            &format!("{base}..HEAD"),
+            "--",
+        ])?;
+        range_commits.lines().collect::<Vec<_>>()
+    } else {
+        let revisions = if train_delta { &args[1..] } else { args };
+        if revisions.is_empty() {
+            return Err("--class-search needs at least one fix revision".into());
+        }
+        revisions.iter().map(String::as_str).collect()
+    };
     let format =
         Regex::new(r"^Class-Search: (?:([0-9a-f]{8}) )?(\S.*) -> ([0-9]+) hits, ([0-9]+) changed$")
             .unwrap();
@@ -262,22 +281,28 @@ fn class_search(args: &[String]) -> Result<Vec<String>, String> {
             continue;
         }
         let mut inline = false;
-        let mut malformed = false;
+        let mut malformed = Vec::new();
         for line in body
             .lines()
             .filter(|line| line.starts_with("Class-Search:"))
         {
             match format.captures(line) {
-                Some(record) if record.get(1).is_some() => {}
-                Some(record) if valid_counts(&record) => inline = true,
-                _ => malformed = true,
+                Some(record) if valid_counts(&record) => inline |= record.get(1).is_none(),
+                _ => malformed.push(line),
             }
         }
-        if !malformed && (inline || later_class_search(&format, sha, valid_counts)?) {
+        if (malformed.is_empty() && (inline || validate_range))
+            || later_class_search(&format, sha, valid_counts)?
+        {
             continue;
         }
+        let detail = if malformed.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", malformed.join("; "))
+        };
         findings.push(format!(
-            "{sha}: missing or invalid Class-Search in fix commit body or a later commit on HEAD"
+            "{sha}: missing or invalid Class-Search in fix commit body or a later commit on HEAD{detail}"
         ));
     }
     Ok(findings)
