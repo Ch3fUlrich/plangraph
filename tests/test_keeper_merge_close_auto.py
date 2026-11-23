@@ -766,3 +766,34 @@ def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
     assert result["closed"] == []
     assert any(row["key"] == "demo:A" and "merged_pr_missing" in row["reason"]
                for row in result["listed"])
+
+
+def test_watch_merged_open_alert_requires_two_nonzero_passes_and_clears(env, tmp_path):
+    from door_util import Doors
+
+    doors = Doors(env, tmp_path)
+    body = {"apply": False, "watch": True, "require_seats": False}
+    path = "/v1/close_merged_auto"
+
+    def watch(count, alert):
+        status, report = doors.http("system", "POST", path, body)
+        assert status == 200 and report["merged_not_done"] == count
+        assert report["alert"] is alert and report["closed"] == []
+        return report
+
+    try:
+        watch(0, False)
+        env.repo.land("a", "Plan-Item: demo:A", 91)
+        assert [row["key"] for row in watch(1, False)["would_close"]] == ["demo:A"]
+        watch(1, True)
+        assert env.store._alert_row("finding", None, "merged_open_reconcile")["state"] == "open"
+        assert state(env, "demo:A")["state"] == "open"
+        assert doors.http("system", "POST", path, {"watch": True})[0] != 200
+        assert state(env, "demo:A")["state"] == "open"
+        assert [row["key"] for row in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+        watch(0, False)
+        assert env.store._alert_row("finding", None, "merged_open_reconcile")["state"] == "resolved"
+        env.repo.land("b", "Plan-Item: demo:B", 92)
+        watch(1, False)
+    finally:
+        doors.close()

@@ -1,0 +1,13 @@
+[Unit]
+Description=Report merged Keeper items that still need routing
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+EnvironmentFile=-%h/.config/plangraph/plangraph.env
+StateDirectory=pg-reconcile-merged
+StateDirectoryMode=0700
+ExecStart=%h/.local/bin/plangraph reconcile-merged --dry-run --state %S/pg-reconcile-merged/watch.json
+TimeoutStartSec=420
+UMask=0077
