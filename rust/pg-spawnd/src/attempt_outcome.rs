@@ -106,13 +106,16 @@ fn route(plan: &Value, chosen: &Value, native: bool) -> Result<Route, String> {
     }))
 }
 
-pub(crate) fn project(run: Value) -> Result<Value, String> {
-    if !run["ended"].is_number()
-        || matches!(
+pub(crate) fn terminal(run: &Value) -> bool {
+    run["ended"].is_number()
+        && !matches!(
             run["status"].as_str(),
             None | Some("running" | "queued" | "queue_claimed" | "dry_run")
         )
-    {
+}
+
+pub(crate) fn project(run: Value) -> Result<Value, String> {
+    if !terminal(&run) {
         return Ok(Value::Null);
     }
     let last = run["attempts"].as_array().and_then(|rows| {

@@ -607,6 +607,9 @@ planner may supply an assigned level, and the keeper logs any attempt to
 lower it below the computed level.
 
 `pg attempts --since 1d --json` reads terminal spawn rows from keeper storage.
+`GET /v1/spawn_attempt_coverage?day=YYYY-MM-DD` returns run IDs and hosts for
+attempts ending on that UTC day. It requires an all-project spawner or system
+identity so the watchdog can compare fleet totals.
 A spawn without a keeper card has a null `card_key`. The display item preserves
 the supplied item key and uses `adhoc` when the spawn has no item key. The migration
 preserves foreign keys and legacy attempt rows.
