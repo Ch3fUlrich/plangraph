@@ -236,8 +236,8 @@ explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 `opencode/deepseek-v4.1-flash-free` (200k) > `opencode-go/deepseek-v4.1-flash` (1M) >
 `opencode-go/glm-5.3-flash` (1M) on `opencode` as implementation fallback.
 D-6550 (rule 3.66) uses native Codex for GPT legs. GPT falls back to the OpenCode
-gateway model when the Codex client is missing on the selected host. Claude is eligible
-for automatic writer and review fallback when both GPT Sol and Hydrogen are rate-limited.
+gateway model when the Codex client is missing on the selected host. D-6652 below
+defines when native Sonnet can serve as a writer or reviewer.
 D-6667 retires the GPT-6.1 family from leg selection and explicit model launches.
 Use `gpt-6.2-sol` for direct Codex launches. The default writer in `WRITER_ORDER`
 is `cx-gpt-6.2-sol-medium`.
@@ -268,8 +268,8 @@ of the form `D-<number>`. Native Codex package sessions pass
 A 1M spawn route uses the declared request bound of a leg that supports that class.
 Sol and Astra declare 1,000,000 tokens, including effort variants and native sessions.
 Smaller spawn routes use 55% of declared leg context. Legs without a bound and keeper budgets use the 55% class share.
-Review routes under D-6550 prefer `agy-gemini-4-hydrogen-high` and then
-`gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
+After the required OpenCode seats, the standard review order prefers
+`agy-gemini-4-hydrogen-high` and then `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
 available in their configured order, and the Argon review legs stay last. Repository-required reviews admit OpenCode Go DeepSeek and GLM tools legs, which get checkout reads and scoped test commands.
 A missing verdict or a diff-only acceptance cannot complete a repository review. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
