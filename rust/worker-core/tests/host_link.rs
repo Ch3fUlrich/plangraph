@@ -161,7 +161,7 @@ fn cli_failed_peer_queues_bridge_event_and_healthy_peer_resets_state() {
 #[cfg(unix)]
 #[test]
 fn ssh_watch_alerts_once_with_peer_and_ip_evidence_then_recovers() {
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::symlink;
     use std::process::Command;
 
     let dir = tempfile::tempdir().unwrap();
@@ -179,8 +179,10 @@ fn ssh_watch_alerts_once_with_peer_and_ip_evidence_then_recovers() {
         ),
     ] {
         let path = dir.path().join(program);
-        fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{line}'\n")).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        pg_worker_core::executable_test_support::write_private_executable(
+            &path,
+            format!("#!/bin/sh\nprintf '%s\\n' '{line}'\n"),
+        );
     }
     let tick = || {
         let result = Command::new(env!("CARGO_BIN_EXE_pg-host-link"))
@@ -201,8 +203,10 @@ fn ssh_watch_alerts_once_with_peer_and_ip_evidence_then_recovers() {
         "remote nonzero exit proves SSH connected"
     );
     fs::remove_file(&ssh).unwrap();
-    fs::write(&ssh, "#!/bin/sh\nexit 255\n").unwrap();
-    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    pg_worker_core::executable_test_support::write_private_executable(
+        &ssh,
+        "#!/bin/sh\nexit 255\n",
+    );
 
     tick();
     assert!(events(&root).is_empty());
@@ -246,15 +250,13 @@ fn ssh_watch_alerts_once_with_peer_and_ip_evidence_then_recovers() {
 #[cfg(unix)]
 #[test]
 fn ssh_wait_retries_255_then_succeeds_and_names_a_persistent_outage() {
-    use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     let dir = tempfile::tempdir().unwrap();
     let ssh = dir.path().join("ssh");
-    fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &ssh,
         "#!/bin/sh\nread n < attempts\nn=$((n + 1))\nprintf '%s\\n' \"$n\" > attempts\nif test \"$n\" = \"$RECOVER_ON\"; then printf 'ready\\n'; exit 0; fi\nexit 255\n",
-    ).unwrap();
-    fs::set_permissions(ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let run = |recover_on: &str| {
         fs::write(dir.path().join("attempts"), "0\n").unwrap();
         Command::new(env!("CARGO_BIN_EXE_pg-host-link"))

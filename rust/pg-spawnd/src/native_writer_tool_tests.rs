@@ -21,10 +21,11 @@ fn refuses_windows_mount_codex_before_launch() {
 
 #[cfg(unix)]
 fn executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, "#!/bin/sh\nprintf linux-codex").unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        path,
+        "#!/bin/sh\nprintf linux-codex",
+    );
 }
 
 #[cfg(unix)]

@@ -1020,7 +1020,6 @@ mod tests {
             assert_eq!(h.runs(), 0);
             return;
         }
-        use std::os::unix::fs::PermissionsExt;
         let tools = tempfile::tempdir().unwrap();
         let marker = tools.path().join("invoked");
         let jail = tools.path().join("fake-jail");
@@ -1034,8 +1033,7 @@ mod tests {
                 "#!/bin/sh\nprintf invoked > \"$PG_FAKE_JAIL_TEST\"\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n",
             ),
         ] {
-            std::fs::write(&path, script).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            pg_worker_core::executable_test_support::write_executable(&path, script);
         }
         let mut paths = vec![tools.path().to_path_buf()];
         paths.extend(std::env::split_paths(
@@ -1290,13 +1288,14 @@ mod tests {
     /// still does — the control below proves the hook is planted and live.
     #[test]
     fn a_planted_pre_commit_hook_never_runs_as_the_worker() {
-        use std::os::unix::fs::PermissionsExt;
         let (r, base) = repo();
         let hook = r.path().join(".git/hooks");
         std::fs::create_dir_all(&hook).unwrap();
         let hook = hook.join("pre-commit");
-        std::fs::write(&hook, "#!/bin/sh\nprintf ran > HOOK_RAN\n").unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(
+            &hook,
+            "#!/bin/sh\nprintf ran > HOOK_RAN\n",
+        );
 
         // Control: the very same hook fires for a plain git commit.
         write(r.path(), "control.txt", "x");
