@@ -269,8 +269,7 @@ def work_index(git, project, *, fresh=False):
             todo.extend(records.get(sha, ([],))[0])
         if len(parents) > 1:
             pr = subject_pr(commit["subject"])
-            merge = {"sha": landing, "subject": commit["subject"], "pr": pr,
-                     "parents": parents, "date": commit["date"]}
+            merge = {"sha": landing, "subject": commit["subject"], "pr": pr}
             own_pr = len(parents) == 2 and pr
             for sha in introduced:
                 if sha in records and (sha != landing or own_pr):

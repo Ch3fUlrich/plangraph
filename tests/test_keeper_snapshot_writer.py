@@ -348,3 +348,48 @@ def test_show_answers_during_a_fleet_build_of_7000_records(tmp_path, monkeypatch
         server.shutdown()
         server.server_close()
         world.close()
+
+
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(
+    not os.environ.get("PG_DSN"), reason="PG_DSN not set"))])
+def test_plan_reads_see_the_committed_state_while_a_close_write_is_paused(tmp_path, backend):
+    from concurrent.futures import ThreadPoolExecutor
+    from test_keeper_api import call
+
+    world = World(tmp_path, backend=backend)
+    seed(world, [("A", [])])
+    server = _server(tmp_path, world, debounce=30)
+    entered, release = threading.Event(), threading.Event()
+
+    def close():
+        with server.lock, world.store._write():
+            world.conn.execute("UPDATE items SET state='done' WHERE key='demo:A'")
+            entered.set()
+            assert release.wait(30)
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            write = pool.submit(close)
+            try:
+                assert entered.wait(2)
+                requests = [pool.submit(call, server, "/v1/" + path, token=world.tok("reader"))
+                            for path in ("show/demo:A?fmt=json", "ready?fmt=json", "snapshot")]
+                show, ready, snap = [request.result(timeout=1) for request in requests]
+                assert show[0] == ready[0] == snap[0] == 200
+                assert json.loads(show[2])["state"] == json.loads(snap[2])["items"][0]["state"] == "open"
+                assert "demo:A" in json.dumps(json.loads(ready[2])["items"])
+            finally:
+                release.set()
+            write.result(timeout=5)
+        after = call(server, "/v1/show/demo:A?fmt=json", token=world.tok("reader"))
+        assert json.loads(after[2])["state"] == "done"
+        def read_count():
+            with server.lock:
+                return world.conn.execute(
+                    "SELECT COUNT(*) FROM audit_log WHERE actor=? AND action IN ('show','ready','snapshot')",
+                    ("reader",)).fetchone()[0]
+        assert _until(lambda: read_count() == 4)
+    finally:
+        server.shutdown()
+        server.server_close()
+        world.close()

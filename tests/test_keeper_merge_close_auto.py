@@ -685,3 +685,21 @@ def test_refresh_reads_only_new_commit_history(env, monkeypatch):
     assert "Plan-Item: demo:A" not in read[0][1]
     assert [context_sources.indexed_work(index, f"demo:{key}")["commits"][0]["merge"]["pr"]
             for key in "AB"] == [93, 94]
+
+
+def test_items_from_the_same_merge_share_immutable_proof_metadata(env, monkeypatch):
+    env.repo.land("two-keys", "Plan-Item: demo:A\nPlan-Item: demo:B", 95)
+    adapter = env.store.ctx["git"]
+    reads = []
+    real = adapter._run
+
+    def record(repo, args, **kwargs):
+        if args[:3] == ["show", "-s", "--format=%P%x20%cI"]:
+            reads.append(args[-1])
+        return real(repo, args, **kwargs)
+
+    monkeypatch.setattr(adapter, "_run", record)
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    result = auto(env, require_seats=False, frozen=True)
+    assert [row["key"] for row in result["closed"]] == ["demo:A", "demo:B"]
+    assert reads == [git(env.repo.root, "rev-parse", "main")]

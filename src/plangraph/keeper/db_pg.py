@@ -370,6 +370,19 @@ def open_pg(path, *, create=False, busy_timeout=5000, dsn=None, schema=None) -> 
     return PgConnection(raw, name)
 
 
+@contextmanager
+def read_transaction(schema, dsn):
+    """An MVCC reader uses a separate read-only transaction and no migration lock."""
+    name = check_schema(schema)
+    raw = _connect(dsn, 5000)
+    try:
+        raw.execute(f'SET search_path TO "{name}"')
+        raw.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        yield PgConnection(raw, name)
+    finally:
+        raw.close()
+
+
 class PgKeeperLock:
     """Session advisory lock on a dedicated connection; ``release`` closes it."""
 
