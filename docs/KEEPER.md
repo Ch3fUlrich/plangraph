@@ -317,8 +317,9 @@ A merge into main closes its items with no router call (`close_merged_auto`, rol
 
 `plangraph reconcile-merged --dry-run --state PATH` previews merged work once
 per hour through the user timer. The job atomically replaces the watcher state
-file and emits one JSON batch line to the service journal for routing. Each
-batch contains the merged-open count, refusal counts, and proposed actions.
+file. The service journal delivers one JSON batch line per pass. Routing reads
+it with `journalctl --user -u pg-reconcile-merged.service`. Each batch contains
+the merged-open count, refusal counts, and proposed actions.
 The Keeper raises `merged_open_reconcile` on the second consecutive nonzero
 pass and clears it after a zero pass. Routing applies any proposed action
 under its own GO decision.
