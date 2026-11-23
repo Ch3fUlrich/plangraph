@@ -426,6 +426,8 @@ class SpawnService(SeatSpawnMixin):
                 if choice.leg is None:
                     raise SpawnRefused('client_missing: ' + chosen.id)
                 chosen = choice.leg
+            if role == 'research' and card.get('web_required') and not chosen.has_web_tools:
+                raise SpawnRefused('web_access_unavailable: ' + chosen.id)
             require_available(chosen, self.leg_reader, card)
             if role in ('implement', 'review'):
                 from plangraph.planner.route_policy import codex_leg_effort

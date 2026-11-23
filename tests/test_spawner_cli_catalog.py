@@ -88,3 +88,14 @@ def test_route_leg_scores_reports_catalog_intelligence_per_routed_leg(monkeypatc
     assert [leg['id'] for leg in out['legs']] == [leg.id for leg in legs]
     assert out['leg_scores']['mimo-v2.6-pro'] == 46.0
     assert out['leg_scores']['agy-sonnet-5.5'] != out['leg_scores']['mimo-v2.6-pro']
+
+
+def test_research_route_refusal_preserves_per_leg_skips_in_json(tmp_path, capsys):
+    card = json.dumps({'estimate_tokens': 950_000})
+    assert cli.main(['--state', str(tmp_path), 'route', '--role', 'research',
+                     '--json', '--card', card]) == 2
+    output = capsys.readouterr()
+    error = json.loads(output.out)['error']
+    assert 'skip agy-opus-5.5: max_request_tokens' in error
+    assert 'skip opencode-go-glm-5.3-flash: max_request_tokens' in error
+    assert output.err.strip() == error

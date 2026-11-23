@@ -66,6 +66,23 @@ fn exact_id_and_unique_model_resolve() {
     }
 }
 #[test]
+fn research_resolves_only_eligible_ids_and_models() {
+    let mut rows = catalog();
+    rows[0].roles.push("research".into());
+    for reference in ["alpha", "provider/model"] {
+        assert_eq!(
+            resolve_leg(reference, "research", &rows),
+            Ok("alpha".into())
+        );
+    }
+    for reference in ["beta", "shared"] {
+        assert_eq!(
+            resolve_leg(reference, "research", &rows),
+            Err(RefError::Role)
+        );
+    }
+}
+#[test]
 fn exact_id_precedes_model_collision() {
     let mut c = catalog();
     c[1].model = "alpha".into();

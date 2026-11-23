@@ -279,6 +279,15 @@ The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_ri
 The Rust route reports legs with more than three missing verdicts in their last
 ten completed reviews under `review_health_alerts` and puts them after healthier candidates.
 
+## Research routing
+
+Use `--role research` on the CLI or `role: "research"` in MCP to route or
+spawn a research card. Automatic routing uses research-tagged legs, checks
+estimates against declared request limits, and orders eligible Claude legs last.
+Set `web_required: true` on the card to require web tools on the resolved
+harness. This requirement also applies to explicit leg and model picks.
+If no route remains, the JSON refusal includes each skipped leg and its reason.
+
 ## Automatic work mode (D-5952 / rule 3.41)
 
 `pg-spawnd` route JSON, including the `plangraph_agent_route` MCP response,
