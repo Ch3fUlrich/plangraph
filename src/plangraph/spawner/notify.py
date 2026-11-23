@@ -218,7 +218,7 @@ def _attempt_pending(marker):
 
 
 def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
-    """Deliver terminal snapshots idempotently and retain undelivered records."""
+    """Deliver terminal snapshots idempotently and retain retryable records."""
     from plangraph.fleet_snapshot import _projection_binary
 
     keeper = keeper if keeper is not None else KeeperSink()
@@ -248,7 +248,14 @@ def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
                     run = dict(run, host=os.environ.get("PLANGRAPH_HOST") or socket.gethostname())
                 result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
                                         input=json.dumps(run, allow_nan=False), text=True,
-                                        encoding="utf-8", errors="replace", capture_output=True, timeout=5, check=True)
+                                        encoding="utf-8", errors="replace", capture_output=True, timeout=5)
+                # attempt_outcome.rs reserves exit 3 for invalid snapshot contents.
+                if result.returncode == 3:
+                    atomic_write_private(marker, "unprojectable\n")
+                    findings.append(dict(rule="spawn-attempt-delivery", run_id=run["run_id"],
+                                         reason="unprojectable"))
+                    continue
+                result.check_returncode()
                 attempt = json.loads(result.stdout)
                 if attempt is None:
                     continue
