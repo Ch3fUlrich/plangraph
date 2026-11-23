@@ -331,6 +331,7 @@ def test_router_edits_done_criteria_of_claimed_item(w):
     event = last_defined(w)
     assert (event["actor"], event["role"]) == ("router", "router")
     assert event["payload"] == {"fields": ["done_criteria"],
+                                "criteria_ledger": True,
                                 "while": "claimed", "who": "router",
                                 "before": {"done_criteria": "criteria"},
                                 "after": {"done_criteria": "tighter criteria"},
@@ -409,6 +410,7 @@ def test_router_active_edit_event_carries_before_and_after(tmp_path):
     assert item["round"] == 2
     event = last_defined(w)
     assert event["payload"] == {"fields": ["depends_on", "done_criteria"],
+                                "criteria_ledger": True,
                                 "while": "in_review", "who": "router",
                                 "before": {"done_criteria": "criteria",
                                            "depends_on": []},
