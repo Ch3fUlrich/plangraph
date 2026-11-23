@@ -61,6 +61,24 @@ fn sample_batch_validates_all_step_types_through_train_join() {
 }
 
 #[test]
+fn red_ci_can_end_a_batch() {
+    let mut example = sample();
+    example["rows"][9]["step"]["result"]["output"]["classification"] = json!("red");
+    example["rows"].as_array_mut().unwrap().truncate(10);
+    validate(example).unwrap();
+}
+
+#[test]
+fn red_ci_rejects_a_following_train_join() {
+    let mut example = sample();
+    example["rows"][9]["step"]["result"]["output"]["classification"] = json!("red");
+    assert_eq!(
+        validate(example).unwrap_err(),
+        "step 10: step out of order or input does not match"
+    );
+}
+
+#[test]
 fn a_batch_rejects_stale_evidence_misordered_steps_and_invalid_stage_rows() {
     for (index, field, bad) in [
         (5, "session", json!("another-session")),
