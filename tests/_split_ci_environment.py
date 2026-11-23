@@ -1,12 +1,16 @@
+import faulthandler
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from contextlib import contextmanager
-from threading import Thread, Timer
+from threading import Thread, Timer, get_ident
+from time import monotonic
 import pytest
 
 def python_test_env(env=None):
@@ -214,40 +218,41 @@ def pytest_addoption(parser):
     parser.addini('test_deadline', 'Default per-test deadline in seconds', default='120')
 
 
-_EXIT = os._exit
 _START_INFRASTRUCTURE_THREAD = Thread.start
+_SET_SIGNAL_HANDLER = signal.signal
+_DEADLINE = pytest.StashKey()
 
 
-def _stop_hung_test(item):
-    import asyncio
-    import faulthandler
-    import signal
+class _TestHung(BaseException):
+    """Unwind the test without caching a timeout as a fixture setup failure."""
 
+
+class _TeardownHung(_TestHung, pytest.fail.Exception):
+    """Let pytest collect this teardown failure and run remaining finalizers."""
+
+
+def _stop_hung_test(item, started, teardown):
     pid = os.getpid()
-    try:
-        capture = item.config.pluginmanager.get_plugin('capturemanager')
-        if capture is not None:
-            capture.suspend(in_=True)
-        os.write(2, f'\nHUNG {_ci_nodeid(item.nodeid)}\n'.encode(errors='backslashreplace'))
-        faulthandler.dump_traceback(file=2, all_threads=True)
-    finally:
+    message = f'HUNG {_ci_nodeid(item.nodeid)}'
+    with tempfile.TemporaryFile() as stacks:
+        faulthandler.dump_traceback(file=stacks, all_threads=True)
+        stacks.seek(0)
+        message += '\n' + stacks.read().decode(errors='replace')
+    if started is not None:
+        from plangraph.spawner import proc_kill
+
+        table = proc_kill._scan()
+        isolated_group = os.getpgrp() == pid
+        # Shared fixtures can own children that predate this test.
+        roots = {child for child, entry in table.items() if child != pid and
+                 (entry[1] == pid or (isolated_group and entry[2] == pid)) and
+                 entry[4] >= started}
+        children = proc_kill.descendants(table, roots)
         try:
-            if sys.platform == 'linux':
-                from plangraph.spawner import proc_kill
-                table = proc_kill._scan()
-                seeds = {pid}
-                if os.getpgrp() == pid:
-                    seeds.update(child for child, info in table.items() if info[2] == pid)
-                children = proc_kill.descendants(table, seeds) - {pid}
-                members = {child: table[child][4] for child in children if table[child][0] != 'Z'}
-                proc_kill.kill_identities(members)
-                asyncio.run(proc_kill.verify_gone(members, wait_s=2))
-            elif os.name == 'nt':
-                subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], timeout=5, check=False)
-        finally:
-            if os.name == 'posix' and os.getpgrp() == pid:
-                os.killpg(pid, signal.SIGKILL)
-            _EXIT(124)
+            proc_kill.kill_identities({child: table[child][4] for child in children if table[child][0] != 'Z'})
+        except OSError as exc:
+            message += f'Could not stop test subprocesses: {exc}\n'
+    raise (_TeardownHung if teardown else _TestHung)(message)
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -266,15 +271,64 @@ def pytest_runtest_protocol(item):
         raise pytest.UsageError(
             f'{item.nodeid}: test_deadline must be positive; longer overrides need a reason',
         ) from exc
-    timer = Timer(seconds, _stop_hung_test, args=(item,))
+    started = (int(time.clock_gettime(time.CLOCK_BOOTTIME) * os.sysconf('SC_CLK_TCK'))
+               if sys.platform == 'linux' else None)
+    item.stash[_DEADLINE] = (monotonic() + seconds, seconds, started)
+    return (yield)
+
+
+def _watch_test_phase(item, teardown=False):
+    expires, seconds, started = item.stash[_DEADLINE]
+    remaining = expires - monotonic()
+    if not hasattr(signal, 'pthread_kill'):
+        # Platforms without a thread-directed signal still get a stack dump.
+        faulthandler.dump_traceback_later(max(0.001, remaining))
+        try:
+            return (yield)
+        finally:
+            faulthandler.cancel_dump_traceback_later()
+
+    armed = False
+
+    def interrupt(signum, frame):
+        if armed:
+            # Teardown must be able to clean up after a timeout and is bounded too.
+            item.stash[_DEADLINE] = (monotonic() + seconds, seconds, started)
+            _stop_hung_test(item, started, teardown)
+
+    # SIGALRM belongs to tests that install their own subprocess alarms.
+    sig = signal.SIGUSR2
+    timer = Timer(max(0, remaining), signal.pthread_kill, args=(get_ident(), sig))
     timer.daemon = True
-    # The watchdog outlives fixture teardown and has its own join in this hook.
-    _START_INFRASTRUCTURE_THREAD(timer)
+    previous = _SET_SIGNAL_HANDLER(sig, interrupt)
     try:
+        _START_INFRASTRUCTURE_THREAD(timer)
+        armed = True
+        if monotonic() >= expires:
+            interrupt(sig, None)
         return (yield)
     finally:
+        armed = False
         timer.cancel()
-        timer.join()
+        if timer.ident is not None:
+            timer.join()
+        _SET_SIGNAL_HANDLER(sig, previous)
+
+
+pytest_runtest_setup = pytest_runtest_call = pytest.hookimpl(wrapper=True, tryfirst=True)(_watch_test_phase)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item):
+    return (yield from _watch_test_phase(item, teardown=True))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    if call.excinfo is not None and call.excinfo.errisinstance(_TestHung):
+        report.longrepr = str(call.excinfo.value)
+    return report
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus):
