@@ -347,7 +347,7 @@ def test_scheduled_agy_probe_clears_a_model_limit_within_an_hour(tmp_path, monke
     leg = next(row for row in legs.routed_review_legs() if row.id == 'agy-gemini-4-argon-low')
     monkeypatch.setattr(legs, 'spawnable_legs', lambda: (leg,))
     monkeypatch.setattr(legs, 'routed_review_legs', lambda: (leg,) if routed else ())
-    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/agy' if name == 'agy' else None)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, *, path=None: '/bin/agy' if name == 'agy' else None)
     clock = [10_000]
     monkeypatch.setattr(leg_probe.time, 'time', lambda: clock[0])
     store = LegStateStore(tmp_path / 'legs.sqlite')
