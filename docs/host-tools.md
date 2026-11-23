@@ -53,8 +53,11 @@ server startup to normalize paths in cache keys.
 `sccache --show-stats` shows hits, misses and cache usage. With sccache absent,
 the build environment warns once and Cargo continues without a wrapper.
 
-The shared target cap defaults to 10 GB per root. Under disk pressure or above
-that cap, cleanup removes oldest idle incremental sessions and stale
+The shared target cap defaults to 32 GiB per root. A valid
+`PLANGRAPH_CARGO_TARGET_CAP_GB` value takes precedence over the host file
+`cargo-target-cap-gb` in `$XDG_CONFIG_HOME/plangraph` (default
+`~/.config/plangraph`). Both take a nonnegative GiB value. Under disk pressure
+or above the cap, cleanup removes oldest idle incremental sessions and stale
 `build/<crate>-<hash>` variants, keeping the newest compile unit and run unit per crate and profile.
 Candidates must be idle over six hours; recent, unknown and sole variants survive.
 The cap is a reclamation trigger, not a hard size limit: protected/newest data may
@@ -89,10 +92,11 @@ existing state worktree roots are included automatically. Each filesystem is
 compared with its own thresholds. An unavailable root raises the alarm while
 the other filesystems are still swept. Set `PLANGRAPH_SPAWN_STATE` when records live
 outside the default state directory.
-Threshold options are `--alarm-free-bytes` (default `5368709120`, 5 GiB),
-`--cleanup-free-bytes` (default `10000000000`) and `--shared-target-cap-bytes`
-(default `10000000000`); options take byte counts (10 GB is decimal). Alarm must be positive and no
-larger than cleanup. JSON reports `free_bytes`, never a usage percentage.
+Threshold options are `--alarm-free-bytes` (default `5368709120`, 5 GiB) and
+`--cleanup-free-bytes` (default `10000000000`, 10 GB). Use
+`--shared-target-cap-bytes` to override the configured cap for one invocation.
+These options take byte counts. Alarm must be positive and no larger than
+cleanup. JSON reports `free_bytes`, never a usage percentage.
 Rule 7.1 requires at least 5 GiB free to start any writer/run on every host and
 stopping at 2 GiB free. The spawner owns admission and runtime stopping;
 this timer reports pressure and reclaims idle rebuildable state.

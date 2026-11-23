@@ -367,3 +367,62 @@ fn post_run_caps_identified_debug_only_when_idle() {
     assert!(crate::disk_hygiene::scan(&target).unwrap().0 <= 80);
     assert!(sibling.join("data").exists());
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_ones() {
+    let parent = tempfile::tempdir().unwrap();
+    let checkout = parent.path().join("checkout");
+    let target = parent.path().join("target");
+    let profile = target.join("debug");
+    fs::create_dir_all(profile.join("build")).unwrap();
+    fs::create_dir(&checkout).unwrap();
+    fs::write(profile.join(".cargo-lock"), []).unwrap();
+    fs::write(
+        target.join("CACHEDIR.TAG"),
+        b"Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now();
+    let unit = |name: &str, age_minutes: u64| {
+        let path = profile.join("build").join(name);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("build-script-build"), vec![0u8; 100]).unwrap();
+        let modified = now - std::time::Duration::from_secs(age_minutes * 60);
+        for p in [path.join("build-script-build"), path.clone()] {
+            fs::File::open(p).unwrap().set_modified(modified).unwrap();
+        }
+        path
+    };
+    let stale: Vec<_> = (0..50)
+        .map(|n| unit(&format!("pg-worker-core-{n:016x}"), 361 + n))
+        .collect();
+    // Held by a running build: touched minutes ago, and the crate's newest variant.
+    let live = unit("pg-worker-core-ffffffffffffffff", 5);
+    let other = unit("other-crate-0000000000000001", 390);
+    // 52 units of 100 B; cap 5200 leaves the watermark at 3900 B.
+    let cap = 5200;
+    assert_eq!(crate::cargo_pool::watermark_bytes(cap), 3900);
+    let size = || crate::disk_hygiene::scan(&target).unwrap().0;
+    assert!(size() > cap);
+    let report = post_run_cargo_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap();
+    assert!(
+        size() <= crate::cargo_pool::watermark_bytes(cap),
+        "{}",
+        size()
+    );
+    // Oldest first: the freshest stale variants survive, the oldest are gone.
+    assert!(!stale[49].exists() && !stale[48].exists());
+    assert!(live.exists() && other.exists());
+    assert!(
+        profile.join("build").exists(),
+        "debug profile kept under the cap"
+    );
+    assert!(
+        report.freed_bytes >= 1300
+            && report
+                .actions
+                .iter()
+                .all(|a| !a.contains("ffffffffffffffff"))
+    );
+}

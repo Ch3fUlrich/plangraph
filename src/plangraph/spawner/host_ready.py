@@ -28,7 +28,7 @@ from .host_ready_source import (
 MAX_AGE = 600
 _sccache_missing_warned = False
 # Mirrors pg_worker_core::cargo_pool::DEFAULT_CARGO_TARGET_CAP_GB (a test pins both).
-DEFAULT_CARGO_TARGET_CAP_GB = 12
+DEFAULT_CARGO_TARGET_CAP_GB = 32
 
 
 def _node_version(entry):
@@ -314,11 +314,30 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
             shutil.rmtree(target)
 
 
+def _cap_gb(raw):
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw.isascii() or '_' in raw:
+        return None
+    try:
+        cap = float(raw)
+    except ValueError:
+        return None
+    return cap if math.isfinite(cap) and cap >= 0 else None
+
+
 def cargo_target_cap_gb():
-    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', str(DEFAULT_CARGO_TARGET_CAP_GB)))
-    if not math.isfinite(cap) or cap < 0:
-        raise ValueError('invalid cache cap')
-    return cap
+    """Use the first valid cap from the environment, host config file, or default."""
+    cap = _cap_gb(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB'))
+    if cap is not None:
+        return cap
+    config = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
+    try:
+        cap = _cap_gb((config / 'plangraph' / 'cargo-target-cap-gb').read_text(encoding='utf-8'))
+    except (OSError, UnicodeError):
+        cap = None
+    return DEFAULT_CARGO_TARGET_CAP_GB if cap is None else cap
 
 
 def cargo_run_busy(record):
