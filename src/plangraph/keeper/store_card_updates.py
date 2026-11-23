@@ -70,23 +70,29 @@ class CardUpdatesMixin:
                 f" VALUES((SELECT COALESCE(MAX(id),0)+1 FROM attempts),1,{marks})", values)
         return {"attempt_id": text["attempt_id"], "duplicate": False}
 
-    def spawn_attempts(self, principal, since):
+    def spawn_attempts(self, principal, since, *, scope=None):
         from datetime import UTC, datetime
         from .cli_verbs import parse_duration
 
         def read(now):
+            if scope not in (None, "telemetry"):
+                raise Refused("validation", "unknown attempt scope")
+            telemetry = scope == "telemetry"
+            if telemetry and (principal.role != "reader" or principal.projects):
+                raise Refused("forbidden", "attempt telemetry requires an unscoped reader")
             try:
                 window = parse_duration(since)
             except (ValueError, OverflowError) as exc:
                 raise Refused("validation", "since must be a positive duration") from exc
             if window <= 0:
                 raise Refused("validation", "since must be a positive duration")
+            spawn_only = "" if telemetry else " AND attempt_id IS NOT NULL"
             rows = self.conn.execute(
-                "SELECT attempt_id,card_key,COALESCE(item_key,card_key) AS item,role,harness,leg,requested_model,served_model,effort,"
+                "SELECT id,attempt_id,card_key,COALESCE(item_key,card_key,key) AS item,role,harness,leg,requested_model,served_model,effort,"
                 " level,level_reason,task_class,risk_band,bucket,host,plan_hash,route,"
                 " started_at,ended_at,exit_class,tokens_in,tokens_out,cost"
-                " FROM attempts WHERE attempt_id IS NOT NULL AND started_at>=?"
-                " ORDER BY started_at,attempt_id", (self._iso(max(0, now - window)),))
+                f" FROM attempts WHERE started_at>=?{spawn_only}"
+                " ORDER BY started_at,attempt_id,id", (self._iso(max(0, now - window)),))
             projects = principal.projects
             result = []
             for raw in rows:
@@ -94,11 +100,16 @@ class CardUpdatesMixin:
                 key = row["item"]
                 if projects and (key is None or key.partition(":")[0] not in projects):
                     continue
-                row.update(item=key or "adhoc", route=json.loads(row["route"]))
-                row["wall_s"] = (datetime.fromisoformat(row["ended_at"]).astimezone(UTC)
-                                 - datetime.fromisoformat(row["started_at"]).astimezone(UTC)).total_seconds()
+                row_id = row.pop("id")
+                if row["attempt_id"] is None:
+                    row.update(attempt_id=f"legacy:{row_id}", role="unknown")
+                row.update(item=key or "adhoc", route=json.loads(row["route"]) if row["route"] else None)
+                row["wall_s"] = None
+                if row["ended_at"]:
+                    row["wall_s"] = (datetime.fromisoformat(row["ended_at"]).astimezone(UTC)
+                                     - datetime.fromisoformat(row["started_at"]).astimezone(UTC)).total_seconds()
                 result.append(row)
-            return result
+            return {"rows": result} if telemetry else result
 
         return self._run(principal, "spawn_attempts", None, read)
 
