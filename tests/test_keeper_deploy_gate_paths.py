@@ -211,7 +211,7 @@ def test_a_snapshot_older_than_the_work_the_close_proves_is_stale(env):  # noqa:
     git(root, "checkout", "-q", "main")
     git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #51 from x/later", "later")
     result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
-    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+    assert result["closed"] == [] and "merge_index_tip_changed" in result["listed"][0]["reason"]
     assert env.store._item("demo:A")["state"] == "open"
     # A fresh warm-up sees both PRs and finds the unit.
     again = frozen(env, require_seats=False)
@@ -259,7 +259,7 @@ def test_a_snapshot_of_a_rebuilt_ref_is_stale_even_with_the_same_tagged_commit(e
     git(root, "checkout", "-q", "main")
     git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #54 from x/redo", "redo")
     result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
-    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+    assert result["closed"] == [] and "merge_index_tip_changed" in result["listed"][0]["reason"]
     assert env.store._item("demo:A")["state"] == "open"
     again = frozen(env, require_seats=False)
     assert again["closed"] == [] and "deploy_pending" in again["listed"][0]["reason"]

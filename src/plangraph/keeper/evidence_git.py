@@ -18,6 +18,7 @@ import re
 import subprocess
 import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -401,6 +402,16 @@ class GitAdapter:
             return sha
         except Exception:
             return None
+
+    @lru_cache(maxsize=4096)
+    def merge_proof_fields(self, repo, sha):
+        """Read immutable merge parent and date fields once per landed SHA."""
+        if not valid_commit_ref(sha):
+            raise ValueError("invalid merge sha")
+        proc = self._run(repo, ["show", "-s", "--format=%P%x20%cI", "--end-of-options", sha])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read merge proof")
+        return tuple(proc.stdout.split())
 
     def merge_commit_of(
         self, repo: str, sha: str, ref: str

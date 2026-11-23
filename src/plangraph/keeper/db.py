@@ -14,6 +14,7 @@ import fcntl
 import os
 import re
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
@@ -314,6 +315,27 @@ def open_db(path, *, create: bool = False,
     _enable_defensive(conn)
     conn.set_authorizer(_authorizer)
     return conn
+
+
+@contextmanager
+def read_transaction(path, *, schema=None, dsn=None):
+    """Open a separate connection with one committed read snapshot across queries."""
+    if schema is not None:
+        from .db_pg import read_transaction as pg_read_transaction
+
+        with pg_read_transaction(schema, _pg_dsn(dsn)) as conn:
+            yield conn
+        return
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA trusted_schema=OFF")
+        conn.set_authorizer(_authorizer)
+        conn.execute("BEGIN")
+        yield conn
+    finally:
+        conn.close()
 
 
 class KeeperLock:

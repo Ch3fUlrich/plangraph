@@ -12,7 +12,8 @@ import time
 clock = time.monotonic
 THRESHOLD_MS = 250
 DEFAULT_CLAIM_PREFLIGHT_S = 30
-_LATENCY_VERBS = frozenset({"show", "claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
+_LATENCY_VERBS = frozenset({"show", "ready", "snapshot", "close_merged", "close_merged_auto",
+                            "claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
 _parts = ContextVar("keeper_timing_parts", default=None)
 _request_timer = ContextVar("keeper_request_timer", default=None)
 _io_deadline = ContextVar("keeper_io_deadline", default=None)
@@ -183,6 +184,8 @@ class RequestTimer:
         self.verb = verb
 
     def acquire(self):
+        if self.lock is None:
+            return
         start = _sample()
         self.lock.acquire()
         self.held = _sample()
@@ -191,6 +194,8 @@ class RequestTimer:
 
     def release(self):
         end = _sample()
+        if self.lock is None:
+            return end
         self.lock.release()
         elapsed = _ms(self.held, end)
         self.hold_ms = None if elapsed is None or self.hold_ms is None else self.hold_ms + elapsed

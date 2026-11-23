@@ -472,13 +472,12 @@ class CloseMixin:
             raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
         return dict(item, _close_head=head)
 
-    def _deploy_changes(self, item, commits=None):
+    def _deploy_changes(self, item):
         """Tagged commits and landed diffs at the same default commit as the merge proofs."""
         git, project = self._adapter("git"), self._merge_project(item)
         repo, head = git.repo_path(project), item["_close_head"]
-        if commits is None:
-            commits = context_sources.plan_item_commits(
-                git, project, item["key"], fetch=False, limit=None, head=head)
+        commits = context_sources.plan_item_commits(
+            git, project, item["key"], fetch=False, limit=None, head=head)
         if commits is None:
             raise RuntimeError("commit history unreadable")
         tagged = frozenset(commit["sha"] for commit in commits)
@@ -551,8 +550,7 @@ class CloseMixin:
                     and previous["text"] == text and previous["commits"] == commits):
                 token, changes = (head, *previous["token"][1:]), previous["changes"]
             else:
-                token, changes = self._deploy_changes(dict(tagged, _close_head=head),
-                                                      commits if index.get("target") else None)
+                token, changes = self._deploy_changes(dict(tagged, _close_head=head))
         except Exception:  # noqa: BLE001 - recorded as unreadable
             token, changes = None, None
         self.__dict__["_deploy_warm"][project, key] = {

@@ -32,16 +32,17 @@ import sys
 import tempfile
 import threading
 import urllib.parse
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from copy import copy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from queue import SimpleQueue
 
 from .. import inbox, views
 from . import outage, timing
 from .snapshot_io import SnapshotPublication, write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from .snapshot_writer import SnapshotWriter
-from . import api_routes, audit_meta, auth, brief, changelog, fmt
+from . import api_routes, audit_meta, auth, brief, changelog, db, fmt
 from .auth import Principal, RunPrincipal
 from .errors import ConnectionLost, Refused
 
@@ -54,6 +55,7 @@ from .api_routes import (READ_CALLS, ROLE_CHECKED_VERBS, ROUTER_VERBS,
                          TEXT_DEFAULT as _TEXT_DEFAULT)
 from .api_routes import WRITE_VERBS as _WRITE_VERBS
 _READ_VERBS.add("hosts")
+_COMMITTED_READS = frozenset({"show", "ready", "snapshot"})
 log = logging.getLogger("plangraph.keeper")
 
 
@@ -138,6 +140,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
             return
 
         server = self.server
+        if method == "GET" and name in _COMMITTED_READS and getattr(server, "read_path", None):
+            token = self._token()
+            # Scoped oversight credentials can charge a denial budget during authentication.
+            if not (token or "").startswith(auth.OVERSIGHT_PREFIX) and not server.fatal_reason:
+                return self._committed_read(name, extra, query, token)
         try:
             with server.lock:
                 try:
@@ -199,6 +206,24 @@ class KeeperHandler(BaseHTTPRequestHandler):
             self._fail_line(exc)
             self._json(500, {"error": "internal", "msg": "internal server error"})
 
+    def _committed_read(self, name, extra, query, token):
+        server = self.server
+        try:
+            with timing.RequestTimer(None, "read", verb=name), server.read_store() as store:
+                try:
+                    principal = auth.authenticate(store.conn, token)
+                except Refused as exc:
+                    self._auth_failure(name, "GET", exc, store=store)
+                    return
+                api_routes.run_gate(principal, name)
+                payload, as_text = self._read(name, extra, query, principal, store=store)
+            (self._text if as_text else self._json)(200, payload)
+        except Refused as exc:
+            self._json(_STATUS.get(exc.code, 400), {"error": exc.code, "msg": exc.msg})
+        except ConnectionLost as exc:
+            self._fail_line(exc)
+            self._json(503, {"error": "unavailable", "msg": "keeper read connection unavailable"})
+
     @staticmethod
     def _can_read_revoked_receipt(name, exc):
         return isinstance(exc, auth.RevokedRunToken) and (
@@ -221,11 +246,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
         else:
             self._json(200, settled)
 
-    def _auth_failure(self, name, method, exc):
+    def _auth_failure(self, name, method, exc, *, store=None):
         if method == "POST":
             self.close_connection = True   # Never interpret an unread body as another request.
         with suppress(Exception):          # Missing or broken audit still returns the refusal.
-            self.server.store.audit_auth_failure(exc.msg or exc.code)
+            (store or self.server.store).audit_auth_failure(exc.msg or exc.code)
         self._json(403 if name == "ingest_host_sample" else 401, {"error": exc.code, "msg": exc.msg})
 
     # ------------------------------------------------------------- plumbing
@@ -322,7 +347,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         return values[0] if values else default
 
     @timing.measured(part="query_ms")
-    def _read(self, name, extra, query, principal):
+    def _read(self, name, extra, query, principal, *, store=None):
         if name == "write_context":
             return self.server.store.write_context(principal, query.get("key", [None])[0]), False
         if name in ("host_samples", "host_samples_range"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_read"]).http_read(self.server.store, principal, name, query), False
@@ -353,7 +378,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "messages":
             from .messages_poll import read_messages
             return read_messages(self.server, principal, query), False
-        store = self.server.store
+        store = store if store is not None else self.server.store
         fmt_name = self._one(query, "fmt")
         as_text = fmt_name == "text" or (
             fmt_name is None and name in _TEXT_DEFAULT)
@@ -611,6 +636,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.lock = threading.RLock()
         self.snapshot_publication = SnapshotPublication()
         self.merge_refresh = None
+        self._audit_thread = None
         self.system = system or Principal("system", "system", [], None)
         self.reaper = None
         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
@@ -663,6 +689,55 @@ class KeeperHTTPServer(ThreadingHTTPServer):
                           type(exc).__name__, exc)
                 self.bus_registry = None
         super().__init__(address, KeeperHandler)
+        self.read_path = getattr(config, "db", None)
+        self.read_schema = getattr(store.conn, "schema", None)
+        self.read_dsn = getattr(config, "db_options", {}).get("dsn")
+        self._read_audits = SimpleQueue()
+        self._audit_thread = threading.Thread(target=self._flush_read_audits, name="keeper-read-audit",
+                                              daemon=True)
+        self._audit_thread.start()
+
+    @contextmanager
+    def read_store(self):
+        """Run a read against committed rows and deliver its audits through the writer."""
+        audits = []
+        try:
+            with db.read_transaction(self.read_path, schema=self.read_schema, dsn=self.read_dsn) as conn:
+                view = copy(self.store)
+                view.conn, view._batch = conn, None
+
+                def record(*args, **kw):
+                    audits.append(("_audit", args, kw))
+
+                def authentication_failure(reason):
+                    audits.append(("audit_auth_failure", (reason,), {"now": view.now()}))
+
+                view._audit, view.audit_auth_failure = record, authentication_failure
+                yield view
+        finally:
+            if audits:
+                if self.lock.acquire(blocking=False):
+                    try:
+                        self._apply_read_audits(audits)
+                    finally:
+                        self.lock.release()
+                else:
+                    self._read_audits.put(audits)
+
+    def _apply_read_audits(self, audits):
+        for method, args, kw in audits:
+            try:
+                getattr(self.store, method)(*args, **kw)
+            except ConnectionLost:
+                self.fail("postgres connection lost")
+                return
+            except Exception as exc:
+                log.error("read audit failed: %s", type(exc).__name__)
+
+    def _flush_read_audits(self):
+        while (audits := self._read_audits.get()) is not None:
+            with self.lock:
+                self._apply_read_audits(audits)
 
     def refresh_merge_index(self, action):
         """The merge-close timer starts a scan and checks its status in separate calls."""
@@ -761,6 +836,10 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         if writer is not None:
             with suppress(Exception):     # shutdown never hangs on a snapshot error
                 writer.stop()
+        if self._audit_thread is not None:
+            self._read_audits.put(None)
+            self._audit_thread.join(timeout=2)
+            self._audit_thread = None
         super().server_close()
 
 

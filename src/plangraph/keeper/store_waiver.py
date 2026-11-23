@@ -282,17 +282,18 @@ class WaiverMixin:
         commit on the default branch binds to itself.
         """
         merge = commit.get("merge") or {}
-        if merge.get("parents"):
-            parents = merge["parents"]
-            if len(parents) != 2 or not all(valid_commit_ref(parent) for parent in parents):
-                raise Refused("evidence_unverified", "merged_pr_head_missing")
-            head, date = parents[1], merge["date"]
-        elif merge.get("sha"):
+        if merge.get("sha"):
             repo = git.repo_path(project)
             landed = valid_commit_ref(merge["sha"])
-            proc = git._run(repo, ["show", "-s", "--format=%P%x20%cI",
-                                   "--end-of-options", merge["sha"]]) if landed else None
-            fields = proc.stdout.split() if proc and proc.returncode == 0 else []
+            try:
+                if landed and hasattr(git, "merge_proof_fields"):
+                    fields = git.merge_proof_fields(repo, merge["sha"])
+                else:
+                    proc = git._run(repo, ["show", "-s", "--format=%P%x20%cI",
+                                           "--end-of-options", merge["sha"]]) if landed else None
+                    fields = proc.stdout.split() if proc and proc.returncode == 0 else []
+            except (OSError, RuntimeError, ValueError):
+                fields = []
             if len(fields) != 3 or not all(valid_commit_ref(p) for p in fields[:2]):
                 raise Refused("evidence_unverified", "merged_pr_head_missing")
             head, date = fields[1], fields[2]
@@ -518,8 +519,9 @@ class WaiverMixin:
             scoped_train = go_key_scope(statement) is not None
             all_work = from_open or scoped_train
             complete_history = all_work or waive_seats is not None
-            item, token, changes = self._manual_deploy_scan(
-                item, complete_history=complete_history, refresh_alternate=not waiver_only)
+            with timing.outside_request_lock():
+                item, token, changes = self._manual_deploy_scan(
+                    item, complete_history=complete_history, refresh_alternate=not waiver_only)
             if waiver_only:
                 head, prs, waiver, _ = self._merged_waiver_only(item, decision_id, now, all_work=from_open)
             else:
@@ -665,7 +667,10 @@ class WaiverMixin:
             if repo_project not in indexes:
                 if frozen:
                     if not self._warm(repo_project):
-                        reason = scan_errors.setdefault(repo_project, scan_errors.get("*", "merge_index_not_warm"))
+                        mismatch = repo_project in self.__dict__.get("_warmed", {})
+                        reason = scan_errors.setdefault(
+                            repo_project, scan_errors.get("*", "merge_index_tip_changed" if mismatch
+                                                         else "merge_index_not_warm"))
                         raise Refused("evidence_unverified", f"{reason}: {repo_project}")
                     index = self.__dict__["_warmed"][repo_project]
                 else:
