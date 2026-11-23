@@ -167,7 +167,10 @@ def test_detached_cli_later_worktree_refusal_is_reported_by_status(repository, d
     service = dispatch[0](True)
     monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
     start = cli._start_supervisor
+    # Keep the harness running until the parent has checked that the CLI detached.
+    release = repo.parent / 'finish-harness'
     script = f'''import asyncio
+from pathlib import Path
 from plangraph.spawner import cli, seat_spawn
 seat_spawn.resources = lambda service: (0, 1000000)
 from plangraph.spawner.runner import JobInfo
@@ -175,8 +178,11 @@ from plangraph.spawner.service import SpawnService
 from plangraph.planner.routing import SpawnPlan
 from plangraph.planner.legs import DEFAULT_LEGS
 from types import SimpleNamespace
+async def released():
+    while not Path({str(release)!r}).exists():
+        await asyncio.sleep(0.05)
 async def factory(**kwargs):
-    await asyncio.sleep(3)
+    await asyncio.wait_for(released(), timeout=10)
     return JobInfo('job-test', 'completed', kwargs['prompt'], kwargs['model_or_combo'], exit_code=0)
 service = SpawnService(runner=SimpleNamespace(default_cwd={str(repo)!r}, spawn=factory, _tasks={{}}, _processes={{}}, provider_responses={{}}), state={str(service.state)!r})
 service._route = lambda *a, **k: SpawnPlan((next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.2-sol-medium'),), (), 'test', (), ())
@@ -189,17 +195,17 @@ raise SystemExit(cli.main(['--supervise']))
         return children[-1]
     monkeypatch.setattr(cli, '_start_supervisor', supervisor)
     card = dict(estimate_tokens=100, lane_branch='lane/resume', continuation=True)
-    started = time.monotonic()
     try:
         assert cli.main(['spawn', '--card', json.dumps(card), '--run-worktree', 'Implement a tested change']) == (2 if stale else 0)
-        assert time.monotonic() - started < 2.5
         record = json.loads(capsys.readouterr().out)
         assert record['status'] == ('refused' if stale else 'running')
         if stale:
             assert record['reason'] == 'base_stale: worktree_base_behind_origin'
         else:
             assert record['base_admitted'] is True
+            assert len(children) == 1 and children[0].poll() is None
     finally:
+        release.touch()
         for child in children:
             child.wait(timeout=10)
 class _Out(io.StringIO):
@@ -711,3 +717,94 @@ def test_admitted_spawn_leaves_the_callers_admission_clock_unset(repository, dis
         await asyncio.gather(*service.tasks.values(), return_exceptions=True)
         return base_fresh.ADMISSION_STARTED.get()
     assert asyncio.run(main()) is None
+
+
+def test_no_sub_five_second_wall_clock_assertions():
+    """Ratchet literal upper bounds on elapsed time in Python tests."""
+    import ast
+    from collections import defaultdict
+    from pathlib import Path
+
+    def measures_elapsed(expr):
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Sub):
+            expr = expr.left
+        if isinstance(expr, ast.Call):
+            return ast.unparse(expr.func).rsplit('.', 1)[-1] in {
+                'monotonic', 'perf_counter', 'time',
+            }
+        if isinstance(expr, ast.Subscript):
+            expr = expr.slice
+        name = ast.unparse(expr).rsplit('.', 1)[-1].strip("'\"")
+        return name in {'elapsed', 'waited', 'duration', 'elapsed_s', 'duration_s'}
+
+    def is_short_bound(comparison):
+        operands = [comparison.left, *comparison.comparators]
+        for left, op, right in zip(operands, comparison.ops, operands[1:]):
+            if isinstance(op, (ast.Gt, ast.GtE)):
+                left, right = right, left
+            elif not isinstance(op, (ast.Lt, ast.LtE)):
+                continue
+            if (isinstance(right, ast.Constant) and type(right.value) in (int, float)
+                    and 0 < right.value < 5 and measures_elapsed(left)):
+                return True
+        return False
+
+    class FindBounds(ast.NodeVisitor):
+        def __init__(self, path):
+            self.path = path
+            self.scope = []
+
+        def visit_FunctionDef(self, node):
+            self.scope.append(node.name)
+            self.generic_visit(node)
+            self.scope.pop()
+
+        visit_AsyncFunctionDef = visit_ClassDef = visit_FunctionDef
+
+        def visit_Assert(self, node):
+            for expr in ast.walk(node.test):
+                if isinstance(expr, ast.Compare) and is_short_bound(expr):
+                    depth = next((i + 1 for i, part in enumerate(self.scope)
+                                  if part.startswith('test_')), len(self.scope))
+                    name = '::'.join(self.scope[:depth]) or '<module>'
+                    matches[f'{self.path}::{name}'].append(expr.lineno)
+
+    tests = Path(__file__).resolve().parent
+    matches = defaultdict(list)
+    for path in sorted(tests.rglob('*.py')):
+        relative = path.relative_to(tests.parent).as_posix()
+        FindBounds(relative).visit(ast.parse(path.read_bytes(), filename=str(path)))
+
+    # Each entry is a known flake risk to convert to a deterministic assertion.
+    allowed = set('''\
+tests/hooks/test_redact_common.py::test_scans_stay_linear_on_hostile_lines
+tests/test_devstack_sh.py::test_dying_start_dev_child_fails_fast
+tests/test_e2e_teardown_reap.py::test_term_ignorer
+tests/test_fleet_msg.py::test_prober_answers_unreachable_peers_within_budget
+tests/test_jev_attempt_thread.py::test_hanging_jev_does_not_delay_production_decisions
+tests/test_jev_client.py::test_timeout_is_recorded_and_bounded
+tests/test_keeper_bus_fatal.py::test_fatal_before_on_fatal_wiring_exits_75
+tests/test_keeper_ready_scale.py::test_cold_read_builds_in_the_request_expired_read_serves_the_old_index
+tests/test_keeper_review_jev_shadow.py::test_a_failing_jev_never_changes_the_verdict_result
+tests/test_keeper_seat_clause_tier.py::test_adversarial_length
+tests/test_keeper_snapshot_writer.py::test_show_answers_during_a_fleet_build_of_7000_records
+tests/test_kg_export.py::test_slow_drip_response_hits_total_budget
+tests/test_m2b_anchor.py::test_silent_service_times_out_quickly
+tests/test_planner_jev_shadow.py::test_guarded_ok_timeout_and_error
+tests/test_planner_jev_shadow.py::test_timeout_is_bounded_and_reported_for_every_kind
+tests/test_prod_audit_detached.py::test_stalled_log_runtime_count_is_capped
+tests/test_prod_audit_safety.py::test_interpreter_startup_is_inside_deadline
+tests/test_prod_audit_safety.py::test_stalled_audit_is_bounded
+tests/test_redact_output_rules.py::test_unterminated_pem_scan_is_linear
+tests/test_review_jev_hook.py::test_a_bad_jev_never_blocks_plan_actions_or_changes_the_plan
+tests/test_spawn_cli.py::test_cli_wait_returns_after_the_dispatcher_died
+tests/test_spawner_quota_failfast.py::test_call_log_poll_is_time_bounded
+tests/test_spawner_remote_ps.py::test_wsl_query_deadline_holds_when_the_reader_never_drains_the_plan
+'''.splitlines())
+    unexpected = [f'{name} at lines {lines}' for name, lines in matches.items()
+                  if name not in allowed or len(lines) > 1]
+    stale = sorted(allowed - matches.keys())
+    assert not (unexpected or stale), (
+        f'Unexpected sub-five-second wall-clock assertions: {unexpected}\n'
+        f'Stale wall-clock allowlist entries: {stale}'
+    )
