@@ -122,7 +122,11 @@ pub(crate) fn prepare(
         }
     }
     let gitdir = git(&launch.cwd, &["rev-parse", "--absolute-git-dir"])?;
-    if !Path::new(&gitdir).join("fast-checks").join(&head).is_file() {
+    if !Path::new(&gitdir).join("fast-checks").join(&head).is_file()
+        && !pg_worker_core::worktree::fast_check_stamp(&launch.cwd, &head)
+            .map_err(|e| parameter(e.to_string()))?
+            .is_file()
+    {
         return Err(parameter("CLI review requires fast-checks stamp for HEAD"));
     }
     let dispatch = Dispatch::new(&launch.cwd, head, reference)?;

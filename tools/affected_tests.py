@@ -647,6 +647,7 @@ def main(root=None):
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--fleet-spawnd-prebuilt", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--collect-only", action="store_true", help="validate the unsharded selection without running tests")
     parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
@@ -716,7 +717,9 @@ def main(root=None):
         env["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(root / "src"), env.get("PYTHONPATH")) if part)
         start = time.monotonic()
-        if args.local and not args.collect_only and 'tests/test_fleet_snapshot.py' in plan['tests']:
+        fleet = (args.local and not args.collect_only
+                 and 'tests/test_fleet_snapshot.py' in plan['tests'])
+        if fleet and not args.fleet_spawnd_prebuilt:
             # Push preflight runs in a detached checkout, even when the writer
             # already built pg-spawnd in the worktree that launched the hook.
             print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
@@ -724,17 +727,23 @@ def main(root=None):
                 build = subprocess.run(
                     ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'pg-spawnd'],
                     cwd=root, env=env)
+                if build.returncode:
+                    return build.returncode
             except OSError as error:
-                print(f'CARGO FAIL: could not start the pg-spawnd build ({error})', file=sys.stderr)
+                print(f'CARGO FAIL: could not prepare pg-spawnd ({error})', file=sys.stderr)
                 return 1
-            if build.returncode:
-                return build.returncode
         if args.collect_only:
             env.pop("PYTEST_SHARD", None)
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
                     if not args.collect_only and importlib.util.find_spec("xdist") is not None else [])
         quiet = [] if args.loud else QUIET_FLAGS
         with affected_pytest() as (scratch, run_pytest):
+            if fleet:
+                staged = str(Path(scratch) / ('pg-spawnd.exe' if os.name == 'nt' else 'pg-spawnd'))
+                verify = subprocess.run([sys.executable, 'tests/_spawnd.py', staged], cwd=root, env=env)
+                if verify.returncode:
+                    return verify.returncode
+                env["PLANGRAPH_TEST_FLEET_SPAWND"] = staged
             if args.collect_only:
                 result = run_pytest([sys.executable, "-m", "pytest", *parallel, "--durations=30",
                                      "--collect-only",

@@ -554,3 +554,48 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
         .iter()
         .any(|a| a.as_str().is_some_and(|a| a.contains("pool_"))));
 }
+
+#[test]
+fn old_fast_worktrees_are_swept_only_when_idle_and_disposable() {
+    let (_tmp, repo, root) = fixture();
+    fs::write(repo.join(".git/info/exclude"), ".env\n").unwrap();
+    for name in ["idle-fast", "live-fast", "private-fast"] {
+        let tree = root.join(name);
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                tree.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        fs::create_dir(tree.join("target")).unwrap();
+        fs::write(tree.join("target/build"), [0; 128]).unwrap();
+    }
+    fs::write(root.join("private-fast/.env"), "valuable").unwrap();
+    let live = root.join("live-fast");
+    let mut child = Command::new("sleep")
+        .arg("60")
+        .current_dir(&live)
+        .spawn()
+        .unwrap();
+    let process_cwd = format!("/proc/{}/cwd", child.id());
+    let result = sweep_checked(
+        &repo,
+        &root,
+        &Guards::default(),
+        SystemTime::now() + Duration::from_secs(3 * 3600),
+        u64::MAX,
+        Thresholds::default(),
+        true,
+        |tree| Ok(!fs::read_link(&process_cwd)?.starts_with(tree)),
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let report = result.unwrap();
+    assert!(!root.join("idle-fast").exists(), "{report:?}");
+    assert!(live.join("target/build").is_file());
+    assert!(root.join("private-fast/.env").is_file());
+}

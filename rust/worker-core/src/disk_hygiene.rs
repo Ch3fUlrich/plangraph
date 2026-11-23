@@ -1,4 +1,7 @@
 //! Conservative cleanup of registered worktrees under an explicit root.
+#[path = "disk_fast_worktrees.rs"]
+mod fast_worktrees;
+
 use crate::host_command;
 use serde::Serialize;
 use std::{
@@ -173,26 +176,16 @@ fn collect_caches(root: &Path, path: &Path, caches: &mut Vec<PathBuf>) -> io::Re
     Ok(())
 }
 
-fn clean_caches(
-    path: &Path,
-    guards: &Guards,
-    now: SystemTime,
-    apply: bool,
-    report: &mut Report,
-    safe_to_remove: &impl Fn(&Path) -> io::Result<bool>,
-) -> io::Result<()> {
+fn disposable_caches(path: &Path, report: &mut Report) -> io::Result<Option<Vec<PathBuf>>> {
     let mut caches = Vec::new();
     collect_caches(path, path, &mut caches)?;
-    if caches.is_empty() {
-        return Ok(());
-    }
     if caches.iter().any(|p| {
         fs::symlink_metadata(p).map_or(true, |m| m.file_type().is_symlink() || !m.is_dir())
     }) {
         report
             .skipped
             .push(format!("{}: unsafe cache path", path.display()));
-        return Ok(());
+        return Ok(None);
     }
     let mut tracked_args = vec!["--literal-pathspecs", "ls-files", "--"];
     let relative: Vec<_> = caches
@@ -208,12 +201,12 @@ fn clean_caches(
     if !git(path, &["status", "--porcelain=v1", "--untracked-files=all"])?
         .trim()
         .is_empty()
-        || !git(path, &tracked_args)?.trim().is_empty()
+        || (!caches.is_empty() && !git(path, &tracked_args)?.trim().is_empty())
     {
         report
             .skipped
             .push(format!("{}: dirty or tracked cache", path.display()));
-        return Ok(());
+        return Ok(None);
     }
     // Enumerate only ignored non-cache data. --directory also emits untracked
     // ancestors of nested ignored caches (e.g. src/), so do not use it here.
@@ -236,6 +229,23 @@ fn clean_caches(
         report
             .skipped
             .push(format!("{}: ignored non-cache files", path.display()));
+        return Ok(None);
+    }
+    Ok(Some(caches))
+}
+
+fn clean_caches(
+    path: &Path,
+    guards: &Guards,
+    now: SystemTime,
+    apply: bool,
+    report: &mut Report,
+    safe_to_remove: &impl Fn(&Path) -> io::Result<bool>,
+) -> io::Result<()> {
+    let Some(caches) = disposable_caches(path, report)? else {
+        return Ok(());
+    };
+    if caches.is_empty() {
         return Ok(());
     }
     let (_, newest) = scan(path)?;
@@ -271,7 +281,7 @@ fn clean_caches(
     Ok(())
 }
 
-/// Reclaims ignored rebuildable data only. Worktree removal belongs to pg-reap.
+/// Reclaim unused caches under disk pressure and old disposable fast-check worktrees.
 pub fn sweep(
     repo: &Path,
     root: &Path,
@@ -315,9 +325,6 @@ pub fn sweep_checked(
         skipped: vec![],
         error: None,
     };
-    if free_bytes >= thresholds.cleanup_free_bytes {
-        return Ok(report);
-    }
     let listing = git(repo, &["worktree", "list", "--porcelain", "-z"])?;
     for (index, block) in listing.split("\0\0").filter(|s| !s.is_empty()).enumerate() {
         let fields: Vec<_> = block.split('\0').collect();
@@ -325,6 +332,14 @@ pub fn sweep_checked(
             continue;
         };
         let original = Path::new(original);
+        let fast = fields.contains(&"detached")
+            && original
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("-fast"));
+        if !fast && free_bytes >= thresholds.cleanup_free_bytes {
+            continue;
+        }
         let Some(path) = available_or_skip(original.canonicalize(), original, &mut report) else {
             continue;
         };
@@ -344,7 +359,19 @@ pub fn sweep_checked(
                 .push(format!("{}: protected", path.display()));
             continue;
         }
-        if let Err(error) = clean_caches(&path, guards, now, apply, &mut report, &safe_to_remove) {
+        let result = if fast {
+            fast_worktrees::remove_old_fast_tree(
+                repo,
+                &path,
+                now,
+                apply,
+                &mut report,
+                &safe_to_remove,
+            )
+        } else {
+            clean_caches(&path, guards, now, apply, &mut report, &safe_to_remove)
+        };
+        if let Err(error) = result {
             report.skipped.push(format!(
                 "{}: probe/cleanup unavailable: {error}",
                 path.display()

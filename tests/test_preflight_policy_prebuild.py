@@ -255,3 +255,43 @@ def test_an_unusable_cargo_lease_fails_the_build_by_name_and_the_other_checks_st
     assert "policy: 1 check(s) failed:" in out and "FAIL policy" in out
     assert ran.exists()                                  # an independent policy check still ran
     assert not log.exists()                              # cargo never ran
+
+
+def test_cargo_target_cap_counts_allocated_blocks_once_per_inode(tmp_path):
+    from plangraph.spawner.host_ready import cargo_target_size_gb
+
+    artifact = tmp_path / "artifact"
+    artifact.write_bytes(b"a" * 8192)
+    os.link(artifact, tmp_path / "hard-link")
+    os.link(artifact, tmp_path / "second-link")
+    sparse = tmp_path / "sparse"
+    with sparse.open("wb") as stream:
+        stream.truncate(1024 ** 3)
+    used = (artifact.stat().st_blocks + sparse.stat().st_blocks) * 512
+    assert cargo_target_size_gb(tmp_path) == used / (1024 ** 3)
+
+
+def test_lane_reuses_current_policy_binary_over_cap(rig, monkeypatch, capsys):
+    repo, log, seen = rig
+    script(repo / "ptools/skill-rules.py", "")
+    assert preflight.main(["--base", "HEAD", "--lane"], repo) == 0
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "0")
+    assert preflight.main(["--base", "HEAD", "--lane"], repo) == 0
+    assert log.read_text().count("build ") == 1
+
+
+def test_fast_gate_uses_source_keyed_policy_instead_of_unkeyed_cargo_run(rig, monkeypatch):
+    repo, log, seen = rig
+    script_path = repo / "tools/check_new_code_lang.py"
+    script_path.parent.mkdir(exist_ok=True)
+    shutil.copy(TOOLS / "check_new_code_lang.py", script_path)
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(shared_target(repo)))
+    monkeypatch.setenv("CLASS_SEARCH_BASE", "fixture-base")
+    monkeypatch.delenv("PG_POLICY_BIN", raising=False)
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS))
+    completed = preflight.subprocess.run([sys.executable, str(script_path)], cwd=repo,
+                                         text=True, capture_output=True)
+    assert completed.returncode == 0, completed
+    assert log.read_text().count("build ") == 1
+    assert seen.read_text().splitlines()[-1] == "--class-search --range fixture-base"
+    assert (preflight.policy_target(repo) / "debug/pg-policy").is_file()

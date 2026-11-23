@@ -66,14 +66,19 @@ or under 10 GB (decimal) free.
 `pg-disk-hygiene` reclaims ignored `target`, `rust/target`, `node_modules`, and
 nested `__pycache__` / `.pytest_cache` directories in eligible idle worktrees.
 Other ignored data, tracked cache files, dirty trees and protection records
-prevent reclaim. Worktree removal remains a separate `pg-worktree-sweep` step.
+prevent reclaim. Hygiene also removes detached `*-fast` worktrees after
+two hours without writes, including on disks above the cleanup threshold.
+It checks process references again before removing a tree and requires its
+commit to remain reachable from a Git ref.
 
 When every Cargo pool slot is leased, `plangraph fast-checks` waits up to 30 seconds
 for a slot. It reports exhaustion if every slot stays busy.
 
 Pre-push preflight also pins the shared target, disables incremental builds and
 holds its shared lease while Cargo runs. Cap checks run before and after each
-Cargo command. Native Codex launches pin the same target; briefs forbid private
+Cargo command. They count allocated blocks once per file inode. A non-Rust
+lane push with a current cached policy executable stages it under a read
+lease without invoking Cargo. Native Codex launches pin the same target; briefs forbid private
 targets. Continuous cap sampling in these two paths and exact-head fast-check
 stamps remain open.
 

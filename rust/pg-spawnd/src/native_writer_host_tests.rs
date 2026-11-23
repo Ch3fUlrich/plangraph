@@ -788,3 +788,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
 mod late_fixture;
 #[cfg(unix)]
 use late_fixture::*;
+
+#[cfg(target_os = "linux")]
+#[path = "native_writer_policy_tests.rs"]
+mod policy_gate;
