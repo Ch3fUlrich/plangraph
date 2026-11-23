@@ -525,7 +525,9 @@ def test_harness_units_supply_tool_resolution(tmp_path, monkeypatch):
     import shlex
 
     units = Path(__file__).resolve().parents[1] / 'deploy' / 'systemd'
-    direct = re.compile(r'^Exec\w*=\S*?(?:/|=)(?:codex|opencode|claude|agy|qodercli|node|npm|npx)(?:\s|$)')
+    direct = re.compile(
+        r'^Exec\w*=[@:\-+!]*(?:\S*/)?'
+        r'(?:codex|opencode|claude|agy|qodercli|gemini|qwen|node|npm|npx|pnpm|yarn|corepack)(?:\s|$)')
     covered = set()
     for unit in units.rglob('*.service*'):
         if not unit.is_file():
