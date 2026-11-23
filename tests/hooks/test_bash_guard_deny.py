@@ -15,7 +15,22 @@ substitution. Rows are (test id, command, substring of the deny message).
 """
 import shlex
 
+import pytest
+
 from bash_guard_support import MIB, cases, guard  # noqa: F401 (guard is a fixture)
+from bash_guard_helpers import run_bash
+
+
+@pytest.mark.parametrize('command', [
+    'codex exec -m gpt-6.1-sol',
+    'codex --model=gpt-6.1-terra-medium',
+    'env opencode run --model omniroute/cx-gpt-6.1-terra-xhigh',
+    'opencode run -momniroute/cx-gpt-6.1-sol',
+])
+def test_retired_model_launch_is_denied(command):
+    result = run_bash(command)
+    assert result.returncode == 2
+    assert 'model_retired' in result.stderr and 'gpt-6.2-sol' in result.stderr
 
 S2 = 'claude -p "$(id)"'            # shape 2: a one-shot claude whose prompt is expanded
 HD = "cat <<EOF\n`id`\nEOF\n"       # shape 1: an unquoted heredoc whose body runs `id`

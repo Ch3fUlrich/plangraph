@@ -518,11 +518,11 @@ def test_d6310_route_orders_low_risk_and_families():
 
     # Retired models absent from routes and rejected
     for leg in spawnable_legs():
-        assert 'gpt-6.1-sol' not in leg.id and 'gpt-6.1-sol' not in leg.model
+        assert 'gpt-6.1-' not in leg.id and 'gpt-6.1-' not in leg.model
         # D-6366: argon is a review leg only; no implement leg serves it.
         assert 'gemini-4-argon' not in leg.model or leg.roles == ('review',)
     assert not any('argon' in l.id for l in imp.legs)
-    for bad in ('omniroute/cx-gpt-6.1-sol-xhigh',):
+    for bad in ('omniroute/cx-gpt-6.1-sol-xhigh', 'gpt-6.1-terra', 'gpt-6.1-other'):
         assert is_retired(bad)
         with pytest.raises(RetiredModelError):
             check_retired(bad)

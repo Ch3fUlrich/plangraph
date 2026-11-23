@@ -127,8 +127,7 @@ WITH observations AS (
 SELECT model_id, effort, harness, score, score_se, n_runs, steps,
        cost_per_task_usd,
        tokens_per_task, CASE WHEN origin <> 'own' AND (
-           lower(model_id) LIKE '%gpt-6.2-sol%' OR lower(model_id) LIKE '%gpt-6.1-sol%'
-           OR lower(model_id) LIKE '%gpt-6.1-terra%' OR lower(model_id) LIKE '%gpt-6-luna%'
+           lower(model_id) LIKE '%gpt-6.2-sol%' OR lower(model_id) LIKE '%gpt-6-luna%'
            OR lower(model_id) LIKE '%mimo-v2.6%') THEN 1 ELSE imputed END AS imputed,
        effort_channel, index_version, source_url, source_date, source_record,
        measured_at, origin, legacy, verified_tok_per_s,

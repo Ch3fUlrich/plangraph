@@ -292,8 +292,6 @@ EXPLICIT_LEGS += tuple(
         claude_family=family == 'claude', roles=(), effort=effort,
         disabled='D-5696: capability evidence required')
     for id, harness, model, family, effort in (
-        ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
-        ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
         ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),
         ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 'high')))
 

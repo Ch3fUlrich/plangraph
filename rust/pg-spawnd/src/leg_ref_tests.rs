@@ -11,7 +11,7 @@ fn synthetic_34_mutations_suggest_or_refuse_never_autocorrect() {
         "cx-gpt-6-luna",
         "glm-5.3-flash-free",
         "omniroute/cx-gpt-6-luna",
-        "omniroute/cx-gpt-6.1-terra",
+        "omniroute/cx-gpt-6.2-sol",
         "omniroute/gc/grok-4.7",
         "omniroute/or-laguna-s-2.1-free",
         "omniroute/or-nemotron-3-super-free",

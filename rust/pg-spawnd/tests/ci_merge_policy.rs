@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory() as tmp:
     git('update-ref', 'refs/remotes/origin/main', base)
     path = pathlib.Path(tmp, '.github/workflows/tests.yml')
     path.parent.mkdir(parents=True)
-    for trailer, expected in [('Hand-Edit: fixture', 'hand-edit touches auth/door'), ('Writer: codex/gpt-6.1-sol-medium', 'gate edit without Gate-Edit')]:
+    for trailer, expected in [('Hand-Edit: fixture', 'hand-edit touches auth/door'), ('Writer: codex/gpt-6.2-sol-medium', 'gate edit without Gate-Edit')]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(trailer)
         git('add', '.')

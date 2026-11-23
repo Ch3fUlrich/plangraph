@@ -237,6 +237,8 @@ explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 D-6550 (rule 3.66) uses native Codex for the lead writer. Explicit model calls
 can still use the registered OpenCode gateway leg. Claude is eligible
 for automatic writer and review fallback when both GPT Sol and Hydrogen are rate-limited.
+D-6667 retires the GPT-6.1 family from leg selection and explicit model launches.
+Use `gpt-6.2-sol` for direct Codex launches.
 For native Codex, routing and launch admission check quota and availability independently
 of the OpenCode model listing.
 Missing models and inactive or unreachable providers keep their own skip reasons
