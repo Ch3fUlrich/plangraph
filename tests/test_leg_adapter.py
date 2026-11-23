@@ -196,10 +196,10 @@ def test_bounded_discovery_failure(monkeypatch, error):
 
 def test_refresh_recovers_without_failure_becoming_health(tmp_path):
     reader, _ = adapter(tmp_path, available=False)
-    assert reader('opencode-go/sample')['state'] == 'limited'
+    assert reader('opencode-go/sample') == dict(state='down', reason='provider_inactive', evidence=None)
     reader.clock = lambda: 61
     reader.provider.snapshot = lambda: (_ for _ in ()).throw(RuntimeError())
-    assert reader('opencode-go/sample')['state'] == 'limited'
+    assert reader('opencode-go/sample')['state'] == 'unknown'
     reader.clock = lambda: 122
     reader.provider.snapshot = lambda: {'opencode-go': SimpleNamespace(available=True, stale=False)}
     assert reader('opencode-go/sample')['state'] == 'ok'
@@ -283,7 +283,7 @@ def test_snapshot_refresh_keeps_error(tmp_path, error):
     reader.provider.snapshot = snapshot
     reader.clock = lambda: 61
     assert reader('opencode-go/sample') == dict(
-        state='limited', evidence=None,
+        state='unknown', evidence=None,
         reason=f'leg_state_snapshot_error: {type(error).__name__}: {error}')
     assert reader._states is previous  # stale health cannot mask a failed read
 

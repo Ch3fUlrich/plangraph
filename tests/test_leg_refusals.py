@@ -48,7 +48,12 @@ def test_listed_refusal_and_refresh(tmp_path, monkeypatch, model, line, enabled)
     reason = exit_outcome.fallthrough_reason(NS(leg_reader=reader), NS(model=model), job, record)
     assert reason
     assert len(notices) == 1
-    assert reader(model)['state'] == 'limited'
+    status = reader(model)
+    if enabled and line.startswith('Error: Model unavailable:'):
+        assert status['state'] == 'down'
+        assert status['reason'] == 'model_unavailable'
+    else:
+        assert status['state'] == 'limited'
     if enabled:
         clock[0] = 11
         assert reader(model)['state'] == 'ok'

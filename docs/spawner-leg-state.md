@@ -3,11 +3,15 @@
 Snapshot HTTP 401/403 responses are `auth_refused`, distinct from
 `OmniRouteUnreachable`. The diagnostic includes the validated management gateway
 URL, HTTP status, and caller's `PLANGRAPH_PRINCIPAL` (or `unknown` when unset),
-never the key or response body. The adapter retains its `limited` availability
-contract, with `auth_refused` evidence and a detailed reason. Auth refusal clears
+never the key or response body. The adapter returns `down` with
+`auth_refused` evidence and a detailed reason. Auth refusal clears
 cached successful health and bypasses transport retries and recovery probes. A model absent from `opencode models --standalone` (run without the management token variables) is `not_listed` and is returned before any model-run probe; a discovery that fails (timeout, missing binary) is a `leg_state_snapshot_error`, which keeps the retry-then-probe recovery.
 Routing candidates and saved run plans expose `auth_refused` and its evidence;
 an already planned leg records the detailed refusal in its attempt skip reason.
+
+A usable OmniRoute snapshot produces `provider_inactive` for an inactive
+provider and `unreachable` for an advertised model without a provider entry.
+A provider rate-limit window produces `limited` while its reset is in the future.
 
 `plangraph.spawner.leg_state` stores provider 429/402 responses in SQLite at
 `$XDG_STATE_HOME/plangraph/leg-state.sqlite` (default

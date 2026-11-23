@@ -39,7 +39,7 @@ def test_snapshot_auth_refused_gateway(monkeypatch, tmp_path, status):
         reader = LegAdapter(LegStateStore(tmp_path / 'state'), provider,
                             ['opencode-go/sample'], enabled=True)
         state = reader('opencode-go/sample')
-        assert state['state'] == 'limited'
+        assert state['state'] == 'down'
         assert state['reason'].startswith('auth_refused:')
         assert state['evidence'] == dict(kind='auth_refused', gateway_url=gateway,
                                          principal='reviewer', http_status=status)

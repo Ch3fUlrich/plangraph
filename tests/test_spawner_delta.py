@@ -38,7 +38,7 @@ def test_discovery_retries(monkeypatch):
     provider = SimpleNamespace(snapshot=lambda: {'provider': SimpleNamespace(stale=False, available=True)})
     clock = [0]
     adapter = LegAdapter(None, provider, enabled=True, clock=lambda: clock[0])
-    assert adapter.leg_status('provider/model')['state'] == 'limited'
+    assert adapter.leg_status('provider/model') == dict(state='down', reason='not_listed', evidence=None)
     clock[0] = 61
     assert adapter.leg_status('provider/model')['state'] == 'ok'
 

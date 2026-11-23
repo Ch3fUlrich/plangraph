@@ -475,16 +475,17 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
-    from plangraph.routing_support.leg_state import leg_key
-    def read_status(model):
-        return reader(model, now=now, account=card.get("account"), combo=card.get("combo"))
+    from plangraph.routing_support.leg_state import leg_key, routing_status
+    def read_status(model, **scope):
+        return routing_status(reader(model, now=now, account=card.get("account"),
+                                     combo=card.get("combo"), **scope))
 
     def _leg_status(leg_obj):
         # Sonnet's bare model is also the native Claude subscription identity.
         if leg_obj.harness == "agy" and leg_obj.model == REVIEW_SONNET:
             return read_status("agy/" + leg_obj.model)
-        st = read_leg_model(reader, leg_obj, leg_obj.model, now=now,
-                            account=card.get("account"), combo=card.get("combo"))
+        scope = {"harness": "codex"} if leg_obj.harness == "codex" else {}
+        st = read_leg_model(read_status, leg_obj, leg_obj.model, **scope)
         if leg_obj.harness == "agy" and "/" not in leg_obj.model:
             alt = read_status(leg_key(leg_obj))
             if unavailable(alt) and (not unavailable(st) or (alt.get('evidence') or {}).get('quota_scope') == 'account'):
@@ -497,7 +498,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
                              ("gemini-4-argon", REVIEW_ARGON_LOW),
                              ("claude-sonnet-5-5", REVIEW_SONNET))}
-    limited = {key for key, state in states.items() if unavailable(state)}
+    blocked = {key for key, state in states.items() if unavailable(state)
+               or (state["state"] == "unknown" and state.get("reason"))}
     def quota_limited(state):
         return state["state"] == "limited" and (state.get("evidence") or {}).get("kind") != "auth_refused"
 
@@ -505,13 +507,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     writer_model = next(leg.model for leg in DEFAULT_LEGS if leg.id == LEAD_WRITER)
     # D-6652 correction: the Sonnet writers serve only while the Codex lead is limited (429 or quota).
     codex_limited = native_implement and any(
-        quota_limited(read_status(key)) for key in (writer_model, LEAD_WRITER))
+        quota_limited(read_status(key, harness="codex")) for key in (writer_model, LEAD_WRITER))
     if native_implement and quota_limited(quota_states["agy:gemini-4-hydrogen"]):
         claude_quota_fallback = any(
-            quota_limited(read_status(key)) for key in (writer_model, LEAD_WRITER, REVIEW_GPT))
+            quota_limited(read_status(key, harness="codex"))
+            for key in (writer_model, LEAD_WRITER, REVIEW_GPT))
     # D-6652: the Claude review seat only when both required OpenCode seats are out of the route.
     required_seats_out = native_review and not any(
-        leg.id in REVIEW_REQUIRED and leg.id not in limited and leg.family not in excluded
+        leg.id in REVIEW_REQUIRED and leg.id not in blocked and leg.family not in excluded
         and not policy.skip_reason(leg, role) for leg in candidates)
 
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
@@ -526,15 +529,19 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
     for leg in candidates:
         row = benchmark_for_leg(rows, leg)
-        reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        status = states[leg.id]
+        state_reason = status["state"] if leg.id in blocked else None
+        if state_reason in ("down", "unknown"):
+            state_reason = status.get("reason") or state_reason
+        if leg.id in blocked and (status.get("evidence") or {}).get("kind") == "auth_refused":
+            state_reason = "auth_refused"
+        reason = policy.skip_reason(leg, role) or state_reason
         if (not reason and (native_implement or native_review) and leg.claude_family
                 and not (native_implement and leg.id in SONNET_WRITERS and codex_limited)
                 and not (native_implement and leg.id not in SONNET_WRITERS and claude_quota_fallback)
                 and not (native_review and leg.id == REVIEW_SONNET and (sensitive_review or required_seats_out))):
             reason = ("claude_requires_codex_limited" if native_implement and leg.id in SONNET_WRITERS
                       else "claude_requires_gpt_and_hydrogen_limits")
-        if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
-            reason = 'auth_refused'
         if reason == 'limited' and leg.harness == 'agy':
             reason = agy_limit_reason(leg_key(leg), states[leg.id]) or reason
         if reason == 'limited':
@@ -579,7 +586,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         "claude_requires_codex_limited",
         "repository_review_tools_unavailable", "benchmark_unmeasured", "opencode_tools_denied")}
     try:
-        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
+        route = route_card(card, legs=candidates, unavailable=blocked | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
