@@ -12,7 +12,7 @@ ADMISSION_STARTED = ContextVar('admission_started', default=None)
 def _git_env():
     from .prompt_input import checkout_env
     return checkout_env()
-def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
+def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD', *, conflict_base=None):
     repo = os.fspath(repo)
     def git(*args, check=True):
         return subprocess.run(['git', '-C', repo, *args], env=_git_env(), check=check,
@@ -41,6 +41,12 @@ def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
                 git('fetch', '-q', 'origin', refspec)
             fetching = False
         origin = git('rev-parse', '--verify', 'refs/remotes/origin/' + default + '^{commit}').stdout.strip()
+        if conflict_base is not None:
+            admitted, observed = conflict_base
+            if git('merge-base', '--is-ancestor', admitted, observed, check=False).returncode:
+                return result
+            if origin == observed:
+                origin = admitted
         base = git('rev-parse', '--verify', '--end-of-options', str(ref) + '^{commit}').stdout.strip()
         behind = int(git('rev-list', '--count', base + '..' + origin).stdout.strip())
         result.update(origin_sha=origin, base_sha=base, behind=behind)
@@ -125,11 +131,54 @@ def _decision_waives(decision, check):
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         return False
 
+def _native_review_base(service, record, card):
+    """Read the owning writer's exact-head evidence, outside the submitted card."""
+    from .item_key import native_writer_review
+    run_id = native_writer_review(card)
+    diff = card.get('diff_ref')
+    if not run_id or record.get('role') != 'review' or not isinstance(diff, dict):
+        return None
+    try:
+        writer = service.result(run_id)
+    except (AttributeError, OSError, ValueError):
+        return None
+    if (writer.get('run_id') != run_id or writer.get('run_kind') != 'native-codex'
+            or writer.get('role') != 'implement' or writer.get('status') != 'running'
+            or writer.get('base_admitted') is not True or writer.get('overflow_remote')
+            or writer.get('origin_receipt')):
+        return None
+    review = writer.get('review_base') or {}
+    checks = writer.get('fast_checks') or {}
+    previous = writer.get('review') or {}
+    head, base = diff.get('head'), review.get('base')
+    if not all(isinstance(sha, str) and re.fullmatch(r'[0-9a-f]{40}', sha)
+               for sha in (head, base, review.get('main'), review.get('observed_main'))):
+        return None
+    delta = previous.get('head') if previous.get('verdict') == 'REQUEST_CHANGES' else None
+    if (head != writer.get('final_head') or head != review.get('head')
+            or checks != {'head': head, 'status': 'passed'}
+            or base != writer.get('base_sha')
+            or diff.get('base') not in (base, delta) or not diff.get('base')
+            or review.get('mode') not in ('current', 'rebased', 'conflict')):
+        return None
+    if not all(isinstance(path, str) and os.path.isabs(path)
+               for path in (diff.get('repo'), writer.get('repo'))):
+        return None
+    if os.path.normcase(os.path.realpath(diff['repo'])) != os.path.normcase(os.path.realpath(writer['repo'])):
+        return None
+    return review
+
 async def admit_base(service, record, card, *, launch=False):
     """Check the worker checkout and any reviewed diff at both admission boundaries."""
     card = card or {}
     repo = record.get('review_source') or record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
-    result = await asyncio.to_thread(base_fresh, repo)
+    native = await asyncio.to_thread(_native_review_base, service, record, card)
+    if native is not None:
+        conflict = (native['main'], native['observed_main']) if native['mode'] == 'conflict' else None
+        result = await asyncio.to_thread(_check, card['diff_ref']['repo'], default='main',
+                                         ref=native['head'], conflict_base=conflict)
+    else:
+        result = await asyncio.to_thread(base_fresh, repo)
     decision = card.get('base_decision')
     decisions = {}
     async def accepted(check):
@@ -143,7 +192,7 @@ async def admit_base(service, record, card, *, launch=False):
             decisions[key] = await asyncio.to_thread(_decision_waives, decision, check)
         return decisions[key]
     diff = card.get('diff_ref') if record.get('role') in ('review', 'judge') else None
-    if await accepted(result) and diff is not None:
+    if native is None and await accepted(result) and diff is not None:
         diff_repo = diff.get('repo') or repo
         same_repo = os.path.normcase(os.path.realpath(diff_repo)) == os.path.normcase(os.path.realpath(repo))
         # The cached check reuses the worker check's refs, so it also reuses its resolved default branch.
@@ -152,6 +201,8 @@ async def admit_base(service, record, card, *, launch=False):
         if not await accepted(reviewed):
             result = reviewed
     if await accepted(result):
+        if native is not None:
+            record['review_base'] = dict(native)
         record['base_sha'] = card['base_sha'] = result['origin_sha']
         record['checked_base_sha'] = card['checked_base_sha'] = result.get('base_sha')
         record['card'] = dict(card)
