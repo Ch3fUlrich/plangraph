@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, io::Write};
 
+// The watchdog settles this input-specific failure. CLI and I/O errors stay retryable.
+const UNPROJECTABLE_EXIT: i32 = 3;
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Rejected {
@@ -106,13 +109,16 @@ fn route(plan: &Value, chosen: &Value, native: bool) -> Result<Route, String> {
     }))
 }
 
-pub(crate) fn project(run: Value) -> Result<Value, String> {
-    if !run["ended"].is_number()
-        || matches!(
+pub(crate) fn terminal(run: &Value) -> bool {
+    run["ended"].is_number()
+        && !matches!(
             run["status"].as_str(),
-            None | Some("running" | "queued" | "dry_run" | "refused" | "stalled_no_leg")
+            None | Some("running" | "queued" | "queue_claimed" | "dry_run")
         )
-    {
+}
+
+pub(crate) fn project(run: Value) -> Result<Value, String> {
+    if !terminal(&run) {
         return Ok(Value::Null);
     }
     let last = run["attempts"].as_array().and_then(|rows| {
@@ -125,17 +131,20 @@ pub(crate) fn project(run: Value) -> Result<Value, String> {
                 && row["served_witness_reason"] != "leg refused before launch"
         })
     });
-    let native = run["run_kind"] == "native-codex" && run["requested_model"].is_string();
-    let native_leg = json!({"id":"native-codex","harness":"codex",
-        "model":run["requested_model"],"effort":run["effort"]});
+    let native = run["run_kind"] == "native-codex";
+    let harness = run["harness"]
+        .as_str()
+        .unwrap_or(if native { "codex" } else { "unwitnessed" });
+    let fallback = json!({
+        "id": if native { "native-codex" } else { run["leg"].as_str().unwrap_or(harness) },
+        "harness": harness, "model": run["requested_model"], "effort": run["effort"]
+    });
     let (leg, witness) = if let Some(last) = last {
         (&last["leg"], last)
-    } else if native {
-        (&native_leg, &run)
-    } else if (run["pid"].is_u64() || run["job_id"].is_string()) && run["chosen_leg"].is_object() {
+    } else if run["chosen_leg"].is_object() {
         (&run["chosen_leg"], &run)
     } else {
-        return Ok(Value::Null);
+        (&fallback, &run)
     };
     for name in ["run_id", "host", "role"] {
         if !run[name].as_str().is_some_and(|value| !value.is_empty()) {
@@ -152,20 +161,25 @@ pub(crate) fn project(run: Value) -> Result<Value, String> {
         (Some("completed" | "succeeded"), _) if run["exit_code"] == 0 => "ok",
         (Some("cancelled" | "killed"), _) => "cancelled",
         (Some("timeout" | "timed_out"), _) => "timeout",
-        (Some("stalled"), _) => "stall",
+        (Some("stalled" | "stalled_no_leg"), _) => "stall",
         (_, "usage_limit" | "credit_limit") => "usage_limit",
         (_, "outage" | "not_served_on_host") => "outage",
         (_, "check_fail") => "check_fail",
         (_, "writer_no_changes") => "no_change",
+        (Some("refused"), _) => "contract_defect",
         _ => "worker_crash",
     };
     Ok(json!({
         "attempt_id":run["run_id"], "role":run["role"], "host":run["host"],
         "card_key":run["item_key"].as_str().filter(|key| crate::records::valid_item(key)),
-        "harness":leg["harness"], "leg":leg["id"], "requested_model":leg["model"],
+        "harness":leg["harness"].as_str().unwrap_or(harness),
+        "leg":leg["id"].as_str().or_else(|| fallback["id"].as_str()),
+        "requested_model":leg["model"].as_str().or_else(|| run["requested_model"].as_str()),
         "served_model":witness["served_model"].as_str().unwrap_or("unwitnessed"), "effort":leg["effort"],
         "level":effort["level"], "level_reason":effort["reason"],
-        "bucket":effort["bucket"], "task_class":effort["task_class"], "risk_band":effort["risk_band"],
+        "bucket":effort["bucket"],
+        "task_class":effort["task_class"].as_str().or_else(|| run["task_class"].as_str()).unwrap_or("adhoc"),
+        "risk_band":effort["risk_band"],
         "plan_hash":crate::pyjson::card_hash(plan), "route":route(plan, &leg["id"], native)?,
         "started":run["started"], "ended":run["ended"], "exit_class":exit_class,
         "tokens_in":witness["usage"]["input_tokens"], "tokens_out":witness["usage"]["output_tokens"],
@@ -179,7 +193,10 @@ pub(crate) fn execute(verb: &str, args: Vec<String>, out: &mut dyn Write) -> Res
     }
     let input = serde_json::from_reader(std::io::stdin().lock()).map_err(|e| e.to_string())?;
     let value = match verb {
-        "project-spawn-attempt" => project(input)?,
+        "project-spawn-attempt" => project(input).unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(UNPROJECTABLE_EXIT);
+        }),
         "validate-attempt-route" => json!(route_from_json(input)?),
         _ => return Err("unknown attempt command".into()),
     };

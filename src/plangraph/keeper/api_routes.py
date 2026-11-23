@@ -26,7 +26,7 @@ __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
               "answers", "progress", "changelog", "audit-meta", "metrics",
-              "jev_report", "write_context", "events", "attempts"}
+              "jev_report", "write_context", "events", "attempts", "spawn_attempt_coverage"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "claim_batch", "delegate", "heartbeat", "heartbeat_batch", "release",
                "add_evidence", "add_evidence_router", "incident", "submit", "verdict",

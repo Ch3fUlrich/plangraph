@@ -259,7 +259,8 @@ def deliver_event(state, event, *, now=None, interval=None, budget=None):
     Return true when the event is queued or its one-time stamp already exists.
     """
     from plangraph.spawner.private_io import atomic_write_private
-    once = event.get('kind') == 'completion' or event.get('rule') == 'stalled_no_leg'
+    once = event.get('kind') == 'completion' or event.get('rule') in (
+        'stalled_no_leg', 'spawn-attempt-coverage')
     if once:
         event = dict(event, event_id=hashlib.sha256(json.dumps(
             [event.get('run_id'), event.get('rule'), event.get('cancelled'),
@@ -302,6 +303,49 @@ def deliver_event(state, event, *, now=None, interval=None, budget=None):
         alert['kind'] = 'stall'
     atomic_write_private(stamp, json.dumps(alert))
     return True
+
+def attempt_coverage_tick(state, *, now=None):
+    """Evaluate one closed UTC day and advance the durable reporting cursor."""
+    from datetime import UTC, date, datetime, timedelta
+    from .notify import KeeperSink, inbox_lock
+    from .private_io import atomic_write_private
+    from .remote_ps import attempt_coverage_inputs, lifecycle_command
+
+    current = datetime.fromtimestamp(time.time() if now is None else now, UTC)
+    if current.hour == 0 and current.minute < 15:
+        return []
+    step = timedelta(days=1)
+    latest = current.date() - step
+    cursor = Path(state) / 'watchdog/attempt-coverage/next-day'
+    with inbox_lock(cursor):
+        try:
+            pending = date.fromisoformat(cursor.read_text(encoding='utf-8').strip())
+        except FileNotFoundError:
+            pending = latest
+            atomic_write_private(cursor, pending.isoformat() + '\n')
+        if pending > latest:
+            return []
+        day = pending.isoformat()
+        path = cursor.with_name(day + '.json')
+        next_day = (pending + step).isoformat() + '\n'
+        if path.exists():
+            atomic_write_private(cursor, next_day)
+            return []
+        keeper = KeeperSink()
+        inputs = attempt_coverage_inputs(state, day)
+        inputs['keeper'] = keeper.attempt_coverage(day)
+        report = json.loads(lifecycle_command(
+            state, 'attempt-coverage', input=json.dumps(inputs), text=True,
+            encoding='utf-8', errors='replace', capture_output=True).stdout)
+        findings = []
+        if report['below_threshold']:
+            event = dict(report, rule='spawn-attempt-coverage', kind='alert',
+                         recipient='routing', episode=day)
+            deliver_event(state, event)
+            findings.append(event)
+        atomic_write_private(path, json.dumps(report) + '\n')
+        atomic_write_private(cursor, next_day)
+        return findings
 
 def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""
@@ -402,7 +446,14 @@ def main(argv=None, *, hung_config=None):
         return
     # Completion delivery must not be blocked by an unavailable keeper.
     from .runner import spawn_service
+    recovery_findings = []
     if not args.dry_run:
+        if (state / 'run-lifecycle').exists():
+            from .remote_ps import lifecycle_command
+            try:
+                lifecycle_command(state, 'record-recover', stdout=subprocess.DEVNULL)
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                recovery_findings.append(dict(rule='run-lifecycle-recovery', reason=type(exc).__name__))
         spawn_service(state=state).retry_completions()
     budget = [max(1, int(probe_setting('PLANGRAPH_PROBE_MAX_PER_TICK', 25, 25))), 0]
     deliver = lambda e: deliver_event(state, e, budget=budget)
@@ -413,9 +464,15 @@ def main(argv=None, *, hung_config=None):
         _budget.reset(token)
     findings = tick(runs, [], lambda s: read_activity(state, s),
                     deliver=deliver, state=state, dry_run=args.dry_run, budget=budget, hung=hung, stuck=True)
+    findings.extend(recovery_findings)
     if not args.dry_run:
         from .notify import retry_spawn_attempts
         findings.extend(retry_spawn_attempts(state, runs))
+        if os.environ.get('PLANGRAPH_ATTEMPT_COVERAGE') == '1':
+            try:
+                findings.extend(attempt_coverage_tick(state))
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+                findings.append(dict(rule='spawn-attempt-coverage-unavailable', reason=type(exc).__name__))
     error = warning = None
     try:
         findings += tick([r for r in runs if r.get('status') in ('running', 'queued')],
