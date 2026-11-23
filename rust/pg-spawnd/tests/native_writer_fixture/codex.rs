@@ -83,6 +83,11 @@ else:
     subprocess.run(['git','add','writer.txt','writer-path'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','writer'], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}))
+    if 'quota marker' in prompt:
+        limit = "You've hit your usage limit. Upgrade to Pro, or try again at Nov 27th, 2026 8:24 PM."
+        print(json.dumps({'type':'error','message':limit}))
+        print(json.dumps({'type':'turn.failed','error':{'message':limit}}))
+        sys.exit(1)
 print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1000,'output_tokens':234}}))
 print('tokens used\n1,234')
 "#;

@@ -362,6 +362,25 @@ impl Driver for Host {
         self.git(&["push", "origin", &format!("{head}:{target}")])?;
         Ok(Some(target))
     }
+    fn record_quota(&mut self, limit: &crate::native_writer::quota::Limit) -> Result<(), String> {
+        let mut argv = vec![
+            "quota-result".into(),
+            "--model".into(),
+            WRITER_MODEL.into(),
+            "--harness".into(),
+            "codex".into(),
+            "--error".into(),
+            "Error: usage limit reached.".into(),
+        ];
+        if let Some(reset) = limit.reset_epoch {
+            argv.extend(["--reset-at".into(), reset.to_string()]);
+        }
+        match crate::adapter::Adapter(&self.state).run(&argv, std::time::Duration::from_secs(10)) {
+            Ok((0, _, _)) => Ok(()),
+            Ok((code, _, stderr)) => Err(format!("quota-result exit {code}: {stderr}")),
+            Err(_) => Err("quota-result adapter did not run".into()),
+        }
+    }
     fn pending_steer(&self, record: &Value) -> Result<Vec<crate::native_steer::Message>, String> {
         let directory = self
             .record_path

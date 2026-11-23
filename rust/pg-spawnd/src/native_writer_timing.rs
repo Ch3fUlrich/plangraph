@@ -27,6 +27,8 @@ pub(super) fn execute_turn(
     result.map_err(|e| {
         let code = if e.starts_with(pg_worker_core::host_readiness::SANDBOX_UNAVAILABLE) {
             2
+        } else if e.starts_with(super::quota::PREFIX) {
+            super::quota::EXIT
         } else {
             6
         };

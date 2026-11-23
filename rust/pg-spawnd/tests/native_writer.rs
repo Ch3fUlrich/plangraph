@@ -371,7 +371,7 @@ async def check():
     assert denied['status'] == 'refused' and denied['reason'].startswith('sandbox_unavailable:'), denied
     assert 'bwrap: setting up uid map: Permission denied' in denied['reason'], denied
     assert denied['manifest']['try_count'] == 1 and denied['review_rounds'] == 0, denied
-    for marker, tries, status in [('kill marker', 2, 'completed'), ('fail marker', 3, 'failed'), ('missing marker', 2, 'completed'), ('reject marker', 1, 'failed')]:
+    for marker, tries, status in [('kill marker', 2, 'completed'), ('fail marker', 3, 'failed'), ('missing marker', 2, 'completed'), ('reject marker', 1, 'failed'), ('quota marker', 1, 'failed')]:
         brief = 'brief marker ' + marker + ('\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n' if marker == 'reject marker' else '')
         with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
             retried = await admitted_spawn(service, dict(card=card, prompt=brief))
@@ -391,6 +391,12 @@ async def check():
             denied = subprocess.run([os.environ['NATIVE_BINARY'], 'steer-local', final['run_id'],
                 '--state', str(root/'state')], input='too late', text=True, capture_output=True)
             assert json.loads(denied.stdout)['error'] == 'native writer is finished', denied.stdout
+        elif marker == 'quota marker':
+            # A usage limit ends the run after that turn: no relaunch, booked, QUOTA status line.
+            assert final['result'] == 'QUOTA' and final['exit_code'] == 11, final
+            assert final['status_line'].startswith('QUOTA 2026-11-2'), final
+            assert final['quota_limited']['reset'] == 'Nov 27th, 2026 8:24 PM', final
+            assert final['final_head'] != final['base_sha'], final
         elif status == 'failed':
             assert final['result'] == 'BLOCKED' and final['exit_code'] == 9, final
         else:
