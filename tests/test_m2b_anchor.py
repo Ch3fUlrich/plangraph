@@ -435,31 +435,39 @@ def test_unit_files_keep_the_sandbox():
 def test_reaper_anchors_under_the_server_lock_after_its_writes(tmp_path):
     """The reaper calls tick only while holding the server lock, after reap + snapshot (committed)."""
     from types import SimpleNamespace
-    from plangraph.keeper import api
+    from plangraph.keeper import api, snapshot_writer
     order = []
     lock = __import__("threading").RLock()
 
     class FakeAnchorer:
         def tick(self, conn):
             order.append(("tick", lock._is_owned()))
-    store = SimpleNamespace(reap=lambda p: order.append(("reap", lock._is_owned())), conn=None)
+    def reap(principal):
+        order.append(("reap", lock._is_owned()))
+        store._reap_revision = 1
+
+    store = SimpleNamespace(reap=reap, conn=None)
     server = SimpleNamespace(lock=lock, store=store, system=None, anchorer=FakeAnchorer(),
+                             snapshot_writer=None,
+                             snapshot_publication=SimpleNamespace(requested=0, latest=0),
                              config=SimpleNamespace(reap_interval=0.01, db=str(tmp_path / "k.db"),
                                                     snapshot=str(tmp_path / "s.json"), signing_key=None))
-    api_write = api.write_snapshot
-    api.write_snapshot = lambda srv, p: order.append(("snapshot", lock._is_owned()))
+    api_write = snapshot_writer.write_snapshot
+    snapshot_writer.write_snapshot = lambda srv, p: order.append(("snapshot", lock._is_owned()))
     try:
         reaper = api.Reaper(server)
         reaper.start()
         for _ in range(200):
-            if any(o[0] == "tick" for o in order):
+            if sum(o[0] == "tick" for o in order) >= 2:
                 break
             __import__("time").sleep(0.01)
         reaper.stop()
     finally:
-        api.write_snapshot = api_write
+        snapshot_writer.write_snapshot = api_write
     first = [o[0] for o in order][:3]
     assert first == ["reap", "snapshot", "tick"] and all(owned for _, owned in order[:3])
+    assert [o[0] for o in order][3:5] == ["reap", "tick"]
+    assert sum(o[0] == "snapshot" for o in order) == 1
 
 
 def test_silent_service_times_out_quickly(tmp_path, short_socket_dir):

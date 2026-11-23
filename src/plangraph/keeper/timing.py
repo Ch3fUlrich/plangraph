@@ -12,7 +12,8 @@ import time
 clock = time.monotonic
 THRESHOLD_MS = 250
 DEFAULT_CLAIM_PREFLIGHT_S = 30
-_LATENCY_VERBS = frozenset({"show", "claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
+_LATENCY_VERBS = frozenset({"show", "ready", "snapshot", "close_merged", "close_merged_auto",
+                            "claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
 _parts = ContextVar("keeper_timing_parts", default=None)
 _request_timer = ContextVar("keeper_request_timer", default=None)
 _io_deadline = ContextVar("keeper_io_deadline", default=None)
@@ -102,7 +103,7 @@ def outside_request_lock():
             _request_timer.reset(token)
 
 
-_fields = ("build_ms", "encode_ms", "sign_ms", "write_ms", "tick_ms", "record_ms", "submit_ms")
+_fields = ("build_ms", "encode_ms", "sign_ms", "write_ms", "tick_ms", "record_ms", "submit_ms", "fleet_ms")
 _events = {"request_timing", "writer_timing", "reaper_timing", "snapshot_timing",
            "changelog_timing"}
 
@@ -156,7 +157,7 @@ def _emit(event, kind, wait, hold, parts):
             return  # a failed clock sample leaves None and its line is dropped here
         verb = getattr(parts, "verb", None)
         if verb not in _LATENCY_VERBS and (event in {"snapshot_timing", "changelog_timing", "reaper_timing"}
-                or event == "request_timing" and kind in {"read", "write"}) and wait + hold < THRESHOLD_MS:
+                or event == "request_timing" and kind in {"read", "write"}) and max(wait + hold, parts.get("fleet_ms", 0)) < THRESHOLD_MS:
             return
         names = ("wait_ms", "hold_ms", *_fields)
         line = f"keeper: {event} kind={kind} " + " ".join(
@@ -183,6 +184,8 @@ class RequestTimer:
         self.verb = verb
 
     def acquire(self):
+        if self.lock is None:
+            return
         start = _sample()
         self.lock.acquire()
         self.held = _sample()
@@ -191,6 +194,8 @@ class RequestTimer:
 
     def release(self):
         end = _sample()
+        if self.lock is None:
+            return end
         self.lock.release()
         elapsed = _ms(self.held, end)
         self.hold_ms = None if elapsed is None or self.hold_ms is None else self.hold_ms + elapsed

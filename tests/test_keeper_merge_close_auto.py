@@ -1,5 +1,6 @@
 """MERGE-CLOSES-ITEMS-NO-AGENT-CALL: a merge into main closes its keeper items by code."""
 import json
+import os
 import subprocess
 
 import pytest
@@ -51,10 +52,10 @@ def seat_record(root, run, key, head, model="gemini-test"):
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path, monkeypatch, request):
     monkeypatch.setattr(auth, "_mint_token", iter(f"fixture-token-{i}" for i in range(99)).__next__)
     (tmp_path / "w").mkdir()
-    world = World(tmp_path / "w", backend="sqlite")
+    world = World(tmp_path / "w", backend=getattr(request, "param", "sqlite"))
     world.store.require_seats = True  # the seat tests below run with the gate on
     router = world.p("router")
     world.store.create_items(router, [defn(i) for i in "ABCPSNH"] + [
@@ -113,6 +114,9 @@ def test_merge_closes_open_claimed_and_in_review_items_without_a_router(env):
         assert item["reviewer"] == "system"
         kinds = env.conn.execute("SELECT kind, verified FROM evidence WHERE key=?", (key,)).fetchall()
         assert ("commit", 1) in [tuple(r) for r in kinds]
+        proof = env.store._evidence(key)[-1]["ref"]["prs"][0]
+        assert proof["merge_sha"] != proof["head"]
+        assert git(env.repo.root, "show", "-s", "--format=%P", proof["merge_sha"]).split()[1] == proof["head"]
     assert env.store.verify_integrity() == []
     assert result["merged_not_done"] == 0
     assert auto(env)["closed"] == []
@@ -120,6 +124,7 @@ def test_merge_closes_open_claimed_and_in_review_items_without_a_router(env):
 
 def test_a_plan_item_part_key_stays_open_and_unmerged_keys_are_not_listed(env):
     env.repo.land("p", "Plan-Item-Part: demo:P", 21)
+    part = git(env.repo.root, "rev-parse", "main")
     env.repo.land("x", "Plan-Item: demo:B", 22)
     to_in_review(env, "demo:N")
     result = auto(env, require_seats=False)
@@ -127,6 +132,12 @@ def test_a_plan_item_part_key_stays_open_and_unmerged_keys_are_not_listed(env):
     assert state(env, "demo:P")["state"] == "open"
     assert state(env, "demo:N")["state"] == "in_review"
     assert result["listed"] == []
+    assert result["parts"] == [{"key": "demo:P", "project": "demo", "pr": 21, "merge_sha": part}]
+    note = state(env, "demo:P")["note"]
+    assert part in note
+    auto(env, require_seats=False)
+    assert state(env, "demo:P")["note"] == note
+    assert env.store.verify_integrity() == []
 
 
 def test_a_sensitive_key_is_listed_with_its_reason_and_not_closed(env):
@@ -348,30 +359,72 @@ def test_a_warmed_scan_is_not_fetched_again_under_the_lock(env, monkeypatch):
     calls = []
     real = context_sources.work_index
     monkeypatch.setattr(context_sources, "work_index",
-                        lambda git, project, *, fresh=False, max_age=None, cached_only=False: calls.append(fresh) or real(git, project, fresh=fresh))
+                        lambda git, project, *, fresh=False, **kw:
+                        calls.append(fresh) or real(git, project, fresh=fresh, **kw))
     env.store.warm_merge_scan()
     assert calls == [True]
     result = auto(env, require_seats=False)
     assert calls == [True, False] and [c["key"] for c in result["closed"]] == ["demo:C"]
 
 
+@pytest.mark.parametrize("env", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(
+    not os.environ.get("PG_DSN"), reason="PG_DSN not set"))], indirect=True)
 def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_closes(env, tmp_path, monkeypatch):
+    import threading
     from door_util import Doors
+    from plangraph.keeper import api_routes
 
     set_states(env)
     env.repo.land("c", "Plan-Item: demo:C", 84)
+    tick = [100.0]
+    monkeypatch.setattr(api_routes, "monotonic", lambda: tick[0], raising=False)
     doors = Doors(env, tmp_path)
     held = []
-    real = env.store.warm_merge_scan
-    monkeypatch.setattr(env.store, "warm_merge_scan",
-                        lambda *a: held.append(doors.server.lock._is_owned()) or real(*a))
+    started = threading.Event()
+    unblock = threading.Event()
+    real = type(env.store).warm_merge_scan
+
+    def warm(store, candidates):
+        held.append(doors.server.lock._is_owned())
+        started.set()
+        assert unblock.wait(5)
+        return real(store, candidates)
+
+    monkeypatch.setattr(type(env.store), "warm_merge_scan", warm)
+    path = "/v1/close_merged_auto"
     try:
-        status, body = doors.http("system", "POST", "/v1/close_merged_auto", {"require_seats": False})
+        status, body = doors.http("system", "POST", path, {"require_seats": False})
+        assert status == 200 and body["closed"] == [] and not held
+        assert doors.http("l1main", "POST", path, {"refresh": "start"})[0] == 403
+        assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
+        assert started.wait(2)
+        assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "running"})
+        worker = next(thread for thread in threading.enumerate() if thread.name == "keeper-merge-index")
+        unblock.set()
+        worker.join(5)
+        assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "ready"})
+        assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "ready"})
+        status, body = doors.http("system", "POST", path, {
+            "require_seats": False, "limit": 1, "after": "demo:B"})
         assert status == 200 and [c["key"] for c in body["closed"]] == ["demo:C"]
-        assert held == [False]
-        assert doors.http("l1main", "POST", "/v1/close_merged_auto", {})[0] == 403
-        assert held == [False]  # a non-system caller never starts the fetch
+        assert body["next_after"] == "demo:C"
+        status, body = doors.http("system", "POST", path, {"after": body["next_after"]})
+        assert status == 200 and body["next_after"] is None
+        tick[0] += 300
+        assert doors.http("system", "POST", path, {}) == (
+            409, {"error": "conflict", "msg": "merge index expired; start a refresh"})
+        started.clear()
+        unblock.clear()
+        assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
+        assert started.wait(2)
+        worker = next(thread for thread in threading.enumerate() if thread.name == "keeper-merge-index")
+        unblock.set()
+        worker.join(5)
+        assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "ready"})
+        assert doors.http("system", "POST", path, {"apply": False})[0] == 200
+        assert held == [False, False]
     finally:
+        unblock.set()
         doors.close()
 
 
@@ -449,6 +502,10 @@ def test_a_lane_answer_is_per_origin_and_an_expired_warm_snapshot_asks_the_forge
     slug[0] = "o/open"    # the checkout's origin changed: the old forge's answer says nothing about the new one
     assert context_sources.open_lanes(adapter, "demo", "demo:C", cache=cache) == ["c-lane"]
     assert asked == ["o/closed", "o/open"]
+    run = subprocess.run
+    monkeypatch.setattr(subprocess, "run", lambda argv, *a, **kw:
+                        subprocess.CompletedProcess(argv, 0, "[]") if argv[0] == "gh"
+                        else run(argv, *a, **kw))
     # the API's run is frozen: warm, with the cache emptied (a tip that moved) the lane is unknown; unwarmed, the run refuses
     asked.clear()
     env.store.warm_merge_scan(env.store.merge_candidates())
@@ -476,19 +533,36 @@ class RecordingGit(GitAdapter):
         return super()._run(repo, args, **kw)
 
 
-def test_a_marker_that_outlives_the_cached_index_is_not_warm_and_nothing_is_fetched(env):
-    import time
-
+def test_an_old_index_at_the_current_tip_closes_without_a_fetch(env):
     set_states(env)
     env.repo.land("c", "Plan-Item: demo:C", 88)
     env.store.ctx["git"] = recorder = RecordingGit({"demo": str(env.repo.root)})
-    env.store.warm_merge_scan()
+    env.store.warm_merge_scan(env.store.merge_candidates())
     recorder.fetches.clear()
     for key, (stamp, index) in list(recorder._context_work_index.items()):
         recorder._context_work_index[key] = (stamp - 61, index)      # the index is 61 s old, the marker 0 s
     assert env.store._warm("demo")
     result = auto(env, require_seats=False, frozen=True)
-    assert result["closed"] == [] and "merge_index_not_warm" in result["listed"][0]["reason"]
+    assert [row["key"] for row in result["closed"]] == ["demo:C"]
+    assert recorder.fetches == []
+
+
+def test_a_marker_that_outlives_the_cached_index_is_not_warm_and_nothing_is_fetched(env):
+    """An advance of the default ref invalidates a published scan, whatever its age."""
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 88)
+    env.store.ctx["git"] = recorder = RecordingGit({"demo": str(env.repo.root)})
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    assert env.store._warm("demo")
+    recorder.fetches.clear()
+
+    env.repo.land("later", "Work after the cached tip", 89)
+    assert not env.store._warm("demo")
+    result = auto(env, require_seats=False, frozen=True)
+    assert result["closed"] == []
+    assert result["scan_errors"] == {"demo": "merge_index_tip_changed"}
+    assert any(row["key"] == "demo:C" and "merge_index_tip_changed" in row["reason"]
+               for row in result["listed"])
     assert recorder.fetches == []
 
 
@@ -612,3 +686,83 @@ def test_reverting_a_revert_restores_delivery_on_both_read_paths(env, monkeypatc
     assert commits() == ([delivery], [delivery])
     git(root, "revert", "--no-edit", "HEAD")
     assert commits() == ([], [])
+
+
+def test_a_failed_scan_reports_its_reason_over_http(env, tmp_path, monkeypatch):
+    from door_util import Doors
+
+    monkeypatch.setattr(type(env.store), "_refresh_merged_default_ref",
+                        staticmethod(lambda git, project: False))
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    doors = Doors(env, tmp_path)
+    try:
+        status, body = doors.http("system", "POST", "/v1/close_merged_auto", {"project": "demo"})
+        assert status == 200 and body["closed"] == []
+        assert body["scan_errors"] == {"demo": "merged_default_ref_refresh_failed"}
+        assert all("merged_default_ref_refresh_failed" in row["reason"] for row in body["listed"])
+    finally:
+        doors.close()
+
+
+@pytest.mark.parametrize("env", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(
+    not os.environ.get("PG_DSN"), reason="PG_DSN not set"))], indirect=True)
+def test_auto_close_continues_by_key_after_a_page_changes_state(env):
+    env.repo.land("a-page", "Plan-Item: demo:A", 91)
+    env.repo.land("b-page", "Plan-Item: demo:B", 92)
+    first = auto(env, project="demo", require_seats=False, limit=1)
+    assert [row["key"] for row in first["closed"]] == ["demo:A"]
+    assert first["next_after"] == "demo:A"
+    second = auto(env, project="demo", require_seats=False, limit=1, after=first["next_after"])
+    assert [row["key"] for row in second["closed"]] == ["demo:B"]
+
+
+def test_refresh_reads_only_new_commit_history(env, monkeypatch):
+    from plangraph.keeper import context_sources
+
+    env.repo.land("old", "Plan-Item: demo:A", 93)
+    adapter = env.store.ctx["git"]
+    previous = context_sources.work_index(adapter, "demo", fresh=True, incremental=True)
+    env.repo.land("new", "Plan-Item: demo:B", 94)
+    read = []
+    real = adapter._run
+
+    def track(repo, args, **kw):
+        result = real(repo, args, **kw)
+        if args[:2] == ["log", "--all"]:
+            read.append((args, result.stdout))
+        return result
+
+    monkeypatch.setattr(adapter, "_run", track)
+    index = context_sources.work_index(adapter, "demo", fresh=True, incremental=True)
+    assert len(read) == 1 and "^" + previous["target"] in read[0][0]
+    assert "Plan-Item: demo:A" not in read[0][1]
+    assert [context_sources.indexed_work(index, f"demo:{key}")["commits"][0]["merge"]["pr"]
+            for key in "AB"] == [93, 94]
+    context_sources.work_index(adapter, "demo", fresh=True, incremental=True)
+    assert len(read) == 1
+
+
+def test_items_from_the_same_merge_share_immutable_proof_metadata(env, monkeypatch):
+    env.repo.land("two-keys", "Plan-Item: demo:A\nPlan-Item: demo:B", 95)
+    adapter = env.store.ctx["git"]
+    reads = []
+    real = adapter._run
+
+    def record(repo, args, **kwargs):
+        if args[:3] == ["show", "-s", "--format=%P%x20%cI"]:
+            reads.append(args[-1])
+        return real(repo, args, **kwargs)
+
+    monkeypatch.setattr(adapter, "_run", record)
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    result = auto(env, require_seats=False, frozen=True)
+    assert [row["key"] for row in result["closed"]] == ["demo:A", "demo:B"]
+    assert reads == [git(env.repo.root, "rev-parse", "main")]
+
+
+def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
+    git(env.repo.root, "commit", "--allow-empty", "-qm", "direct work\n\nPlan-Item: demo:A")
+    result = auto(env, require_seats=False)
+    assert result["closed"] == []
+    assert any(row["key"] == "demo:A" and "merged_pr_missing" in row["reason"]
+               for row in result["listed"])
