@@ -546,3 +546,19 @@ raise SystemExit(main(root=Path.cwd()))
     assert '"tests": ["tests/test_selected.py"]' in output
     assert "1 passed" in output
     assert elapsed < 300
+
+
+@pytest.mark.parametrize("ref,lane", [("lane/batch1-x", True), ("feat/x", True),
+                                      ("phase/x", False), ("main", False)])
+def test_lane_pushes_run_the_lane_preflight_like_the_fast_checks_dry_run(repo, tmp_path, ref, lane):
+    """LE-CARGO-CAP-BELOW-FULL-WORKSPACE-BUILD: refs/heads/lane/* gets --lane, the path a fast-checks dry run must mirror."""
+    r, base = repo
+    marker = tmp_path / "argv"
+    (r / "tools").mkdir(parents=True, exist_ok=True)
+    (r / "tools/preflight.py").write_text(
+        "import os, sys\nfrom pathlib import Path\n"
+        "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text(' '.join(sys.argv[1:]))\n")
+    head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
+    res = run_hook(r, [push_line(ref, head, base)], {"TEST_PREFLIGHT_MARKER": str(marker)})
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert ("--lane" in marker.read_text().split()) is lane

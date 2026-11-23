@@ -23,7 +23,14 @@ Spawned builds also use host-configured cache variables. See the sccache
 settings in [Worker disk rollout](worker-disks.md).
 Caller and per-worktree target overrides are replaced; children also receive
 `CARGO_INCREMENTAL=0`. The cache cap is
-`PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB, per slot, shared with the Rust pool). Over-cap busy hosts refuse a building role with
+`PLANGRAPH_CARGO_TARGET_CAP_GB`, else the host file `cargo-target-cap-gb` in the plangraph config directory
+(`$XDG_CONFIG_HOME/plangraph`, default `~/.config/plangraph`), else 32 GiB (per slot, shared with the Rust pool). The default sits above
+the measured size of one cold full-workspace debug test build (20.9 to 25.9 GB), so a pre-push or fast-checks run is not refused by its
+own build. After each run the post-run trim evicts build-script variants and incremental dirs untouched for an hour, oldest first,
+down to a watermark of 75% of the cap, and whole debug profiles only while the target is still over the cap; the newest variant of
+each crate and anything written within the hour stay. The disk guard (`pg-disk-hygiene --repo`) reports a main checkout's own
+`rust/target` and removes it once idle for an hour with no cargo running; the Bash guard refuses a cargo build in a main checkout
+unless `CARGO_TARGET_DIR` (or `--target-dir`) points outside it. Over-cap busy hosts refuse a building role with
 `cargo_target_cap`, which names the measured cache path. Native writer reviews use
 a disposable Cargo target alongside the exact-head checkout on a worker. The
 free-space floor applies to reviews, which are exempt from the shared cap. Idle hosts clear the shared cache before
