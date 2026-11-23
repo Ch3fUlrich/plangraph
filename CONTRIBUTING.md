@@ -59,6 +59,7 @@ A part (a batch waiting for a train) enters a train only after its own head pass
 
 `merge_batch build` requires a successful full Tests run on the exact head of
 each part that changes shared test execution, setup, fixtures, or workflows.
+This includes the Rust toolchain pin and shared deadline and process-group code.
 The part table shows the run ID. This requirement also applies with `--force-set`.
 
 Outside lane preflight, with sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned before a private target is created. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). Before any build preflight trims the shared target (over `PLANGRAPH_CARGO_TARGET_CAP_GB` it is removed; `cli-tests/<hash>` builds are kept to the newest `PLANGRAPH_CLI_TESTS_KEEP`, default 3, and 24 h), then builds pg-policy once into `policy-bin/<source hash>` of that target (equal sources share a warm build, different sources never share an artifact; the newest 3 are kept) and hands a private copy to the policy step as `PG_POLICY_BIN`, outside the 60-second check bound. See docs/TESTING.md.

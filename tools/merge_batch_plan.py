@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import fnmatch
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -305,10 +304,15 @@ def windows_report(st, head):
 
 
 RUNNER_PATHS = frozenset({
-    "pytest.ini", "requirements-ci.txt", "pyproject.toml",
+    "pytest.ini", "requirements-ci.txt", "pyproject.toml", "rust-toolchain.toml",
     "tools/affected_tests.py", "tools/ci_select.py", "tools/pgtest.py", "tools/preflight.py",
     "tools/dell_ci_jobs.py", "tools/dell_ci_run.py",
-    "rust/worker-core/src/run/group_unix.rs",
+    "src/plangraph/spawner/proc_kill.py", "src/plangraph/spawner/winjob.py",
+    "rust/worker-core/src/run/group.rs", "rust/worker-core/src/run/group_unix.rs",
+    "rust/worker-core/src/run/group_windows.rs", "rust/worker-core/src/run/supervise.rs",
+    "rust/worker-core/src/run/supervisor.rs", "rust/worker-core/src/stall.rs",
+    "rust/worker-core/src/stall/deadline.rs", "rust/worker-core/src/stall/unix.rs",
+    "rust/worker-core/src/stall/windows.rs",
 })
 
 
@@ -317,15 +321,10 @@ def runner_wide_path(path):
     parts = Path(path).parts
     if parts[-1] == "conftest.py":
         return True
-    if path in RUNNER_PATHS or path.startswith((
-            ".github/workflows/", "tests/fixtures/", "rust/test_support/",
-            "rust/worker-core/src/bin/pg-test-deadline.rs", "rust/worker-core/src/bin/test_deadline/")):
+    if path in RUNNER_PATHS or path.startswith((".github/workflows/", "tests/fixtures/", "rust/test_support/")):
         return True
     if parts[0] == "tests":
         return len(parts) == 2 and not parts[-1].startswith("test_")
-    if parts[0] == "tools":
-        return re.fullmatch(r"(?:test[-_](?:deadline|reap|runner)|(?:reap|run)[-_]tests?)(?:[-_].*)?",
-                            Path(parts[1]).stem) is not None
     return False
 
 

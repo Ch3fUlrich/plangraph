@@ -61,11 +61,20 @@ def test_build_refuses_a_part_the_predicate_refuses_and_force_set_logs_it(env, t
     assert "FORCE-SET: building despite part entry" in forced.stderr
 
 
-@pytest.mark.parametrize("path", ["tests/conftest.py", "tools/test_deadline.py", "app/feature.py"])
-def test_runner_wide_part_requires_full_ci_before_build(env, path):
+@pytest.mark.parametrize("path,runner_wide", [
+    ("tests/conftest.py", True),
+    ("tools/pgtest.py", True),
+    ("rust-toolchain.toml", True),
+    ("rust/worker-core/src/run/group_windows.rs", True),
+    ("rust/worker-core/src/run/supervise.rs", True),
+    ("rust/worker-core/src/stall/deadline.rs", True),
+    ("src/plangraph/spawner/proc_kill.py", True),
+    ("src/plangraph/planner/provider_stop.py", False),
+])
+def test_runner_wide_part_requires_full_ci_before_build(env, path, runner_wide):
     head = env.branch_pr(1, {path: "value = 1\n"})
     result = env.run("build", "--name", "runner-wide", "--prs", "1", "--force-set")
-    if path == "app/feature.py":
+    if not runner_wide:
         assert result.returncode == 0, result.stderr
     else:
         assert result.returncode == 1, result.stderr
