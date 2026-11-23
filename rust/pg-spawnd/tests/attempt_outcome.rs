@@ -275,10 +275,10 @@ delivered = []
 keeper = SimpleNamespace(url='fixture', token_file='fixture', spawn_attempt=delivered.append)
 with patch('plangraph.fleet_snapshot._projection_binary', return_value=sys.argv[2]):
     first = retry_spawn_attempts(state, runs, keeper=keeper)
-    second = retry_spawn_attempts(state, runs, keeper=keeper)
     assert [row['attempt_id'] for row in delivered] == ['run-new'], delivered
-    assert [row['run_id'] for row in first] == [run['run_id'] for run in legacy[:25]]
-    assert [row['run_id'] for row in second] == ['run-old-25']
+    assert [row['run_id'] for row in first] == [run['run_id'] for run in reversed(legacy[2:])]
+    second = retry_spawn_attempts(state, runs, keeper=keeper)
+    assert [row['run_id'] for row in second] == ['run-old-1', 'run-old-0']
     assert {row['reason'] for row in first + second} == {'unprojectable'}
     assert retry_spawn_attempts(state, runs, keeper=keeper) == []
 for run in legacy:
