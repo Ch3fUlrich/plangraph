@@ -2,7 +2,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(crate) fn resolve_state(
+pub fn resolve_state(
     flag: Option<&str>,
     env_lookup: impl Fn(&str) -> Option<OsString>,
 ) -> Result<PathBuf, String> {

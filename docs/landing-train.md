@@ -71,9 +71,11 @@ Run a hand-started train resolver from its worktree with
 host's configured shared target before launching it. The launcher validates
 that setting before it starts the writer.
 
-For a detached user unit, add `--unit NAME --result PATH` before `--`. Review
-jobs also pass `--review-output PATH`. The result records the child exit code,
-and the unit reports a stuck-work alert for a failed child or empty review.
+Use `--review` for a foreground review. For a detached user unit, add
+`--unit NAME --result PATH` before `--`; review units also pass
+`--review-output PATH`. Hand-run records the harness outcome in the host
+lifecycle journal. The unit result records the child exit code and reports
+a stuck-work alert for a failed child or empty review.
 
 ## A red train
 

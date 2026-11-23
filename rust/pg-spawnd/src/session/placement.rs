@@ -360,7 +360,7 @@ fn run_probe(command: &mut Command, seconds: u64) -> Option<String> {
         .flatten()
 }
 
-fn fs_hostname() -> String {
+pub(super) fn fs_hostname() -> String {
     let mut name = [0u8; 256];
     // SAFETY: name is writable for its full length.
     if unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) } != 0 {
