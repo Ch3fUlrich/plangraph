@@ -370,7 +370,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name in inbox.routes.READ_VERBS:
             return inbox.routes.read(store, principal, name, query), False
         if name == "attempts":
-            return store.spawn_attempts(principal, self._one(query, "since", "1d")), False
+            return store.spawn_attempts(principal, self._one(query, "since", "1d"), scope=self._one(query, "scope")), False
         if name == "ready":
             n = None if self._one(query, "all") else self._int(self._one(query, "n", 10), "n")
             mine = str(self._one(query, "mine")).lower() in ("1", "true")   # MCP sends "True"
