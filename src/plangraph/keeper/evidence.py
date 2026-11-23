@@ -791,7 +791,7 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
         semaphore=SemaphoreAdapter(),
         decisions=DecisionsAdapter(_cfg(config, "decisions_file"), from_origin=True),
         claude_projects_dir=_cfg(config, "claude_projects_dir"),
-        spawner_records=SpawnerRecordAdapter(_cfg(config, "spawner_records_dir")),
+        spawner_records=SpawnerRecordAdapter.for_keeper(_cfg(config, "spawner_records_dir"), _cfg(config, "runs_dir")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
         merge_principals=_principals(_cfg(config, "merge_principals")),
