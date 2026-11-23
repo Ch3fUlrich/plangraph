@@ -1,5 +1,8 @@
 //! Create systemd environment files without replacing operator configuration.
 use super::Env;
+
+#[path = "host_sync_quota.rs"]
+mod quota;
 use std::{
     ffi::OsString,
     fs,
@@ -69,6 +72,7 @@ fn install(family: &str, home: &Path) -> io::Result<()> {
             }
             create(&config.join("disk-hygiene.env"), content.as_bytes())
         }
+        "quota-alarms" => quota::install(home, &config.join("quota-alarms.env")),
         "keeper-backup" => create(
             &config.join("keeper-backup.env"),
             include_bytes!("../../../deploy/systemd/keeper-backup.env.example"),

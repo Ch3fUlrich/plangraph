@@ -167,3 +167,12 @@ run `host-sync --install-env keeper-backup`. It creates the mode-0600 env file
 from the empty connection fields in `keeper-backup.env.example`. The approved
 key-placement session supplies the database credentials before the backup
 unit is verified or enabled.
+
+
+On the OmniRoute gateway host, run `host-sync --install-env quota-alarms`.
+The installer uses `QUOTA_SNAPSHOT_DB` when supplied, then an explicitly
+configured `OMNIROUTE_DATA_DIR`, then the host mount backing `/app/data`
+when `QUOTA_GATEWAY_CONTAINER` is set. For an unmanaged local gateway it
+looks in `~/.omniroute` and `${XDG_DATA_HOME:-$HOME/.local/share}/omniroute`.
+It verifies that `storage.sqlite` can supply quota snapshots and reports the
+searched paths on failure. The service opens the selected file read-only.
