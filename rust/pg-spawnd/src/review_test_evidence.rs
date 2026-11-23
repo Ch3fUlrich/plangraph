@@ -3,6 +3,11 @@ pub(crate) fn tests_line(text: &str) -> Option<&str> {
     test_report(text).map(|(_, body)| body)
 }
 
+pub(crate) fn required(leg: &serde_json::Value) -> bool {
+    leg["id"] == "claude-sonnet-5-5-high"
+        || (leg["harness"] == "claude" && leg["model"] == "claude-sonnet-5-5-high")
+}
+
 fn test_report(text: &str) -> Option<(std::ops::Range<usize>, &str)> {
     let mut fence: Option<(u8, usize)> = None;
     let mut report = None;
@@ -46,6 +51,15 @@ pub(crate) fn set_tests_line(mut text: String, line: &str) -> String {
 
 pub(crate) fn reported(text: &str) -> Option<&str> {
     tests_line(text).filter(|report| {
+        let lower = report.to_ascii_lowercase();
+        if lower.contains("requires approval")
+            || lower.contains("not permitted")
+            || lower
+                .split(|c: char| !c.is_ascii_alphabetic())
+                .any(|word| matches!(word, "denied" | "disallowed"))
+        {
+            return false;
+        }
         let mut words = report
             .split(|c: char| c == ':' || c.is_whitespace())
             .filter(|word| !word.is_empty());
@@ -91,6 +105,8 @@ mod tests {
         for text in [
             "VERDICT: ACCEPT\n",
             "TESTS: none: Bash denied\n",
+            "TESTS: pytest -q tests/test_fixture.py — permission denied\n",
+            "TESTS: cargo test -p fixture (requires approval)\n",
             "TESTS: NONE\n",
             "TESTS: not run (denied)\n",
             "TESTS: could not run any tests\n",

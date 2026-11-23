@@ -82,19 +82,10 @@ def model_family(model):
     found = {family for pattern, family in FAMILIES if re.search(pattern, name)}
     return found.pop() if len(found) == 1 else None
 
-def parse_verdict(text):
-    """Return (ok, index_of_line) from the LAST ``VERDICT:`` line, else (None, -1).
-
-    Only that line decides.  A template echo such as ``VERDICT: pass | fix`` or
-    an unknown first word yields no verdict; earlier lines are never consulted.
-    ``REQUEST_CHANGES`` reads as fix and ``ACCEPT`` as pass.
-    """
-    lines = (text or "").splitlines()
-    # r3: VERDICT lines inside ``` fences or starting with ">" (quoted template
-    # echoes) never decide; the last remaining line keeps the last-line rule.
+def _review_lines(text):
+    """Yield numbered review lines outside quoted examples and fenced blocks."""
     fence = None
-    found = None
-    for idx, raw in enumerate(lines):
+    for idx, raw in enumerate((text or "").splitlines()):
         if fence is not None:
             close = _FENCE_CLOSE_RE.match(raw)
             if close and close.group(1)[0] == fence[0] and len(close.group(1)) >= fence[1]:
@@ -106,6 +97,31 @@ def parse_verdict(text):
             continue
         if raw.lstrip().startswith(">"):
             continue
+        yield idx, raw
+
+
+def _reported_tests(text):
+    report = ""
+    for _, raw in _review_lines(text):
+        line = raw.lstrip(" ")
+        if len(raw) - len(line) < 4 and line.startswith("TESTS:"):
+            report = line.removeprefix("TESTS:").strip()
+    return bool(report) and not re.search(
+        r"^(?:(?:i|we)\s+)?(?:none|no|not|skipped|untested|unavailable|unable|cannot|"
+        r"(?:could|can|did)\s+not|(?:couldn|can|didn)['’]t)\b|"
+        r"\b(?:denied|disallowed|not permitted|requires approval)\b",
+        report, re.I)
+
+
+def parse_verdict(text):
+    """Return (ok, index_of_line) from the LAST ``VERDICT:`` line, else (None, -1).
+
+    Only that line decides.  A template echo such as ``VERDICT: pass | fix`` or
+    an unknown first word yields no verdict; earlier lines are never consulted.
+    ``REQUEST_CHANGES`` reads as fix and ``ACCEPT`` as pass.
+    """
+    found = None
+    for idx, raw in _review_lines(text):
         match = _VERDICT_LINE.match(raw)
         if match:
             found = (match, idx)
@@ -376,6 +392,10 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     if ok is None:
         print("seat_verdict: no parseable VERDICT line", file=sys.stderr)
         return EXIT_NO_VERDICT
+    if ok and re.match(r"claude-sonnet-5-5(?:$|[-@])", str(model).rsplit("/", 1)[-1],
+                       re.I) and not _reported_tests(text):
+        print("seat_verdict: pass refused (Sonnet review tests unavailable)", file=sys.stderr)
+        return EXIT_PASS_REFUSED
     gaming = evidence.get("test_gaming")
     if ok and (evidence.get("finish_reason") not in ("stop", "end_turn") or not isinstance(gaming, str)
                or gaming.strip().lower() != "no"):

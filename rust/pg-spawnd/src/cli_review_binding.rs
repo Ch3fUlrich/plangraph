@@ -58,18 +58,15 @@ impl Dispatch {
             .binding
             .as_ref()
             .and_then(|binding| binding["base_sha"].as_str());
-        let read_only =
-            launch.events.iter().flatten().any(|event| {
-                event.get("event").and_then(Value::as_str) == Some("sandbox_unavailable")
-            });
-        let range = base.filter(|_| !read_only).map_or_else(String::new, |base| {
+        let inline_diff = leg["harness"] == "claude";
+        let range = base.filter(|_| !inline_diff).map_or_else(String::new, |base| {
             format!(" Review the full diff using `git --no-replace-objects diff --no-ext-diff --no-textconv {base} {head} --`.")
         });
         let prompt = format!("{access}Read-only repository review of HEAD {head}.{range} Open callers and tests; never edit. Do not run background commands; wait for every command to finish before deciding. Name at least one reviewed path from the diff or a file:line in your review. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{original}");
-        let Some(base) = base.filter(|_| read_only) else {
+        let Some(base) = base.filter(|_| inline_diff) else {
             return Ok(prompt);
         };
-        // Use the same exact commit pair as the binding when the seat cannot run git.
+        // Sonnet's Bash policy is scoped to tests. Supply the bound diff directly.
         let child = diff_command(&launch.cwd)
             .args(["--patch", "--submodule=short", base, head, "--"])
             .spawn()
