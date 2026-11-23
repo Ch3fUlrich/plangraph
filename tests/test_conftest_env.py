@@ -267,3 +267,30 @@ def test_pytest_shards_balance_recorded_durations(tmp_path, monkeypatch, shard_s
     shards = [shard_selector(items, f'{index}/2') for index in range(2)]
     assert [[item.nodeid for item in shard] for shard in shards] == [['a', 'd'], ['b', 'c', 'e']]
     assert [sum(timings[item.nodeid] for item in shard) for shard in shards] == [12, 12]
+
+
+@pytest.mark.parametrize(('now', 'mode', 'expected'), [
+    ('2026-11-24T09:00:00+00:00', 'blocking', ['test_regular']),
+    ('2026-11-24T09:00:00+00:00', 'quarantine', ['test_flaky']),
+    ('2026-11-25T09:00:00+00:00', 'blocking', ['test_regular', 'test_flaky']),
+    ('2026-11-25T09:00:00+00:00', 'quarantine', []),
+])
+def test_pytest_quarantine_expires(tmp_path, now, mode, expected):
+    import json
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from _split_ci_environment import quarantine_items
+
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({
+        'test_flaky': {
+            'owner': 'plangraph:FIX-THE-FLAKE',
+            'starts': '2026-11-23T09:00:00+00:00',
+            'expires': '2026-11-25T09:00:00+00:00',
+        }
+    }))
+    items = [SimpleNamespace(nodeid=nodeid) for nodeid in ['test_regular', 'test_flaky']]
+    selected, active = quarantine_items(items, ledger, mode, datetime.fromisoformat(now))
+    assert [item.nodeid for item in selected] == expected
+    assert active == ({'test_flaky': 'plangraph:FIX-THE-FLAKE'} if now.startswith('2026-11-24') else {})
