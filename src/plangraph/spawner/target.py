@@ -90,3 +90,17 @@ def resolve_target(target, *, chosen=None):
         admit_leg(leg)
         target = leg.model
     return target, leg
+
+
+def resolve_launch_target(target, *, chosen=None):
+    """Resolve the local harness for a launch without an already selected leg."""
+    if chosen is not None:
+        return resolve_target(target, chosen=chosen)
+    model, leg = resolve_target(target)
+    if leg is None or leg.family != 'gpt' or leg.harness != 'codex':
+        return model, leg
+    from plangraph.planner.legs import resolve_harness
+    choice = resolve_harness(leg)
+    if choice.leg is None:
+        raise SpawnRefused('client_missing: ' + leg.id)
+    return choice.leg.model, choice.leg
