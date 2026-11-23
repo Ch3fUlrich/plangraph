@@ -228,6 +228,9 @@ and environment template they read. Add an explicit test case in
 filenames joined to a deployment directory by a helper. `rust/pg-spawnd/` and
 `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
 Python files executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
+The scheduled review probe test imports `src/plangraph/planner/__init__.py` and embeds
+`deploy/systemd/plangraph-review-probe.service` to exercise its `ExecStart` command.
+Both paths select Rust CI through `RUST_INPUTS`.
 The router liveness installation test selects Rust CI when its deployed config or watchdog changes.
 `skills/router-core/SKILL.md` selects Rust CI because the batch CLI tests check its command examples; `tests/fixtures/replan_slice_definition.json` does because the spawner's replan test asserts it.
 `ci_select.RUST_WORKER_INPUTS` lists inputs that also select the standalone
