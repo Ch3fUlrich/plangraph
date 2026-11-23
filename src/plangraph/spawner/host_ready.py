@@ -141,6 +141,7 @@ def worktree_disk_root():
 def cargo_target_size_gb(path):
     # Do not follow links into another cache or repository.
     total = 0
+    seen = set()
     if not path.exists():
         return 0
     def unreadable(exc):
@@ -152,7 +153,13 @@ def cargo_target_size_gb(path):
             entry = Path(root) / name
             if not entry.is_symlink():
                 try:
-                    total += entry.stat().st_size
+                    stat = entry.stat(follow_symlinks=False)
+                    if stat.st_nlink > 1 and stat.st_ino:
+                        inode = (stat.st_dev, stat.st_ino)
+                        if inode in seen:
+                            continue
+                        seen.add(inode)
+                    total += stat.st_blocks * 512 if hasattr(stat, 'st_blocks') else stat.st_size
                 except FileNotFoundError:
                     pass  # Cargo renames and unlinks temporary files during builds.
     return total / (1024 ** 3)
