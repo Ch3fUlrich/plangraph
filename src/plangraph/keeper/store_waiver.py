@@ -623,9 +623,8 @@ class WaiverMixin:
     # --- the automatic merge close (MERGE-CLOSES-ITEMS-NO-AGENT-CALL) ---
     # Reads the default ref once per repository, takes every unfinished item a
     # merge named by ``Plan-Item`` and closes it by the same proofs as the router
-    # verb minus the GO row: the merge itself is the authority. ``Plan-Item-Part``
-    # trailers name no item, so a part key stays open; an auth/secrets card and
-    # every refusal are returned in ``listed`` with their reason, never skipped.
+    # verb minus the GO row: the merge itself is the authority. Partial deliveries
+    # are annotated on their cards; every refused close is returned in ``listed``.
     AUTO_STATES = ("open", "claimed", "in_review")
 
     def close_merged_auto(self, principal, project=None, require_seats=None, apply=True, repos_only=False,
@@ -659,7 +658,7 @@ class WaiverMixin:
             raise Refused("validation", "limit must be an integer from 1 to 100")
         if after is not None and not isinstance(after, str):
             raise Refused("validation", "after must be an item key")
-        indexes, closed, listed, pending = {}, [], [], []
+        indexes, closed, listed, pending, parts = {}, [], [], [], []
         frozen = self.__dict__.get("_frozen_lanes")
         scan_errors = dict(self.__dict__.get("_merge_scan_errors", {})) if frozen else {}
 
@@ -693,16 +692,16 @@ class WaiverMixin:
                 hinted = None if (hinted, revision) == (item["project"], None) else hinted
                 if hinted and callable(scan) and hinted not in repos:
                     raise Refused("evidence_unverified", f"merge_repo_not_scanned: {hinted}")
-                if hinted:
-                    index_of(hinted)  # a hinted repository is held to the same warm-index rule
-                found = [hinted] if hinted else [
-                    p for p in self._scan_projects(item)
-                    if index_of(p) is not None and context_sources.indexed_work(index_of(p), key)["commits"]]
-                if hinted and not revision and not (index_of(hinted) and context_sources.indexed_work(
-                        index_of(hinted), key)["commits"]):
-                    continue
+                projects = [hinted] if hinted else self._scan_projects(item)
+                found = [p for p in projects if (index := index_of(p)) is not None
+                         and (revision or context_sources.indexed_work(index, key)["commits"])]
                 if not found:
-                    continue  # no merge names this item
+                    delivered = [{"key": key, "project": p, "pr": part["pr"], "merge_sha": part["sha"]}
+                                 for p in projects for part in context_sources.indexed_parts(indexes[p], key)]
+                    if apply and delivered:
+                        self._note_merged_parts(principal, item, delivered, indexes, now)
+                    parts.extend(delivered)
+                    continue
                 if len(found) > 1:
                     raise Refused("evidence_unverified",
                                   f"merge_repo_ambiguous: {', '.join(found)} (name one with Merge-Repo:)")
@@ -714,7 +713,30 @@ class WaiverMixin:
             (closed if apply else pending).append(result)
         return {"closed": closed, "would_close": pending, "listed": listed, "repos": repos,
                 "merged_not_done": len(pending) + len(listed), "require_seats": require_seats,
-                "next_after": next_after, "scan_errors": scan_errors}
+                "next_after": next_after, "scan_errors": scan_errors, "parts": parts}
+
+    def _note_merged_parts(self, principal, item, parts, indexes, now):
+        key = item["key"]
+        git = self._adapter("git")
+        with self._write():
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            if fresh["state"] not in self.AUTO_STATES or fresh["epoch"] != item["epoch"]:
+                raise Refused("conflict", f"{key} changed under the transaction")
+            for project in {part["project"] for part in parts}:
+                index = indexes[project]
+                if git.ref_commit(git.repo_path(project), index["ref"]) != index["target"]:
+                    raise Refused("conflict", "merge_index_tip_changed")
+            existing = fresh.get("note") or ""
+            lines = [f"Merged part: {p['project']} PR #{p['pr']} at {p['merge_sha']}" for p in parts]
+            added = [line for line in lines if line not in existing.splitlines()]
+            if added:
+                note = "\n".join([existing.rstrip(), *added]).lstrip("\n")
+                cursor = self.conn.execute(
+                    "UPDATE items SET note=?, updated_at=? WHERE key=? AND epoch=? AND state=?",
+                    (note, self._iso(now), key, fresh["epoch"], fresh["state"]))
+                self._race_guard(cursor, key, fresh["state"], fresh["epoch"])
+                self._append(principal, key, "item_defined", {"note": note}, now)
 
     def _auto_merge_candidates(self, project, after, limit):
         if limit is None:
@@ -797,9 +819,14 @@ class WaiverMixin:
         proofs = []
         # A Merge-Repo hint only names the repository: the item's own trailers and lanes decide.
         for commit in self._merged_work_commits(item):
-            pr, head, _ = self._merged_commit_proof(git, project, commit)
+            pr, head, date = self._merged_commit_proof(git, project, commit)
+            merge = commit.get("merge") or {}
+            sha = merge.get("sha")
+            if pr is None or not valid_commit_ref(sha):
+                raise Refused("evidence_unverified", "merged_pr_missing")
             if all(p["head"] != head for p in proofs):
-                proofs.append({"pr": pr, "head": head, "decision_id": None})
+                proofs.append({"pr": pr, "head": head, "decision_id": None,
+                               "merge_sha": sha, "merged_at": date})
         return proofs
 
     def waive_second_family(self, principal, key, decision_id):

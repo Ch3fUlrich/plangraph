@@ -113,6 +113,9 @@ def test_merge_closes_open_claimed_and_in_review_items_without_a_router(env):
         assert item["reviewer"] == "system"
         kinds = env.conn.execute("SELECT kind, verified FROM evidence WHERE key=?", (key,)).fetchall()
         assert ("commit", 1) in [tuple(r) for r in kinds]
+        proof = env.store._evidence(key)[-1]["ref"]["prs"][0]
+        assert proof["merge_sha"] != proof["head"]
+        assert git(env.repo.root, "show", "-s", "--format=%P", proof["merge_sha"]).split()[1] == proof["head"]
     assert env.store.verify_integrity() == []
     assert result["merged_not_done"] == 0
     assert auto(env)["closed"] == []
@@ -120,6 +123,7 @@ def test_merge_closes_open_claimed_and_in_review_items_without_a_router(env):
 
 def test_a_plan_item_part_key_stays_open_and_unmerged_keys_are_not_listed(env):
     env.repo.land("p", "Plan-Item-Part: demo:P", 21)
+    part = git(env.repo.root, "rev-parse", "main")
     env.repo.land("x", "Plan-Item: demo:B", 22)
     to_in_review(env, "demo:N")
     result = auto(env, require_seats=False)
@@ -127,6 +131,12 @@ def test_a_plan_item_part_key_stays_open_and_unmerged_keys_are_not_listed(env):
     assert state(env, "demo:P")["state"] == "open"
     assert state(env, "demo:N")["state"] == "in_review"
     assert result["listed"] == []
+    assert result["parts"] == [{"key": "demo:P", "project": "demo", "pr": 21, "merge_sha": part}]
+    note = state(env, "demo:P")["note"]
+    assert part in note
+    auto(env, require_seats=False)
+    assert state(env, "demo:P")["note"] == note
+    assert env.store.verify_integrity() == []
 
 
 def test_a_sensitive_key_is_listed_with_its_reason_and_not_closed(env):
@@ -703,3 +713,11 @@ def test_items_from_the_same_merge_share_immutable_proof_metadata(env, monkeypat
     result = auto(env, require_seats=False, frozen=True)
     assert [row["key"] for row in result["closed"]] == ["demo:A", "demo:B"]
     assert reads == [git(env.repo.root, "rev-parse", "main")]
+
+
+def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
+    git(env.repo.root, "commit", "--allow-empty", "-qm", "direct work\n\nPlan-Item: demo:A")
+    result = auto(env, require_seats=False)
+    assert result["closed"] == []
+    assert any(row["key"] == "demo:A" and "merged_pr_missing" in row["reason"]
+               for row in result["listed"])
