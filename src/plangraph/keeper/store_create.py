@@ -18,7 +18,7 @@ from .brief import creation_error, superseded_contract
 from .errors import Refused
 from .credential_guard import guard
 from .item_fixes import check_fix_limit
-from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_kg_refs, check_model_fields
+from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_kg_refs, check_model_fields, check_implementation_repo
 from .note_fold import fold_checked
 from .store_tiers import (
     REVIEW_TIERS,
@@ -206,6 +206,7 @@ class CreateMixin:
                                   "import only honours open/claimed/in_review")
         else:
             for definition in defs:
+                check_implementation_repo(definition)
                 check_named_review_model(definition, definition["key"])
                 check_seat_clause_tier(definition.get("done_criteria"),
                                        definition["review_tier"])
@@ -459,6 +460,8 @@ class CreateMixin:
             deps_derived = True
         edit_fields = dict(rest)
         self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
+        if "description" in edit_fields:
+            check_implementation_repo({**item, **edit_fields})
         check_named_review_model(edit_fields, key)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
         # audit-meta ``default`` marker keeps flagging the item forever.  An

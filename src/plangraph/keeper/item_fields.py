@@ -24,6 +24,26 @@ import re
 
 from .errors import Refused
 
+_HOW = re.compile(r"^[ \t]*How:[ \t]*(.*?)(?=^[ \t]*(?:Why|Done when|Checked against):|\Z)",
+                  re.M | re.S)
+_PATH = re.compile(r"(?<![\w./-])(?:\.\.?/)?(?:[\w.-]+/)+[\w.-]+")
+_EXTERNAL = re.compile(r"(?:\.\./|plangraph-data/|router/bin/|handoffs/|plan-order/helpers/)")
+_LOCAL_MODULE = re.compile(r"(?:plangraph/)?(?:src/plangraph|rust|tools|deploy)/[\w./-]+")
+
+
+def check_implementation_repo(item):
+    """A plangraph lane that cites outside code must name a local implementation target."""
+    if item["project"] != "plangraph" or item["kind"] != "lane":
+        return
+    how = _HOW.search(item.get("description") or "")
+    if not how:
+        return
+    paths = [path.removeprefix("./") for path in _PATH.findall(how[1])]
+    if any(_EXTERNAL.match(path) for path in paths) and not any(
+            _LOCAL_MODULE.fullmatch(path) and ".." not in path.split("/") for path in paths):
+        raise Refused("validation", f"{item['key']}: name the plangraph module or write a port item")
+
+
 HOST_CAP = 100
 _HOST = re.compile(r"[a-z0-9._-]+")
 
