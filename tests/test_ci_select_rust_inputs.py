@@ -41,6 +41,8 @@ def rust_repo_inputs(root):
             value = match["raw"] if match["raw"] is not None else match["plain"]
             if value is None:
                 continue  # comment
+            if "\n" in value and "include_" not in text[max(0, match.start() - 40):match.start()]:
+                continue  # an embedded script or message, never a path (also overlong for the OS)
             before = text[:match.start()]
             include = re.search(r'include_(?:str|bytes)!\s*\(\s*$', before)
             bases = [source.parent] if include else []
@@ -121,6 +123,16 @@ def test_schema_change_cli_outputs(tmp_path, monkeypatch, capsys):
     expected["full"] = "false"
     assert dict(line.split("=") for line in output.read_text().splitlines()) == expected
     assert capsys.readouterr().out == output.read_text()
+
+
+def test_multiline_literal_is_a_script_not_a_path(tmp_path):
+    # An embedded Python snippet made is_file() raise "File name too long" (CI).
+    source = tmp_path / "rust/sample/src/lib.rs"
+    source.parent.mkdir(parents=True)
+    (source.parent.parent / "Cargo.toml").write_text('[package]\nname = "sample"\n')
+    script = "import asyncio, json\n" + "from plangraph.spawner import build\n" * 400 + "../x"
+    source.write_text('fn f() { let _ = env!("CARGO_MANIFEST_DIR"); let _ = r#"' + script + '"#; }\n')
+    assert rust_repo_inputs(tmp_path) == {}
 
 
 def test_git_metadata_joined_onto_fixture_is_not_an_input(tmp_path):
