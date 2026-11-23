@@ -149,3 +149,39 @@ def test_a_standalone_manifest_test_command_survives_into_the_entry_commands(tmp
     commands = ci_select.entry_commands(plan, b, head, root)
     worker = [c for c in commands if c[:3] == ["cargo", "test", "--no-fail-fast"] and "--manifest-path" in c]
     assert worker and worker[0][-2:] == ["--lib", "--bins"], commands
+
+
+def test_the_entry_run_executes_workspace_and_standalone_nextest_commands(tmp_path, monkeypatch, capfd):
+    base_files = {
+        **BASE,
+        "rust/Cargo.toml": '[workspace]\nmembers = ["pg-spawnd"]\nexclude = ["worker"]\n',
+        "rust/.config/nextest.toml": "",
+        "rust/worker/Cargo.toml": '[package]\nname = "pg-worker"\n[workspace]\n',
+        "rust/worker/src/lib.rs": "",
+    }
+    root, base, head = tree(tmp_path, {
+        "rust/pg-spawnd/src/lib.rs": "// workspace change\n",
+        "rust/worker/src/lib.rs": "// standalone change\n",
+    }, base_files)
+    run = subprocess.run
+    cargo_calls = []
+
+    def fake_cargo(command, *args, **kwargs):
+        if command[0] != "cargo":
+            return run(command, *args, **kwargs)
+        assert kwargs["cwd"] == root / "rust"
+        cargo_calls.append(command)
+        return subprocess.CompletedProcess(command, int("--manifest-path" in command))
+
+    monkeypatch.setattr(subprocess, "run", fake_cargo)
+    assert ci_select.main(["entry-set", "--root", str(root), "--base", base, "--head", head, "--run"]) == 1
+    result = capfd.readouterr()
+    assert json.loads(result.out)["rust_packages"] == ["pg-spawnd"]
+    assert "entry-set: FAIL: cargo nextest run" in result.err
+    runner = ["cargo", "nextest", "run", "--config-file", str(root / "rust/.config/nextest.toml"),
+              "--no-fail-fast", "--color", "never"]
+    assert cargo_calls == [
+        ["cargo", "nextest", "--version"],
+        [*runner, "-p", "pg-spawnd"],
+        [*runner, "--manifest-path", str(root / "rust/worker/Cargo.toml"), "--lib", "--bins"],
+    ]

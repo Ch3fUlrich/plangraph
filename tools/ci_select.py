@@ -409,8 +409,8 @@ def entry_set(root, base: str, head: str) -> dict:
         except preflight.SkipFamily:
             commands = []
         for command in commands:
-            if command[:2] == ["cargo", "test"]:
-                rust_tests.append(command[2:])   # every selected test command, standalone manifests included
+            if command[:2] == ["cargo", "test"] or is_nextest(command):
+                rust_tests.append(preflight.with_no_fail_fast(command))
                 packages += [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
     return {"paths": paths, "suites": {k: v for k, v in suites.items()}, "python_tests": python_tests,
             "rust_packages": sorted(set(packages)), "rust_tests": rust_tests, "fallback": fallback, "windows": bool(suites["rust"])}
@@ -426,8 +426,9 @@ def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", ro
                          *(["--root", str(root)] if root else []), "--local", "--run"])
     tests = plan.get("rust_tests")
     if tests is None and plan.get("rust_packages"):
-        tests = [[arg for package in plan["rust_packages"] for arg in ("-p", package)]]
-    commands += [["cargo", "test", "--no-fail-fast", *arguments] for arguments in tests or []]
+        tests = [["cargo", "test", "--no-fail-fast",
+                  *(arg for package in plan["rust_packages"] for arg in ("-p", package))]]
+    commands.extend(tests or [])
     return commands
 
 
