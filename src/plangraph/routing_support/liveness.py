@@ -42,11 +42,14 @@ def read_leg_model(read, leg, model, **scope):
 def require_available(leg, reader, card):
     """Overrides cannot bypass the same state boundary used by routing."""
     from .leg_state import leg_status
+    from .quota_snapshots import skip_reason as quota_skip_reason
     from plangraph.planner.routing import SpawnRefused
     from .leg_state import leg_key as key
     read = getattr(reader, 'leg_status', reader) or leg_status
     model = key(leg)
     state = read_leg_model(read, leg, model, account=card.get('account'), combo=card.get('combo'))
     if unavailable(state):
-        reason = agy_limit_reason(model, state) if getattr(leg, "harness", None) == "agy" else None
+        reason = quota_skip_reason(state)
+        if reason is None and getattr(leg, "harness", None) == "agy":
+            reason = agy_limit_reason(model, state)
         raise SpawnRefused((reason or 'leg ' + (state.get('reason') or state['state'])) + ': ' + leg.id)

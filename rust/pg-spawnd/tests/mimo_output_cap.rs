@@ -260,7 +260,7 @@ async def run():
     try:
         job = await runner.spawn('Review', model_or_combo=request['model'],
             role=request.get('role', 'review'), reasoning_cap=request.get('reasoning_cap', False),
-            wait_seconds=2, extra_env={
+            client=request.get('client'), wait_seconds=2, extra_env={
                 'OPENCODE_CONFIG_CONTENT': json.dumps(request['config']),
                 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX': '17'})
         return dict(status=job.status, reason=job.stderr, events=job.events, calls=calls,
@@ -376,7 +376,8 @@ fn non_mimo_launch_preserves_its_model_config_and_existing_review_env_filter() {
     ] {
         let result = python(
             LAUNCH,
-            json!({"model": "omniroute/cx-gpt-6-luna", "config": before, "role": role, "reasoning_cap": reasoning_cap}),
+            json!({"model": "omniroute/cx-gpt-6-luna", "client": "opencode",
+                   "config": before, "role": role, "reasoning_cap": reasoning_cap}),
         );
         assert_eq!(result["status"], "completed", "{result}");
         let env = &result["calls"][0];
