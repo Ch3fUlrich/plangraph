@@ -25,6 +25,7 @@ use request::Request;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
+    borrow::Cow,
     io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -194,7 +195,7 @@ fn local(
         return Ok(2);
     }
     let prompt_path = Path::new(&args.prompt);
-    let supplied = || read_text(prompt_path);
+    let supplied = || read_writer_prompt(prompt_path);
     let prompt = match request
         .restart
         .as_ref()
@@ -222,6 +223,15 @@ fn local(
     }
     let style = read_text(&paths.ops.join("terse-style.txt")).unwrap_or_default();
     let style = style.trim_end_matches('\n');
+    let routing_style;
+    let style = if args.role == "routing" {
+        routing_style = format!(
+            "{style}\n\nInvoke the skill router-core at startup (skills/router-core/SKILL.md in the plangraph checkout). Follow its Batch mode procedure for multi-item router work."
+        );
+        &routing_style
+    } else {
+        style
+    };
     let _lock = if !args.dry && var("FLEET_DEFER_RECORD").as_deref() != Some("1") {
         match storage::role_lock(&paths.state, &args.role) {
             Ok(file) => Some(file),
@@ -377,4 +387,15 @@ fn local(
         writeln!(out, "fleet-launch: started-unknown {name}")?;
     }
     Ok(0)
+}
+
+fn read_writer_prompt(path: &Path) -> io::Result<String> {
+    let text = read_text(path)?;
+    match crate::batch_writer_brief::render(&text).map_err(io::Error::other)? {
+        Cow::Borrowed(_) => Ok(text),
+        Cow::Owned(brief) => {
+            const SKILL: &str = include_str!("../../../../skills/batch-writer/SKILL.md");
+            Ok(crate::role_header::compose("claude", &brief, Some(SKILL)))
+        }
+    }
 }

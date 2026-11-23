@@ -1,0 +1,20 @@
+PLANGRAPH-BATCH-INPUT-V1
+{
+  "items": [{
+    "key": "demo:FIXTURE",
+    "title": "brief marker",
+    "brief": "Why: shared launch fixture\nHow: exercise the launch boundary\nDone when: Run values are identical."
+  }],
+  "run": {
+    "name": "fixture-batch",
+    "worktree": "fixture-checkout",
+    "base": "1111111111111111111111111111111111111111",
+    "writer_family": "gpt",
+    "status_file": "fixture-status",
+    "fast_checks": ["git diff --check", "cargo fmt --check"],
+    "review_cmd": "fixture-review",
+    "review_wait_seconds": 60,
+    "round_cap": 3,
+    "trailers": ["Plan-Item: demo:FIXTURE", "Writer: fixture"]
+  }
+}

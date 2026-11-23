@@ -1,4 +1,6 @@
+use super::dry_run::ROUTER_CORE_APPEND;
 use super::sandbox::{Launcher, Sandbox, LOCAL, PROMPT, SID};
+use pg_spawnd::role_header::header;
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::os::fd::AsRawFd;
@@ -302,4 +304,59 @@ pub fn check_id_resolution(launcher: &Launcher) {
         Value::Null
     );
     assert!(!s.path("oom").exists() && !s.path("guard").exists());
+}
+
+pub fn check_router_prompt(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let out = s.launch("routing").output().unwrap();
+    s.expect(
+        &out,
+        0,
+        &format!("{SID}\nfleet-launch: session routing-0001\nfleet-launch: started {SID}\n"),
+        "",
+    );
+    let child = s.json("child.json");
+    let args = child["argv"].as_array().unwrap();
+    let system = args
+        .iter()
+        .position(|arg| arg == "--append-system-prompt")
+        .unwrap()
+        + 1;
+    let system = args[system].as_str().unwrap();
+    assert!(system.ends_with(ROUTER_CORE_APPEND), "{system}");
+    assert_eq!(args.last(), Some(&json!(PROMPT)));
+}
+
+pub fn check_batch_prompt(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    fs::write(
+        s.path("prompt"),
+        include_str!("../fixtures/batch-writer-input.txt"),
+    )
+    .unwrap();
+    let out = s.launch("writer").output().unwrap();
+    s.expect(
+        &out,
+        0,
+        &format!("{SID}\nfleet-launch: session writer-0001\nfleet-launch: started {SID}\n"),
+        "",
+    );
+    let child = s.json("child.json");
+    let prompt = child["argv"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let skill = include_str!("../../../../skills/batch-writer/SKILL.md");
+    assert!(
+        prompt.starts_with(&format!("{}\n\n{skill}", header("claude", "implement"))),
+        "{prompt}"
+    );
+    assert!(prompt.contains("\n# Items\n"), "{prompt}");
+    assert_eq!(
+        prompt.split_once("# Run values").map(|(_, run)| run),
+        include_str!("../fixtures/batch-writer-run-values.txt").strip_prefix("# Run values"),
+    );
 }

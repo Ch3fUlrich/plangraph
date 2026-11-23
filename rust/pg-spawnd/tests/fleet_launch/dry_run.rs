@@ -1,6 +1,9 @@
 use super::sandbox::{Launcher, Sandbox};
 use serde::Deserialize;
 use serde_json::json;
+use std::fs;
+
+pub(super) const ROUTER_CORE_APPEND: &str = "\n\nInvoke the skill router-core at startup (skills/router-core/SKILL.md in the plangraph checkout). Follow its Batch mode procedure for multi-item router work.";
 
 #[derive(Deserialize)]
 struct Case {
@@ -32,6 +35,15 @@ pub fn check(launcher: &Launcher) {
                     ""
                 },
             );
+        // Only the Rust launcher appends the router-core startup instruction.
+        let expected = if case.role == "routing" && matches!(launcher, Launcher::Rust(_)) {
+            let style = fs::read_to_string(s.path("router/ops/terse-style.txt")).unwrap();
+            let length =
+                style.trim_end_matches('\n').chars().count() + ROUTER_CORE_APPEND.chars().count();
+            expected.replace("<881 chars>", &format!("<{length} chars>"))
+        } else {
+            expected
+        };
         let stderr = format!(
             "fleet-launch: admission allowed\nfleet-launch: dry run: {settings} is written by the real launch (lean profile + both compact variables = {})\n",
             case.window

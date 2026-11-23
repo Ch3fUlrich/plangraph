@@ -217,10 +217,10 @@ systemd user scope. Use `affected` or `full` to measure each separately.
 Rust review record assertions run on every platform; keeper-backed assertions run only on Unix because the keeper imports POSIX `fcntl`.
 Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/measured_down.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well. `rust/plangraph-cli/src/runner/config.rs` tests parse `docs/operations/ci-runners.example.toml`, which is a `RUST_INPUTS` entry too. `rust/pg-spawnd/tests/ci_step_timeout.rs` reads `.github/actions/bounded-step/action.yml`, so that action file is a `RUST_INPUTS` entry as well. `rust/pg-spawnd/src/role_header.rs` embeds `src/plangraph/config/role_headers.json`, so that header table is a `RUST_INPUTS` entry too. `rust/pg-spawnd/src/round_progress_tests.rs` reads the round setting in `src/plangraph/settings.py`, so that file is a `RUST_INPUTS` entry as well.
 
-CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
-`RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
-select both `rust` and `rust-windows` via the shared `rust` output without changing
-other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
+`tools/ci_select.py` selects `rust` and `rust-windows` through the shared `rust`
+output for paths in `RUST_INPUTS`, including documentation under `docs/schemas/`.
+The Claude writer launcher embeds `skills/batch-writer/SKILL.md`, so edits to that
+skill also select Rust CI. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
 and environment template they read. Add an explicit test case in
