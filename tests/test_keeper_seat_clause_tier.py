@@ -130,8 +130,12 @@ def test_edit_escalation_uses_final_tier(world_like, fields):
     world = world_like
     key = _create(world)
     assert world.store._item(key)["review_tier"] == "standard"
-    world.store.edit_definition(world.p("router"), key,
-                                {"done_criteria": "two families approve", **fields})
+    world.store.edit_definition(world.p("router"), key, {
+        "done_criteria": "two families approve",
+        "criteria_reason": "Require an independent second review family",
+        "criteria_evidence": "D-123",
+        **fields,
+    })
     assert world.store._item(key)["review_tier"] == "high"
 
 
@@ -278,6 +282,8 @@ def test_description_edit_reports_the_superseded_contract(world_like):
         "description": "Use one counter per spawn plan v9.",
         "title": "Launch per spawn plan v9",
         "done_criteria": "Verify one counter as specified in spawn plan v9",
+        "criteria_reason": "Align the verification with the superseding plan",
+        "criteria_evidence": "spawn plan v9",
     })
     assert "warnings" not in corrected
     assert "stale" not in world.store.show(router, key, brief=True)
