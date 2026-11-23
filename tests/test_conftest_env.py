@@ -346,6 +346,64 @@ def test_pytest_deadline_reports_hang_and_keeps_running(tmp_path, parallel, phas
             command.wait(timeout=5)
 
 
+@pytest.mark.skipif(sys.platform != 'linux', reason='checks the thread-directed deadline signal')
+@pytest.mark.parametrize('parallel', [False, True])
+@pytest.mark.parametrize('patch', [
+    'monkeypatch.setattr(threading, "Thread", lambda *a, **k: object())',
+    'monkeypatch.setattr(threading.Thread, "daemon", property(lambda self: False, lambda self, value: 1 / 0))',
+    'monkeypatch.setattr(threading.Thread, "__init__", lambda self, *a, **k: None)',
+])
+def test_pytest_deadline_survives_tests_that_patch_threading(tmp_path, parallel, patch):
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text('pytest_plugins = ("_split_ci_environment",)\n')
+    (tmp_path / 'test_patch.py').write_text(
+        'import threading\n\n'
+        'def test_patches_threading(monkeypatch):\n'
+        f'    {patch}\n\n'
+        + ''.join(f'def test_after_{n}():\n    assert threading.Thread.__init__ is not None\n\n' for n in range(4)),
+    )
+    worker_args = []
+    if parallel:
+        pytest.importorskip('xdist')
+        worker_args = ['-p', 'xdist.plugin', '-n', '2', '--dist', 'load']
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *worker_args, str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert '5 passed' in output and 'error' not in output.lower(), output
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='checks the thread-directed deadline signal')
+def test_pytest_deadline_arming_failure_fails_only_that_test(tmp_path):
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text('pytest_plugins = ("_split_ci_environment",)\n')
+    (tmp_path / 'test_arm.py').write_text(
+        'import _split_ci_environment as plugin\n\n'
+        'def test_cannot_arm_teardown(monkeypatch):\n'
+        '    def refuse(*args):\n        raise RuntimeError("can\'t start new thread")\n'
+        '    monkeypatch.setattr(plugin, "_START_ALARM_THREAD", refuse)\n\n'
+        + ''.join(f'def test_after_{n}():\n    pass\n\n' for n in range(3)),
+    )
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert '4 passed, 1 error' in output, output
+    assert 'could not arm the test deadline' in output and 'INTERNALERROR' not in output, output
+
+
 @pytest.mark.parametrize('parallel', [False, True])
 def test_pytest_writes_shard_durations_through_conftest(tmp_path, parallel):
     import json
