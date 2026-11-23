@@ -170,7 +170,8 @@ def test_routed_spawn_diff_delivery(tmp_path, monkeypatch, mode, has_diff):
     seat.runner = SimpleNamespace(default_cwd=str(tmp_path))
     chosen = replace(DEFAULT_LEGS[0], tool_mode=mode)
     card = {'diff_ref': {'repo': str(tmp_path), 'base': 'base', 'head': 'head'}} if has_diff else {}
-    monkeypatch.setattr('plangraph.spawner.context_pack.pack_prompt', lambda p, *a: p)
+    monkeypatch.setattr('plangraph.spawner.context_pack.pack_prompt',
+                        lambda prompt, card, cwd, pack=None, *, review=False: prompt)
     monkeypatch.setattr('plangraph.spawner.inline_diff.subprocess.run',
                         lambda *a, **k: SimpleNamespace(returncode=0, stdout='+change\n', stderr=''))
     # Admission itself must never refuse; only inline prompt assembly requires a diff.
@@ -204,7 +205,8 @@ def test_diff_delivery(monkeypatch, harness, mode, inline):
     leg = replace(DEFAULT_LEGS[0], harness=harness, tool_mode=mode)
     card = {'diff_ref': {'repo': 'unused', 'base': 'base', 'head': 'head'}}
     calls = []
-    monkeypatch.setattr('plangraph.spawner.context_pack.pack_prompt', lambda p, *a: p)
+    monkeypatch.setattr('plangraph.spawner.context_pack.pack_prompt',
+                        lambda prompt, card, cwd, pack=None, *, review=False: prompt)
     def diff(prompt, ref, **kwargs):
         calls.append(ref)
         return prompt + '\nDIFF'
