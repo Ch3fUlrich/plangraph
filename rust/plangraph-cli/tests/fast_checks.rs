@@ -190,3 +190,25 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     assert!(String::from_utf8_lossy(&output.stdout)
         .contains("FAILED test_example.py::test_example - fixture failure"));
 }
+
+#[test]
+fn fast_checks_builds_spawnd_before_affected_tests() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(root)
+        .args([
+            "fast-checks",
+            "--plan",
+            "--files",
+            "rust/pg-spawnd/src/lib.rs",
+            "tests/test_fleet_snapshot.py",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let plan = String::from_utf8(output.stdout).unwrap();
+    let build = plan
+        .find("cargo build --locked --manifest-path rust/Cargo.toml -p pg-spawnd --bin pg-spawnd")
+        .expect(&plan);
+    assert!(build < plan.find("affected-tests:").expect(&plan), "{plan}");
+}
