@@ -2,7 +2,21 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
-use std::process::Command;
+use std::{fs, path::Path, process::Command};
+
+fn git(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
+        .env("GIT_COMMITTER_NAME", "Fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap().trim().into()
+}
 
 #[test]
 fn fast_checks_matches_ci_for_three_fixture_diffs() {
@@ -93,21 +107,6 @@ fn fast_checks_keeps_external_rust_inputs_in_a_mixed_diff() {
 
 #[test]
 fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
-    use std::{fs, path::Path};
-    fn git(root: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(args)
-            .env("GIT_AUTHOR_NAME", "Fixture")
-            .env("GIT_AUTHOR_EMAIL", "fixture@example.test")
-            .env("GIT_COMMITTER_NAME", "Fixture")
-            .env("GIT_COMMITTER_EMAIL", "fixture@example.test")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        String::from_utf8(output.stdout).unwrap().trim().into()
-    }
-
     let dir = tempfile::tempdir().unwrap();
     let cargo_cache = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -243,4 +242,57 @@ fn fast_checks_builds_spawnd_before_affected_tests() {
         .find("cargo build --locked --manifest-path rust/Cargo.toml -p pg-spawnd --bin pg-spawnd")
         .expect(&plan);
     assert!(build < plan.find("affected-tests:").expect(&plan), "{plan}");
+}
+
+#[test]
+fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    let cache = tempfile::tempdir().unwrap();
+    git(root, &["init", "-q"]);
+    let tools = root.join("tools");
+    fs::create_dir_all(tools.join("split")).unwrap();
+    for name in [
+        "split/scrub_check.py",
+        "check_file_size.py",
+        "check_new_code_lang.py",
+        "check_changelog_docs.py",
+        "ci_commit_gate.py",
+    ] {
+        fs::write(tools.join(name), "pass\n").unwrap();
+    }
+    fs::write(tools.join("ci_select.py"), "print('pytest=true')\n").unwrap();
+    fs::write(tools.join("affected_tests.py"),
+        "import os, pathlib, sys\nassert pathlib.Path.cwd() != pathlib.Path(os.environ['ORIGINAL_CHECKOUT'])\npathlib.Path('generated').write_text('test output')\nsys.exit(int(os.environ.get('FIXTURE_FAIL', '0')))\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "base"]);
+    let base = git(root, &["rev-parse", "HEAD"]);
+    let run = |fail: &str| {
+        Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .current_dir(root)
+            .args(["fast-checks", "--owned-worktree", "--base", &base])
+            .env("PLANGRAPH_CARGO_TARGET_DIR", cache.path().join("cargo"))
+            .env("ORIGINAL_CHECKOUT", root)
+            .env("FIXTURE_FAIL", fail)
+            .output()
+            .unwrap()
+    };
+    let before = git(root, &["worktree", "list", "--porcelain"]);
+    for fail in ["0", "1"] {
+        git(root, &["commit", "--allow-empty", "-qm", fail]);
+        let commit = git(root, &["rev-parse", "HEAD"]);
+        let output = run(fail);
+        assert_eq!(output.status.success(), fail == "0", "{output:?}");
+        assert_eq!(
+            root.join(".git/plangraph-state/fast-checks")
+                .join(&commit)
+                .is_file(),
+            fail == "0"
+        );
+        assert_eq!(
+            git(root, &["worktree", "list", "--porcelain"]).replace(&commit, &base),
+            before
+        );
+        assert!(!root.join("generated").exists());
+    }
 }
