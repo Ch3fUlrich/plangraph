@@ -183,7 +183,24 @@ def rust_path_dependencies(manifest, data, workspace_dir, workspace):
     return dependencies
 
 
-def rust_commands(root, base, head, env=None):
+def rust_test_runner(root, env):
+    config = root / 'rust/.config/nextest.toml'
+    if config.is_file():
+        try:
+            probe = subprocess.run(["cargo", "nextest", "--version"], cwd=root / "rust", env=env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=CHECK_TIMEOUT)
+            if probe.returncode == 0:
+                return ["cargo", "nextest", "run", "--config-file", str(config),
+                        "--no-fail-fast", "--color", "never"]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        print("rust: cargo-nextest unavailable; falling back to cargo test (no per-test deadline)",
+              file=sys.stderr, flush=True)
+    return ["cargo", "test"]
+
+
+def rust_commands(root, base, head, env=None, run_tests=True):
     root = root.resolve()
     try:
         changed = subprocess.check_output(
@@ -238,9 +255,7 @@ def rust_commands(root, base, head, env=None):
         if dependents <= selected:
             break
         selected.update(dependents)
-    config = root / 'rust/.config/nextest.toml'
-    test = (["cargo", "nextest", "run", "--config-file", str(config), "--no-fail-fast", "--color", "never"]
-            if config.is_file() else ["cargo", "test"])
+    test = rust_test_runner(root, env) if run_tests else ["cargo", "test"]
     packages = [arg for p in sorted(selected & manifests.keys()) for arg in ("-p", manifests[p])]
     commands = ([["cargo", "fmt", "--check"],
                  ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
@@ -636,7 +651,7 @@ def _main(argv, root, cleanup):
             try:
                 if commands is None:
                     rust_base = (args.scrub_base or args.base) if args.lane else args.base
-                    commands = rust_commands(root, rust_base, args.head, env)
+                    commands = rust_commands(root, rust_base, args.head, env, not args.lane)
                     if args.lane:
                         commands = lane_rust_commands(commands)
                 family_env = policy_env if family == "policy" else env
