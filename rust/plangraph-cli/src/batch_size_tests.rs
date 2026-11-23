@@ -13,6 +13,7 @@ fn item(key: &str, kind: &str, bytes: Option<u64>) -> Item {
         expected_bytes: bytes,
         text: Some(format!("Why: {key}\nHow: h\nDone when: d")),
         files: Vec::new(),
+        design_ref: None,
     }
 }
 fn input(writer: Writer, sizes: &[u64]) -> Input {
@@ -23,6 +24,7 @@ fn input(writer: Writer, sizes: &[u64]) -> Input {
             .enumerate()
             .map(|(i, b)| item(&format!("k{i}"), "lane", Some(*b)))
             .collect(),
+        design_roots: BTreeMap::new(),
         prior_part_files: Vec::new(),
         merged_bytes: BTreeMap::new(),
         limit_bytes: None,
@@ -318,4 +320,48 @@ fn a_module_already_planned_in_this_train_waits_for_the_next_train() {
     next_part["prior_part_files"] = serde_json::json!([]);
     let following_train = plan(&serde_json::from_value(next_part).unwrap());
     assert_eq!(following_train.keys, ["second", "third"]);
+}
+
+#[test]
+fn selected_design_files_are_embedded_verbatim_and_missing_refs_name_the_path() {
+    let root = tempfile::tempdir().unwrap();
+    let design = "  Contract input\r\n\nkeep trailing whitespace  \n";
+    std::fs::write(root.path().join("contract.md"), design).unwrap();
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "writer": {},
+        "items": [{"key": "demo:A", "kind": "lane", "text": "How: use the contract",
+                   "design_ref": "data:contract.md"}],
+        "design_roots": {"data": root.path()}
+    }))
+    .unwrap();
+    let plan = plan(&input);
+    assert!(brief(&input, &plan).unwrap().contains(design));
+    std::fs::remove_file(root.path().join("contract.md")).unwrap();
+    assert!(brief(&input, &plan)
+        .unwrap_err()
+        .contains("data:contract.md"));
+}
+
+#[test]
+fn unqualified_design_refs_require_the_items_project_root() {
+    let root = tempfile::tempdir().unwrap();
+    let design = "The project's design contract\n";
+    std::fs::write(root.path().join("Cargo.toml"), design).unwrap();
+    assert!(std::path::Path::new("Cargo.toml").is_file());
+    let mut input: Input = serde_json::from_value(serde_json::json!({
+        "writer": {},
+        "items": [{"key": "demo:A", "kind": "lane", "text": "How: use the contract",
+                   "design_ref": "Cargo.toml"}],
+        "design_roots": {"other": root.path()}
+    }))
+    .unwrap();
+    let plan = plan(&input);
+    let error = brief(&input, &plan).unwrap_err();
+    assert!(error.contains("Cargo.toml"));
+    assert!(error.contains("no design root configured for demo"));
+
+    input
+        .design_roots
+        .insert("demo".into(), root.path().to_path_buf());
+    assert!(brief(&input, &plan).unwrap().contains(design));
 }

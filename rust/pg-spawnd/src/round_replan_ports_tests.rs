@@ -301,6 +301,9 @@ fn the_generated_slice_definitions_match_the_golden_file_the_keeper_test_uses() 
     let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/replan_slice_definition.json");
     let items = json!({"items":exec.defined.borrow().clone()});
+    for item in items["items"].as_array().unwrap() {
+        assert_eq!(item["slice_parent"], item["under"]);
+    }
     if std::env::var_os("PG_WRITE_GOLDEN").is_some() {
         std::fs::write(
             &golden,

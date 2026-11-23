@@ -1,5 +1,5 @@
 """Contract 9: definition verbs (create/import/edit/priority/kind/rehome/legacy)."""
-from contract_world import claim, err, make_plan, ok, show, uid
+from contract_world import claim, err, head, make_plan, ok, show, uid
 
 
 def _item(tag, name="A", kind="lane", deps=(), project="demo", **extra):
@@ -88,8 +88,15 @@ def test_import_items_is_router_only_and_honours_legacy_state(kp):
 def test_edit_definition_rules(kp):
     plan = make_plan(kp, 2, chain=True)
     first, second = plan.lanes
+    before = show(kp, first)["done_criteria"]
+    event_head = head(kp)
+    err(kp.post("edit_definition", "lead", {"key": first, "fields": {
+        "done_criteria": "c2", "criteria_reason": "Cover the retry path"}}), 400, "validation")
+    assert show(kp, first)["done_criteria"] == before
+    assert head(kp) == event_head
     ok(kp.post("edit_definition", "lead", {"key": first, "fields": {
-        "title": "retitled", "description": "new text", "done_criteria": "c2"}}), "KeyOnly")
+        "title": "retitled", "description": "new text", "done_criteria": "c2",
+        "criteria_reason": "Cover the retry path", "criteria_evidence": "D-123"}}), "KeyOnly")
     row = show(kp, first)
     assert (row["title"], row["description"], row["done_criteria"]) == ("retitled", "new text", "c2")
     err(kp.post("edit_definition", "lead_other", {"key": first, "fields": {"title": "x"}}), 403, "forbidden")

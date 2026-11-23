@@ -140,7 +140,7 @@ worker that is not the recorded owner, a card whose observed state fails the liv
 |---|---|---|
 | `create_items(p, items)` | router (any project); l1 (own projects) | batch of definitions as `item_created` events (state `open`); whole batch validated with `views.validate` over existing+new (cycle, unknown dep, unreachable…) or refused atomically; optional per-item `under: <key>` attaches the gate → new edge in the same transaction (paragraph below) |
 | `import_items(p, items)` | router only | like `create_items`, but per-item `state` ∈ {open, claimed, in_review} is honoured (legacy rows, e.g. work already in flight): the item gets `item_created` plus a `claimed`/`submitted` event flagged `legacy: true` with `claimed_by` = the item's `owner` string (need not be a principal) and NO verified-evidence requirement; `done` is never importable; the router later attaches evidence (e.g. `decision`) via `add_evidence_router(p, key, kind, ref)` (router-only, state `in_review`/`claimed`, still runs the verifier) |
-| `edit_definition(p, key, fields)` | router; l1 own project | only while `open`; fields: title, description, host, estimate_h, estimate_src, done_criteria, evidence_kinds, depends_on, track, owner, note; `estimate_src` is a non-empty string (≤64 chars, credential-guarded) and needs a non-null `estimate_h`; clearing `estimate_h` (null) also clears `estimate_src`, and a non-null `estimate_src` together with a null `estimate_h` is refused; an `estimate_h` edit that omits `estimate_src` auto-fills it with the editing principal's name (one `estimate_src_auto` marker in the `item_defined` payload), so the item stops reading `default`; cross-project `depends_on` changes: router only; a `depends_on` entry naming a `cancelled` item is dropped from the list (result carries `warnings`, not a refusal); whole-graph validate; `item_defined` event |
+| `edit_definition(p, key, fields)` | router; l1 own project | only while `open`; fields: title, description, host, estimate_h, estimate_src, done_criteria, evidence_kinds, depends_on, track, owner, note. Changes to `done_criteria` require nonblank `criteria_reason` and `criteria_evidence` in `fields`. `estimate_src` is a non-empty string (≤64 chars, credential-guarded) and needs a non-null `estimate_h`; clearing `estimate_h` (null) also clears `estimate_src`, and a non-null `estimate_src` together with a null `estimate_h` is refused; an `estimate_h` edit that omits `estimate_src` auto-fills it with the editing principal's name (one `estimate_src_auto` marker in the `item_defined` payload), so the item stops reading `default`; cross-project `depends_on` changes: router only; a `depends_on` entry naming a `cancelled` item is dropped from the list (result carries `warnings`, not a refusal); whole-graph validate; `item_defined` event |
 | `set_priority(p, key, n)` | router | `priority_set` |
 | `set_kind(p, key, kind)` | router | PG-SET-KIND: an `open` `lane` becomes a `question` or `operator_task` (`pg set-kind KEY KIND`, MCP `set_kind`, `apply_ops`/batch op `set_kind`); any other target kind, source kind or state is refused (`validation` / `bad_state` / `locked`). One `kind_set` event `{kind, was, operator, wait}`; the row gets `operator=1` and the kind's default `wait` (`answer` / `task`; an explicit `wait` is kept), as `create_items` would store. `fold` replays `kind`, `wait` and `operator`; `verify_integrity` compares `kind` and `operator` for every item that has a `kind_set` event; the HTTP/MCP door refuses fields other than `key`/`kind` |
 | `migrate_descriptions(p)` | router | moves a leading folded `description: ` note line into the `description` column of every active item (never DONE/cancelled, never overwrites); one `item_defined` event per item; idempotent. `alerts` also lists advisory `warnings` (`title_is_id`, `no_description`) |
@@ -317,6 +317,20 @@ A first-parent PR merge into the configured default branch can close open, claim
 
 `keeper.json` sets `require_seats` (default off). `PG_MERGE_CLOSE_REQUIRE_SEATS` or the request field `require_seats` overrides it for that call. Tier `none` takes no seats. With the requirement off, missing seat witnesses are stored in the `seats_missing` flag. The job prints those flags with the closed or would-close row. The `listed` field contains refused keys and reasons, and `plangraph merge-close --count` prints the merged-not-done total from a preview.
 
+`plangraph reconcile-merged --dry-run --state PATH` previews merged work once
+per hour through the user timer. The job refreshes the merge index and requires
+a complete preview across all configured repositories before it atomically
+replaces the watcher state file. Routing reads one `reconcile-merged` JSON
+batch line per pass from `journalctl --user -u pg-reconcile-merged.service`
+or reads the latest batch from `watch.json` in the unit's state directory.
+Each batch contains the merged-open count, refusal counts, and proposed
+actions. Deployment and seat blockers appear in the refusal counts under
+`deploy_pending` and `seats_missing`.
+The Keeper raises `merged_open_reconcile` on the second consecutive nonzero
+pass and clears it after a zero pass. Routing applies any proposed action
+under its own GO decision.
+
+
 The writer families a seat may not share (`close_merged`, the automatic merge close and the `claude-seat` verifier) are the recorded writers: commit evidence, the `Writer` trailers of the commits that landed the item's `Plan-Item` work, the item's `owner_family`, `writer_model` and the writers of recorded runs. The claimant and delegate principals (an orchestrator such as an L1) count only when no writer is on record at all, so a claude-seat on a diff written by another family closes, a claude-written diff stays refused (`claude_seat_writer_family`) and an unrecorded writer behind a Claude claimant stays refused. `claude-seat` evidence for any merged head of the item counts as that part's seat (`claude_seat_head` only when the head is no merged head of the item), and a high-tier item closes on one claude-seat plus one seat of another family.
 
 The timer and land job use `plangraph merge-close`. The client starts a background scan with `{"refresh":"start"}`, checks `{"refresh":"status"}`, and sends subsequent close requests one project at a time. The scanner reuses parsed history from previous ref tips and cached deployment diffs for unchanged deliveries. A close checks the scanned tip against the locally observed default ref and reports unavailable repositories in `scan_errors`. HTTP close requests return a conflict five minutes after the scan started, at which point the client must request a fresh scan. Pages contain at most 25 candidates by default and return a `next_after` key when more work remains. Send that key as `after` on the next request. Preview requests use `apply: false`.
@@ -395,6 +409,49 @@ includes that finding in the stale reason on `show` and applies the existing
 audited stale-claim override procedure.
 
 `pg go-row check` (offline) reads one GO row's decision cell with the grammar `close_merged` uses (`store_runs.go_row_check`): the prefix is `(HH:MMZ)` or `(HH:MMZ, date -u)` only, a `GO-KEYS` token ending in punctuation is refused with the token named, and with `--repo PATH --head TRAIN-HEAD --exclude origin/main` the row must name exactly the delivered `Plan-Item` keys of the train (keys trailered only on `docs/checkpoints/**` are deferred and must not be named). It prints `accept` or `refuse: <code>: <reason>`, exit 0 or 2. The shared fixture table is `tests/fixtures/go_row_prefixes.json`. A deploy target of a train part is read from the key's own commits and the part's untagged commits (`evidence_pr.part_changes`).
+
+An edit that changes `done_criteria` appends a row to `criteria_amendments`
+in the same transaction as the definition event. The row links to that event
+and records the before and after text, editing principal and time. A change
+requires nonblank `criteria_reason` and `criteria_evidence` in the edit fields.
+`pg admin verify` checks criteria edits from the first ledger row onward and
+any `item_defined` event with `criteria_ledger: true` in its payload. It reports
+missing, mismatched or unverifiable amendments by item key and event sequence.
+Legacy criteria edits before the ledger started are accepted.
+
+A definition whose How asks the writer to obtain a design or contract, or
+explicitly calls for a design document, contract file, or approved or versioned
+input, needs a `design_ref`. Set it to a repository-relative path or use
+`REPOSITORY:PATH` for a file in another repository. Show, short briefs
+and snapshots expose the stored reference. The native batch-size input accepts
+`design_ref` on each item and `design_roots` indexed by repository qualifier.
+An unqualified reference requires a root configured for the item's project.
+The generated brief embeds the selected files verbatim and reports the
+reference if a file cannot be read. If a plangraph lane's How names external
+code, it must also name the plangraph implementation target.
+
+When running `pg define --file slices.json`, each entry must set `slice_parent`
+to the Keeper key of the item being sliced. Use
+`under: plangraph:LESSONS-ENFORCE` to attach writer slices to the lessons gate.
+The round replanner attaches its slices
+under the item it slices. Keeper records `slice_parent` in the creation event
+and refuses slicing an existing slice, naming its key. Older slices with
+`Slice of …` criteria are also recognized. Ordinary items can attach under a slice.
+
+Ready and claim include qualified Plan-Item matches from other repositories
+in the configured merge scan. A bare Plan-Item ID matches within its own
+project, and a merge message can carry a Plan-Item line in its body. Merged
+work can appear in `needs_reconcile` instead of the ready list. A GO part
+table can also identify the item when its named part belongs to the GO head
+and the matching PR landed on the default branch. A decision's explicit
+`Closes: KEY@SHA` also counts when its revision resolves to a landed merge.
+The watcher includes these decision-only cases as routing proposals.
+
+The reaper raises `gate_dependency_capacity` when a nonterminal gate or goal
+has at least 190 non-cancelled dependencies, including done dependencies.
+Define counts unfinished dependencies against the 200-dependency limit.
+When an attachment would exceed the limit, the refusal names an available
+split gate when one exists.
 
 ## Tests (minimum; write first)
 state machine: every allowed edge + every disallowed edge refused · claim race: 3 threads → exactly one winner · stale epoch refused ·

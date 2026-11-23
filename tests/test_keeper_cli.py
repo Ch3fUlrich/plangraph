@@ -107,6 +107,8 @@ def test_cli_refusal_exits_2(live, capsys):
 
 def test_cli_unreachable_read_falls_back(live, capsys):
     server, w, tokens, cfg, _ = live
+    ref = "docs/contracts/keeper.md"
+    w.store.edit_definition(w.p("router"), "demo:A", {"design_ref": ref})
     snap = w.store.snapshot(w.p("router"))
     cfg.snapshot.write_text(json.dumps(snap), encoding="utf-8")
     server.shutdown()
@@ -116,6 +118,11 @@ def test_cli_unreachable_read_falls_back(live, capsys):
     assert code == 0
     assert "READ-ONLY fallback (keeper unreachable)" in captured.err
     assert "demo:A" in captured.out
+    for options in ([], ["--brief"]):
+        assert run(tokens["reader"], "show", "demo:A", *options) == 0
+        assert f"design_ref {ref}" in capsys.readouterr().out
+        assert run(tokens["reader"], "show", "demo:A", "--json", *options) == 0
+        assert out_json(capsys)["design_ref"] == ref
 
 
 def test_cli_unreachable_write_exits_3(live, capsys):

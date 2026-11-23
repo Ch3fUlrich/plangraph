@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
 from .schema import CLAIM_DEFINITION_INDEX_DDL, EVENT_AUDIENCE_DDL, EXIT_CLASSES, INCIDENTS_DDL, JEV_KINDS, JEV_STATUSES, LANDING_CLAIMS_DDL, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL, WINDOW_CLASSES
+from .schema import CRITERIA_AMENDMENTS_TABLE
 from .messages_schema import PG as MESSAGES_DDL
 from .schema_pg_spawner import PG as SPAWNER_DDL
 from .schema_pg_baseline import BASELINE as _V1
@@ -342,6 +343,16 @@ _SPAWN_ATTEMPTS = ("ALTER TABLE attempts ALTER COLUMN key DROP NOT NULL;\n"
                     for name, declaration in ATTEMPT_SPAWN_COLUMNS)
         + ATTEMPT_SPAWN_INDEXES)
 
+_CRITERIA_AMENDMENTS_PG = CRITERIA_AMENDMENTS_TABLE.replace(
+    "TEXT", 'TEXT COLLATE "C"') + """
+CREATE TRIGGER trg_criteria_amendments_update BEFORE UPDATE ON criteria_amendments
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('criteria amendments are append-only');
+CREATE TRIGGER trg_criteria_amendments_delete BEFORE DELETE ON criteria_amendments
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('criteria amendments are append-only');
+CREATE TRIGGER trg_criteria_amendments_truncate BEFORE TRUNCATE ON criteria_amendments
+    FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('criteria amendments are append-only');
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
@@ -372,7 +383,10 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(22, "item incident log index", INCIDENTS_DDL),
               Migration(23, "card effort decision", _CARD_EFFORT),
               Migration(24, "spawn attempt outcomes", _SPAWN_ATTEMPTS),
-              Migration(25, "claim definition event index", CLAIM_DEFINITION_INDEX_DDL))
+              Migration(25, "claim definition event index", CLAIM_DEFINITION_INDEX_DDL),
+              Migration(26, "criteria amendments", _CRITERIA_AMENDMENTS_PG),
+              Migration(27, "definition design reference",
+                        'ALTER TABLE items ADD COLUMN IF NOT EXISTS design_ref TEXT COLLATE "C";'))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)

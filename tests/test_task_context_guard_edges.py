@@ -398,3 +398,93 @@ def test_unverified_pr_inventory_in_another_repo_blocks_ready_and_claims(
     with pytest.raises(Refused, match=message):
         w.store.claim(w.p("l1main"), key)
     assert w.store._item(key)["epoch"] == 0
+
+
+@pytest.mark.parametrize("source", ["trailer", "merge-body", "foreign-bare"])
+def test_ready_and_claim_check_merged_work_in_all_repositories(w, repo, tmp_path, source):
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    data = tmp_path / "data"
+    _git(tmp_path, "clone", "-q", "--no-local", str(repo), str(data))
+    _git(data, "remote", "remove", "origin")
+    _git(data, "config", "user.email", "t@example.invalid")
+    _git(data, "config", "user.name", "t")
+    _git(data, "config", "commit.gpgsign", "false")
+    key, = seed(w, [("CROSS-REPO", [])])
+    if source == "merge-body":
+        _git(data, "checkout", "-qb", "part")
+        _commit(data, "delivery", "work")
+        _git(data, "checkout", "-q", "main")
+        _git(data, "merge", "-q", "--no-ff", "-m",
+             f"Land train (#7)\n\nPlan-Item: {key}\n\nTrain summary follows.", "part")
+    else:
+        trailer = key if source == "trailer" else "CROSS-REPO"
+        _commit(data, "delivery", f"work\n\nPlan-Item: {trailer}")
+    w.store.ctx["git"] = GitAdapter({"demo": str(repo), "data-repo": str(data)})
+
+    ready = w.store.ready_data(w.p("reader"), "demo")
+    if source == "foreign-bare":
+        assert [row["key"] for row in ready["items"]] == [key]
+        assert w.store.claim(w.p("l1main"), key)["epoch"] == 1
+    else:
+        assert ready["items"] == []
+        assert [row["key"] for row in ready["needs_reconcile"]] == [key]
+        with pytest.raises(Refused, match="stale: already merged"):
+            w.store.claim(w.p("l1main"), key)
+
+
+@pytest.mark.parametrize("landed,named,pr", [(True, True, 55), (True, False, 55),
+                                             (False, True, 55), (True, True, 56),
+                                             (True, "excluded", 55)])
+def test_go_part_table_excludes_only_keys_in_landed_parts(w, repo, decisions, landed, named, pr):
+    _git(repo, "checkout", "-qb", "part")
+    part = _commit(repo, "part-work", "work with no Plan-Item trailer")
+    _git(repo, "checkout", "-qb", "train")
+    head = _commit(repo, "train-work", "prepare the train")
+    _git(repo, "checkout", "-q", "main")
+    if landed:
+        _git(repo, "merge", "-q", "--no-ff", "-m", "Land train (#55)", "train")
+    table_key = "demo:GO-PART" if named is True else "demo:OTHER"
+    if named == "excluded":
+        table_key += " (excludes demo:GO-PART)"
+    _decide(decisions, 55, f"GO #{pr}; GO-HEAD {head}; Per-part table: Batch 8, part head {part[:9]}, keys {table_key}")
+    key, = seed(w, [("GO-PART", [])])
+
+    ready = w.store.ready_data(w.p("reader"), "demo")
+    if landed and named is True and pr == 55:
+        from plangraph.keeper.api_routes import ROLE_CHECKED_VERBS
+
+        w.store.warm_merge_scan(w.store.merge_candidates())
+        report = ROLE_CHECKED_VERBS["close_merged_auto"](
+            w.store, w.p("system"), {"apply": False, "watch": True}, None)
+        assert report["merged_not_done"] == 1
+        assert [(row["key"], row["reason"].split(":")[1].strip()) for row in report["listed"]] == [
+            (key, "decision_merge_only")]
+        assert report["closed"] == []
+        assert ready["items"] == []
+        assert [row["key"] for row in ready["needs_reconcile"]] == [key]
+        with pytest.raises(Refused, match=r"stale: already merged: GO part D-55"):
+            w.store.claim(w.p("l1main"), key)
+    else:
+        assert [row["key"] for row in ready["items"]] == [key]
+        assert w.store.claim(w.p("l1main"), key)["epoch"] == 1
+
+
+@pytest.mark.parametrize("qualified", [True, False])
+def test_hashed_close_decision_requires_an_exact_key_and_landed_merge(w, repo, decisions, qualified):
+    _git(repo, "checkout", "-qb", "part")
+    _commit(repo, "legacy-work", "work before item trailers")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Land legacy work (#56)", "part")
+    merged = _git(repo, "rev-parse", "HEAD")
+    scope = f"demo:CLOSE-TOKEN@{merged}" if qualified else "demo:CLOSE-TOKEN"
+    _decide(decisions, 56, f"Router checked merged delivery. Closes: {scope}")
+    key, = seed(w, [("CLOSE-TOKEN", [])])
+    ready = w.store.ready_data(w.p("reader"), "demo")
+    if qualified:
+        assert ready["items"] == []
+        assert [row["key"] for row in ready["needs_reconcile"]] == [key]
+        with pytest.raises(Refused, match="already merged: Close decision D-56"):
+            w.store.claim(w.p("l1main"), key)
+    else:
+        assert [row["key"] for row in ready["items"]] == [key]

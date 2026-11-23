@@ -11,6 +11,8 @@ Rules:
 Language: new code is Rust with Rust tests. New Python, shell or Node source files
 and allowlist additions require an operator D-id; fixes in existing Python stay allowed.
 Gates: cheap checks, changed and affected tests, fast-checks on the exact head, then review.
+If writing slices.json, set slice_parent to the Keeper key of the item being sliced.
+Use under: plangraph:LESSONS-ENFORCE for the attachment.
 When a commit fixes or implements a keeper item, add one Plan-Item trailer for
 every fixed item key, including subitems fixed as part of a larger item. The
 parent key alone and legacy Closes tokens do not prove a subitem was merged.

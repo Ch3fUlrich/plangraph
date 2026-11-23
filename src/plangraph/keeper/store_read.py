@@ -183,6 +183,8 @@ class ReadMixin:
             "depends_on": deps,
             "unblocks": unblocks, "evidence": evidence,
         }
+        if item.get("design_ref"):
+            info["design_ref"] = item["design_ref"]
         incidents = self._incidents_by_key(key).get(key)
         if incidents:
             info["incidents"] = incidents

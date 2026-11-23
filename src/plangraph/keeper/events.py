@@ -14,6 +14,7 @@ import hashlib
 import json
 from collections import Counter
 
+from .store_input import verify_criteria_amendments
 from .token_fold import verify_tokens
 
 from .item_fields import SMALL_FIELDS
@@ -83,7 +84,7 @@ def _new_state():
     return {"state": "open", "epoch": 0, "claimed_by": None, "delegate": None,
             "lease_until": None, "reviewer": None, "model": None, "priority": 0,
             "round": 0, "evidence": [], "review_waiver": None,
-            "review_tier": "standard", "description": None,
+            "review_tier": "standard", "description": None, "design_ref": None,
             "host": None, "wait": None, "layer": None, "role": None,
             "agent_id": None, "phase_kind": None, "fixes": None,
             "writer_model": None,
@@ -369,7 +370,7 @@ def verify_integrity(conn):
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
         "review_waiver,review_tier,description,host,wait,layer,role,agent_id,"
-        "phase_kind,fixes,writer_model,seat_models,run_ids,kind,operator FROM items")}
+        "phase_kind,fixes,writer_model,seat_models,run_ids,kind,operator,design_ref FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -395,7 +396,7 @@ def verify_integrity(conn):
                       "reviewer", "review_waiver", "review_tier", "description",
                       "host", "wait", "layer", "role", "agent_id",
                       "phase_kind", "fixes", "writer_model", "seat_models",
-                      "run_ids"):
+                      "run_ids", "design_ref"):
             if row[field] != expected[field]:
                 problems.append({"key": key, "code": "cache_mismatch",
                                  "field": field, "expected": expected[field],
@@ -446,6 +447,7 @@ def verify_integrity(conn):
             problems.append({"key": key, "code": "cache_extra",
                              "field": None, "expected": None, "got": None})
     problems.extend(verify_tokens(conn, all_events))   # M2B-TOKEN-INTEGRITY
+    problems.extend(verify_criteria_amendments(conn, all_events))
     want = folded_aliases(all_events)
     have = {r["old_key"]: r["new_key"]
             for r in conn.execute("SELECT old_key,new_key FROM aliases")}
