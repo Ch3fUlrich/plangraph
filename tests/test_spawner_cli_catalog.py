@@ -39,6 +39,8 @@ def test_missing_legs_registered_for_utility(lid, model):
         'agy-sonnet-5.5', 'omniroute-deepseek-flash', 'omniroute-muse-spark'} else set())
     if lid in {'agy-sonnet-5.5', 'agy-opus-5.5', 'agy-gemini-4-neon-medium'}:
         expected_roles.remove('implement')
+    if lid == 'agy-opus-5.5':
+        expected_roles.add('research')
     active = lid != 'opencode-glm-5.3-flash-free'
     assert (leg.model, leg_active(leg), set(leg.roles)) == (model, active, expected_roles)
     if not active:

@@ -54,8 +54,9 @@ def test_leg_data():
         assert leg.windows == ('128k', '256k', '1m')
     for leg_id, model in SOL.items():
         leg = BY_ID[leg_id]
+        roles = ('implement', 'research') if leg_id == 'cx-gpt-6.2-sol-medium' else ('implement',)
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.disabled) == (
-            'codex', model, 'gpt', ('implement',), None), leg_id
+            'codex', model, 'gpt', roles, None), leg_id
     for leg_id, model in LUNA.items():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.tool_mode) == (
