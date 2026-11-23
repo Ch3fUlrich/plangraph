@@ -11,7 +11,7 @@ from fake_pid import FAKE_PID
 pytestmark = pytest.mark.usefixtures('fake_ownership')   # r3 V3: FAKE_PID exceeds the host PID range; no live process can match
 
 from plangraph.spawner import gateway_witness as gw
-from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS, resolve_harness
 
 
 class _Runner:
@@ -201,7 +201,7 @@ def test_key_file_owner_only_check_refuses_windows_modes():
 
 
 _SOL_LEGS = [leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS)
-             if leg.id.startswith('cx-gpt-6.1-sol')]
+             if leg.harness == 'codex' and leg.id.removeprefix('cx-').startswith('gpt-6.2-sol')]
 
 
 @pytest.mark.parametrize('leg', _SOL_LEGS, ids=lambda leg: leg.id)
@@ -216,6 +216,11 @@ def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, rol
     from plangraph.spawner.runner import SpawnerRunner
     from plangraph.routing_support import host_keys, opencode_render
 
+    # Codex has no verified served-model metadata. Exercise the gateway on its OpenCode fallback.
+    choice = resolve_harness(leg, installed=lambda name: name != 'codex')
+    assert (choice.harness, choice.fallback) == ('opencode', 'client_missing')
+    leg = choice.leg
+
     async def probe(*args, **kwargs):
         return None
 
@@ -229,7 +234,7 @@ def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, rol
     seen = {}
     served = leg.model.removeprefix('omniroute/cx-')
     if row_kind == 'base-model':
-        served = 'gpt-6.1-sol'
+        served = 'gpt-6.2-sol'
     elif row_kind == 'different-gpt':
         served = 'gpt-6-luna'
     elif '/' in row_kind:
@@ -259,7 +264,7 @@ def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, rol
 
     async def run():
         job = await runner.spawn('fixture', model_or_combo=leg.model, role=role,
-                                 client=leg.harness, cwd=str(tmp_path), wait_seconds=3)
+                                 chosen=leg, client=leg.harness, cwd=str(tmp_path), wait_seconds=3)
         await runner._tasks[job.job_id]
         return job
 
@@ -286,14 +291,19 @@ def test_sol_gateway_witness_for_every_route_leg(tmp_path, monkeypatch, leg, rol
 def test_route_table_witness_paths():
     """Run with -s to list all legs without an authenticated witness path.
 
-    Includes disabled and explicit legs so route changes cannot hide gaps.
+    Includes disabled and explicit legs, using the OpenCode fallback for Sol.
     Gateway capability assumes the MiMo endpoint is the configured gateway.
     """
     from plangraph.spawner.runner import SpawnerRunner
     from plangraph.spawner.served_telemetry import native_models
 
+    assert _SOL_LEGS, 'expected Sol route legs to exercise'
     missing = []
     for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS):
+        if leg in _SOL_LEGS:
+            choice = resolve_harness(leg, installed=lambda name: name != 'codex')
+            assert choice.leg is not None, leg.id
+            leg = choice.leg
         cfg = {'provider': {'omniroute': {}, 'mimo': {}}}
         gw.tag_session(cfg, 'coverage')
         env = {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg), 'OMNIROUTE_BASE_URL': '/gateway/v1'}
