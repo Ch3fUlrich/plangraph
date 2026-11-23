@@ -14,6 +14,8 @@ import time
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
+from plangraph.routing_errors import CREDIT_AUTH_MARKER, busy_refusal
+
 REPROBE_MINUTES = 10
 
 #: D-3685/D-6082: cap flat fallback down_s at 24 h; provider-stated resets are uncapped.
@@ -415,7 +417,6 @@ def routing_status(status):
         return dict(status, state='down', reason='model_unavailable')
     if body.startswith(('http 429:', 'http 402:')):
         return status
-    from plangraph.spawner.env_redact import CREDIT_AUTH_MARKER, busy_refusal
     if body.startswith('http 503:') or busy_refusal(body):
         return dict(status, state='down', reason='provider_busy')
     auth = CREDIT_AUTH_MARKER.search(body)

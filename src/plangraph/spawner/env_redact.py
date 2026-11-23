@@ -4,6 +4,8 @@ import os
 import re
 import subprocess
 from decimal import Decimal
+from plangraph.routing_errors import CREDIT_AUTH_MARKER, busy_refusal
+from plangraph.routing_errors import normalize_output as normalize
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
 from .redact_tokens import redact_wide_assignments, redact_bearer_wrapped, open_wrapped_line_start
 from .redact_tokens import redact_diff_wrapped, is_computed
@@ -320,12 +322,6 @@ class OutputLines:
 
 IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'tree_sha', 'tree_branch', 'idempotency_key'})
 
-#: Credit/auth refusals (D-3605 a): the leg is as unusable as a rate-limited one.
-#: No bare HTTP 401/402/403 alternative: a run that merely prints those codes
-#: in prose ("HTTP 403: forbidden (expected)") is healthy, not a refusal (F1).
-CREDIT_AUTH_MARKER = re.compile(
-    r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
-    r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
     r'quota reached|quota exceeded|quota exhausted|quota refusal|quota threshold|exhausted their quota|rate limit|resets in'
     r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
@@ -347,24 +343,6 @@ _CREDIT_LIMIT = re.compile(
     r'to get more resources\. Report Issue \(input /feedback\)\s*', re.I)
 _MODEL_UNAVAILABLE = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?Model unavailable:\s*\S+\s*', re.I)
-_BUSY_LINE = re.compile(
-    r'\s*(?:error:\s*(?:server busy|too busy|overloaded)|HTTP 503: Service Unavailable)\s*$', re.I)
-
-
-def busy_refusal(text):
-    """Unavailable dispatch evidence, not a mid-sentence discussion of errors."""
-    for line in normalize(text).splitlines():
-        if _BUSY_LINE.match(line):
-            return line.strip()
-        if not line.strip().startswith('{'):
-            continue
-        try:
-            response = json.loads(line).get('autoos_provider_response', {})
-            if response.get('status') == 503:
-                return 'HTTP 503: ' + ' '.join(normalize(str(response.get('body', ''))).split())[:200]
-        except (ValueError, TypeError, AttributeError):
-            pass
-    return None
 
 
 def _is_numeric(value):
@@ -376,10 +354,6 @@ def _is_numeric(value):
     friends can carry a secret payload.
     """
     return re.fullmatch(r'[+-]?\d+', value) is not None
-
-
-def normalize(text):
-    return re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))', '', text).replace('\r\n', '\n').replace('\r', '\n')
 
 
 def first_reason(text):
