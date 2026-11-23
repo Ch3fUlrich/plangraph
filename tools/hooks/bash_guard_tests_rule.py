@@ -160,3 +160,74 @@ def check_bare_tests(pos_words, wrapped_in_slice, *, placement_required=True,
             takes_value = arg in _VALUE_OPTIONS.get(wrapper, "").split()
             i += 2 if takes_value else 1
     return None
+
+
+MAIN_TARGET_MESSAGE = ("bash-guard: DENIED - cargo %s in the main checkout %s would write its target "
+                       "here, outside every disk cap; run it in a worktree or set CARGO_TARGET_DIR to "
+                       "the shared target (~/.cache/plangraph/cargo-target)")
+_TARGET_ENVS = ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR")
+_BUILDING = frozenset(("build", "b", "check", "c", "test", "t", "nextest", "clippy", "run", "r",
+                       "bench", "doc", "d", "rustc", "llvm-cov"))
+
+
+def main_checkout_root(cwd):
+    """Root of the main (not linked-worktree) checkout containing cwd, or None."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(cwd or Path.cwd()), "rev-parse", "--path-format=absolute",
+             "--show-toplevel", "--git-dir", "--git-common-dir"],
+            capture_output=True, text=True, check=True, timeout=2).stdout.split("\n")
+        top, git_dir, common = (Path(line).resolve() for line in out[:3])
+        return top if git_dir == common else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _inside(path, root, cwd):
+    try:
+        return (Path(cwd) / Path(path).expanduser()).resolve().is_relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def main_checkout_cargo(command, cwd, depth=0):
+    """Deny message for a cargo build whose target dir is the main checkout's own rust/target."""
+    root = main_checkout_root(cwd)
+    if root is None or depth > 3:
+        return None
+    from bash_guard_rules import _ENV_ASSIGN_RE, _SHELLS, _WRAPPERS, _basename, _shell_strings
+    from bash_guard_rules2 import lead, scan
+    cwd = Path(cwd or Path.cwd())
+    commands, _ = scan(command)
+    for cmd in commands:
+        pos = [w for w in cmd if not w.redir]
+        words = [w.text for w in pos]
+        i = lead(pos)
+        envs = {w.split("=", 1)[0]: w.split("=", 1)[1] for w in words[i:] if _ENV_ASSIGN_RE.match(w)}
+        while i < len(words) and _ENV_ASSIGN_RE.match(words[i]):
+            i += 1
+        if i >= len(words):
+            continue
+        if _basename(words[i]) in _SHELLS:
+            for string in _shell_strings(pos, i + 1):
+                reason = main_checkout_cargo(string, cwd, depth + 1)
+                if reason:
+                    return reason
+            continue
+        if _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS:  # their options are not modelled
+            i = next((k for k in range(i, len(words)) if _basename(words[k]) == "cargo"), len(words))
+            if i >= len(words):
+                continue
+        if _basename(words[i]) != "cargo":
+            continue
+        args = [a for a in words[i + 1:] if not a.startswith("+")][:1]
+        if not args or args[0] not in _BUILDING:
+            continue
+        rest = words[i + 1:]
+        target = next((rest[k + 1] for k, a in enumerate(rest[:-1]) if a == "--target-dir"), None)
+        target = target or next((a.split("=", 1)[1] for a in rest if a.startswith("--target-dir=")), None)
+        for name in _TARGET_ENVS:
+            target = target or envs.get(name) or os.environ.get(name) or None
+        if target is None or _inside(target, root, cwd):
+            return MAIN_TARGET_MESSAGE % (args[0], root)
+    return None

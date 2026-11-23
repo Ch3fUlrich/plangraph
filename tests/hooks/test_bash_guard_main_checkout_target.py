@@ -1,0 +1,74 @@
+"""A cargo build inside a main checkout without a shared target is refused (LE-CODING-VM-DISK-EMERGENCY-FIFTH-UNCAPPED-TARGETS)."""
+import json
+import subprocess
+
+import pytest
+
+from bash_guard_support import HOOK, guard  # noqa: F401
+import sys
+
+
+def git(cwd, *args):
+    subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                   check=True, capture_output=True)
+
+
+@pytest.fixture
+def repos(tmp_path, monkeypatch):
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    monkeypatch.delenv("CARGO_BUILD_TARGET_DIR", raising=False)
+    main = tmp_path / "code" / "proj"
+    (main / "rust").mkdir(parents=True)
+    git(main, "init", "-q")
+    (main / "rust" / "Cargo.toml").write_text("[workspace]\n")
+    git(main, "add", "-A")
+    git(main, "commit", "-qm", "init")
+    work = main / ".claude" / "worktrees" / "lane"
+    git(main, "worktree", "add", "-q", str(work), "-b", "lane/x")
+    return main, work
+
+
+def hook(command, cwd):
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)})
+    return subprocess.run([sys.executable, "-I", str(HOOK)], input=payload.encode(), capture_output=True,
+                          timeout=60)
+
+
+@pytest.mark.parametrize("command", [
+    "cargo build", "cargo test -p pg-worker-core", "cargo +nightly clippy --all-targets",
+    "nice -n 10 cargo check", "env FOO=1 cargo run", "bash -c 'cargo build'",
+    "CARGO_TARGET_DIR=rust/target cargo build", "cargo build --target-dir rust/target",
+    "cargo test --target-dir=./rust/target",
+])
+def test_cargo_without_a_shared_target_is_refused_in_a_main_checkout(repos, command):
+    main, _ = repos
+    result = hook(command, main / "rust")
+    assert result.returncode == 2, result.stderr
+    assert b"shared target" in result.stderr and b"cargo-target" in result.stderr
+
+
+@pytest.mark.parametrize("command", [
+    "CARGO_TARGET_DIR=/var/cache/shared cargo build", "env CARGO_TARGET_DIR=/var/cache/shared cargo test",
+    "cargo build --target-dir /var/cache/shared", "cargo fmt --check", "cargo --version",
+    "echo cargo build", "bash -c 'CARGO_TARGET_DIR=/var/cache/shared cargo test'",
+])
+def test_cargo_with_an_outside_target_or_no_build_is_allowed(repos, command):
+    main, _ = repos
+    assert hook(command, main / "rust").returncode == 0
+
+
+def test_cargo_in_a_linked_worktree_is_not_a_main_checkout(repos):
+    _, work = repos
+    assert hook("cargo build", work / "rust").returncode == 0
+
+
+def test_cargo_outside_any_repository_is_allowed(tmp_path):
+    assert hook("cargo build", tmp_path).returncode == 0
+
+
+def test_a_target_dir_environment_inside_the_main_checkout_is_refused(repos, monkeypatch):
+    main, _ = repos
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(main / "rust" / "target"))
+    assert hook("cargo build", main / "rust").returncode == 2
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(main.parent / "elsewhere"))
+    assert hook("cargo build", main / "rust").returncode == 0

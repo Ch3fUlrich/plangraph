@@ -60,6 +60,7 @@ pub mod hosts;
 pub mod janitor;
 pub mod live_probe;
 pub mod lockfile;
+pub mod main_target;
 pub mod merged_sweep;
 pub mod outcome;
 pub mod package_placement;
