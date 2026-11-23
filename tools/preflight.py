@@ -170,8 +170,7 @@ def rust_path_dependencies(manifest, data, workspace_dir, workspace):
     return dependencies
 
 
-def rust_commands(root, base, head, env=None):
-    root = root.resolve()
+def changed_rust_paths(root, base, head):
     try:
         changed = subprocess.check_output(
             ["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"],
@@ -179,7 +178,12 @@ def rust_commands(root, base, head, env=None):
             timeout=CHECK_TIMEOUT).splitlines()
     except subprocess.CalledProcessError as exc:
         raise SkipFamily("revision baseline unavailable or no merge-base") from exc
-    changed = [p for p in changed if p.startswith("rust/") or p == "rust-toolchain.toml"]
+    return [p for p in changed if p.startswith("rust/") or p == "rust-toolchain.toml"]
+
+
+def rust_commands(root, base, head, env=None):
+    root = root.resolve()
+    changed = changed_rust_paths(root, base, head)
     if not changed:
         raise SkipFamily("no rust changes")
     available = shutil.which("cargo") if env is None else shutil.which("cargo", path=env.get('PATH', ''))
@@ -461,6 +465,19 @@ def stage_policy_binary(executable, cleanup):
     return stage_binary(executable, cleanup, 'preflight-policy-')
 
 
+def reuse_policy(root, cleanup):
+    """Stage a policy executable keyed by the exact sources while holding its read lease."""
+    try:
+        with cargo_lease():
+            keydir = policy_target(root)
+            executable = keydir / "debug" / ("pg-policy.exe" if os.name == "nt" else "pg-policy")
+            if executable.is_file() and os.access(executable, os.X_OK):
+                return stage_policy_binary(executable, cleanup)
+    except OSError:
+        pass
+    return None
+
+
 def build_policy(root, env, cleanup):
     """Build pg-policy and stage this checkout's own artifact while the shared lease is held.
 
@@ -610,7 +627,13 @@ def _main(argv, root, cleanup):
                             *([python("skill-rules.py", "all")] if args.lane else [])]),
                 ("rust", None), ("tests", [] if args.fast or args.lane else [tests])]
     summary, exit_code, stopped, scrub_bad = [], 0, False, False
-    trim_shared_target(root)
+    try:
+        reuse_without_build = (args.lane and policy_build_command(root) is not None
+                               and not changed_rust_paths(root, args.scrub_base or args.base, args.head))
+    except (SkipFamily, OSError, subprocess.TimeoutExpired):
+        reuse_without_build = False
+    if not reuse_without_build:
+        trim_shared_target(root)
     for family, commands in families:
         start = time.monotonic()
         status = "SKIP"
@@ -635,8 +658,14 @@ def _main(argv, root, cleanup):
                 failed = []  # policy runs every check and reports all failures
                 if family == "policy" and policy_build_command(root):
                     # Outside the per-check bound; a cold compile must not fail a green diff.
-                    code, output, binary = build_policy(root, env, cleanup)
-                    print(output, end="", flush=True)
+                    binary = reuse_policy(root, cleanup) if reuse_without_build else None
+                    if binary:
+                        print("pg-policy: using current cached executable", flush=True)
+                    else:
+                        if reuse_without_build:
+                            trim_shared_target(root)
+                        _, output, binary = build_policy(root, env, cleanup)
+                        print(output, end="", flush=True)
                     if binary:
                         family_env = dict(family_env, PG_POLICY_BIN=binary)
                     else:
