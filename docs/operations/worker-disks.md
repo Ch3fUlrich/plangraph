@@ -59,6 +59,10 @@ claims, run state and root paths. Inspect the dry run and record a real cleanup
 with freed bytes. Give the heartbeat collector the newest `disk-hygiene.json`
 report for that host and surface its `alarm` or failure.
 
+The timer emits an alert when a monitored filesystem reaches 85% use. The alert
+lists up to three configured directories by allocated bytes.
+`disk-watermarks.json` retains the active crossings until usage falls below 85%.
+
 ## Build caches
 
 NOTE Worker host sessions. Set `RUSTC_WRAPPER=sccache` and an explicit
