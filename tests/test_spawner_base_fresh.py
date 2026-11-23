@@ -719,23 +719,49 @@ def test_admitted_spawn_leaves_the_callers_admission_clock_unset(repository, dis
     assert asyncio.run(main()) is None
 
 
-def test_no_sub_five_second_wall_clock_assertions():
-    """Ratchet literal upper bounds on elapsed time in Python tests."""
+def _wall_clock_bounds(source, path):
     import ast
+    import operator
     from collections import defaultdict
-    from pathlib import Path
+
+    arithmetic = {ast.Add: operator.add, ast.Sub: operator.sub,
+                  ast.Mult: operator.mul, ast.Div: operator.truediv}
+
+    def constant_seconds(expr):
+        if isinstance(expr, ast.Constant) and type(expr.value) in (float, int):
+            return expr.value
+        if isinstance(expr, ast.UnaryOp):
+            operation = {ast.UAdd: operator.pos, ast.USub: operator.neg}.get(type(expr.op))
+            if operation and (operand := constant_seconds(expr.operand)) is not None:
+                return operation(operand)
+        if isinstance(expr, ast.BinOp) and (operation := arithmetic.get(type(expr.op))):
+            left, right = constant_seconds(expr.left), constant_seconds(expr.right)
+            if left is not None and right is not None:
+                try:
+                    return operation(left, right)
+                except ArithmeticError:
+                    return None
+        return None
+
+    def expression_name(expr):
+        if isinstance(expr, ast.Name):
+            return expr.id
+        if isinstance(expr, ast.Attribute):
+            return expr.attr
+        if isinstance(expr, ast.Subscript) and isinstance(expr.slice, ast.Constant):
+            return expr.slice.value
+        return None
 
     def measures_elapsed(expr):
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Sub):
+            # Timestamp differences can start with a recorded sample rather than a clock call.
+            if (isinstance(expr.left, (ast.Name, ast.Attribute, ast.Subscript))
+                    and expression_name(expr.right) in {'start', 'started', 'start_time', 't0'}):
+                return True
             expr = expr.left
         if isinstance(expr, ast.Call):
-            return ast.unparse(expr.func).rsplit('.', 1)[-1] in {
-                'monotonic', 'perf_counter', 'time',
-            }
-        if isinstance(expr, ast.Subscript):
-            expr = expr.slice
-        name = ast.unparse(expr).rsplit('.', 1)[-1].strip("'\"")
-        return name in {'elapsed', 'waited', 'duration', 'elapsed_s', 'duration_s'}
+            return expression_name(expr.func) in {'monotonic', 'perf_counter', 'time'}
+        return expression_name(expr) in {'elapsed', 'waited', 'duration', 'elapsed_s', 'duration_s'}
 
     def is_short_bound(comparison):
         operands = [comparison.left, *comparison.comparators]
@@ -744,8 +770,8 @@ def test_no_sub_five_second_wall_clock_assertions():
                 left, right = right, left
             elif not isinstance(op, (ast.Lt, ast.LtE)):
                 continue
-            if (isinstance(right, ast.Constant) and type(right.value) in (int, float)
-                    and 0 < right.value < 5 and measures_elapsed(left)):
+            seconds = constant_seconds(right)
+            if seconds is not None and 0 < seconds < 5 and measures_elapsed(left):
                 return True
         return False
 
@@ -769,11 +795,33 @@ def test_no_sub_five_second_wall_clock_assertions():
                     name = '::'.join(self.scope[:depth]) or '<module>'
                     matches[f'{self.path}::{name}'].append(expr.lineno)
 
-    tests = Path(__file__).resolve().parent
     matches = defaultdict(list)
+    FindBounds(path).visit(ast.parse(source, filename=path))
+    return matches
+
+
+@pytest.mark.parametrize('bound, matched', [
+    ('end - start < 2.5', True),
+    ('fake.builds[0] - t0 < 0.5 + 0.3', True),
+    ('0.5 + 0.3 > fake.builds[0] - t0', True),
+    ('total - count < 2.5', False),
+    ('end - start < 4 + 1', False),
+])
+def test_wall_clock_ratchet_detects_subtracted_timestamps(bound, matched):
+    source = f'def test_example():\n    assert {bound}\n'
+    expected = {'tests/example.py::test_example': [2]} if matched else {}
+    assert _wall_clock_bounds(source, 'tests/example.py') == expected
+
+
+def test_no_sub_five_second_wall_clock_assertions():
+    """Ratchet short upper bounds on elapsed time in Python tests."""
+    from pathlib import Path
+
+    tests = Path(__file__).resolve().parent
+    matches = {}
     for path in sorted(tests.rglob('*.py')):
         relative = path.relative_to(tests.parent).as_posix()
-        FindBounds(relative).visit(ast.parse(path.read_bytes(), filename=str(path)))
+        matches.update(_wall_clock_bounds(path.read_bytes(), relative))
 
     # Each entry is a known flake risk to convert to a deterministic assertion.
     allowed = set('''\
@@ -787,6 +835,7 @@ tests/test_keeper_bus_fatal.py::test_fatal_before_on_fatal_wiring_exits_75
 tests/test_keeper_ready_scale.py::test_cold_read_builds_in_the_request_expired_read_serves_the_old_index
 tests/test_keeper_review_jev_shadow.py::test_a_failing_jev_never_changes_the_verdict_result
 tests/test_keeper_seat_clause_tier.py::test_adversarial_length
+tests/test_keeper_snapshot_writer.py::test_a_steady_stream_cannot_starve_the_file
 tests/test_keeper_snapshot_writer.py::test_show_answers_during_a_fleet_build_of_7000_records
 tests/test_kg_export.py::test_slow_drip_response_hits_total_budget
 tests/test_m2b_anchor.py::test_silent_service_times_out_quickly
