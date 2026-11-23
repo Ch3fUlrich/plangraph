@@ -138,6 +138,12 @@ def shard_items(items, shard):
             if int.from_bytes(hashlib.sha256(key(item).encode()).digest()[:8], 'big') % count == index]
 
 
+def _ci_nodeid(nodeid):
+    # xdist's loadgroup adds an @group suffix after the normal test ID.
+    suffix = nodeid.rfind('@')
+    return nodeid[:suffix] if suffix > max(nodeid.rfind(']'), nodeid.rfind('::')) else nodeid
+
+
 def _weighted_shard(items, key, index, count, duration_file):
     try:
         durations = json.loads(Path(duration_file).read_text(encoding='utf-8'))
@@ -152,7 +158,7 @@ def _weighted_shard(items, key, index, count, duration_file):
     weights = {}
     for item in items:
         group = key(item)
-        weights[group] = weights.get(group, 0) + max(durations.get(item.nodeid, 1), 0.001)
+        weights[group] = weights.get(group, 0) + max(durations.get(_ci_nodeid(item.nodeid), 1), 0.001)
     loads = [0] * count
     buckets = {}
     for group in sorted(weights, key=lambda group: (-weights[group], group)):
@@ -191,6 +197,13 @@ def quarantine_items(items, ledger, mode, now):
                 active[nodeid] = owner
     except (OSError, TypeError, KeyError, ValueError, OverflowError) as exc:
         raise pytest.UsageError(f'PYTEST_QUARANTINE_FILE: {exc}') from exc
-    matched = {item.nodeid: active[item.nodeid] for item in items if item.nodeid in active}
-    selected = [item for item in items if (item.nodeid in matched) == (mode == 'quarantine')]
+    matched = {}
+    selected = []
+    for item in items:
+        nodeid = _ci_nodeid(item.nodeid)
+        owner = active.get(nodeid)
+        if owner:
+            matched[nodeid] = owner
+        if bool(owner) == (mode == 'quarantine'):
+            selected.append(item)
     return selected, matched
