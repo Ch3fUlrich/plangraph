@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
 from pathlib import Path
 from runpy import run_path
 from string import Template
@@ -24,6 +26,9 @@ NO_TOOLS_PREAMBLE = (
     "The full material is inline below. "
     "Answer in plain text; never emit tool calls."
 )
+REVIEW_OUTPUT_SECTION = "\n\n=== REVIEW OUTPUT\n"
+_WRITER_ARTIFACT_MAX_BYTES = 1024 * 1024
+_WRITER_ARTIFACT_EXCERPT_BYTES = 32 * 1024
 
 
 def _claude_writer_trailer(rules: str, launch_record: dict | None) -> str:
@@ -59,6 +64,43 @@ def _claude_writer_trailer(rules: str, launch_record: dict | None) -> str:
     return f"\nWriter: {identity}"
 
 
+def _writer_artifacts(record: dict) -> str:
+    sections = ["\n=== WRITER RUN EVIDENCE"]
+    for label, field in (("writer status", "writer_status_path"),
+                         ("writer slices", "writer_slices_path")):
+        value = record.get(field)
+        if value is None:
+            sections.append(f"{label}: missing")
+            continue
+        try:
+            path = Path(value)
+            if not path.is_absolute() or path.parent != Path(record["review_dir"]):
+                raise ValueError("artifact must be directly inside the review directory")
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_NONBLOCK", 0))
+            with os.fdopen(fd, "rb") as artifact:
+                if not stat.S_ISREG(os.fstat(artifact.fileno()).st_mode):
+                    raise ValueError("expected a regular artifact file")
+                data = artifact.read(_WRITER_ARTIFACT_MAX_BYTES + 1)
+            if len(data) > _WRITER_ARTIFACT_MAX_BYTES:
+                raise ValueError("artifact exceeds 1 MiB")
+            content = data.decode("utf-8")
+        except FileNotFoundError:
+            sections.append(f"{label}: missing")
+        except (KeyError, OSError, TypeError, ValueError):
+            sections.append(f"{label}: unreadable")
+        else:
+            truncated = len(data) > _WRITER_ARTIFACT_EXCERPT_BYTES
+            if truncated:
+                # Validation above means only a partial final character can be dropped.
+                content = data[:_WRITER_ARTIFACT_EXCERPT_BYTES].decode("utf-8", errors="ignore")
+            quoted = ["> " + line for line in content.splitlines()]
+            if truncated:
+                quoted.append(f"> [artifact truncated at {_WRITER_ARTIFACT_EXCERPT_BYTES // 1024} KiB]")
+            sections.append(f"{label}: included\n" + "\n".join(quoted))
+    return "\n".join(sections) + "\n\n"
+
+
 def render_brief(role: str, context: dict | None = None, *, rules: str = "",
                  launch_record: dict | None = None) -> str:
     """Render a versioned brief, optionally bound to a Claude fleet writer record."""
@@ -67,12 +109,15 @@ def render_brief(role: str, context: dict | None = None, *, rules: str = "",
     fields = ("item_key", "done_criteria", "invariants", "base_sha", "head_sha",
               "public_symbols", "callers", "test_output_paths")
     values = {field: "unavailable (request before acceptance)" for field in fields}
-    values.update({key: str(value) for key, value in (context or {}).items()
+    context = context or {}
+    values.update({key: str(value) for key, value in context.items()
                    if key in fields})
     text = Path(__file__).with_name(role + "_brief.md").read_text(encoding="utf-8")
     prefix, marker, item = text.partition("=== ITEM CONTEXT")
     writer = _claude_writer_trailer(rules, launch_record) if role == "writer" else ""
-    return prefix + rules + "\n" + marker + writer + Template(item).substitute(values)
+    writer_run = context.get("writer_run")
+    evidence = _writer_artifacts(writer_run) if role == "review" and isinstance(writer_run, dict) else ""
+    return prefix + rules + "\n" + evidence + marker + writer + Template(item).substitute(values)
 
 
 def load_tail() -> str:
@@ -91,17 +136,16 @@ def vector_block(vectors: list[str]) -> str:
 
 def assemble(vectors: list[str], parts: list[tuple[str, str]],
              *, preamble: bool = True, context: dict | None = None) -> str:
-    """Fixed preamble/rules/output contract first, item context and material last."""
+    """Stable rules, then review evidence, then vectors and output contract."""
     if not vectors:
         raise ValueError("vectors must not be empty")
     out = ""
     if preamble:
         out += NO_TOOLS_PREAMBLE + "\n"
-    out += render_brief("review", context, rules=load_tail().rstrip()) + "\n"
-    out += vector_block(vectors)
+    out += render_brief("review", context)
     for label, text in parts:
         out += "\n=== %s\n" % label + text
-    return out
+    return out + "\n\n" + vector_block(vectors) + "\n" + load_tail()
 
 
 def sha256(prompt: str) -> str:

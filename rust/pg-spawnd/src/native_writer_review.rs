@@ -2,6 +2,7 @@
 //! spawner review run on the exact head, its verdict read from the run record.
 use super::{context, Host};
 use crate::{late_review, native_writer::Driver};
+use pg_worker_core::review_split::REVIEW_OUTPUT_SECTION;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
@@ -72,6 +73,7 @@ impl Host {
     pub(super) fn checks(&self) -> Result<String, String> {
         let mut log = String::new();
         let pin = self.base_pin();
+        self.check_item_trailers(&pin)?;
         let range = |extra: &[&str]| {
             let mut args: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
             args.extend(["--base".into(), pin.clone(), "--head".into(), "HEAD".into()]);
@@ -117,6 +119,35 @@ impl Host {
             log.push_str(&format!("== {gate} ({})\n{both}\n", result.status));
         }
         Ok(log)
+    }
+    fn check_item_trailers(&self, pin: &str) -> Result<(), String> {
+        let assigned = context::item_keys(&self.brief);
+        let range = format!("{pin}..HEAD");
+        let mut args = vec![
+            "log",
+            "-z",
+            "--format=%H%x00%(trailers:key=Plan-Item,valueonly,unfold)",
+            &range,
+        ];
+        // A base refresh can import upstream commits after the original pin.
+        let upstream = self
+            .git(&["rev-parse", "--verify", "refs/remotes/origin/main"])
+            .ok()
+            .map(|sha| format!("^{sha}"));
+        args.extend(upstream.as_deref());
+        args.push("--");
+        let log = self.git(&args)?;
+        let mut records = log.split_terminator('\0');
+        while let (Some(commit), Some(trailers)) = (records.next(), records.next()) {
+            for item in trailers.lines().map(str::trim) {
+                if !assigned.iter().any(|key| key == item) && !item.is_empty() {
+                    return Err(format!(
+                        "commit {commit}: Plan-Item outside writer brief: {item}"
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
     /// Item-context evidence of the versioned review brief, from the writer brief and the
     /// exact diff: item keys, whole done criteria, invariants, both SHAs, the public symbols
@@ -213,7 +244,7 @@ impl Host {
         } else {
             format!("[review-skill]\n{skill}\n[/review-skill]\n\n")
         };
-        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR. To read the review diff, use git diff {diff_base} {head}.{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR. To read the review diff, run:\ngit diff {diff_base} {head}\n{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
         let messages = self.git(&[
             "log",
             "--reverse",
@@ -233,7 +264,7 @@ impl Host {
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head}, check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head}.\n")),
         }
-        prompt.push_str(&format!("Name each finding as file:line. Include one TEST-GAMING: line using the seat's required format. List the repository files you opened in a FILES READ: line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
+        prompt.push_str(&format!("{REVIEW_OUTPUT_SECTION}Name each finding as file:line. Include one TEST-GAMING: line and a FILES READ: line using the seat's required formats. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
         Ok(prompt)
     }
     /// One review run through the spawner, role review with every writer family of the range excluded,
@@ -294,7 +325,12 @@ impl Host {
         }
         // Fixed prefix, the review skill as rules and the item context of the versioned
         // review brief, from the one renderer; the context carries the actual evidence.
-        let context = self.brief_context(base, head);
+        let mut context = self.brief_context(base, head);
+        context["writer_run"] = json!({
+            "review_dir": self.reviews,
+            "writer_status_path": writer.get("writer_status_path"),
+            "writer_slices_path": writer.get("writer_slices_path"),
+        });
         let versioned =
             pg_worker_core::writer_families::render_review_brief(&context, "", &trusted_python)?;
         let prompt = self.review_prompt(base, head, prev, &families, &versioned, &skill)?;

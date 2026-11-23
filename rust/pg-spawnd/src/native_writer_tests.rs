@@ -594,7 +594,8 @@ fn native_prompt_starts_with_header_then_role_skill() {
     };
     run(&mut driver, json!({}), "the brief");
     let header = crate::role_header::header("codex", "implement");
-    assert!(driver.prompts[0].starts_with(&format!("{header}\n\n{skill}\nthe brief")));
+    let rules = crate::role_header::NATIVE_RULES;
+    assert!(driver.prompts[0].starts_with(&format!("{header}\n\n{skill}\n{rules}\n\nthe brief")));
     assert!(!driver.prompts[0].contains("AutoOS"));
 }
 #[test]

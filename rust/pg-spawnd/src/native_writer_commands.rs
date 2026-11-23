@@ -179,6 +179,11 @@ fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
         record["plan"]["static_v0"] = json!("native-codex");
     }
     record["cwd"] = json!(host.cwd);
+    for field in ["writer_status_path", "writer_slices_path"] {
+        if let Some(path) = request["card"][field].as_str() {
+            record[field] = json!(path);
+        }
+    }
     host.save(&record)?;
     native_writer::run(
         &mut host,
