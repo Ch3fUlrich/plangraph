@@ -365,3 +365,58 @@ def test_triggers_refuse_tampering(tmp_path):
         w.conn.execute("DROP TRIGGER trg_events_append_only_update ON events")
     with pytest.raises(db_errors.DENIED):
         w.conn.execute("SELECT 1; DROP TABLE events")
+
+
+@needs_pg
+def test_pg_v25_upgrade_records_and_protects_criteria_amendments(tmp_path, monkeypatch):
+    import psycopg
+
+    from plangraph.keeper import auth, db, db_pg, schema_pg
+    from plangraph.keeper.store import Store
+
+    name = "t_criteria_upgrade_" + uuid.uuid4().hex[:12]
+    path = tmp_path / "keeper.db"
+    options = dict(backend="postgres", dsn=DSN, schema=name)
+    with psycopg.connect(DSN, autocommit=True) as raw:
+        try:
+            with monkeypatch.context() as old:
+                old.setattr(schema_pg, "MIGRATIONS", tuple(
+                    step for step in schema_pg.MIGRATIONS if step.version <= 25))
+                with closing(db.open_db(path, create=True, **options)) as conn:
+                    auth.add_principal(conn, "router", "router", [])
+            assert db_pg.migrate(raw, name) == [26, 27]
+            with closing(db.open_db(path, **options)) as conn:
+                store = Store(conn)
+                router = auth.get_principal(conn, "router")
+                design_ref = "docs/design.md"
+                store.create_items(router, [
+                    defn("A", design_ref=design_ref), defn("GOAL", ["A"], kind="goal"),
+                ])
+                assert store.show(router, "demo:A")["design_ref"] == design_ref
+                store.edit_definition(router, "demo:A", {
+                    "done_criteria": "revised criteria",
+                    "criteria_reason": "Cover the retry path",
+                    "criteria_evidence": "D-123",
+                })
+                row = conn.execute(
+                    "SELECT a.seq, a.original_text, a.new_text, a.reason, a.evidence,"
+                    " a.authority, e.key, e.type FROM criteria_amendments a"
+                    " JOIN events e ON e.seq=a.seq").fetchone()
+                assert tuple(row)[1:] == ("criteria", "revised criteria", "Cover the retry path",
+                                          "D-123", "router", "demo:A", "item_defined")
+                with pytest.raises(psycopg.errors.ForeignKeyViolation, match="\\(seq\\)"):
+                    conn.execute(
+                        "INSERT INTO criteria_amendments"
+                        " (seq,key,original_text,new_text,reason,evidence,authority,ts)"
+                        " SELECT ?,key,original_text,new_text,reason,evidence,authority,ts"
+                        " FROM criteria_amendments", (-1,))
+                assert store.verify_integrity() == []
+            table = f'"{name}".criteria_amendments'
+            for sql in (f"UPDATE {table} SET reason='rewritten'", f"DELETE FROM {table}",
+                        f"TRUNCATE {table}"):
+                with pytest.raises(psycopg.IntegrityError, match="criteria amendments are append-only") as exc:
+                    raw.execute(sql)
+                assert exc.value.sqlstate == "23000"
+            assert raw.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
+        finally:
+            raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
