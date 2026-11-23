@@ -8,7 +8,7 @@ mod binary;
 mod common;
 use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
-use std::{os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{path::Path, process::Command};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = pg_worker_core::git_test_support::command(dir)
@@ -23,8 +23,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 fn executable(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    pg_worker_core::executable_test_support::write_private_executable(path, text);
 }
 fn payload(reply: &Value) -> Value {
     serde_json::from_str(

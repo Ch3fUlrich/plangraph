@@ -52,7 +52,7 @@ fn rust_release_installs_train_cli_and_spawner_together() {
     fs::write(&stamp, before).unwrap();
     let cargo = tools.join("cargo");
     fs::create_dir_all(&tools).unwrap();
-    fs::write(
+    pg_worker_core::executable_test_support::write_executable(
         &cargo,
         r#"#!/bin/sh
 set -eu
@@ -65,10 +65,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 "#,
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let target = home.join("fixture-artifacts");
     let path = std::env::join_paths([
         bin.as_path(),

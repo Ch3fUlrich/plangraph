@@ -4,7 +4,7 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
-use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+use std::{fs, path::Path};
 
 #[test]
 fn sccache_environment_uses_one_host_cache_and_falls_back_when_missing() {
@@ -12,8 +12,7 @@ fn sccache_environment_uses_one_host_cache_and_falls_back_when_missing() {
     let tools = home.path().join("bin");
     fs::create_dir(&tools).unwrap();
     let cache = tools.join("sccache");
-    fs::write(&cache, "fixture").unwrap();
-    fs::set_permissions(&cache, fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(&cache, "fixture");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
     let output = test_python::command()
         .env("PYTHONPATH", source)

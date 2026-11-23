@@ -1,6 +1,6 @@
 //! Real Git merges and pushes; only GitHub and the orchestrator are fixtures.
 #![cfg(unix)]
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -23,8 +23,10 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().into()
 }
 fn script(path: &Path, body: &str) {
-    fs::write(path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        path,
+        format!("#!/bin/sh\nset -eu\n{body}\n"),
+    );
 }
 fn commit(repo: &Path, message: &str) {
     git(repo, &["add", "."]);

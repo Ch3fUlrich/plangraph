@@ -657,7 +657,6 @@ mod tests {
 
     #[test]
     fn rebase_onto_a_failing_hook_is_an_error_not_a_conflict() {
-        use std::os::unix::fs::PermissionsExt;
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let wt = attempt_worktree(r.path(), &base, root.path());
@@ -666,14 +665,12 @@ mod tests {
         let hooks = git_common_dir(r.path()).unwrap().join("hooks");
         std::fs::create_dir_all(&hooks).unwrap();
         let hook = hooks.join("pre-rebase");
-        std::fs::write(
+        pg_worker_core::executable_test_support::write_executable(
             &hook,
             "#!/bin/sh
 exit 1
 ",
-        )
-        .unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let res = rebase_onto(&wt, &moved);
         assert!(matches!(res, Err(MergeError::Git(_))), "{res:?}");
     }

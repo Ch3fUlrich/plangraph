@@ -117,17 +117,14 @@ fn role_rule_precedes_adapter_and_dry_run() {
         }
         return;
     }
-    use std::os::unix::fs::PermissionsExt;
     let temp = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
     std::fs::create_dir(&temp).unwrap();
     let script = temp.join("adapter.sh");
     let marker = temp.join("called");
-    std::fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &script,
         "#!/bin/sh\ntouch \"$PG_LEG_REF_MARKER\"\nprintf '{}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -197,11 +194,10 @@ fn wired_adapter_case(invalid: bool) {
         }
         return;
     }
-    use std::os::unix::fs::PermissionsExt;
     let temp = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
     std::fs::create_dir(&temp).unwrap();
     let script = temp.join("adapter.sh");
-    std::fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &script,
         r#"#!/bin/sh
 printf '%s\n' "$*" >> "$PG_LEG_REF_STATE/calls"
@@ -211,16 +207,12 @@ route) printf '{"legs":[{"id":"registered","harness":"test","model":"provider/mo
 *) exit 9;;
 esac
 "#,
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let launch = temp.join("launch.sh");
-    std::fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &launch,
         "#!/bin/sh\nprintf '{\"argv\":[\"true\"],\"cwd\":\".\",\"env\":{},\"stdin\":\"test\",\"prompt\":\"test\"}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let name = if invalid {
         "invalid_ref_never_calls_adapter_in_on"
     } else {
