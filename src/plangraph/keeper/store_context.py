@@ -451,12 +451,14 @@ class ContextMixin:
             with timing.outside_request_lock():
                 book = src.decision_book(adapter)
             work = self._indexed_delivery(indexes, item["key"], project, book)
+            facts = []
             if work["commits"]:
-                raise Refused("bad_state", f"{item['key']} stale: already merged: "
-                              f"{work['commits'][0].get('source', 'Plan-Item commit')} {work['commits'][0]['sha'][:8]}")
+                head = work["commits"][0]
+                facts.append(f"already merged: {head.get('source', 'Plan-Item commit')} {head['sha'][:8]}")
+            override = self._stale_override(item["key"], reason, facts)
             if unknown:
                 raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
-            return None
+            return override
         index = self._item_neighborhood(item)
         if "clock" not in shared:
             shared["clock"] = self._decision_clock()
@@ -484,10 +486,14 @@ class ContextMixin:
             facts.append("work index unverified: " + work_index["reason"])
         if unknown:
             facts.append("work index unverified: open PR inventory unavailable: " + ", ".join(unknown))
+        return self._stale_override(item["key"], reason, facts)
+
+    @staticmethod
+    def _stale_override(key, reason, facts):
         if not facts:
             return None
         if reason is None:
-            raise Refused("bad_state", f"{item['key']} stale: " + " | ".join(facts)
+            raise Refused("bad_state", f"{key} stale: " + " | ".join(facts)
                           + " (override: force_stale=<reason>, audited)")
         return {"reason": reason, "overrode": facts}
 
