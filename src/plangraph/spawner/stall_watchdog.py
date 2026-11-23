@@ -451,7 +451,7 @@ def main(argv=None, *, hung_config=None):
         if (state / 'run-lifecycle').exists():
             from .remote_ps import lifecycle_command
             try:
-                lifecycle_command(state, 'record-recover', capture_output=True)
+                lifecycle_command(state, 'record-recover', stdout=subprocess.DEVNULL)
             except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
                 recovery_findings.append(dict(rule='run-lifecycle-recovery', reason=type(exc).__name__))
         spawn_service(state=state).retry_completions()

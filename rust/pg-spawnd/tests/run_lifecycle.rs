@@ -76,6 +76,54 @@ fn lifecycle_replays_terminal_publication_after_interruption() {
     assert_eq!(resumed["next_cursor"], 3);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn external_recovery_removes_a_stale_terminal_marker() {
+    let state = tempfile::tempdir().unwrap();
+    publish(state.path(), "completed", json!(2));
+    let markers = state.path().join("run-lifecycle/external");
+    std::fs::create_dir(&markers).unwrap();
+    let marker = markers.join("run-fixture");
+    std::fs::write(&marker, b"").unwrap();
+
+    assert!(command(state.path())
+        .arg("record-recover")
+        .status()
+        .unwrap()
+        .success());
+    assert!(!marker.exists(), "terminal marker should be retired");
+    assert_eq!(page(state.path(), "0")["next_cursor"], 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn external_recovery_reports_record_read_failures_and_keeps_processing() {
+    let state = tempfile::tempdir().unwrap();
+    publish(state.path(), "completed", json!(2));
+    let markers = state.path().join("run-lifecycle/external");
+    std::fs::create_dir(&markers).unwrap();
+    let unavailable = ["run-missing", "run-unreadable", "run-malformed"];
+    for id in unavailable.into_iter().chain(["run-fixture"]) {
+        std::fs::write(markers.join(id), b"").unwrap();
+    }
+    std::fs::create_dir_all(state.path().join("runs/run-unreadable/record.json")).unwrap();
+    let malformed = state.path().join("runs/run-malformed/record.json");
+    std::fs::create_dir(malformed.parent().unwrap()).unwrap();
+    std::fs::write(malformed, b"{").unwrap();
+
+    let output = command(state.path())
+        .arg("record-recover")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    for id in unavailable {
+        assert!(stderr.contains(id), "missing diagnostic for {id}: {stderr}");
+        assert!(markers.join(id).exists(), "{id} should remain retryable");
+    }
+    assert!(!markers.join("run-fixture").exists());
+}
+
 #[test]
 fn legacy_spawner_publishes_and_replays_backlog_after_host_recovers() {
     if !cfg!(unix) {

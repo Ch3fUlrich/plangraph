@@ -3,7 +3,7 @@ use pg_worker_core::run::{
     finalize::now,
     group_unix::proc_start_time,
     lifecycle,
-    record::{new_run_id, run_dir, valid_run_id},
+    record::{new_run_id, run_dir, valid_run_id, Status},
     record_io::atomic_write_private,
 };
 use serde_json::{json, Value};
@@ -111,9 +111,32 @@ pub fn recover(state: &Path) -> io::Result<()> {
             continue;
         };
         let path = state.join("runs").join(id).join("record.json");
-        let record: Value = serde_json::from_slice(&fs::read(&path)?)?;
-        if record["status"] != "running" || record["run_id"] != id {
+        let record: Value = match fs::read(&path)
+            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(io::Error::from))
+        {
+            Ok(record) => record,
+            Err(error) => {
+                eprintln!("external recovery: could not read record for {id}: {error}");
+                continue;
+            }
+        };
+        if record["run_id"] != id {
             continue;
+        }
+        match record["status"].as_str().and_then(Status::parse) {
+            Some(Status::Running) => {}
+            Some(status) if status.is_terminal() => {
+                match fs::remove_file(marker.path()) {
+                    Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                        eprintln!(
+                            "external recovery: could not remove terminal marker for {id}: {error}"
+                        );
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            _ => continue,
         }
         if record["run_kind"] == "fleet-session" {
             let witness = state.join(FLEET_OUTCOMES).join(format!("{id}.json"));
