@@ -39,9 +39,9 @@ from pathlib import Path
 from queue import SimpleQueue
 
 from .. import inbox, views
-from . import outage, timing
+from . import timing
 from .snapshot_io import SnapshotPublication, write_snapshot  # noqa: F401  (re-exported; M2B signing)
-from .snapshot_writer import SnapshotWriter
+from .snapshot_writer import Reaper, SnapshotWriter
 from . import api_routes, audit_meta, auth, brief, changelog, db, fmt
 from .auth import Principal, RunPrincipal
 from .errors import ConnectionLost, Refused
@@ -458,9 +458,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "close_merged_auto":
             if "refresh" in body:
                 self.server.store._require_role(principal, "system", "router")
-                return self.server.refresh_merge_index(body["refresh"])
-            if self.server.merge_refresh == "running" and body.get("repos_only") is not True:
-                raise Refused("conflict", "merge index refresh is running")
+                return self.server.merge_refresh.control(body["refresh"])
+            if body.get("repos_only") is not True:
+                self.server.merge_refresh.consume()
         if name in ("ingest_host_sample", "mint_host_token", "revoke_host_token"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_write"]).http_write(self.server.store, principal, name, body)
         if name == "write_receipt":
             return self.server.store.write_receipt(principal, body)
@@ -581,48 +581,6 @@ class KeeperHandler(BaseHTTPRequestHandler):
 # server + reaper
 # --------------------------------------------------------------------------- #
 
-class Reaper(threading.Thread):
-    """Calls ``Store.reap`` every ``config.reap_interval`` seconds."""
-
-    def __init__(self, server):
-        super().__init__(name="keeper-reaper", daemon=True)
-        self.server = server
-        self.interval = getattr(server.config, "reap_interval", 60.0)
-        #: NOT ``_stop``: ``Thread`` owns that name; shadowing it breaks join.
-        self._halt = threading.Event()
-        self._published_reap = 0
-
-    def run(self):
-        while not self._halt.wait(self.interval):
-            try:
-                with timing.RequestTimer(self.server.lock, event="reaper_timing"):
-                    store = self.server.store
-                    store.reap(self.server.system)
-                    revision = getattr(store, "_reap_revision", 0)
-                    writer = self.server.snapshot_writer
-                    publication = self.server.snapshot_publication
-                    retry = writer is None and publication.requested > publication.latest
-                    if revision != self._published_reap or retry:
-                        if writer is None:
-                            write_snapshot(self.server, self.server.system)
-                        else:
-                            writer.mark()
-                        self._published_reap = revision
-                    outage.stamp(self.server.config)      # M2B-OUTBOX: liveness for the outage grace
-                    if self.server.anchorer is not None:      # M2B-ANCHOR: done transitions + hourly
-                        self.server.anchorer.tick(self.server.store.conn)
-            except ConnectionLost:
-                self.server.fail("postgres connection lost")
-                continue
-            except Exception:  # noqa: BLE001 - the reaper never dies loudly
-                continue
-
-    def stop(self):
-        self._halt.set()
-        if self.is_alive():
-            self.join(timeout=2)
-
-
 class KeeperHTTPServer(ThreadingHTTPServer):
     """One ``Store`` guarded by one lock, plus a system principal for reaps."""
 
@@ -635,7 +593,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.config = config
         self.lock = threading.RLock()
         self.snapshot_publication = SnapshotPublication()
-        self.merge_refresh = None
+        self.merge_refresh = api_routes.MergeRefresh(self)
         self._audit_thread = None
         self.system = system or Principal("system", "system", [], None)
         self.reaper = None
@@ -738,34 +696,6 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         while (audits := self._read_audits.get()) is not None:
             with self.lock:
                 self._apply_read_audits(audits)
-
-    def refresh_merge_index(self, action):
-        """The merge-close timer starts a scan and checks its status in separate calls."""
-        if action == "projects":
-            return {"projects": sorted({project for _, project in self.store.merge_candidates()})}
-        if action not in ("start", "status"):
-            raise Refused("validation", "refresh must be start, status or projects")
-        if action == "start" and self.merge_refresh != "running":
-            self.merge_refresh = "running"
-            threading.Thread(target=self._build_merge_index, name="keeper-merge-index", daemon=True).start()
-        return {"scan": self.merge_refresh or "idle"}
-
-    def _build_merge_index(self):
-        try:
-            with self.lock:
-                scan = copy(self.store)
-                candidates = scan.merge_candidates()
-            scan.warm_merge_scan(candidates)
-            published = {field: scan.__dict__[field] for field in
-                         ("_warmed", "_lanes", "_deploy_warm", "_merge_scan_errors")}
-        except Exception as exc:  # report the failure without repository paths or subprocess output
-            published = dict(_warmed={}, _lanes={}, _deploy_warm={},
-                             _merge_scan_errors={"*": f"merge_scan_failed: {type(exc).__name__}"})
-        with self.lock:
-            self.store.__dict__.update(published)
-            self.merge_refresh = "ready"
-        log.info("merge_index_refresh repos=%d failed=%d", len(published["_warmed"]),
-                 len(published["_merge_scan_errors"]))
 
     def fail(self, reason: str) -> None:
         """Record fatal failure once; calls on_fatal hook (I2, S2)."""
