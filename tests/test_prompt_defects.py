@@ -75,8 +75,9 @@ def test_tail_standing_question(mode):
                    '--- a/src/example.py\n+++ b/src/example.py\n@@ -1 +1 @@\n-value = 0\n+value = 1\n'))
     assert prompts
     for prompt in prompts:
-        assert text.rstrip() in prompt
-        assert prompt.index(text.rstrip()) < prompt.index("=== ITEM CONTEXT")
+        assert prompt.rstrip().endswith(text.rstrip())
+        assert prompt.index("=== ITEM CONTEXT") < prompt.index("=== FILE-PART MAP")
+        assert prompt.index("value = 1") < prompt.index(text.rstrip())
         assert prompt.count('Does the change game tests') == 1
 
 def test_claude_skill_pointers():
