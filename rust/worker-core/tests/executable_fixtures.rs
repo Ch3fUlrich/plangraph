@@ -25,12 +25,7 @@ fn executable_fixtures_use_the_shared_writer() {
                 }
                 let source = std::fs::read_to_string(&path).unwrap();
                 for (number, line) in source.lines().enumerate() {
-                    if (line.contains("0o755") || line.contains("0o700"))
-                        && (line.contains("from_mode")
-                            || line.contains("set_mode")
-                            || line.contains(".chmod("))
-                        && !mode_is_not_a_fixture_write(&name, line)
-                    {
+                    if writes_executable_mode(line) && !mode_is_not_a_fixture_write(&name, line) {
                         offenders.push(format!("{name}:{}", number + 1));
                     }
                 }
@@ -47,13 +42,17 @@ fn executable_fixtures_use_the_shared_writer() {
 
 fn mode_is_not_a_fixture_write(path: &str, line: &str) -> bool {
     match path {
-        // The shared fixture writer and production file writers.
-        "worker-core/src/executable_test_support.rs"
-        | "plangraph-cli/src/atomic.rs"
-        | "plangraph-cli/src/host_sync_release.rs" => {
-            line.contains("file.set_permissions(")
-                || line.trim() == ".set_permissions(fs::Permissions::from_mode(0o755))?;"
+        // Production file writers and directory permissions.
+        "plangraph-cli/src/atomic.rs" => {
+            line.trim() == "file.set_permissions(fs::Permissions::from_mode(0o755))"
         }
+        "plangraph-cli/src/host_sync_release.rs" => {
+            line.trim() == ".set_permissions(fs::Permissions::from_mode(0o755))?;"
+        }
+        "pg-spawnd/src/session/storage.rs" => line.trim() == ".mode(0o700)",
+        "plangraph-cli/src/keeper_outbox/mod.rs"
+        | "worker-core/src/run/record_io.rs"
+        | "worker-core/src/writer_blob.rs" => line.trim() == "builder.mode(0o700);",
         // This test keeps the write descriptor open to trigger the busy-exec retry.
         "worker-core/src/stall.rs" => line.contains("set_permissions(&p,"),
         // These tests exercise mode metadata or directory access.
@@ -61,9 +60,13 @@ fn mode_is_not_a_fixture_write(path: &str, line: &str) -> bool {
             line.contains("set_permissions(&dir,")
                 || line.contains("set_permissions(&target,")
                 || line.contains("set_permissions(path,")
+                || line.trim() == "b.mode(0o700);"
         }
         "worker-core/src/finalize_promote_tests.rs" => line.contains("set_permissions(&dir,"),
-        "worker-core/src/private_targets_tests.rs" => line.contains("set_permissions(&public,"),
+        "worker-core/src/private_targets_tests.rs" => {
+            line.contains("set_permissions(&public,")
+                || line.contains("DirBuilder::new().mode(0o700).create(")
+        }
         "worker-core/src/slots/liveness/tests.rs" => line.contains("set_permissions(&parent,"),
         "worker-core/src/slots/liveness/tests/lock_tests.rs" => {
             line.contains("set_permissions(&fd_dir,") || line.contains("set_permissions(&parent,")
@@ -77,10 +80,14 @@ fn mode_is_not_a_fixture_write(path: &str, line: &str) -> bool {
             line.contains("set_permissions(path,")
         }
         "pg-spawnd/tests/common/mod.rs" => {
-            line.contains(".permissions(") || line.contains("set_permissions(dir.path(),")
+            line.contains(".permissions(std::fs::Permissions::from_mode(")
+                || line.contains("set_permissions(dir.path(),")
+                || line.contains("DirBuilder::new().mode(0o700).create(")
         }
         "pg-spawnd/src/transport_unix.rs" => {
-            line.contains(".permissions(")
+            line.contains(".permissions(std::fs::Permissions::from_mode(")
+                || line.trim() == ".mode(0o700)"
+                || line.contains("DirBuilder::new().mode(0o700).create(")
                 || line.contains("set_permissions(base,")
                 || line.contains("set_permissions(&dir,")
         }
@@ -88,7 +95,56 @@ fn mode_is_not_a_fixture_write(path: &str, line: &str) -> bool {
         "worker-core/src/fleet_foundation_tick_state_tests.rs" => {
             line.contains(r#"set_permissions(".","#)
         }
-        "worker-core/src/reap_journal.rs" => line.contains(".permissions("),
+        "worker-core/src/reap_journal.rs" => {
+            line.contains(".permissions(fs::Permissions::from_mode(")
+        }
         _ => false,
+    }
+}
+
+fn writes_executable_mode(line: &str) -> bool {
+    ["::from_mode", ".set_mode", ".chmod", ".mode"]
+        .iter()
+        .any(|setter| {
+            line.match_indices(setter).any(|(offset, _)| {
+                let rest = line[offset + setter.len()..].trim_start();
+                let Some(literal) = rest.strip_prefix('(').map(str::trim_start) else {
+                    return false;
+                };
+                let (radix, digits) = if let Some(digits) = literal.strip_prefix("0o") {
+                    (8, digits)
+                } else if let Some(digits) = literal.strip_prefix("0x") {
+                    (16, digits)
+                } else if let Some(digits) = literal.strip_prefix("0b") {
+                    (2, digits)
+                } else {
+                    (10, literal)
+                };
+                let end = digits
+                    .find(|ch: char| !ch.is_digit(radix) && ch != '_')
+                    .unwrap_or(digits.len());
+                u32::from_str_radix(&digits[..end].replace('_', ""), radix)
+                    .is_ok_and(|mode| mode & 0o111 != 0)
+            })
+        })
+}
+
+#[test]
+fn recognizes_mode_setters_with_any_execute_bit() {
+    for setter in [
+        "OpenOptions::new().mode(0o711)",
+        "Permissions::from_mode(0o100)",
+        "permissions.set_mode(0o010)",
+        "path.chmod(0o001)",
+        "OpenOptions::new().mode(0x1ff)",
+    ] {
+        assert!(writes_executable_mode(setter), "{setter}");
+    }
+    for other in [
+        "OpenOptions::new().mode(0o644)",
+        "metadata.permissions().mode() & 0o111",
+        "Permissions::from_mode(0o600)",
+    ] {
+        assert!(!writes_executable_mode(other), "{other}");
     }
 }
