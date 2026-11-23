@@ -563,9 +563,12 @@ async def native_spawn(self, card, options):
     except (TypeError, ValueError) as exc:
         raise SpawnRefused(str(exc)) from exc
     binary = _projection_binary()
+    from .host_ready import harness_path
+    tool_env = dict(os.environ)
+    tool_env['PATH'] = harness_path(tool_env, native_writer=True)
     # Resolve on the placed host before creating a run or acknowledging admission.
     probe = await asyncio.create_subprocess_exec(binary, 'native-tools', '--check-sandbox',
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=tool_env)
     tools, error = await probe.communicate()
     if probe.returncode:
         raise SpawnRefused(error.decode(errors='replace').strip())

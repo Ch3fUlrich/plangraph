@@ -132,3 +132,59 @@ SSH transport failures up to three checks and reports the confirmed outage
 time when the monitor has one. Use `ssh-status` to guard steps with side effects.
 `pg-package-host --state` uses the same state directory to queue launches when
 the selected SSH route has a confirmed outage.
+
+
+## Host release binaries
+
+After fast-forwarding the main checkout, run `host-sync --install-release REPO`
+with the host's shared `CARGO_TARGET_DIR` in the environment. On the first
+rollout, build the entry point with
+`cargo build --manifest-path REPO/rust/Cargo.toml --release -p plangraph-cli --bin host-sync`.
+Use that entry point as the release step in the host-sync schedule. It installs
+`pg-spawnd`, `pg-disk-hygiene`, `plangraph` and `turn-budget-hook` in
+`~/.local/bin` and records the installed Rust tree in
+`${XDG_STATE_HOME:-$HOME/.local/state}/plangraph/release-built-tree`.
+Keep `~/.local/bin` on the landing and pre-push workers' PATH.
+
+
+On disk-hygiene workers, run `host-sync --install-env disk-hygiene` to create
+`~/.config/plangraph/disk-hygiene-service.env` with the checkout at
+`~/code/plangraph`, its `.claude/worktrees` directory and
+`~/.config/plangraph/pins.json`. The pins producer must publish that file
+before the first tick. The disk service still reads an existing
+`disk-hygiene.env` and the installer preserves it. The sweep bootstrap
+provisions that shared file independently. When both files exist, the
+disk service uses `disk-hygiene-service.env` for keys present in both.
+
+On the WSL worker, an operator installs the trusted release artifact at
+`/usr/local/bin/pg-spawnd` with `install -o root -g root -m 0755`, then runs
+`host-sync --install-wsl-guard POLICY HOST` as root. The installer checks
+that executable and writes the system units and the memory floor if the
+floor file is absent. The policy's default floor is 20480 MiB. Include
+retirement of the temporary WSL cache timer after replacement verification
+and check for overlap with existing disk cleanup timers in the deploy ask.
+
+
+On the keeper host, include `--with-keeper-backup` in the release install and
+run `host-sync --install-env keeper-backup`. It creates the mode-0600 env file
+from the empty connection fields in `keeper-backup.env.example`. The approved
+key-placement session supplies the database credentials before the backup
+unit is verified or enabled.
+
+
+On the OmniRoute gateway host, run `host-sync --install-env quota-alarms`.
+The installer uses `QUOTA_SNAPSHOT_DB` when supplied, then an explicitly
+configured `OMNIROUTE_DATA_DIR`, then the host mount backing `/app/data`
+when `QUOTA_GATEWAY_CONTAINER` is set. For an unmanaged local gateway it
+looks in `~/.omniroute` and `${XDG_DATA_HOME:-$HOME/.local/share}/omniroute`.
+It verifies that `storage.sqlite` can supply quota snapshots and reports the
+searched paths on failure. The service opens the selected file read-only.
+
+
+On the orchestration host, run `host-sync --install-env throughput`. The
+installer derives the lander's repository identity from the `origin`
+remote of `~/code/plangraph` and sets the project to `plangraph`. The unit
+reads the keeper reader's default published snapshot at
+`~/.local/share/plangraph/plan.snapshot.json`. The checkout's
+`refs/remotes/origin/main`, the lander's SQLite database and the snapshot
+must be available before the first throughput tick.
