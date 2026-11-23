@@ -2,7 +2,6 @@
 
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -33,8 +32,10 @@ impl Fixture {
 
     fn executable(&self, name: &str, body: &str) -> PathBuf {
         let path = self.bin.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        pg_worker_core::executable_test_support::write_private_executable(
+            &path,
+            format!("#!/bin/sh\n{body}\n"),
+        );
         path
     }
 

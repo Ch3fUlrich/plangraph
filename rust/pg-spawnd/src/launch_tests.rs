@@ -1,9 +1,6 @@
 use crate::launch::*;
 use serde_json::{json, Value};
-use std::{
-    os::unix::fs::PermissionsExt,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 struct TestDir(std::path::PathBuf);
 impl std::ops::Deref for TestDir {
@@ -25,8 +22,10 @@ fn fixture() -> (TestDir, Value) {
 }
 fn script(dir: &std::path::Path, body: &str) -> LaunchAdapter {
     let path = dir.join("launch");
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    pg_worker_core::executable_test_support::write_private_executable(
+        &path,
+        format!("#!/bin/sh\n{body}\n"),
+    );
     LaunchAdapter(Some(path.into_os_string()), "python3".into())
 }
 #[test]
@@ -297,12 +296,10 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
     let repo = repos.get_mut("demo").unwrap();
     repo.remote = "fixture:repo".into();
     let ssh = dir.join("stall-ssh");
-    std::fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &ssh,
         "#!/bin/sh\nprintf '%s %s\\n' \"$PPID\" \"$$\" > fetch-pids\nexec sleep 8\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+    );
     for args in [
         ["remote", "add", "origin", repo.remote.as_str()].as_slice(),
         &["config", "core.sshCommand", "./stall-ssh"],
@@ -349,6 +346,10 @@ fn native_codex_review_client_missing_has_a_distinct_exit() {
     let (dir, _) = fixture();
     let python = which_python();
     let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    pg_worker_core::executable_test_support::write_private_executable(
+        dir.join("installed-codex"),
+        "#!/bin/sh\nprintf configured-codex",
+    );
     let code = r#"
 import io, json, pathlib, subprocess, sys
 from plangraph.spawner.launch_spec import main
@@ -361,8 +362,6 @@ status = main(io.BytesIO(json.dumps(request).encode()), out, err)
 assert status == 10, (status, err.getvalue())
 assert err.getvalue().startswith('REVIEW ' + request['run_id'] + ' FAIL client_missing ')
 client = root / 'installed-codex'
-client.write_text('#!/bin/sh\nprintf configured-codex')
-client.chmod(0o700)
 resolved, _ = resolve_codex_client({'PATH':'', 'PLANGRAPH_CODEX_BIN':str(client)})
 assert subprocess.check_output([resolved], env={'PATH':''}) == b'configured-codex'
 "#;

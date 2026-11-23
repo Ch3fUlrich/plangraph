@@ -268,19 +268,16 @@ fn editable_pth_shadow_refused() {
 #[cfg(unix)]
 #[test]
 fn canary_timeout_refused() {
-    use std::os::unix::fs::PermissionsExt;
     let mut f = Fixture::new();
     let script = f._tmp.path().join("python");
     let pidfile = f._tmp.path().join("child-pid");
-    fs::write(
+    crate::executable_test_support::write_private_executable(
         &script,
         format!(
             "#!/bin/sh\ntrap '' TERM\nsleep 30 &\necho $! > '{}'\nwait\n",
             pidfile.display()
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    );
     f.repo.python = Some(script.to_str().unwrap().into());
     let started = std::time::Instant::now();
     assert!(f.import("sample").is_err());

@@ -144,11 +144,11 @@ fn writer_placement_requires_workspace_write_readiness() {
 #[test]
 fn workspace_write_probe_names_both_git_directories() {
     use pg_worker_core::host_readiness::Native;
-    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+    use std::path::PathBuf;
 
     let tmp = tempfile::tempdir().unwrap();
     let codex = tmp.path().join("codex");
-    fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &codex,
         r#"#!/bin/sh
 set -eu
@@ -167,9 +167,7 @@ shift 7
 shift
 exec "$@"
 "#,
-    )
-    .unwrap();
-    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let mut runner = Native {
         codex,
         executable: PathBuf::from(env!("CARGO_BIN_EXE_pg-host-readiness")),
@@ -186,12 +184,10 @@ exec "$@"
 fn failed_bwrap_probe_is_persisted_and_refuses_placement() {
     use pg_worker_core::host_readiness::{Native, Record, WRITER_SANDBOX};
     use pg_worker_core::package_placement::{refusal, Candidate, Policy};
-    use std::{fs, os::unix::fs::PermissionsExt};
 
     let tmp = tempfile::tempdir().unwrap();
     let codex = tmp.path().join("codex");
-    fs::write(&codex, "#!/bin/sh\ncase \"$1\" in sandbox) >&2 echo 'bwrap: setting up uid map: Permission denied'; exit 1;; esac\n").unwrap();
-    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+    pg_worker_core::executable_test_support::write_private_executable(&codex, "#!/bin/sh\ncase \"$1\" in sandbox) >&2 echo 'bwrap: setting up uid map: Permission denied'; exit 1;; esac\n");
     let mut runner = Native {
         codex,
         executable: env!("CARGO_BIN_EXE_pg-host-readiness").into(),
