@@ -278,3 +278,20 @@ def test_lane_reuses_current_policy_binary_over_cap(rig, monkeypatch, capsys):
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "0")
     assert preflight.main(["--base", "HEAD", "--lane"], repo) == 0
     assert log.read_text().count("build ") == 1
+
+
+def test_fast_gate_uses_source_keyed_policy_instead_of_unkeyed_cargo_run(rig, monkeypatch):
+    repo, log, seen = rig
+    script_path = repo / "tools/check_new_code_lang.py"
+    script_path.parent.mkdir(exist_ok=True)
+    shutil.copy(TOOLS / "check_new_code_lang.py", script_path)
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(shared_target(repo)))
+    monkeypatch.setenv("CLASS_SEARCH_BASE", "fixture-base")
+    monkeypatch.delenv("PG_POLICY_BIN", raising=False)
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS))
+    completed = preflight.subprocess.run([sys.executable, str(script_path)], cwd=repo,
+                                         text=True, capture_output=True)
+    assert completed.returncode == 0, completed
+    assert log.read_text().count("build ") == 1
+    assert seen.read_text().splitlines()[-1] == "--class-search --range fixture-base"
+    assert (preflight.policy_target(repo) / "debug/pg-policy").is_file()

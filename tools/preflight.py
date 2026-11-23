@@ -434,7 +434,7 @@ def policy_artifact(output):
     return cargo_artifact(output, 'pg-policy')
 
 
-def policy_target(root):
+def policy_target(root, target=None):
     """A Cargo target of its own for pg-policy, inside the shared target and keyed by what the binary is built from.
 
     target/debug/pg-policy of the shared target is one file that any checkout's build may replace, so a
@@ -451,7 +451,20 @@ def policy_target(root):
                           rust / 'rust-toolchain.toml') if p.is_file()]
     for path in names:
         digest.update(path.relative_to(root).as_posix().encode() + b'\0' + path.read_bytes() + b'\0')
-    return shared_cargo_target() / 'policy-bin' / digest.hexdigest()[:16]
+    return (target or shared_cargo_target()) / 'policy-bin' / digest.hexdigest()[:16]
+
+
+def policy_cached_executable(keydir):
+    executable = keydir / "debug" / ("pg-policy.exe" if os.name == "nt" else "pg-policy")
+    return executable if executable.is_file() and os.access(executable, os.X_OK) else None
+
+
+def compile_policy(root, env, keydir):
+    target = str(keydir)
+    code, output = run(policy_build_command(root), root,
+                       dict(env, CARGO_TARGET_DIR=target, CARGO_BUILD_BUILD_DIR=target))
+    executable, text = policy_artifact(output)
+    return code, text, executable
 
 
 def stage_binary(executable, cleanup, prefix):
@@ -469,9 +482,7 @@ def reuse_policy(root, cleanup):
     """Stage a policy executable keyed by the exact sources while holding its read lease."""
     try:
         with cargo_lease():
-            keydir = policy_target(root)
-            executable = keydir / "debug" / ("pg-policy.exe" if os.name == "nt" else "pg-policy")
-            if executable.is_file() and os.access(executable, os.X_OK):
+            if executable := policy_cached_executable(policy_target(root)):
                 return stage_policy_binary(executable, cleanup)
     except OSError:
         pass
@@ -494,8 +505,7 @@ def build_policy(root, env, cleanup):
         if refusal:
             return 1, refusal + '\n', None
         keydir = policy_target(root)
-        code, output = run(policy_build_command(root), root, dict(env, CARGO_TARGET_DIR=str(keydir)))
-        executable, text = policy_artifact(output)
+        code, text, executable = compile_policy(root, env, keydir)
         binary = None
         if not code:
             try:
