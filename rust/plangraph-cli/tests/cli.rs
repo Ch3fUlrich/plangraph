@@ -130,6 +130,7 @@ fn keeper_restart_checks_the_candidate_schema_before_requesting_restart() {
             interpreter.clone(),
             r#"#!/bin/sh
 printf '%s\n' "$0|$UNIT_SETTING|$*" >> "$TRACE"
+if [ "$FAIL_STEP" = migrate ] && [ "${*##* }" = --dry-run ]; then exit 0; fi
 for arg do
   if [ "$arg" = "$FAIL_STEP" ]; then exit 4; fi
 done
@@ -226,6 +227,7 @@ UNIT_SETTING='configured value' exec "$@"
         config.display(),
         dsn_file.display()
     );
+    let dry_check = format!("{migrate} --dry-run");
     let check = format!(
         "{}|configured value|-m plangraph.keeper.cli --config {} admin check-schema",
         interpreter.display(),
@@ -236,14 +238,25 @@ UNIT_SETTING='configured value' exec "$@"
         ("daemon-reload", checkout.as_path(), vec![reload]),
         ("mismatch", root.path(), vec![reload, "inspect"]),
         (
+            "--dry-run",
+            checkout.as_path(),
+            vec![reload, "inspect", dry_check.as_str()],
+        ),
+        (
             "migrate",
             checkout.as_path(),
-            vec![reload, "inspect", migrate.as_str()],
+            vec![reload, "inspect", dry_check.as_str(), migrate.as_str()],
         ),
         (
             "check-schema",
             checkout.as_path(),
-            vec![reload, "inspect", migrate.as_str(), check.as_str()],
+            vec![
+                reload,
+                "inspect",
+                dry_check.as_str(),
+                migrate.as_str(),
+                check.as_str(),
+            ],
         ),
         (
             "",
@@ -251,6 +264,7 @@ UNIT_SETTING='configured value' exec "$@"
             vec![
                 reload,
                 "inspect",
+                dry_check.as_str(),
                 migrate.as_str(),
                 check.as_str(),
                 "--user restart plangraph-keeper.service",
