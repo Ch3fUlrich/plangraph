@@ -214,7 +214,44 @@ fn terminal_records_project_without_routed_legs() {
 }
 
 #[test]
-fn null_projection_leaves_delivery_pending() {
+fn null_and_operational_projection_failures_leave_delivery_pending() {
+    let state = tempfile::tempdir().unwrap();
+    let output = test_python::command()
+        .args([
+            "-c",
+            r#"
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.spawner.notify import retry_spawn_attempts
+
+state = Path(sys.argv[1])
+run = dict(run_id='run-fixture', ended=2, status=True)
+keeper = SimpleNamespace(url='fixture', token_file='fixture')
+with patch('plangraph.fleet_snapshot._projection_binary', return_value=sys.argv[2]):
+    failed = subprocess.CompletedProcess([sys.argv[2], 'project-spawn-attempt'], 2)
+    with patch('plangraph.spawner.notify.subprocess.run', return_value=failed):
+        assert retry_spawn_attempts(state, [run], keeper=keeper) == [
+            dict(rule='spawn-attempt-delivery', run_id='run-fixture', reason='CalledProcessError')]
+    assert retry_spawn_attempts(state, [run], keeper=keeper) == []
+assert not (state / 'runs/run-fixture/attempt.delivered').exists()
+"#,
+        ])
+        .arg(state.path())
+        .arg(env!("CARGO_BIN_EXE_pg-spawnd"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn unprojectable_legacy_runs_cannot_starve_newer_deliveries() {
     let state = tempfile::tempdir().unwrap();
     let output = test_python::command()
         .args([
@@ -227,11 +264,27 @@ from unittest.mock import patch
 from plangraph.spawner.notify import retry_spawn_attempts
 
 state = Path(sys.argv[1])
-run = dict(run_id='run-fixture', ended=2, status=True)
-keeper = SimpleNamespace(url='fixture', token_file='fixture')
+legacy = [dict(run_id=f'run-old-{i}', host='fixture', ended=i+2, status='completed')
+          for i in range(26)]
+good = dict(run_id='run-new', host='fixture', role='implement', started=28,
+            ended=29, status='completed', exit_code=0)
+runs = [*legacy, good]
+for run in runs:
+    (state / 'runs' / run['run_id']).mkdir(parents=True)
+delivered = []
+keeper = SimpleNamespace(url='fixture', token_file='fixture', spawn_attempt=delivered.append)
 with patch('plangraph.fleet_snapshot._projection_binary', return_value=sys.argv[2]):
-    assert retry_spawn_attempts(state, [run], keeper=keeper) == []
-assert not (state / 'runs/run-fixture/attempt.delivered').exists()
+    first = retry_spawn_attempts(state, runs, keeper=keeper)
+    second = retry_spawn_attempts(state, runs, keeper=keeper)
+    assert [row['attempt_id'] for row in delivered] == ['run-new'], delivered
+    assert [row['run_id'] for row in first] == [run['run_id'] for run in legacy[:25]]
+    assert [row['run_id'] for row in second] == ['run-old-25']
+    assert {row['reason'] for row in first + second} == {'unprojectable'}
+    assert retry_spawn_attempts(state, runs, keeper=keeper) == []
+for run in legacy:
+    assert (state / 'runs' / run['run_id'] / 'attempt.delivered').read_text() == 'unprojectable\n'
+assert (state / 'runs/run-new/attempt.delivered').read_text() == 'delivered\n'
+assert len(delivered) == 1
 "#,
         ])
         .arg(state.path())
