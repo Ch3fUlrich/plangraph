@@ -176,3 +176,6 @@ scoped deployment GO. Its regression test reads the versioned effective
 settings and exercises the Bash and context outage alerts. The fixture execution
 runs in the Unix hook test suite.
 [Fail-closed registration](guard-hooks.md)
+
+The hook test suite publishes fake executables with the shared Rust fixture
+writer so parallel process launches cannot race a direct script write.

@@ -46,3 +46,6 @@ systemctl --user start pg-keeper-backup.service && journalctl --user -u pg-keepe
 ```
 
 Test: `cargo test -p pg-keeper-backup`. Rules run against a fake `Pg`; `tests/cli.rs` runs the real command line against a fake `docker` executable that checks the commands, the `0600` modes and that a sentinel password never reaches output or logs; `tests/units.rs` runs `systemd-analyze verify` when it is installed. No test needs a Postgres server.
+
+The systemd unit verification fixture uses the shared atomic writer for its
+stand-in backup executable.

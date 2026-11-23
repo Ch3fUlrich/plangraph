@@ -406,12 +406,10 @@ mod tests {
 
     fn make_exec(path: &Path) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        pg_worker_core::executable_test_support::write_executable(path, "#!/bin/sh\nexit 0\n");
+        #[cfg(not(unix))]
+        fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
     }
 
     #[test]

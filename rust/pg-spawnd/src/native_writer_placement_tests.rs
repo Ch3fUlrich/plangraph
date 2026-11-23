@@ -63,8 +63,30 @@ with tempfile.TemporaryDirectory() as directory:
 #[test]
 fn overflow_review_bundle_materializes_unpublished_commits_on_receiver() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = test_python::command()
+    let folder = tempfile::tempdir().unwrap();
+    let mut python = test_python::command();
+    let executable = python.get_program().to_string_lossy();
+    let script = r#"from pathlib import Path
+import json, os, sys, tempfile
+from plangraph.spawner.prompt_input import checkout_review
+
+args = sys.argv
+diff = json.loads(Path(args[args.index('--card') + 1][1:]).read_text())['diff_ref']
+assert Path(diff['repo']) == Path.cwd()
+with tempfile.TemporaryDirectory() as directory:
+    checkout = Path(directory) / 'checkout'
+    head = checkout_review(diff, checkout)
+    assert (checkout / 'change.txt').read_text() == 'reviewed exactly'
+print(json.dumps({'run_id':'run-fixture', 'status':'completed', 'head_sha':head,
+                  'host':os.environ['PLANGRAPH_PLACED_HOST']}))
+"#;
+    pg_worker_core::executable_test_support::write_private_executable(
+        folder.path().join("python3"),
+        format!("#!{executable}\n{script}"),
+    );
+    let output = python
         .current_dir(&root)
+        .env("PG_FIXTURE_PYTHON_BIN", folder.path())
         .env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 from pathlib import Path
@@ -95,25 +117,7 @@ with tempfile.TemporaryDirectory() as directory:
     absent = subprocess.run(['git', '-C', target, 'cat-file', '-e', head],
                             env=checkout_env(), capture_output=True)
     assert absent.returncode != 0
-    folder = root / 'bin'
-    folder.mkdir()
-    launch = folder / 'python3'
-    launch.write_text('#!' + sys.executable + '\n' + """
-from pathlib import Path
-import json, os, sys, tempfile
-from plangraph.spawner.prompt_input import checkout_review
-
-args = sys.argv
-diff = json.loads(Path(args[args.index('--card') + 1][1:]).read_text())['diff_ref']
-assert Path(diff['repo']) == Path.cwd()
-with tempfile.TemporaryDirectory() as directory:
-    checkout = Path(directory) / 'checkout'
-    head = checkout_review(diff, checkout)
-    assert (checkout / 'change.txt').read_text() == 'reviewed exactly'
-print(json.dumps({'run_id':'run-fixture', 'status':'completed', 'head_sha':head,
-                  'host':os.environ['PLANGRAPH_PLACED_HOST']}))
-""")
-    launch.chmod(0o700)
+    folder = Path(os.environ['PG_FIXTURE_PYTHON_BIN'])
     run = subprocess.run
     def transport(argv, **options):
         if argv[0] == 'ssh':
