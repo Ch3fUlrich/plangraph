@@ -102,6 +102,28 @@ class CardUpdatesMixin:
 
         return self._run(principal, "spawn_attempts", None, read)
 
+    def spawn_attempt_coverage(self, principal, day):
+        from datetime import UTC, datetime, timedelta
+
+        def read(now):
+            self._require_role(principal, "spawner", "system")
+            if principal.projects:
+                raise Refused("forbidden", "attempt coverage requires all-project access")
+            try:
+                start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
+                end = start + timedelta(days=1)
+                if start.date().isoformat() != day:
+                    raise ValueError()
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise Refused("validation", "expected a UTC day as YYYY-MM-DD") from exc
+            rows = self.conn.execute(
+                "SELECT attempt_id AS run_id, host FROM attempts"
+                " WHERE attempt_id IS NOT NULL AND ended_at>=? AND ended_at<?"
+                " ORDER BY attempt_id", (self._iso(start.timestamp()), self._iso(end.timestamp())))
+            return [dict(row) for row in rows]
+
+        return self._run(principal, "spawn_attempt_coverage", None, read)
+
     # ------------------------------------------------------------- attempts
     def record_attempt(self, principal, key, attempt):
         result = self._run(principal, "record_attempt", key,
