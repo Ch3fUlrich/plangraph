@@ -16,9 +16,9 @@ Every L1 launch or relaunch prompt starts with: "Invoke the skill unattended-orc
 
 ## Router startup
 
-The fleet launcher adds an instruction to read `skills/router-core/SKILL.md`
-to the `routing` role's system prompt on launch and recycle. The Batch mode
-section gives the procedure for work spanning multiple items.
+The fleet launcher instructs the `routing` role to invoke the `router-core`
+skill on launch and recycle. Its Batch mode section gives the procedure for
+work spanning multiple items.
 
 ## Quiet fleet (D-1364, D-1377)
 Every launch prompt says: no recurring cron in any session (wait via one background command that exits); keep a card of at most 40 lines next to the handoff, refreshed before 230k, then `CARD-READY <path>` to the router; messages only for BLOCKED, DONE, GO, incident, launch; no ALIVE or ack messages (check the job state yourself). The router sends no acks either.
