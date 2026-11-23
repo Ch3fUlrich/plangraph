@@ -695,3 +695,14 @@ def test_go_req_key_list_works_for_a_land_state_without_a_base_name(env):
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 0, result.stderr
     assert "GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B]" in result.stdout
+
+
+def test_push_renders_the_pr_body_key_list_at_the_new_head(env):
+    """A resolver commit added before a second push is in the PR body of that push, not the next one."""
+    st = go_ready(env)
+    wt = Path(st["worktree"])
+    (wt / "resolver.txt").write_text("fix\n")
+    env.git("add", "-A", cwd=wt)
+    env.git("commit", "-qm", "resolver slice\n\nPlan-Item: plangraph:RESOLVER-KEY", cwd=wt)
+    assert env.run("push", "--name", "g1").returncode == 0
+    assert "GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B,plangraph:RESOLVER-KEY]" in env.load()["prs"]["100"]["body"]

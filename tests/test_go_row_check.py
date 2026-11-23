@@ -116,3 +116,58 @@ def test_a_row_must_name_exactly_the_delivered_trailered_keys(train_repo, capsys
     assert "go_row_keys_missing" in capsys.readouterr().out
     assert cli.main(["go-row", "check", "--repo", str(train_repo), "--head", "nope", "--row", "GO"]) == 2
     assert "go_row_train_unreadable" in capsys.readouterr().out
+
+
+def _part(root, key, name, text="x\n"):
+    _git(root, "checkout", "-q", "-b", name, "train")
+    (root / f"{name}.txt").write_text(text)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", f"{name}\n\nPlan-Item: {key}")
+    _git(root, "checkout", "-q", "train")
+    _git(root, "merge", "-q", "--no-ff", "-m", f"Train 9: merge {name}", name)
+
+
+@pytest.fixture
+def dropped_repo(train_repo):
+    """The train of ``train_repo`` plus a part merge that a revert with Dropped-Part cancels."""
+    root = train_repo
+    _part(root, "plangraph:DROPPED-KEY", "dropme")
+    merge = _git(root, "rev-parse", "HEAD")
+    _git(root, "revert", "-m", "1", "--no-edit", merge)
+    _git(root, "commit", "-q", "--amend", "-m",
+         f"Train 9: drop dropme\n\nThis reverts commit {merge[:12]}.\n\nDropped-Part: plangraph:DROPPED-KEY")
+    return root
+
+
+def _train_keys(root):
+    from plangraph.keeper.evidence_git import GitAdapter
+    from plangraph.keeper.evidence_pr import train_trailer_keys
+    return train_trailer_keys(GitAdapter(), str(root), "train", ["main"])
+
+
+def test_a_reverted_part_gives_up_its_keys(dropped_repo, capsys):
+    assert _train_keys(dropped_repo) == (["plangraph:PART-KEY", "plangraph:RESOLVER-KEY"], ["plangraph:LATER-KEY"])
+    row = _row(["plangraph:PART-KEY", "plangraph:RESOLVER-KEY", "plangraph:DROPPED-KEY"])
+    assert cli.main(["go-row", "check", "--repo", str(dropped_repo), "--head", "train",
+                     "--exclude", "main", "--row", row]) == 2
+    assert "plangraph:DROPPED-KEY" in capsys.readouterr().out
+
+
+def test_a_resolver_commit_after_the_drop_still_delivers_the_key(dropped_repo):
+    (dropped_repo / "resolver2.txt").write_text("again\n")
+    _git(dropped_repo, "add", "-A")
+    _git(dropped_repo, "commit", "-q", "-m", "deliver it again\n\nPlan-Item: plangraph:DROPPED-KEY")
+    assert "plangraph:DROPPED-KEY" in _train_keys(dropped_repo)[0]
+
+
+def test_a_resolver_commit_outside_the_dropped_part_keeps_the_key(train_repo):
+    root = train_repo
+    (root / "outside.txt").write_text("resolver\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "outside the part\n\nPlan-Item: plangraph:DROPPED-KEY")
+    _part(root, "plangraph:DROPPED-KEY", "dropme")
+    merge = _git(root, "rev-parse", "HEAD")
+    _git(root, "revert", "-m", "1", "--no-edit", merge)
+    _git(root, "commit", "-q", "--amend", "-m",
+         f"Train 9: drop dropme\n\nThis reverts commit {merge[:12]}.\n\nDropped-Part: plangraph:DROPPED-KEY")
+    assert "plangraph:DROPPED-KEY" in _train_keys(root)[0]

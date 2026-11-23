@@ -492,3 +492,53 @@ def test_train_deploy_gate_keeps_other_keys_units_out_of_a_shared_part(env):  # 
     result = auto(env, require_seats=False)
     assert [c["key"] for c in result["closed"]] == ["demo:A"]
     assert "deploy_pending" in next(r["reason"] for r in result["listed"] if r["key"] == "demo:B")
+
+
+def _train_with_part(env, build, *, evil=None):
+    """A train of one part: *build* makes the part's commits, *evil* edits the part merge itself."""
+    root = env.repo.root
+    base = git(root, "rev-parse", "main")
+    git(root, "checkout", "-q", "-b", "train")
+    git(root, "checkout", "-q", "-b", "part", base)
+    build(root)
+    git(root, "checkout", "-q", "train")
+    if evil:
+        git(root, "merge", "-q", "--no-ff", "--no-commit", "part")
+        evil(root)
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "Train 9: merge part")
+    else:
+        git(root, "merge", "-q", "--no-ff", "-m", "Train 9: merge part", "part")
+    git(root, "branch", "-D", "part")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m", "Landing train 9: 1 batch (#57)", "train")
+    git(root, "branch", "-D", "train")
+    store = env.store
+    return store._pin_close(store._item("demo:A"))
+
+
+def test_train_part_net_change_ignores_a_unit_added_then_removed(env):  # noqa: F811
+    def build(root):
+        (root / "deploy/systemd").mkdir(parents=True)
+        (root / "deploy/systemd/temp.service").write_text("[Service]\n")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "scratch unit\n\nPlan-Item: demo:A")
+        git(root, "rm", "-q", "deploy/systemd/temp.service")
+        git(root, "commit", "-q", "-m", "remove it\n\nPlan-Item: demo:A")
+
+    pinned = _train_with_part(env, build)
+    assert env.store._deploy_changes(pinned)[1] == set()
+
+
+def test_train_part_merge_commit_own_unit_counts_for_the_part_key(env):  # noqa: F811
+    def build(root):
+        (root / "NOTES.md").write_text("docs\n")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "docs\n\nPlan-Item: demo:A")
+
+    def evil(root):
+        (root / "deploy/systemd").mkdir(parents=True)
+        (root / "deploy/systemd/resolved.service").write_text("[Service]\n")
+
+    pinned = _train_with_part(env, build, evil=evil)
+    assert ("A", "deploy/systemd/resolved.service") in env.store._deploy_changes(pinned)[1]

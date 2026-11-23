@@ -142,13 +142,13 @@ def active_train(st, head):
             part_target = target and (part["merge"].startswith(target) or part["head"].startswith(target))
             if part_target or keys.intersection(part["items"]):
                 dropped.add(part["pr"])
-    return dict(st, merged=[rec for rec in st["merged"] if rec["pr"] not in skipped | dropped],
+    return dict(st, head=head, merged=[rec for rec in st["merged"] if rec["pr"] not in skipped | dropped],
                 dropped=[rec for rec in st["merged"] if rec["pr"] in dropped])
 
 
 def train_key_lists(st):
     """``(delivered, deferred)``: the Plan-Item trailers of the train's commits not on main (resolver
-    commits and extra slices count; checkpoint-doc-only keys are deferred; dropped parts' keys go)."""
+    commits and extra slices count; checkpoint-doc-only keys are deferred; reverted work is netted out)."""
     from plangraph.keeper.evidence_git import GitAdapter
     from plangraph.keeper.evidence_pr import train_trailer_keys
 
@@ -159,9 +159,7 @@ def train_key_lists(st):
         origin = f"origin/{st.get('base') or 'main'}"
         known = git("rev-parse", "--verify", "-q", f"{origin}^{{commit}}", cwd=wt, ok=(0, 1)).returncode == 0
         found, held = train_trailer_keys(GitAdapter(), wt, head, [base, *([origin] if known else [])])
-        gone = {key for rec in [*st.get("dropped", []), *st.get("skipped", [])] for key in rec.get("items", [])} - kept
-        delivered = (delivered | set(found)) - gone - set(held)
-        deferred = set(held) - gone
+        delivered, deferred = (delivered | set(found)) - set(held), set(held)
     if re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", st.get("plan") or ""):
         delivered.add(st["plan"])
     return sorted(delivered), sorted(deferred)
