@@ -61,6 +61,10 @@ _WS_RE = re.compile(r"\s+")
 _KEY_TOKEN_RE = re.compile(r"[^:@/\s,]+:[^:@/\s,]+\Z")
 _CLOSES_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}\Z")
 
+# One part-table entry: "Batch 23, part head <sha>", "Batch 13, PR #1084, head <sha>", "Batch 26, heads <sha> and fix <sha>".
+_HEX = r"`?[0-9a-f]{7,40}(?![\w])`?"
+_PART_HEADS = re.compile(r"(?<![\w-])Batch\s+\d+\w*(?:\s*\([^)]*\))?,\s*(?:PR\s*#\d+,\s*)?(?:(?:part|lane)\s+)?heads?\s+"
+                         rf"({_HEX}(?:(?:,\s*|\s+and\s+(?:fix\s+)?){_HEX})*)")
 
 # Row 40 "supersedes / corrects / withdraws / replaces D-12" retires D-12.
 _SUPERSEDES_RE = re.compile(
@@ -223,6 +227,16 @@ def _listed_tokens(cell: str, pattern: re.Pattern):
                 yield token
             if not found:
                 break
+
+
+def go_part_entries(statement):
+    """Read part-table entries, keeping each match span for its key scope."""
+    return _PART_HEADS.finditer(statement)
+
+
+def go_part_tokens(entry):
+    """Return the revision tokens named by one GO part-table entry."""
+    return re.findall(r"[0-9a-f]{7,40}", entry[1])
 
 
 def close_commit_scope(cell):

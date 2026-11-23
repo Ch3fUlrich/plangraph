@@ -469,3 +469,39 @@ def test_define_requires_slice_parent_to_match_under(w):
     assert w.store.create_items(router, [first])["attached"] == [
         {"key": "demo:X-S1", "under": "demo:LESSONS-ENFORCE"},
     ]
+
+
+def test_define_writer_slices_requires_the_sliced_item_key(w, tmp_path):
+    from door_util import Doors
+
+    router = w.p("router")
+    w.store.create_items(router, [defn("ROUTING-GOAL", project="plangraph", kind="goal")])
+    w.store.create_items(router, [
+        defn("LESSONS-ENFORCE", project="plangraph", kind="gate", under="ROUTING-GOAL"),
+        defn("ORIGINAL", project="plangraph", under="ROUTING-GOAL"),
+        defn("LEGACY", project="plangraph", under="ROUTING-GOAL",
+             done_criteria="Slice of plangraph:ORIGINAL: legacy criteria"),
+    ])
+    path = tmp_path / "slices.json"
+    item = defn("FOLLOWUP", project="plangraph", under="LEGACY",
+                description="Why: split remaining work\nHow: cover its retry path.")
+    doors = Doors(w, tmp_path)
+    try:
+        argv = ("define", "--file", str(path))
+        path.write_text(json.dumps([item]), encoding="utf-8")
+        code, _, error = doors.pg("router", *argv)
+        assert code == 2
+        assert "plangraph:FOLLOWUP" in error
+        assert "slice_parent" in error
+        assert w.store._item("plangraph:FOLLOWUP") is None
+        item.update(under="plangraph:LESSONS-ENFORCE", slice_parent="plangraph:LEGACY")
+        path.write_text(json.dumps({"items": [item]}), encoding="utf-8")
+        code, _, error = doors.pg("router", *argv)
+        assert code == 2
+        assert "parent plangraph:LEGACY is already a slice" in error
+        item["slice_parent"] = "plangraph:ORIGINAL"
+        path.write_text(json.dumps({"items": [item]}), encoding="utf-8")
+        assert doors.pg("router", *argv)[0] == 0
+        assert w.store._item("plangraph:LESSONS-ENFORCE")["depends_on"] == ["plangraph:FOLLOWUP"]
+    finally:
+        doors.close()
