@@ -4,7 +4,8 @@ use serde_json::Value;
 
 const TABLE: &str = include_str!("../../../src/plangraph/config/role_headers.json");
 
-pub(crate) fn header(agent: &str, role: &str) -> String {
+/// Render the configured header for an agent and role.
+pub fn header(agent: &str, role: &str) -> String {
     let table: Value = serde_json::from_str(TABLE).expect("role_headers.json is valid");
     let name = table["agents"][agent]
         .as_str()
