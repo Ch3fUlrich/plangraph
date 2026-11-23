@@ -518,3 +518,23 @@ def test_review_probe_systemd_units():
     assert tim.get('Install', 'WantedBy') == 'timers.target'
     readme = (units / 'README.md').read_text(encoding='utf-8')
     assert 'plangraph-review-probe.service' in readme
+
+
+def test_harness_units_supply_tool_resolution():
+    import re
+
+    units = Path(__file__).resolve().parents[1] / 'deploy' / 'systemd'
+    direct = re.compile(r'^Exec\w*=\S*?(?:/|=)(?:codex|opencode|claude|agy|qodercli|node|npm|npx)(?:\s|$)')
+    covered = set()
+    for unit in units.rglob('*.service*'):
+        if not unit.is_file():
+            continue
+        lines = unit.read_text(encoding='utf-8').splitlines()
+        if any(direct.match(line) for line in lines):
+            assert any(line.startswith('Environment=PATH=%h/.local/bin:') for line in lines), unit
+            covered.add(unit.name)
+        if any('plangraph.spawner.cli' in line and ' probe ' in line for line in lines):
+            from plangraph.spawner import leg_probe
+            assert callable(leg_probe.harness_path)
+            covered.add(unit.name)
+    assert {'claude-daemon.service', 'plangraph-review-probe.service'} <= covered
