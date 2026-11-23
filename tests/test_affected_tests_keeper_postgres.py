@@ -2,7 +2,9 @@
 import importlib.util
 import os
 import stat
+import sys
 from pathlib import Path
+from types import ModuleType
 
 
 def selector():
@@ -53,7 +55,30 @@ def test_a_host_without_postgres_says_so_and_does_not_fail(tmp_path, capsys):
     assert "keeper-postgres: SKIPPED: no Postgres binaries on this host" in capsys.readouterr().out
 
 
-def test_the_files_run_with_the_postgres_backend_on_a_throwaway_cluster(tmp_path):
+def test_optional_postgres_run_skips_without_psycopg(tmp_path, capsys, monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", None)
+    log = tmp_path / "log"
+    directory = stub_bin(tmp_path, log)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_keeper_a.py").write_text("")
+    started = []
+
+    def runner(command, **kwargs):
+        started.append(command)
+        return type("R", (), {"returncode": 3})()
+
+    code = selector().run_keeper_postgres(
+        tmp_path, ["tests/test_keeper_a.py"],
+        {"PG_BIN": str(directory), "PATH": os.environ["PATH"]}, runner=runner)
+    assert code == 0
+    assert "keeper-postgres: SKIPPED: Python cannot find psycopg" in capsys.readouterr().out
+    assert not started and not log.exists()
+
+
+def test_the_files_run_with_the_postgres_backend_on_a_throwaway_cluster(tmp_path, monkeypatch):
+    driver = ModuleType("psycopg")
+    driver.__spec__ = importlib.util.spec_from_loader("psycopg", loader=None)
+    monkeypatch.setitem(sys.modules, "psycopg", driver)
     log = tmp_path / "log"
     directory = stub_bin(tmp_path, log)
     mod = selector()
@@ -76,7 +101,8 @@ def test_the_files_run_with_the_postgres_backend_on_a_throwaway_cluster(tmp_path
     assert calls.rstrip().splitlines()[-1].startswith("pg_ctl") and "stop" in calls.splitlines()[-1]
 
 
-def test_an_existing_pg_dsn_is_used_without_starting_a_cluster(tmp_path):
+def test_an_existing_pg_dsn_is_used_without_starting_a_cluster(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", None)
     mod = selector()
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests/test_keeper_a.py").write_text("")

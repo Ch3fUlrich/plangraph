@@ -89,8 +89,8 @@ def postgres_bin(env, search=POSTGRES_BIN_GLOBS):
 def run_keeper_postgres(root, changed, env, *, runner=subprocess.run, search=POSTGRES_BIN_GLOBS):
     """Run the changed keeper test files with PG_KEEPER_BACKEND=postgres, as the CI job does.
 
-    An existing PG_DSN is used as is; else a throwaway local cluster is started and stopped. A host
-    without the Postgres binaries says so and passes: CI is then the first Postgres run."""
+    An existing PG_DSN is used as is. The optional throwaway cluster needs both
+    the Postgres binaries and the psycopg driver in this Python environment."""
     files = keeper_postgres_files(root, changed)
     if not files:
         return 0
@@ -101,6 +101,10 @@ def run_keeper_postgres(root, changed, env, *, runner=subprocess.run, search=POS
     directory = postgres_bin(env, search)
     if directory is None:
         print("keeper-postgres: SKIPPED: no Postgres binaries on this host (set PG_BIN or PG_DSN); "
+              f"{len(files)} keeper test file(s) run on Postgres first in CI", flush=True)
+        return 0
+    if importlib.util.find_spec("psycopg") is None:
+        print("keeper-postgres: SKIPPED: Python cannot find psycopg (install 'psycopg[binary]'); "
               f"{len(files)} keeper test file(s) run on Postgres first in CI", flush=True)
         return 0
     scratch = Path(tempfile.mkdtemp(prefix="pgkeeper-"))
