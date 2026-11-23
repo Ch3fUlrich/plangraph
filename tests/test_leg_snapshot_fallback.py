@@ -8,7 +8,24 @@ import pytest
 from plangraph.routing_support import leg_state, quota_snapshots
 from plangraph.routing_support.leg_state_flag import default_reader as production_reader
 from plangraph.routing_support.liveness import require_available
+from plangraph.routing_errors import SpawnRefused
 from plangraph.spawner import leg_probe
+
+
+@pytest.mark.parametrize(('listed', 'reason'), [
+    (False, 'not_listed'),
+    (True, 'provider_inactive'),
+])
+def test_pinned_leg_refusal_preserves_availability_reason(tmp_path, listed, reason):
+    model = 'opencode-go/sample'
+    provider = SimpleNamespace(snapshot=lambda: {
+        'opencode-go': quota_snapshots.ProviderState('opencode-go', False, 'inactive', ''),
+    })
+    store = leg_state.LegStateStore(tmp_path / 'legs.sqlite')
+    reader = leg_state.LegAdapter(store, provider, [model] if listed else [], enabled=True)
+    leg = SimpleNamespace(id='sample', model=model, harness='opencode')
+    with pytest.raises(SpawnRefused, match=f'^leg {reason}: sample$'):
+        require_available(leg, reader, {})
 
 
 def test_default_reader_snapshot_error_fallback_still_probes(tmp_path, monkeypatch, caplog):

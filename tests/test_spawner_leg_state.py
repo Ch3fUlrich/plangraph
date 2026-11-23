@@ -67,6 +67,7 @@ def test_provider_exhaustion_counts_temporary_harness_outages(store, line, reaso
     assert status['reason'] == reason
     outage = {'reason': status['reason']}
     assert provider_exhausted([outage, {'reason': 'not_listed'}])
+    assert provider_exhausted([{'reason': 'limited'}, outage])
     assert not provider_exhausted([outage, {'reason': 'auth_refused'}])
 
 
