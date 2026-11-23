@@ -241,6 +241,7 @@ def admit(service, options, *, card=None, preview=False):
     if options.get('dry_run'):
         return None
     from . import overflow
+    from .item_key import native_writer_review
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
     config = overflow.placement_config(registry, role)
@@ -264,7 +265,7 @@ def admit(service, options, *, card=None, preview=False):
     if placed and not local_repository_review:
         remote_first = False
     local_host = overflow.host_config(registry, local)
-    local_worker = bool(local_host) and not orchestration_only
+    local_worker = not orchestration_only and (bool(local_host) or bool(native_writer_review(card)))
     if preview and not (remote_first or compare_local):
         return None
     role_mb, floor = overflow.local_limits(registry, role)
@@ -586,7 +587,7 @@ class SeatSpawnMixin:
                                      allow_empty=record.get('review_document') == 'train_delta'))
             except FamilyError as exc:
                 raise SpawnRefused(str(exc)) from None
-            if record.get('item_key') and not options.get('dry_run'):
+            if record.get('item_key') and not (options.get('dry_run') or record.get('native_writer_run')):
                 from subprocess import SubprocessError
                 from .notify import KeeperSink
                 sink = KeeperSink()

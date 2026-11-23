@@ -255,7 +255,7 @@ def deliver_verdict(directory, record, keeper):
         logging.getLogger(__name__).warning('verdict delivery deferred: %s', type(exc).__name__)
 
 
-def _verdict_outcome(directory, status, reason):
+def _verdict_outcome(directory, status, reason, **identity):
     journal = directory / 'verdict.json'
     previous = json.loads(journal.read_text()) if journal.exists() else {}
     if previous.get('status') in ('skipped', 'delivered'):
@@ -264,7 +264,7 @@ def _verdict_outcome(directory, status, reason):
     attempts = previous.get('attempts', 0) + 1
     if status == 'retry' and attempts >= 3 and not (directory / 'verdict.payload.json').exists():
         status, reason = 'skipped', 'retry limit reached: ' + reason
-    atomic_write_private(journal, json.dumps(dict(status=status, reason=reason, attempts=attempts)) + '\n')
+    atomic_write_private(journal, json.dumps(dict(status=status, reason=reason, attempts=attempts, **identity)) + '\n')
     if status in ('skipped', 'delivered'):
         atomic_write_private(directory / 'verdict.delivered', status + '\n')
 
@@ -285,6 +285,11 @@ def _deliver_verdict(directory, record, keeper):
     journal = directory / 'verdict.json'
     with inbox_lock(journal):
         if marker.exists():
+            return
+        if record.get('native_writer_run'):
+            _verdict_outcome(directory, 'skipped', 'native writer review precedes Keeper seat admission',
+                             **{field: record.get(field) for field in
+                                ('native_writer_run', 'item_key', 'host', 'head_sha')})
             return
         def outcome(status, reason):
             _verdict_outcome(directory, status, reason)

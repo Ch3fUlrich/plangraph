@@ -944,14 +944,15 @@ def spawn_service(*args, **kwargs):
             if rounds_exhausted(self, card, role):
                 from plangraph.routing_errors import SpawnRefused
                 raise SpawnRefused('question_rounds_exhausted')
-            # Let the base service handle audited overrides, which never fall through.
-            if seats or model is not None or leg is not None or not card:
+            # The base service owns the disposable checkout lifecycle for workspace reviews.
+            workspace_review = role == 'review' and (card or {}).get('review_workspace') is True
+            if seats or model is not None or leg is not None or not card or workspace_review:
                 return await super()._spawn(
                     card=card, prompt=prompt, role=role, writer_families=writer_families,
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
-                    dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
+                    dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=no_fallthrough or not (seats or workspace_review),
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                    seats=seats, run_worktree=run_worktree, _placement=_placement, cwd=cwd,
+                    seats=seats, run_worktree=run_worktree, _plan=_plan, _placement=_placement, cwd=cwd,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)

@@ -16,7 +16,7 @@ from .remote_ps import native_receipt, publish_run_record
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
-from .item_key import annotate_item
+from .item_key import annotate_item, valid_item
 from .base_fresh import admit_base
 def remote_native_running(record):
     """True for a running native Codex run placed on another host; only these need a remote refresh."""
@@ -143,12 +143,17 @@ class SpawnService(SeatSpawnMixin):
             return value
         write_stderr_log(self._stderr_captures.setdefault(record['run_id'], {}), getattr(self.runner, 'jobs', {}), record, self._path(record['run_id']).with_name('stderr.log'), clean)
         host, item_key = record.get('host'), record.get('item_key')
+        review = record.get('review')
+        review_item = review.get('item_key') if record.get('run_kind') == 'native-codex' and isinstance(review, dict) else None
+        review_item = review_item if valid_item(review_item) else None
         binding = (record.get('request') or {}).get('verdict_binding')
         bound_item = item_key if isinstance(binding, dict) and binding.get('key') == item_key else None
         if record.get('ended') is not None:
             terminal_reason(record, job)
         record.update(clean(record))
         if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
+        if review_item is not None:
+            record['review']['item_key'] = review_item
         if bound_item is not None:
             record['request']['verdict_binding']['key'] = bound_item
         if host is not None:
@@ -171,6 +176,8 @@ class SpawnService(SeatSpawnMixin):
         persisted = redact(record)
         if 'item_key' in record:
             persisted['item_key'] = item_key
+        if review_item is not None:
+            persisted['review']['item_key'] = review_item
         if bound_item is not None:
             persisted['request']['verdict_binding']['key'] = bound_item
         payload = json.dumps(persisted, indent=2)
@@ -448,6 +455,9 @@ class SpawnService(SeatSpawnMixin):
             # The spawn wrapper owns refusal persistence; route() owns it only
             # for standalone route requests, otherwise one error is saved twice.
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+            if role == 'review' and card.get('review_workspace') is True:
+                from .resolver import plan_for_launch_async
+                plan = await plan_for_launch_async(replace(plan, placement=_placement or plan.placement), dry_run=dry_run)
         if plan.error or not plan.first_leg:
             refused = SpawnRefused(plan.error or 'no eligible leg')
             refused.reason, refused.skipped = refused.args[0], [dict(row) for row in plan.skipped]
@@ -460,6 +470,8 @@ class SpawnService(SeatSpawnMixin):
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
         if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(record['run_id'])
+        if role == 'review' and card.get('review_workspace') is True and _placement and _placement.get('host'):
+            record['host'] = _placement['host']
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
         async def execute():
             lease = None

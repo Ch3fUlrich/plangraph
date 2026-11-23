@@ -23,10 +23,24 @@ fn writer_command_is_workspace_write_and_never_danger_full_access() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     fs::create_dir(&repo).unwrap();
+    let worktree = dir.path().join("worktree");
+    let mut git = pg_worker_core::git_test_support::command(&repo);
+    assert!(git.args(["init", "-q"]).status().unwrap().success());
+    assert!(pg_worker_core::git_test_support::command(&repo)
+        .args(["commit", "--allow-empty", "-qm", "base"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(pg_worker_core::git_test_support::command(&repo)
+        .args(["worktree", "add", "-q", "--detach"])
+        .arg(&worktree)
+        .status()
+        .unwrap()
+        .success());
     let host = Host {
         repo: repo.clone(),
         run_id: "run-sandbox".into(),
-        cwd: repo.clone(),
+        cwd: worktree.clone(),
         reviews: dir.path().join("reviews"),
         record_path: dir.path().join("run/record.json"),
         base_ref: "refs/heads/main".into(),
@@ -40,7 +54,7 @@ fn writer_command_is_workspace_write_and_never_danger_full_access() {
         review_cli: vec!["false".into()],
         python_src: None,
     };
-    host.git(&["init"]).unwrap();
+    let git_dir = host.git(&["rev-parse", "--absolute-git-dir"]).unwrap();
     for session in [None, Some("session-1")] {
         let command = host
             .writer_command("codex", session, &dir.path().join("run"))
@@ -67,6 +81,7 @@ fn writer_command_is_workspace_write_and_never_danger_full_access() {
             dir.path().join("reviews"),
             dir.path().join("run"),
             repo.join(".git"),
+            PathBuf::from(&git_dir),
         ] {
             assert!(
                 roots.contains(&same_path(&named)),
@@ -74,5 +89,21 @@ fn writer_command_is_workspace_write_and_never_danger_full_access() {
             );
         }
         assert_eq!(args.contains(&"resume".to_owned()), session.is_some());
+        let global = &args[..args
+            .iter()
+            .position(|arg| arg == "resume")
+            .unwrap_or(args.len())];
+        assert!(
+            global
+                .windows(2)
+                .any(|pair| pair[0] == "--cd"
+                    && same_path(Path::new(&pair[1])) == same_path(&worktree)),
+            "{line}"
+        );
+        assert!(
+            global.windows(2).any(|pair| pair[0] == "--add-dir"
+                && same_path(Path::new(&pair[1])) == same_path(Path::new(&git_dir))),
+            "{line}"
+        );
     }
 }
