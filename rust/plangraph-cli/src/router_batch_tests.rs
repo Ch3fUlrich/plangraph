@@ -41,6 +41,22 @@ fn go(parts: Vec<Part>) -> GoInput {
     }
 }
 
+/// The keeper family table in miniature: claude is anthropic, gpt and codex are openai.
+fn fam(name: &str) -> String {
+    match name {
+        "claude" => "anthropic",
+        "gpt" | "codex" => "openai",
+        other => other,
+    }
+    .to_owned()
+}
+fn go_row(
+    input: &GoInput,
+    read: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    super::go_row(input, read, &fam)
+}
+
 fn go_row_ok(input: &GoInput) -> Result<String, String> {
     go_row(input, &accepting)
 }
@@ -207,6 +223,32 @@ fn a_review_file_that_is_missing_for_another_head_or_not_an_accept_refuses_the_p
     assert!(go_row(&input, &read_review)
         .unwrap_err()
         .contains("review file unreadable"));
+}
+
+#[test]
+fn two_seats_need_two_review_files_and_two_keeper_families() {
+    // The same review file cited twice is one seat.
+    let mut same_file = part("alpha", H, "claude", "gemini");
+    same_file.seats[1].review_file = same_file.seats[0].review_file.clone();
+    assert_eq!(
+        go_row_ok(&go(vec![same_file])).unwrap_err(),
+        "part alpha: review seats share a review file"
+    );
+    // Spelling cannot make one keeper family two seats: gpt and openai are one family.
+    let mut spelled = part("alpha", H, "claude", "gpt");
+    spelled.seats[1].reviewer_family = "openai".into();
+    assert_eq!(
+        go_row_ok(&go(vec![spelled])).unwrap_err(),
+        "part alpha: review seats share a family"
+    );
+    // Nor can a spelling hide the writer: an anthropic seat for a claude writer is the writer.
+    let mut writer = part("alpha", H, "claude", "gemini");
+    writer.seats[1].reviewer_family = "anthropic".into();
+    assert_eq!(
+        go_row_ok(&go(vec![writer])).unwrap_err(),
+        "part alpha: reviewer family is the writer family"
+    );
+    assert!(go_row_ok(&go(vec![part("alpha", H, "claude", "gpt")])).is_ok());
 }
 
 #[test]

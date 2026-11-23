@@ -111,10 +111,13 @@ fn review_refusal(text: &str, head: &str) -> Option<&'static str> {
 /// cell the per-part evidence table. Refuses, naming the part, when a head is not 40 hex, CI is
 /// not green, the part has fewer than two review seats, a seat's review file is missing,
 /// unreadable, not for the part's head, not an ACCEPT or without FILES READ, a reviewer family is
-/// the writer's, or two seats share a family. `read` returns the text of a review file.
+/// the writer's, or two seats share a review file or a keeper family. `read` returns the text of
+/// a review file; `family` maps a family name to its keeper family (claude and anthropic are one,
+/// gpt and openai are one), so spelling cannot make two seats look independent.
 pub fn go_row(
     input: &GoInput,
     read: &dyn Fn(&str) -> Result<String, String>,
+    family: &dyn Fn(&str) -> String,
 ) -> Result<String, String> {
     if !decision_id(&input.decision)
         || !token(&input.project)
@@ -144,15 +147,21 @@ pub fn go_row(
         } else if part
             .seats
             .iter()
-            .any(|seat| seat.reviewer_family == part.writer_family)
+            .any(|seat| family(&seat.reviewer_family) == family(&part.writer_family))
         {
             Some("reviewer family is the writer family")
         } else if part.seats.iter().enumerate().any(|(i, a)| {
             part.seats[..i]
                 .iter()
-                .any(|b| a.reviewer_family == b.reviewer_family)
+                .any(|b| family(&a.reviewer_family) == family(&b.reviewer_family))
         }) {
             Some("review seats share a family")
+        } else if part.seats.iter().enumerate().any(|(i, a)| {
+            part.seats[..i]
+                .iter()
+                .any(|b| a.review_file == b.review_file)
+        }) {
+            Some("review seats share a review file")
         } else {
             None
         };
@@ -258,6 +267,26 @@ fn read_review(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
+/// The keeper family of every family name the input uses, from the Python family table.
+fn keeper_family_table(
+    input: &GoInput,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut names: Vec<String> = input
+        .parts
+        .iter()
+        .flat_map(|p| {
+            std::iter::once(p.writer_family.clone())
+                .chain(p.seats.iter().map(|s| s.reviewer_family.clone()))
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    let root = std::env::current_dir().ok();
+    pg_worker_core::writer_families::keeper_families(&names, &|| {
+        pg_worker_core::writer_families::python_command(root.as_deref())
+    })
+}
+
 /// `plangraph router (go-row|grant-rows|ask-group) INPUT.json [OUT]`.
 pub fn run(args: &[String]) -> i32 {
     let (Some(verb), Some(input)) = (args.first(), args.get(1)) else {
@@ -266,7 +295,12 @@ pub fn run(args: &[String]) -> i32 {
     };
     let text = match verb.as_str() {
         "go-row" => read(input)
-            .and_then(|i: GoInput| go_row(&i, &read_review))
+            .and_then(|i: GoInput| {
+                let table = keeper_family_table(&i)?;
+                go_row(&i, &read_review, &|name| {
+                    table.get(name).cloned().unwrap_or_else(|| name.to_owned())
+                })
+            })
             .map(|t| t + "\n"),
         "grant-rows" => read(input).and_then(|i: GrantInput| grant_rows(&i)),
         "ask-group" => read(input).and_then(|i: AskInput| ask_group(&i)),

@@ -126,6 +126,21 @@ fn short(sha: &str) -> &str {
     &sha[..12.min(sha.len())]
 }
 
+/// The keeper family of each name (`plangraph.planner.seats.seat_family`: claude and anthropic
+/// are one, gpt and openai are one), keyed by the name as given. This is the one reader of the
+/// keeper family table for callers that only hold family names (the router's GO row).
+pub fn keeper_families(
+    names: &[String],
+    python: &dyn Fn() -> Command,
+) -> Result<HashMap<String, String>, String> {
+    let code = "import json, sys\nfrom plangraph.planner.seats import seat_family\n\
+                print(json.dumps({n: seat_family(n) for n in json.load(sys.stdin)}))";
+    let payload = serde_json::to_vec(names).map_err(|e| format!("refused: {e}"))?;
+    let out = run_python(python, code, payload, "keeper family table")?;
+    serde_json::from_slice(&out)
+        .map_err(|e| format!("refused: keeper family table unreadable: {e}"))
+}
+
 /// Every writer family of `base..head`: the canonical families of the `Writer` and `Hand-Edit`
 /// trailers of each commit, else of its other attribution lines and author. `leg_models` are
 /// models that wrote without a trailer (a native writer's served model); their families join
