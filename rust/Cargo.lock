@@ -2420,6 +2420,7 @@ dependencies = [
  "pg-worker-core",
  "regex",
  "rusqlite",
+ "saphyr",
  "serde",
  "serde_json",
  "sha2",
