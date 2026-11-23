@@ -49,7 +49,13 @@ D-row naming tip sha, seats, evidence shas you sampled.
 For a landing train, copy the inline `GO-KEYS [project:A,project:B]` block from
 the head-bound GO-REQ into the GO row before the PLAN block. The keeper treats
 that block as the full scope of the GO. Keep its brackets and comma-separated
-full keys when printing or copying the GO row.
+full keys when printing or copying the GO row. The list is generated from the
+Plan-Item trailers of the train's commits (resolver commits and extra slices
+included); a `GO-DEFERRED [..]` block lists keys trailered only on a checkpoint
+doc, which the row must not name. `pg go-row check --row TEXT --repo PATH --head
+TRAIN-HEAD --exclude origin/main` prints `accept` or `refuse: <code>: <reason>`
+with the keeper's own grammar (prefix `(HH:MMZ)` or `(HH:MMZ, date -u)` only,
+no key token ending in punctuation, no delivered key left out).
 
 Put `PLAN <item-key> conforms=yes|no deviations=<text, or none>` last in every GO-REQ and in the GO row's decision cell. The key is the keeper item key; pass it to the gate with `--key KEY`, and the gate also needs `pgk show KEY` to succeed. `bin/go-row-gate` reads the block after GO-HEAD validation and refuses (exit 5) when:
 - the block is missing, repeated, or its key differs from the item;

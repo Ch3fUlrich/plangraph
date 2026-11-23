@@ -330,6 +330,7 @@ def build_parser():
     _add_reads(sub)
     _add_writes(sub)
     _add_admin(sub)
+    cli_check.add_go_row_parser(sub)
     sync = sub.add_parser("sync", help="D-818: refresh this host's signed local plan copy")
     sync.add_argument("sync_command", choices=["pull"])
     return parser
@@ -361,6 +362,8 @@ def main(argv=None) -> int:
         return cli_admin.dispatch(args)
     if args.command == "sync":
         return _cmd_sync(args)
+    if args.command == "go-row":
+        return cli_check.cmd_go_row(args)
     session = Session(json_mode=args.json, config_path=args.config,
                       url=getattr(args, "url", None))
     return HANDLERS[args.command](args, session)

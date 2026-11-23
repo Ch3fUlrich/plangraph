@@ -42,13 +42,13 @@ def _known_family(value):
 # prefix) or is a ``RULINGS`` row with exactly one numbered ruling that starts with ``GO``.
 # The statement may name a pull request (``GO #12``, ``GO <project> PR #12``, ``GO <project>
 # PR 12``) and one full ``GO-HEAD`` token; both bind the verdict to one merged PR head.
-_GO_PREFIX = re.compile(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z(?:, date -u)?\)\s+")
+GO_PREFIX = re.compile(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z(?:, date -u)?\)\s+")
 _GO_RULING = re.compile(r"(?:(?<=\s)|^)\((\d{1,2})\)\s+")
 _GO_HEAD = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
 
 
 def _strip_prefix(text):
-    return _GO_PREFIX.sub("", text) if isinstance(text, str) else text
+    return GO_PREFIX.sub("", text) if isinstance(text, str) else text
 
 
 def _go_statement(text):

@@ -731,6 +731,8 @@ Notification smoke: `tools/smoke-run-exit-notify.sh` targets
 
 Claude transcript census: see [usage and classification limits](docs/claude-census.md).
 
+The GO-REQ key list (`tools/merge_batch_util.py` `go_key_block`) is generated from the `Plan-Item` trailers of the train's commits not on main; keys trailered only on `docs/checkpoints/**` print as `GO-DEFERRED [..]`. Check a GO row against it with `pg go-row check` (see `docs/KEEPER.md`).
+
 ## Bash guard rules (`tools/hooks/bash_guard.py`)
 
 The PreToolUse Bash guard (`tools/hooks/bash_guard.py` / `bash_guard_rules.py`)

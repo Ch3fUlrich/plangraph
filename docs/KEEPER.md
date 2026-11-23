@@ -390,6 +390,8 @@ returns both fields and a reminder to update them together. The keeper
 includes that finding in the stale reason on `show` and applies the existing
 audited stale-claim override procedure.
 
+`pg go-row check` (offline) reads one GO row's decision cell with the grammar `close_merged` uses (`store_runs.go_row_check`): the prefix is `(HH:MMZ)` or `(HH:MMZ, date -u)` only, a `GO-KEYS` token ending in punctuation is refused with the token named, and with `--repo PATH --head TRAIN-HEAD --exclude origin/main` the row must name exactly the delivered `Plan-Item` keys of the train (keys trailered only on `docs/checkpoints/**` are deferred and must not be named). It prints `accept` or `refuse: <code>: <reason>`, exit 0 or 2. The shared fixture table is `tests/fixtures/go_row_prefixes.json`. A deploy target of a train part is read from the key's own commits and the part's untagged commits (`evidence_pr.part_changes`).
+
 ## Tests (minimum; write first)
 state machine: every allowed edge + every disallowed edge refused · claim race: 3 threads → exactly one winner · stale epoch refused ·
 lease reaper · attack suite at store level: edit/delete/reopen/re-point a DONE item, `corrects` pointing at non-done, evidence/event/edge
