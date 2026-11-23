@@ -416,6 +416,7 @@ input, needs a `design_ref`. Set it to a repository-relative path or use
 `REPOSITORY:PATH` for a file in another repository. Show, short briefs
 and snapshots expose the stored reference. The native batch-size input accepts
 `design_ref` on each item and `design_roots` indexed by repository qualifier.
+An unqualified reference requires a root configured for the item's project.
 The generated brief embeds the selected files verbatim and reports the
 reference if a file cannot be read. If a plangraph lane's How names external
 code, it must also name the plangraph implementation target.
