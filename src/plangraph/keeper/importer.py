@@ -22,7 +22,7 @@ import yaml
 
 from .errors import Refused
 from .note_fold import DESCRIPTION_CAP, fold_checked as _fold_note
-from .item_fields import (KIND_DEFAULTS, MODEL_FIELDS, check_host, check_kind,
+from .item_fields import (KIND_DEFAULTS, MODEL_FIELDS, check_design_ref, check_host, check_kind,
                           check_model_fields, check_wait, kind_defaults)
 from .store_create import default_review_tier, validated_review_tier
 
@@ -32,7 +32,7 @@ __all__ = ["load_dir", "export_yaml"]
 _FIELD_ORDER = (
     "project", "id", "key", "title", "description", "host", "wait", "layer", "role",
     "agent_id", "phase_kind", "fixes", "kind", "track", "owner", "state",
-    "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
+    "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria", "design_ref",
     "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
 )
 _FIELDS = frozenset(_FIELD_ORDER)
@@ -130,6 +130,8 @@ def _normalise_item(raw, where):
     description = _string(raw, "description", key)
     if description is not None and len(description) > DESCRIPTION_CAP:
         raise _bad(key, f"description exceeds {DESCRIPTION_CAP} characters")
+    design_ref = raw.get("design_ref")
+    check_design_ref(design_ref, key)
     track = _string(raw, "track", key)
     explicit_tier = raw.get("review_tier")
     if explicit_tier is not None:
@@ -148,7 +150,7 @@ def _normalise_item(raw, where):
         "owner": _string(raw, "owner", key), "state": state,
         "estimate_h": estimate, "estimate_src": _string(raw, "estimate_src", key),
         "depends_on": depends, "corrects": corrects,
-        "done_criteria": _string(raw, "done_criteria", key),
+        "done_criteria": _string(raw, "done_criteria", key), "design_ref": design_ref,
         "evidence_kinds": kinds, "operator": operator, "priority": priority,
         "review_tier": review_tier,
         "source": _string(raw, "source", key), "note": note,
