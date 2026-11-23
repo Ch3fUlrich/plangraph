@@ -445,40 +445,47 @@ def _install_marker_preflight(r, marker):
         "import os, sys\nfrom pathlib import Path\n"
         "assert '--fast' not in sys.argv\n"
         "with Path(os.environ['TEST_PREFLIGHT_MARKER']).open('a') as marker:\n"
-        "    marker.write('ran\\n')\n"
+        "    marker.write('fast gates only\\n' if '--lane' in sys.argv else 'affected tests\\n')\n"
     )
     return {"TEST_PREFLIGHT_MARKER": str(marker)}
 
 
-@pytest.mark.parametrize("ref", ["phase/x", "phase/nested/y", "feat/x", "lane/x", "main", "phase-x"])
-def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref):
-    """Legacy phase skip flags cannot suppress affected preflight on any ref."""
+@pytest.mark.parametrize("ref", ["phase/x", "phase/nested/y", "land/x", "feat/x", "lane/x", "main", "phase-x"])
+def test_preflight_skip_scope_allows_only_land_and_preserves_phase(repo, tmp_path, ref):
     r, base = repo
     marker = tmp_path / "preflight-ran"
     env = _install_marker_preflight(r, marker)
     head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
     res = run_hook(r, [push_line(ref, head, base)],
                    {**env, "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1"})
-    assert res.returncode == 0, res.stdout + res.stderr
-    assert marker.read_text() == "ran\n"
+    if ref.startswith(("phase/", "land/")):
+        assert res.returncode == 0, res.stdout + res.stderr
+        expected = "fast gates only\n" if ref.startswith("land/") else "affected tests\n"
+        assert marker.read_text() == expected
+        skipped = f"skipping local preflight tests for refs/heads/{ref} (PREFLIGHT_SKIP=1)"
+        assert (skipped in res.stderr) == ref.startswith("land/")
+    else:
+        assert res.returncode == 1, res.stdout + res.stderr
+        assert f"PREFLIGHT_SKIP=1 is not allowed for refs/heads/{ref}" in res.stderr
+        assert not marker.exists()
 
 
 def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
-    """Legacy phase skip flags leave every ref and the scrub gate covered."""
+    """Land still runs scrub, and mixed pushes cannot apply the skip to off-scope refs."""
     r, base = repo
     marker = tmp_path / "preflight-ran"
     env = {**_install_marker_preflight(r, marker), "PREFLIGHT_SKIP": "1"}
     clean_head = commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
     mixed = run_hook(r, [push_line("phase/x", clean_head, base),
-                         push_line("feat/x", clean_head, base),
+                         push_line("land/x", clean_head, base),
                          f"HEAD {clean_head} refs/tags/v1 {ZERO}"], env)
-    assert mixed.returncode == 0, mixed.stdout + mixed.stderr
-    assert marker.read_text().splitlines() == ["ran"] * 3
-    marker.unlink()
+    assert mixed.returncode == 1, mixed.stdout + mixed.stderr
+    assert "PREFLIGHT_SKIP=1 is not allowed for refs/tags/v1" in mixed.stderr
+    assert not marker.exists()
     dirty_head = commit_file(r, "app/leak.py", f'peer = "{fake_ip()}"\n')
     dirty = run_hook(
         r,
-        [push_line("phase/x", dirty_head, clean_head)],
+        [push_line("land/x", dirty_head, clean_head)],
         {**env, "PREFLIGHT_SKIP": "1"},
     )
     assert dirty.returncode == 1, dirty.stdout + dirty.stderr
