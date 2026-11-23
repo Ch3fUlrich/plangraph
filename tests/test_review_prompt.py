@@ -36,14 +36,15 @@ def test_empty_vectors_error():
 
 
 def test_tail_is_last():
-    """Output contract precedes item data, preamble or not."""
+    """Changing evidence precedes the vectors and closing contract."""
     tail = p.load_tail()
     assert TAIL_PATH.is_file() and tail
     for prompt in (p.assemble(["v"], [("A", "x")]),
                    p.assemble(["v"], [("A", "x")], preamble=False),
                    *p.assemble_all(["v"], {"a.txt": "x"})):
-        assert tail.rstrip() in prompt
-        assert prompt.index(tail.rstrip()) < prompt.index("=== ITEM CONTEXT")
+        assert prompt.rstrip().endswith(tail.rstrip())
+        evidence = max(prompt.find("=== A"), prompt.find("=== a.txt"))
+        assert prompt.index("=== ITEM CONTEXT") < evidence < prompt.index("=== VECTORS")
 
 
 def test_split_boundaries():
@@ -98,8 +99,8 @@ def test_assemble_all_carries_map():
         assert "\n=== FILE-PART MAP\n" in prompt
         assert "part 1:" in prompt and "part 2:" in prompt
         assert "V1. do X" in prompt
-        assert tail.rstrip() in prompt
-        assert prompt.index(tail.rstrip()) < prompt.index("=== ITEM CONTEXT")
+        assert prompt.rstrip().endswith(tail.rstrip())
+        assert prompt.index("=== FILE-PART MAP") < prompt.index("=== VECTORS")
 
 
 def test_sha256():

@@ -1,0 +1,1 @@
+- Place stable writer and review rules before changing evidence, and keep the review output instructions after the inline diff.
