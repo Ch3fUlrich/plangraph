@@ -195,8 +195,22 @@ def _inside(path, root, cwd):
         return False
 
 
-def main_checkout_cargo(command, cwd, depth=0):
-    """Deny message for a cargo build whose target dir is the main checkout's own rust/target."""
+_CARGO_VALUE_OPTIONS = frozenset(("--color", "-Z", "-C", "--config"))
+
+
+def _cargo_subcommand(rest):
+    """First word of cargo's arguments that is not a +toolchain or a global option."""
+    it = iter(rest)
+    for word in it:
+        if word in _CARGO_VALUE_OPTIONS:
+            next(it, None)
+        elif not word.startswith(("+", "-")):
+            return word
+    return None
+
+
+def main_checkout_cargo(command, cwd, depth=0, inherited=None):
+    """Deny message for a cargo build whose target dir is a main checkout's or agent worktree's own."""
     root = main_checkout_root(cwd)
     if root is None or depth > 3:
         return None
@@ -208,31 +222,37 @@ def main_checkout_cargo(command, cwd, depth=0):
         pos = [w for w in cmd if not w.redir]
         words = [w.text for w in pos]
         i = lead(pos)
-        envs = {w.split("=", 1)[0]: w.split("=", 1)[1] for w in words[i:] if _ENV_ASSIGN_RE.match(w)}
+        envs = dict(inherited or {})
+        envs.update(w.split("=", 1) for w in words[i:] if _ENV_ASSIGN_RE.match(w))
         while i < len(words) and _ENV_ASSIGN_RE.match(words[i]):
             i += 1
         if i >= len(words):
             continue
-        if _basename(words[i]) in _SHELLS:
-            for string in _shell_strings(pos, i + 1):
-                reason = main_checkout_cargo(string, cwd, depth + 1)
+        # Wrapper options are not modelled: every later word may be the command, as check_command reads it.
+        wrapped = _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS
+        evaled = False
+        for j in range(i, len(words)) if wrapped else (i,):
+            name = _basename(words[j])
+            if name in _SHELLS:
+                nested = _shell_strings(pos, j + 1)
+            elif name == "eval" and not evaled:
+                evaled, nested = True, [" ".join(words[j + 1:])]
+            else:
+                nested = []
+            for string in nested:
+                reason = main_checkout_cargo(string, cwd, depth + 1, envs)
                 if reason:
                     return reason
-            continue
-        if _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS:  # their options are not modelled
-            i = next((k for k in range(i, len(words)) if _basename(words[k]) == "cargo"), len(words))
-            if i >= len(words):
+            if name != "cargo":
                 continue
-        if _basename(words[i]) != "cargo":
-            continue
-        args = [a for a in words[i + 1:] if not a.startswith("+")][:1]
-        if not args or args[0] not in _BUILDING:
-            continue
-        rest = words[i + 1:]
-        target = next((rest[k + 1] for k, a in enumerate(rest[:-1]) if a == "--target-dir"), None)
-        target = target or next((a.split("=", 1)[1] for a in rest if a.startswith("--target-dir=")), None)
-        for name in _TARGET_ENVS:
-            target = target or envs.get(name) or os.environ.get(name) or None
-        if target is None or _inside(target, root, cwd):
-            return MAIN_TARGET_MESSAGE % (args[0], root)
+            rest = words[j + 1:]
+            sub = _cargo_subcommand(rest)
+            if sub not in _BUILDING:
+                continue
+            target = next((rest[k + 1] for k, a in enumerate(rest[:-1]) if a == "--target-dir"), None)
+            target = target or next((a.split("=", 1)[1] for a in rest if a.startswith("--target-dir=")), None)
+            for var in _TARGET_ENVS:
+                target = target or envs.get(var) or os.environ.get(var) or None
+            if target is None or _inside(target, root, cwd):
+                return MAIN_TARGET_MESSAGE % (sub, root)
     return None
