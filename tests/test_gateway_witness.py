@@ -145,6 +145,7 @@ def test_runner_review_seat_on_omniroute_is_witnessed_from_call_log(tmp_path, mo
     import asyncio
     from plangraph.spawner import resolver
     from plangraph.spawner.runner import SpawnerRunner
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda: (None, 'fixture'))
     async def probe(*args, **kwargs):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
@@ -351,6 +352,7 @@ def test_job_session_tags_keep_uuid_entropy(tmp_path, monkeypatch):
     import itertools
     import uuid
     from plangraph.spawner import runner as module
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda: (None, 'fixture'))
     ids = (uuid.UUID(f'12345678-0000-4000-8000-{i:012x}') for i in itertools.count(1))
     monkeypatch.setattr(module.uuid, 'uuid4', lambda: next(ids))
     runner = module.SpawnerRunner(default_cwd=str(tmp_path))
