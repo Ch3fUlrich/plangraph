@@ -176,3 +176,12 @@ when `QUOTA_GATEWAY_CONTAINER` is set. For an unmanaged local gateway it
 looks in `~/.omniroute` and `${XDG_DATA_HOME:-$HOME/.local/share}/omniroute`.
 It verifies that `storage.sqlite` can supply quota snapshots and reports the
 searched paths on failure. The service opens the selected file read-only.
+
+
+On the orchestration host, run `host-sync --install-env throughput`. The
+installer derives the lander's repository identity from the `origin`
+remote of `~/code/plangraph` and sets the project to `plangraph`. The unit
+reads the keeper reader's default published snapshot at
+`~/.local/share/plangraph/plan.snapshot.json`. The checkout's
+`refs/remotes/origin/main`, the lander's SQLite database and the snapshot
+must be available before the first throughput tick.

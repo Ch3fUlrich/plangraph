@@ -13,7 +13,7 @@ const BINARIES: &[(&str, &str)] = &[
     ("pg-worker-core", "turn-budget-hook"),
 ];
 
-fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
+pub(super) fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
     let mut command = Command::new("git");
     pg_worker_core::host_command::isolate_git(&mut command);
     let output = command.current_dir(repo).args(args).output()?;

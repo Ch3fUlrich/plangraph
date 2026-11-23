@@ -57,6 +57,24 @@ fn assignment(key: &str, path: &Path) -> io::Result<String> {
     Ok(format!("{key}=\"{value}\"\n"))
 }
 
+fn install_throughput(home: &Path, env_file: &Path) -> io::Result<()> {
+    if exists(env_file)? {
+        println!("SAME {}", env_file.display());
+        return Ok(());
+    }
+    let repo = home.join("code/plangraph");
+    let origin = super::release::git(&repo, &["remote", "get-url", "origin"])
+        .map_err(|_| io::Error::other(format!("cannot read origin for {}", repo.display())))?;
+    let repo_id = crate::ci_watch::github::repository(&origin).map_err(io::Error::other)?;
+    let mut contents = assignment("PLANGRAPH_THROUGHPUT_REPO", Path::new(&repo_id))?;
+    contents.push_str("PLANGRAPH_THROUGHPUT_PROJECT=plangraph\n");
+    contents.push_str(&assignment(
+        "PLANGRAPH_THROUGHPUT_SNAPSHOT",
+        &home.join(".local/share/plangraph/plan.snapshot.json"),
+    )?);
+    create(env_file, contents.as_bytes())
+}
+
 fn install(family: &str, home: &Path, args: &[OsString]) -> io::Result<()> {
     // The unit EnvironmentFile= directives use %h/.config.
     let config = home.join(".config/plangraph");
@@ -82,6 +100,7 @@ fn install(family: &str, home: &Path, args: &[OsString]) -> io::Result<()> {
             }
             create(&config.join("disk-hygiene.env"), content.as_bytes())
         }
+        ("throughput", []) => install_throughput(home, &config.join("throughput.env")),
         ("quota-alarms", []) => quota::install(home, &config.join("quota-alarms.env")),
         ("keeper-backup", []) => create(
             &config.join("keeper-backup.env"),
