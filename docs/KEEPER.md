@@ -390,6 +390,30 @@ returns both fields and a reminder to update them together. The keeper
 includes that finding in the stale reason on `show` and applies the existing
 audited stale-claim override procedure.
 
+An edit that changes `done_criteria` appends a row to `criteria_amendments`
+in the same transaction as the definition event. The row links to that event
+and records the before and after text, editing principal and time. Supply
+`criteria_reason` and `criteria_evidence` in the edit fields to record the
+rationale and supporting evidence. With those fields omitted, the row records
+that the edit came through Keeper and links to the definition event.
+
+A definition whose How asks the writer to use a design or contract needs a
+`design_ref`. Set it to a repository-relative path or use
+`REPOSITORY:PATH` for a file in another repository. Show, short briefs
+and snapshots expose the stored reference. If a plangraph lane's How names
+external code, it must also name the plangraph implementation target.
+
+Ready and claim include qualified Plan-Item matches from other repositories
+in the configured merge scan. A bare Plan-Item ID matches within its own
+project, and a merge message can carry a Plan-Item line in its body. Merged
+work can appear in `needs_reconcile` instead of the ready list.
+
+The reaper raises `gate_dependency_capacity` when a nonterminal gate or goal
+has at least 190 non-cancelled dependencies, including done dependencies.
+Define counts unfinished dependencies against the 200-dependency limit.
+When an attachment would exceed the limit, the refusal names an available
+split gate when one exists.
+
 ## Tests (minimum; write first)
 state machine: every allowed edge + every disallowed edge refused · claim race: 3 threads → exactly one winner · stale epoch refused ·
 lease reaper · attack suite at store level: edit/delete/reopen/re-point a DONE item, `corrects` pointing at non-done, evidence/event/edge
