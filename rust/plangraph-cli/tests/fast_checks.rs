@@ -62,7 +62,7 @@ fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
         "pg-spawnd/clippy:",
         "pg-worker/clippy:",
         "pg-worker/test: cargo run",
-        "--bin ci-temporal -- cargo test",
+        "--bin ci-temporal -- cargo nextest run --config-file rust/.config/nextest.toml",
         "--local --files-only --run",
     ] {
         assert!(plan.contains(required), "missing {required}: {plan}");
@@ -189,4 +189,74 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout)
         .contains("FAILED test_example.py::test_example - fixture failure"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires cargo-nextest on PATH; protected CI rollout is tracked separately"]
+fn preflight_reports_a_hanging_rust_test_and_reaps_its_child() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = tempfile::tempdir().unwrap();
+    let path = fixture.path();
+    std::fs::create_dir(path.join("src")).unwrap();
+    std::fs::write(
+        path.join("Cargo.toml"),
+        "[package]\nname = \"pg-timeout-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        path.join("src/lib.rs"),
+        r#"
+#[test]
+fn hangs_with_child() {
+    let child = std::process::Command::new("sleep").arg("120").spawn().unwrap();
+    std::fs::write(std::env::var_os("CHILD_PID").unwrap(), child.id().to_string()).unwrap();
+    loop { std::thread::park(); }
+}
+"#,
+    )
+    .unwrap();
+    let config = std::fs::read_to_string(root.join("rust/.config/nextest.toml")).unwrap();
+    let deadline = path.join("nextest.toml");
+    std::fs::write(&deadline, config.replace("\"120s\"", "\"2s\"")).unwrap();
+    let pidfile = path.join("child.pid");
+    let output = test_python::command()
+        .current_dir(&root)
+        .env("CHILD_PID", &pidfile)
+        .args([
+            "-c",
+            r#"
+import os, sys
+from pathlib import Path
+sys.path.insert(0, 'tools')
+import preflight
+preflight.check_timeout = lambda *args: 45
+code, output = preflight.run(sys.argv[1:], Path.cwd(), os.environ)
+print(output, end='')
+sys.exit(code)
+"#,
+            "cargo",
+            "nextest",
+            "run",
+            "--manifest-path",
+        ])
+        .arg(path.join("Cargo.toml"))
+        .arg("--config-file")
+        .arg(deadline)
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "{log}");
+    assert!(
+        log.contains("HUNG pg-timeout-fixture hangs_with_child"),
+        "{log}\n{:?}",
+        output.stderr
+    );
+    let pid: u32 = std::fs::read_to_string(pidfile).unwrap().parse().unwrap();
+    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        assert!(
+            stat.rsplit_once(") ").unwrap().1.starts_with("Z "),
+            "{stat}"
+        );
+    }
 }

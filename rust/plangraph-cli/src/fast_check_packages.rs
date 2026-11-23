@@ -1,4 +1,4 @@
-use super::fast_checks::Result;
+use super::fast_checks::{Result, NEXTEST_CONFIG};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -60,7 +60,7 @@ pub(super) fn packages(root: &Path, paths: &[String], full: bool) -> Result<Vec<
         || paths.iter().any(|p| {
             matches!(
                 p.as_str(),
-                "rust/Cargo.toml" | "rust/Cargo.lock" | "rust-toolchain.toml"
+                "rust/Cargo.toml" | "rust/Cargo.lock" | "rust-toolchain.toml" | NEXTEST_CONFIG
             )
         });
     let mut selected: BTreeSet<String> = crates
