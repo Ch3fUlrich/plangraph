@@ -259,7 +259,8 @@ class ContextMixin:
         indexes = {} if shared is None else shared
         for name in sorted(names - indexes.keys()):
             indexes[name] = timing.share_inflight(
-                ("work", id(git), name), lambda: src.work_index(git, name, fresh=True))
+                ("work", id(git), name), lambda: src.work_index(git, name, fresh=True),
+                step=f"work index for {name}")
         return {name: indexes[name] for name in sorted(names)}
 
     def _ready_items(self, project=None, n=10, owner=None, agent=False):
@@ -386,6 +387,7 @@ class ContextMixin:
         index = self._item_neighborhood(item)
         if "clock" not in shared:
             shared["clock"] = self._decision_clock()
+        timing.check_io_deadline("decision clock")
         try:
             if "book" not in shared:
                 adapter = self._adapter("decisions")
@@ -393,12 +395,15 @@ class ContextMixin:
                     shared["book"] = timing.share_inflight(
                         ("decisions", id(adapter)),
                         lambda: src.decision_book(adapter, fresh=True),
+                        step="decision book",
                     )
         except src.DecisionsUnreadable:
+            timing.check_io_deadline("decision book")
             path = getattr(self._adapter("decisions"), "_path", None)
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
         ctx = self._task_context(item, index, inputs={
             "graph": _graph(index), "book": shared["book"], "clock": shared["clock"]}, git=False)
+        timing.check_io_deadline("task context")
         work_index = indexes[project]
         ctx["work_exists"] = src.indexed_work(work_index, item["key"])
         facts = self._claim_staleness(ctx)

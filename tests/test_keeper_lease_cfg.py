@@ -21,6 +21,11 @@ def configured_store(w, tmp_path):
     return build
 
 
+def test_daemon_applies_claim_preflight_budget(configured_store):
+    assert configured_store({}).claim_preflight_s == 30
+    assert configured_store({"claim_preflight_s": 9}).claim_preflight_s == 9
+
+
 def test_daemon_run_builds_store_through_make_store(tmp_path, monkeypatch):
     cfg = config.load_config(write_config(tmp_path, {"default_lease": 600}))
     conn, lock = Mock(), Mock()

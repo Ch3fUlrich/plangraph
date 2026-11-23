@@ -583,31 +583,46 @@ def test_batch_claim_and_heartbeat_commit_once_and_replay(srv, w, monkeypatch):
     assert commits == ["commit", "commit"]
 
 
-@pytest.mark.parametrize("verb", ["claim", "claim_batch"])
-def test_claim_preflight_deadline_refuses_without_claiming(srv, w, monkeypatch, verb):
+def _slow_claim_request(srv, w, monkeypatch, verb, budget=None):
     from types import SimpleNamespace
     from keeper_util import Clock
     from plangraph.keeper import context_sources, timing
 
     clock = Clock(0)
     monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic=clock))
+    if budget is not None:
+        w.store.claim_preflight_s = budget
 
     def work_index(*args, **kwargs):
-        assert timing.io_timeout(30) == 3.0
-        clock.advance(3.1)
+        clock.advance(4)
         return None
 
     monkeypatch.setattr(context_sources, "work_index", work_index)
     body = {"key": "demo:A"} if verb == "claim" else {"keys": ["demo:A"]}
     status, _, raw = call(srv, f"/v1/{verb}", method="POST", body=body,
                           token=w.tok("l1main"))
-    result = {"error": "conflict", "msg": "claim preflight exceeded its deadline"}
+    return status, jbody(raw)
+
+
+@pytest.mark.parametrize("verb", ["claim", "claim_batch"])
+def test_claim_preflight_deadline_refuses_without_claiming(srv, w, monkeypatch, verb):
+    status, body = _slow_claim_request(srv, w, monkeypatch, verb, budget=3)
+    result = {"error": "conflict", "msg": "claim preflight exceeded its deadline during work index for demo"}
     if verb == "claim_batch":
-        assert (status, jbody(raw)) == (200, {"results": [{"key": "demo:A", **result}]})
+        assert (status, body) == (200, {"results": [{"key": "demo:A", **result}]})
     else:
-        assert (status, jbody(raw)) == (409, result)
+        assert (status, body) == (409, result)
     assert w.store._item("demo:A")["state"] == "open"
     assert not w.conn.execute("SELECT 1 FROM events WHERE type='claimed'").fetchone()
+
+
+@pytest.mark.parametrize("verb", ["claim", "claim_batch"])
+def test_four_second_claim_preflight_succeeds(srv, w, monkeypatch, verb):
+    status, body = _slow_claim_request(srv, w, monkeypatch, verb)
+    assert status == 200
+    row = body["results"][0] if verb == "claim_batch" else body
+    assert row["epoch"] == 1
+    assert w.store._item("demo:A")["state"] == "claimed"
 
 
 @pytest.mark.parametrize("verb", ["claim_batch", "heartbeat_batch"])

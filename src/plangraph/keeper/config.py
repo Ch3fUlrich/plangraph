@@ -17,6 +17,7 @@ The config maps the store and its verifiers onto real paths:
 * ``batch_roots``   — directories ``close_on_decision`` may read batch files from
 * ``bind``          — ``"host:port"`` (or ``host``/``port`` keys)
 * ``default_lease`` — seconds a claim is held without a heartbeat
+* ``claim_preflight_s`` — seconds for claim authority checks before writing
 
 A config file is refused unless its mode is exactly ``0600``: it may name paths
 and, in deployments, tokens.  No value is ever printed — :meth:`Config.__repr__`
@@ -30,6 +31,7 @@ import stat
 from pathlib import Path
 
 from .evidence_git import valid_ref
+from .timing import DEFAULT_CLAIM_PREFLIGHT_S
 
 __all__ = ["Config", "ConfigError", "load_config", "verifier_context",
            "REQUIRED_MODE"]
@@ -121,6 +123,8 @@ class Config:
         self.host = host
         self.port = port
         self.default_lease = self._positive_seconds(data, "default_lease", 7200)
+        self.claim_preflight_s = self._positive_seconds(
+            data, "claim_preflight_s", DEFAULT_CLAIM_PREFLIGHT_S)
         self.review_overdue_s = self._positive_seconds(data, "review_overdue_s", 4 * 3600)
         self.lease_warn_s = self._positive_seconds(data, "lease_warn_s", 15 * 60)
         self.alert_window_s = self._positive_seconds(data, "alert_window_s", 7 * 86400)
