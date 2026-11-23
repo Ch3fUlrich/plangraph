@@ -172,13 +172,10 @@ mod tests {
         // The helper exists but refuses (as an unsupported kernel does); whether the
         // launcher in front of it is missing, broken or working, the check never runs.
         let bin = tmp.path().join("refusing-jail");
-        std::fs::write(
+        crate::executable_test_support::write_executable(
             &bin,
             "#!/bin/sh\necho 'pg-jail: unsupported' >&2\nexit 78\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+        );
         let limits = crate::scope::ScopeLimits::default();
         let r = probe_scoped(
             d.path(),
