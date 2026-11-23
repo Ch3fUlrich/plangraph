@@ -296,21 +296,99 @@ def test_pytest_quarantine_expires(tmp_path, now, mode, expected):
     assert active == ({'test_flaky[user@example.invalid]': 'plangraph:FIX-THE-FLAKE'} if now.startswith('2026-11-24') else {})
 
 
-def test_pytest_default_hang_diagnostic_dumps_the_blocked_test(tmp_path, request):
+@pytest.mark.skipif(sys.platform != 'linux', reason='checks an isolated Linux process group')
+@pytest.mark.parametrize('parallel', [False, True])
+def test_pytest_deadline_reports_hang_and_kills_its_group(tmp_path, parallel):
+    import signal
     import subprocess
-    import sys
 
-    assert float(request.config.getini('faulthandler_timeout')) == 120
+    from plangraph.spawner.proc_kill import alive
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text(
+        'from _split_ci_environment import pytest_addoption, pytest_runtest_protocol\n',
+    )
     scenario = tmp_path / 'test_hang.py'
-    scenario.write_text('from threading import Event\n\ndef test_blocked():\n    Event().wait(0.5)\n')
+    scenario.write_text(
+        'from pathlib import Path\n'
+        'import subprocess, sys\n'
+        'from threading import Event\n\n'
+        'def test_blocked():\n'
+        '    child = subprocess.Popen([sys.executable, "-c", "from threading import Event; Event().wait()"])\n'
+        '    Path("child.pid").write_text(str(child.pid))\n'
+        '    Event().wait()\n',
+    )
+    worker_args = []
+    if parallel:
+        pytest.importorskip('xdist')
+        worker_args = ['-p', 'xdist.plugin', '-n', '2']
+    command = subprocess.Popen(
+        [sys.executable, '-m', 'pytest', '-q', '-o', 'test_deadline=2', *worker_args, str(scenario)],
+        cwd=tmp_path, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    try:
+        output, _ = command.communicate(timeout=20)
+        assert command.returncode != 0, output
+        assert 'HUNG test_hang.py::test_blocked' in output
+        assert 'in test_blocked' in output
+        assert not alive(int((tmp_path / 'child.pid').read_text()), None)
+    finally:
+        if command.poll() is None:
+            os.killpg(command.pid, signal.SIGKILL)
+            command.wait(timeout=5)
+
+
+@pytest.mark.parametrize('parallel', [False, True])
+def test_pytest_writes_shard_durations_through_conftest(tmp_path, parallel):
+    import json
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    nodeid = 'tests/test_conftest_env.py::test_pytest_shards_preserve_groups_and_cover_every_case'
+    data = tmp_path / 'durations.json'
+    worker_args = []
+    if parallel:
+        pytest.importorskip('xdist')
+        worker_args = ['-n', '2', '--dist', 'loadgroup']
     result = subprocess.run(
-        [sys.executable, '-m', 'pytest', '-q', '-o', 'faulthandler_timeout=0.05', str(scenario)],
-        cwd=tmp_path,
-        env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'),
-        capture_output=True,
-        text=True,
-        timeout=15,
+        [sys.executable, '-m', 'pytest', '-q', *worker_args, nodeid],
+        cwd=root, env=dict(_nested_pytest_env(), PYTEST_SHARD_DURATIONS_OUT=str(data)),
+        capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'Timeout (' in result.stderr
-    assert 'test_hang.py' in result.stderr and 'in test_blocked' in result.stderr
+    durations = json.loads(data.read_text(encoding='utf-8'))
+    assert list(durations) == [nodeid]
+    assert durations[nodeid] > 0
+
+
+def test_pytest_quarantine_is_applied_during_collection(tmp_path):
+    import json
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    nodeid = 'tests/test_conftest_env.py::test_pytest_shards_preserve_groups_and_cover_every_case'
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({
+        nodeid: {
+            'owner': 'plangraph:FIX-THE-FLAKE',
+            'starts': '2026-11-23T09:00:00+00:00',
+            'expires': '2026-11-25T09:00:00+00:00',
+        },
+    }), encoding='utf-8')
+    env = dict(_nested_pytest_env(), PYTEST_QUARANTINE_FILE=str(ledger),
+               PYTEST_QUARANTINE_AS_OF='2026-11-24T09:00:00+00:00')
+    for mode, code, outcome in [('blocking', 5, '1 deselected'), ('quarantine', 0, '1 passed')]:
+        result = subprocess.run(
+            [sys.executable, '-m', 'pytest', '-q', nodeid], cwd=root,
+            env=dict(env, PYTEST_QUARANTINE_MODE=mode),
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == code, result.stdout + result.stderr
+        assert outcome in result.stdout
+        assert f'QUARANTINED {nodeid} owner=plangraph:FIX-THE-FLAKE mode={mode}' in result.stdout
+
+
+def _nested_pytest_env():
+    return {key: value for key, value in os.environ.items() if not key.startswith('PYTEST_')}
