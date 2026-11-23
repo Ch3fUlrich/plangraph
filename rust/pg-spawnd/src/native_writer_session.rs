@@ -93,9 +93,11 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         let mut completed = false;
         let mut working_shell = false;
         let mut sandbox_error = None;
+        let mut quota = None;
         let mut thread_id = session.map(str::to_owned);
         for line in BufReader::new(log).lines() {
             let line = line.map_err(|e| e.to_string())?;
+            quota = quota.or_else(|| crate::native_writer::quota::from_log_line(&line));
             let Ok(event) = serde_json::from_str::<Value>(&line) else {
                 if let Some(error) = bwrap_start_failure(&line) {
                     sandbox_error = Some(sandbox_unavailable(error));
@@ -122,6 +124,10 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         }
         if let Some(error) = sandbox_error.filter(|_| !working_shell) {
             return Err(error);
+        }
+        // A usage limit ends the turn with an error; a turn that completed is not one.
+        if let Some(limit) = quota.filter(|_| !completed) {
+            return Err(limit.error());
         }
         if !status.success() {
             return Err(format!("codex failed: {status}"));

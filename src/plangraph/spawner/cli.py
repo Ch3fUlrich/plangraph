@@ -248,7 +248,7 @@ def main(argv=None):
     commands.add_parser('catalog')
     p = commands.add_parser('quota-result')
     p.add_argument('--model', required=True)
-    p.add_argument('--harness', choices=('agy', 'claude'), default='agy')
+    p.add_argument('--harness', choices=('agy', 'claude', 'codex'), default='agy')
     p.add_argument('--error', required=True)
     p.add_argument('--reset-at', type=float)
     p.add_argument('--account')
