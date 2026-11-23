@@ -37,6 +37,7 @@ _LANE_LIMIT = 5
 _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
+_MERGE_BODY_ITEM = re.compile(r"^Plan-Item:[ \t]*([A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?)[ \t]*$", re.I | re.M)
 _PR_RE = re.compile(r"#(\d+)")
 _PR_SUFFIX_RE = re.compile(r"\(#([1-9][0-9]*)\)\Z")
 MERGE_REPO_LINE = re.compile(
@@ -205,8 +206,11 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             sha, parents, date, subject, trailers = fields
             if (revert := delivery_revert(trailers)) is not None:
                 reverts[sha] = revert
-            records[sha] = (parents.split(), {"sha": sha, "date": date,
-                            "subject": subject}, [] if sha in reverts else plan_items(trailers))
+            parents = parents.split()
+            names = [] if sha in reverts else plan_items(trailers)
+            if len(parents) > 1 and sha not in reverts:
+                names = list(dict.fromkeys([*names, *_MERGE_BODY_ITEM.findall(trailers.partition("\n")[2])]))
+            records[sha] = (parents, {"sha": sha, "date": date, "subject": subject}, names)
 
     def ancestors(head):
         seen, todo = set(), [head]
