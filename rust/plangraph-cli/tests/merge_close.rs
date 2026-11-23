@@ -284,11 +284,16 @@ fn reconcile_persists_one_routing_batch_and_only_requests_a_watched_dry_run() {
     let keeper = Script::new([(
         json!({"apply":false,"watch":true,"require_seats":true}),
         json!({
-            "merged_not_done": 3, "alert": true,
+            "merged_not_done": 8, "alert": true,
             "would_close": [{"key":"demo:A"}],
             "listed": [
                 {"key":"demo:B","reason":"evidence_unverified: unmerged_work_or_lanes_unknown"},
-                {"key":"demo:C","reason":"evidence_unverified: deploy_pending: service"}
+                {"key":"demo:C","reason":"evidence_unverified: deploy_pending: service"},
+                {"key":"demo:D","reason":"evidence_unverified: decision_merge_only: demo abc"},
+                {"key":"demo:E","reason":"seats_missing: required review unavailable"},
+                {"key":"demo:F","reason":"evidence_unverified: NO-WITNESS demo:F: cited review unavailable or unwitnessed"},
+                {"key":"demo:G","reason":"evidence_unverified: merge_repo_ambiguous: demo, data"},
+                {"key":"demo:H","reason":"coverage: insufficient_seat_families: need 2"}
             ]
         }),
     )]);
@@ -303,13 +308,21 @@ fn reconcile_persists_one_routing_batch_and_only_requests_a_watched_dry_run() {
         batch
     );
     assert_eq!(batch["alert"], true);
+    assert_eq!(batch["merged_not_done"], 8);
     assert_eq!(
         batch["refusals"],
-        json!({"deploy_pending":1,"unmerged_work_or_lanes_unknown":1})
+        json!({"deploy_pending":1,"decision_merge_only":1,"seats_missing":3,
+               "merge_repo_ambiguous":1,"unmerged_work_or_lanes_unknown":1})
     );
-    assert_eq!(batch["proposals"][0]["action"], "CLOSE");
-    assert_eq!(batch["proposals"][1]["action"], "SLICE-OPEN");
-    assert_eq!(batch["proposals"][2]["action"], "RESCOPE");
+    assert_eq!(
+        batch["proposals"],
+        json!([
+            {"action":"CLOSE","item":{"key":"demo:A"}},
+            {"action":"SLICE-OPEN","item":{"key":"demo:B","reason":"evidence_unverified: unmerged_work_or_lanes_unknown"}},
+            {"action":"CLOSE","item":{"key":"demo:D","reason":"evidence_unverified: decision_merge_only: demo abc"}},
+            {"action":"RESCOPE","item":{"key":"demo:G","reason":"evidence_unverified: merge_repo_ambiguous: demo, data"}}
+        ])
+    );
     control.assert_finished();
     keeper.assert_finished();
 }

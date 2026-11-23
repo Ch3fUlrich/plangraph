@@ -8,6 +8,7 @@ WorkingDirectory=%h/code/plangraph
 EnvironmentFile=-%h/.config/plangraph/plangraph.env
 StateDirectory=pg-reconcile-merged
 StateDirectoryMode=0700
+# Routing reads the batch line from the journal or the latest batch from watch.json.
 ExecStart=%h/.local/bin/plangraph reconcile-merged --dry-run --state %S/pg-reconcile-merged/watch.json
 TimeoutStartSec=420
 UMask=0077

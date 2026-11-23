@@ -410,16 +410,18 @@ pub fn reconcile_with(
         let reason = row["reason"].as_str().ok_or("missing refusal reason")?;
         let (code, detail) = reason.split_once(": ").unwrap_or((reason, ""));
         let tag = detail.split(':').next().unwrap_or_default();
-        let tag = if !tag.is_empty() && tag.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
-            tag
-        } else {
-            code
+        let tag = match code {
+            "coverage" | "same_family" | "family_unknown" => "seats_missing",
+            "evidence_unverified" if detail.starts_with("NO-WITNESS ") => "seats_missing",
+            _ if !tag.is_empty() && tag.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') => tag,
+            _ => code,
         };
         *refusals.entry(tag).or_insert(0usize) += 1;
-        let action = if tag == "unmerged_work_or_lanes_unknown" {
-            "SLICE-OPEN"
-        } else {
-            "RESCOPE"
+        let action = match tag {
+            "decision_merge_only" => "CLOSE",
+            "unmerged_work_or_lanes_unknown" => "SLICE-OPEN",
+            "deploy_pending" | "seats_missing" => continue,
+            _ => "RESCOPE",
         };
         proposals.push(json!({"action": action, "item": row}));
     }

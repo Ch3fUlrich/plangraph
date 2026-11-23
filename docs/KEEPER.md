@@ -320,9 +320,12 @@ A first-parent PR merge into the configured default branch can close open, claim
 `plangraph reconcile-merged --dry-run --state PATH` previews merged work once
 per hour through the user timer. The job refreshes the merge index and requires
 a complete preview across all configured repositories before it atomically
-replaces the watcher state file. The service journal delivers one JSON batch
-line per pass. Routing reads it with `journalctl --user -u pg-reconcile-merged.service`. Each batch contains
-the merged-open count, refusal counts, and proposed actions.
+replaces the watcher state file. Routing reads one `reconcile-merged` JSON
+batch line per pass from `journalctl --user -u pg-reconcile-merged.service`
+or reads the latest batch from `watch.json` in the unit's state directory.
+Each batch contains the merged-open count, refusal counts, and proposed
+actions. Deployment and seat blockers appear in the refusal counts under
+`deploy_pending` and `seats_missing`.
 The Keeper raises `merged_open_reconcile` on the second consecutive nonzero
 pass and clears it after a zero pass. Routing applies any proposed action
 under its own GO decision.
