@@ -6,6 +6,8 @@ have run too long, using the shared plumbing on the ``Store`` base class.
 """
 from __future__ import annotations
 
+from .store_input import GATE_DEPENDENCY_WARNING, GATE_KINDS
+
 
 #: KEEPER-PRIORITY-LEVELS-AND-AGING: an open, unclaimed item left at this
 #: priority this long since its last priority change drops one level.
@@ -28,7 +30,8 @@ class ReapMixin:
         aged = []
         findings = 0
         with self._write():
-            for item in self._all_items():
+            items = self._all_items()
+            for item in items:
                 if item["state"] == "claimed" and item["lease_until"]:
                     due = self._parse_iso(item["lease_until"])
                     if due is not None and due.timestamp() < now:
@@ -49,11 +52,32 @@ class ReapMixin:
                                           "in review for over 4h", now)
                             findings += 1
                         overdue.append(item["key"])
+            self._check_gate_capacity(items, now)
             aged = self._age_priorities(principal, now)
             alerts = self._alerts_expire(now)
         if expired or aged or findings or alerts:
             self._reap_revision = getattr(self, "_reap_revision", 0) + 1
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}
+
+    def _check_gate_capacity(self, items, now):
+        code = "gate_dependency_capacity"
+        active = {item["key"] for item in items if item["state"] != "cancelled"}
+        near_cap = {}
+        for item in items:
+            if item["kind"] in GATE_KINDS and item["state"] not in ("done", "cancelled"):
+                count = len(active.intersection(item["depends_on"]))
+                if count >= GATE_DEPENDENCY_WARNING:
+                    near_cap[item["key"]] = count
+        previous = {row["key"] for row in self.conn.execute(
+            "SELECT key FROM alerts WHERE code=? AND state='open'", (code,))}
+        for key, count in near_cap.items():
+            msg = f"Gate has {count} dependencies; split it into parts."
+            if key in previous:
+                self._alerts_raise_finding(key, code, msg, now)
+            else:
+                self._finding(key, code, msg, now)
+        for key in sorted(previous - near_cap.keys()):
+            self._alerts_resolve(key, now, code=code)
 
     def _age_priorities(self, principal, now):
         """Drop an open, unclaimed 10 (after 3 days) or 9 (after 7) one level.

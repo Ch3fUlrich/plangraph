@@ -21,6 +21,12 @@ _TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
               "description": DESCRIPTION_CAP, "owner": 100, "track": 100,
               "estimate_src": 64}
 _MAX_DEPS = 200
+GATE_DEPENDENCY_WARNING = 190
+GATE_KINDS = ("gate", "goal")
+
+
+def _unfinished_dependencies(keys, items):
+    return {key for key in keys if items.get(key, {}).get("state") not in ("done", "cancelled")}
 
 
 class InputMixin:
@@ -135,21 +141,38 @@ class InputMixin:
             "state": raw.get("state", "open"),
         }
 
-    @staticmethod
-    def _check_dependency_cap(key, deps, items, previous=None):
-        """Count distinct unfinished targets, permitting removal from legacy overages."""
-        def unfinished(keys):
-            return {dep for dep in keys
-                    if items.get(dep, {}).get("state") not in ("done", "cancelled")}
+    def _check_definition_dependency_caps(self, definitions, attachments):
+        if not attachments and not any(item["depends_on"] for item in definitions):
+            return
+        items = {item["key"]: item for item in self._all_items()}
+        items.update((item["key"], item) for item in definitions)
+        for item in definitions:
+            self._check_dependency_cap(item["key"], item["depends_on"], items)
+        additions = {}
+        for item, gate in attachments:
+            additions.setdefault(gate["key"], set()).add(item["key"])
+        for key, added in additions.items():
+            deps = set(items[key]["depends_on"]) | added
+            self._check_dependency_cap(key, deps, items, attach_count=len(added))
 
-        active = unfinished(deps)
+    @staticmethod
+    def _check_dependency_cap(key, deps, items, previous=None, *, attach_count=0):
+        """Count distinct unfinished targets, permitting removal from legacy overages."""
+        active = _unfinished_dependencies(deps, items)
         if len(active) <= _MAX_DEPS:
             return
-        if previous is not None and active <= unfinished(previous):
+        if previous is not None and active <= _unfinished_dependencies(previous, items):
             return
-        raise Refused("validation",
-                      f"{key}: depends_on has {len(active)} open dependencies "
-                      f"and exceeds the limit of {_MAX_DEPS}")
+        detail = f"{key}: depends_on has {len(active)} open dependencies and exceeds the limit of {_MAX_DEPS}"
+        if attach_count and items[key]["kind"] in GATE_KINDS:
+            parts = [f"{key}-{suffix}" for suffix in ("A", "B")]
+            for part in parts:
+                item = items.get(part)
+                if (item and item["kind"] in GATE_KINDS and item["state"] == "open"
+                        and len(_unfinished_dependencies(item["depends_on"], items)) + attach_count <= _MAX_DEPS):
+                    raise Refused("validation", f"{detail}; use split gate {part}")
+            detail += f"; use a split gate with room ({' or '.join(parts)})"
+        raise Refused("validation", detail)
 
     def _qualify(self, project, dep):
         """``project:dep`` for a bare id, then through the alias table."""
