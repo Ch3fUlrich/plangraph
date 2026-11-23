@@ -153,3 +153,25 @@ fn writer_docs_map_uses_committed_head_and_merge_base_with_date_boundary() {
     }
     assert!(docs_map::check(&f.tree, "missing-ref", &head).is_err());
 }
+
+#[test]
+fn finalize_docs_map_accepts_a_new_item_fragment() {
+    for (source, reference, area) in [
+        ("tools/helper.rs", "CONTRIBUTING.md", "contributing"),
+        ("src/keeper.rs", "docs/KEEPER.md", "keeper"),
+        ("src/spawner.rs", "docs/SPAWNER.md", "spawner"),
+    ] {
+        let f = Fixture::new();
+        let mapping = format!("{source} -> {reference}\n");
+        let fragment = format!("docs/{area}/DOCS-FRAGMENT.md");
+        record(
+            &f,
+            &[
+                (".docs-map", &mapping),
+                (source, "code"),
+                (&fragment, "doc"),
+            ],
+        );
+        assert!(check_result(&f.repo, &f.tree, &f.ws).is_ok());
+    }
+}
