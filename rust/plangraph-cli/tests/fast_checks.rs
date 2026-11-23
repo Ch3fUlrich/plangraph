@@ -242,13 +242,8 @@ fn fast_checks_builds_spawnd_before_affected_tests() {
     let build = plan
         .find("cargo build --locked --manifest-path rust/Cargo.toml -p pg-spawnd --bin pg-spawnd")
         .expect(&plan);
-    let verify = plan
-        .find("fleet-spawnd-verify: python3 tests/_spawnd.py")
-        .expect(&plan);
-    assert!(
-        build < verify && verify < plan.find("affected-tests:").expect(&plan),
-        "{plan}"
-    );
+    assert!(build < plan.find("affected-tests:").expect(&plan), "{plan}");
+    assert!(plan.contains("--fleet-spawnd-prebuilt"), "{plan}");
 }
 
 #[test]

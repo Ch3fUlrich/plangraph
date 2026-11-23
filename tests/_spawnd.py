@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -41,6 +42,9 @@ def _current_binary(binary, workspace, name):
 
 
 def fleet_spawnd():
+    staged = os.environ.get('PLANGRAPH_TEST_FLEET_SPAWND')
+    if staged:
+        return Path(staged)
     stale = None
     for profile in ('release', 'debug'):
         try:
@@ -55,29 +59,38 @@ def fleet_spawnd():
     raise RuntimeError(f'build pg-spawnd before running fleet tests: {binary}')
 
 
-def ensure_fleet_spawnd():
-    """Verify the build published this checkout's binary, forcing a relink if needed."""
+def ensure_fleet_spawnd(destination=None):
+    """Verify this checkout's binary and optionally stage it for the pytest run."""
     root = Path(__file__).resolve().parents[1]
     binary = built_rust_binary('pg-spawnd', cargo_cwd=root)
 
     def current():
         return binary.is_file() and _current_binary(binary, root / 'rust', 'pg-spawnd')
 
-    if current():
-        return 0
-    print('fleet tests: relinking pg-spawnd after Cargo left a stale shared executable', flush=True)
-    # An explicit compiler argument gives only the binary a fresh Cargo unit.
-    # Dependencies and the inherited compiler cache remain shared.
-    metadata = f'plangraph_fleet_{os.getpid()}_{time.time_ns()}'
-    status = subprocess.run(
-        ['cargo', 'rustc', '--locked', '--manifest-path', 'rust/Cargo.toml',
-         '-p', 'pg-spawnd', '--bin', 'pg-spawnd', '--', '-C', f'metadata={metadata}'],
-        cwd=root).returncode
-    if status:
-        return status
     if not current():
-        print(f'fleet tests: pg-spawnd is stale after relinking: {binary}', file=sys.stderr)
-        return 1
+        print('fleet tests: relinking pg-spawnd after Cargo left a stale shared executable', flush=True)
+        # An explicit compiler argument gives only the binary a fresh Cargo unit.
+        # Dependencies and the inherited compiler cache remain shared.
+        metadata = f'plangraph_fleet_{os.getpid()}_{time.time_ns()}'
+        status = subprocess.run(
+            ['cargo', 'rustc', '--locked', '--manifest-path', 'rust/Cargo.toml',
+             '-p', 'pg-spawnd', '--bin', 'pg-spawnd', '--', '-C', f'metadata={metadata}'],
+            cwd=root).returncode
+        if status:
+            return status
+        if not current():
+            print(f'fleet tests: pg-spawnd is stale after relinking: {binary}', file=sys.stderr)
+            return 1
+    if destination is not None:
+        def identity():
+            stat = binary.stat()
+            return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+        before = identity()
+        shutil.copy2(binary, destination)
+        if before != identity() or not current():
+            print(f'fleet tests: shared pg-spawnd changed during staging: {binary}', file=sys.stderr)
+            return 1
     return 0
 
 
@@ -177,4 +190,4 @@ def build_spawnd():
 
 
 if __name__ == '__main__':
-    raise SystemExit(ensure_fleet_spawnd())
+    raise SystemExit(ensure_fleet_spawnd(sys.argv[1] if len(sys.argv) > 1 else None))

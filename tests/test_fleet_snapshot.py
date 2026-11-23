@@ -26,6 +26,7 @@ def test_fleet_binary_must_match_current_sources(tmp_path, monkeypatch, release)
     os.utime(source, (200, 200))
     monkeypatch.setattr(_spawnd, '__file__', str(tmp_path / 'checkout/tests/_spawnd.py'))
     monkeypatch.setenv('CARGO_TARGET_DIR', str(target))
+    monkeypatch.delenv('PLANGRAPH_TEST_FLEET_SPAWND', raising=False)
 
     def artifact(profile, built_from, timestamp):
         path = built_rust_binary('pg-spawnd', profile)
@@ -369,3 +370,26 @@ def test_fast_checks_rebuilds_after_cargo_leaves_a_stale_shared_binary(tmp_path,
     assert any(arg.startswith('metadata=') for arg in command)
     assert _spawnd.ensure_fleet_spawnd() == 0
     assert len(calls) == 1
+
+
+def test_staged_fleet_binary_survives_another_checkout_replacing_shared_target(tmp_path, monkeypatch):
+    import _spawnd
+
+    root = tmp_path / 'checkout'
+    source = root / 'rust/pg-spawnd/src/main.rs'
+    source.parent.mkdir(parents=True)
+    source.touch()
+    os.utime(source, (100, 100))
+    target = tmp_path / 'cargo-target'
+    binary = target / 'debug/pg-spawnd'
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b'current checkout')
+    os.utime(binary, (200, 200))
+    binary.with_suffix('.d').write_text(f'{binary}: {source}\n')
+    monkeypatch.setattr(_spawnd, '__file__', str(root / 'tests/_spawnd.py'))
+    monkeypatch.setenv('CARGO_TARGET_DIR', str(target))
+    staged = tmp_path / 'staged-spawnd'
+    assert _spawnd.ensure_fleet_spawnd(staged) == 0
+    monkeypatch.setenv('PLANGRAPH_TEST_FLEET_SPAWND', str(staged))
+    binary.write_bytes(b'another checkout')
+    assert _spawnd.fleet_spawnd().read_bytes() == b'current checkout'
