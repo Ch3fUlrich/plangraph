@@ -243,6 +243,21 @@ def _mint_run_token(store, principal, body, need):
                                 need(body, "role"), need(body, "run_id"))
 
 
+def _close_merged_auto(store, principal, body, need):
+    watch = body.get("watch", False)
+    apply = body.get("apply", True)
+    repos_only = body.get("repos_only", False)
+    project = body.get("project")
+    if type(watch) is not bool or watch and (apply is not False or repos_only or project is not None):
+        raise Refused("validation", "watch requires a dry run across all repositories")
+    report = store.close_merged_auto(
+        principal, project, require_seats=body.get("require_seats"),
+        apply=apply, repos_only=repos_only, frozen=True)
+    if watch:
+        report["alert"] = store._watch_merged_open(report)
+    return report
+
+
 def _set_metrics(store, principal, body, need):
     return store.set_metrics(principal, body.get("day"), body.get("items"))   # role first (403)
 
@@ -344,9 +359,7 @@ ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "land": lambda store, principal, body, need: store.land(principal, body),
                       "record_spawn_attempt": lambda store, principal, body, need:
                           store.record_spawn_attempt(principal, body),
-                      "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
-                          principal, body.get("project"), require_seats=body.get("require_seats"),
-                          apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True),
+                      "close_merged_auto": _close_merged_auto,
                       "close_on_decision": _close_on_decision,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,
