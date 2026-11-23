@@ -76,7 +76,9 @@ def test_unknown(request_data):
 
 @pytest.mark.parametrize('role', ['implement', 'review'])
 @pytest.mark.parametrize('explicit', [False, True])
-def test_tools(request_data, role, tmp_path, explicit):
+def test_tools(request_data, role, tmp_path, explicit, monkeypatch):
+    from plangraph.routing_support import clients
+    monkeypatch.setattr(clients, 'resolve_codex_client', lambda: (None, 'fixture'))
     leg_id = 'cx-gpt-6.2-sol' if role == 'implement' else request_data['leg']['id']
     exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')

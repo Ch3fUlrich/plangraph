@@ -55,11 +55,11 @@ def test_leg_data():
     for leg_id, model in SOL.items():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.disabled) == (
-            'opencode', model, 'gpt', ('implement',), None), leg_id
+            'codex', model, 'gpt', ('implement',), None), leg_id
     for leg_id, model in LUNA.items():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.tool_mode) == (
-            'opencode', model, 'gpt', ('review',), 'inline-only'), leg_id
+            'codex', model, 'gpt', ('review',), 'inline-only'), leg_id
     assert not any("flash" in leg.model and "gemini" in leg.model for leg in BY_ID.values())
     ids = [leg.id for leg in spawnable_legs()]
     assert len(ids) == len(set(ids))

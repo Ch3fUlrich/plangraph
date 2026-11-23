@@ -234,8 +234,8 @@ Implementation routes prioritize `cx-gpt-6.2-sol-medium` (with `cx-gpt-6.2-sol-{
 explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 `opencode/deepseek-v4.1-flash-free` (200k) > `opencode-go/deepseek-v4.1-flash` (1M) >
 `opencode-go/glm-5.3-flash` (1M) on `opencode` as implementation fallback.
-D-6550 (rule 3.66) uses native Codex for the lead writer. Explicit model calls
-can still use the registered OpenCode gateway leg. Claude is eligible
+D-6550 (rule 3.66) uses native Codex for GPT legs. GPT falls back to the OpenCode
+gateway model when the Codex client is missing on the selected host. Claude is eligible
 for automatic writer and review fallback when both GPT Sol and Hydrogen are rate-limited.
 D-6667 retires the GPT-6.1 family from leg selection and explicit model launches.
 Use `gpt-6.2-sol` for direct Codex launches.
