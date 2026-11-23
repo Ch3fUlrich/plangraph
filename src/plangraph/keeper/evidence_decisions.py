@@ -225,6 +225,34 @@ def _listed_tokens(cell: str, pattern: re.Pattern):
                 break
 
 
+def close_commit_scope(cell):
+    """Return the key and revision bindings from one decision cell."""
+    return _close_commit_tokens(_listed_tokens(cell, _CLOSES_RE))
+
+
+def _close_commit_tokens(tokens):
+    result: dict[str, str | None] = {}
+    invalid: set[str] = set()
+    for token in tokens:
+        parsed = _parse_closes_token(token)
+        if parsed is None:
+            continue
+        key, sha = parsed
+        if key in invalid:
+            continue
+        prev = result.get(key)
+        if prev is None:
+            result[key] = sha
+        elif sha is not None:
+            p_l, s_l = prev.lower(), sha.lower()
+            if s_l.startswith(p_l) and len(sha) > len(prev):
+                result[key] = sha
+            elif not p_l.startswith(s_l):
+                invalid.add(key)
+                del result[key]
+    return result
+
+
 def _decision_cell(row: str) -> str:
     """The DECISION cell (3rd column) of a ``|`` table row (``""`` when short).
 
@@ -414,26 +442,7 @@ class DecisionsAdapter:
 
     def closes_with_commits(self, decision_id: str) -> dict[str, str | None]:
         """Map of key -> sha|None for valid ``Closes:`` tokens in *decision_id*'s rows."""
-        result: dict[str, str | None] = {}
-        invalid: set[str] = set()
-        for token in self._scoped_tokens(decision_id, _CLOSES_RE):
-            parsed = _parse_closes_token(token)
-            if parsed is None:
-                continue
-            key, sha = parsed
-            if key in invalid:
-                continue
-            prev = result.get(key)
-            if prev is None:
-                result[key] = sha
-            elif sha is not None:
-                p_l, s_l = prev.lower(), sha.lower()
-                if s_l.startswith(p_l) and len(sha) > len(prev):
-                    result[key] = sha
-                elif not p_l.startswith(s_l):
-                    invalid.add(key)
-                    del result[key]
-        return result
+        return _close_commit_tokens(self._scoped_tokens(decision_id, _CLOSES_RE))
 
     def closes(self, decision_id: str) -> set[str]:
         """The whole ``Closes: <project:ID>`` keys in the DECISION cell of *decision_id*'s rows.
