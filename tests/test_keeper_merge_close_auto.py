@@ -769,6 +769,7 @@ def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
 
 
 def test_watch_merged_open_alert_requires_two_nonzero_passes_and_clears(env, tmp_path):
+    import threading
     from door_util import Doors
 
     doors = Doors(env, tmp_path)
@@ -776,6 +777,11 @@ def test_watch_merged_open_alert_requires_two_nonzero_passes_and_clears(env, tmp
     path = "/v1/close_merged_auto"
 
     def watch(count, alert):
+        assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
+        worker = next((thread for thread in threading.enumerate() if thread.name == "keeper-merge-index"), None)
+        if worker is not None:
+            worker.join(5)
+        assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "ready"})
         status, report = doors.http("system", "POST", path, body)
         assert status == 200 and report["merged_not_done"] == count
         assert report["alert"] is alert and report["closed"] == []
@@ -789,11 +795,15 @@ def test_watch_merged_open_alert_requires_two_nonzero_passes_and_clears(env, tmp
         assert env.store._alert_row("finding", None, "merged_open_reconcile")["state"] == "open"
         assert state(env, "demo:A")["state"] == "open"
         assert doors.http("system", "POST", path, {"watch": True})[0] != 200
+        assert doors.http("system", "POST", path, {**body, "limit": 1})[0] != 200
         assert state(env, "demo:A")["state"] == "open"
         assert [row["key"] for row in auto(env, require_seats=False)["closed"]] == ["demo:A"]
         watch(0, False)
         assert env.store._alert_row("finding", None, "merged_open_reconcile")["state"] == "resolved"
-        env.repo.land("b", "Plan-Item: demo:B", 92)
-        watch(1, False)
+        env.store.create_items(env.p("router"), [
+            *(defn(f"PREFIX-{n:02}", under="G") for n in range(25)), defn("ZZ", under="G"),
+        ])
+        env.repo.land("z", "Plan-Item: demo:ZZ", 92)
+        assert [row["key"] for row in watch(1, False)["would_close"]] == ["demo:ZZ"]
     finally:
         doors.close()
