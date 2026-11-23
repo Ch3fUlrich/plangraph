@@ -1,6 +1,5 @@
 //! Run the production language-gate wrapper against a recording policy executable.
 use super::*;
-use std::os::unix::fs::PermissionsExt;
 
 fn install(repo: &Path) {
     let gate = include_str!("../../../tools/check_new_code_lang.py");
@@ -17,7 +16,7 @@ fn install(repo: &Path) {
     fs::create_dir_all(&crate_dir).unwrap();
     fs::write(crate_dir.join("Cargo.toml"), "").unwrap();
     let policy = repo.join("tools/fixture-pg-policy");
-    fs::write(
+    pg_worker_core::executable_test_support::write_executable(
         &policy,
         r#"#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
@@ -43,9 +42,7 @@ if args[:1] == ['--class-search']:
     if (pathlib.Path.cwd().parent / 'reject-policy').is_file():
         sys.exit('malformed Class-Search from fixture')
 "#,
-    )
-    .unwrap();
-    fs::set_permissions(&policy, fs::Permissions::from_mode(0o755)).unwrap();
+    );
 }
 
 #[test]
