@@ -61,10 +61,12 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/pg-worktree-sweep.service",
     "deploy/systemd/pg-wsl-cache-guard.service",
     "deploy/systemd/pg-wsl-cache-guard.timer",
+    "deploy/systemd/plangraph-review-probe.service",  # The Rust probe test embeds the unit.
     "deploy/systemd/plangraph-state-shadow@.service",
     "deploy/liveness/router.toml",
     "tools/liveness_watchdog.py",
     "src/plangraph/keeper/errors.py",
+    "src/plangraph/planner/__init__.py",
     "src/plangraph/planner/routing.py",
     "src/plangraph/planner/benchmarks.py",
     "src/plangraph/planner/route_policy.py",
