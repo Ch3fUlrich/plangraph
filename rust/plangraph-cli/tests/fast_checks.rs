@@ -366,26 +366,10 @@ fn hangs_with_child() {
     let deadline = path.join("nextest.toml");
     std::fs::write(&deadline, config.replace("\"120s\"", "\"2s\"")).unwrap();
     let pidfile = path.join("child.pid");
-    let output = test_python::command()
+    let output = preflight_command()
         .current_dir(&root)
         .env("CHILD_PID", &pidfile)
-        .args([
-            "-c",
-            r#"
-import os, sys
-from pathlib import Path
-sys.path.insert(0, 'tools')
-import preflight
-preflight.check_timeout = lambda *args: 45
-code, output = preflight.run(sys.argv[1:], Path.cwd(), os.environ)
-print(output, end='')
-sys.exit(code)
-"#,
-            "cargo",
-            "nextest",
-            "run",
-            "--manifest-path",
-        ])
+        .args(["cargo", "nextest", "run", "--manifest-path"])
         .arg(path.join("Cargo.toml"))
         .arg("--config-file")
         .arg(deadline)
@@ -398,6 +382,11 @@ sys.exit(code)
         "{log}\n{:?}",
         output.stderr
     );
+    assert_child_stopped(&pidfile);
+}
+
+#[cfg(target_os = "linux")]
+fn assert_child_stopped(pidfile: &std::path::Path) {
     let pid: u32 = std::fs::read_to_string(pidfile).unwrap().parse().unwrap();
     if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         assert!(
@@ -405,4 +394,79 @@ sys.exit(code)
             "{stat}"
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+fn preflight_command() -> Command {
+    let mut command = test_python::command();
+    command.args([
+        "-c",
+        r#"
+import os, sys
+from pathlib import Path
+sys.path.insert(0, 'tools')
+import preflight
+preflight.check_timeout = lambda *args: int(os.environ.get('PREFLIGHT_FIXTURE_TIMEOUT', '45'))
+code, output = preflight.run(sys.argv[1:], Path.cwd(), os.environ)
+print(output, end='')
+sys.exit(code)
+"#,
+    ]);
+    command
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preflight_reports_a_nextest_timeout_without_an_installed_runner() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = tempfile::tempdir().unwrap();
+    pg_worker_core::executable_test_support::write_script(
+        fixture.path(),
+        "cargo",
+        r#"#!/bin/sh
+[ "$1 $2" = 'nextest run' ] || exit 2
+case "$3" in
+    report-timeout)
+        printf '    TIMEOUT [   2.004s] ( 1/ 1) pg-timeout-fixture hangs_with_child\n' >&2
+        exit 100
+        ;;
+    stall)
+        sleep 120 &
+        printf '%s' "$!" > "$CHILD_PID"
+        wait
+        ;;
+    *) exit 2 ;;
+esac
+"#,
+    );
+    let search_path = std::env::join_paths(
+        std::iter::once(fixture.path().to_owned())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let pidfile = fixture.path().join("child.pid");
+    let run = |mode| {
+        preflight_command()
+            .current_dir(&root)
+            .env("PATH", &search_path)
+            .env("CHILD_PID", &pidfile)
+            .env("PREFLIGHT_FIXTURE_TIMEOUT", "3")
+            .args(["cargo", "nextest", "run", mode])
+            .output()
+            .unwrap()
+    };
+
+    let output = run("report-timeout");
+    assert_eq!(output.status.code(), Some(100), "{output:?}");
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        log.contains("HUNG pg-timeout-fixture hangs_with_child"),
+        "{log}"
+    );
+
+    let output = run("stall");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(log.contains("check exceeded 3 second timeout"), "{log}");
+    assert_child_stopped(&pidfile);
 }
