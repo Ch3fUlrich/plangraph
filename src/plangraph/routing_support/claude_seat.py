@@ -42,10 +42,12 @@ def _review_command(command, worktree):
                     continue
                 if arg == "-k" and re.fullmatch(r"[A-Za-z0-9_]+", next(args, "")):
                     continue
-                path = Path(arg.partition("::")[0])
-                if not re.fullmatch(r"tests/[A-Za-z0-9_./-]+\.py", str(path)) or ".." in path.parts:
+                # Judge the literal text: str(Path) uses backslashes on Windows.
+                name = arg.partition("::")[0]
+                if (not re.fullmatch(r"tests/[A-Za-z0-9_./-]+\.py", name)
+                        or ".." in name.split("/")):
                     return False
-                paths.append(worktree / path)
+                paths.append(worktree / name)
             return bool(paths) and all(
                 path.resolve().is_relative_to(worktree) and path.is_file() for path in paths
             )
