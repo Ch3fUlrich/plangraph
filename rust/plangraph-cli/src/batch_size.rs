@@ -8,8 +8,9 @@
 //! still fit; an item expected above half the limit goes alone. (c) The feedback of the last
 //! batch: one item fewer after skipped items or a HIGH that survived two rounds, one more
 //! after a batch accepted in round 1.
+use crate::paths::{paths_overlap, repo_relative};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 #[path = "batch_size_tests.rs"]
@@ -40,6 +41,9 @@ pub struct Item {
     /// The item text (Why, How, Done when) the brief carries; `brief` refuses an item without.
     #[serde(default)]
     pub text: Option<String>,
+    /// Repository-relative files or module paths from the planner's file list.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -64,6 +68,9 @@ pub struct Last {
 pub struct Input {
     pub writer: Writer,
     pub items: Vec<Item>,
+    /// File lists of the parts already assigned to this train, combined by the caller.
+    #[serde(default)]
+    pub prior_part_files: Vec<String>,
     /// Diff bytes of merged items by kind: the fallback estimate is their median.
     #[serde(default)]
     pub merged_bytes: BTreeMap<String, Vec<u64>>,
@@ -80,6 +87,8 @@ pub struct Plan {
     pub keys: Vec<String>,
     /// Items expected above half the limit: each goes alone, in its own batch.
     pub alone: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub next_train: BTreeMap<String, Vec<String>>,
     pub reason: String,
 }
 
@@ -133,6 +142,18 @@ pub fn feedback_bound(last: Option<&Last>) -> (usize, &'static str) {
     }
 }
 
+/// Docs and changelog fragments do not couple delivery of source changes.
+pub(crate) fn part_source_path(path: &str) -> bool {
+    !path.starts_with("changelog.d/") && !path.starts_with("docs/")
+}
+
+fn part_paths(paths: &[String]) -> impl Iterator<Item = &str> {
+    paths
+        .iter()
+        .map(|path| repo_relative(path))
+        .filter(|path| !path.is_empty() && part_source_path(path))
+}
+
 /// The batch to brief: how many of `input.items`, in the given order, and why.
 pub fn plan(input: &Input) -> Plan {
     let limit = input.limit_bytes.unwrap_or(DEFAULT_LIMIT_BYTES);
@@ -142,7 +163,23 @@ pub fn plan(input: &Input) -> Plan {
     let bound = cap.min(feedback);
     let (mut keys, mut alone, mut bytes) = (Vec::new(), Vec::new(), 0u64);
     let mut fit_stop = None;
-    for (index, item) in input.items.iter().enumerate() {
+    let prior_files: BTreeSet<_> = part_paths(&input.prior_part_files).collect();
+    let mut next_train = BTreeMap::new();
+    let eligible = input.items.iter().filter(|item| {
+        let overlap: BTreeSet<_> = part_paths(&item.files)
+            .filter(|path| prior_files.iter().any(|prior| paths_overlap(path, prior)))
+            .map(str::to_owned)
+            .collect();
+        if overlap.is_empty() {
+            true
+        } else {
+            next_train.insert(item.key.clone(), overlap.into_iter().collect::<Vec<_>>());
+            false
+        }
+    });
+    // Evaluate every item so deferrals are reported even when this part is already full.
+    let eligible: Vec<_> = eligible.collect();
+    for (index, item) in eligible.into_iter().enumerate() {
         let expected = expected_bytes(item, &input.merged_bytes);
         if expected > limit / 2 {
             if index == 0 {
@@ -171,10 +208,15 @@ pub fn plan(input: &Input) -> Plan {
         fit_stop.map_or(String::new(), |k| format!(", {k} would pass the target")),
         if alone.is_empty() { String::new() } else { format!("; alone: {}", alone.join(" ")) },
     );
+    let mut reason = reason;
+    for (key, paths) in &next_train {
+        reason.push_str(&format!("; next train: {key} shares {}", paths.join(", ")));
+    }
     Plan {
         count,
         keys,
         alone,
+        next_train,
         reason,
     }
 }
@@ -203,7 +245,7 @@ pub fn brief(input: &Input, plan: &Plan) -> Result<String, String> {
         .items
         .iter()
         .map(|i| i.key.as_str())
-        .filter(|k| !plan.keys.iter().any(|s| s == k))
+        .filter(|k| !plan.keys.iter().any(|s| s == k) && !plan.next_train.contains_key(*k))
         .collect();
     if !waiting.is_empty() {
         out.push_str(&format!("Left for the next batch: {}\n", waiting.join(" ")));

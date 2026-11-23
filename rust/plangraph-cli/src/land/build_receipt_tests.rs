@@ -33,3 +33,50 @@ fn train_requires_every_part_receipt_for_its_exact_head() {
         .unwrap_err()
         .contains("registered"));
 }
+
+#[test]
+fn completed_build_warns_with_the_paths_and_parts_that_overlap() {
+    use super::super::cli::{build_train, Build};
+    use super::super::main_state::State;
+
+    let fx = Fx::new();
+    let base = fx.base();
+    let first = fx.commit(
+        &base,
+        "shared.txt",
+        "first\nline 2\nline 3\nline 4\nline 5\nline 6\n",
+    );
+    let second = fx.commit(
+        &base,
+        "shared.txt",
+        "line 1\nline 2\nline 3\nline 4\nline 5\nsecond\n",
+    );
+    let out = tempfile::tempdir().unwrap();
+    let job = Build {
+        repo: fx.path().to_owned(),
+        base: base.clone(),
+        name: "fixture".into(),
+        parts: vec![part(10, &first, None), part(20, &second, None)],
+        attributes: String::new(),
+        cap: None,
+        out: out.path().to_owned(),
+        branch: "land/train-fixture".into(),
+        resolutions: vec![],
+        protected: vec![],
+        open: BuildOpen {
+            build: "fixture".into(),
+            policy_version: git::POLICY_VERSION.into(),
+            base: base.clone(),
+            grant_digest: "fixture".into(),
+            snapshot_position: 1,
+        },
+    };
+    let lines = build_train(&job, &State::Green, &base).unwrap();
+    assert!(lines[0].contains("2 merged"), "{lines:?}");
+    assert!(
+        lines.iter().any(|line| line.contains("shared.txt")
+            && line.contains("#10")
+            && line.contains("#20")),
+        "{lines:?}"
+    );
+}

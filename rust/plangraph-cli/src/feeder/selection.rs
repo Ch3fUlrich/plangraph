@@ -103,13 +103,9 @@ fn overlap(a: &Task, b: &Run) -> bool {
         return false;
     }
     family(&a.key) == family(&b.item_key)
-        || a.files.iter().any(|a| {
-            b.files.iter().any(|b| {
-                let clean = |s: &str| s.trim_start_matches("./").trim_end_matches('/').to_string();
-                let (a, b) = (clean(a), clean(b));
-                a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
-            })
-        })
+        || a.files
+            .iter()
+            .any(|a| b.files.iter().any(|b| crate::paths::paths_overlap(a, b)))
 }
 fn signal(v: &Value) -> bool {
     match v {

@@ -501,14 +501,22 @@ class WaiverMixin:
             raise Refused("validation", "decision_id must look like D-NNN")
         # The operator waiver row itself as the decision: no GO row is read.
         waiver_only = waive_seats is not None and waive_seats == decision_id
-        item, token, changes = self._manual_deploy_scan(item, complete_history=from_open or bool(waive_seats),
-            refresh_alternate=not waiver_only)
         with self._decisions_snapshot(item, now):
+            try:
+                statement = _go_statement(self._ctx(item, now).decisions.text(decision_id))
+            except Exception:  # the GO proof reports unreadable decision text
+                statement = None
+            scoped_train = go_key_scope(statement) is not None
+            all_work = from_open or scoped_train
+            complete_history = all_work or waive_seats is not None
+            item, token, changes = self._manual_deploy_scan(
+                item, complete_history=complete_history, refresh_alternate=not waiver_only)
             if waiver_only:
                 head, prs, waiver, _ = self._merged_waiver_only(item, decision_id, now, all_work=from_open)
             else:
-                head, _ = self._merged_go_proof(item, decision_id, now, all_work=from_open)
-                prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
+                head, _ = self._merged_go_proof(item, decision_id, now, all_work=all_work)
+                prs = (self._merged_open_prs(item, decision_id, head, now, waive_seats is not None)
+                       if complete_history else [])
                 waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
             backfill = families is None and waiver is None
             witnessed, seats, flags = ([], [], None) if waiver is not None else self._seats_or_flag(
@@ -516,7 +524,7 @@ class WaiverMixin:
             project, revision = self._merge_repository(item)
             if token is not None and not waiver_only and project != item["project"] and revision is None:
                 changes |= self._merged_go_deploy_changes(item, head)
-            pending = self._deploy_pending(item, changes)
+            pending = self._deploy_pending(item, changes, token)
             if token is not None and not self._deploy_scan_current(item, token):
                 raise Refused("conflict", "merged_on_default_changed")
             if pending:
@@ -544,10 +552,10 @@ class WaiverMixin:
                 if current_waiver != waiver:
                     raise Refused("conflict", "merged_seat_waiver_changed")
             else:
-                current_head, result = self._merged_go_proof(fresh, decision_id, now, all_work=from_open)
+                current_head, result = self._merged_go_proof(fresh, decision_id, now, all_work=all_work)
                 if current_head != head:
                     raise Refused("conflict", "merged_on_default_changed")
-                if (from_open or waiver) and self._merged_open_prs(fresh, decision_id, head, now) != prs:
+                if complete_history and self._merged_open_prs(fresh, decision_id, head, now, bool(waiver)) != prs:
                     raise Refused("conflict", "merged_pr_proofs_changed")
                 if waiver and self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now) != waiver:
                     raise Refused("conflict", "merged_seat_waiver_changed")
@@ -564,7 +572,7 @@ class WaiverMixin:
                 ref.update(waiver={k: v for k, v in waiver.items() if k not in ("scope", "cutoff")}, prs=prs, review_tier=fresh["review_tier"],
                            risk_tags=json.loads(card["risk_tags"]) if card else [],
                            seat_rule_waived_by=waive_seats)
-            if from_open:
+            if all_work:
                 ref["prs"] = prs
             part = None if waiver_only else self._merged_go_scope(decision_id, fresh, now, require_key=False)[1]
             if part:
@@ -693,7 +701,7 @@ class WaiverMixin:
         token, changes = self._auto_deploy_scan(item)
         pinned = dict(item, _close_head=token[0])
         proofs = self._merged_auto_proofs(pinned)
-        pending = self._deploy_pending(pinned, changes)
+        pending = self._deploy_pending(pinned, changes, token)
         if pending:
             if apply:
                 self._deploy_pending_result(item, pending, now)

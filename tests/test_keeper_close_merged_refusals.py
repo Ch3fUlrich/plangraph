@@ -441,3 +441,47 @@ def test_main_trailer_per_fixed_key_allows_close_merged_dry_run(w, doors, monkey
     assert code == 0 and f'{KEY} would close ({state} -> done)' in out, (out, err)
     assert w.store._item(KEY) == before and before['state'] == state
     assert _counts(w) == counts
+
+
+@pytest.mark.parametrize("state", ["open", "in_review"])
+@pytest.mark.parametrize("case", ["final", "unnumbered-partial", "earlier-go", "reverted-final", "no-go", "other-key"])
+def test_close_requires_the_go_of_the_final_delivery(w, monkeypatch, tmp_path, state, case):
+    from plangraph.keeper.evidence_git import GitAdapter
+    from test_keeper_merge_close_auto import Repo, git
+
+    repo = Repo(tmp_path)
+    partial = repo.land("partial", f"Plan-Item: {KEY}", 10) if case != "no-go" else None
+    if case == "unnumbered-partial":
+        git(tmp_path, "commit", "--amend", "-qm", "Historical partial delivery")
+    final = repo.land("final", f"Plan-Item: {KEY}", 20)
+    if case == "reverted-final":
+        merge = git(tmp_path, "rev-parse", "main")
+        git(tmp_path, "commit", "--allow-empty", "-qm",
+            f"Train 12: drop final\n\nThis reverts commit {merge}.\n\nDropped-Part: {KEY}")
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(tmp_path), "ref": "main"}})
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kwargs: [])
+    w.conn.execute("UPDATE items SET state=? WHERE key=?", (state, KEY))
+    statements = {
+        "final": f"GO #20; GO-HEAD {final}; GO-KEYS [{KEY}]",
+        "unnumbered-partial": f"GO #20; GO-HEAD {final}; GO-KEYS [{KEY}]",
+        "earlier-go": f"GO #10; GO-HEAD {partial}; GO-KEYS [{KEY}]",
+        "reverted-final": f"GO #10; GO-HEAD {partial}; GO-KEYS [{KEY}]",
+        "no-go": f"HOLD {final}",
+        "other-key": f"GO #20; GO-HEAD {final}; GO-KEYS [demo:OTHER]",
+    }
+    w.decision_path.write_text(f"| D-5504 | demo | {statements[case]} | ROUTER |\n")
+
+    def close():
+        return w.store.close_merged(w.p("router"), KEY, "D-5504", ["google"],
+                                    from_open=state == "open", apply=True)
+
+    if case in ("final", "unnumbered-partial", "reverted-final"):
+        assert close()["state"] == "done"  # the part ships no unit or host binary
+        pr, head = (10, partial) if case == "reverted-final" else (20, final)
+        assert w.store._evidence(KEY)[-1]["ref"]["prs"] == [
+            {"pr": pr, "head": head, "decision_id": "D-5504"}]
+    else:
+        with pytest.raises(Refused, match="go_row_not_go|merged_pr_go_scope_mismatch|final_delivery"):
+            close()
+        assert w.store._item(KEY)["state"] == state
