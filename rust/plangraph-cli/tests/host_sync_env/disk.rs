@@ -1,5 +1,8 @@
 use super::{fs, install, Command, Path};
 
+#[path = "../../../test_support/python.rs"]
+mod test_python;
+
 #[test]
 fn disk_hygiene_environment_matches_unit_and_preserves_existing_configuration() {
     let temp = tempfile::tempdir().unwrap();
@@ -59,10 +62,9 @@ fn disk_hygiene_environment_matches_unit_and_preserves_existing_configuration() 
     let token = config.join("sweep.token");
     fs::write(&token, "fixture").unwrap();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let sweep = Command::new("python3")
+    let sweep = test_python::command()
         .env("HOME", &home)
         .env("PG_URL", "https://fixture.invalid")
-        .env("PYTHONPATH", repo.join("src"))
         .args([
             "-m",
             "plangraph.keeper.cli",
