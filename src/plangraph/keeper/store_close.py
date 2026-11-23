@@ -40,14 +40,12 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import time
 
 from . import context_sources
 from .errors import Refused
 from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
 from .evidence_types import valid_commit_ref
-from .store_runs import _WARM_S
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
@@ -474,12 +472,13 @@ class CloseMixin:
             raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
         return dict(item, _close_head=head)
 
-    def _deploy_changes(self, item):
+    def _deploy_changes(self, item, commits=None):
         """Tagged commits and landed diffs at the same default commit as the merge proofs."""
         git, project = self._adapter("git"), self._merge_project(item)
         repo, head = git.repo_path(project), item["_close_head"]
-        commits = context_sources.plan_item_commits(
-            git, project, item["key"], fetch=False, limit=None, head=head)
+        if commits is None:
+            commits = context_sources.plan_item_commits(
+                git, project, item["key"], fetch=False, limit=None, head=head)
         if commits is None:
             raise RuntimeError("commit history unreadable")
         tagged = frozenset(commit["sha"] for commit in commits)
@@ -533,26 +532,31 @@ class CloseMixin:
     def _merge_text(item):
         return f"{item.get('description') or ''}\n{item.get('note') or ''}"
 
-    def _snapshot_deploy(self, key, project):
-        """Scan one candidate's deploy changes outside the request lock; ``warm_merge_scan`` calls it.
-
-        The answer (``None`` when anything could not be read) is what the frozen automatic close
-        consumes, so it asks git and the forge nothing under the lock.
-        """
+    def _snapshot_deploy(self, key, project, commits, previous):
+        """Reuse an unchanged delivery's immutable diffs across default-tip advances."""
         item = self.__dict__.get("_deploy_inputs", {}).get(key)
         if item is None:
             return
+        text = self._merge_text(item)
+        index = self.__dict__["_warmed"][project]
         try:
             hinted, revision = self._merge_repository(item)
             if (hinted != item["project"] or revision is not None) and hinted != project:
                 return
-            tagged = self._pin_close(dict(item, _merge_project=project))
-            token, changes = self._deploy_changes(tagged)
+            tagged = dict(item, _merge_project=project)
+            head = index.get("target")
+            if head is None:
+                head = self._pin_close(tagged)["_close_head"]
+            if (revision is None and previous and previous["changes"] is not None
+                    and previous["text"] == text and previous["commits"] == commits):
+                token, changes = (head, *previous["token"][1:]), previous["changes"]
+            else:
+                token, changes = self._deploy_changes(dict(tagged, _close_head=head),
+                                                      commits if index.get("target") else None)
         except Exception:  # noqa: BLE001 - recorded as unreadable
             token, changes = None, None
-        self.__dict__.setdefault("_deploy_warm", {})[key] = {
-            "at": time.monotonic(), "text": self._merge_text(item), "token": token, "project": project,
-            "changes": changes}
+        self.__dict__["_deploy_warm"][project, key] = {
+            "text": text, "token": token, "commits": commits, "changes": changes}
 
     def _deploy_scan_current(self, item, token):
         """Keep a scan across first-parent extensions that add no work for this item."""
@@ -560,6 +564,9 @@ class CloseMixin:
         pinned, tagged, _ = token
         try:
             repo, ref = git.repo_path(project), git.repo_ref(project)
+            if self.__dict__.get("_frozen_lanes"):
+                index = self.__dict__.get("_warmed", {}).get(project) or {}
+                return git.ref_commit(repo, index.get("ref", ref)) == pinned
             current = git.ref_commit(repo, ref)
             if current != pinned:
                 # A second-parent ancestor can have different introducing merges.
@@ -575,17 +582,16 @@ class CloseMixin:
 
     def _auto_deploy_scan(self, item):
         """Use the outside-lock deploy snapshot for a frozen automatic close."""
+        project = self._merge_project(item)
         if self.__dict__.get("_frozen_lanes"):
-            hit = self.__dict__.get("_deploy_warm", {}).get(item["key"])
-            if (hit is None or time.monotonic() - hit["at"] >= _WARM_S
-                    or hit["text"] != self._merge_text(item)):
+            hit = self.__dict__.get("_deploy_warm", {}).get((project, item["key"]))
+            if hit is None or hit["text"] != self._merge_text(item):
                 raise Refused("evidence_unverified", "deploy_scan_not_warm")
             if hit["changes"] is None:
                 raise Refused("evidence_unverified", "deploy_scan_unreadable")
-            if hit["project"] != self._merge_project(item) or not self._deploy_scan_current(item, hit["token"]):
+            if not self._deploy_scan_current(item, hit["token"]):
                 raise Refused("evidence_unverified", "deploy_scan_not_warm")
             return hit["token"], hit["changes"]
-        project = self._merge_project(item)
         if not self._warm(project) and not self._refresh_merged_default_ref(self._adapter("git"), project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
         _, token, changes = self._read_current_deploy_scan(item)

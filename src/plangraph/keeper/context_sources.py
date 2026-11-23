@@ -125,10 +125,46 @@ def _cancelled_delivery(git, repo, candidates, reverts):
     return cancelled
 
 
+def _work_record(record):
+    """Decode a new immutable commit record for the index."""
+    sha, parents, date, subject, message = record.split("\x1f", 4)
+    revert = delivery_revert(message)
+    return sha, parents.split(), date, subject, () if revert else plan_items(message), revert
+
+
+def _work_log(git, repo, refs, target, previous):
+    """Keep old commit records and read only history outside the previous ref tips."""
+    if refs is None or target is None:
+        return None
+    heads = {target, *[line.rsplit(" ", 1)[-1] for line in refs.splitlines()]}
+    old_heads, old_records = previous or (set(), {})
+    if heads == old_heads:
+        return heads, old_records
+    # Previous refs may have been garbage collected after a force-push.
+    excluded = [f"^{sha}" for sha in sorted(old_heads & old_records.keys())]
+    args = ["log", "--all", "--date-order", "--no-show-signature",
+            "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d", "--end-of-options", target]
+    out = _ok(git, repo, args + excluded) if excluded else None
+    if out is None:
+        out = _ok(git, repo, args)
+        old_records = {}
+    if out is None:
+        return None
+    records = {}
+    for raw in out.split("\x1d"):
+        record = raw.strip("\n")
+        if record.count("\x1f") >= 4 and valid_commit_ref(record.split("\x1f", 1)[0]):
+            parsed = _work_record(record)
+            records[parsed[0]] = parsed
+    for sha, record in old_records.items():
+        records.setdefault(sha, record)
+    return heads, records
+
+
 _WORK_INDEX_CACHE_LOCK = threading.Lock()
 
 
-def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
+def work_index(git, project, *, fresh=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
     Read all commit trailers and topology together, including hosted open PR
@@ -140,11 +176,7 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     cache = getattr(git, "_context_work_index", {})
     cache_key = (repo, ref)
     hit = cache.get(cache_key)
-    if cached_only:  # a caller holding the keeper lock: the warm answer or nothing, never git or the forge
-        if hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
-            return hit[1]
-        raise Refused("evidence_unverified", f"merge_index_not_warm: {project}")
-    if not fresh and hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
+    if not fresh and hit and time.monotonic() - hit[0] < _REFS_TTL:
         return hit[1]
     step = f"work index for {project}"
     timing.check_io_deadline(step)
@@ -190,23 +222,19 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             problems.append("open PR inventory unavailable")
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
-    out = _ok(git, repo, ["log", "--all", "--date-order", "--no-show-signature",
-                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
+    target = (target or "").strip()
+    log = _work_log(git, repo, refs_out, target or None, hit[1].get("_log") if hit else None)
     timing.check_io_deadline(step)
-    if refs_out is None or target is None or out is None:
+    if log is None:
         if not origin:
             return None
         origin_stale = True
         problems.append("repository index unavailable")
     records, reverts = {}, {}
-    for record in (out or "").split("\x1d"):
-        fields = record.strip("\n").split("\x1f")
-        if len(fields) == 5 and valid_commit_ref(fields[0]):
-            sha, parents, date, subject, trailers = fields
-            if (revert := delivery_revert(trailers)) is not None:
-                reverts[sha] = revert
-            records[sha] = (parents.split(), {"sha": sha, "date": date,
-                            "subject": subject}, [] if sha in reverts else plan_items(trailers))
+    for sha, parents, date, subject, trailers, revert in (log[1].values() if log else ()):
+        if revert is not None:
+            reverts[sha] = revert
+        records[sha] = (parents, {"sha": sha, "date": date, "subject": subject}, trailers)
 
     def ancestors(head):
         seen, todo = set(), [head]
@@ -241,7 +269,8 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             todo.extend(records.get(sha, ([],))[0])
         if len(parents) > 1:
             pr = subject_pr(commit["subject"])
-            merge = {"sha": landing, "subject": commit["subject"], "pr": pr}
+            merge = {"sha": landing, "subject": commit["subject"], "pr": pr,
+                     "parents": parents, "date": commit["date"]}
             own_pr = len(parents) == 2 and pr
             for sha in introduced:
                 if sha in records and (sha != landing or own_pr):
@@ -271,7 +300,7 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
               "stale": bool(problems), "origin_stale": origin_stale,
               "reason": "; ".join(problems),
-              "verified_at": verified_at}
+              "verified_at": verified_at, "target": target, "ref": ref, "_log": log}
     timing.check_io_deadline(step)
     with _WORK_INDEX_CACHE_LOCK:
         cache = getattr(git, "_context_work_index", {})
@@ -337,7 +366,7 @@ def indexed_open_pulls(indexes, key, project, *, cached=False):
     return sorted(pulls)
 
 
-def indexed_work(index, key):
+def indexed_work(index, key, *, limit=COMMIT_LIMIT):
     """Resolve full/bare trailers and lane names without I/O."""
     if index is None or index.get("origin_stale"):
         return {"commits": None, "lanes": None, "prs": None}
@@ -347,7 +376,7 @@ def indexed_work(index, key):
                for c in index["commits"].get(name, [])}
     prs = index["prs"]
     ordered = sorted(commits.values(), key=lambda c: index.get("order", {}).get(c["sha"], 0))
-    return {"commits": ordered[:COMMIT_LIMIT],
+    return {"commits": ordered[:limit],
             "lanes": [b for b in index["branches"] if bare.lower() in b.lower()],
             "prs": sorted({p for name in names for p in prs.get(name, [])})
             if prs is not None else None}

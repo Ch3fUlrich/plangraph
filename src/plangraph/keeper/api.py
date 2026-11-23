@@ -33,6 +33,7 @@ import tempfile
 import threading
 import urllib.parse
 from contextlib import suppress
+from copy import copy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -86,15 +87,6 @@ class KeeperHandler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------------- verbs
     def do_GET(self):  # noqa: N802 - stdlib signature
         self._request("GET")
-
-    def _warm_merge_scan(self, server):
-        """Fetch the scanned repositories before the request takes the lock; the verb itself answers any refusal."""
-        with suppress(Exception):
-            with server.lock:
-                principal = auth.authenticate(server.store.conn, self._token())
-                candidates = server.store.merge_candidates() if principal.role in ("system", "router") else None
-            if candidates is not None:
-                server.store.warm_merge_scan(candidates)
 
     def do_POST(self):  # noqa: N802 - stdlib signature
         self._request("POST")
@@ -168,8 +160,6 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 return
             if body is None:
                 return  # 413 already sent
-            if name == "close_merged_auto":
-                self._warm_merge_scan(server)
             with timing.RequestTimer(server.lock, "read" if method == "GET" else "write", verb=name):
                 if revoked is not None:
                     self._read_revoked_receipt(name, principal, body, revoked)
@@ -183,7 +173,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
                     receipt_read = name == "write_receipt" and (
                         payload.get("result") == "duplicate" or payload.get("http_replayed"))
                     preview = name == "close_merged" and body.get("dry_run") is True
-                    if not (replayed or receipt_read or preview):
+                    merge_preview = name == "close_merged_auto" and (
+                        "refresh" in body or body.get("repos_only") or body.get("apply") is False)
+                    if not (replayed or receipt_read or preview or merge_preview):
                         self._snapshot(principal)
                     if payload is None:   # worker verbs: 204, no body
                         self._empty(204)
@@ -438,6 +430,12 @@ class KeeperHandler(BaseHTTPRequestHandler):
             lambda: self._write(name, body, principal, extra))
 
     def _write(self, name, body, principal, extra=""):
+        if name == "close_merged_auto":
+            if "refresh" in body:
+                self.server.store._require_role(principal, "system", "router")
+                return self.server.refresh_merge_index(body["refresh"])
+            if self.server.merge_refresh == "running" and body.get("repos_only") is not True:
+                raise Refused("conflict", "merge index refresh is running")
         if name in ("ingest_host_sample", "mint_host_token", "revoke_host_token"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_write"]).http_write(self.server.store, principal, name, body)
         if name == "write_receipt":
             return self.server.store.write_receipt(principal, body)
@@ -601,6 +599,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.config = config
         self.lock = threading.RLock()
         self.snapshot_publication = SnapshotPublication()
+        self.merge_refresh = None
         self.system = system or Principal("system", "system", [], None)
         self.reaper = None
         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
@@ -653,6 +652,34 @@ class KeeperHTTPServer(ThreadingHTTPServer):
                           type(exc).__name__, exc)
                 self.bus_registry = None
         super().__init__(address, KeeperHandler)
+
+    def refresh_merge_index(self, action):
+        """The merge-close timer starts a scan and checks its status in separate calls."""
+        if action == "projects":
+            return {"projects": sorted({project for _, project in self.store.merge_candidates()})}
+        if action not in ("start", "status"):
+            raise Refused("validation", "refresh must be start, status or projects")
+        if action == "start" and self.merge_refresh != "running":
+            self.merge_refresh = "running"
+            threading.Thread(target=self._build_merge_index, name="keeper-merge-index", daemon=True).start()
+        return {"scan": self.merge_refresh or "idle"}
+
+    def _build_merge_index(self):
+        try:
+            with self.lock:
+                scan = copy(self.store)
+                candidates = scan.merge_candidates()
+            scan.warm_merge_scan(candidates)
+            published = {field: scan.__dict__[field] for field in
+                         ("_warmed", "_lanes", "_deploy_warm", "_merge_scan_errors")}
+        except Exception as exc:  # report the failure without repository paths or subprocess output
+            published = dict(_warmed={}, _lanes={}, _deploy_warm={},
+                             _merge_scan_errors={"*": f"merge_scan_failed: {type(exc).__name__}"})
+        with self.lock:
+            self.store.__dict__.update(published)
+            self.merge_refresh = "ready"
+        log.info("merge_index_refresh repos=%d failed=%d", len(published["_warmed"]),
+                 len(published["_merge_scan_errors"]))
 
     def fail(self, reason: str) -> None:
         """Record fatal failure once; calls on_fatal hook (I2, S2)."""

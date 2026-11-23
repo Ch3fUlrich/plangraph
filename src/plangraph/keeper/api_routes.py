@@ -338,15 +338,22 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "record_run": _record_run}
 
 
+def _close_merged_auto(store, principal, body, need):
+    from . import timing
+    with timing.io_budget(90):
+        return store.close_merged_auto(
+            principal, body.get("project"), require_seats=body.get("require_seats"),
+            apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True,
+            limit=25 if body.get("limit") is None else body["limit"], after=body.get("after"))
+
+
 #: Write verbs whose store method checks the role itself and admits more than the
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "land": lambda store, principal, body, need: store.land(principal, body),
                       "record_spawn_attempt": lambda store, principal, body, need:
                           store.record_spawn_attempt(principal, body),
-                      "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
-                          principal, body.get("project"), require_seats=body.get("require_seats"),
-                          apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True),
+                      "close_merged_auto": _close_merged_auto,
                       "close_on_decision": _close_on_decision,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,
