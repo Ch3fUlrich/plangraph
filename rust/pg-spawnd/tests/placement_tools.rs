@@ -84,6 +84,48 @@ fn unknown_writer_names_survive_the_real_route_adapter() {
     assert!(message.chars().count() <= 300);
 }
 #[test]
+fn research_route_and_spawn_record_an_attempt() {
+    let leg = json!({"id":"sol","harness":"codex","model":"m","family":"gpt",
+                     "max_request_tokens":900000});
+    let plan = json!({"legs":[leg],"first_leg":leg});
+    let mut f = Fixture::new(&plan.to_string(), 0, "");
+    let args = json!({"prompt":"p","role":"research","card":{"estimate_tokens":400000},
+                      "wait_seconds":2});
+    let routed = f.call("route", args.clone());
+    assert!(routed.get("error").is_none(), "{routed}");
+    let argv = std::fs::read_to_string(f.state.path().join("argv")).unwrap();
+    assert!(argv.contains("--role\nresearch\n"), "{argv}");
+
+    let reply = f.call("spawn", args);
+    assert!(reply.get("error").is_none(), "{reply}");
+    let rows = records(&f);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row["role"], "research");
+    assert_eq!(row["status"], "completed");
+    assert_eq!(row["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(row["attempts"][0]["leg"], leg);
+}
+
+#[test]
+fn research_route_refusal_lists_every_leg() {
+    let details =
+        "no eligible leg for 1m\nskip sol: limited\nskip hydrogen: web_access_unavailable";
+    let refusal = json!({"error":details});
+    let mut f = Fixture::new(
+        &refusal.to_string(),
+        2,
+        "skip hydrogen: web_access_unavailable",
+    );
+    let reply = f.call(
+        "route",
+        json!({"role":"research","card":{"estimate_tokens":400000}}),
+    );
+    assert_eq!(reply["error"]["code"], -32000, "{reply}");
+    assert_eq!(reply["error"]["message"], details);
+}
+
+#[test]
 fn route_reports_resolved_work_mode_and_reason() {
     let mut f = Fixture::new(r#"{"legs":[],"work_mode_writer_legs":[]}"#, 0, "");
     let r = f.call("route", json!({"card":{}}));
@@ -121,7 +163,7 @@ fn typed_options_precede_card_size() {
         (
             "role",
             json!("bad"),
-            "role must be implement, review or orchestrate",
+            "role must be implement, review, orchestrate or research",
         ),
         (
             "writer_families",
@@ -192,7 +234,7 @@ fn route_probe_validation() {
         (
             "route",
             json!({"card":{},"role":"bad"}),
-            "role must be implement, review or orchestrate",
+            "role must be implement, review, orchestrate or research",
         ),
         (
             "route",
@@ -256,7 +298,7 @@ fn spawn_validation_records() {
         (
             "role",
             json!("orchestrate"),
-            "role must be implement or review",
+            "role must be implement, review or research",
         ),
         ("dry_run", json!(1), "dry_run must be a bool"),
         (

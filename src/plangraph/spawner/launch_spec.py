@@ -16,7 +16,8 @@ import shutil
 import tempfile
 import time
 
-from plangraph.planner.routing import DEFAULT_LEGS, SpawnRefused
+from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES
+from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
 from .inline_diff import InlineDiffError
@@ -47,7 +48,7 @@ def _validate(req):
     checks = dict(
         run_id=lambda v: isinstance(v, str) and re.fullmatch(r'run-[0-9a-f]{32}', v),
         job_id=lambda v: isinstance(v, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', v),
-        role=lambda v: isinstance(v, str) and v in ('implement', 'review', 'orchestrate'),
+        role=lambda v: isinstance(v, str) and v in LEG_ROLES,
         dry_run=lambda v: type(v) is bool,
         leg=lambda v: isinstance(v, dict) and isinstance(v.get('id'), str) and bool(v['id'])
             and ('explicit' not in v or type(v['explicit']) is bool),
@@ -121,6 +122,8 @@ def build(request: dict) -> dict:
         raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith('effort_') else 'leg_inactive', reason) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
+    if request['role'] == 'research' and request['card'].get('web_required') and not leg.has_web_tools:
+        raise LaunchRefused('web_access_unavailable', leg.id)
     service = SpawnService(state=request['state'])
     reader = getattr(service, 'leg_reader', None)
     if leg.harness in ('agy', 'codex'):

@@ -56,6 +56,10 @@
       "stall_min": {
        "exclusiveMinimum": 0,
        "type": "number"
+      },
+      "web_required": {
+       "description": "research: require a harness with web search or fetch",
+       "type": "boolean"
       }
      },
      "required": [
@@ -386,6 +390,10 @@
       "stall_min": {
        "exclusiveMinimum": 0,
        "type": "number"
+      },
+      "web_required": {
+       "description": "research: require a harness with web search or fetch",
+       "type": "boolean"
       }
      },
      "required": [

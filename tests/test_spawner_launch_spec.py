@@ -123,6 +123,21 @@ def test_agy_stream_spec(request_data):
     assert json.loads(result['stdin'])['message']['content'] == result['prompt'] and result['prompt'].endswith(request_data['prompt'])
 
 
+def test_research_stream_spec(request_data):
+    request_data.update(role='research', dry_run=True,
+                        leg={'id': 'agy-gemini-4-hydrogen-high'},
+                        card={'estimate_tokens': 400_000}, writer_families=[])
+    code, out, err = invoke(request_data)
+    assert (code, err) == (0, '')
+    result = json.loads(out)
+    assert result['argv'][0] == 'agy'
+    assert json.loads(result['stdin'])['message']['content'].endswith(request_data['prompt'])
+    assert 'GIT_AUTHOR_EMAIL' not in result['env']
+
+    request_data['card']['web_required'] = True
+    assert invoke(request_data) == (2, '', 'web_access_unavailable: agy-gemini-4-hydrogen-high\n')
+
+
 @pytest.mark.parametrize('leg_id', ['agy-gemini-4-neon-medium', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
 @pytest.mark.parametrize('dry_run', [False, True])
 @pytest.mark.parametrize('size', [16, 200 * 1024], ids=['short', '200KiB'])
