@@ -156,7 +156,7 @@ def train_key_lists(st):
     delivered, deferred = set(kept), set()
     base, head, wt = st.get("base_head"), st.get("head"), st.get("worktree")
     if base and head and wt:
-        origin = f"origin/{st['base']}"
+        origin = f"origin/{st.get('base') or 'main'}"
         known = git("rev-parse", "--verify", "-q", f"{origin}^{{commit}}", cwd=wt, ok=(0, 1)).returncode == 0
         found, held = train_trailer_keys(GitAdapter(), wt, head, [base, *([origin] if known else [])])
         gone = {key for rec in [*st.get("dropped", []), *st.get("skipped", [])] for key in rec.get("items", [])} - kept

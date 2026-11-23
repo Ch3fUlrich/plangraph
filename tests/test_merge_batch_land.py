@@ -685,3 +685,13 @@ def test_go_req_key_list_is_generated_from_the_train_trailers(env):
     assert result.returncode == 0, result.stderr
     assert ("GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B,plangraph:RESOLVER-KEY]; "
             "GO-DEFERRED [plangraph:DEFERRED-KEY];") in result.stdout
+
+
+def test_go_req_key_list_works_for_a_land_state_without_a_base_name(env):
+    """Older land states carry no ``base``: the default branch is main, as the rest of the landing reads it."""
+    st = go_ready(env)
+    st.pop("base")
+    env.state_file("g1").write_text(json.dumps(st))
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 0, result.stderr
+    assert "GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B]" in result.stdout
