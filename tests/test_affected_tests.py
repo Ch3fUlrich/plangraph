@@ -37,9 +37,10 @@ def test_local_fleet_selection_builds_pg_spawnd_before_pytest(tmp_path, monkeypa
     assert module.main(root=tmp_path) == build_code
     assert calls[0] == ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml',
                         '-p', 'pg-spawnd']
-    assert len(calls) == (1 if build_code else 2)
+    assert len(calls) == (1 if build_code else 3)
     if not build_code:
-        assert calls[1][:3] == [sys.executable, '-m', 'pytest']
+        assert calls[1] == [sys.executable, 'tests/_spawnd.py']
+        assert calls[2][:3] == [sys.executable, '-m', 'pytest']
 
 
 @pytest.mark.parametrize("changed,expected", [

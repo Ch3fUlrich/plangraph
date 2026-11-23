@@ -235,6 +235,10 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
                         "pg-spawnd",
                     ],
                 ));
+                steps.push(step(
+                    "fleet-spawnd-verify",
+                    &["python3", "tests/_spawnd.py"],
+                ));
                 affected.args.push("--fleet-spawnd-prebuilt".into());
             }
         }
