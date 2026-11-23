@@ -182,10 +182,15 @@ def _cmd_init(args, cfg) -> int:
 def _cmd_migrate(args, cfg) -> int:
     """Bring the schema to the current version (Postgres runs the pending migrations)."""
     postgres = kdb.select_backend(cfg.db_options.get("backend")) == "postgres"
+    if args.dry_run and not args.dsn_file:
+        raise ValueError("migration dry run requires --dsn-file")
     if args.dsn_file:
         if not postgres:
             raise ValueError("a migration DSN requires the Postgres backend")
         opts = {**cfg.db_options, "dsn": _migration_dsn(args.dsn_file)}
+        if args.dry_run:
+            print("migration DSN file verified")
+            return 0
         kdb.open_db(cfg.db, create=True, **opts).close()
     else:
         _open(cfg, create=postgres).close()  # SQLite upgrades on open
@@ -194,6 +199,9 @@ def _cmd_migrate(args, cfg) -> int:
 
 
 def _migration_dsn(path):
+    from .db_pg import _psycopg
+
+    format_error = "migration DSN file: expected a DSN or one PG_DSN= line"
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     with os.fdopen(os.open(path, flags), "r", encoding="utf-8") as file:
         info = os.fstat(file.fileno())
@@ -201,11 +209,30 @@ def _migration_dsn(path):
                 or (hasattr(os, "geteuid") and info.st_uid != os.geteuid())):
             raise ValueError("migration DSN must be a regular file owned by the caller with mode 0600")
         try:
-            dsn = file.read(16385).strip()
+            contents = file.read(16385)
         except UnicodeError:
             raise ValueError("migration DSN must be UTF-8") from None
-    if not dsn or len(dsn) > 16384:
-        raise ValueError("migration DSN must be nonempty and at most 16384 characters")
+    if len(contents) > 16384:
+        raise ValueError("migration DSN must be at most 16384 characters")
+    dsn = contents.strip()
+    if dsn.startswith("PG_DSN="):
+        line = contents.removesuffix("\n")
+        if not line.startswith("PG_DSN=") or "\n" in line:
+            raise ValueError(format_error)
+        dsn = line.removeprefix("PG_DSN=").strip()
+        if dsn.startswith(("'", '"')):
+            if len(dsn) < 2 or not dsn.endswith(dsn[0]):
+                raise ValueError(format_error)
+            dsn = dsn[1:-1]
+    if not dsn.strip() or "\0" in dsn or (
+        dsn.startswith(("postgresql://", "postgres://")) and any(c.isspace() for c in dsn)
+    ):
+        raise ValueError(format_error)
+    psycopg = _psycopg()
+    try:
+        psycopg.conninfo.conninfo_to_dict(dsn)
+    except psycopg.ProgrammingError:
+        raise ValueError(format_error) from None
     return dsn
 
 

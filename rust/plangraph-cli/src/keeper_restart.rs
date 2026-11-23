@@ -99,12 +99,15 @@ fn restart(checkout: &Path, config: &Path, migration_dsn: &Path) -> Result<(), S
             .arg("admin");
         Ok::<_, String>(command)
     };
-    checked(
-        admin()?
+    let migrate = || {
+        let mut command = admin()?;
+        command
             .args(["migrate", "--dsn-file"])
-            .arg(literal_arg(&migration_dsn)?),
-        "schema migration",
-    )?;
+            .arg(literal_arg(&migration_dsn)?);
+        Ok::<_, String>(command)
+    };
+    checked(migrate()?.arg("--dry-run"), "migration DSN validation")?;
+    checked(&mut migrate()?, "schema migration")?;
     checked(admin()?.arg("check-schema"), "runtime schema verification")?;
     checked(
         Command::new("systemctl").args(["--user", "restart", SERVICE]),
