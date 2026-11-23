@@ -165,3 +165,32 @@ def _weighted_shard(items, key, index, count, duration_file):
 @pytest.fixture
 def shard_selector():
     return shard_items
+
+
+def quarantine_items(items, ledger, mode, now):
+    """Select blocking or quarantined tests as of a shared UTC run timestamp."""
+    from datetime import datetime, timedelta
+
+    if mode not in ('blocking', 'quarantine'):
+        raise pytest.UsageError('PYTEST_QUARANTINE_MODE must be blocking or quarantine')
+    try:
+        entries = json.loads(ledger.read_text(encoding='utf-8'))
+        if not isinstance(entries, dict) or now.utcoffset() != timedelta():
+            raise ValueError('expected a test ID mapping and a UTC run timestamp')
+        active = {}
+        for nodeid, entry in entries.items():
+            owner = entry['owner']
+            starts = datetime.fromisoformat(entry['starts'])
+            expires = datetime.fromisoformat(entry['expires'])
+            if (not isinstance(owner, str) or not owner.startswith('plangraph:') or
+                not owner.removeprefix('plangraph:').strip() or
+                starts.utcoffset() != timedelta() or expires.utcoffset() != timedelta() or
+                not timedelta() < expires - starts <= timedelta(hours=48)):
+                raise ValueError(f'invalid owner or quarantine window for {nodeid}')
+            if starts <= now < expires:
+                active[nodeid] = owner
+    except (OSError, TypeError, KeyError, ValueError, OverflowError) as exc:
+        raise pytest.UsageError(f'PYTEST_QUARANTINE_FILE: {exc}') from exc
+    matched = {item.nodeid: active[item.nodeid] for item in items if item.nodeid in active}
+    selected = [item for item in items if (item.nodeid in matched) == (mode == 'quarantine')]
+    return selected, matched
