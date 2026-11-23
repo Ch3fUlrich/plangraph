@@ -79,9 +79,22 @@ pub(super) fn assert_writer_artifacts(host: &Host, head: &str) {
     assert!(prompt.contains(&format!("> {SLICES_CONTENT}")));
 }
 
-pub(super) fn assert_foreign_trailer_refused(host: &mut Host, git: impl Fn(&[&str]) -> String) {
+pub(super) fn assert_item_trailers_bound_to_brief(
+    host: &mut Host,
+    git: impl Fn(&[&str]) -> String,
+) {
     host.brief
-        .push_str("\nWhy: depends on plangraph:UNASSIGNED\n");
+        .push_str("\n## plangraph:ASSIGNED | t\nWhy: depends on plangraph:UNASSIGNED\n");
+    git(&[
+        "commit",
+        "--allow-empty",
+        "-m",
+        "assigned item\n\nPlan-Item: plangraph:ASSIGNED",
+    ]);
+    let assigned = git(&["rev-parse", "HEAD"]);
+    host.fast_checks(&assigned).unwrap();
+    assert!(host.stamped(&assigned));
+
     git(&[
         "commit",
         "--allow-empty",

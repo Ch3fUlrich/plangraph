@@ -24,6 +24,10 @@ fn batch_done_criteria_are_the_inline_text_and_stop_at_the_next_item() {
     );
     assert_eq!(item_keys(BATCH), ["plangraph:LE-X", "plangraph:LE-Y"]);
     assert_eq!(item_keys(FEEDER), ["plangraph:PATCH-PR"]);
+    assert_eq!(
+        item_keys("## plangraph:ASSIGNED | t\nWhy: depends on plangraph:UNASSIGNED\n"),
+        ["plangraph:ASSIGNED"]
+    );
     assert_eq!(done_criteria("no criteria here"), None);
 }
 #[test]
