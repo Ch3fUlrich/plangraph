@@ -384,7 +384,9 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(23, "card effort decision", _CARD_EFFORT),
               Migration(24, "spawn attempt outcomes", _SPAWN_ATTEMPTS),
               Migration(25, "claim definition event index", CLAIM_DEFINITION_INDEX_DDL),
-              Migration(26, "criteria amendments", _CRITERIA_AMENDMENTS_PG))
+              Migration(26, "criteria amendments", _CRITERIA_AMENDMENTS_PG),
+              Migration(27, "definition design reference",
+                        'ALTER TABLE items ADD COLUMN IF NOT EXISTS design_ref TEXT COLLATE "C";'))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
