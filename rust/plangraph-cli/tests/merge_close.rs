@@ -188,7 +188,10 @@ impl Transport for Script {
             .expect("unexpected keeper call");
         assert_eq!(verb, "close_merged_auto");
         assert_eq!(body, Some(expected));
-        Ok(reply)
+        match reply.as_str() {
+            Some(error) => Err(error.into()),
+            None => Ok(reply),
+        }
     }
 }
 
@@ -243,6 +246,96 @@ fn scheduled_close_stops_at_the_refresh_deadline_without_paging() {
         run_scheduled_with(&keeper, &control, None, true, None, false, Duration::ZERO).unwrap_err();
     assert_eq!(error, "merge index refresh is still running");
     control.assert_finished();
+    keeper.assert_finished();
+}
+
+#[test]
+fn expiry_refreshes_and_retries_the_same_cursor() {
+    let first = json!({"apply":true,"project":"demo","require_seats":false});
+    let next = json!({"apply":true,"project":"demo","require_seats":false,"after":"demo:A"});
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            first,
+            json!({"closed":[{"key":"demo:A"}],"merged_not_done":0,"next_after":"demo:A"}),
+        ),
+        (
+            next.clone(),
+            json!("item_refused:conflict:merge index expired; start a refresh"),
+        ),
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            next,
+            json!({"closed":[{"key":"demo:B"}],"merged_not_done":0}),
+        ),
+    ]);
+    let out = run_scheduled_with(
+        &keeper,
+        &keeper,
+        Some(false),
+        true,
+        Some("demo"),
+        false,
+        Duration::ZERO,
+    )
+    .unwrap();
+    assert!(out.text.starts_with("closed\tdemo:A\t\nclosed\tdemo:B\t\n"));
+    assert!(!out.text.contains("continue\t"));
+    keeper.assert_finished();
+}
+
+#[test]
+fn expiry_after_a_close_exits_successfully_if_refresh_cannot_finish() {
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            json!({"refresh":"projects"}),
+            json!({"projects":["demo","other"]}),
+        ),
+        (
+            json!({"apply":true,"project":"demo"}),
+            json!({"closed":[{"key":"demo:A"}],"merged_not_done":0,"next_after":"demo:A"}),
+        ),
+        (
+            json!({"apply":true,"project":"demo","after":"demo:A"}),
+            json!("item_refused:conflict:merge index expired; start a refresh"),
+        ),
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"running"})),
+    ]);
+    let out =
+        run_scheduled_with(&keeper, &keeper, None, true, None, false, Duration::ZERO).unwrap();
+    assert!(out.text.contains("closed\tdemo:A\t\n"));
+    assert!(out.text.contains("continue\t2 projects remaining\t"));
+    keeper.assert_finished();
+}
+
+#[test]
+fn running_refresh_conflict_without_a_close_is_an_error() {
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            json!({"apply":true,"project":"demo"}),
+            json!("item_refused:conflict:merge index refresh is running"),
+        ),
+    ]);
+    assert_eq!(
+        run_scheduled_with(
+            &keeper,
+            &keeper,
+            None,
+            true,
+            Some("demo"),
+            false,
+            Duration::ZERO
+        )
+        .unwrap_err(),
+        "item_refused:conflict:merge index refresh is running",
+    );
     keeper.assert_finished();
 }
 
