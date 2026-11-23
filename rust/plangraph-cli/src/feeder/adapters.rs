@@ -43,6 +43,9 @@ pub struct SlowKeeper<'a> {
     pub env: &'a Env,
     pub max_time_secs: u32,
 }
+pub const MERGE_INDEX_EXPIRED: &str = "item_refused:conflict:merge index expired; start a refresh";
+pub const MERGE_INDEX_RUNNING: &str = "item_refused:conflict:merge index refresh is running";
+
 fn http_response(raw: &[u8]) -> Result<Value, String> {
     let split = raw
         .iter()
@@ -58,6 +61,13 @@ fn http_response(raw: &[u8]) -> Result<Value, String> {
         return Ok(body);
     }
     let code = body["error"].as_str().unwrap_or("");
+    if status == 409 && code == "conflict" {
+        match body["msg"].as_str() {
+            Some("merge index expired; start a refresh") => return Err(MERGE_INDEX_EXPIRED.into()),
+            Some("merge index refresh is running") => return Err(MERGE_INDEX_RUNNING.into()),
+            _ => {}
+        }
+    }
     if body["msg"]
         .as_str()
         .is_some_and(|s| s.contains("cannot read decisions"))
@@ -298,6 +308,23 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
         pin_local(&mut local, d.path()).unwrap();
         local.args(["-c", script]);
         assert!(output(local).unwrap()["host"].is_null());
+    }
+    #[test]
+    fn keeper_response_distinguishes_merge_index_conflicts() {
+        for (message, expected) in [
+            (
+                "merge index expired; start a refresh",
+                "item_refused:conflict:merge index expired; start a refresh",
+            ),
+            (
+                "merge index refresh is running",
+                "item_refused:conflict:merge index refresh is running",
+            ),
+            ("private", "item_refused:conflict"),
+        ] {
+            let raw = format!("{}\n409", json!({"error":"conflict","msg":message}));
+            assert_eq!(http_response(raw.as_bytes()).unwrap_err(), expected);
+        }
     }
     #[test]
     fn keeper_response_distinguishes_item_refusal_and_infrastructure() {

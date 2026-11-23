@@ -1,0 +1,1 @@
+Merge-close refreshes an expired Keeper index and retries the interrupted page within the service budget. If an index conflict interrupts a run after a close, the command can report the remaining projects for the next run and exit successfully.
