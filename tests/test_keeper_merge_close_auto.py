@@ -366,7 +366,7 @@ def test_a_warmed_scan_is_not_fetched_again_under_the_lock(env, monkeypatch):
     assert calls == [True, False] and [c["key"] for c in result["closed"]] == ["demo:C"]
 
 
-def test_http_close_only_consumes_the_timer_refresh(env, tmp_path, monkeypatch):
+def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_closes(env, tmp_path, monkeypatch):
     import threading
     from door_util import Doors
 
@@ -512,7 +512,6 @@ class RecordingGit(GitAdapter):
 
 
 def test_an_old_index_at_the_current_tip_closes_without_a_fetch(env):
-
     set_states(env)
     env.repo.land("c", "Plan-Item: demo:C", 88)
     env.store.ctx["git"] = recorder = RecordingGit({"demo": str(env.repo.root)})
@@ -525,6 +524,24 @@ def test_an_old_index_at_the_current_tip_closes_without_a_fetch(env):
     assert [row["key"] for row in result["closed"]] == ["demo:C"]
     assert recorder.fetches == []
 
+
+def test_a_marker_that_outlives_the_cached_index_is_not_warm_and_nothing_is_fetched(env):
+    """An advance of the default ref invalidates a published scan, whatever its age."""
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 88)
+    env.store.ctx["git"] = recorder = RecordingGit({"demo": str(env.repo.root)})
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    assert env.store._warm("demo")
+    recorder.fetches.clear()
+
+    env.repo.land("later", "Work after the cached tip", 89)
+    assert not env.store._warm("demo")
+    result = auto(env, require_seats=False, frozen=True)
+    assert result["closed"] == []
+    assert result["scan_errors"] == {"demo": "merge_index_tip_changed"}
+    assert any(row["key"] == "demo:C" and "merge_index_tip_changed" in row["reason"]
+               for row in result["listed"])
+    assert recorder.fetches == []
 
 
 def test_a_revision_qualified_hint_is_held_to_the_warm_index_and_the_proof_never_refreshes(env):
