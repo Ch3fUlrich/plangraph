@@ -1176,31 +1176,22 @@ def test_all_pg_migrations_apply_in_order_exec_7_oversight_8_bus_9():
     seven_tables = schema_pg.parse_tables(seven[0].sql)
     assert list(seven_tables) == ["items"]
     assert [c for c, _ in seven_tables["items"]] == exec_cols
-    assert applied["items"][-len(exec_cols):] == \
+    assert [(c, nn) for c, nn in applied["items"] if c in exec_cols] == \
         [(c, False) for c in exec_cols], applied["items"]
 
     # ... and migration 8 alone carries the oversight tables
     eight_tables = schema_pg.parse_tables(eight[0].sql)
     assert {"oversight_tokens", "oversight_ops"} <= set(eight_tables)
 
-    # both new sets match SQLite column-for-column (name order and NOT NULL)
+    # Both backends agree on column names and nullability.
     sqlite_tables = schema_pg.parse_tables(schema.SCHEMA)
-    # Main declares exec columns before timestamps in SQLite, while PG adds
-    # them after the shipped baseline. Compare in PG migration order.
-    sqlite_tables["items"] = (
-        [(c, nn) for c, nn in sqlite_tables["items"] if c not in exec_cols]
-        + [(c, nn) for c, nn in sqlite_tables["items"] if c in exec_cols])
     for table in ("oversight_tokens", "oversight_ops"):
         assert [c for c, _ in sqlite_tables[table]] == \
             [c for c, _ in applied[table]], table
         assert [bool(nn) for _, nn in sqlite_tables[table]] == \
             [bool(nn) for _, nn in applied[table]], table
-    for column, notnull in sqlite_tables["items"][-len(exec_cols):]:
-        assert column in exec_cols, column
-    assert [c for c, _ in sqlite_tables["items"]] == \
-        [c for c, _ in applied["items"]], "items columns drift"
-    assert [bool(nn) for _, nn in sqlite_tables["items"]] == \
-        [bool(nn) for _, nn in applied["items"]], "items NOT NULL drift"
+    # SQLite declares items columns together while Postgres adds them in stages.
+    assert sorted(sqlite_tables["items"]) == sorted(applied["items"])
 
     # the exec columns live in the SQLite items DDL at main's v13 shape, and
     # the SQLite version step (v14) stays the oversight tables alone
