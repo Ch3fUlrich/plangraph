@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from bisect import bisect_left
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import quote
@@ -151,6 +152,35 @@ def validate_merge(ctx, project, merge_info, target_ref, ref):
 
 #: Work under this prefix only records items as deferred; it delivers nothing.
 CHECKPOINT_PREFIX = "docs/checkpoints/"
+
+
+def indexed_revision(index, token):
+    """Resolve a revision prefix when it identifies exactly one indexed commit."""
+    ordered = index.get("revision_order", ())
+    offset = bisect_left(ordered, token)
+    matches = [sha for sha in ordered[offset:offset + 2] if sha.startswith(token)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def landed_go_part(index, head, token, pr):
+    """Resolve an unambiguous part introduced with this default-branch GO head."""
+    graph = index.get("merged_history", {})
+    part = indexed_revision(index, token)
+    if not part or part == head:
+        return None
+    landed = graph.get(head, ((), None))[1]
+    candidate = graph.get(part, ((), None))[1]
+    merge = (landed or {}).get("merge") or {}
+    if not candidate or merge.get("pr") != pr or candidate.get("merge") != merge:
+        return None
+    seen, todo = set(), [head]
+    while todo:
+        sha = todo.pop()
+        if sha == part:
+            return candidate
+        if sha not in seen:
+            seen.add(sha)
+            todo.extend(graph.get(sha, ((), None))[0])
 
 
 def part_changes(git, repo, parent, part, merge, names):
