@@ -39,7 +39,12 @@ fn linux_path_export_selects_and_runs_linux_codex() {
     let path = std::env::join_paths([&linux_bin, &inherited_bin]).unwrap();
     let selected = resolve(&path, root.path()).unwrap();
     assert_eq!(selected, linux_bin.join("codex"));
-    let result = std::process::Command::new(selected).output().unwrap();
+    let mut command = std::process::Command::new(selected);
+    command.stdout(std::process::Stdio::piped());
+    let result = pg_worker_core::executable_test_support::spawn(&mut command)
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
     assert!(result.status.success());
     assert_eq!(result.stdout, b"linux-codex");
 }
