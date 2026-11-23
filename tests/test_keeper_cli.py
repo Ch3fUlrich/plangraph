@@ -566,6 +566,46 @@ def test_attempts_cli_reads_writer_seat_and_adhoc_rows(live, capsys, monkeypatch
     assert w.store.spawn_attempts(w.p("reader"), "1s") == []
 
 
+def test_attempt_telemetry_reads_every_row_and_requires_global_reader(live, monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    from plangraph.keeper import auth
+
+    _, w, _, _, _ = live
+    monkeypatch.setattr("plangraph.keeper.store_card_updates._validate_spawn_route", lambda route: route)
+    for project in ("demo", "other"):
+        token = auth.add_principal(w.conn, f"{project}-spawner", "spawner", [project])
+        writer = auth.authenticate(w.conn, token)
+        for n in range(9):
+            w.store.record_spawn_attempt(writer, dict(
+                attempt_id=f"run-{project}-{n}", role="implement",
+                card_key=f"{project}:A", host="fixture", plan_hash="0" * 64,
+                route={}, started=w.clock() - 2, ended=w.clock(), exit_class="ok"))
+    w.store.record_spawn_attempt(w.p("system"), dict(
+        attempt_id="run-adhoc", role="review", host="fixture", plan_hash="0" * 64,
+        route={}, started=w.clock() - 2, ended=w.clock(), exit_class="ok"))
+    w.conn.execute("INSERT INTO attempts (id, n, started_at, exit_class) VALUES (?, ?, ?, ?)",
+                   (99, 1, w.store._iso(w.clock() - 2), "ok"))
+    url = os.environ["PG_URL"] + "/v1/attempts?since=1d"
+
+    def read(token, scope=""):
+        request = urllib.request.Request(url + scope, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(request) as response:
+            return json.load(response)
+
+    rows = read(w.tok("reader"), "&scope=telemetry")["rows"]
+    assert len(rows) == w.conn.execute("SELECT COUNT(*) AS n FROM attempts").fetchone()["n"] == 20
+    assert {row["item"] for row in rows} == {"demo:A", "other:A", "adhoc"}
+    assert [row["attempt_id"] for row in rows if row["route"] is None] == ["legacy:99"]
+    assert len(read(w.tok("l1main"))) == 9
+    scoped_reader = auth.add_principal(w.conn, "scoped-reader", "reader", ["demo"])
+    for token in (scoped_reader, w.tok("l1main"), w.tok("router")):
+        with pytest.raises(urllib.error.HTTPError) as refusal:
+            read(token, "&scope=telemetry")
+        assert refusal.value.code == 403
+
+
 def test_watchdog_delivers_spawn_through_keeper_http(live, capsys, monkeypatch, tmp_path):
     from plangraph.spawner.notify import KeeperSink, retry_spawn_attempts
 
