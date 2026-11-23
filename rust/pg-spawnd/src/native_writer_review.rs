@@ -97,26 +97,25 @@ impl Host {
                 continue;
             }
             let mut command = self.command(if cfg!(windows) { "python" } else { "python3" });
-            command
-                .arg(path)
-                .args(args)
-                .current_dir(&self.cwd)
-                .env("CLASS_SEARCH_BASE", &pin);
+            command.arg(path).args(args).current_dir(&self.cwd);
+            let policy_gate = gate == "check_new_code_lang.py";
+            if policy_gate {
+                command.env("CLASS_SEARCH_BASE", &pin);
+            }
             #[cfg(target_os = "linux")]
-            let _policy_lease = if gate == "check_new_code_lang.py"
-                && self.cwd.join("rust/pg-policy/Cargo.toml").is_file()
-            {
-                let target = pg_worker_core::cargo_cache::shared_cache_roots()
-                    .map_err(|e| e.to_string())?
-                    .remove(0);
-                command.env("CARGO_TARGET_DIR", &target);
-                Some(
-                    pg_worker_core::cargo_cache::writer_lease(&target)
-                        .map_err(|e| format!("{gate}: {e}"))?,
-                )
-            } else {
-                None
-            };
+            let _policy_lease =
+                if policy_gate && self.cwd.join("rust/pg-policy/Cargo.toml").is_file() {
+                    let target = pg_worker_core::cargo_cache::shared_cache_roots()
+                        .map_err(|e| e.to_string())?
+                        .remove(0);
+                    command.env("CARGO_TARGET_DIR", &target);
+                    Some(
+                        pg_worker_core::cargo_cache::writer_lease(&target)
+                            .map_err(|e| format!("{gate}: {e}"))?,
+                    )
+                } else {
+                    None
+                };
             // Both streams of a passing gate are evidence too (a skipped check is reported
             // on stderr).
             let result = command.output().map_err(|e| format!("{gate}: {e}"))?;
