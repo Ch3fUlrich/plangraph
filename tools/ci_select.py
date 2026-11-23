@@ -658,6 +658,19 @@ def host_load():
     return load, os.cpu_count() or 2
 
 
+#: One-minute load per CPU at or above this marks a host busy. The fast-check dispatcher in
+#: rust/plangraph-cli/src/fast_check_dispatch.rs holds the same number; a test keeps them equal.
+HOST_BUSY_LOAD_PER_CPU = 0.7
+HOST_BUSY_REASON = "host_busy"
+
+
+def host_busy_reason(load, cores):
+    """The machine-readable busy-host reason when load per CPU is at or above the limit, else None."""
+    if cores <= 0 or load / cores < HOST_BUSY_LOAD_PER_CPU:
+        return None
+    return {"reason": HOST_BUSY_REASON, "load_per_cpu": round(load / cores, 2), "cpus": cores}
+
+
 def planned_test_binaries(commands, root):
     """Test binaries the cargo test commands build: one lib/bin target plus every tests/*.rs per crate."""
     root = Path(root)

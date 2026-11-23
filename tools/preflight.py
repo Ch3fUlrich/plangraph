@@ -16,7 +16,7 @@ import time
 import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
+from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_busy_reason, host_load, planned_test_binaries, running_test_binary, rust_bound
 from pgtest import run_test_process as run_bounded_test, selected_count, test_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -119,8 +119,12 @@ def run(command, cwd, env):
         return result.returncode, result.stdout
     except subprocess.TimeoutExpired as exc:
         if is_affected_step(command):
+            # A timeout on a loaded host is no verdict on the tests: the reason line lets the
+            # dispatcher retry once on another host.
+            busy = host_busy_reason(*host_load())
             return 1, (f"tests: affected-tests step exceeded its {timeout} second bound "
-                       f"({selected_count(exc.stdout)} selected test paths)\n")
+                       f"({selected_count(exc.stdout)} selected test paths)\n"
+                       + (json.dumps(busy) + "\n" if busy else ""))
         binary = running_test_binary(exc.stdout)
         named = f" (running test binary: {binary})" if binary else ""
         return 1, f"check exceeded {timeout} second timeout{named}\n"
