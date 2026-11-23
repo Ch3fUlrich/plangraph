@@ -537,6 +537,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     let runs = fs::read_to_string(dir.path().join("gate-runs.txt")).unwrap();
     let expected = format!("check --base refs/plangraph/native/run-host/base --head HEAD {head}");
     assert_eq!(runs.lines().filter(|l| *l == expected).count(), 4, "{runs}");
+    super::review_tests::save_writer_without_artifacts(&mut host);
     let review = host.review(&head, None).unwrap();
     assert_eq!(review["verdict"], "ACCEPT", "{review}");
     assert_eq!(review["head"], head.as_str());
