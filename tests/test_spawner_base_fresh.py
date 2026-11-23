@@ -654,11 +654,13 @@ def test_stuck_initiating_probe_is_a_leg_skip_not_an_admission_timeout(repositor
 
 def test_probe_budget_counts_routing_time_spent_before_the_run_record(repository, dispatch, monkeypatch):
     """Routing before run record creation consumes the probe budget."""
+    from functools import partial
     from types import SimpleNamespace
     from plangraph.spawner import base_fresh, leg_probe
     monkeypatch.setattr(leg_probe, 'before_launch', _REAL_BEFORE_LAUNCH)
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
-    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.8)
+    # Shorten the synthetic probe window while leaving the real admission watchdog alone.
+    monkeypatch.setattr(leg_probe, 'ProbeBudget', partial(leg_probe.ProbeBudget, window=1.8))
     now = 100.0
     clock = SimpleNamespace(monotonic=lambda: now, time=lambda: 0.0)
     monkeypatch.setattr(base_fresh, 'time', clock)
