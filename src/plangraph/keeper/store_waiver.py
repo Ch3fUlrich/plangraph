@@ -633,20 +633,25 @@ class WaiverMixin:
         pinned = dict(item, _close_head=token[0])
         proofs = self._merged_auto_proofs(pinned)
         pending = self._deploy_pending(pinned, changes, token)
+        missing = list(pending)
         if self._live_evidence_missing(item, proofs):
-            pending.append("live_evidence_missing")
-        if pending:
-            if apply:
-                self._deploy_pending_result(item, pending, now)
+            missing.append("live_evidence_missing")
+        result = {}
+        if missing:
             landed = [(stamp, proof["merged_at"]) for proof in proofs
                       if (stamp := as_epoch(proof["merged_at"])) is not None]
             earliest = min(landed, default=None)
-            return {"deployment_pending": {
-                "missing": pending, "merged_at": earliest[1] if earliest else None,
-                "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}}
+            result["deployment_pending"] = {
+                "missing": missing, "merged_at": earliest[1] if earliest else None,
+                "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}
+        if pending:
+            if apply:
+                self._deploy_pending_result(item, pending, now)
+            return result
+        # Free-form Live criteria are reported alongside a close. Only shipped units gate it.
         witnessed, flags = self._auto_seats(pinned, proofs, now, require_seats) if seated else ([], None)
         if not apply:
-            return {"key": key, "state": item["state"], "prs": proofs, **self._flags_of(flags)}
+            return {**result, "key": key, "state": item["state"], "prs": proofs, **self._flags_of(flags)}
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
@@ -671,7 +676,8 @@ class WaiverMixin:
             done = self._land_merged(principal, fresh, head, seats, witnessed, f"auto-{head[:12]}",
                                      fresh["state"] != "in_review", ("commit", ref, Result(True, "merged on default")),
                                      f"merge close: merged {head}", now, release=True, flags=flags)
-            return {"key": key, "state": done["state"], "prs": proofs, "seats": seats, **self._flags_of(flags)}
+            return {**result, "key": key, "state": done["state"], "prs": proofs, "seats": seats,
+                    **self._flags_of(flags)}
 
     def _live_evidence_missing(self, item, proofs):
         criteria = item.get("done_criteria") or ""

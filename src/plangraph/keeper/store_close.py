@@ -728,12 +728,13 @@ class CloseMixin:
             except Refused as exc:
                 listed.append({"key": key, "state": item["state"], "reason": f"{exc.code}: {exc.msg}"})
                 continue
-            if deployment := result.get("deployment_pending"):
+            if deployment := result.pop("deployment_pending", None):
                 deployments.append({"key": key, **deployment})
+            if result:
+                (closed if apply else pending).append(result)
+            else:
                 listed.append({"key": key, "state": item["state"],
                                "reason": "evidence_unverified: deploy_pending: " + ", ".join(deployment["missing"])})
-            else:
-                (closed if apply else pending).append(result)
         return {"closed": closed, "would_close": pending, "listed": listed, "repos": repos,
                 "merged_not_done": len(pending) + len(listed), "require_seats": require_seats,
                 "next_after": next_after, "scan_errors": scan_errors, "parts": parts, "deployment_pending": deployments}
