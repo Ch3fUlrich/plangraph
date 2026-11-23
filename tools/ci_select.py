@@ -658,6 +658,27 @@ def host_load():
     return load, os.cpu_count() or 2
 
 
+def is_nextest(command):
+    return command[:3] == ["cargo", "nextest", "run"]
+
+
+def rust_test_runner(root, env, timeout):
+    config = root / 'rust/.config/nextest.toml'
+    if config.is_file():
+        try:
+            probe = subprocess.run(["cargo", "nextest", "--version"], cwd=root / "rust", env=env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=timeout)
+            if probe.returncode == 0:
+                return ["cargo", "nextest", "run", "--config-file", str(config),
+                        "--no-fail-fast", "--color", "never"]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        print("rust: cargo-nextest unavailable; falling back to cargo test (no per-test deadline)",
+              file=sys.stderr, flush=True)
+    return ["cargo", "test"]
+
+
 def planned_test_binaries(commands, root):
     """Test binaries the cargo test commands build: one lib/bin target plus every tests/*.rs per crate."""
     root = Path(root)
@@ -676,7 +697,7 @@ def planned_test_binaries(commands, root):
         owners[str(manifest.resolve())] = manifest.parent
     total = 0
     for command in commands:
-        if command[:2] != ["cargo", "test"] and command[:3] != ["cargo", "nextest", "run"]:
+        if command[:2] != ["cargo", "test"] and not is_nextest(command):
             continue
         crates = [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
         crates += [str(Path(command[i + 1]).resolve()) for i, arg in enumerate(command[:-1])
