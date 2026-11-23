@@ -82,6 +82,7 @@ fn execute_with(
     }
     let pins = pins.ok_or_else(|| io::Error::other("--pins required"))?;
     let thresholds = thresholds.validate()?;
+    let mut guards = Guards::load(&pins, state)?;
     let configured: std::collections::BTreeMap<_, _> = mounts
         .into_iter()
         .map(|mount| (work_disks::worktree_root(&mount), mount))
@@ -140,7 +141,6 @@ fn execute_with(
         &scratch,
         &mut report,
     );
-    let mut guards = Guards::load(&pins, state)?;
     // A worktree a user unit runs from keeps its caches: the build the unit starts needs them.
     let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
     guards.pinned.extend(
