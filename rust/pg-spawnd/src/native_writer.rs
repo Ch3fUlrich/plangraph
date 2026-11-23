@@ -1,6 +1,8 @@
 //! Native CLI writer lifecycle, independent of placement and transport.
 use crate::writer_control::STOPPED;
 use serde_json::{json, Value};
+#[path = "native_writer_quota.rs"]
+pub(crate) mod quota;
 #[path = "native_writer_stage.rs"]
 mod stage;
 #[path = "native_writer_timing.rs"]
@@ -30,6 +32,10 @@ pub(crate) trait Driver {
     /// Push the accepted head; returns the pushed ref, or None when no push is configured.
     fn push(&mut self, _head: &str) -> Result<Option<String>, String> {
         Ok(None)
+    }
+    /// Book a usage-limit stop of the writer leg in the leg state the route reads.
+    fn record_quota(&mut self, _limit: &quota::Limit) -> Result<(), String> {
+        Ok(())
     }
     fn save(&mut self, record: &Value) -> Result<(), String>;
     fn pending_steer(&self, _record: &Value) -> Result<Vec<crate::native_steer::Message>, String> {
@@ -78,7 +84,8 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
         "brief":brief, "effort":record["effort"].as_str().unwrap_or("medium"), "try_count":0
     });
     record["review_rounds"] = json!(0);
-    let result = lifecycle(driver, &mut record, brief);
+    let result = lifecycle(driver, &mut record, brief)
+        .or_else(|failure| quota_stop(driver, &mut record, failure));
     finish(driver, record, result)
 }
 
@@ -88,7 +95,8 @@ pub(crate) fn run_resume(
     session: &str,
     prompt: &str,
 ) -> Value {
-    let result = writer_attempt(driver, &mut record, prompt, Some(session));
+    let result = writer_attempt(driver, &mut record, prompt, Some(session))
+        .or_else(|failure| quota_stop(driver, &mut record, failure));
     finish(driver, record, result)
 }
 
@@ -129,6 +137,9 @@ fn finish(
     }
     if matches!(exit, 4 | 9) {
         record["result"] = json!("BLOCKED");
+    }
+    if exit == quota::EXIT {
+        record["result"] = json!("QUOTA");
     }
     record["ended"] = json!(std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -188,6 +199,7 @@ fn lifecycle(
         };
         match writer_attempt(driver, record, &launch, saved_session.take().as_deref()) {
             Err((_, error)) if error == STOPPED => return Err((10, error)),
+            Err((quota::EXIT, error)) => return Err((quota::EXIT, error)),
             Err((6, error)) => {
                 record["last_writer_failure"] = json!(error);
                 driver.save(record).map_err(|e| (9, e))?;
@@ -209,6 +221,48 @@ fn lifecycle(
         }
     }
     unreachable!()
+}
+/// A writer turn that hit the usage limit ends the run at once: relaunching or resuming
+/// spends turns on a known quota state. The limit is booked in the leg state, the committed
+/// head is pushed through the push gate, and the status line names the reset time.
+fn quota_stop(
+    driver: &mut impl Driver,
+    record: &mut Value,
+    failure: (i32, String),
+) -> Result<i32, (i32, String)> {
+    let Some(limit) = (failure.0 == quota::EXIT)
+        .then(|| quota::from_error(&failure.1))
+        .flatten()
+    else {
+        return Err(failure);
+    };
+    record["quota_limited"] =
+        json!({"line":limit.line, "reset":limit.reset, "reset_epoch":limit.reset_epoch});
+    record["status_line"] = json!(format!("QUOTA {}", limit.label()));
+    if driver.record_quota(&limit).is_err() {
+        record["quota_record_error"] = json!(true);
+    }
+    let Ok(head) = driver.head() else {
+        return Err(failure);
+    };
+    record["final_head"] = json!(head);
+    let base = record["base_sha"].as_str().unwrap_or("").to_owned();
+    if !driver.has_commits_beyond(&base, &head).unwrap_or(false) {
+        return Err(failure);
+    }
+    match driver.push(&head) {
+        Ok(target) => {
+            record["pushed"] = json!(target);
+            Err(failure)
+        }
+        Err(refusal) => {
+            push_failure(record, &head, &refusal);
+            Err((
+                quota::EXIT,
+                format!("{} (push of {head} refused: {refusal})", failure.1),
+            ))
+        }
+    }
 }
 fn latest_push_failure(record: &Value) -> Option<&str> {
     let failure = record["push_failures"].as_array()?.last()?;
