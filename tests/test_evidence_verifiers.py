@@ -11,6 +11,41 @@ from types import SimpleNamespace
 import pytest
 from evidence_fakes import ITEM, FakeDecisions, FakeRuns, FakeSemaphore, make_ctx, verify
 from plangraph.keeper import evidence as ev
+from test_keeper_close_merged_scan import _git
+
+
+@pytest.mark.parametrize("service_fields,timer_host,timer_state,missing", [
+    ({}, "host-a", "active", False),
+    ({"result": "exit-code"}, "host-a", "active", True),
+    ({"result": "exit-code", "is_active": "active"}, "host-a", "active", True),
+    ({"exec_main_exit_timestamp": "2026-11-01T12:00:00Z"}, "host-a", "active", True),
+    ({"exec_main_exit_timestamp": "Sun 2026-11-01 12:01:00 UTC"}, "host-a", "active", False),
+    ({"exec_main_exit_timestamp": "inf"}, "host-a", "active", True),
+    ({}, "host-b", "active", True),
+    ({}, "host-a", "inactive", True),
+    ({}, None, None, True),
+    ({"type": "simple"}, "host-a", "active", True),
+    ({"type": "simple", "is_active": "active"}, None, None, False),
+])
+def test_deploy_gate_oneshot(service_fields, timer_host, timer_state, missing, tmp_path):
+    _git(tmp_path, "init", "-b", "main")
+    unit, host = "tick.service", "host-a"
+    path = tmp_path / "deploy/systemd" / unit
+    path.parent.mkdir(parents=True)
+    path.write_text("[Service]\nType=oneshot\n")
+    _git(tmp_path, "add", str(path))
+    _git(tmp_path, "commit", "-m", "Install tick\n\nPlan-Item: fixture:TICK")
+    item = {"key": "fixture:TICK", "project": "fixture"}
+    ctx = ev.default_context({"repos": {"fixture": {"path": str(tmp_path), "ref": "main"}}})
+    service = {"host": host, "unit": unit, "is_active": "inactive", "type": "oneshot",
+               "result": "success", "exec_main_exit_timestamp": "2026-11-01T12:01:00Z"}
+    service.update(service_fields)
+    refs = [service]
+    if timer_host:
+        refs.append({"host": timer_host, "unit": "tick.timer", "is_active": timer_state})
+    rows = [{"kind": "deploy", "ref": ref, "verified": ev.verify("deploy", item, ref, ctx).ok}
+            for ref in refs]
+    assert ev.deploy_missing([unit], [host], rows) == ([f"{host}:{unit}"] if missing else [])
 
 
 # --------------------------------------------------------------------------- #

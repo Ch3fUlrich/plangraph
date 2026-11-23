@@ -1,0 +1,1 @@
+Keeper accepts a systemd oneshot service after a successful run newer than the deployment commit and verified active evidence for its same-name timer on the same host. Deploy evidence uses `type`, `result`, and `exec_main_exit_timestamp`. Collect them with `LC_ALL=C systemctl --user --utc show -p Type -p Result -p ExecMainExitTimestamp UNIT`, or submit the timestamp as ISO 8601.
