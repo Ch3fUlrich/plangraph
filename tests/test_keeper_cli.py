@@ -722,12 +722,13 @@ def test_refused_attempts_cannot_starve_newer_deliveries(
         directory.mkdir(parents=True)
         runs.append(dict(run_id=run_id, attempt_capture=1, status="completed", ended=ended))
     # Completion refusals are independent of attempt delivery.
-    completion_journal = tmp_path / "runs" / refused[0] / "keeper.refused"
-    completion_journal.write_text(f"{status}\n", encoding="utf-8")
+    newest_refusal = tmp_path / "runs" / refused[-1]
+    (newest_refusal / "keeper.refused").write_text(f"{status}\n", encoding="utf-8")
 
     keeper = Keeper()
     retry_spawn_attempts(tmp_path, runs, keeper=keeper, limit=limit)
-    assert (tmp_path / "runs" / refused[0] / "attempt.delivered").exists() == (attempts_per_refusal == 1)
+    assert list(calls) == ["run-valid", refused[-1]]
+    assert (newest_refusal / "attempt.delivered").exists() == (attempts_per_refusal == 1)
     for _ in range(2 * attempts_per_refusal):
         retry_spawn_attempts(tmp_path, runs, keeper=keeper, limit=limit)
 
