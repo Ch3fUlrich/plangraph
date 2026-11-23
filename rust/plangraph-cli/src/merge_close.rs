@@ -296,7 +296,7 @@ fn run_scheduled(
     deployment_only: bool,
 ) -> Result<Outcome, String> {
     let seats = require_seats(env)?;
-    let timing = ScheduleTiming::new(Duration::from_secs(95), PASS_BUDGET);
+    let timing = ScheduleTiming::new(REFRESH_TIMEOUT, PASS_BUDGET);
     let transport = |max_time_secs| DeadlineKeeper {
         keeper: SlowKeeper { env, max_time_secs },
         deadline: timing.deadline,
