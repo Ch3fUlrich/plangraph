@@ -32,7 +32,7 @@ import sys
 import tempfile
 import threading
 import urllib.parse
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from copy import copy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -42,7 +42,7 @@ from .. import inbox, views
 from . import timing
 from .snapshot_io import SnapshotPublication, write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from .snapshot_writer import Reaper, SnapshotWriter
-from . import api_routes, audit_meta, auth, brief, changelog, db, fmt
+from . import api_routes, audit_meta, auth, brief, changelog, db, db_errors, fmt
 from .auth import Principal, RunPrincipal
 from .errors import ConnectionLost, Refused
 
@@ -209,7 +209,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def _committed_read(self, name, extra, query, token):
         server = self.server
         try:
-            with timing.RequestTimer(None, "read", verb=name), server.read_store() as store:
+            with timing.RequestTimer(None, "read", verb=name), ExitStack() as stack:
+                try:
+                    store = stack.enter_context(server.read_store())
+                except (RuntimeError, *db_errors.OPERATIONAL) as exc:
+                    raise ConnectionLost("statement") from exc
                 try:
                     principal = auth.authenticate(store.conn, token)
                 except Refused as exc:
@@ -223,6 +227,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         except ConnectionLost as exc:
             self._fail_line(exc)
             self._json(503, {"error": "unavailable", "msg": "keeper read connection unavailable"})
+        except Exception as exc:
+            self._escape(exc)
 
     @staticmethod
     def _can_read_revoked_receipt(name, exc):
