@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 /// Keep a bound on each keeper call, including a page of close results.
 const MAX_TIME_SECS: u32 = 300;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(95);
-// Leave time for a final control reply and logging before the service's 420 s timeout.
-const RECOVERY_BUDGET: Duration = Duration::from_secs(400);
+// Leave time for process overhead and logging before the service's 420 s timeout.
+const PASS_BUDGET: Duration = Duration::from_secs(400);
 const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
 
 /// What one run did, as the keeper reported it.
@@ -23,6 +23,21 @@ const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
 pub struct Outcome {
     pub text: String,
     pub merged_not_done: u64,
+}
+
+/// The refresh limit and shared deadline for one scheduled pass.
+pub struct ScheduleTiming {
+    refresh_timeout: Duration,
+    deadline: Instant,
+}
+
+impl ScheduleTiming {
+    pub fn new(refresh_timeout: Duration, budget: Duration) -> Self {
+        Self {
+            refresh_timeout,
+            deadline: Instant::now() + budget,
+        }
+    }
 }
 
 /// The `require_seats` switch: unset leaves the keeper's own `require_seats` setting in force
@@ -237,6 +252,34 @@ pub fn repos_with(keeper: &dyn Transport) -> Result<Vec<String>, String> {
         .collect()
 }
 
+struct DeadlineKeeper<'a> {
+    keeper: SlowKeeper<'a>,
+    deadline: Instant,
+}
+
+impl Transport for DeadlineKeeper<'_> {
+    fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(MERGE_INDEX_EXPIRED.into());
+        }
+        // curl takes whole seconds here. Round up within the unit's shutdown margin.
+        let remaining_secs = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);
+        let request_limit = u64::from(self.keeper.max_time_secs);
+        let result = SlowKeeper {
+            env: self.keeper.env,
+            max_time_secs: request_limit.min(remaining_secs) as u32,
+        }
+        .call(verb, body);
+        match result {
+            Err(_) if remaining_secs <= request_limit && Instant::now() >= self.deadline => {
+                Err(MERGE_INDEX_EXPIRED.into())
+            }
+            result => result,
+        }
+    }
+}
+
 fn run_scheduled(
     env: &Env,
     apply: bool,
@@ -244,22 +287,19 @@ fn run_scheduled(
     deployment_only: bool,
 ) -> Result<Outcome, String> {
     let seats = require_seats(env)?;
-    let keeper = SlowKeeper {
-        env,
-        max_time_secs: MAX_TIME_SECS,
-    };
-    let control = SlowKeeper {
-        env,
-        max_time_secs: 10,
+    let timing = ScheduleTiming::new(Duration::from_secs(95), PASS_BUDGET);
+    let transport = |max_time_secs| DeadlineKeeper {
+        keeper: SlowKeeper { env, max_time_secs },
+        deadline: timing.deadline,
     };
     run_scheduled_with(
-        &keeper,
-        &control,
+        &transport(MAX_TIME_SECS),
+        &transport(10),
         seats,
         apply,
         project,
         deployment_only,
-        REFRESH_TIMEOUT,
+        timing,
     )
 }
 
@@ -271,9 +311,12 @@ pub fn run_scheduled_with(
     apply: bool,
     project: Option<&str>,
     deployment_only: bool,
-    refresh_timeout: Duration,
+    timing: ScheduleTiming,
 ) -> Result<Outcome, String> {
-    let deadline = Instant::now() + RECOVERY_BUDGET;
+    let ScheduleTiming {
+        refresh_timeout,
+        deadline,
+    } = timing;
     refresh_index(control, refresh_timeout)?;
     let mut pass = ClosePass {
         deployment_count: Some(0),
@@ -293,7 +336,12 @@ pub fn run_scheduled_with(
     };
     for (index, project) in projects.iter().enumerate() {
         let result = pass.collect(seats, apply, Some(project), |body| {
-            let call = || keeper.call("close_merged_auto", Some(body.clone()));
+            let call = || {
+                if Instant::now() >= deadline {
+                    return Err(MERGE_INDEX_EXPIRED.into());
+                }
+                keeper.call("close_merged_auto", Some(body.clone()))
+            };
             match call() {
                 Err(error)
                     if apply && error == MERGE_INDEX_EXPIRED && Instant::now() < deadline =>
@@ -301,11 +349,7 @@ pub fn run_scheduled_with(
                     let remaining = deadline.saturating_duration_since(Instant::now());
                     refresh_index(control, refresh_timeout.min(remaining))
                         .map_err(|reason| format!("{MERGE_INDEX_EXPIRED} ({reason})"))?;
-                    if Instant::now() < deadline {
-                        call()
-                    } else {
-                        Err(error)
-                    }
+                    call()
                 }
                 result => result,
             }
