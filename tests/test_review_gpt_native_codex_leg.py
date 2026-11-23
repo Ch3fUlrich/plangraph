@@ -44,7 +44,8 @@ def test_argon_is_the_end_of_the_whole_eligible_route():
     assert ids.index("cx-gpt-6-luna") < ids.index("agy-gemini-4-argon-low")
 
 
-def test_agy_model_limit_keeps_native_codex_review_leg_available(tmp_path):
+def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
+    """An account-scoped Argon booking leaves Codex and sibling models eligible."""
     from plangraph.planner.legs import REVIEW_ARGON_LOW, REVIEW_GPT, REVIEW_NEON, REVIEW_SONNET
     from plangraph.planner.route_policy import RoutePolicy
     from plangraph.routing_support.leg_state import LegStateStore

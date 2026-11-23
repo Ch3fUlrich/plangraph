@@ -112,15 +112,22 @@ def test_service_route_review_for_claude_diff_runs_gpt_in_codex(tmp_path, review
         ("agy-gemini-4-hydrogen-high", "agy"), ("gpt-6.2-sol-medium", "codex")]
 
 
-def test_service_spawn_admits_registered_codex_pin(tmp_path):
+@pytest.mark.parametrize('foreign_harness', [True, False], ids=['foreign', 'native'])
+def test_service_spawn_refuses_a_foreign_pin_without_a_reason(tmp_path, monkeypatch, foreign_harness):
     import asyncio
     from types import SimpleNamespace
 
+    from plangraph.planner import legs
     from plangraph.spawner.service import SpawnService
+    if foreign_harness:
+        monkeypatch.setattr(legs, 'EXPLICIT_LEGS', tuple(
+            replace(leg, harness='opencode') if leg.id == 'cx-gpt-6.2-sol' else leg
+            for leg in legs.EXPLICIT_LEGS))
     service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
                            state=tmp_path / "state")
     service.client_probe = ALL
-    with pytest.raises(SpawnRefused, match="spawn by card; --override-reason required"):
+    reason = 'foreign-harness pin refused' if foreign_harness else 'spawn by card; --override-reason required'
+    with pytest.raises(SpawnRefused, match=reason):
         asyncio.run(service.spawn(card={"estimate_tokens": 1000}, prompt="x", role="implement",
                                   leg="cx-gpt-6.2-sol", dry_run=True))
 
@@ -129,6 +136,13 @@ def test_inline_only_gpt_leg_keeps_its_codex_harness():
     leg = CATALOG["cx-gpt-6-luna"]
     assert leg.harness == "codex" and leg.tool_mode == "inline-only"
     assert own_harness_legs((leg,), ALL)[0] == leg
+
+
+def test_inline_only_leg_keeps_its_opencode_harness():
+    luna = CATALOG["cx-gpt-6-luna"]
+    (fallback,) = own_harness_legs((luna,), lambda harness: harness == 'opencode')
+    assert (fallback.model, fallback.harness, fallback.tool_mode, fallback.harness_fallback) == (
+        luna.model, 'opencode', 'inline-only', 'client_missing')
 
 
 def test_switch_off_keeps_registered_harness(tmp_path, monkeypatch):
