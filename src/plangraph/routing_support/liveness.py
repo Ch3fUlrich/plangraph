@@ -49,4 +49,4 @@ def require_available(leg, reader, card):
     state = read_leg_model(read, leg, model, account=card.get('account'), combo=card.get('combo'))
     if unavailable(state):
         reason = agy_limit_reason(model, state) if getattr(leg, "harness", None) == "agy" else None
-        raise SpawnRefused((reason or 'leg ' + state['state']) + ': ' + leg.id)
+        raise SpawnRefused((reason or 'leg ' + (state.get('reason') or state['state'])) + ': ' + leg.id)
