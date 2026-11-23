@@ -232,7 +232,8 @@ def test_verify_accepts_legacy_criteria_edits_before_the_ledger(w, audit_values)
     assert w.store.verify_chain() == []
 
 
-def test_verify_reports_criteria_edits_without_audit_values_after_the_ledger_starts(w):
+def test_verify_reports_legacy_criteria_edits_without_inventing_text(w):
+    # A legacy-shaped event after the first ledger row still needs an audit.
     w.store.edit_definition(w.p("router"), KEY, {**RATIONALE, "done_criteria": "current"})
     with w.store._write():
         w.conn.execute("UPDATE items SET done_criteria=? WHERE key=?", ("unlogged edit", KEY))
