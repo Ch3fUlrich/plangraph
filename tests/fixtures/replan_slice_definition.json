@@ -11,6 +11,7 @@
       "depends_on": [],
       "operator": false,
       "under": "p:I",
+      "slice_parent": "p:I",
       "done_criteria": "Slice of p:I: 900 changed lines in 1 files; every finding below fixed",
       "evidence_kinds": [
         "any"
@@ -28,6 +29,7 @@
       "depends_on": [],
       "operator": false,
       "under": "p:I",
+      "slice_parent": "p:I",
       "done_criteria": "Slice of p:I: 800 changed lines in 1 files; every finding below fixed",
       "evidence_kinds": [
         "any"

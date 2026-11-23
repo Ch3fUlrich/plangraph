@@ -20,7 +20,7 @@ from .credential_guard import guard
 from .item_fixes import check_fix_limit
 from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_definition_inputs, check_kg_refs, check_model_fields
 from .note_fold import fold_checked
-from .store_input import _defined_payload, slice_parent
+from .store_input import _defined_payload
 from .store_tiers import (
     REVIEW_TIERS,
     _REVIEW_KEYWORD,
@@ -63,7 +63,7 @@ def _blank(value):
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
-     "estimate_h", "estimate_src", "depends_on", "under", "corrects", "done_criteria",
+     "estimate_h", "estimate_src", "depends_on", "under", "slice_parent", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note", "design_ref",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
@@ -367,8 +367,8 @@ class CreateMixin:
         for name in SMALL_FIELDS:
             if row[name] is not None:
                 created[name] = row[name]
-        if (parent := slice_parent(definition)) and self.resolve_key(parent) == definition.get("under"):
-            created["slice_parent"] = definition["under"]
+        if parent := definition.get("slice_parent"):
+            created["slice_parent"] = parent
         if definition.get("rehomed_from"):
             created["rehomed_from"] = definition["rehomed_from"]
         self._append(principal, definition["key"], "item_created", created, now)
