@@ -288,6 +288,20 @@ class ContextMixin:
             jobs = [pool.submit(copy_context().run, load, group) for group in groups.values()]
             return {name: index for job in jobs for name, index in job.result().items()}
 
+    @staticmethod
+    def _indexed_delivery(indexes, key, project):
+        """Keep bare IDs local and match qualified deliveries across repositories."""
+        work = src.indexed_work(indexes[project], key)
+        commits = {commit["sha"]: commit for commit in work["commits"] or ()}
+        for name, index in indexes.items():
+            if name == project or not index or index.get("origin_stale"):
+                continue
+            for commit in index["commits"].get(key, ()):
+                commits.setdefault(commit["sha"], commit)
+        if commits:
+            work["commits"] = list(commits.values())[:src.COMMIT_LIMIT]
+        return work
+
     def _ready_items(self, project=None, n=10, owner=None, agent=False):
         """Candidate rows with shared claim facts and presentation status."""
         items = self._all_items()
@@ -327,7 +341,7 @@ class ContextMixin:
                     "age_seconds": work_index["built_age_s"],
                     "reason": "work index built "
                               f"{work_index['built_age_s']}s ago, refresh running"}
-            ctx["work_exists"] = src.indexed_work(work_index, row["key"])
+            ctx["work_exists"] = self._indexed_delivery(indexes, row["key"], row["project"])
             prs = src.indexed_open_pulls(indexes, row["key"], row["project"])
             if prs:
                 ctx["work_exists"]["prs"] = prs
@@ -406,6 +420,10 @@ class ContextMixin:
         unknown = [name for name, entry in indexes.items()
                    if entry and entry.get("prs_unverified")]
         if not stale_checks:
+            work = self._indexed_delivery(indexes, item["key"], project)
+            if work["commits"]:
+                raise Refused("bad_state", f"{item['key']} stale: already merged: "
+                              f"Plan-Item commit {work['commits'][0]['sha'][:8]}")
             if unknown:
                 raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
             return None
@@ -430,7 +448,7 @@ class ContextMixin:
             "graph": _graph(index), "book": shared["book"], "clock": shared["clock"]}, git=False)
         timing.check_io_deadline("task context")
         work_index = indexes[project]
-        ctx["work_exists"] = src.indexed_work(work_index, item["key"])
+        ctx["work_exists"] = self._indexed_delivery(indexes, item["key"], project)
         facts = self._claim_staleness(ctx)
         if work_index is not None and work_index.get("stale"):
             facts.append("work index unverified: " + work_index["reason"])
@@ -449,7 +467,7 @@ class ContextMixin:
         facts = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
-        if commits and not (isinstance(lanes, list) and lanes):
+        if commits and not lanes:
             head = commits[0]
             merge = head.get("merge") or {}
             facts.append(
