@@ -562,7 +562,30 @@ class GitAdapter:
                     yield from self._train_deploy_changes(repo, parent, part, names)
                 continue
             if names.intersection(self.merge_plan_items(repo, merge)):
-                yield part, merge, self._name_status(repo, ["--end-of-options", parent, merge])
+                yield part, merge, self._part_changes(repo, parent, part, merge, names)
+
+    def _part_changes(self, repo, parent, part, merge, names):
+        """A part's changes as the key sees them: its own commits and the part's untagged ones.
+
+        Commits tagged only for other keys of the same part are left out. A key with no
+        non-merge commit of its own in the part (its tag sits on a merge) keeps the whole part.
+        """
+        proc = self._run(repo, ["log", "--no-merges", "--format=%H%x1e%B%x1d",
+                                "--end-of-options", part, f"^{parent}"])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read train part commits")
+        shas, named = [], False
+        for record in _stdout(proc).split("\x1d"):
+            sha, _, body = record.strip().partition("\x1e")
+            items = plan_items(body)
+            if valid_commit_ref(sha) and (not items or names.intersection(items)):
+                shas.append(sha)
+                named = named or bool(items)
+        if not named:
+            return self._name_status(repo, ["--end-of-options", parent, merge])
+        changes = {change for sha in shas
+                   for change in self._name_status(repo, ["--root", "--end-of-options", sha])}
+        return sorted(changes)
 
     _TRAIN_MERGE_SUBJECT = re.compile(
         r"Landing train [0-9]+\b|batch [A-Za-z0-9_-]+: (?:#[0-9]+ )+\(#[0-9]+\)$", re.I)

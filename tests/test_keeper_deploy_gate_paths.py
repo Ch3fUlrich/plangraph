@@ -462,3 +462,33 @@ def test_train_deploy_hosts_are_read_from_the_part_that_ships_the_unit(env):  # 
         env.store.add_evidence_router(env.p("router"), "demo:B", "deploy",
                                       {"host": host, "unit": "train.service", "is_active": "active"})
     assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:B"]
+
+
+def test_train_deploy_gate_keeps_other_keys_units_out_of_a_shared_part(env):  # noqa: F811
+    """Two keys share one part: only the key whose own commit adds a unit, or the untagged
+    follow-up of the part, is deploy-pending (LE-DEPLOY-ATTRIBUTION-OLD-TRAINS-BLOCKS-UNITLESS-KEYS)."""
+    root = env.repo.root
+    base = git(root, "rev-parse", "main")
+    git(root, "checkout", "-q", "-b", "train")
+    git(root, "checkout", "-q", "-b", "shared", base)
+    (root / "NOTES.md").write_text("docs\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "docs\n\nPlan-Item: demo:A")
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/shared.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "unit\n\nPlan-Item: demo:B")
+    git(root, "checkout", "-q", "train")
+    git(root, "merge", "-q", "--no-ff", "-m", "Train 9: merge shared", "shared")
+    git(root, "branch", "-D", "shared")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m", "Landing train 9: 1 batch (#57)", "train")
+    git(root, "branch", "-D", "train")
+
+    store = env.store
+    docs = store._pin_close(store._item("demo:A"))
+    assert store._deploy_changes(docs)[1] == {("A", "NOTES.md")}
+    assert store._deploy_changes(dict(docs, key="demo:B"))[1] == {("A", "deploy/systemd/shared.service")}
+    result = auto(env, require_seats=False)
+    assert [c["key"] for c in result["closed"]] == ["demo:A"]
+    assert "deploy_pending" in next(r["reason"] for r in result["listed"] if r["key"] == "demo:B")
