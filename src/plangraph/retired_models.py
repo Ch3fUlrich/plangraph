@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from plangraph.routing_errors import SpawnRefused
 
+_RETIRED_GPT = re.compile(r'gpt-6\.1-', re.I)
+
 
 class RetiredModelError(SpawnRefused, ValueError):
     """A request names an operator-retired model."""
@@ -11,8 +13,7 @@ class RetiredModelError(SpawnRefused, ValueError):
 
 def is_retired(value):
     return isinstance(value, str) and bool(
-        re.search(r'(?:gemini[\s\S]*flash|gpt-6\.1-sol)', value, re.I)
-    )
+        _RETIRED_GPT.search(value) or re.search(r'gemini[\s\S]*flash', value, re.I))
 
 
 def check_retired(value):
@@ -28,10 +29,9 @@ def check_retired(value):
         for item in value:
             check_retired(item)
     elif is_retired(value):
-        low = value.lower()
-        if "gpt-6.1-sol" in low:
-            exc = RetiredModelError('model_retired: gpt-6.1-sol retired by operator order '
-                                    '2026-11-19 (D-6310); use cx-gpt-6.2-sol-medium')
+        if _RETIRED_GPT.search(value):
+            exc = RetiredModelError('model_retired: GPT-6.1 models retired by operator order '
+                                    'D-6667. Use gpt-6.2-sol.')
             exc.reason = exc.code = 'model_retired'
             raise exc
         exc = RetiredModelError('gemini_flash_retired: model retired by operator order '

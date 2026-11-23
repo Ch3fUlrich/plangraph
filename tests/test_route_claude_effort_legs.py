@@ -67,8 +67,7 @@ def test_leg_data():
 
 def test_explicit_legs_stay_out_of_every_route():
     """D-5206 promotes only Sol xhigh; every other effort leg stays explicit-only."""
-    declarations = {'cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh',
-                    'muse-ember-max', 'claude-fable-5.2-high'}
+    declarations = {'muse-ember-max', 'claude-fable-5.2-high'}
     from plangraph.planner.legs import REVIEW_FALLBACK_LEGS
     from plangraph.planner.legs import CLAUDE_WRITER_LEGS
     assert {leg.id for leg in EXPLICIT_LEGS} == MANUAL | declarations | {l.id for l in REVIEW_FALLBACK_LEGS} | {l.id for l in CLAUDE_WRITER_LEGS}
