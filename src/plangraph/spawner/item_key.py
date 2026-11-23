@@ -23,6 +23,10 @@ def annotate_item(record, card, *, inherit=False):
             item = item[len(project) + 1:]
         value = project + ':' + item
     record['item_key'] = value
+    if record.get('role') == 'review' and isinstance(card, dict) and card.get('review_workspace') is True:
+        writer_run = card.get('native_writer_run')
+        if isinstance(writer_run, str) and re.fullmatch(r'run-[A-Za-z0-9]{1,64}', writer_run):
+            record['native_writer_run'] = writer_run
     if value and record.get('role') == 'review' and not inherit:
         request = record.setdefault('request', {})
         request.update(item_key=value, role='review')

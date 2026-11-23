@@ -639,6 +639,8 @@ Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
 Native Codex writer and review worker placement: [run contract](native-codex-writer.md). An orchestration-only flag in either the host registry or placement policy excludes the host from build-capable review admission. Admission refuses missing cargo/git/codex with `tool_missing` and failed workspace-write startup with `sandbox_unavailable`; records retain the caller PATH and resolved tools, and the writer and final gates reuse that PATH. Inline-only native reviews receive shared item context and the inline change. Tools-capable reviews also receive the original writer brief and repository instructions. See [host tools](host-tools.md) for the shared compiler cache. Native Codex review launches resolve `PLANGRAPH_CODEX_BIN`, the user install, then PATH. Missing clients return exit 10 with `REVIEW <tag> FAIL client_missing <path searched>`.
 
+In-worker native reviews retain the item key, review host and exact checkout head. Their local verdict drives the next writer turn before Keeper seat admission.
+
 Native agy CLI reviews (D-6054) use a disposable `git clone --shared` at the
 stamped HEAD with origin removed. Commands are pre-approved inside that checkout
 so headless plan mode can inspect callers and run bounded tests without a

@@ -586,7 +586,7 @@ class SeatSpawnMixin:
                                      allow_empty=record.get('review_document') == 'train_delta'))
             except FamilyError as exc:
                 raise SpawnRefused(str(exc)) from None
-            if record.get('item_key') and not options.get('dry_run'):
+            if record.get('item_key') and not (options.get('dry_run') or record.get('native_writer_run')):
                 from subprocess import SubprocessError
                 from .notify import KeeperSink
                 sink = KeeperSink()

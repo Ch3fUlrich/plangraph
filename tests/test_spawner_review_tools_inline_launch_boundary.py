@@ -201,7 +201,7 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner.notify import completion_event
     from plangraph.spawner.runner import JobInfo
-    from plangraph.spawner.service import SpawnService
+    from plangraph.spawner.runner import spawn_service
 
     receiver = tmp_path / 'receiver'
     receiver.mkdir()
@@ -217,7 +217,9 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
     base, head = git('rev-parse', 'HEAD^', 'HEAD').splitlines()
     git('checkout', '--detach', base)
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
-    service = SpawnService(state=tmp_path / 'state')
+    monkeypatch.delenv('PG_URL', raising=False)
+    monkeypatch.delenv('PG_TOKEN_FILE', raising=False)
+    service = spawn_service(state=tmp_path / 'state')
     service.runner.default_cwd = str(receiver)
     async def admit(*args, **kwargs):
         return True
@@ -254,7 +256,8 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
     monkeypatch.setattr(service, '_launch_leg', launch)
     async def run():
         record = await service._spawn(
-            card={'review_workspace': True, 'diff_ref': {'repo': str(receiver), 'base': base, 'head': head}},
+            card={'review_workspace': True, 'native_writer_run': 'run-writer', 'item_key': 'demo:ITEM',
+                  'diff_ref': {'repo': str(receiver), 'base': base, 'head': head}},
             prompt='fixture', role='review', writer_families=('openai',),
             _plan=SpawnPlan((leg,), (), 'fixture', (), ()), _placement={'host': 'worker'})
         task = service.tasks[record['run_id']]
@@ -265,6 +268,14 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         final = service.result(record['run_id'])
         assert final['status'] == {'launch_failed': 'failed'}.get(outcome, outcome), final.get('error')
         assert final['head_sha'] == head
+        assert final['host'] == 'worker'
+        assert final['item_key'] == 'demo:ITEM'
+        journal = service.state / 'runs' / record['run_id'] / 'verdict.json'
+        import json
+        delivery = json.loads(journal.read_text())
+        assert delivery['status'] == 'skipped'
+        assert delivery['reason'] == 'native writer review precedes Keeper seat admission'
+        assert (delivery['item_key'], delivery['host'], delivery['head_sha']) == ('demo:ITEM', 'worker', head)
         assert len(paths) == 2 and all(not path.exists() for path in paths)
         assert completion_event(final, paths[0])['head_sha'] == head
         assert git('rev-parse', 'HEAD') == base
@@ -272,7 +283,7 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("case", ["admitted", "missing-cwd", "refused", "down", "dry-run"])
+@pytest.mark.parametrize("case", ["admitted", "missing-cwd", "refused", "down", "dry-run", "native-writer"])
 def test_seat_admission_at_launch_boundary(launch_leg_case, monkeypatch, case):
     import asyncio
     import json
@@ -284,6 +295,8 @@ def test_seat_admission_at_launch_boundary(launch_leg_case, monkeypatch, case):
     seat, record, chosen, jobs, calls = launch_leg_case
     jobs[0].events = []
     record["item_key"] = "demo:A"
+    if case == "native-writer":
+        record["native_writer_run"] = "run-writer"
     if case != "missing-cwd":
         record["cwd"] = seat.runner.default_cwd
     binding = {"key": "demo:A", "epoch": 1, "round": 2, "head": "a" * 40, "seat_run": record["run_id"]}
@@ -304,7 +317,7 @@ def test_seat_admission_at_launch_boundary(launch_leg_case, monkeypatch, case):
 
     async def inspect_launch(**options):
         path = seat._path(record["run_id"])
-        if case == "dry-run":
+        if case in ("dry-run", "native-writer"):
             assert not path.exists()
         else:
             assert json.loads(path.read_text())["request"]["verdict_binding"] == binding
@@ -320,4 +333,4 @@ def test_seat_admission_at_launch_boundary(launch_leg_case, monkeypatch, case):
     else:
         assert asyncio.run(launch) is jobs[0]
         assert len(calls) == 1
-    assert admissions == ([] if case == "dry-run" else [seat.runner.default_cwd])
+    assert admissions == ([] if case in ("dry-run", "native-writer") else [seat.runner.default_cwd])

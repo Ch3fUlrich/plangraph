@@ -274,9 +274,21 @@ impl Host {
             &trusted_python,
         )?;
         let max_min = 60;
-        let card = json!({"estimate_tokens":300000, "max_min":max_min, "stall_min":20,
+        let writer = crate::records::read_record_file(&self.record_path).unwrap_or(Value::Null);
+        let brief_keys = context::item_keys(&self.brief);
+        let item = writer["item_key"]
+            .as_str()
+            .or_else(|| match brief_keys.as_slice() {
+                [key] => Some(key.as_str()),
+                _ => None,
+            });
+        let mut card = json!({"estimate_tokens":300000, "max_min":max_min, "stall_min":20,
             "repository_review_required":true, "review_workspace":true,
+            "native_writer_run":self.run_id,
             "diff_ref":{"repo":self.repo, "base":review_diff_base(base, head, prev), "head":head}});
+        if let Some(item) = item {
+            card["item_key"] = json!(item);
+        }
         if self.review_override.is_none() {
             if let Some(deferred) = self.review_preflight(&self.repo, &card, &families, head)? {
                 return Ok(deferred);
@@ -292,6 +304,11 @@ impl Host {
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         let serialized_card = card.to_string();
         let mut command = self.command(&self.review_cli[0]);
+        if let Some(host) = writer["host"].as_str().filter(|host| !host.is_empty()) {
+            command
+                .env("PLANGRAPH_HOST_NAME", host)
+                .env("PLANGRAPH_HOST", host);
+        }
         command
             .args(&self.review_cli[1..])
             .arg("--state")
@@ -412,6 +429,9 @@ pub(crate) fn review_record_verdict(
     verdict["leg"] = chosen["id"].clone();
     verdict["harness"] = chosen["harness"].clone();
     verdict["host"] = record["host"].clone();
+    if let Some(item) = record["item_key"].as_str() {
+        verdict["item_key"] = json!(item);
+    }
     if verdict["verdict"] == "ACCEPT" {
         verdict["accepted_at"] = record["ended"].as_f64().map_or_else(
             || json!(chrono::Utc::now().to_rfc3339()),

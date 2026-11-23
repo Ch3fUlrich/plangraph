@@ -1,0 +1,1 @@
+Native writer reviews bind verdicts to the item, executing host and exact checkout head independently of Keeper seat delivery. Native Codex resumes explicitly grant the linked worktree metadata access needed for fix commits.

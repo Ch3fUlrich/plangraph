@@ -53,6 +53,10 @@ if 'hold marker' in prompt:
     sys.exit(0)
 if 'resume' in sys.argv:
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
+    launch = sys.argv[:sys.argv.index('resume')]
+    git_dir = subprocess.check_output(['git', 'rev-parse', '--absolute-git-dir'], text=True).strip()
+    assert pathlib.Path(launch[launch.index('--cd') + 1]).resolve() == pathlib.Path.cwd()
+    assert launch[launch.index('--add-dir') + 1] == git_dir
     if 'external fix' in prompt:
         import os
         record = json.loads((pathlib.Path.cwd().parent/'record.json').read_text())

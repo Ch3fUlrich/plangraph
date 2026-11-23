@@ -126,7 +126,14 @@ impl Host {
         );
         let mut command = self.command(codex);
         crate::native_writer_sandbox::apply_env(&mut command, std::env::vars_os(), &self.tool_path);
-        command.arg("exec");
+        // Exec-level flags apply to fresh and resumed turns, including saved sessions
+        // whose sandbox permissions were built from an earlier invocation.
+        command
+            .arg("exec")
+            .arg("--cd")
+            .arg(&self.cwd)
+            .arg("--add-dir")
+            .arg(&git_dirs[1]);
         if let Some(id) = session {
             command.args(["resume", id]);
         }
