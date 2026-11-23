@@ -294,11 +294,16 @@ def test_default_root_is_script_relative(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("pin_only", [False, True])
-def test_rust_selection(repo, monkeypatch, pin_only):
+@pytest.mark.parametrize("bounded", [False, True])
+def test_rust_selection(repo, monkeypatch, pin_only, bounded):
     crate = repo / "rust/one"
     crate.mkdir(parents=True)
     (crate / "Cargo.toml").write_text('[package]\nname = "one"\n')
     (crate / "lib.rs").write_text("// changed\n")
+    if bounded:
+        config = repo / "rust/.config/nextest.toml"
+        config.parent.mkdir()
+        config.write_text('[profile.default]\nslow-timeout = { period = "2m", terminate-after = 1 }\n')
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                     "commit", "-qm", "rust"], cwd=repo, check=True)
@@ -310,7 +315,10 @@ def test_rust_selection(repo, monkeypatch, pin_only):
     monkeypatch.setattr(preflight.shutil, "which", lambda _: "/fake/cargo")
     commands = preflight.rust_commands(repo, "HEAD~1", "HEAD")
     assert commands[1] == ["cargo", "clippy", "-p", "one", "--all-targets", "--", "-D", "warnings"]
-    assert commands[2] == ["cargo", "test", "-p", "one"]
+    expected = (["cargo", "nextest", "run", "--config-file", str(config), "--no-fail-fast",
+                 "--color", "never", "-p", "one"]
+                if bounded else ["cargo", "test", "-p", "one"])
+    assert commands[2] == expected
 
 
 @pytest.mark.parametrize("rust_changed", [False, True])
@@ -727,3 +735,18 @@ def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch,
         assert "cargo post-run trim" not in output
     else:
         assert message in output
+
+
+
+def test_preflight_names_nextest_timeouts(monkeypatch, repo):
+    command = ["cargo", "nextest", "run"]
+    message = "     TIMEOUT [   2.017s] (1/1) example::unit nested::blocked\n"
+    monkeypatch.setattr(preflight, "check_timeout", lambda *args: 60)
+    monkeypatch.setattr(preflight, "run_test_process", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(command, 100, message * 2))
+    code, output = preflight.run(command, repo, {})
+    assert code == 100
+    assert output.count("HUNG example::unit nested::blocked") == 1
+    assert preflight.failing_tests(
+        output + "        FAIL [   0.016s] (2/2) example::unit nested::failed\n"
+    ) == ["example::unit nested::blocked", "example::unit nested::failed"]

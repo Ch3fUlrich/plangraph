@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+pub(super) const NEXTEST_CONFIG: &str = "rust/.config/nextest.toml";
+
 pub(super) type Result<T> = std::result::Result<T, String>;
 
 #[path = "fast_check_target.rs"]
@@ -151,14 +153,28 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
                 ("clippy", vec!["--all-targets", "--", "-D", "warnings"]),
                 ("test", vec![]),
             ] {
-                let mut args = vec![
-                    "cargo".into(),
-                    verb.into(),
+                let mut args = if verb == "test" && root.join(NEXTEST_CONFIG).is_file() {
+                    [
+                        "cargo",
+                        "nextest",
+                        "run",
+                        "--config-file",
+                        NEXTEST_CONFIG,
+                        "--color",
+                        "never",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+                } else {
+                    vec!["cargo".into(), verb.into()]
+                };
+                args.extend([
                     "--manifest-path".into(),
                     workspace.clone(),
                     "-p".into(),
                     name.clone(),
-                ];
+                ]);
                 args.extend(tail.into_iter().map(String::from));
                 if verb == "test" && workspace.starts_with("rust/worker/") {
                     let mut wrapper: Vec<String> = [
