@@ -620,153 +620,6 @@ class WaiverMixin:
         return dict(self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats),
                                release=release, flags=flags), closed=True)
 
-    # --- the automatic merge close (MERGE-CLOSES-ITEMS-NO-AGENT-CALL) ---
-    # Reads the default ref once per repository, takes every unfinished item a
-    # merge named by ``Plan-Item`` and closes it by the same proofs as the router
-    # verb minus the GO row: the merge itself is the authority. Partial deliveries
-    # are annotated on their cards; every refused close is returned in ``listed``.
-    AUTO_STATES = ("open", "claimed", "in_review")
-
-    def close_merged_auto(self, principal, project=None, require_seats=None, apply=True, repos_only=False,
-                          frozen=False, limit=None, after=None):
-        return self._run(principal, "close_merged_auto", None,
-                         lambda now: self._close_merged_auto(
-                             principal, project, require_seats, apply, now, repos_only, frozen, limit, after),
-                         success_message=None)
-
-    def _close_merged_auto(self, principal, project, require_seats, apply, now, repos_only, frozen, limit, after):
-        # ``frozen`` (the API, which holds the keeper lock): read only the warm scan, ask git and the forge nothing.
-        self.__dict__["_frozen_lanes"] = bool(frozen)
-        try:
-            return self._close_merged_auto_run(principal, project, require_seats, apply, now, repos_only, limit, after)
-        finally:
-            self.__dict__["_frozen_lanes"] = False
-
-    def _close_merged_auto_run(self, principal, project, require_seats, apply, now, repos_only, limit, after):
-        self._require_role(principal, "system", "router")
-        if any(type(value) is not bool for value in (apply, repos_only)):
-            raise Refused("validation", "apply and repos_only must be booleans")
-        require_seats = self._seats_required(require_seats)
-        if project is not None and not isinstance(project, str):
-            raise Refused("validation", "project must be a string")
-        git = self._adapter("git")
-        scan = getattr(git, "scan_projects", None)
-        repos = list(scan()) if callable(scan) else []
-        if repos_only:
-            return {"repos": repos}
-        if limit is not None and (type(limit) is not int or not 1 <= limit <= 100):
-            raise Refused("validation", "limit must be an integer from 1 to 100")
-        if after is not None and not isinstance(after, str):
-            raise Refused("validation", "after must be an item key")
-        indexes, closed, listed, pending, parts = {}, [], [], [], []
-        frozen = self.__dict__.get("_frozen_lanes")
-        scan_errors = dict(self.__dict__.get("_merge_scan_errors", {})) if frozen else {}
-
-        def index_of(repo_project):
-            if repo_project not in indexes:
-                if frozen:
-                    if not self._warm(repo_project):
-                        mismatch = repo_project in self.__dict__.get("_warmed", {})
-                        reason = scan_errors.setdefault(
-                            repo_project, scan_errors.get("*", "merge_index_tip_changed" if mismatch
-                                                         else "merge_index_not_warm"))
-                        raise Refused("evidence_unverified", f"{reason}: {repo_project}")
-                    index = self.__dict__["_warmed"][repo_project]
-                else:
-                    index = context_sources.work_index(git, repo_project, fresh=not self._warm(repo_project))
-                if index is not None and index.get("origin_stale"):
-                    raise Refused("evidence_unverified", f"merge_index_stale: {repo_project}: {index.get('reason')}")
-                indexes[repo_project] = index
-            return indexes[repo_project]
-
-        candidates = self._auto_merge_candidates(project, after, limit)
-        next_after = None
-        for processed, item in enumerate(candidates):
-            if processed and (processed == limit or timing.io_timeout(1) < 1):
-                next_after = last_key
-                break
-            last_key = item["key"]
-            key = item["key"]
-            try:
-                hinted, revision = self._merge_repository(item)
-                hinted = None if (hinted, revision) == (item["project"], None) else hinted
-                if hinted and callable(scan) and hinted not in repos:
-                    raise Refused("evidence_unverified", f"merge_repo_not_scanned: {hinted}")
-                projects = [hinted] if hinted else self._scan_projects(item)
-                found = [p for p in projects if (index := index_of(p)) is not None
-                         and (revision or context_sources.indexed_work(index, key)["commits"])]
-                if not found:
-                    delivered = [{"key": key, "project": p, "pr": part["pr"], "merge_sha": part["sha"]}
-                                 for p in projects for part in context_sources.indexed_parts(indexes[p], key)]
-                    if apply and delivered:
-                        self._note_merged_parts(principal, item, delivered, indexes, now)
-                    parts.extend(delivered)
-                    continue
-                if len(found) > 1:
-                    raise Refused("evidence_unverified",
-                                  f"merge_repo_ambiguous: {', '.join(found)} (name one with Merge-Repo:)")
-                tagged = item if found[0] == item["project"] else dict(item, _merge_project=found[0])
-                result = self._auto_close_one(principal, tagged, require_seats, apply, now)
-            except Refused as exc:
-                listed.append({"key": key, "state": item["state"], "reason": f"{exc.code}: {exc.msg}"})
-                continue
-            (closed if apply else pending).append(result)
-        return {"closed": closed, "would_close": pending, "listed": listed, "repos": repos,
-                "merged_not_done": len(pending) + len(listed), "require_seats": require_seats,
-                "next_after": next_after, "scan_errors": scan_errors, "parts": parts}
-
-    def _note_merged_parts(self, principal, item, parts, indexes, now):
-        key = item["key"]
-        git = self._adapter("git")
-        with self._write():
-            fresh = self._get_or_refuse(key)
-            self._assert_unlocked(fresh)
-            if fresh["state"] not in self.AUTO_STATES or fresh["epoch"] != item["epoch"]:
-                raise Refused("conflict", f"{key} changed under the transaction")
-            for project in {part["project"] for part in parts}:
-                index = indexes[project]
-                if git.ref_commit(git.repo_path(project), index["ref"]) != index["target"]:
-                    raise Refused("conflict", "merge_index_tip_changed")
-            existing = fresh.get("note") or ""
-            lines = [f"Merged part: {p['project']} PR #{p['pr']} at {p['merge_sha']}" for p in parts]
-            added = [line for line in lines if line not in existing.splitlines()]
-            if added:
-                note = "\n".join([existing.rstrip(), *added]).lstrip("\n")
-                cursor = self.conn.execute(
-                    "UPDATE items SET note=?, updated_at=? WHERE key=? AND epoch=? AND state=?",
-                    (note, self._iso(now), key, fresh["epoch"], fresh["state"]))
-                self._race_guard(cursor, key, fresh["state"], fresh["epoch"])
-                self._append(principal, key, "item_defined", {"note": note}, now)
-
-    def _auto_merge_candidates(self, project, after, limit):
-        if limit is None:
-            return [item for item in self._all_items()
-                    if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")
-                    and (project is None or item["project"] == project)
-                    and (after is None or item["key"] > after)]
-        states = ",".join("?" for _ in self.AUTO_STATES)
-        sql = (f"SELECT * FROM items WHERE state IN ({states})"
-               " AND kind NOT IN ('goal','operator_task')")
-        args = list(self.AUTO_STATES)
-        if project is not None:
-            sql += " AND project=?"
-            args.append(project)
-        if after is not None:
-            sql += " AND key>?"
-            args.append(after)
-        sql += " ORDER BY key LIMIT ?"
-        args.append(limit + 1)
-        rows = self.conn.execute(sql, args).fetchall()
-        if not rows:
-            return []
-        keys = [row["key"] for row in rows]
-        predicates = ",".join("?" for _ in keys)
-        deps = {key: [] for key in keys}
-        for edge in self.conn.execute(
-                f"SELECT src,dst FROM edges WHERE src IN ({predicates}) ORDER BY dst", keys):
-            deps[edge["src"]].append(edge["dst"])
-        return [dict(self._hydrate(dict(row)), depends_on=deps[row["key"]]) for row in rows]
-
     def _auto_close_one(self, principal, item, require_seats, apply, now):
         key = item["key"]
         tier = item.get("review_tier")
@@ -780,10 +633,17 @@ class WaiverMixin:
         pinned = dict(item, _close_head=token[0])
         proofs = self._merged_auto_proofs(pinned)
         pending = self._deploy_pending(pinned, changes, token)
+        if self._live_evidence_missing(item, proofs):
+            pending.append("live_evidence_missing")
         if pending:
             if apply:
                 self._deploy_pending_result(item, pending, now)
-            raise Refused("evidence_unverified", "deploy_pending: " + ", ".join(pending))
+            landed = [(stamp, proof["merged_at"]) for proof in proofs
+                      if (stamp := as_epoch(proof["merged_at"])) is not None]
+            earliest = min(landed, default=None)
+            return {"deployment_pending": {
+                "missing": pending, "merged_at": earliest[1] if earliest else None,
+                "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}}
         witnessed, flags = self._auto_seats(pinned, proofs, now, require_seats) if seated else ([], None)
         if not apply:
             return {"key": key, "state": item["state"], "prs": proofs, **self._flags_of(flags)}
@@ -812,6 +672,17 @@ class WaiverMixin:
                                      fresh["state"] != "in_review", ("commit", ref, Result(True, "merged on default")),
                                      f"merge close: merged {head}", now, release=True, flags=flags)
             return {"key": key, "state": done["state"], "prs": proofs, "seats": seats, **self._flags_of(flags)}
+
+    def _live_evidence_missing(self, item, proofs):
+        criteria = item.get("done_criteria") or ""
+        if not re.search(r"(?:^|[.!?;]\s+|\n\s*)Live:\s*\S", criteria):
+            return False
+        stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
+        if any(stamp is None for stamp in stamps):
+            return True
+        last_merge = max(stamps)
+        return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
+                       and (as_epoch(row["at"]) or 0) >= last_merge for row in self._evidence(item["key"]))
 
     def _merged_auto_proofs(self, item):
         """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""

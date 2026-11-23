@@ -1,5 +1,6 @@
 """MERGE-CLOSES-ITEMS-NO-AGENT-CALL: a merge into main closes its keeper items by code."""
 import json
+import os
 import subprocess
 
 import pytest
@@ -51,10 +52,10 @@ def seat_record(root, run, key, head, model="gemini-test"):
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path, monkeypatch, request):
     monkeypatch.setattr(auth, "_mint_token", iter(f"fixture-token-{i}" for i in range(99)).__next__)
     (tmp_path / "w").mkdir()
-    world = World(tmp_path / "w", backend="sqlite")
+    world = World(tmp_path / "w", backend=getattr(request, "param", "sqlite"))
     world.store.require_seats = True  # the seat tests below run with the gate on
     router = world.p("router")
     world.store.create_items(router, [defn(i) for i in "ABCPSNH"] + [
@@ -396,6 +397,7 @@ def test_http_close_only_consumes_the_timer_refresh(env, tmp_path, monkeypatch):
         unblock.set()
         worker.join(5)
         assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "ready"})
+        assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "ready"})
         status, body = doors.http("system", "POST", path, {"require_seats": False})
         assert status == 200 and [c["key"] for c in body["closed"]] == ["demo:C"]
         assert held == [False]
@@ -663,6 +665,8 @@ def test_a_failed_scan_reports_its_reason_over_http(env, tmp_path, monkeypatch):
         doors.close()
 
 
+@pytest.mark.parametrize("env", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(
+    not os.environ.get("PG_DSN"), reason="PG_DSN not set"))], indirect=True)
 def test_auto_close_continues_by_key_after_a_page_changes_state(env):
     env.repo.land("a-page", "Plan-Item: demo:A", 91)
     env.repo.land("b-page", "Plan-Item: demo:B", 92)

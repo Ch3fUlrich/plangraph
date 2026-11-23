@@ -142,3 +142,25 @@ fn follows_a_cursor_and_reports_scan_errors_once() {
         .text
         .contains("would-close\tdemo:A\t\nwould-close\tdemo:B\t\n"));
 }
+
+#[test]
+fn reports_unproven_deployments_with_their_merge_age() {
+    let keeper = Fake(
+        json!({
+            "merged_not_done": 2,
+            "deployment_pending": [
+                {"key": "demo:A", "age_hours": 24, "missing": ["fixture:unit.timer"]},
+                {"key": "demo:B", "age_hours": 23, "missing": ["live_evidence_missing"]}
+            ]
+        }),
+        RefCell::default(),
+    );
+    let outcome = run_with(&keeper, None, false, Some("demo")).unwrap();
+    assert!(outcome
+        .text
+        .contains("deployment-pending\tdemo:A\t24h\tfixture:unit.timer"));
+    assert!(outcome
+        .text
+        .contains("deployment-pending\tdemo:B\t23h\tlive_evidence_missing"));
+    assert!(outcome.text.contains("merged-not-live\t2\n"));
+}
