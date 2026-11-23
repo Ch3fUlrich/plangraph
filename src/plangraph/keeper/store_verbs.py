@@ -25,6 +25,8 @@ _CANCELLABLE = tuple(s for s in STATES if s not in ("done", "cancelled"))
 class VerbsMixin:
     """Every Store verb that moves an item through its lifecycle."""
 
+    claim_preflight_s = timing.DEFAULT_CLAIM_PREFLIGHT_S
+
     # --------------------------------------------------------- evidence
     def add_evidence_router(self, principal, key, kind, ref):
         return self._run(principal, "add_evidence_router", key,
@@ -139,7 +141,7 @@ class VerbsMixin:
                                         if allow_system else ("l1", "worker", "phase-worker")))
         lease = self._lease_seconds(lease_s)
         reason = self._force_stale_reason(force_stale)
-        with timing.io_budget(3.0):
+        with timing.io_budget(self.claim_preflight_s):
             prepared = self._prepare_claim(principal, key, reason, {})
         with self._write():
             self._check_principal(principal)
@@ -147,8 +149,11 @@ class VerbsMixin:
                 principal, key, lease, prepared, self.now(), allow_system))
 
     def _prepare_claim(self, principal, key, reason, shared):
+        timing.check_io_deadline("item eligibility")
         item = self._item(key)
-        if item is None or item["state"] != "open" or self._claim_train_for(item) is False:
+        eligible = item is not None and item["state"] == "open" and self._claim_train_for(item) is not False
+        timing.check_io_deadline("item eligibility")
+        if not eligible:
             return None
         stale_checks = principal.role in ("l1", "worker")
         if stale_checks:
@@ -159,8 +164,7 @@ class VerbsMixin:
         if repo not in bases:
             with timing.outside_request_lock():
                 bases[repo] = record_bases(item, self._adapter("git"))
-        if timing.io_expired():
-            raise Refused("conflict", "claim preflight exceeded its deadline")
+        timing.check_io_deadline("base recording")
         return item, override, bases[repo]
 
     def _commit_claim(self, principal, key, lease_seconds, prepared, now,
@@ -219,7 +223,7 @@ class VerbsMixin:
         lease = self._lease_seconds(lease_s)
         reason = self._force_stale_reason(force_stale)
         shared, prepared = {}, {}
-        with timing.io_budget(3.0):
+        with timing.io_budget(self.claim_preflight_s):
             for key in keys:
                 try:
                     prepared[key] = self._prepare_claim(principal, key, reason, shared)

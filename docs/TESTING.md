@@ -9,6 +9,11 @@ python3 tools/affected_tests.py --base origin/main --local --files-only --run
 
 Affected PR CI runs the selector without the local flags.
 
+The selector's optional PostgreSQL pass needs both the server binaries and
+`psycopg` in the test interpreter to start a throwaway cluster. It reports a
+skip when either dependency is missing. An explicit `PG_DSN` still selects
+PostgreSQL tests and reports any missing dependency as a failure.
+
 For a train resolution, set `--base` to the start of the fix range and use
 `--local --files-only --run -n 2`. Run the push checks with
 `python3 tools/preflight.py --base <range-base> --head HEAD --lane`.

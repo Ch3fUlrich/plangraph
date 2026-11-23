@@ -164,6 +164,28 @@ def test_claim_refuses_an_item_already_merged(w, repo):
     assert w.store._item(key)["state"] == "open"
 
 
+def test_claim_checks_origin_again_even_with_a_recent_work_index(w, repo, tmp_path, monkeypatch):
+    from time import time
+    from types import SimpleNamespace
+    from plangraph.keeper import context_sources
+
+    # Freeze index age so the second claim happens inside any work-index TTL.
+    monkeypatch.setattr(context_sources, "time", SimpleNamespace(monotonic=lambda: 10, time=time))
+    checkout = tmp_path / "checkout"
+    _git(tmp_path, "clone", "-q", str(repo), str(checkout))
+    w.store.ctx["git"] = GitAdapter({"demo": str(checkout)})
+    key, = seed(w, [("A", [])])
+    principal = w.p("l1main")
+    first = w.store.claim(principal, key)
+    w.store.release(principal, key, first["epoch"])
+
+    sha = _merge_lane(repo, key)
+    assert _git(checkout, "rev-parse", "origin/main") != _git(repo, "rev-parse", "main")
+    with pytest.raises(Refused, match=f"already merged: Plan-Item commit {sha[:8]}"):
+        w.store.claim(principal, key)
+    assert w.store._item(key)["state"] == "open"
+
+
 def test_force_stale_claims_and_is_audited_on_the_event(w, repo):
     key, = seed(w, [("A", [])])
     _merge_lane(repo, key)

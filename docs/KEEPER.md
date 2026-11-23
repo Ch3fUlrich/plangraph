@@ -362,7 +362,14 @@ If `claim`, `claim-batch`, `heartbeat`, `heartbeat-batch`, or `priority` gives a
 
 Use `pg claim-batch KEY...` to claim up to 200 distinct keys with a shared lease and optional audited `--force-stale` reason. Use `pg heartbeat-batch --claim KEY EPOCH --claim KEY EPOCH` to renew held claims. The corresponding HTTP endpoints are `POST /v1/claim_batch` with `{"keys":[...]}` and `POST /v1/heartbeat_batch` with `{"claims":[{"key":"project:ID","epoch":1}]}`. Each batch commits in one transaction and returns a `results` array in request order. Each row contains the key and either its epoch and lease deadline or an error and message. The CLI reports every row and exits 2 if any key is refused.
 
-Overlapping claims share fresh authority lookups. If the lookup fails, waiting claims receive its error. A claim whose own wait budget expires receives a conflict refusal.
+The keeper setting `claim_preflight_s` defaults to 30 seconds and accepts a positive
+JSON integer. The daemon applies it at startup to claim, worker claim, and claim
+batch before writing. Overlapping claims share in-flight authority lookups and
+can wait up to the earlier of the leader's deadline and their own deadline. A
+lookup error is shared with waiting claims. A deadline refusal names the
+preflight step that ran out of time. Independent checkouts refresh in parallel,
+with up to four workers per scan. A later claim refreshes repository authority
+again, even when a previous work index is recent.
 
 `pg define` and `pg define --edit` refuse review clauses in `done_criteria`
 or `description` that pin a model or leg from the routing catalog. Ask for

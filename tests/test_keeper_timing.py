@@ -344,7 +344,7 @@ def test_claim_authority_shares_only_inflight_lookup(monkeypatch, error_type):
         try:
             assert started.wait(5)
             with timing.io_budget(0), pytest.raises(
-                    Refused, match="claim authority refresh exceeded its deadline"):
+                    Refused, match="claim preflight exceeded its deadline during authority refresh"):
                 timing.share_inflight(key, next_lookup)
             assert not leader.done()
             monkeypatch.setattr(timing, "io_timeout", follower_timeout)
@@ -360,3 +360,40 @@ def test_claim_authority_shares_only_inflight_lookup(monkeypatch, error_type):
 
     fresh = object()
     assert timing.share_inflight(key, lambda: fresh) is fresh
+
+
+def test_claim_authority_follower_uses_leaders_remaining_budget(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    started, finish = threading.Event(), threading.Event()
+    clock = Clock(0)
+    monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic=clock))
+    original_wait = timing.wait
+
+    def wait(pending, timeout):
+        assert timeout == 29
+        clock.advance(3)
+        finish.set()
+        return original_wait(pending, timeout=5)
+
+    def lookup():
+        started.set()
+        assert finish.wait(5)
+        assert clock() == 4
+        return "index"
+
+    def lead():
+        with timing.io_budget(30):
+            return timing.share_inflight("test-budget", lookup)
+
+    monkeypatch.setattr(timing, "wait", wait)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        leader = pool.submit(lead)
+        try:
+            assert started.wait(5)
+            clock.advance(1)
+            with timing.io_budget(30):
+                assert timing.share_inflight("test-budget", lambda: pytest.fail("duplicate")) == "index"
+        finally:
+            finish.set()
+        assert leader.result(timeout=5) == "index"

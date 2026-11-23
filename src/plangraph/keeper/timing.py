@@ -11,6 +11,7 @@ import time
 
 clock = time.monotonic
 THRESHOLD_MS = 250
+DEFAULT_CLAIM_PREFLIGHT_S = 30
 _LATENCY_VERBS = frozenset({"show", "claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
 _parts = ContextVar("keeper_timing_parts", default=None)
 _request_timer = ContextVar("keeper_request_timer", default=None)
@@ -20,22 +21,29 @@ _inflight = {}
 _inflight_lock = Lock()
 
 
-def share_inflight(key, fetch):
+def share_inflight(key, fetch, *, step="authority refresh"):
     """Share a running authority lookup, then discard its answer."""
     with _inflight_lock:
-        pending = _inflight.get(key)
-        if pending is None:
-            pending = _inflight[key] = Future()
+        entry = _inflight.get(key)
+        if entry is None:
+            pending = Future()
+            _inflight[key] = pending, _io_deadline.get()
             leader = True
         else:
+            pending, deadline = entry
             leader = False
     if not leader:
-        done, _ = wait((pending,), timeout=io_timeout(3.0))
+        remaining = DEFAULT_CLAIM_PREFLIGHT_S if deadline is None else max(0, deadline - time.monotonic())
+        done, _ = wait((pending,), timeout=io_timeout(remaining))
         if not done:
-            raise Refused("conflict", "claim authority refresh exceeded its deadline")
-        return pending.result()
+            raise _io_refusal(step)
+        result = pending.result()
+        check_io_deadline(step)
+        return result
     try:
+        check_io_deadline(step)
         result = fetch()
+        check_io_deadline(step)
     except BaseException as exc:
         with _inflight_lock:
             del _inflight[key]
@@ -65,8 +73,15 @@ def io_timeout(seconds):
     return max(0, min(seconds, deadline - time.monotonic()))
 
 
-def io_expired():
-    return io_timeout(1) == 0
+def _io_refusal(step):
+    return Refused("conflict", f"claim preflight exceeded its deadline during {step}")
+
+
+def check_io_deadline(step):
+    """Refuse an expired preflight with the step responsible for the delay."""
+    deadline = _io_deadline.get()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise _io_refusal(step)
 
 
 @contextmanager
