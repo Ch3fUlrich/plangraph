@@ -1,11 +1,10 @@
 """Resolve explicit spawn targets before admission or provider rendering."""
 from collections.abc import Mapping
-from dataclasses import replace
 import os
 from pathlib import Path
 import re
 
-from plangraph.planner.legs import leg_active
+from plangraph.planner.legs import leg_active, opencode_counterpart
 from plangraph.routing_errors import SpawnRefused
 
 QUOTA_EXEMPT_ROLES = frozenset({'basic-analysis'})
@@ -87,6 +86,8 @@ def resolve_target(target, *, chosen=None):
         if row is not None:
             target = row['id']
             leg = next((l for l in SPAWNABLE_LEGS if l.model == target), None)
+            if leg is not None and leg.harness == 'codex' and row.get('harness') == 'opencode':
+                leg = opencode_counterpart(leg) or leg
     if leg is not None:
         admit_leg(leg)
         target = leg.model
@@ -103,9 +104,9 @@ def resolve_launch_target(target, *, chosen=None, client=None):
     from plangraph.planner.legs import own_harness_enabled, resolve_harness
     if client == 'opencode':
         # Reuse the registered counterpart. An explicit pin is not a missing-client fallback.
-        counterpart = resolve_harness(leg, installed=lambda _: False).leg
+        counterpart = opencode_counterpart(leg)
         if counterpart is not None:
-            return counterpart.model, replace(counterpart, harness_fallback=None)
+            return counterpart.model, counterpart
         return model, leg
     if client is not None or not own_harness_enabled():
         return model, leg

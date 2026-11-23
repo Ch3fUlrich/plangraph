@@ -300,7 +300,7 @@ service's resolved state directory, with no environment fallback; pre/post size
 snapshots reject touches of old logs, truncations, replacements and read races.
 Only the explicit stderr excerpt extends the legacy 300-character reason bound.
 Ordinary probe JSON omits `state`; it is never emitted as null.
-CLI `launch-spec` (placement R6a-3d; nothing calls it yet): one JSON request on stdin, one launch spec on stdout (argv, cwd, the complete child env, stdin, warnings, events) for pg-spawnd; optional request `leg.explicit` must be boolean: only `true` permits document review without `diff_ref`, absent/false still refuses; it reuses the spawn prep and never launches; exit 2 = one redacted refusal line, exit 1 = internal error (type name only).
+CLI `launch-spec` (placement R6a-3d; nothing calls it yet): one JSON request on stdin, one launch spec on stdout (argv, cwd, the complete child env, stdin, warnings, events) for pg-spawnd. For GPT legs, `leg.harness` carries the route's Codex or OpenCode selection into launch preparation. Optional request `leg.explicit` must be boolean: only `true` permits document review without `diff_ref`, absent/false still refuses. The adapter reuses the spawn prep and never launches. Exit 10 reports a missing native Codex review client, exit 2 gives one redacted refusal line, and exit 1 gives the internal error type.
 MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_` prefix) share these records. Spawn requires
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
 Result/status/cancel accept `run_id`; legacy job-id operations remain available.

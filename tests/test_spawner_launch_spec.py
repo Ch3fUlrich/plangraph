@@ -85,6 +85,9 @@ def test_tools(request_data, role, tmp_path, explicit, monkeypatch):
     exe.chmod(0o700)
     request_data.update(role=role, leg={'id': leg_id, 'model': 'untrusted'})
     request_data['leg']['explicit'] = explicit
+    if role == 'implement' and explicit:
+        request_data['leg']['harness'] = 'opencode'
+        monkeypatch.setattr(clients, 'resolve_codex_client', lambda: ('codex', None))
     code, out, err = invoke(request_data)
     assert (code, err) == (0, '')
     result = json.loads(out)

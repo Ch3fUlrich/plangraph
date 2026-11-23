@@ -517,7 +517,7 @@ def service_probe(service) -> Callable[[str], bool] | None:
     return client_installed if own_harness_enabled() else None
 
 
-def _opencode_counterpart(leg: Leg) -> Leg | None:
+def opencode_counterpart(leg: Leg) -> Leg | None:
     """The registered OpenCode leg serving the same gpt model (its ``omniroute/cx-`` alias), review-packaged."""
     if leg.family != "gpt":
         return None
@@ -526,7 +526,7 @@ def _opencode_counterpart(leg: Leg) -> Leg | None:
         return None
     tool_mode = "inline-only" if "implement" not in leg.roles else leg.tool_mode
     return dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode,
-                               harness_fallback=CLIENT_MISSING, web_access=False)
+                               harness_fallback=None, web_access=False)
 
 
 def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_installed) -> HarnessChoice:
@@ -540,8 +540,10 @@ def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_i
     if harness in own:
         if installed(harness):
             return HarnessChoice(harness, None, leg)
-        fallback = _opencode_counterpart(leg)
-        return HarnessChoice("opencode", CLIENT_MISSING, fallback) if fallback else HarnessChoice(None, CLIENT_MISSING)
+        fallback = opencode_counterpart(leg)
+        if fallback is None:
+            return HarnessChoice(None, CLIENT_MISSING)
+        return HarnessChoice("opencode", CLIENT_MISSING, dataclasses.replace(fallback, harness_fallback=CLIENT_MISSING))
     if installed(own[0]):
         return HarnessChoice(own[0], None, dataclasses.replace(leg, harness=own[0], web_access=False))
     return HarnessChoice(harness, CLIENT_MISSING, dataclasses.replace(leg, harness_fallback=CLIENT_MISSING))

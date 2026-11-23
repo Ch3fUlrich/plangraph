@@ -86,14 +86,20 @@ def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
     leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.2-sol-medium')
     binary = tmp_path / 'opencode'
-    # W33B host admission probes are not child attempts: serve the requested id.
-    binary.write_text('#!/bin/sh\nif [ "$1" = models ]; then echo "' + leg.model + '"; exit 0; fi\necho launched >> "' + str(tmp_path / 'launches') + '"\necho "Model unavailable: fixture" >&2\nexit 1\n')
+    # Admission and version probes do not count as launch attempts.
+    binary.write_text('#!/bin/sh\n'
+        'case "$1" in\n'
+        f'  models) echo "{leg.model}"; exit 0;;\n'
+        '  --version) echo fixture-version; exit 0;;\nesac\n'
+        f'echo launched >> "{tmp_path / "launches"}"\n'
+        'echo "Model unavailable: fixture" >&2\nexit 1\n')
     binary.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
     (tmp_path / 'providers.json').write_text('{"providers":{}}')
     monkeypatch.setattr(resolver, 'host_skip_reason', lambda *a, **kw: None)
     service = spawn_service(state=tmp_path, runner=SpawnerRunner(default_cwd=str(tmp_path)))
+    service.client_probe = lambda harness: harness == 'opencode'
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x',
         leg=leg.id, override_reason='W30 unavailable model regression', wait_seconds=None))
     assert result['status'] == 'failed'

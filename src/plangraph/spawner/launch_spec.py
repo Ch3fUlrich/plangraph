@@ -16,7 +16,7 @@ import shutil
 import tempfile
 import time
 
-from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES
+from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES, opencode_counterpart
 from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
@@ -98,11 +98,19 @@ def build(request: dict) -> dict:
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
     if leg.family == 'gpt' and leg.harness == 'codex':
-        from plangraph.planner.legs import resolve_harness
-        choice = resolve_harness(leg)
-        if choice.leg is None:
-            raise LaunchRefused('client_missing', 'Codex client unavailable for ' + leg.id)
-        leg = choice.leg
+        planned_harness = request['leg'].get('harness')
+        if planned_harness == 'opencode':
+            counterpart = opencode_counterpart(leg)
+            if counterpart is None:
+                raise LaunchRefused('leg_harness', 'no OpenCode counterpart for ' + leg.id)
+            leg = counterpart
+        elif planned_harness is None and request['role'] != 'review':
+            # Older non-review callers supply only the registered leg ID.
+            from plangraph.planner.legs import resolve_harness
+            choice = resolve_harness(leg)
+            if choice.leg is None:
+                raise LaunchRefused('client_missing', 'Codex client unavailable for ' + leg.id)
+            leg = choice.leg
     from plangraph.routing_support.clients import codex_review_client
     codex, missing_client = (None, None) if request['dry_run'] else codex_review_client(
         leg.harness, request['role'], request['run_id'])
