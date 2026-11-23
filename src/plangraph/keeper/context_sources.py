@@ -125,6 +125,9 @@ def _cancelled_delivery(git, repo, candidates, reverts):
     return cancelled
 
 
+_WORK_INDEX_CACHE_LOCK = threading.Lock()
+
+
 def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
@@ -270,8 +273,10 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
               "reason": "; ".join(problems),
               "verified_at": verified_at}
     timing.check_io_deadline(step)
-    cache[cache_key] = (time.monotonic(), result)
-    git._context_work_index = cache
+    with _WORK_INDEX_CACHE_LOCK:
+        cache = getattr(git, "_context_work_index", {})
+        cache[cache_key] = (time.monotonic(), result)
+        git._context_work_index = cache
     return result
 
 

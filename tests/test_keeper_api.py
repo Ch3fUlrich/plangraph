@@ -482,11 +482,21 @@ def test_incident_migration_on_existing_sqlite_store(tmp_path):
         conn.close()
 
 
-def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch):
+def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch, tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from contextlib import contextmanager
+    from subprocess import run
     from time import perf_counter, sleep
-    from plangraph.keeper import context_sources
+    from plangraph.keeper import context_sources, timing
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    repos = {name: tmp_path / name for name in ("demo", *(f"related-{i}" for i in range(4)))}
+    for repo in repos.values():
+        repo.mkdir()
+        run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        run(["git", "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+             "commit", "--allow-empty", "-qm", "base"], cwd=repo, check=True)
+    w.store.ctx = {"git": GitAdapter({name: str(repo) for name, repo in repos.items()})}
 
     ids = [f"LOAD-{i}" for i in range(16)]
     w.store.create_items(w.p("router"), [*(defn(key) for key in ids),
@@ -504,10 +514,24 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch)
                 phases[name].append(perf_counter() - start)
         return run
 
-    def work_index(*args, **kwargs):
-        if kwargs.get("fresh"):
-            sleep(.75)  # Simulate a responsive remote fetch and forge inventory.
-        return original(*args, **kwargs)
+    index_barrier = threading.Barrier(4)
+    index_lock = threading.Lock()
+    active_indexes = peak_indexes = 0
+
+    def work_index(git, project, **kwargs):
+        nonlocal active_indexes, peak_indexes
+        assert 0 < timing.io_timeout(60) <= w.store.claim_preflight_s
+        with index_lock:
+            active_indexes += 1
+            peak_indexes = max(peak_indexes, active_indexes)
+        try:
+            if project != "related-3":
+                index_barrier.wait(timeout=2)
+            sleep(.75)  # Keep real refreshes in flight while requests overlap.
+            return original(git, project, **kwargs)
+        finally:
+            with index_lock:
+                active_indexes -= 1
 
     @contextmanager
     def transaction():
@@ -541,6 +565,8 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch)
     print("HTTP p95", round(samples[-1], 3),
           "phase maxima", {name: round(max(values), 4) for name, values in phases.items()})
     assert samples[-1] < 5
+    assert len(phases["index"]) == len(repos)
+    assert peak_indexes == 4
 
 
 def test_batch_claim_and_heartbeat_commit_once_and_replay(srv, w, monkeypatch):

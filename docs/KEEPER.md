@@ -367,7 +367,9 @@ JSON integer. The daemon applies it at startup to claim, worker claim, and claim
 batch before writing. Overlapping claims share in-flight authority lookups and
 can wait up to the earlier of the leader's deadline and their own deadline. A
 lookup error is shared with waiting claims. A deadline refusal names the
-preflight step that ran out of time.
+preflight step that ran out of time. Independent checkouts refresh in parallel,
+with up to four workers per scan. A later claim refreshes repository authority
+again, even when a previous work index is recent.
 
 `pg define` and `pg define --edit` refuse review clauses in `done_criteria`
 or `description` that pin a model or leg from the routing catalog. Ask for
