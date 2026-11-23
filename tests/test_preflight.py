@@ -18,6 +18,27 @@ preflight = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(preflight)
 
 
+def test_bounded_runner_imports_without_preflight(tmp_path):
+    script = """
+import subprocess
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from pgtest import run_test_process
+
+assert "preflight" not in sys.modules
+child = run_test_process(
+    [sys.executable, "-c", "import sys; print(sys.stdin.read().strip())"],
+    input="fixture", stdout=subprocess.PIPE, text=True, timeout=5, taskkill_timeout=5,
+)
+assert child.returncode == 0
+assert child.stdout == "fixture\\n"
+"""
+    result = subprocess.run([sys.executable, "-I", "-c", script, str(Path(preflight.__file__).parent)],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("PREFLIGHT_TOOLS_DIR", raising=False)

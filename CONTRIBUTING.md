@@ -31,6 +31,8 @@ file-only affected preflight has 240 seconds (`TEST_TIMEOUT`) for selection and 
 
 When the local affected selection includes the fleet projection tests, the selector
 builds `pg-spawnd` from the selected checkout before pytest starts.
+`tools/pgtest.py` runs the bounded test subprocess and handles process-tree
+cleanup when it times out. Preflight chooses the deadline and reports failures.
 When preflight selects `tests/test_hooks_prepush_paths.py`, it builds and stages
 one `plangraph` CLI before starting the 240-second step. Every pytest worker
 uses that executable through `PLANGRAPH_TEST_CLI`. Direct pytest and selector
