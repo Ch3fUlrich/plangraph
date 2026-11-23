@@ -32,9 +32,10 @@ an explicit pass on both reruns and equal hashes; `FAILED-IN-PARALLEL` is a pass
 failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. The exit
 status stays that of the first run, so a flake is named, never hidden.
 
-`SKIPPED plangraph:FLAKE-RETRY-QUARANTINE` — the part-entry runner is outside
-this batch's scope, and a nonblocking CI quarantine job requires an operator
-`Gate-Edit` decision ID.
+Pytest supports expiry-bound quarantine selection. The part-entry replay is
+tracked by `LE-CI-FLAKE-ENTRY-REPLAY`. The nonblocking job, retry ledger and
+Keeper reporting are tracked by `LE-CI-FLAKE-RETRY-QUARANTINE-WIRING` and
+require a workflow `Gate-Edit` decision.
 
 Selection follows transitive AST imports in src/ and tests/, plus test references
 to filenames for subprocess consumers. Changed tests select themselves.
