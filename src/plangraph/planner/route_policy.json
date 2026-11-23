@@ -7,6 +7,6 @@
   "review_tools_denied_legs": ["mimo-v2.6-pro"],
   "paused_harnesses": {
     "qodercli": {"allowed_roles": []},
-    "agy": {"allowed_roles": ["implement", "orchestrate", "review"]}
+    "agy": {"allowed_roles": ["implement", "orchestrate", "review", "research"]}
   }
 }

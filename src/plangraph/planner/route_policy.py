@@ -23,11 +23,11 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from .legs import LEG_ROLES
 
 __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("route_policy.json")
-_ROLES = ("implement", "review", "orchestrate")
 _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families",
          "review_tools_denied_legs")
 
@@ -181,9 +181,9 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
         raw = {}
     for harness, entry in raw.items():
         roles = entry.get("allowed_roles") if isinstance(entry, Mapping) else None
-        if (not isinstance(roles, list) or any(r not in _ROLES for r in roles)
+        if (not isinstance(roles, list) or any(r not in LEG_ROLES for r in roles)
                 or set(entry) - {"allowed_roles"}):
-            problems.append(f"paused_harnesses.{harness}: needs allowed_roles, a subset of {_ROLES}")
+            problems.append(f"paused_harnesses.{harness}: needs allowed_roles, a subset of {LEG_ROLES}")
             continue
         paused[harness] = tuple(roles)
     if problems:
