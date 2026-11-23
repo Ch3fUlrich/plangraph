@@ -258,7 +258,11 @@ def _join_prompt(parts, separator=''):
 
 
 def _before_review_output(prompt, block):
-    """Insert review evidence before the closing contract, preserving producer spans."""
+    """Insert review evidence before the closing contract, preserving producer spans.
+
+    For an unmarked hand-written prompt, append the evidence. The Rust inline
+    formatter also supplies a generic verdict reminder after the diff in this case.
+    """
     from plangraph.review.prompt import REVIEW_OUTPUT_SECTION
 
     spans = prompt.spans if type(prompt) is _SourcePrompt else ()
