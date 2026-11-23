@@ -1,5 +1,6 @@
 use super::dry_run::ROUTER_CORE_APPEND;
 use super::sandbox::{Launcher, Sandbox, LOCAL, PROMPT, SID};
+use pg_spawnd::role_header::header;
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::os::fd::AsRawFd;
@@ -348,6 +349,11 @@ pub fn check_batch_prompt(launcher: &Launcher) {
         .unwrap()
         .as_str()
         .unwrap();
+    let skill = include_str!("../../../../skills/batch-writer/SKILL.md");
+    assert!(
+        prompt.starts_with(&format!("{}\n\n{skill}", header("claude", "implement"))),
+        "{prompt}"
+    );
     assert!(prompt.contains("\n# Items\n"), "{prompt}");
     assert_eq!(
         prompt.split_once("# Run values").map(|(_, run)| run),
