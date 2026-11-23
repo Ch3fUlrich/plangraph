@@ -6,6 +6,53 @@ import pytest
 
 from plangraph.spawner import stall_watchdog as w
 from conftest_watchdog import isolated_process_evidence  # noqa: F401
+
+
+def test_attempt_coverage_alert_is_once_per_utc_day_even_after_replay(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import remote_ps
+    from plangraph.spawner.notify import KeeperSink
+
+    calls = []
+
+    def project(state, verb, **kwargs):
+        assert state == tmp_path and verb == "attempt-coverage"
+        data = json.loads(kwargs["input"])
+        calls.append(data["day"])
+        return SimpleNamespace(stdout=json.dumps(dict(day=data["day"], below_threshold=True)))
+
+    monkeypatch.setattr(remote_ps, "attempt_coverage_inputs",
+                        lambda state, day: dict(day=day, runs=[], fleet=[]), raising=False)
+    monkeypatch.setattr(remote_ps, "lifecycle_command", project)
+    monkeypatch.setattr(KeeperSink, "attempt_coverage", lambda self, day: [])
+    now = 1700006400 + 3600
+    w.attempt_coverage_tick(tmp_path, now=now)
+    outbox = tmp_path / "watchdog/outbox"
+    event_path, = outbox.glob("*.json")
+    first = json.loads(event_path.read_text())
+    assert first["kind"] == "alert" and first["day"] == "2023-11-14"
+    event_path.unlink()
+    (tmp_path / "watchdog/attempt-coverage/2023-11-14.json").unlink()
+    (tmp_path / "watchdog/attempt-coverage/next-day").write_text("2023-11-14\n")
+    w.attempt_coverage_tick(tmp_path, now=now + 120)
+    assert not list(outbox.glob("*.json"))
+    w.attempt_coverage_tick(tmp_path, now=now + 86400)
+    event_path, = outbox.glob("*.json")
+    assert json.loads(event_path.read_text())["day"] == "2023-11-15"
+    assert calls == ["2023-11-14", "2023-11-14", "2023-11-15"]
+
+    def unavailable(state, day):
+        raise TimeoutError(day)
+
+    monkeypatch.setattr(remote_ps, "attempt_coverage_inputs", unavailable)
+    with pytest.raises(TimeoutError, match="2023-11-16"):
+        w.attempt_coverage_tick(tmp_path, now=now + 2 * 86400)
+    monkeypatch.setattr(remote_ps, "attempt_coverage_inputs",
+                        lambda state, day: dict(day=day, runs=[], fleet=[]))
+    findings = w.attempt_coverage_tick(tmp_path, now=now + 3 * 86400)
+    assert findings[0]["day"] == "2023-11-16"
+
+
 @pytest.mark.parametrize('bad', [{}, {'run_id': 'run-fixture', 'card': None},
                                 {'run_id': 'run-fixture', 'card': 1}])
 def test_bad_record_does_not_stop_tick(tmp_path, bad):

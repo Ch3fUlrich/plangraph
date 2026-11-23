@@ -5,6 +5,7 @@ mod test_python;
 mod adapter;
 mod agent_view;
 mod agent_view_projection;
+mod attempt_coverage;
 mod attempt_outcome;
 mod cli;
 mod cli_review;

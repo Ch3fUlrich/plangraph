@@ -654,6 +654,24 @@ def test_watchdog_delivers_spawn_through_keeper_http(live, capsys, monkeypatch, 
     assert out_json(capsys)[0]["attempt_id"] == run_id
 
 
+def test_attempt_coverage_reads_by_utc_completion_day(live, monkeypatch, tmp_path):
+    from datetime import UTC, datetime
+    from plangraph.spawner.notify import KeeperSink
+
+    _, w, _, _, _ = live
+    monkeypatch.setattr("plangraph.keeper.store_card_updates._validate_spawn_route", lambda route: route)
+    end = 1700006400
+    for suffix, ended in (("previous", end - 1), ("midnight", end), ("tomorrow", end + 86400)):
+        w.store.record_spawn_attempt(w.p("system"), dict(
+            attempt_id=f"run-{suffix}", role="review", host="fixture", plan_hash="0" * 64,
+            started=end - 4 * 86400, ended=ended, exit_class="ok", route={}))
+    day = datetime.fromtimestamp(end, UTC).date().isoformat()
+    token = tmp_path / "system.token"
+    token.write_text(w.tok("system"), encoding="utf-8")
+    assert KeeperSink(token_file=str(token)).attempt_coverage(day) == [
+        {"run_id": "run-midnight", "host": "fixture"}]
+
+
 @pytest.mark.parametrize(("ident", "role", "item", "card_key"), [
     ("run-fix", "fix", None, None),
     ("run-cardless", "implement", "demo:A", None),

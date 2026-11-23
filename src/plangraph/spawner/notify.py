@@ -171,10 +171,16 @@ class KeeperSink:
         self._post("record_spawn_attempt", attempt, token)
 
     def item(self, key):
+        return self._get("show", {"key": key, "fmt": "json"})
+
+    def attempt_coverage(self, day):
+        return self._get("spawn_attempt_coverage", {"day": day})
+
+    def _get(self, verb, query):
         from urllib.parse import urlencode
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
         request = urllib.request.Request(
-            self.url.rstrip('/') + '/v1/show?' + urlencode({'key': key, 'fmt': 'json'}),
+            self.url.rstrip('/') + '/v1/' + verb + '?' + urlencode(query),
             headers={'Authorization': 'Bearer ' + token})
         with urllib.request.build_opener(_NoRedirectHandler()).open(request, timeout=10) as response:
             return json.load(response)
