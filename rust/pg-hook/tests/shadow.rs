@@ -159,7 +159,6 @@ fn shadow_cli_returns_python_and_appends_not_implemented() {
 
 #[test]
 fn shadow_cli_uses_in_place_isolated_python_without_path() {
-    use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     let script = tmp.path().join("interpreter.py");
     std::fs::write(
@@ -172,8 +171,10 @@ fn shadow_cli_uses_in_place_isolated_python_without_path() {
     // must preserve Python's normal sibling, PYTHONPATH and user-site imports.
     let isolated = tmp.path().join("isolated-python");
     let quoted = executable.to_str().unwrap().replace('\'', "'\\''");
-    std::fs::write(&isolated, format!("#!/bin/sh\nexec '{quoted}' -I \"$@\"\n")).unwrap();
-    std::fs::set_permissions(&isolated, std::fs::Permissions::from_mode(0o700)).unwrap();
+    pg_worker_core::executable_test_support::write_private_executable(
+        &isolated,
+        format!("#!/bin/sh\nexec '{quoted}' -I \"$@\"\n"),
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
         .args(["shadow", "bash_guard"])
         .arg(tmp.path().join("shadow.jsonl"))

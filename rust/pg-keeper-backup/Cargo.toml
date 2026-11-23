@@ -8,6 +8,7 @@ publish = false
 sha2 = "0.10"
 
 [dev-dependencies]
+pg-worker-core = { path = "../worker-core", features = ["test-support"] }
 tempfile = "3"
 
 [[bin]]

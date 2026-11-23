@@ -4,7 +4,7 @@ mod binary;
 
 use pg_worker_core::worker_host::{Phase, Store};
 use serde_json::{json, Value};
-use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+use std::{fs, process::Command};
 
 #[test]
 fn two_misses_emit_one_alert_and_recovery_keeps_the_affected_runs() {
@@ -38,12 +38,10 @@ fn two_misses_emit_one_alert_and_recovery_keeps_the_affected_runs() {
     .unwrap();
     for program in ["ssh", "tailscale"] {
         let file = bin.join(program);
-        fs::write(
+        pg_worker_core::executable_test_support::write_private_executable(
             &file,
             format!("#!/bin/sh\nprintf '%s\n' {program} >> \"$FIXTURE_ROOT/probe-log\"\nif [ ! -f \"$FIXTURE_ROOT/reachable\" ]; then exit 255; fi\n"),
-        )
-        .unwrap();
-        fs::set_permissions(file, fs::Permissions::from_mode(0o700)).unwrap();
+        );
     }
     let tick = || {
         let result = Command::new(binary::spawnd())
@@ -126,12 +124,10 @@ fn delivery_continues_past_failed_events_and_quarantines_permanent_refusals() {
     let bridge = root.join("plangraph-bridge");
     fs::create_dir(&bridge).unwrap();
     let executable = bridge.join("plangraph");
-    fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &executable,
         "#!/bin/sh\ncase \"$2\" in\n*-retry.json) exit 1;;\n*-refused.json) exit 3;;\nesac\n",
-    )
-    .unwrap();
-    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let result = Command::new(binary::spawnd())
         .args(["worker-liveness", "--deliver"])
         .env("PLANGRAPH_SPAWN_STATE", &state)

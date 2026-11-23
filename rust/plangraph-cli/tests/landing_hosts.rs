@@ -5,7 +5,6 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Write,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -142,11 +141,10 @@ fn agent_runs_sync_with_the_checkout_and_head_then_rechecks_the_hook() {
     let checkout = Checkout::new();
     fs::write(&checkout.hook, "stale hook\n").unwrap();
     let sync = checkout.directory.path().join("sync");
-    fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &sync,
         "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$1\" \"$2\" > \"$1/sync-receipt\"\ncp \"$1/tools/hooks/pre-push\" \"$1/.git/hooks/pre-push\"\n",
-    ).unwrap();
-    fs::set_permissions(&sync, fs::Permissions::from_mode(0o700)).unwrap();
+    );
     assert_eq!(
         checkout.host_agent(&checkout.head, Some(&sync))["verified"],
         true
