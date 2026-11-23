@@ -22,6 +22,77 @@ def test_empty_config_is_local_only(tmp_path, monkeypatch):
     local = [dict(run_id='run-local', host='original')]
     assert remote_ps.list_runs(local) == local
 
+
+@pytest.mark.parametrize('fault,error', [
+    ('offline', remote_ps.HostQueryError),
+    ('wrong-day', ValueError),
+])
+def test_coverage_tick_uses_host_inventories_and_retries_incomplete_day(tmp_path, monkeypatch, fault, error):
+    from plangraph.spawner.notify import KeeperSink
+    from plangraph.spawner.stall_watchdog import attempt_coverage_tick
+
+    config(tmp_path, monkeypatch, [
+        dict(name='node-a', target='coverage-a'),
+        dict(name='node-b', target='coverage-b', wsl_distro='Fixture', src='/fixture/src'),
+    ])
+    day = '2023-11-14'
+    local = dict(run_id='run-local', host='local')
+    remote = dict(run_id='run-remote', host='node-a')
+    fleet = dict(run_id='run-fleet', host='node-b')
+    reported = []
+
+    def lifecycle(state, verb, *args, **kwargs):
+        assert state == tmp_path
+        if verb == 'attempt-coverage-input':
+            assert args == (day,)
+            payload = dict(day=day, runs=[local], fleet=[])
+        else:
+            assert verb == 'attempt-coverage' and not args
+            reported.append(json.loads(kwargs['input']))
+            payload = dict(day=day, below_threshold=False)
+        return subprocess.CompletedProcess([verb], 0, stdout=json.dumps(payload))
+
+    popen = subprocess.Popen
+    query = ['pg-spawnd', 'attempt-coverage-input', day]
+
+    def ssh(argv, **kwargs):
+        assert argv[:6] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2', '--']
+        target, command = argv[6:]
+        if target == 'coverage-a':
+            assert command == ' '.join(query)
+            assert kwargs['stdin'] == subprocess.DEVNULL
+            payload = dict(day=day, runs=[local, remote], fleet=[])
+            return popen([sys.executable, '-c', 'import sys; print(sys.argv[1])',
+                          json.dumps(payload)], **kwargs)
+        assert target == 'coverage-b'
+        assert command == 'wsl.exe --distribution Fixture --exec pg-spawnd steps'
+        assert kwargs['stdin'] == subprocess.PIPE
+        payload = dict(day='2023-11-13' if fault == 'wrong-day' else day,
+                       runs=[], fleet=[remote, fleet])
+        peer = ('import json, sys; '
+                'assert json.load(sys.stdin) == {"steps": [{"argv": json.loads(sys.argv[1])}]}; '
+                'print(sys.argv[2]); sys.exit(int(sys.argv[3]))')
+        return popen([sys.executable, '-c', peer, json.dumps(query), json.dumps(payload),
+                      '255' if fault == 'offline' else '0'], **kwargs)
+
+    monkeypatch.setattr(remote_ps, 'lifecycle_command', lifecycle)
+    monkeypatch.setattr(KeeperSink, 'attempt_coverage', lambda self, day: [local, remote, fleet])
+    monkeypatch.setattr(subprocess, 'Popen', ssh)
+    now = 1700006400 + 3600
+    with pytest.raises(error):
+        attempt_coverage_tick(tmp_path, now=now)
+    reports = tmp_path / 'watchdog/attempt-coverage'
+    assert (reports / 'next-day').read_text() == day + '\n'
+    assert not reported and not list(reports.glob('*.json'))
+
+    fault = None
+    assert attempt_coverage_tick(tmp_path, now=now + 86400) == []
+    assert reported == [dict(day=day, runs=[local, local, remote],
+                             fleet=[remote, fleet], keeper=[local, remote, fleet])]
+    assert (reports / (day + '.json')).exists()
+    assert (reports / 'next-day').read_text() == '2023-11-15\n'
+
+
 def test_parallel_partial_and_private(tmp_path, monkeypatch):
     config(tmp_path, monkeypatch, [dict(name=f'node-{i}', target=f'private-{i}')
                                  for i in range(3)])

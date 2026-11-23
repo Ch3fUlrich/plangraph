@@ -625,7 +625,9 @@ def test_watchdog_delivers_spawn_through_keeper_http(live, capsys, monkeypatch, 
             return subprocess.CompletedProcess(argv, 0, stdout="{}")
         events.append(argv[-1])
         if argv[-1] == "project-spawn-attempt":
-            assert json.loads(kwargs["input"])["run_id"] == run_id
+            record = json.loads(kwargs["input"])
+            assert record["run_id"] == run_id
+            assert record["host"] == "fixture"
             value = row
         else:
             assert argv[-1] == "validate-attempt-route"
@@ -634,19 +636,40 @@ def test_watchdog_delivers_spawn_through_keeper_http(live, capsys, monkeypatch, 
 
     monkeypatch.setattr("plangraph.fleet_snapshot._projection_binary", lambda: "pg-spawnd")
     monkeypatch.setattr(subprocess, "run", project)
-    record = {"run_id": run_id, "attempt_capture": 1, "status": "completed", "ended": w.clock()}
+    monkeypatch.setenv("PLANGRAPH_HOST", "fixture")
+    record = {"run_id": run_id, "status": "completed", "ended": w.clock()}
+    marker = directory / "attempt.delivered"
+    marker.write_text("not_launched\n")
     sink = KeeperSink(token_file=str(tokens["router"]))
     assert retry_spawn_attempts(tmp_path, [record], keeper=sink)[0]["reason"] == "KeeperRefused"
-    assert not (directory / "attempt.delivered").exists()
+    assert marker.read_text() == "not_launched\n"
     token = tmp_path / "system.token"
     token.write_text(w.tok("system"), encoding="utf-8")
     sink = KeeperSink(token_file=str(token))
-    assert retry_spawn_attempts(tmp_path, [record], keeper=sink) == []
-    assert retry_spawn_attempts(tmp_path, [record], keeper=sink) == []
-    assert (directory / "attempt.delivered").read_text() == "delivered\n"
+    assert retry_spawn_attempts(tmp_path, [record, record], keeper=sink) == []
+    assert retry_spawn_attempts(tmp_path, [record], keeper=KeeperSink(token_file=str(token))) == []
+    assert marker.read_text() == "delivered\n"
     assert events == ["project-spawn-attempt", "project-spawn-attempt", "validate-attempt-route"]
     assert run(tokens["reader"], "attempts", "--since", "1d", "--json") == 0
     assert out_json(capsys)[0]["attempt_id"] == run_id
+
+
+def test_attempt_coverage_reads_by_utc_completion_day(live, monkeypatch, tmp_path):
+    from datetime import UTC, datetime
+    from plangraph.spawner.notify import KeeperSink
+
+    _, w, _, _, _ = live
+    monkeypatch.setattr("plangraph.keeper.store_card_updates._validate_spawn_route", lambda route: route)
+    end = 1700006400
+    for suffix, ended in (("previous", end - 1), ("midnight", end), ("tomorrow", end + 86400)):
+        w.store.record_spawn_attempt(w.p("system"), dict(
+            attempt_id=f"run-{suffix}", role="review", host="fixture", plan_hash="0" * 64,
+            started=end - 4 * 86400, ended=ended, exit_class="ok", route={}))
+    day = datetime.fromtimestamp(end, UTC).date().isoformat()
+    token = tmp_path / "system.token"
+    token.write_text(w.tok("system"), encoding="utf-8")
+    assert KeeperSink(token_file=str(token)).attempt_coverage(day) == [
+        {"run_id": "run-midnight", "host": "fixture"}]
 
 
 @pytest.mark.parametrize(("ident", "role", "item", "card_key"), [

@@ -1,8 +1,12 @@
 use serde_json::{json, Value};
 use std::{
+    fs,
     io::Write,
     process::{Command, Stdio},
 };
+
+#[path = "../../test_support/python.rs"]
+mod test_python;
 
 fn call(verb: &str, value: &Value) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
@@ -19,6 +23,279 @@ fn call(verb: &str, value: &Value) -> std::process::Output {
         .write_all(value.to_string().as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn daily_coverage_joins_by_run_and_host_at_the_exact_boundary() {
+    let day = "2026-11-22";
+    let first: Vec<_> = (0..20)
+        .map(|n| json!({"run_id":format!("run-{n}"),"host":"a"}))
+        .collect();
+    let mut keeper = first[..19].to_vec();
+    keeper.push(keeper[0].clone());
+    let mut input = json!({
+        "day":day, "runs":first, "fleet":[first[0]], "keeper":keeper
+    });
+    let report = |input: &Value| {
+        let output = call("attempt-coverage", input);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let exactly = report(&input);
+    assert_eq!(exactly["below_threshold"], false);
+    assert_eq!(
+        exactly["hosts"]["a"],
+        json!({"expected":20,"keeper":19,"matched":19})
+    );
+    input["fleet"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"run_id":"run-fleet","host":"b"}));
+    input["keeper"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"run_id":"run-fleet","host":"a"}));
+    let missing = report(&input);
+    assert_eq!(missing["day"], day);
+    assert_eq!(missing["below_threshold"], true);
+    assert_eq!(
+        missing["hosts"]["b"],
+        json!({"expected":1,"keeper":0,"matched":0})
+    );
+    assert_eq!(
+        missing["total"],
+        json!({"expected":21,"keeper":20,"matched":19})
+    );
+}
+
+#[test]
+fn daily_coverage_rejects_conflicting_hosts_within_an_evidence_source() {
+    for source in ["runs", "fleet", "keeper"] {
+        let mut input = json!({"day":"2026-11-22", "runs":[], "fleet":[], "keeper":[]});
+        input[source] = json!([
+            {"run_id":"run-shared", "host":"a"},
+            {"run_id":"run-shared", "host":"b"}
+        ]);
+        let output = call("attempt-coverage", &input);
+        assert!(!output.status.success(), "{source}");
+        assert!(output.stdout.is_empty(), "{source}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            "conflicting hosts for one attempt coverage run ID"
+        );
+    }
+}
+
+#[test]
+fn daily_inventory_includes_separate_fleet_evidence_and_uses_utc_end_time() {
+    let state = tempfile::tempdir().unwrap();
+    let midnight = 1_700_006_400;
+    let snapshot = |id, ended, status, host| json!({"run_id":id,"started":midnight-400_000,"ended":ended,"status":status,"host":host});
+    let save = |file: &str, row: Value| {
+        let path = state.path().join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, row.to_string()).unwrap();
+    };
+    save(
+        "runs/run-midnight/record.json",
+        snapshot("run-midnight", midnight, "failed", None),
+    );
+    save(
+        "runs/run-before/record.json",
+        snapshot("run-before", midnight - 1, "completed", None),
+    );
+    save(
+        "runs/run-dry/record.json",
+        snapshot("run-dry", midnight, "dry_run", None),
+    );
+    #[cfg(target_os = "linux")]
+    save(
+        "fleet-session-outcomes/run-fleet.json",
+        snapshot(
+            "run-fleet",
+            midnight + 86_399,
+            "cancelled",
+            Some("other-host"),
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        .args(["attempt-coverage-input", "2023-11-15"])
+        .env("PLANGRAPH_SPAWN_STATE", state.path())
+        .env("PLANGRAPH_HOST", "workstation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        result["runs"],
+        json!([{"run_id":"run-midnight","host":"workstation"}])
+    );
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        result["fleet"],
+        json!([{"run_id":"run-fleet","host":"other-host"}])
+    );
+}
+
+#[test]
+fn terminal_records_project_without_routed_legs() {
+    for (kind, role, harness, status, code, leg, outcome) in [
+        ("seat", "review", "claude", "completed", 0, "claude", "ok"),
+        (
+            "spawner",
+            "implement",
+            "codex",
+            "failed",
+            1,
+            "codex",
+            "worker_crash",
+        ),
+        (
+            "spawner",
+            "implement",
+            "codex",
+            "refused",
+            2,
+            "codex",
+            "contract_defect",
+        ),
+        (
+            "spawner",
+            "implement",
+            "codex",
+            "stalled_no_leg",
+            1,
+            "codex",
+            "stall",
+        ),
+        (
+            "native-codex",
+            "implement",
+            "codex",
+            "completed",
+            0,
+            "native-codex",
+            "ok",
+        ),
+        (
+            "native-codex",
+            "implement",
+            "codex",
+            "failed",
+            1,
+            "native-codex",
+            "worker_crash",
+        ),
+    ] {
+        let record = json!({
+            "run_id":"run-fixture", "host":"workstation", "role":role, "run_kind":kind,
+            "harness":harness, "status":status, "exit_code":code, "started":1, "ended":2
+        });
+        let output = call("project-spawn-attempt", &record);
+        assert!(output.status.success());
+        let row: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(row["attempt_id"], "run-fixture");
+        assert_eq!(row["role"], role);
+        assert_eq!(row["host"], "workstation");
+        assert_eq!(row["harness"], harness);
+        assert_eq!(row["leg"], leg);
+        assert_eq!(row["task_class"], "adhoc");
+        assert_eq!(row["exit_class"], outcome);
+    }
+}
+
+#[test]
+fn null_and_operational_projection_failures_leave_delivery_pending() {
+    let state = tempfile::tempdir().unwrap();
+    let output = test_python::command()
+        .args([
+            "-c",
+            r#"
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.spawner.notify import retry_spawn_attempts
+
+state = Path(sys.argv[1])
+run = dict(run_id='run-fixture', ended=2, status=True)
+keeper = SimpleNamespace(url='fixture', token_file='fixture')
+with patch('plangraph.fleet_snapshot._projection_binary', return_value=sys.argv[2]):
+    failed = subprocess.CompletedProcess([sys.argv[2], 'project-spawn-attempt'], 2)
+    with patch('plangraph.spawner.notify.subprocess.run', return_value=failed):
+        assert retry_spawn_attempts(state, [run], keeper=keeper) == [
+            dict(rule='spawn-attempt-delivery', run_id='run-fixture', reason='CalledProcessError')]
+    assert retry_spawn_attempts(state, [run], keeper=keeper) == []
+assert not (state / 'runs/run-fixture/attempt.delivered').exists()
+"#,
+        ])
+        .arg(state.path())
+        .arg(env!("CARGO_BIN_EXE_pg-spawnd"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn unprojectable_legacy_runs_cannot_starve_newer_deliveries() {
+    let state = tempfile::tempdir().unwrap();
+    let output = test_python::command()
+        .args([
+            "-c",
+            r#"
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.spawner.notify import retry_spawn_attempts
+
+state = Path(sys.argv[1])
+legacy = [dict(run_id=f'run-old-{i}', host='fixture', ended=i+2, status='completed')
+          for i in range(26)]
+good = dict(run_id='run-new', host='fixture', role='implement', started=28,
+            ended=29, status='completed', exit_code=0)
+runs = [*legacy, good]
+for run in runs:
+    (state / 'runs' / run['run_id']).mkdir(parents=True)
+delivered = []
+keeper = SimpleNamespace(url='fixture', token_file='fixture', spawn_attempt=delivered.append)
+with patch('plangraph.fleet_snapshot._projection_binary', return_value=sys.argv[2]):
+    first = retry_spawn_attempts(state, runs, keeper=keeper)
+    second = retry_spawn_attempts(state, runs, keeper=keeper)
+    assert [row['attempt_id'] for row in delivered] == ['run-new'], delivered
+    assert [row['run_id'] for row in first] == [run['run_id'] for run in legacy[:25]]
+    assert [row['run_id'] for row in second] == ['run-old-25']
+    assert {row['reason'] for row in first + second} == {'unprojectable'}
+    assert retry_spawn_attempts(state, runs, keeper=keeper) == []
+for run in legacy:
+    assert (state / 'runs' / run['run_id'] / 'attempt.delivered').read_text() == 'unprojectable\n'
+assert (state / 'runs/run-new/attempt.delivered').read_text() == 'delivered\n'
+assert len(delivered) == 1
+"#,
+        ])
+        .arg(state.path())
+        .arg(env!("CARGO_BIN_EXE_pg-spawnd"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
