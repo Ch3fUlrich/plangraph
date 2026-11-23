@@ -9,12 +9,12 @@ import contextlib
 import json
 import re
 import time
-from bisect import bisect_left
 
 from . import context_sources
 from .errors import Refused
 from .evidence_decisions import close_commit_scope
 from .evidence_git import plan_items
+from .evidence_pr import indexed_revision, landed_go_part
 from .evidence_runs import RunRecordAdapter
 from .evidence_types import valid_commit_ref
 from ..review.family import model_family
@@ -111,34 +111,6 @@ def _part_tokens(entry):
     return re.findall(r"[0-9a-f]{7,40}", entry[1])
 
 
-def _indexed_revision(index, token):
-    ordered = index.get("revision_order", ())
-    offset = bisect_left(ordered, token)
-    matches = [sha for sha in ordered[offset:offset + 2] if sha.startswith(token)]
-    return matches[0] if len(matches) == 1 else None
-
-
-def _landed_go_part(index, head, token, pr):
-    """Resolve an unambiguous part introduced with this default-branch GO head."""
-    graph = index.get("merged_history", {})
-    part = _indexed_revision(index, token)
-    if not part or part == head:
-        return None
-    landed = graph.get(head, ((), None))[1]
-    candidate = graph.get(part, ((), None))[1]
-    merge = (landed or {}).get("merge") or {}
-    if not candidate or merge.get("pr") != pr or candidate.get("merge") != merge:
-        return None
-    seen, todo = set(), [head]
-    while todo:
-        sha = todo.pop()
-        if sha == part:
-            return candidate
-        if sha not in seen:
-            seen.add(sha)
-            todo.extend(graph.get(sha, ((), None))[0])
-
-
 def merged_decision_delivery(indexes, book, key, project):
     """Match a landed revision explicitly scoped to the key in a decision row."""
     from .store_waiver import _go_binding, _go_statement
@@ -156,7 +128,7 @@ def merged_decision_delivery(indexes, book, key, project):
             continue
         if revision := close_commit_scope(cells[2]).get(key):
             for index in candidates:
-                sha = _indexed_revision(index, revision.lower())
+                sha = indexed_revision(index, revision.lower())
                 commit = index.get("merged_history", {}).get(sha, ((), None))[1]
                 if commit and (commit.get("merge") or {}).get("sha") == sha:
                     return {**commit, "source": f"Close decision {did}"}
@@ -174,7 +146,7 @@ def merged_decision_delivery(indexes, book, key, project):
                 continue
             for index in candidates:
                 for token in _part_tokens(entry):
-                    if match := _landed_go_part(index, head, token, pr):
+                    if match := landed_go_part(index, head, token, pr):
                         return {**match, "source": f"GO part {did}"}
     return None
 
