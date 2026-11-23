@@ -419,7 +419,7 @@ def test_reap_raises_one_gate_capacity_alert_at_190_open_or_done(w):
 
 
 @pytest.mark.parametrize("rehome", [False, True])
-def test_define_refuses_a_nested_slices_json_entry_after_parent_criteria_are_edited(w, rehome):
+def test_define_refuses_a_nested_slice_even_after_the_parent_criteria_are_edited(w, rehome):
     router = w.p("router")
     first = defn("X-S1", under="X", slice_parent="demo:X",
                  done_criteria="The first part passes its regression test")
