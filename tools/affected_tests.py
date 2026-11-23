@@ -726,11 +726,14 @@ def main(root=None):
                 build = subprocess.run(
                     ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'pg-spawnd'],
                     cwd=root, env=env)
+                if build.returncode:
+                    return build.returncode
+                verify = subprocess.run([sys.executable, 'tests/_spawnd.py'], cwd=root, env=env)
+                if verify.returncode:
+                    return verify.returncode
             except OSError as error:
-                print(f'CARGO FAIL: could not start the pg-spawnd build ({error})', file=sys.stderr)
+                print(f'CARGO FAIL: could not prepare pg-spawnd ({error})', file=sys.stderr)
                 return 1
-            if build.returncode:
-                return build.returncode
         if args.collect_only:
             env.pop("PYTEST_SHARD", None)
         parallel = (["-n", args.workers, "--dist", "loadgroup"]

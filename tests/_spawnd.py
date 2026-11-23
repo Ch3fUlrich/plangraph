@@ -1,13 +1,11 @@
 """One missing-helper policy for tests that execute the Rust spawner."""
 import json
 import os
-import subprocess
-from pathlib import Path
 import re
-
-import pytest
-
-from plangraph import fleet_snapshot as fleet
+import subprocess
+import sys
+import time
+from pathlib import Path
 
 
 def built_rust_binary(name, profile='debug', *, cargo_cwd=None, require_current=False):
@@ -57,7 +55,36 @@ def fleet_spawnd():
     raise RuntimeError(f'build pg-spawnd before running fleet tests: {binary}')
 
 
+def ensure_fleet_spawnd():
+    """Verify the build published this checkout's binary, forcing a relink if needed."""
+    root = Path(__file__).resolve().parents[1]
+    binary = built_rust_binary('pg-spawnd', cargo_cwd=root)
+
+    def current():
+        return binary.is_file() and _current_binary(binary, root / 'rust', 'pg-spawnd')
+
+    if current():
+        return 0
+    print('fleet tests: relinking pg-spawnd after Cargo left a stale shared executable', flush=True)
+    # An explicit compiler argument gives only the binary a fresh Cargo unit.
+    # Dependencies and the inherited compiler cache remain shared.
+    metadata = f'plangraph_fleet_{os.getpid()}_{time.time_ns()}'
+    status = subprocess.run(
+        ['cargo', 'rustc', '--locked', '--manifest-path', 'rust/Cargo.toml',
+         '-p', 'pg-spawnd', '--bin', 'pg-spawnd', '--', '-C', f'metadata={metadata}'],
+        cwd=root).returncode
+    if status:
+        return status
+    if not current():
+        print(f'fleet tests: pg-spawnd is stale after relinking: {binary}', file=sys.stderr)
+        return 1
+    return 0
+
+
 def require_spawnd():
+    import pytest
+    from plangraph import fleet_snapshot as fleet
+
     try:
         return fleet._projection_binary()
     except RuntimeError as error:
@@ -125,6 +152,8 @@ def build_spawnd():
     visible to the tests. CI builds the release helper there first (a no-op here); elsewhere a
     debug build is used. A missing toolchain skips; a failing build fails with its diagnostics.
     """
+    import pytest
+
     release = bool(os.environ.get('CI'))
     if release not in _BUILT:
         try:
@@ -145,3 +174,7 @@ def build_spawnd():
                 pytrace=False)
         _BUILT[release] = path
     return Path(_BUILT[release])
+
+
+if __name__ == '__main__':
+    raise SystemExit(ensure_fleet_spawnd())
