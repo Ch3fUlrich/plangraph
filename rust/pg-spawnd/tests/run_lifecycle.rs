@@ -59,6 +59,13 @@ fn lifecycle_replays_terminal_publication_after_interruption() {
     // The event committed, but the process stopped before updating the projection.
     std::fs::write(&record, running).unwrap();
     std::fs::write(state.path().join("run-lifecycle/published"), b"2").unwrap();
+    assert!(command(state.path())
+        .arg("record-recover")
+        .status()
+        .unwrap()
+        .success());
+    let saved: Value = serde_json::from_slice(&std::fs::read(record).unwrap()).unwrap();
+    assert_eq!(saved["status"], "failed");
     let resumed = page(state.path(), "1");
     let rows = resumed["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
@@ -67,8 +74,6 @@ fn lifecycle_replays_terminal_publication_after_interruption() {
     assert_eq!(rows[1]["status"], "failed");
     assert!(rows[1].get("stderr_tail").is_none());
     assert_eq!(resumed["next_cursor"], 3);
-    let saved: Value = serde_json::from_slice(&std::fs::read(record).unwrap()).unwrap();
-    assert_eq!(saved["status"], "failed");
 }
 
 #[test]

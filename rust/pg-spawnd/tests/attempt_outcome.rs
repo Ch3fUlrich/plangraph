@@ -22,6 +22,55 @@ fn call(verb: &str, value: &Value) -> std::process::Output {
 }
 
 #[test]
+fn terminal_records_project_without_routed_legs() {
+    for (kind, role, harness, status, code, leg, outcome) in [
+        ("seat", "review", "claude", "completed", 0, "claude", "ok"),
+        (
+            "spawner",
+            "implement",
+            "codex",
+            "failed",
+            1,
+            "codex",
+            "worker_crash",
+        ),
+        (
+            "native-codex",
+            "implement",
+            "codex",
+            "completed",
+            0,
+            "native-codex",
+            "ok",
+        ),
+        (
+            "native-codex",
+            "implement",
+            "codex",
+            "failed",
+            1,
+            "native-codex",
+            "worker_crash",
+        ),
+    ] {
+        let record = json!({
+            "run_id":"run-fixture", "host":"workstation", "role":role, "run_kind":kind,
+            "harness":harness, "status":status, "exit_code":code, "started":1, "ended":2
+        });
+        let output = call("project-spawn-attempt", &record);
+        assert!(output.status.success());
+        let row: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(row["attempt_id"], "run-fixture");
+        assert_eq!(row["role"], role);
+        assert_eq!(row["host"], "workstation");
+        assert_eq!(row["harness"], harness);
+        assert_eq!(row["leg"], leg);
+        assert_eq!(row["task_class"], "adhoc");
+        assert_eq!(row["exit_class"], outcome);
+    }
+}
+
+#[test]
 fn terminal_spawn_projects_final_leg_once() {
     for (role, item) in [
         ("implement", Some("demo:A")),
