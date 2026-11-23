@@ -1,1 +1,2 @@
 - Refuse a cargo build in a main checkout without a target outside it, evict build-script variants and incremental dirs untouched for an hour (was six), and report and remove an idle main-checkout `rust/target` from the disk guard.
+- The same refusal covers a worktree under `.claude/worktrees` (a writer's checkout held 19 GB of `rust/target` on dell).

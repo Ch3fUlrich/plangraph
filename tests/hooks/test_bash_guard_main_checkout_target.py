@@ -57,9 +57,21 @@ def test_cargo_with_an_outside_target_or_no_build_is_allowed(repos, command):
     assert hook(command, main / "rust").returncode == 0
 
 
-def test_cargo_in_a_linked_worktree_is_not_a_main_checkout(repos):
+def test_cargo_in_a_worktree_under_claude_worktrees_is_refused_without_a_shared_target(repos):
+    """A writer worktree held a 19 GB rust/target on dell: the same refusal applies there."""
     _, work = repos
-    assert hook("cargo build", work / "rust").returncode == 0
+    for command in ("cargo build", "cargo test -p x", "CARGO_TARGET_DIR=target cargo build"):
+        result = hook(command, work / "rust")
+        assert result.returncode == 2 and b"cargo-target" in result.stderr, command
+    assert hook("CARGO_TARGET_DIR=/var/cache/shared cargo build", work / "rust").returncode == 0
+    assert hook("cargo build --target-dir /var/cache/shared", work).returncode == 0
+
+
+def test_cargo_in_a_linked_worktree_elsewhere_is_not_refused(repos, tmp_path):
+    main, _ = repos
+    elsewhere = tmp_path / "runs" / "run-1" / "worktree"
+    git(main, "worktree", "add", "-q", str(elsewhere), "-b", "other/y")
+    assert hook("cargo build", elsewhere / "rust").returncode == 0
 
 
 def test_cargo_outside_any_repository_is_allowed(tmp_path):

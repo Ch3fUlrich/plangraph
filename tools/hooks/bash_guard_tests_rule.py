@@ -162,7 +162,7 @@ def check_bare_tests(pos_words, wrapped_in_slice, *, placement_required=True,
     return None
 
 
-MAIN_TARGET_MESSAGE = ("bash-guard: DENIED - cargo %s in the main checkout %s would write its target "
+MAIN_TARGET_MESSAGE = ("bash-guard: DENIED - cargo %s in the checkout %s (main or .claude/worktrees) would write its target "
                        "here, outside every disk cap; run it in a worktree or set CARGO_TARGET_DIR to "
                        "the shared target (~/.cache/plangraph/cargo-target)")
 _TARGET_ENVS = ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR")
@@ -170,15 +170,20 @@ _BUILDING = frozenset(("build", "b", "check", "c", "test", "t", "nextest", "clip
                        "bench", "doc", "d", "rustc", "llvm-cov"))
 
 
+def _agent_worktree(top):
+    """A linked worktree under .claude/worktrees (a writer's checkout) is as uncapped as a main one."""
+    return any(a.name == ".claude" and (a / "worktrees") == b for a, b in zip(top.parents, [top, *top.parents]))
+
+
 def main_checkout_root(cwd):
-    """Root of the main (not linked-worktree) checkout containing cwd, or None."""
+    """Root of the main checkout, or of a linked worktree under .claude/worktrees, containing cwd; else None."""
     try:
         out = subprocess.run(
             ["git", "-C", str(cwd or Path.cwd()), "rev-parse", "--path-format=absolute",
              "--show-toplevel", "--git-dir", "--git-common-dir"],
             capture_output=True, text=True, check=True, timeout=2).stdout.split("\n")
         top, git_dir, common = (Path(line).resolve() for line in out[:3])
-        return top if git_dir == common else None
+        return top if git_dir == common or _agent_worktree(top) else None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
 

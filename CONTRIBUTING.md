@@ -742,10 +742,11 @@ denies:
   <uuid|hex>` / `-r <uuid|hex>` without `-n`/`--name`, `claude --resume`,
   `claude agents`, and `claude stop <id>` stay allowed.
 - `cargo build|check|test|nextest|clippy|run|bench|doc` run from a main checkout
-  (a repository root whose `.git` is a directory, not a linked worktree) with no
+  (a repository root whose `.git` is a directory) or a linked worktree under
+  `.claude/worktrees`, with no
   `CARGO_TARGET_DIR` / `--target-dir` outside that checkout: the build would fill
   its uncapped `rust/target`. The message names the shared target
-  (`~/.cache/plangraph/cargo-target`). Linked worktrees and `cargo fmt` stay allowed.
+  (`~/.cache/plangraph/cargo-target`). Other linked worktrees and `cargo fmt` stay allowed.
 - A while or until condition where a literal `pgrep -f` pattern can match the
   shell running the loop. Wait on the PID or unit, or put the original command
   in the Bash tool's background mode.
