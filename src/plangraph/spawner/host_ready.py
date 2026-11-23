@@ -28,7 +28,7 @@ from .host_ready_source import (
 MAX_AGE = 600
 _sccache_missing_warned = False
 # Mirrors pg_worker_core::cargo_pool::DEFAULT_CARGO_TARGET_CAP_GB (a test pins both).
-DEFAULT_CARGO_TARGET_CAP_GB = 12
+DEFAULT_CARGO_TARGET_CAP_GB = 32
 
 
 def shared_cargo_target():
@@ -278,11 +278,29 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
             shutil.rmtree(target)
 
 
+def _cap_gb(raw):
+    try:
+        cap = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return cap if math.isfinite(cap) and cap >= 0 else None
+
+
 def cargo_target_cap_gb():
-    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', str(DEFAULT_CARGO_TARGET_CAP_GB)))
-    if not math.isfinite(cap) or cap < 0:
-        raise ValueError('invalid cache cap')
-    return cap
+    """Environment, then the host file ``cargo-target-cap-gb`` in the config directory (Rust
+    ``cap_bytes_from`` reads the same file), then the default; an unusable file value falls through. An invalid variable raises."""
+    env = os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB')
+    if env is not None:
+        cap = float(env)
+        if not math.isfinite(cap) or cap < 0:
+            raise ValueError('invalid cache cap')
+        return cap
+    config = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
+    try:
+        cap = _cap_gb((config / 'plangraph' / 'cargo-target-cap-gb').read_text())
+    except OSError:
+        cap = None
+    return DEFAULT_CARGO_TARGET_CAP_GB if cap is None else cap
 
 
 def cargo_run_busy(record):
