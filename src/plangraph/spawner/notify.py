@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import socket
 import subprocess
 import urllib.error
 import urllib.request
@@ -203,39 +204,55 @@ class KeeperSink:
         request['verdict_binding'] = binding
 
 
+def _attempt_pending(marker):
+    try:
+        return marker.read_text(encoding="utf-8") == "not_launched\n"
+    except FileNotFoundError:
+        return True
+
+
 def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
     """Deliver terminal snapshots idempotently and retain undelivered records."""
-    import re
     from plangraph.fleet_snapshot import _projection_binary
 
     keeper = keeper if keeper is not None else KeeperSink()
     if not keeper.url or not keeper.token_file:
         return []
-    pending = []
+    pending = {}
+    findings = []
     for run in runs:
         run_id = run.get("run_id", "")
-        if (run.get("attempt_capture") != 1 or not run.get("ended")
-                or run.get("status") in ("queued", "running", "queue_claimed")
-                or not re.fullmatch(r"run-[A-Za-z0-9-]+", run_id)):
+        if (type(run.get("ended")) not in (int, float)
+                or run.get("status") in (None, "queued", "running", "queue_claimed", "dry_run")
+                or not isinstance(run_id, str) or not re.fullmatch(r"run-[A-Za-z0-9-]+", run_id)):
             continue
         marker = Path(state) / "runs" / run_id / "attempt.delivered"
-        if not marker.exists():
-            pending.append((run, marker))
-    findings = []
-    for run, marker in sorted(pending, key=lambda pair: pair[0]["ended"])[:limit]:
         try:
-            result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
-                                    input=json.dumps(run, allow_nan=False), text=True,
-                                    encoding="utf-8", errors="replace", capture_output=True, timeout=5, check=True)
-            attempt = json.loads(result.stdout)
-            if attempt is not None:
+            if _attempt_pending(marker):
+                pending.setdefault(run_id, (run, marker))
+        except (OSError, ValueError) as exc:
+            findings.append(dict(rule="spawn-attempt-delivery", run_id=run_id, reason=type(exc).__name__))
+    for run, marker in sorted(pending.values(), key=lambda pair: pair[0]["ended"])[:limit]:
+        try:
+            with inbox_lock(marker):
+                if not _attempt_pending(marker):
+                    continue
+                if not run.get("host"):
+                    run = dict(run, host=os.environ.get("PLANGRAPH_HOST") or socket.gethostname())
+                result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
+                                        input=json.dumps(run, allow_nan=False), text=True,
+                                        encoding="utf-8", errors="replace", capture_output=True, timeout=5, check=True)
+                attempt = json.loads(result.stdout)
+                if attempt is None:
+                    atomic_write_private(marker, "ineligible\n")
+                    continue
                 try:
                     keeper.spawn_attempt(attempt)
                 except KeeperRefused as refusal:
                     settle_refusal(marker, f"keeper (attempt {run['run_id']})",
                                    refusal, final_statuses=(400, 422))
                     raise
-            atomic_write_private(marker, "delivered\n" if attempt is not None else "not_launched\n")
+                atomic_write_private(marker, "delivered\n")
         except (OSError, ValueError, RuntimeError, KeeperRefused, subprocess.SubprocessError) as exc:
             findings.append(dict(rule="spawn-attempt-delivery", run_id=run["run_id"],
                                  reason=type(exc).__name__))
