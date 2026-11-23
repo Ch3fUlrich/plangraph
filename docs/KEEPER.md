@@ -318,9 +318,10 @@ A first-parent PR merge into the configured default branch can close open, claim
 `keeper.json` sets `require_seats` (default off). `PG_MERGE_CLOSE_REQUIRE_SEATS` or the request field `require_seats` overrides it for that call. Tier `none` takes no seats. With the requirement off, missing seat witnesses are stored in the `seats_missing` flag. The job prints those flags with the closed or would-close row. The `listed` field contains refused keys and reasons, and `plangraph merge-close --count` prints the merged-not-done total from a preview.
 
 `plangraph reconcile-merged --dry-run --state PATH` previews merged work once
-per hour through the user timer. The job atomically replaces the watcher state
-file. The service journal delivers one JSON batch line per pass. Routing reads
-it with `journalctl --user -u pg-reconcile-merged.service`. Each batch contains
+per hour through the user timer. The job refreshes the merge index and requires
+a complete preview across all configured repositories before it atomically
+replaces the watcher state file. The service journal delivers one JSON batch
+line per pass. Routing reads it with `journalctl --user -u pg-reconcile-merged.service`. Each batch contains
 the merged-open count, refusal counts, and proposed actions.
 The Keeper raises `merged_open_reconcile` on the second consecutive nonzero
 pass and clears it after a zero pass. Routing applies any proposed action

@@ -52,10 +52,10 @@ class ReapMixin:
                                           "in review for over 4h", now)
                             findings += 1
                         overdue.append(item["key"])
-            self._check_gate_capacity(items, now)
+            gate_alerts = self._check_gate_capacity(items, now)
             aged = self._age_priorities(principal, now)
             alerts = self._alerts_expire(now)
-        if expired or aged or findings or alerts:
+        if expired or aged or findings or alerts or gate_alerts:
             self._reap_revision = getattr(self, "_reap_revision", 0) + 1
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}
 
@@ -78,6 +78,7 @@ class ReapMixin:
                 self._finding(key, code, msg, now)
         for key in sorted(previous - near_cap.keys()):
             self._alerts_resolve(key, now, code=code)
+        return bool(near_cap or previous)
 
     def _age_priorities(self, principal, now):
         """Drop an open, unclaimed 10 (after 3 days) or 9 (after 7) one level.

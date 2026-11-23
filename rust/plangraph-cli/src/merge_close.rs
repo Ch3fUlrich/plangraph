@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 /// Keep a bound on each keeper call, including a page of close results.
 const MAX_TIME_SECS: u32 = 300;
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(95);
 const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
 
 /// What one run did, as the keeper reported it.
@@ -250,7 +251,7 @@ fn run_scheduled(
         apply,
         project,
         deployment_only,
-        Duration::from_secs(95),
+        REFRESH_TIMEOUT,
     )
 }
 
@@ -264,19 +265,7 @@ pub fn run_scheduled_with(
     deployment_only: bool,
     refresh_timeout: Duration,
 ) -> Result<Outcome, String> {
-    control.call("close_merged_auto", Some(json!({"refresh": "start"})))?;
-    let deadline = Instant::now() + refresh_timeout;
-    loop {
-        let reply = control.call("close_merged_auto", Some(json!({"refresh": "status"})))?;
-        match reply["scan"].as_str() {
-            Some("ready") => break,
-            Some("running") if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_secs(1))
-            }
-            Some("running") => return Err("merge index refresh is still running".into()),
-            _ => return Err("keeper reply has no valid merge index status".into()),
-        }
-    }
+    refresh_index(control, refresh_timeout)?;
     let mut pass = ClosePass {
         deployment_count: Some(0),
         ..ClosePass::default()
@@ -297,6 +286,22 @@ pub fn run_scheduled_with(
         return Err(format!("incomplete merge scan: {:?}", pass.scan_errors));
     }
     Ok(pass.finish(deployment_only))
+}
+
+fn refresh_index(control: &dyn Transport, timeout: Duration) -> Result<(), String> {
+    control.call("close_merged_auto", Some(json!({"refresh": "start"})))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        let reply = control.call("close_merged_auto", Some(json!({"refresh": "status"})))?;
+        match reply["scan"].as_str() {
+            Some("ready") => return Ok(()),
+            Some("running") if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_secs(1))
+            }
+            Some("running") => return Err("merge index refresh is still running".into()),
+            _ => return Err("keeper reply has no valid merge index status".into()),
+        }
+    }
 }
 
 /// The call the land step makes after a merge: the job with the configured switch.
@@ -370,9 +375,12 @@ fn usage() -> i32 {
 /// Persist one routing proposal batch from the keeper's watched dry run.
 pub fn reconcile_with(
     keeper: &dyn Transport,
+    control: &dyn Transport,
     seats: Option<bool>,
     state: &std::path::Path,
+    refresh_timeout: Duration,
 ) -> Result<String, String> {
+    refresh_index(control, refresh_timeout)?;
     let mut request = json!({"apply": false, "watch": true});
     if let Some(required) = seats {
         request["require_seats"] = json!(required);
@@ -436,7 +444,13 @@ pub fn reconcile(env: &Env, args: &[String]) -> i32 {
         env,
         max_time_secs: MAX_TIME_SECS,
     };
-    match require_seats(env).and_then(|seats| reconcile_with(&keeper, seats, state.as_ref())) {
+    let control = SlowKeeper {
+        env,
+        max_time_secs: 10,
+    };
+    match require_seats(env)
+        .and_then(|seats| reconcile_with(&keeper, &control, seats, state.as_ref(), REFRESH_TIMEOUT))
+    {
         Ok(line) => {
             println!("{line}");
             0

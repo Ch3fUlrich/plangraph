@@ -36,7 +36,7 @@ from .. import views
 from . import context_sources as src, timing
 from .brief import ensure_cap, superseded_contract
 from .errors import Refused
-from .store_runs import _WARM_S, merged_decision_delivery
+from .store_runs import merged_decision_delivery
 from .schema import DEFINITION_EVENTS
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
@@ -307,14 +307,16 @@ class ContextMixin:
 
     def _add_decision_reconcile_rows(self, report):
         """Include decision-only merge candidates in the routing preview without applying a close."""
-        git = self._adapter("git")
+        warmed = self.__dict__.get("_warmed")
+        with timing.outside_request_lock():
+            book = src.decision_book(self._adapter("decisions"))
+        if self.__dict__.get("_warmed") is not warmed:
+            raise Refused("conflict", "merge index changed during the watched preview")
         indexes = {}
         for name in report["repos"]:
             if not self._warm(name):
                 raise Refused("evidence_unverified", f"merge_index_not_warm: {name}")
-            indexes[name] = src.work_index(git, name, max_age=_WARM_S, cached_only=True)
-        with timing.outside_request_lock():
-            book = src.decision_book(self._adapter("decisions"))
+            indexes[name] = warmed[name]
         if not book["rows"]:
             return
         listed = report["listed"]

@@ -277,7 +277,12 @@ fn scheduled_preview_fails_if_the_selected_project_scan_is_incomplete() {
 fn reconcile_persists_one_routing_batch_and_only_requests_a_watched_dry_run() {
     use plangraph_cli::merge_close::reconcile_with;
 
-    let keeper = Fake(
+    let control = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+    ]);
+    let keeper = Script::new([(
+        json!({"apply":false,"watch":true,"require_seats":true}),
         json!({
             "merged_not_done": 3, "alert": true,
             "would_close": [{"key":"demo:A"}],
@@ -286,11 +291,10 @@ fn reconcile_persists_one_routing_batch_and_only_requests_a_watched_dry_run() {
                 {"key":"demo:C","reason":"evidence_unverified: deploy_pending: service"}
             ]
         }),
-        RefCell::default(),
-    );
+    )]);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("watch.json");
-    let line = reconcile_with(&keeper, Some(true), &path).unwrap();
+    let line = reconcile_with(&keeper, &control, Some(true), &path, Duration::ZERO).unwrap();
     assert_eq!(line.lines().count(), 1);
     let batch: Value =
         serde_json::from_str(line.strip_prefix("reconcile-merged\t").unwrap()).unwrap();
@@ -306,13 +310,8 @@ fn reconcile_persists_one_routing_batch_and_only_requests_a_watched_dry_run() {
     assert_eq!(batch["proposals"][0]["action"], "CLOSE");
     assert_eq!(batch["proposals"][1]["action"], "SLICE-OPEN");
     assert_eq!(batch["proposals"][2]["action"], "RESCOPE");
-    assert_eq!(
-        keeper.1.borrow().as_slice(),
-        &[(
-            "close_merged_auto".to_owned(),
-            json!({"apply":false,"watch":true,"require_seats":true}),
-        )]
-    );
+    control.assert_finished();
+    keeper.assert_finished();
 }
 
 #[test]
