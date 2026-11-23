@@ -453,7 +453,7 @@ class SpawnerRunner:
 
             from plangraph.routing_support.clients import CODEX_REVIEW_CLIENT_MISSING, PromptTransportError, codex_review_client, launch_stdin_payload
             from .resolver import host_skip_reason_async
-            codex, missing_client = codex_review_client(cmd[0], role, job_id)
+            codex, missing_client = codex_review_client(cmd[0], role, job_id, env=child_env)
             unavailable = missing_client or await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
                 job.status, job.exit_code = 'failed', CODEX_REVIEW_CLIENT_MISSING if missing_client else 1

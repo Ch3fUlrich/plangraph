@@ -13,6 +13,7 @@ pub(crate) trait Driver {
     fn disk_gb(&mut self) -> Result<u64, String>;
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String>;
     fn head(&mut self) -> Result<String, String>;
+    fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String>;
     /// Run the fast checks on `head`; success writes that head's stamp.
     fn fast_checks(&mut self, head: &str) -> Result<(), String>;
     /// Whether the fast-checks stamp for exactly `head` exists.
@@ -318,8 +319,15 @@ fn writer_attempt(
     prompt: &str,
     saved_session: Option<&str>,
 ) -> Result<i32, (i32, String)> {
-    // HEAD before the turn: a relaunch keeps the commits of the earlier attempts.
-    let mut turn_start = driver.head().map_err(|e| (6, e))?;
+    let base = match record["base_sha"].as_str() {
+        Some(base) => base.to_owned(),
+        // Older resume receipts can lack the admitted SHA.
+        None => driver.head().map_err(|e| (6, e))?,
+    };
+    let mut checked_head = record["fast_checks"]["head"]
+        .as_str()
+        .or_else(|| record["review"]["head"].as_str())
+        .map(str::to_owned);
     let session = if let Some(session) = saved_session {
         resume(driver, record, session, prompt)?;
         record.as_object_mut().unwrap().remove("landing_resume");
@@ -336,10 +344,13 @@ fn writer_attempt(
         let head = driver.head().map_err(|e| (6, e))?;
         record["final_head"] = json!(head);
         driver.save(record).map_err(|e| (6, e))?;
-        // No new commit since the turn began: the gates would rerun on the same head, or only
-        // report an empty range. Send the writer back to its items instead of resuming it on
-        // a failure it did not cause, or spending a review round on the same commit.
-        if head == turn_start {
+        // A first check can use commits already on the worktree at the start of the turn.
+        // Fix turns still need a different head before repeating checks or review.
+        if checked_head.as_deref() == Some(head.as_str())
+            || !driver
+                .has_commits_beyond(&base, &head)
+                .map_err(|e| (7, e))?
+        {
             idle += 1;
             if idle > NO_COMMIT_RESUMES || session.is_empty() {
                 return Err((
@@ -353,7 +364,7 @@ fn writer_attempt(
             continue;
         }
         idle = 0;
-        turn_start = head.clone();
+        checked_head = Some(head.clone());
         let started = stage::now();
         let checked = driver.fast_checks(&head);
         if matches!(&checked, Err(error) if error == STOPPED) {

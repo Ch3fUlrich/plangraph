@@ -101,11 +101,11 @@ def resolve_codex_client(env=None):
     return shutil.which("codex", path=env.get("PATH", os.defpath)), "PATH"
 
 
-def codex_review_client(harness, role, tag):
+def codex_review_client(harness, role, tag, *, env=None):
     """Resolve the native executable or return its review-specific failure."""
     if harness != "codex" or role != "review":
         return None, None
-    executable, searched = resolve_codex_client()
+    executable, searched = resolve_codex_client(env)
     return executable, None if executable else f"REVIEW {tag} FAIL client_missing {searched}"
 
 
