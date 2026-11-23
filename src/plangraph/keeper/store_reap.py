@@ -26,6 +26,7 @@ class ReapMixin:
         expired = []
         overdue = []
         aged = []
+        findings = 0
         with self._write():
             for item in self._all_items():
                 if item["state"] == "claimed" and item["lease_until"]:
@@ -46,9 +47,12 @@ class ReapMixin:
                         if not self._has_finding(item["key"], "review_overdue"):
                             self._finding(item["key"], "review_overdue",
                                           "in review for over 4h", now)
+                            findings += 1
                         overdue.append(item["key"])
             aged = self._age_priorities(principal, now)
-            self._alerts_expire(now)
+            alerts = self._alerts_expire(now)
+        if expired or aged or findings or alerts:
+            self._reap_revision = getattr(self, "_reap_revision", 0) + 1
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}
 
     def _age_priorities(self, principal, now):

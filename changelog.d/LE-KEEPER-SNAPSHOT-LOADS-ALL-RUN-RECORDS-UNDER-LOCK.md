@@ -1,0 +1,1 @@
+Keeper projects fleet data outside the request lock. It reuses unchanged run records and fleet results, sends only the fields the projector reads, and reports fleet projection time separately. Idle reaps skip snapshot publication.

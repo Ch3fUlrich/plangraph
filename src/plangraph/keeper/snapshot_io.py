@@ -27,9 +27,16 @@ class SnapshotPublication:
     """Serialize publication and keep an older build from replacing a newer one."""
 
     def __init__(self):
+        from ..fleet_snapshot import FleetProjection
+
+        self.fleet = FleetProjection()
         self.tickets = count()
-        self.latest = -1
+        self.latest = self.requested = -1
         self.lock = threading.Lock()
+
+    def reserve(self):
+        self.requested = next(self.tickets)
+        return self.requested
 
     def publish(self, ticket, path, snapshot, key):
         with timing.outside_request_lock():
@@ -43,7 +50,7 @@ def write_snapshot(server, principal) -> None:
     """Rewrite ``plan.snapshot.json`` atomically (temp file then rename)."""
     path = Path(server.config.snapshot)
     publication = getattr(server, "snapshot_publication", None)
-    ticket = next(publication.tickets) if publication is not None else None
+    ticket = publication.reserve() if publication is not None else None
     # A run-token principal (M2B-RUN-TOKENS) may only act on its item: the snapshot is
     # role-agnostic, so it is built as the system principal, as the reaper does.
     from .auth import RunPrincipal
@@ -51,7 +58,13 @@ def write_snapshot(server, principal) -> None:
     snapshot = timing.measured(part="build_ms")(server.store.snapshot)(who)
     try:
         from ..fleet_snapshot import load_fleet
-        snapshot["fleet"] = load_fleet(server.store)
+        load = timing.measured(part="fleet_ms")(load_fleet)
+        if publication is None:
+            snapshot["fleet"] = load(server.store)
+        else:
+            hosts = server.store.list_bus_hosts()
+            with timing.outside_request_lock():
+                snapshot["fleet"] = load(None, registry=hosts, projection=publication.fleet)
     except Exception as exc:  # noqa: BLE001 - optional fleet must never fail a snapshot
         # Exception messages can contain private store paths; use a fixed summary.
         logging.getLogger(__name__).warning(
@@ -69,8 +82,8 @@ def _publish(path, snapshot, key):
     body = timing.measured(part="encode_ms")(lambda: json.dumps(snapshot).encode("utf-8"))()
     path.parent.mkdir(parents=True, exist_ok=True)
     if key:   # M2B: signature then snapshot; a reader in the gap retries once. A crash between the
-              # two writes leaves a mismatch that FAILS CLOSED until the next write (the reaper
-              # rewrites the snapshot every reap_interval), never an unsigned accept.
+              # two writes leaves a mismatch that FAILS CLOSED until the next publication,
+              # never an unsigned accept.
         signature = timing.measured(part="sign_ms")(snapshot_sign.sign)(body, key).encode()
         timing.measured(part="write_ms")(_atomic_write)(snapshot_sign.sig_path(path), signature)
     timing.measured(part="write_ms")(_atomic_write)(path, body)

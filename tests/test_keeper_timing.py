@@ -14,7 +14,7 @@ from plangraph.keeper.errors import Refused
 PATTERN = re.compile(
     r"keeper: (request|writer|reaper|snapshot|changelog)_timing kind=(read|write|other)"
     r" wait_ms=\d+ hold_ms=\d+ build_ms=\d+ encode_ms=\d+ sign_ms=\d+"
-    r" write_ms=\d+ tick_ms=\d+ record_ms=\d+ submit_ms=\d+"
+    r" write_ms=\d+ tick_ms=\d+ record_ms=\d+ submit_ms=\d+ fleet_ms=\d+"
     r"(?: verb=[a-z_-]+ total_ms=\d+ query_ms=\d+ snapshot_write_ms=\d+)?")
 
 
