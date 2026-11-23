@@ -1,0 +1,1 @@
+- Attribute Keeper deployment proof to each item's landed work across direct PRs and trains, including merge resolutions, so unrelated units and binaries no longer block closure.
