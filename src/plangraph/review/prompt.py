@@ -91,17 +91,16 @@ def vector_block(vectors: list[str]) -> str:
 
 def assemble(vectors: list[str], parts: list[tuple[str, str]],
              *, preamble: bool = True, context: dict | None = None) -> str:
-    """Fixed preamble/rules/output contract first, item context and material last."""
+    """Stable rules, then review evidence, then vectors and output contract."""
     if not vectors:
         raise ValueError("vectors must not be empty")
     out = ""
     if preamble:
         out += NO_TOOLS_PREAMBLE + "\n"
-    out += render_brief("review", context, rules=load_tail().rstrip()) + "\n"
-    out += vector_block(vectors)
+    out += render_brief("review", context)
     for label, text in parts:
         out += "\n=== %s\n" % label + text
-    return out
+    return out + "\n\n" + vector_block(vectors) + "\n" + load_tail()
 
 
 def sha256(prompt: str) -> str:

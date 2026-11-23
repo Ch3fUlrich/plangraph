@@ -1,5 +1,12 @@
 # Spawner prompt rules
 
+Build each role prompt in this order. Start with the stable harness header, role
+skill, rules and gates so retries share a byte-identical prefix. Follow with
+changing run evidence and context. Put the task and its output contract last.
+Keep the review diff before the closing verdict reminder, including on grouped
+inline seats. A tool-less seat's reminder follows the same verdict contract as
+its brief.
+
 `render_fixer_brief` in `src/plangraph/routing_support/fixer.py` numbers every
 finding: each must be fixed, refuted by a named test, or reported as `not done:`
 prose with the reason. Never echo an unchecked checklist or use a `Remaining gaps`
@@ -50,6 +57,8 @@ then the role skill (`batch-writer` for a batch brief, `implement`, or `review`)
 byte-identical from the run checkout's `origin/main` (the working-tree copy of the same file when no
 `origin/main` exists; if neither is readable the prompt carries the header only), then the caller's brief. A brief
 that already starts with the skill text gets it once.
+The native writer places its fixed gate and Cargo rules between the skill and
+the caller's brief.
 
 A review leg whose catalog `tool_mode` is `inline-only` gets the `review_inline` header and
 no skill text: the header holds the inline rules (no tools, the change is quoted in the
