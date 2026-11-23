@@ -32,6 +32,15 @@ def test_retired_model_launch_is_denied(command):
     assert result.returncode == 2
     assert 'model_retired' in result.stderr and 'gpt-6.2-sol' in result.stderr
 
+
+@pytest.mark.parametrize('command', [
+    'codex exec -m gpt-6.2-sol',
+    'env opencode run --model omniroute/cx-gpt-6.2-sol',
+])
+def test_supported_model_launch_is_allowed(command):
+    result = run_bash(command)
+    assert (result.returncode, result.stderr) == (0, '')
+
 S2 = 'claude -p "$(id)"'            # shape 2: a one-shot claude whose prompt is expanded
 HD = "cat <<EOF\n`id`\nEOF\n"       # shape 1: an unquoted heredoc whose body runs `id`
 

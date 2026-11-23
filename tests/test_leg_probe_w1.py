@@ -433,7 +433,7 @@ def test_probe_many_skips_a_limited_leg(tmp_path, monkeypatch):
     server = MCPSpawnerServer(state=tmp_path / 'mcp')
     server.runner.leg_reader = store
     payload = asyncio.run(server.call_tool('plangraph_agent_probe', {'leg': 'zz-limited'}))
-    assert payload == dict(ok=False, probes=[by_id['zz-limited']])
+    assert payload == dict(ok=True, probes=[by_id['zz-limited']], limited_legs=['zz-limited'])
 
 
 def test_mcp_probe_string_leg_is_one_leg(tmp_path):
