@@ -123,8 +123,20 @@ mod tests {
 
     const FIXTURE: &str = include_str!("../tests/fixtures/batch-writer-input.txt");
 
+    fn parse_fixture(text: &str) -> Value {
+        let text = text.replace("\r\n", "\n");
+        serde_json::from_str(text.strip_prefix(PREFIX).unwrap()).unwrap()
+    }
+
     fn fixture() -> Value {
-        serde_json::from_str(FIXTURE.strip_prefix(PREFIX).unwrap()).unwrap()
+        parse_fixture(FIXTURE)
+    }
+
+    #[test]
+    fn parses_fixture_with_either_line_ending() {
+        let lf = FIXTURE.replace("\r\n", "\n");
+        let crlf = lf.replace('\n', "\r\n");
+        assert_eq!(parse_fixture(&crlf), parse_fixture(&lf));
     }
 
     fn assert_rejected(input: Value, error: &str) {
@@ -196,10 +208,11 @@ mod tests {
 
     #[test]
     fn renders_crlf_prefix_like_lf_prefix() {
-        let crlf = FIXTURE.replacen('\n', "\r\n", 1);
+        let lf = FIXTURE.replace("\r\n", "\n");
+        let crlf = lf.replacen('\n', "\r\n", 1);
         let rendered = render(&crlf).unwrap();
         assert!(matches!(rendered, Cow::Owned(_)));
-        assert_eq!(rendered, render(FIXTURE).unwrap());
+        assert_eq!(rendered, render(&lf).unwrap());
     }
 
     #[test]
