@@ -27,6 +27,34 @@ class InputMixin:
     """``_check_text``, ``_normalise`` and ``_qualify`` for :class:`Store`."""
 
     @staticmethod
+    def _criteria_amendment_fields(fields, key):
+        if not isinstance(fields, dict) or "done_criteria" not in fields:
+            return fields, {}
+        fields = dict(fields)
+        amendment = {}
+        for name in ("criteria_reason", "criteria_evidence"):
+            if name in fields:
+                value = fields.pop(name)
+                if not isinstance(value, str) or not value.strip() or len(value) > 600:
+                    raise Refused("validation", f"{name} must contain 1–600 characters")
+                guard(name, value, key)
+                amendment[name] = value
+        return fields, amendment
+
+    def _record_criteria_amendment(self, seq, principal, item, fields, amendment, now):
+        original = item.get("done_criteria")
+        if "done_criteria" not in fields or original == fields["done_criteria"]:
+            return
+        self.conn.execute(
+            "INSERT INTO criteria_amendments"
+            "(seq,key,original_text,new_text,reason,evidence,authority,ts)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (seq, item["key"], original, fields["done_criteria"],
+             amendment.get("criteria_reason", "Criteria edited through Keeper"),
+             amendment.get("criteria_evidence", f"event:{seq}"),
+             principal.name, self._iso(now)))
+
+    @staticmethod
     def _check_text(fields, key=None):
         """Refuse oversize, non-string or credential-shaped text, naming the field.
 
