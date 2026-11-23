@@ -1,9 +1,10 @@
-"""Request-shape checks and normalisation for item definitions.
+"""Item definition validation, normalisation, and criteria amendment audits.
 
 Split out of ``store.py`` (size budget): the text caps, the credential guard,
 the host check and the ``_normalise`` that turns one raw create/import dict into
 the definition shape.  Dependency and ``corrects`` keys are resolved through the
 alias table, so a definition may still name a key that has since been rehomed.
+Criteria amendments are recorded on edits and verified against definition events.
 """
 from __future__ import annotations
 
