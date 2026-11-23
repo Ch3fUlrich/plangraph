@@ -317,10 +317,9 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
         assert_eq!(states[sibling]["state"], "ok");
         assert!(states[sibling]["evidence"].is_null());
     }
-    assert_ne!(
-        states["claude-sonnet-5-5"]["evidence"]["quota_scope"],
-        "account"
-    );
+    let sonnet_evidence = &states["claude-sonnet-5-5"]["evidence"];
+    assert_eq!(sonnet_evidence["status"], 429);
+    assert_eq!(sonnet_evidence["caller"], "pg-spawnd:cli-result");
     let id = new_run_id();
     let record = crate::runs::create(
         dir.path(),
