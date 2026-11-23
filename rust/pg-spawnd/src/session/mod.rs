@@ -25,6 +25,7 @@ use request::Request;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
+    borrow::Cow,
     io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -194,7 +195,7 @@ fn local(
         return Ok(2);
     }
     let prompt_path = Path::new(&args.prompt);
-    let supplied = || read_text(prompt_path);
+    let supplied = || read_writer_prompt(prompt_path);
     let prompt = match request
         .restart
         .as_ref()
@@ -386,4 +387,15 @@ fn local(
         writeln!(out, "fleet-launch: started-unknown {name}")?;
     }
     Ok(0)
+}
+
+fn read_writer_prompt(path: &Path) -> io::Result<String> {
+    let text = read_text(path)?;
+    match crate::batch_writer_brief::render(&text).map_err(io::Error::other)? {
+        Cow::Borrowed(_) => Ok(text),
+        Cow::Owned(brief) => {
+            const SKILL: &str = include_str!("../../../../skills/batch-writer/SKILL.md");
+            Ok(crate::role_header::compose("claude", &brief, Some(SKILL)))
+        }
+    }
 }

@@ -2,6 +2,7 @@ use super::{
     paths::{basename, io_text, normalize, read_text, repr, resolve, shell_quote, Paths},
     placement::Host,
     process::capture,
+    read_writer_prompt,
     storage::{next_seq, record_path, register_child},
     Caps, Request,
 };
@@ -82,7 +83,7 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
         }
         restart.prompt.clone()
     } else {
-        read_text(prompt).map_err(|e| io_text(&e, prompt))?
+        read_writer_prompt(prompt).map_err(|e| io_text(&e, prompt))?
     };
     let mcp = args
         .option("mcp")

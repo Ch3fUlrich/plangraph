@@ -324,3 +324,32 @@ pub fn check_router_prompt(launcher: &Launcher) {
     assert!(system.contains("skills/router-core/SKILL.md"), "{system}");
     assert_eq!(args.last(), Some(&json!(PROMPT)));
 }
+
+pub fn check_batch_prompt(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    fs::write(
+        s.path("prompt"),
+        include_str!("../fixtures/batch-writer-input.txt"),
+    )
+    .unwrap();
+    let out = s.launch("writer").output().unwrap();
+    s.expect(
+        &out,
+        0,
+        &format!("{SID}\nfleet-launch: session writer-0001\nfleet-launch: started {SID}\n"),
+        "",
+    );
+    let child = s.json("child.json");
+    let prompt = child["argv"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert!(prompt.contains("\n# Items\n"), "{prompt}");
+    assert_eq!(
+        prompt.split_once("# Run values").map(|(_, run)| run),
+        include_str!("../fixtures/batch-writer-run-values.txt").strip_prefix("# Run values"),
+    );
+}

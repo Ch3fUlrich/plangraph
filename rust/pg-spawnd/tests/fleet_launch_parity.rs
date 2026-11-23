@@ -87,6 +87,7 @@ fn check(launcher: &sandbox::Launcher) {
     if matches!(launcher, sandbox::Launcher::Rust(_)) {
         restart::check(launcher);
         records::check_router_prompt(launcher);
+        records::check_batch_prompt(launcher);
     }
 }
 
