@@ -210,7 +210,7 @@ fn oversize_diff_splits_across_seats_and_single_oversize_file_refuses() {
     fs::create_dir_all(work.join("beta")).unwrap();
     fs::create_dir_all(work.join("gamma")).unwrap();
 
-    // 400 tokens -> leg max chars = 1200; combined diff across 3 files > 1200 chars, each file < 550 chars.
+    // Each patch fits the leg budget alongside the review contract, while the combined prompt splits.
     fs::write(work.join("alpha/a.rs"), format!("// {}\n", "a".repeat(260))).unwrap();
     fs::write(work.join("beta/b.rs"), format!("// {}\n", "b".repeat(260))).unwrap();
     fs::write(work.join("gamma/c.rs"), format!("// {}\n", "c".repeat(260))).unwrap();
@@ -308,7 +308,7 @@ fn oversize_diff_splits_across_seats_and_single_oversize_file_refuses() {
         "{failed_seats:?}"
     );
 
-    // Now test a single file larger than leg limit (1200 chars) -> refused naming the file.
+    // A single patch larger than the leg budget is refused with its file name.
     fs::write(
         work.join("alpha/huge.rs"),
         format!("// {}\n", "z".repeat(1400)),
@@ -576,7 +576,7 @@ fn binary_file_is_measured_as_the_inlined_base85_patch() {
     git(&work, &["commit", "-m", "bin\n\nWriter: gemini run-1"]);
     let head = git(&work, &["rev-parse", "HEAD"]);
     let (out, log) = review_in_repo(&work, tmp.path(), &base, &head);
-    // A "Binary files differ" stub would fit the 1200-char limit; the base85 patch does not.
+    // A "Binary files differ" stub would fit the leg budget; the base85 patch does not.
     assert_eq!(
         out.status.code(),
         Some(2),

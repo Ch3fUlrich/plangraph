@@ -7,8 +7,8 @@ fn bracket_file_name_is_measured_literally_not_as_a_wildcard() {
     let (tmp, work, _bare, base) = init_repo_with_origin();
     git(&work, &["checkout", "-b", "feat"]);
     fs::create_dir_all(work.join("a")).unwrap();
-    // Each file fits the 1200-char leg limit; read as a wildcard, `x[1].rs` also matches `x1.rs`,
-    // doubles in size and the review refuses it as one oversized file.
+    // Each patch fits alongside the review contract. With wildcard matching, measuring
+    // `x[1].rs` also includes the `x1.rs` patch and exceeds the leg budget.
     fs::write(work.join("a/x[1].rs"), format!("// {}\n", "w".repeat(300))).unwrap();
     fs::write(work.join("a/x1.rs"), format!("// {}\n", "v".repeat(300))).unwrap();
     git(&work, &["add", "-A"]);
