@@ -47,7 +47,7 @@ pub fn run_with(
 ) -> Result<Outcome, String> {
     let mut pass = ClosePass::default();
     pass.collect(keeper, require_seats, apply, project)?;
-    Ok(pass.finish())
+    Ok(pass.finish(false))
 }
 
 #[derive(Default)]
@@ -55,6 +55,8 @@ struct ClosePass {
     text: String,
     merged_not_done: u64,
     scan_errors: BTreeMap<String, String>,
+    deployment_text: String,
+    deployment_count: Option<usize>,
 }
 
 impl ClosePass {
@@ -85,6 +87,12 @@ impl ClosePass {
                 }
             }
             page_text(&mut self.text, &result);
+            if let Some(deployments) = result["deployment_pending"].as_array() {
+                *self.deployment_count.get_or_insert(0) += deployments.len();
+                for row in deployments {
+                    deployment_text(&mut self.deployment_text, row);
+                }
+            }
             let Some(after) = result["next_after"].as_str() else {
                 return if result["next_after"].is_null() {
                     Ok(())
@@ -99,17 +107,44 @@ impl ClosePass {
         }
     }
 
-    fn finish(mut self) -> Outcome {
+    fn finish(mut self, deployment_only: bool) -> Outcome {
+        if deployment_only {
+            self.text.clear();
+        }
+        self.text.push_str(&self.deployment_text);
+        if let Some(count) = self.deployment_count {
+            let _ = writeln!(self.text, "merged-not-live\t{count}");
+        }
         for (repo, reason) in self.scan_errors {
             let _ = writeln!(self.text, "scan-error\t{repo}\t{reason}");
         }
         let merged_not_done = self.merged_not_done;
-        let _ = writeln!(self.text, "merged-not-done\t{merged_not_done}");
+        if !deployment_only {
+            let _ = writeln!(self.text, "merged-not-done\t{merged_not_done}");
+        }
         Outcome {
             text: self.text,
             merged_not_done,
         }
     }
+}
+
+fn deployment_text(text: &mut String, row: &Value) {
+    let age = row["age_hours"]
+        .as_u64()
+        .map_or_else(|| "?".into(), |n| format!("{n}h"));
+    let missing = row["missing"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
+    let _ = writeln!(
+        text,
+        "deployment-pending\t{}\t{age}\t{missing}",
+        row["key"].as_str().unwrap_or("?")
+    );
 }
 
 fn page_text(text: &mut String, result: &Value) {
@@ -193,7 +228,12 @@ pub fn repos_with(keeper: &dyn Transport) -> Result<Vec<String>, String> {
         .collect()
 }
 
-fn run_scheduled(env: &Env, apply: bool, project: Option<&str>) -> Result<Outcome, String> {
+fn run_scheduled(
+    env: &Env,
+    apply: bool,
+    project: Option<&str>,
+    deployment_only: bool,
+) -> Result<Outcome, String> {
     let seats = require_seats(env)?;
     let keeper = SlowKeeper {
         env,
@@ -216,7 +256,10 @@ fn run_scheduled(env: &Env, apply: bool, project: Option<&str>) -> Result<Outcom
             _ => return Err("keeper reply has no valid merge index status".into()),
         }
     }
-    let mut pass = ClosePass::default();
+    let mut pass = ClosePass {
+        deployment_count: Some(0),
+        ..ClosePass::default()
+    };
     if let Some(project) = project {
         pass.collect(&keeper, seats, apply, Some(project))?;
     } else {
@@ -232,32 +275,36 @@ fn run_scheduled(env: &Env, apply: bool, project: Option<&str>) -> Result<Outcom
     if !apply && !pass.scan_errors.is_empty() {
         return Err(format!("incomplete merge scan: {:?}", pass.scan_errors));
     }
-    Ok(pass.finish())
+    Ok(pass.finish(deployment_only))
 }
 
 /// The call the land step makes after a merge: the job with the configured switch.
 pub fn run_once(env: &Env, project: Option<&str>) -> Result<Outcome, String> {
-    run_scheduled(env, true, project)
+    run_scheduled(env, true, project, false)
 }
 
-/// `merge-close [--count | --repos] [--project NAME]`; `--count` prints only the number of
-/// merged items that are not done and `--repos` the scanned repositories, one per line;
-/// neither changes anything.
+/// `merge-close [--count | --repos | --deploy-status] [--project NAME]`.
+/// The flags only report counts, repositories, or unproven deployments.
 pub fn run(env: &Env, args: &[String]) -> i32 {
     let mut count = false;
     let mut repos = false;
+    let mut deploy_status = false;
     let mut project = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--count" => count = true,
             "--repos" => repos = true,
+            "--deploy-status" => deploy_status = true,
             "--project" => match rest.next() {
                 Some(name) => project = Some(name.as_str()),
                 None => return usage(),
             },
             _ => return usage(),
         }
+    }
+    if u8::from(count) + u8::from(repos) + u8::from(deploy_status) > 1 {
+        return usage();
     }
     if repos {
         let keeper = SlowKeeper {
@@ -275,7 +322,7 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
             }
         };
     }
-    let outcome = run_scheduled(env, !count, project);
+    let outcome = run_scheduled(env, !(count || deploy_status), project, deploy_status);
     match outcome {
         Ok(done) => {
             if count {
@@ -293,6 +340,8 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
 }
 
 fn usage() -> i32 {
-    eprintln!("usage: plangraph merge-close [--count | --repos] [--project NAME]");
+    eprintln!(
+        "usage: plangraph merge-close [--count | --repos | --deploy-status] [--project NAME]"
+    );
     2
 }

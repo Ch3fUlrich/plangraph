@@ -7,8 +7,11 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
+import threading
+from copy import copy
 import urllib.parse
 
 from ..inbox import routes as _inbox
@@ -336,6 +339,52 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "grant_apply": _grant_verb("grant_apply"),
                 "revoke_apply": _grant_verb("revoke_apply"),
                 "record_run": _record_run}
+
+
+class MergeRefresh:
+    """Publish a complete scan to HTTP close calls, including partial-scan errors."""
+
+    def __init__(self, server):
+        self.server = server
+        self.state = "idle"
+        self.used = False
+
+    def control(self, action):
+        server = self.server
+        if action == "projects":
+            projects = sorted({project for _, project in server.store.merge_candidates()})
+            if not projects and self.state == "ready":
+                self.used = True
+            return {"projects": projects}
+        if action not in ("start", "status"):
+            raise Refused("validation", "refresh must be start, status or projects")
+        if action == "start" and (self.state == "idle" or (self.state == "ready" and self.used)):
+            self.state, self.used = "running", False
+            threading.Thread(target=self._build, name="keeper-merge-index", daemon=True).start()
+        return {"scan": self.state}
+
+    def consume(self):
+        if self.state == "running":
+            raise Refused("conflict", "merge index refresh is running")
+        self.used = self.state == "ready"
+
+    def _build(self):
+        server = self.server
+        try:
+            with server.lock:
+                scan = copy(server.store)
+                candidates = scan.merge_candidates()
+            scan.warm_merge_scan(candidates)
+            published = {field: scan.__dict__[field] for field in
+                         ("_warmed", "_lanes", "_deploy_warm", "_merge_scan_errors")}
+        except Exception as exc:
+            published = dict(_warmed={}, _lanes={}, _deploy_warm={},
+                             _merge_scan_errors={"*": f"merge_scan_failed: {type(exc).__name__}"})
+        with server.lock:
+            server.store.__dict__.update(published)
+            self.state = "ready"
+        logging.getLogger("plangraph.keeper").info("merge_index_refresh repos=%d failed=%d",
+            len(published["_warmed"]), len(published["_merge_scan_errors"]))
 
 
 def _close_merged_auto(store, principal, body, need):

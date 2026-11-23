@@ -20,7 +20,8 @@ import threading
 import time
 
 from .snapshot_io import write_snapshot
-from . import timing
+from . import outage, timing
+from .errors import ConnectionLost
 
 __all__ = ["SnapshotWriter", "ALARM_AFTER"]
 
@@ -132,3 +133,45 @@ class SnapshotWriter(threading.Thread):
                 self._cond.notify_all()
             if self.is_alive() and threading.current_thread() is not self:
                 self.join(timeout=5)
+
+
+class Reaper(threading.Thread):
+    """Calls ``Store.reap`` every ``config.reap_interval`` seconds."""
+
+    def __init__(self, server):
+        super().__init__(name="keeper-reaper", daemon=True)
+        self.server = server
+        self.interval = getattr(server.config, "reap_interval", 60.0)
+        #: NOT ``_stop``: ``Thread`` owns that name; shadowing it breaks join.
+        self._halt = threading.Event()
+        self._published_reap = 0
+
+    def run(self):
+        while not self._halt.wait(self.interval):
+            try:
+                with timing.RequestTimer(self.server.lock, event="reaper_timing"):
+                    store = self.server.store
+                    store.reap(self.server.system)
+                    revision = getattr(store, "_reap_revision", 0)
+                    writer = self.server.snapshot_writer
+                    publication = self.server.snapshot_publication
+                    retry = writer is None and publication.requested > publication.latest
+                    if revision != self._published_reap or retry:
+                        if writer is None:
+                            write_snapshot(self.server, self.server.system)
+                        else:
+                            writer.mark()
+                        self._published_reap = revision
+                    outage.stamp(self.server.config)      # M2B-OUTBOX: liveness for the outage grace
+                    if self.server.anchorer is not None:      # M2B-ANCHOR: done transitions + hourly
+                        self.server.anchorer.tick(self.server.store.conn)
+            except ConnectionLost:
+                self.server.fail("postgres connection lost")
+                continue
+            except Exception:  # noqa: BLE001 - the reaper never dies loudly
+                continue
+
+    def stop(self):
+        self._halt.set()
+        if self.is_alive():
+            self.join(timeout=2)

@@ -542,3 +542,39 @@ def test_train_part_merge_commit_own_unit_counts_for_the_part_key(env):  # noqa:
 
     pinned = _train_with_part(env, build, evil=evil)
     assert ("A", "deploy/systemd/resolved.service") in env.store._deploy_changes(pinned)[1]
+
+
+def test_merge_close_reports_the_age_of_unproven_unit_and_live_work(env):
+    from plangraph.keeper.evidence_types import as_epoch
+
+    env.store.edit_definition(env.p("router"), "demo:A", {"note": "Deploy-Hosts: fixture"})
+    env.store.edit_definition(env.p("router"), "demo:B", {"done_criteria": "Live: observe the service in use."})
+    _land_with_unit(env.repo.root, name="timer")
+    env.repo.land("live-clause", "Plan-Item: demo:B", 97)
+    env.clock.t = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main")) + 26 * 3600
+    preview = frozen(env, require_seats=False, apply=False)
+    pending = {row["key"]: row for row in preview["deployment_pending"]}
+    assert pending["demo:A"]["missing"] == ["fixture:new.service"]
+    assert pending["demo:B"]["missing"] == ["live_evidence_missing"]
+    assert all(row["age_hours"] >= 26 and row["merged_at"] for row in pending.values())
+    assert preview["merged_not_done"] == 2 and not preview["would_close"]
+    assert all(env.store._item(key)["state"] == "open" for key in pending)
+
+
+def test_a_live_clause_requires_verified_evidence_from_after_the_merge(env):
+    from plangraph.keeper.evidence import VERIFIERS
+    from plangraph.keeper.evidence_types import as_epoch
+
+    key = "demo:A"
+    env.store.edit_definition(env.p("router"), key, {"done_criteria": "Live: observe the service in use."})
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    env.repo.land("live", f"Plan-Item: {key}", 98)
+    merged = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main"))
+    env.clock.t = merged - 60
+    proof = {"host": "fixture", "unit": "test.service", "is_active": "active"}
+    assert env.store.add_evidence_router(env.p("router"), key, "deploy", proof)["verified"]
+    env.clock.t = merged + 60
+    assert frozen(env, require_seats=False, apply=False)["deployment_pending"][0]["key"] == key
+    assert env.store.add_evidence_router(env.p("router"), key, "deploy", proof)["verified"]
+    result = frozen(env, require_seats=False, apply=False)
+    assert result["deployment_pending"] == [] and result["would_close"][0]["key"] == key
