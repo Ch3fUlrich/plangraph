@@ -152,3 +152,33 @@ def test_provider_snapshot_limit_requires_a_current_reset(tmp_path):
     assert reader(model, now=119) == dict(state='limited', reason='rate_limited',
                                          evidence={'reset_at': 120})
     assert reader(model, now=120) == dict(state='down', reason='provider_inactive', evidence=None)
+
+
+@pytest.mark.parametrize('harness,booked', [('codex', False), ('opencode', False), ('codex', True)])
+def test_launch_admission_uses_the_selected_harness(tmp_path, monkeypatch, harness, booked):
+    model = 'omniroute/cx-gpt-6.2-sol-medium'
+    store = leg_state.LegStateStore(tmp_path / 'legs.sqlite')
+    if booked:
+        store.record_provider_response(model, 429, 'quota', {'retry-after': '300'}, 'fixture')
+    snapshot = {'omniroute': quota_snapshots.ProviderState('omniroute', True, '', '')}
+    reader = leg_state.LegAdapter(store, SimpleNamespace(snapshot=lambda: snapshot), [], enabled=True)
+    leg = SimpleNamespace(model=model, harness=harness)
+    probes = []
+
+    async def probe(runner, chosen, **kwargs):
+        probes.append(chosen.harness)
+        return dict(ok=True)
+
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    skip = asyncio.run(leg_probe.before_launch(
+        SimpleNamespace(leg_reader=reader), leg, 'implement', False))
+    if booked:
+        assert skip.startswith('limited until ')
+        assert probes == []
+    elif harness == 'codex':
+        assert skip is None
+        assert probes == ['codex']
+    else:
+        assert skip == 'not_listed'
+        assert probes == []

@@ -60,8 +60,10 @@ disabled skip. Stops with no expiry remain permanent. These local operator stops
 do not override provider availability. A Go quota stop does not suppress a personal
 credential leg; normal routing advances through the remaining eligible inputs.
 When every otherwise eligible provider is limited/down/expired, static manual or
-disabled skips remain visible but do not change the exhausted run's exit 4 into a
-contract refusal. Static-policy-only or request-size failures still refuse.
+disabled skips remain visible without changing the exhausted run's exit 4.
+Missing models and inactive or unreachable providers also preserve exit 4
+when the remaining eligible capacity is exhausted. A route with only those
+skips, only static policy skips, or a request-size failure still refuses.
 
 ## Bounded writer liveness
 
