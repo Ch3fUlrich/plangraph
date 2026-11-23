@@ -294,6 +294,7 @@ def test_admin_migrate_on_sqlite(tmp_path, monkeypatch, capsys):
 
 
 def test_admin_migrate_uses_private_dsn_and_check_schema_uses_runtime_dsn(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
     from plangraph.keeper import cli
 
     cfg = tmp_path / "keeper.json"
@@ -313,6 +314,9 @@ def test_admin_migrate_uses_private_dsn_and_check_schema_uses_runtime_dsn(tmp_pa
         return Connection()
 
     monkeypatch.setattr(kdb, "open_db", open_db)
+    monkeypatch.setattr(db_pg, "_psycopg", lambda: SimpleNamespace(
+        conninfo=SimpleNamespace(conninfo_to_dict=lambda value: {"dbname": value}),
+    ))
     admin = ["--config", str(cfg), "admin"]
     migrate = [*admin, "migrate", "--dsn-file", str(dsn)]
     assert cli.main(migrate) == 2
@@ -325,6 +329,49 @@ def test_admin_migrate_uses_private_dsn_and_check_schema_uses_runtime_dsn(tmp_pa
         {"create": True, "backend": "postgres", "dsn": "migration", "schema": "keeper"},
         {"create": False, "backend": "postgres", "dsn": "runtime", "schema": "keeper"},
     ]
+
+
+@pytest.mark.parametrize(("contents", "expected"), [
+    ("dbname=keeper user=migrator\n", "dbname=keeper user=migrator"),
+    ("PG_DSN=dbname=keeper user=migrator\n", "dbname=keeper user=migrator"),
+    ("PG_DSN=\"dbname=keeper user=migrator\"\n", "dbname=keeper user=migrator"),
+    ("PG_DSN='postgresql:///keeper'\n", "postgresql:///keeper"),
+    ("PG_DSN=postgresql:///keeper\n\n", None),
+    ("PG_DSN=postgresql:///keeper\nOTHER=fixture\n", None),
+    ("OTHER=postgresql:///keeper\n", None),
+    ("PG_DSN=\"postgresql:///keeper\n", None),
+    ("PG_DSN=\n", None),
+    ("not a DSN\n", None),
+])
+def test_migration_dsn_formats(contents, expected, tmp_path, monkeypatch, capsys):
+    pytest.importorskip("psycopg")
+    from plangraph.keeper import cli
+
+    cfg = tmp_path / "keeper.json"
+    cfg.write_text('{"backend":"postgres","dsn":"runtime","pg_schema":"keeper"}')
+    cfg.chmod(0o600)
+    dsn = tmp_path / "migration.dsn"
+    dsn.write_text(contents)
+    dsn.chmod(0o600)
+    opened = []
+
+    def open_db(_path, **kwargs):
+        opened.append(kwargs["dsn"])
+        return type("Connection", (), {"close": lambda self: None})()
+
+    monkeypatch.setattr(kdb, "open_db", open_db)
+    migrate = ["--config", str(cfg), "admin", "migrate", "--dsn-file", str(dsn)]
+    if expected is None:
+        assert cli.main(migrate) == 2
+        assert not opened
+        assert capsys.readouterr().err == (
+            "admin: migration DSN file: expected a DSN or one PG_DSN= line\n"
+        )
+    else:
+        assert cli.main([*migrate, "--dry-run"]) == 0
+        assert not opened
+        assert cli.main(migrate) == 0
+        assert opened == [expected]
 
 
 def test_migrate_existing_schema_does_not_require_database_create():

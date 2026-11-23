@@ -253,6 +253,7 @@ def _add_admin(sub):
 
     migrate = commands.add_parser("migrate", help="apply pending schema migrations (Postgres) / upgrade (SQLite)")
     migrate.add_argument("--dsn-file", help="private file holding the Postgres migration role DSN")
+    migrate.add_argument("--dry-run", action="store_true", help="validate --dsn-file without connecting")
     commands.add_parser("check-schema", help="check the Postgres schema using the running keeper's role")
 
     add = commands.add_parser("add-principal")
