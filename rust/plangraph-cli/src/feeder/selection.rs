@@ -184,9 +184,10 @@ fn age(item: &Task) -> i64 {
         .map(|t| t.timestamp_millis())
         .unwrap_or(i64::MAX)
 }
-/// Optional honest-ready groups override all other data; legacy context guard
-/// facts also exclude reconcilable items before the claim activity runs.
-pub fn pick(ready: &Value, runs: &[Run], _policy: &Policy) -> Option<Task> {
+/// Eligible items in launch order: PR work, then CI fixes, then the rest; higher priority,
+/// then older, first. Optional honest-ready groups override all other data; legacy context
+/// guard facts also exclude reconcilable items before the claim activity runs.
+fn eligible(ready: &Value, runs: &[Run]) -> Option<Vec<Task>> {
     validate_ready(ready).ok()?;
     let excluded: BTreeSet<&str> = ["needs_reconcile", "in_progress"]
         .iter()
@@ -203,7 +204,7 @@ pub fn pick(ready: &Value, runs: &[Run], _policy: &Policy) -> Option<Task> {
         !excluded.contains(i.key.as_str())
             && !reconcile(i)
             && i.state.as_deref().is_none_or(|s| s == "open")
-            && !runs.iter().any(|r| r.active() && r.item_key == i.key)
+            && !runs.iter().any(|r| r.active() && r.holds(&i.key))
             && !runs.iter().any(|r| r.writer() && overlap(i, r))
     });
     items.sort_by(|a, b| {
@@ -213,5 +214,41 @@ pub fn pick(ready: &Value, runs: &[Run], _policy: &Policy) -> Option<Task> {
             .then(age(a).cmp(&age(b)))
             .then(a.key.cmp(&b.key))
     });
-    items.into_iter().next()
+    Some(items)
+}
+pub fn pick(ready: &Value, runs: &[Run], _policy: &Policy) -> Option<Task> {
+    eligible(ready, runs)?.into_iter().next()
+}
+fn related(item: &Task, batch: &[Task]) -> bool {
+    batch.iter().any(|member| {
+        family(&item.key) == family(&member.key)
+            || item.files.iter().any(|a| {
+                member
+                    .files
+                    .iter()
+                    .any(|b| crate::paths::paths_overlap(a, b))
+            })
+    })
+}
+/// The highest-priority eligible item and the eligible items related to it (same family or
+/// sharing files), in launch order, up to `policy.batch_max_items`. Items of a batch share
+/// one writer; two batches never share a file because every other item is claimed on its own.
+pub fn pick_batch(ready: &Value, runs: &[Run], policy: &Policy) -> Vec<Task> {
+    let mut items = eligible(ready, runs).unwrap_or_default().into_iter();
+    let Some(seed) = items.next() else {
+        return Vec::new();
+    };
+    let mut batch = vec![seed];
+    let mut rest: Vec<Task> = items.collect();
+    let order: Vec<String> = batch.iter().chain(&rest).map(|t| t.key.clone()).collect();
+    let limit = policy.batch_max_items.max(1);
+    // An item related only through a later member still joins: scan until nothing is added.
+    while batch.len() < limit {
+        let Some(at) = rest.iter().position(|item| related(item, &batch)) else {
+            break;
+        };
+        batch.push(rest.remove(at));
+    }
+    batch.sort_by_key(|t| order.iter().position(|k| *k == t.key));
+    batch
 }

@@ -11,7 +11,7 @@ pub use adapters::{Env, SlowKeeper, Transport};
 pub(crate) use adapters::{MERGE_INDEX_EXPIRED, MERGE_INDEX_RUNNING};
 pub use quota::run_status as quota_status;
 pub use runtime::run;
-pub use selection::{decode_task, pick, prepare_ready, validate_ready};
+pub use selection::{decode_task, pick, pick_batch, prepare_ready, validate_ready};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -50,6 +50,8 @@ pub struct Policy {
     pub quota_floor_percent: f64,
     pub facts_max_age_seconds: i64,
     pub estimate_tokens: u64,
+    /// Related ready items one writer batch may hold; 1 keeps one item per run.
+    pub batch_max_items: usize,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -63,6 +65,7 @@ impl Default for Policy {
             quota_floor_percent: 10.0,
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
+            batch_max_items: 1,
         }
     }
 }
@@ -83,8 +86,15 @@ pub struct Run {
     pub role: String,
     #[serde(default, deserialize_with = "null_default")]
     pub files: Vec<String>,
+    /// Every item of a batch run; empty for a run of one item.
+    #[serde(default, deserialize_with = "null_default")]
+    pub item_keys: Vec<String>,
 }
 impl Run {
+    /// Whether this run works on `key`, as its item or as a member of its batch.
+    pub fn holds(&self, key: &str) -> bool {
+        self.item_key == key || self.item_keys.iter().any(|k| k == key)
+    }
     pub fn active(&self) -> bool {
         !pg_worker_core::run::record::releases_ownership(&self.status)
     }
@@ -147,6 +157,7 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         || p.ram_per_run_bytes == 0
         || p.disk_floor_bytes == 0
         || p.estimate_tokens == 0
+        || p.batch_max_items == 0
     {
         Some("invalid_policy")
     } else if f.observed_at > f.now || f.now.saturating_sub(f.observed_at) > p.facts_max_age_seconds
@@ -219,6 +230,17 @@ pub trait Launch {
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError>;
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String>;
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String>;
+    /// After `key` is claimed: the key of another claimed item (outside `batch`) whose files
+    /// overlap `files`. The claimant yields to any such claim, so two hosts claiming at once
+    /// never both keep overlapping files. The default has no shared registry to ask.
+    fn rival(
+        &mut self,
+        _key: &str,
+        _files: &[String],
+        _batch: &[String],
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
 }
 pub fn spawn(card: &Value, brief: &str, claim: &mut impl Launch) -> Result<Value, SpawnError> {
     let key = card["item_key"]
@@ -248,16 +270,18 @@ pub fn dispatch(
     if dry_run {
         Ok(json!({"decision":"would_spawn", "card":card, "brief":brief}))
     } else {
-        spawn(card, brief, launch).map(|run| {
-            let decision = if matches!(
-                run["status"].as_str(),
-                Some("queued" | "unknown" | "planned")
-            ) {
-                "pending"
-            } else {
-                "spawned"
-            };
-            json!({"decision":decision, "run":run})
-        })
+        spawn(card, brief, launch).map(decided)
     }
+}
+/// The row of a launched run: queued, unknown and planned receipts stay pending.
+pub(crate) fn decided(run: Value) -> Value {
+    let decision = if matches!(
+        run["status"].as_str(),
+        Some("queued" | "unknown" | "planned")
+    ) {
+        "pending"
+    } else {
+        "spawned"
+    };
+    json!({"decision":decision, "run":run})
 }
