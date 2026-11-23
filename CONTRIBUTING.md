@@ -17,7 +17,8 @@ command; never override this with a private target. See [disk limits and
 cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty.
 
 On Linux, preflight calls `pg-spawnd host post-run-cargo` after all checks
-finish and the build leases have been released. The helper trims idle
+finish and the build leases have been released. Older pg-spawnd installs
+skip this extra trim until upgraded. The helper trims idle
 build entries first and can reclaim an identified debug profile if the
 shared target still exceeds its cap.
 

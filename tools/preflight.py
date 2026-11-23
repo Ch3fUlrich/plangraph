@@ -759,7 +759,10 @@ def _main(argv, root, cleanup):
         else:
             try:
                 code, output = run([spawnd, 'host', 'post-run-cargo'], root, env)
-                print(f"cargo post-run trim {'skipped' if code else 'result'}: {output.strip()}", flush=True)
+                detail = output.strip()
+                legacy_usage = code == 2 and detail.startswith("Usage: pg-spawnd host <") and "post-run-cargo" not in detail
+                if not legacy_usage:
+                    print(f"cargo post-run trim {'skipped' if code else 'result'}: {detail}", flush=True)
             except (OSError, subprocess.SubprocessError) as exc:
                 print(f'cargo post-run trim skipped: {exc}', flush=True)
     return exit_code

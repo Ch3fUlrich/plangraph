@@ -670,7 +670,12 @@ def test_cargo_lease_is_shared_between_runs(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux disk hygiene")
-def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch):
+@pytest.mark.parametrize(("reply", "message"), [
+    ((0, "{}\n"), "cargo post-run trim result: {}"),
+    ((2, "Usage: pg-spawnd host <work-disk|wsl-cache-guard>\n"), None),
+    ((2, "process inventory unavailable\n"), "cargo post-run trim skipped: process inventory unavailable"),
+])
+def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch, capsys, reply, message):
     from plangraph.spawner.host_ready import cargo_lease
 
     target = repo.parent / (repo.name + "-post-run-cache")
@@ -690,9 +695,14 @@ def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch)
             assert calls[-1][0][:2] == ["cargo", "fmt"]
             with cargo_lease(exclusive=True):
                 calls.append((command, cwd, env))
-            return 0, "{}\n"
+            return reply
         return real_run(command, cwd, env)
 
     monkeypatch.setattr(preflight, "run", run)
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
     assert calls[-1][0] == ["/fixture/pg-spawnd", "host", "post-run-cargo"]
+    output = capsys.readouterr().out
+    if message is None:
+        assert "cargo post-run trim" not in output
+    else:
+        assert message in output

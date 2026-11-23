@@ -108,6 +108,18 @@ fn user_home(_: &str) -> io::Result<PathBuf> {
 #[cfg(unix)]
 #[derive(Debug)]
 pub struct CacheLease(File);
+#[cfg(target_os = "linux")]
+impl CacheLease {
+    /// Lock a validated lease file until the caller has finished reclaiming.
+    pub(crate) fn try_exclusive_file(file: File) -> io::Result<Option<Self>> {
+        try_lock_file(file, libc::LOCK_EX)
+    }
+
+    pub(crate) fn file(&self) -> &File {
+        &self.0
+    }
+}
+
 #[cfg(unix)]
 impl Drop for CacheLease {
     fn drop(&mut self) {
@@ -147,7 +159,6 @@ pub fn writer_lease(target: &Path) -> io::Result<CacheLease> {
 
 #[cfg(unix)]
 fn try_lease(target: &Path, mode: libc::c_int) -> io::Result<Option<CacheLease>> {
-    use std::os::fd::AsRawFd;
     let mut name = target
         .components()
         .next_back()
@@ -166,6 +177,12 @@ fn try_lease(target: &Path, mode: libc::c_int) -> io::Result<Option<CacheLease>>
                 .ok_or_else(|| io::Error::other("cache root needs a parent"))?
                 .join(name),
         )?;
+    try_lock_file(lease, mode)
+}
+
+#[cfg(unix)]
+fn try_lock_file(lease: File, mode: libc::c_int) -> io::Result<Option<CacheLease>> {
+    use std::os::fd::AsRawFd;
     // SAFETY: lease owns a valid descriptor; flock does not retain pointers.
     if unsafe { libc::flock(lease.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
         return Ok(Some(CacheLease(lease)));
