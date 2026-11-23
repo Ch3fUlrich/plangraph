@@ -1,5 +1,5 @@
 {
-  "about": "One table of GO-row decision cells and the keeper's verdict on each. Every reader of a GO row (the keeper close path, `pg go-row check`, and the plangraph-data callers go-row-gate, gocheck and merge-part) must give the same accept/refuse. Grammar: store_waiver.GO_PREFIX.",
+  "about": "One table of GO-row decision cells and the keeper's verdict on each. Every reader of a GO row (the keeper close path, `pg go-row check`, and the router callers go-row-gate, gocheck and merge-part) must give the same accept/refuse. Grammar: store_waiver.GO_PREFIX.",
   "rows": [
     {"name": "stamp and date -u", "row": "(18:30Z, date -u) GO #12 GO-HEAD {head}", "accept": true},
     {"name": "stamp only", "row": "(18:30Z) GO #12 GO-HEAD {head}", "accept": true},
