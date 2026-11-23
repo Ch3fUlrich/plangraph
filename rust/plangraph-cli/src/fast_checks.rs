@@ -201,6 +201,41 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
         for path in paths {
             affected.args.extend(["--changed".into(), path.clone()]);
         }
+        if root.join("tests/test_fleet_snapshot.py").is_file() {
+            let mut select = affected.args.clone();
+            select.retain(|arg| arg != "--run");
+            let selected = output(root, &select)?;
+            let plan: serde_json::Value = serde_json::from_str(
+                selected
+                    .lines()
+                    .next()
+                    .ok_or("missing affected test plan")?,
+            )
+            .map_err(|error| error.to_string())?;
+            if plan["tests"]
+                .as_array()
+                .ok_or("invalid affected test plan")?
+                .iter()
+                .any(|path| path == "tests/test_fleet_snapshot.py")
+            {
+                // Cargo verifies the sources even when another checkout built the cache last.
+                steps.push(step(
+                    "fleet-spawnd",
+                    &[
+                        "cargo",
+                        "build",
+                        "--locked",
+                        "--manifest-path",
+                        "rust/Cargo.toml",
+                        "-p",
+                        "pg-spawnd",
+                        "--bin",
+                        "pg-spawnd",
+                    ],
+                ));
+                affected.args.push("--fleet-spawnd-prebuilt".into());
+            }
+        }
         steps.push(affected);
     }
     Ok((selection, steps))
