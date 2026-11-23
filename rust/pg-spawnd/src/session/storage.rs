@@ -240,7 +240,7 @@ pub(super) fn publish(
     mcp: &Path,
     name: &str,
     seq: u64,
-    sid: Option<&str>,
+    (lifecycle, sid): (&crate::external_run::Registered, Option<&str>),
 ) -> io::Result<Value> {
     let args = &request.args;
     let mut spec = request.spec.clone();
@@ -286,6 +286,7 @@ pub(super) fn publish(
     spec["session_name"] = json!(name);
     spec["seq"] = json!(seq);
     spec["session_id"] = json!(sid);
+    spec["run_id"] = json!(lifecycle.id());
     spec["job_id"] = json!(sid.map(|id| &id[..8]));
     let path = record_path(request);
     atomic_json(&path, &spec, ".launch-")?;

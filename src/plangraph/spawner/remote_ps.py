@@ -135,10 +135,16 @@ def exit_reason(code):
 
 def query_host(host, timeout):
     cursor = host.get('lifecycle_cursor')
-    if cursor is None:
+    day = host.get('coverage_day')
+    if day is not None:
+        argv = ['pg-spawnd', 'attempt-coverage-input', day]
+    elif cursor is not None:
+        argv = ['pg-spawnd', 'runs', '--changed-since', str(cursor)]
+    else:
+        argv = None
+    if argv is None:
         command, plan = host_invocation(host, query=True)
     else:
-        argv = ['pg-spawnd', 'runs', '--changed-since', str(cursor)]
         command, plan = invocation(host, shlex.join(argv), [{'argv': argv}])
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
@@ -293,6 +299,28 @@ def lifecycle_command(state, *args, **kwargs):
     binary = os.environ.get(_LIFECYCLE_PUBLISHER) or _projection_binary()
     return subprocess.run([binary, *args], check=True, timeout=10,
                           env=dict(os.environ, PLANGRAPH_SPAWN_STATE=str(state)), **kwargs)
+
+def attempt_coverage_inputs(state, day, *, transport=query_host):
+    """Collect the same closed UTC day from the local and configured remote hosts."""
+    def decode(payload):
+        result = json.loads(payload)
+        if result['day'] != day or not all(isinstance(result[k], list) for k in ('runs', 'fleet')):
+            raise ValueError('invalid attempt coverage input')
+        return result
+
+    evidence = decode(lifecycle_command(state, 'attempt-coverage-input', day,
+                                        stdout=subprocess.PIPE).stdout)
+
+    def fetch(host):
+        if host.get('invalid'):
+            raise ValueError('invalid attempt coverage host configuration')
+        return decode(transport(dict(host, coverage_day=day), TIMEOUT))
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        for remote in pool.map(fetch, configured_hosts()):
+            for source in ('runs', 'fleet'):
+                evidence[source].extend(remote[source])
+    return evidence
 
 
 def publish_run_record(state, path, body):

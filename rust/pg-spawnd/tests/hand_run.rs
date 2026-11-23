@@ -1,5 +1,10 @@
 #![cfg(target_os = "linux")]
 
+mod spawn_attempt_delivery;
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
+use serde_json::Value;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -23,6 +28,7 @@ impl Fixture {
         for dir in [&checkout, &target, &bin] {
             fs::create_dir(dir).unwrap();
         }
+        fs::create_dir(checkout.join(".git")).unwrap();
         Self {
             root,
             checkout,
@@ -115,6 +121,80 @@ fn detached_fixture() -> Fixture {
 }
 
 #[test]
+fn hand_writer_and_external_review_record_terminal_outcomes() {
+    let fixture = detached_fixture();
+    let state = fixture.root.path().join("spawner");
+    let writer = fixture.executable("codex", "exit 0");
+    let reviewer = fixture.executable("agy", "kill -TERM $$");
+    let foreground_reviewer = fixture.executable("claude", "kill -TERM $$");
+    let run = |target| {
+        let mut command = fixture.command(target);
+        command
+            .env("PLANGRAPH_SPAWN_STATE", &state)
+            .env("PLANGRAPH_HOST", "workstation");
+        command
+    };
+    assert!(run(Some(fixture.target.as_path()))
+        .arg("--")
+        .arg(writer)
+        .status()
+        .unwrap()
+        .success());
+    let review = fixture.root.path().join("review");
+    assert_eq!(
+        run(None)
+            .args([
+                "--unit-child",
+                fixture.root.path().join("result").to_str().unwrap(),
+                review.to_str().unwrap(),
+                "--"
+            ])
+            .arg(reviewer)
+            .status()
+            .unwrap()
+            .code(),
+        Some(143)
+    );
+    assert_eq!(
+        run(None)
+            .args(["--review", "--"])
+            .arg(foreground_reviewer)
+            .status()
+            .unwrap()
+            .code(),
+        Some(143)
+    );
+    let mut rows: Vec<Value> = fs::read_dir(state.join("runs"))
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice(&fs::read(entry.unwrap().path().join("record.json")).unwrap())
+                .unwrap()
+        })
+        .collect();
+    rows.sort_by_key(|v| v["harness"].as_str().unwrap().to_owned());
+    assert_eq!(rows.len(), 3);
+    for (row, role, harness, status) in [
+        (&rows[0], "review", "agy", "cancelled"),
+        (&rows[1], "review", "claude", "cancelled"),
+        (&rows[2], "implement", "codex", "completed"),
+    ] {
+        assert_eq!(row["role"], role);
+        assert_eq!(row["host"], "workstation");
+        assert_eq!(row["harness"], harness);
+        assert_eq!(row["status"], status);
+        assert!(row["ended"].is_number());
+    }
+    spawn_attempt_delivery::check(
+        &state,
+        &[
+            ("implement", "workstation", "codex", "ok"),
+            ("review", "workstation", "agy", "cancelled"),
+            ("review", "workstation", "claude", "cancelled"),
+        ],
+    );
+}
+
+#[test]
 fn missing_codex_is_refused_before_systemd_starts() {
     let fixture = detached_fixture();
     let output = fixture
@@ -127,6 +207,64 @@ fn missing_codex_is_refused_before_systemd_starts() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("codex"));
     assert!(!fixture.root.path().join("spawned").exists());
+}
+
+#[test]
+fn lifecycle_failure_preserves_harness_exit_status() {
+    let fixture = Fixture::new();
+    let state = fixture.root.path().join("spawner");
+    for code in [42, 0] {
+        let state = state.join(code.to_string());
+        let reviewer = fixture.executable(
+            "claude",
+            &format!(
+                "printf corrupt > \"$PLANGRAPH_SPAWN_STATE/run-lifecycle/published\"\nexit {code}"
+            ),
+        );
+        let output = fixture
+            .command(None)
+            .env("PLANGRAPH_SPAWN_STATE", &state)
+            .args(["--review", "--"])
+            .arg(reviewer)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("invalid lifecycle publication watermark"),
+            "{stderr}"
+        );
+        assert_eq!(output.status.code(), Some(code), "{stderr}");
+    }
+}
+
+#[test]
+fn watchdog_skips_external_registrations() {
+    let state = tempfile::tempdir().unwrap();
+    let output = test_python::command()
+        .args([
+            "-c",
+            r#"
+import sys
+from types import SimpleNamespace
+from plangraph.spawner.stall_probe import probe_run
+
+state = sys.argv[1]
+run = dict(run_id='run-fixture', status='running', started=1)
+assert probe_run(state, run, 2000)['rule'] == 'unknown'
+hung = SimpleNamespace(enabled=True, probe=lambda *args, **kwargs: {'rule': 'unknown'})
+for kind in ('fleet-session', 'external-harness'):
+    for mode in (None, hung):
+        assert probe_run(state, dict(run, run_kind=kind), 2000, hung=mode) is None, kind
+"#,
+        ])
+        .arg(state.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

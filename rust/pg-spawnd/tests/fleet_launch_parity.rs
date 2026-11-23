@@ -28,6 +28,8 @@ mod restart;
 #[path = "fleet_launch/sandbox.rs"]
 mod sandbox;
 #[cfg(target_os = "linux")]
+mod spawn_attempt_delivery;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/watchdog.rs"]
 mod watchdog;
 
@@ -49,6 +51,7 @@ fn main() {
     use sandbox::Launcher;
     let rust = Launcher::Rust(None);
     check(&rust);
+    records::check_lifecycle(&rust);
     interrupted::check(&rust);
     interrupted::check_counter(&rust, false);
     interrupted::check_counter(&rust, true);

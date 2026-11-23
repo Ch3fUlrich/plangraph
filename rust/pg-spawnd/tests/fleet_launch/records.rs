@@ -1,4 +1,4 @@
-use super::sandbox::{Launcher, Sandbox, PROMPT, SID};
+use super::sandbox::{Launcher, Sandbox, LOCAL, PROMPT, SID};
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::os::fd::AsRawFd;
@@ -55,7 +55,13 @@ pub fn check(launcher: &Launcher) {
     assert_eq!(role, s.json("state/launch/sessions/review-0001.json"));
     let expected = include_str!("../fixtures/fleet-launch/launch-record.json")
         .replace("$ROOT", s.path("").to_str().unwrap().trim_end_matches('/'));
-    let expected: Value = serde_json::from_str(&expected).unwrap();
+    let mut expected: Value = serde_json::from_str(&expected).unwrap();
+    if matches!(launcher, Launcher::Rust(_)) {
+        assert!(role["run_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("run-")));
+        expected["run_id"] = role["run_id"].clone();
+    }
     assert_eq!(without_timestamp(role.clone()), expected);
     let expected_ledger: Value =
         serde_json::from_str(include_str!("../fixtures/fleet-launch/ledger.json")).unwrap();
@@ -125,6 +131,48 @@ pub fn check(launcher: &Launcher) {
     check_respawn(&s, role);
 }
 
+pub fn check_lifecycle(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let out = s.launch("writer").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let spec = s.json("state/launch/sessions/writer-0001.json");
+    let id = spec["run_id"].as_str().expect("fleet run ID");
+    let run_path = format!("xdg/plangraph/runs/{id}/record.json");
+    let launched = s.json(&run_path);
+    assert_eq!(launched["host"], LOCAL);
+    assert_eq!(launched["role"], "implement");
+    assert_eq!(launched["status"], "running");
+    s.write_json(
+        "agents.json",
+        json!([{"sessionId":SID,"kind":"background","state":"done"}]),
+    );
+    let mut recover = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
+    s.isolate(&mut recover);
+    recover.arg("record-recover");
+    for _ in 0..2 {
+        assert!(recover.status().unwrap().success());
+        let finished = s.json(&run_path);
+        assert_eq!(finished["status"], "completed");
+        assert_eq!(finished["exit_code"], 0);
+        assert_eq!(
+            s.json(&format!("xdg/plangraph/fleet-session-outcomes/{id}.json")),
+            finished
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(s.path("xdg/plangraph/run-lifecycle/published")).unwrap(),
+        "2"
+    );
+    crate::spawn_attempt_delivery::check(
+        &s.path("xdg/plangraph"),
+        &[("implement", LOCAL, "claude", "ok")],
+    );
+}
+
 fn check_respawn(s: &Sandbox, original: Value) {
     let watchdog_lock = File::open(s.path("state/role-locks/review.lock")).unwrap();
     // SAFETY: the fixture holds the same live descriptor until the child exits.
@@ -164,6 +212,13 @@ fn check_respawn(s: &Sandbox, original: Value) {
     expected["effort"] = json!("low");
     expected["seq"] = json!(2);
     expected["session_name"] = json!("review-0002");
+    if expected["run_id"].is_string() {
+        assert!(pending["run_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("run-")));
+        assert_ne!(pending["run_id"], expected["run_id"]);
+        expected["run_id"] = pending["run_id"].clone();
+    }
     assert_eq!(without_timestamp(pending), expected);
     assert_eq!(
         fs::read_to_string(s.path("state/session-seq"))

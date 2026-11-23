@@ -37,7 +37,7 @@ pub fn invoke(name: &str, args: Vec<String>) -> bool {
     let write = |file, value: Value| fs::write(root.join(file), value.to_string()).unwrap();
     let env_value = |key| env::var(key).ok();
     match name {
-        "claude" if args == ["agents", "--json"] => {
+        "claude" if args == ["agents", "--json"] || args == ["agents", "--json", "--all"] => {
             hold(&root, "agents");
             print!(
                 "{}",

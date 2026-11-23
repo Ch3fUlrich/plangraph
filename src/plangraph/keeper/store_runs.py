@@ -8,7 +8,6 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-import time
 
 from . import context_sources
 from .errors import Refused
@@ -25,7 +24,6 @@ _GO_HEAD_TOKEN = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
 _HEX = r"`?[0-9a-f]{7,40}(?![\w])`?"
 _PART_HEADS = re.compile(r"(?<![\w-])Batch\s+\d+\w*(?:\s*\([^)]*\))?,\s*(?:PR\s*#\d+,\s*)?(?:(?:part|lane)\s+)?heads?\s+"
                          rf"({_HEX}(?:(?:,\s*|\s+and\s+(?:fix\s+)?){_HEX})*)")
-_WARM_S = 60  # how long a warm scan may be read under the request lock
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
 _VERDICTS = ("pass", "fail", "invalid", None)
@@ -276,20 +274,43 @@ class RunsMixin:
         """
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
-        self.__dict__["_warmed"], self.__dict__["_lanes"] = {}, {}   # a failed refresh must not keep an old snapshot
-        self.__dict__["_deploy_warm"] = {}
+        previous = self.__dict__.get("_deploy_warm", {})
+        self.__dict__.update(_warmed={}, _lanes={}, _deploy_warm={}, _merge_scan_errors={})
         for project in list(scan()) if callable(scan) else []:
-            if self._refresh_merged_default_ref(git, project):
-                index = context_sources.work_index(git, project, fresh=True)
-                if index is not None and not index.get("origin_stale"):
-                    for key, item_project in candidates:
-                        if context_sources.indexed_work(index, key)["commits"]:
-                            context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
-                            self._snapshot_deploy(key, project)
-                    self.__dict__["_warmed"][project] = time.monotonic()
+            try:
+                if not self._refresh_merged_default_ref(git, project):
+                    raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
+                index = context_sources.work_index(git, project, fresh=True, incremental=True)
+                if index is None or index.get("stale") or index.get("origin_stale"):
+                    raise Refused("evidence_unverified", (index or {}).get("reason") or "repository index unavailable")
+                self.__dict__["_warmed"][project] = index
+                self._warm_merge_candidates(git, project, index, candidates, previous)
+            except Refused as exc:
+                self.__dict__["_warmed"].pop(project, None)
+                self.__dict__["_merge_scan_errors"][project] = exc.msg
+            except Exception as exc:  # fixed error detail, without paths or credentials
+                self.__dict__["_warmed"].pop(project, None)
+                self.__dict__["_merge_scan_errors"][project] = f"merge_scan_failed: {type(exc).__name__}"
+
+    def _warm_merge_candidates(self, git, project, index, candidates, previous):
+        for key, _ in candidates:
+            commits = context_sources.indexed_work(index, key, limit=None)["commits"]
+            if commits:
+                context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"],
+                                          head=index.get("target"), fresh=False)
+                self._snapshot_deploy(key, project, commits, previous.get((project, key)))
 
     def _warm(self, project):
-        return time.monotonic() - self.__dict__.get("_warmed", {}).get(project, -1e9) < _WARM_S
+        index = self.__dict__.get("_warmed", {}).get(project)
+        if index is None:
+            return False
+        if not index.get("target"):   # adapters with a local-only fixture index
+            return True
+        git = self._adapter("git")
+        try:
+            return git.ref_commit(git.repo_path(project), index["ref"]) == index["target"]
+        except (OSError, RuntimeError, ValueError):
+            return False
 
     def _merged_open_prs(self, item, decision_id, head, now, require_each_go=False):
         try:

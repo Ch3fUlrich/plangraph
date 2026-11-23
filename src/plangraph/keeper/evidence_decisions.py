@@ -458,3 +458,86 @@ class DecisionsAdapter:
 
     def __repr__(self) -> str:  # pragma: no cover - convenience only
         return "DecisionsAdapter()"
+
+
+# ------------------------------------------------------------ decisions
+_BOOK_LOCK = threading.Lock()
+_BOOKS = {}
+_BOOK_SLOTS = 3
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:-]+")
+
+
+class DecisionsUnreadable(Exception):
+    """The decisions authority could not be read for enforcement."""
+
+
+def decision_book(decisions, *, fresh=False):
+    """``{"rows", "superseded", "index"}`` for a :class:`DecisionsAdapter`.
+
+    ``rows`` = ``{"D-n": [row lines]}``, ``superseded`` = :func:`superseded_map`
+    and ``index`` = ``{token: {D-ids}}`` over every key-like token, so naming
+    lookups cost one dict probe.  Built once per file version (path, inode,
+    mtime, size; up to three files kept); an unreadable source is an empty book.
+    ``fresh`` bypasses the cache for enforcement without replacing read books.
+    """
+    if decisions is None:
+        return _build_book({})
+    if fresh:
+        try:
+            rows = getattr(decisions, "_rows_strict", getattr(decisions, "_rows", dict))()
+        except (OSError, UnicodeDecodeError):
+            raise DecisionsUnreadable from None
+        return _build_book({did: tuple(lines) for did, lines in rows.items()})
+    # Origin-backed rows change independently of the working-tree file's stat.
+    path = None if getattr(decisions, "_from_origin", False) else getattr(decisions, "_path", None)
+    try:
+        stat = os.stat(path) if path is not None else None
+    except OSError:
+        stat = None
+    if stat is None:             # no file identity: parse, but do not cache
+        return _build_book(_read_rows(decisions))
+    stamp = (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
+    with _BOOK_LOCK:
+        book = _BOOKS.get(stamp)
+    if book is not None:
+        return book
+    book = _build_book(_read_rows(decisions))
+    with _BOOK_LOCK:
+        for old in [k for k in _BOOKS if k[0] == stamp[0]]:
+            del _BOOKS[old]
+        while len(_BOOKS) >= _BOOK_SLOTS:
+            del _BOOKS[next(iter(_BOOKS))]
+        _BOOKS[stamp] = book
+    return book
+
+
+def _read_rows(decisions):
+    try:
+        return {did: tuple(lines) for did, lines in decisions._rows().items()}
+    except Exception:
+        return {}
+
+
+def _build_book(rows):
+    index = {}
+    for did, lines in rows.items():
+        for line in lines:
+            for token in _TOKEN_RE.findall(line):
+                token = token.strip(".:")
+                if "-" in token or ":" in token:     # key-like only
+                    index.setdefault(token, set()).add(did)
+    return {"rows": rows, "superseded": superseded_map(rows), "index": index}
+
+
+def decisions_naming(book, key):
+    """Decision ids whose row names *key*, sorted by number.
+
+    The full ``project:ID`` key always counts; the bare id counts when it is
+    distinctive (contains ``-`` and is at least 6 chars), since rows often
+    drop the project prefix.  A longer id (``X-FU``) is a different token.
+    """
+    bare = key.split(":", 1)[-1]
+    hits = set(book["index"].get(key, ()))
+    if "-" in bare and len(bare) >= 6:
+        hits |= book["index"].get(bare, set())
+    return sorted(hits, key=_did_num)

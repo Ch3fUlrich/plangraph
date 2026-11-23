@@ -1,6 +1,7 @@
 //! Caller-process launch for the fleet's session command.
 
 mod arguments;
+mod external_run;
 mod identity;
 mod paths;
 mod placement;
@@ -15,13 +16,14 @@ mod storage;
 mod tests;
 
 use arguments::{Arguments, ParseError};
+pub(crate) use external_run::agent_roster;
 use paths::{io_text, normalize, read_text, repr, resolve, shell_quote, var, Paths};
 use placement::Placement;
 use policy::{refused_role, Admission};
 use regex::Regex;
 use request::Request;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
@@ -37,6 +39,11 @@ pub fn is_attended(marker: &Path, window: u64, now: f64) -> bool {
 /// Select a host with the legacy helper's local fallback and diagnostics.
 pub fn legacy_host(policy_path: &Path, explicit: Option<&str>) -> Result<String, String> {
     placement::legacy_host(policy_path, explicit)
+}
+
+/// Local kernel hostname used when the spawner host identity is unset.
+pub fn local_hostname() -> String {
+    placement::fs_hostname()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -143,13 +150,14 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
         placement.policy_host(&host),
         &paths.state,
     );
-    local(&request, paths, &admission, out)
+    local(&request, paths, &admission, host.name(), out)
 }
 
 fn local(
     request: &Request,
     paths: &Paths,
     admission: &Admission,
+    host: &str,
     out: &mut dyn Write,
 ) -> io::Result<i32> {
     let args = &request.args;
@@ -304,6 +312,7 @@ fn local(
         eprintln!("fleet-launch: fallback ledger unavailable; not starting");
         return Ok(2);
     }
+    let mut lifecycle = external_run::register(args, admission, &name, host)?;
     let launched_ms = storage::epoch_millis();
     let output = Command::new(argv[0])
         .args(&argv[1..])
@@ -318,6 +327,7 @@ fn local(
     let output = match output {
         Ok(output) => output,
         Err(_) => {
+            lifecycle.finish("failed", 127, Some("launch_unavailable"))?;
             log("failed", Some(&name));
             eprintln!("fleet-launch: launch executable unavailable");
             return Ok(2);
@@ -338,14 +348,25 @@ fn local(
         eprintln!("fleet-launch: durable starting row retained; session may be live; do not retry");
     }
     if !output.status.success() {
-        return Ok(remote::exit_code(&output));
+        let code = remote::exit_code(&output);
+        lifecycle.finish("failed", code, Some("launch_failed"))?;
+        return Ok(code);
     }
     writeln!(out, "fleet-launch: session {name}")?;
     let sid = identity::session_id(&stdout, &name, launched_ms, &args.cwd);
+    lifecycle.save("session_id", json!(sid))?;
     if sid.is_none() {
         eprintln!("fleet-launch: warning: no session id for {name}; fleet hooks will not find this session");
     }
-    let spec = storage::publish(request, paths, admission, &mcp, &name, seq, sid.as_deref())?;
+    let spec = storage::publish(
+        request,
+        paths,
+        admission,
+        &mcp,
+        &name,
+        seq,
+        (&lifecycle, sid.as_deref()),
+    )?;
     if let Some(sid) = sid {
         storage::setup(paths, &spec, admission.caps.caps, &sid, &name)?;
         writeln!(out, "fleet-launch: started {sid}")?;
