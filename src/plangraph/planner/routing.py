@@ -484,8 +484,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         # Sonnet's bare model is also the native Claude subscription identity.
         if leg_obj.harness == "agy" and leg_obj.model == REVIEW_SONNET:
             return read_status("agy/" + leg_obj.model)
-        scope = {"harness": "codex"} if leg_obj.harness == "codex" else {}
-        st = read_leg_model(read_status, leg_obj, leg_obj.model, **scope)
+        st = read_leg_model(read_status, leg_obj, leg_obj.model)
         if leg_obj.harness == "agy" and "/" not in leg_obj.model:
             alt = read_status(leg_key(leg_obj))
             if unavailable(alt) and (not unavailable(st) or (alt.get('evidence') or {}).get('quota_scope') == 'account'):

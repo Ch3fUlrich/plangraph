@@ -46,6 +46,14 @@ def test_provider_exhaustion_keeps_static_policy_refusals_separate():
         assert not provider_exhausted([{'reason': state}, {'reason': 'window_class'}])
 
 
+@pytest.mark.parametrize('reason', ('not_listed', 'provider_inactive', 'unreachable'))
+def test_provider_exhaustion_counts_limits_on_the_eligible_legs(reason):
+    from plangraph.routing_support.liveness import provider_exhausted
+    unavailable = {'reason': reason}
+    assert not provider_exhausted([unavailable])
+    assert provider_exhausted([unavailable, {'reason': 'limited'}])
+
+
 @pytest.mark.parametrize('role', ('implement', 'review', 'orchestrate'))
 @pytest.mark.parametrize('state', ('limited', 'down'))
 def test_role_automatically_falls_back(role, state, monkeypatch):
