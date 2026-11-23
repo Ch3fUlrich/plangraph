@@ -676,13 +676,14 @@ def deploy_targets(changes) -> list[str]:
     return sorted(out)
 
 
+def deploy_host_names(values) -> list[str]:
+    return sorted({host for value in values for host in re.split(r"[\s,]+", value)
+                   if re.fullmatch(r"[A-Za-z0-9_.-]+", host)})
+
+
 def deploy_hosts(item: dict) -> list[str]:
     """Hosts named by ``Deploy-Hosts: a, b`` lines of the item description or note."""
-    text = f"{item.get('description') or ''}\n{item.get('note') or ''}"
-    names = []
-    for line in _HOSTS_RE.findall(text):
-        names += [h for h in re.split(r"[\s,]+", line) if re.fullmatch(r"[A-Za-z0-9_.-]+", h)]
-    return sorted(set(names))
+    return deploy_host_names(_HOSTS_RE.findall(f"{item.get('description') or ''}\n{item.get('note') or ''}"))
 
 
 def deploy_missing(targets, hosts, rows) -> list[str]:
@@ -713,7 +714,6 @@ class DeployVerifier:
         return Result(True, f"{unit} {want} on {host}", ref)
 
 
-# --------------------------------------------------------------------------- #
 # registry and factory
 # --------------------------------------------------------------------------- #
 

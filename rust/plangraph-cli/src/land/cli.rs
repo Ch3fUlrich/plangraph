@@ -88,10 +88,14 @@ pub fn build_train(b: &Build, main: &State, tip: &str) -> Result<Vec<String>, St
         build::verify_manifest_with(&b.repo, m, &b.parts, &b.resolutions, &b.protected)?;
     }
     build::verify_result(&b.repo, &b.base, &outcome.result, outcome.manifest.as_ref())?;
-    if let Some(m) = &outcome.manifest {
+    let warnings = if let Some(m) = &outcome.manifest {
+        let warnings = build::shared_part_paths(&b.repo, m)?;
         build::publish(&b.repo, &b.branch, m)?;
         write(&b.out.join(format!("{}.manifest.json", b.name)), m)?;
-    }
+        warnings
+    } else {
+        Vec::new()
+    };
     write(
         &b.out.join(format!("{}.result.json", b.name)),
         &outcome.result,
@@ -108,6 +112,7 @@ pub fn build_train(b: &Build, main: &State, tip: &str) -> Result<Vec<String>, St
     for l in &outcome.result.left_out {
         lines.push(format!("left out #{} ({}) {:?}", l.pr, l.head, l.reason));
     }
+    lines.extend(warnings);
     Ok(lines)
 }
 

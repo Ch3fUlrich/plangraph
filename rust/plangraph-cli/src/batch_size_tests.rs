@@ -12,6 +12,7 @@ fn item(key: &str, kind: &str, bytes: Option<u64>) -> Item {
         kind: kind.into(),
         expected_bytes: bytes,
         text: Some(format!("Why: {key}\nHow: h\nDone when: d")),
+        files: Vec::new(),
     }
 }
 fn input(writer: Writer, sizes: &[u64]) -> Input {
@@ -22,6 +23,7 @@ fn input(writer: Writer, sizes: &[u64]) -> Input {
             .enumerate()
             .map(|(i, b)| item(&format!("k{i}"), "lane", Some(*b)))
             .collect(),
+        prior_part_files: Vec::new(),
         merged_bytes: BTreeMap::new(),
         limit_bytes: None,
         last: None,
@@ -286,4 +288,34 @@ fn an_output_that_cannot_be_written_is_a_failure_not_a_success() {
     let path = file.to_string_lossy().into_owned();
     assert_eq!(execute(std::slice::from_ref(&path), &mut FullDisk), 2);
     assert_eq!(execute(&[path, "--brief".into()], &mut FullDisk), 2);
+}
+
+#[test]
+fn a_module_already_planned_in_this_train_waits_for_the_next_train() {
+    let fixture = serde_json::json!({
+        "writer": {"aa_intelligence": 60.0, "context_window": 500000},
+        "items": [
+            {"key": "first", "kind": "lane", "expected_bytes": 1000,
+             "files": ["tools/merge_batch_land.py"]},
+            {"key": "second", "kind": "lane", "expected_bytes": 1000,
+             "files": ["tools/merge_batch_land.py"]},
+            {"key": "third", "kind": "lane", "expected_bytes": 1000,
+             "files": ["docs/fixture.md", "tools/unrelated.py"]}
+        ]
+    });
+    let same_part = plan(&serde_json::from_value(fixture.clone()).unwrap());
+    assert_eq!(same_part.keys, ["first", "second", "third"]);
+
+    let mut next_part = fixture;
+    next_part["items"].as_array_mut().unwrap().remove(0);
+    next_part["prior_part_files"] =
+        serde_json::json!(["tools/merge_batch_land.py", "docs/fixture.md"]);
+    let same_train = plan(&serde_json::from_value(next_part.clone()).unwrap());
+    assert_eq!(same_train.keys, ["third"]);
+    assert!(same_train.reason.contains("second"));
+    assert!(same_train.reason.contains("tools/merge_batch_land.py"));
+
+    next_part["prior_part_files"] = serde_json::json!([]);
+    let following_train = plan(&serde_json::from_value(next_part).unwrap());
+    assert_eq!(following_train.keys, ["second", "third"]);
 }
