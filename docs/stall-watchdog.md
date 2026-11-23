@@ -13,6 +13,24 @@ not idle. A running/queued record for the same item suppresses claim alerts.
 Configure `PG_URL`, `PG_TOKEN_FILE`, and the spawn state in the scheduler's
 environment. Linux additionally reads `~/.config/plangraph/watchdog.env`.
 
+## Daily attempt coverage
+
+Set `PLANGRAPH_ATTEMPT_COVERAGE=1` on the watchdog responsible for fleet reporting.
+Give it an all-project spawner token and list the other hosts in its
+`plangraph/ps-hosts.json` configuration. Each host serves its daily inventory
+through the installed `pg-spawnd` executable.
+
+After 00:15 UTC, the watchdog compares the previous day's terminal lifecycle
+records and fleet session outcomes with Keeper receipts. An attempt matches
+when the run ID, receipt day, and host agree. Fleet daemons without a terminal
+timestamp use the first recorded terminal observation. One routing alert per
+UTC day lists the counts when any host with observed runs falls below 95 percent.
+Reports are stored under `watchdog/attempt-coverage/`. A failed host or Keeper
+query is shown as an unavailable comparison in watchdog status, and that day
+stays pending until the inputs can be read.
+
+## Watchdog delivery
+
 Events are private JSON files in `watchdog/outbox`. Set
 `PLANGRAPH_WATCHDOG_DELIVERY` to a JSON argv array naming the host event bridge.
 The bridge receives one JSON event on stdin, re-delivers `completion` events to

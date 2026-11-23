@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use std::{
+    fs,
     io::Write,
     process::{Command, Stdio},
 };
@@ -19,6 +20,109 @@ fn call(verb: &str, value: &Value) -> std::process::Output {
         .write_all(value.to_string().as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn daily_coverage_joins_by_run_and_host_at_the_exact_boundary() {
+    let day = "2026-11-22";
+    let first: Vec<_> = (0..20)
+        .map(|n| json!({"run_id":format!("run-{n}"),"host":"a"}))
+        .collect();
+    let mut keeper = first[..19].to_vec();
+    keeper.push(keeper[0].clone());
+    let mut input = json!({
+        "day":day, "runs":first, "fleet":[first[0]], "keeper":keeper
+    });
+    let report = |input: &Value| {
+        let output = call("attempt-coverage", input);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let exactly = report(&input);
+    assert_eq!(exactly["below_threshold"], false);
+    assert_eq!(
+        exactly["hosts"]["a"],
+        json!({"expected":20,"keeper":19,"matched":19})
+    );
+    input["fleet"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"run_id":"run-fleet","host":"b"}));
+    input["keeper"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"run_id":"run-fleet","host":"a"}));
+    let missing = report(&input);
+    assert_eq!(missing["day"], day);
+    assert_eq!(missing["below_threshold"], true);
+    assert_eq!(
+        missing["hosts"]["b"],
+        json!({"expected":1,"keeper":0,"matched":0})
+    );
+    assert_eq!(
+        missing["total"],
+        json!({"expected":21,"keeper":20,"matched":19})
+    );
+}
+
+#[test]
+fn daily_inventory_includes_separate_fleet_evidence_and_uses_utc_end_time() {
+    let state = tempfile::tempdir().unwrap();
+    let midnight = 1_700_006_400;
+    let snapshot = |id, ended, status, host| json!({"run_id":id,"started":midnight-400_000,"ended":ended,"status":status,"host":host});
+    let save = |file: &str, row: Value| {
+        let path = state.path().join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, row.to_string()).unwrap();
+    };
+    save(
+        "runs/run-midnight/record.json",
+        snapshot("run-midnight", midnight, "failed", None),
+    );
+    save(
+        "runs/run-before/record.json",
+        snapshot("run-before", midnight - 1, "completed", None),
+    );
+    save(
+        "runs/run-dry/record.json",
+        snapshot("run-dry", midnight, "dry_run", None),
+    );
+    #[cfg(target_os = "linux")]
+    save(
+        "fleet-session-outcomes/run-fleet.json",
+        snapshot(
+            "run-fleet",
+            midnight + 86_399,
+            "cancelled",
+            Some("other-host"),
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        .args(["attempt-coverage-input", "2023-11-15"])
+        .env("PLANGRAPH_SPAWN_STATE", state.path())
+        .env("PLANGRAPH_HOST", "workstation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        result["runs"],
+        json!([{"run_id":"run-midnight","host":"workstation"}])
+    );
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        result["fleet"],
+        json!([{"run_id":"run-fleet","host":"other-host"}])
+    );
 }
 
 #[test]
