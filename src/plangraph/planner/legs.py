@@ -33,6 +33,7 @@ __all__ = ["OWN_HARNESS", "CLIENT_MISSING", "HarnessChoice", "client_installed",
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
+LEG_ROLES = ("implement", "review", "orchestrate", "research")
 #: Harness names a leg may run under.
 HARNESSES = ("qodercli", "opencode", "agy", "claude", "codex")
 #: How a review leg reads the change: with its own tools, or only from a diff the
@@ -80,6 +81,11 @@ class Leg:
     benchmark_optional: bool = False  # Missing data skips this leg in strict routes.
     #: Why the model's own harness was not used (``client_missing``); None when it was.
     harness_fallback: str | None = None
+    web_access: bool = False
+
+    @property
+    def has_web_tools(self) -> bool:
+        return self.web_access and self.tool_mode == "tools"
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -116,18 +122,19 @@ DEFAULT_LEGS = (
         disabled="D-6310: opencode/glm-5.3-flash-free not served by opencode models (use opencode-go/glm-5.3-flash); never remove (D-3828)"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
-    Leg("cx-gpt-6.2-sol", "subscription", "opencode", "omniroute/cx-gpt-6.2-sol",
+    Leg("cx-gpt-6.2-sol", "subscription", "codex", "omniroute/cx-gpt-6.2-sol",
         "gpt", WINDOW_CLASSES, _SOL_CONTEXT, False, roles=("implement",),
         note="D-6310: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
-    Leg("cx-gpt-6.2-astra", "subscription", "opencode", "omniroute/cx-gpt-6.2-astra",
+    Leg("cx-gpt-6.2-astra", "subscription", "codex", "omniroute/cx-gpt-6.2-astra",
         "gpt", WINDOW_CLASSES, _codex_context('cx-gpt-6.2-astra'), False, roles=("implement",),
         note="D-6310: operator implement leg (GPT-6.2 Astra via OmniRoute cx)"),
-    Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
+    Leg("cx-gpt-6-luna", "subscription", "codex", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k"), 475000, False, roles=("review",),
         tool_mode="inline-only"),
     *(Leg(f"agy-gemini-4-hydrogen-{effort}", "subscription", "agy",
           f"gemini-4-hydrogen-{effort}", "gemini", ("128k", "256k", "1m"), 900000, False,
-          roles=("implement", "review") if effort == "high" else (role,), effort=effort, tool_mode="tools",
+          roles=("implement", "review", "research") if effort == "high" else (role, "research"),
+          effort=effort, tool_mode="tools",
           note="D-5903: enabled; agy models lists Hydrogen low/medium/high/xhigh (2026-11-14); "
                "agy CLI review verdicts: PR #878 (three heads), #886 (2026-11-14), "
                "handoffs/plan-order/reviews/{pr878-5ac07d1d,pr886-75c5bd2f}-hydrogen.txt. "
@@ -154,7 +161,7 @@ DEFAULT_LEGS = (
         "claude", ("128k", "256k"), 180000, False, claude_family=True, roles=("review",)),
     Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
-        roles=("review",)),
+        roles=("review", "research")),
     Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-v4.1-flash",
         "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
     Leg("omniroute-muse-spark", "subscription", "opencode",
@@ -166,7 +173,7 @@ DEFAULT_LEGS = (
         "beam", ("128k",), 100000, False, roles=("implement", "review")),
     Leg("opencode-go-glm-5.3-flash", "subscription", "opencode",
         "opencode-go/glm-5.3-flash", "glm", ("128k", "256k", "1m"), 900000, False,
-        roles=("review", "implement")),
+        roles=("review", "implement", "research"), web_access=True),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
         roles=("review",)),
@@ -182,7 +189,7 @@ DEFAULT_LEGS = (
         note="D-4280: explicit audited selection; scrubbed or public material only"),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k", "256k", "1m"), 900000,
-        False, roles=("review", "implement")),
+        False, roles=("review", "implement", "research"), web_access=True),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
@@ -208,16 +215,16 @@ REVIEW_FALLBACK_LEGS = (
         ("128k", "256k"), 475000, False, roles=("review",), effort="medium", tool_mode="tools",
         note="D-6481 rule 3.61: native Codex review run with repository access; a gpt-written diff skips it"),
     Leg(REVIEW_ARGON_LOW, "subscription", "agy", "gemini-4-argon-low", "gemini",
-        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="low",
+        ("128k", "256k", "1m"), 900000, False, roles=("review", "research"), effort="low",
         tool_mode="tools", note="D-6366: review leg, last since rule 3.61 (D-6481); retired for implement (D-6310)"),
     Leg(REVIEW_ARGON, "subscription", "agy", "gemini-4-argon-medium", "gemini",
-        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium",
+        ("128k", "256k", "1m"), 900000, False, roles=("review", "research"), effort="medium",
         tool_mode="tools", note="D-6366: same-family fallback after argon-low; retired for implement (D-6310)"),
     Leg("console-deepseek-flash", "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
         ("128k",), 100000, False, roles=("review",)),
     Leg(REVIEW_SONNET, "subscription", "claude", "claude-sonnet-5-5-high", "claude",
         ("128k", "256k", "1m"), 900000, False, claude_family=True,
-        roles=("review", "implement"), effort="high",
+        roles=("review", "implement", "research"), effort="high",
         note="D-6652: implement only while the Codex lead is limited; review only for credential diffs or when both required seats are out"),
 )
 #: D-6652 (operator correction 2026-11-23): the Sonnet writer legs, eligible only while the Codex lead is
@@ -231,7 +238,7 @@ CLAUDE_WRITER_LEGS = (
 )
 
 # Preserve role-neutral keeper admission before applying implement-only policy.
-READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
+READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r not in ('implement', 'research')),
                                disabled=leg.disabled or (
                                    'D-3828: writer disabled; no retained review or orchestrate role'
                                    if leg.roles == ('implement',) else None))
@@ -262,10 +269,10 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
           roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
-    *(Leg(f"cx-gpt-6.2-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.2-sol-{e}",
+    *(Leg(f"cx-gpt-6.2-sol-{e}", "subscription", "codex", f"omniroute/cx-gpt-6.2-sol-{e}",
           "gpt", WINDOW_CLASSES, _SOL_CONTEXT, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
-    *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
+    *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "codex", f"omniroute/cx-gpt-6-luna-{e}",
           "gpt", ("128k", "256k"), 475000, False, roles=("review",),
           tool_mode="inline-only")
       for e in CX_EFFORTS),
@@ -275,10 +282,12 @@ EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS + CLAUDE_WRITER_LEGS
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
 _plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.2-sol")
 _sol_default = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
+_sol_default = _replace(_sol_default, roles=(*_sol_default.roles, "research"), web_access=True)
 DEFAULT_LEGS = tuple(_sol_default if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
 EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
 # Keeper readiness keeps its existing admission, but uses the current routed id.
-READINESS_LEGS = tuple(_sol_default if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
+READINESS_LEGS = tuple(_replace(_sol_default, roles=_plain_sol.roles)
+                       if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
 #: D-6550 permits these Claude writers when GPT Sol and Hydrogen are rate-limited.
 CODEX_FALLBACK_WRITERS: tuple[str, ...] = ("agy-claude-sonnet-5-5-high",)
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
@@ -292,8 +301,6 @@ EXPLICIT_LEGS += tuple(
         claude_family=family == 'claude', roles=(), effort=effort,
         disabled='D-5696: capability evidence required')
     for id, harness, model, family, effort in (
-        ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
-        ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
         ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),
         ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 'high')))
 
@@ -311,6 +318,7 @@ def explicit_only_skips(role: str) -> tuple[dict, ...]:
         "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
         for leg in EXPLICIT_LEGS if role in leg.roles
         and not (role == "review" and leg.id in REVIEW_ORDER)
+        and not (role == "research" and leg in REVIEW_FALLBACK_LEGS)
         and not (role == "implement" and leg.id in (*CODEX_FALLBACK_WRITERS, *SONNET_WRITERS)))
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
@@ -328,6 +336,15 @@ def leg_active(leg: Leg, now=None) -> bool:
 def review_route_pool(base=None) -> tuple[Leg, ...]:
     """Candidate pool of the native review route: the routed legs plus the review fallbacks."""
     return (*(DEFAULT_LEGS if base is None else base), *REVIEW_FALLBACK_LEGS)
+
+
+def research_route_pool(legs) -> tuple[Leg, ...]:
+    """Research uses declared legs and reserves headroom on the default Sol leg."""
+    if legs is not DEFAULT_LEGS:
+        return tuple(leg for leg in legs if "research" in leg.roles)
+    return tuple(_replace(leg, max_request_tokens=min(leg.max_request_tokens, 900_000))
+                 if leg.id == LEAD_WRITER else leg
+                 for leg in review_route_pool(legs) if "research" in leg.roles)
 
 
 def routed_review_legs() -> list[Leg]:
@@ -389,9 +406,9 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     roles = raw.get("roles", ("orchestrate",))
     if (not isinstance(roles, (list, tuple))
             or (not roles and not (isinstance(disabled, str) and disabled.strip()))
-            or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
+            or any(not isinstance(r, str) or r not in LEG_ROLES for r in roles)
             or len(set(roles)) != len(roles)):
-        problems.append(f"{where}.roles: must be a subset of implement|review|orchestrate")
+        problems.append(f"{where}.roles: must be a subset of {'|'.join(LEG_ROLES)}")
     if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES
@@ -402,7 +419,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         mrt = raw["max_request_tokens"]
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
-    for key in ("trains_on_data", "claude_family", "benchmark_optional"):
+    for key in ("trains_on_data", "claude_family", "benchmark_optional", "web_access"):
         if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
     if len(problems) > start:
@@ -508,7 +525,8 @@ def _opencode_counterpart(leg: Leg) -> Leg | None:
     if not any(known.model == model for known in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
         return None
     tool_mode = "inline-only" if "implement" not in leg.roles else leg.tool_mode
-    return dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode, harness_fallback=CLIENT_MISSING)
+    return dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode,
+                               harness_fallback=CLIENT_MISSING, web_access=False)
 
 
 def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_installed) -> HarnessChoice:
@@ -525,7 +543,7 @@ def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_i
         fallback = _opencode_counterpart(leg)
         return HarnessChoice("opencode", CLIENT_MISSING, fallback) if fallback else HarnessChoice(None, CLIENT_MISSING)
     if installed(own[0]):
-        return HarnessChoice(own[0], None, dataclasses.replace(leg, harness=own[0]))
+        return HarnessChoice(own[0], None, dataclasses.replace(leg, harness=own[0], web_access=False))
     return HarnessChoice(harness, CLIENT_MISSING, dataclasses.replace(leg, harness_fallback=CLIENT_MISSING))
 
 

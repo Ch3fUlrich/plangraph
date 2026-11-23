@@ -16,7 +16,8 @@ import shutil
 import tempfile
 import time
 
-from plangraph.planner.routing import DEFAULT_LEGS, SpawnRefused
+from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES
+from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
 from .inline_diff import InlineDiffError
@@ -47,7 +48,7 @@ def _validate(req):
     checks = dict(
         run_id=lambda v: isinstance(v, str) and re.fullmatch(r'run-[0-9a-f]{32}', v),
         job_id=lambda v: isinstance(v, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', v),
-        role=lambda v: isinstance(v, str) and v in ('implement', 'review', 'orchestrate'),
+        role=lambda v: isinstance(v, str) and v in LEG_ROLES,
         dry_run=lambda v: type(v) is bool,
         leg=lambda v: isinstance(v, dict) and isinstance(v.get('id'), str) and bool(v['id'])
             and ('explicit' not in v or type(v['explicit']) is bool),
@@ -96,6 +97,12 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
+    if leg.family == 'gpt' and leg.harness == 'codex':
+        from plangraph.planner.legs import resolve_harness
+        choice = resolve_harness(leg)
+        if choice.leg is None:
+            raise LaunchRefused('client_missing', 'Codex client unavailable for ' + leg.id)
+        leg = choice.leg
     from plangraph.routing_support.clients import codex_review_client
     codex, missing_client = (None, None) if request['dry_run'] else codex_review_client(
         leg.harness, request['role'], request['run_id'])
@@ -115,16 +122,18 @@ def build(request: dict) -> dict:
         raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith('effort_') else 'leg_inactive', reason) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
+    if request['role'] == 'research' and request['card'].get('web_required') and not leg.has_web_tools:
+        raise LaunchRefused('web_access_unavailable', leg.id)
     service = SpawnService(state=request['state'])
     reader = getattr(service, 'leg_reader', None)
-    if leg.harness == 'agy':
+    if leg.harness in ('agy', 'codex'):
         from plangraph.routing_support.liveness import require_available
         try:
             require_available(leg, reader, request['card'])
         except SpawnRefused as exc:
             raise LaunchRefused('leg_unavailable', str(exc)) from None
     from plangraph.routing_support.quota_snapshots import pool_of, skip_reason
-    if reader is not None and pool_of(leg.model):
+    if reader is not None and leg.harness != 'codex' and pool_of(leg.model):
         card = request['card']
         status = reader.leg_status(leg.model, account=card.get('account'), combo=card.get('combo'))
         if reason := skip_reason(status):

@@ -71,6 +71,7 @@ def test_host_probe_ticks_and_cleans_env(tmp_path, monkeypatch):
         return set()
     monkeypatch.setattr(resolver, '_served_models_real', probe)
     monkeypatch.setattr(resolver, 'host_skip_reason', lambda *a, **kw: 'not_served_on_host: fixture')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda: (None, 'fixture'))
     async def run():
         ticks = []
         async def tick():

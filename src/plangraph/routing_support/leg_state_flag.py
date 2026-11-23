@@ -9,8 +9,11 @@ def enabled():
     return os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') != '0'
 
 
-def _needs_fallback(reason):
-    return reason in ('unknown', 'unreachable', 'stale') or (reason or '').startswith('leg_state_snapshot_error:')
+def _needs_fallback(status):
+    reason = status.get('reason') or ''
+    # An unreachable provider in a usable snapshot is an explicit exclusion.
+    return (reason in ('unknown', 'stale') or reason.startswith('leg_state_snapshot_error:')
+            or (reason == 'unreachable' and status['state'] != 'down'))
 
 
 @lru_cache(maxsize=1)
@@ -22,7 +25,7 @@ def default_reader():
     original, gate = reader.leg_status, QuotaGate(ttl_s=0 if os.environ.get('QUOTA_SNAPSHOT_DB') else CACHE_S)
     def status(model, **scope):
         result = original(model, **scope)
-        if _needs_fallback(result.get('reason')):
+        if _needs_fallback(result):
             result = dict(reader.store.leg_status(model, **scope), reason=result['reason'])
         return gate.apply(model, result, scope.get('now'))   # pre-route omniroute quota_snapshots gate
     reader.leg_status = status
@@ -44,11 +47,12 @@ def service_plan(service, **kwargs):
     reasons = {}
     def read(model, **scope):
         status = reader.leg_status(model, **scope)
-        if _needs_fallback(status.get('reason')):
+        if _needs_fallback(status):
             reasons[model] = status['reason']
             store = getattr(reader, 'store', None)
             return store.leg_status(model, **scope) if store is not None else status
         return status
+    read.last_probe_attempt_ts = getattr(reader, 'last_probe_attempt_ts', None)
     plan = plan_spawn(**kwargs, leg_reader=read)
     by_id = {leg.id: leg.model for leg in plan.legs}
     details = tuple(dict(c, leg_state_reason=reasons[by_id[c['leg']]])

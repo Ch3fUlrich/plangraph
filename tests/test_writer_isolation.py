@@ -31,6 +31,9 @@ def _git_repo(path):
 
 
 def _run_writer(tmp_path, monkeypatch, work, *, act=lambda work: None, role='implement', home=None):
+    monkeypatch.setenv('PLANGRAPH_OWN_HARNESS', 'on')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client',
+                        lambda: ('codex', None))
     async def probe(*args, **kwargs):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
@@ -53,6 +56,19 @@ def _run_writer(tmp_path, monkeypatch, work, *, act=lambda work: None, role='imp
         await runner._tasks[job.job_id]
         return job
     return asyncio.run(run()), seen['env']
+
+
+def test_direct_launch_skips_harness_probe_when_disabled(monkeypatch):
+    from plangraph.spawner.target import resolve_launch_target
+
+    def unexpected_probe():
+        pytest.fail('own-harness routing is disabled')
+
+    monkeypatch.setenv('PLANGRAPH_OWN_HARNESS', 'off')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', unexpected_probe)
+    model = 'omniroute/cx-gpt-6.2-sol-medium'
+    resolved, leg = resolve_launch_target(model)
+    assert (resolved, leg.harness, leg.harness_fallback) == (model, 'codex', None)
 
 
 def test_writer_gets_a_private_config_dir_not_the_global_one(tmp_path, monkeypatch):

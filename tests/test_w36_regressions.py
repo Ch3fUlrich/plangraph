@@ -112,6 +112,7 @@ def test_windows_process_cmd_resolution(tmp_path, monkeypatch):
     runner.win_job_api = SimpleNamespace(create_job=lambda: 7, assign=lambda h, p: None, close=lambda h: None, terminate=lambda h: None)
     monkeypatch.setattr('plangraph.spawner.proc_kill.escapees', lambda root, job_pids, **k: {})
     monkeypatch.setattr(shutil, 'which', lambda *a, **kw: 'C:/Tools/opencode.cmd')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda: (None, 'fixture'))
     async def probe(*a, **kw):
         return None
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)

@@ -162,6 +162,7 @@ class DispatchReader:
         self.status = getattr(reader, 'leg_status', reader) or fallback
         self.enabled = getattr(reader, 'enabled', False)
         self.store = getattr(reader, 'store', None)
+        self.last_probe_attempt_ts = getattr(reader, 'last_probe_attempt_ts', None)
 
     def leg_status(self, model, **scope):
         return read_status(self.status, model, **scope)
@@ -202,7 +203,7 @@ def _missing_harness(harness, seconds_elapsed=0.0):
                 infra=True, seconds=seconds_elapsed)
 
 
-async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
+async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_reprobe=False):
     """One real commit task (or tiny OK prompt for reviews) in a disposable dir; infra failures book no leg state.
 
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
@@ -276,7 +277,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
                 exhausted = any(e.get('event') == 'opencode_reasoning_exhausted'
                                 for e in (getattr(job, 'events', None) or ()))
                 answer = (getattr(job, 'stdout', None) or '').strip()
-                answered = answer == 'OK' if getattr(leg, 'id', None) == REVIEW_HYDROGEN else bool(answer)
+                answered = answer == 'OK' if quota_reprobe or getattr(leg, 'id', None) == REVIEW_HYDROGEN else bool(answer)
                 ok = (getattr(job, 'status', None) == 'completed'
                       and not getattr(job, 'exit_code', 0)
                       and answered and not exhausted)
@@ -377,6 +378,7 @@ def route_probe_scope(plan, leg):
 
 
 async def before_launch(runner, leg, role, dry_run, budget=None, *, route_state_reason=None):
+    from plangraph.routing_support.liveness import read_leg_model
     from .target import quota_paused
     from .env_redact import redact_output, redact_env_values
     root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
@@ -401,9 +403,9 @@ async def before_launch(runner, leg, role, dry_run, budget=None, *, route_state_
     def admission(retry=True, probe_ok=False):
         if adapter:
             scope = dict(account=getattr(leg, 'account', None), combo=getattr(leg, 'combo', None))
-            status = adapter.leg_status(scoped_model, **scope)
+            status = read_leg_model(adapter.leg_status, leg, scoped_model, **scope)
             if status['state'] == 'ok' and retry_route_snapshot:
-                status = adapter.leg_status(leg.model, **scope)
+                status = read_leg_model(adapter.leg_status, leg, leg.model, **scope)
             reason = status.get('reason') or status['state']
             if reason.startswith('leg_state_snapshot_error:'):
                 logging.getLogger(__name__).warning('%s: %s', key(leg), redact_output(redact_env_values(reason, os.environ)))
@@ -517,20 +519,40 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
     results = []
     state = _store_for(runner)
     state = state.store if getattr(state, 'enabled', False) else state
+    scheduled = all_reviewers and not all_writers and not ids
+    if scheduled:
+        selected_models = {leg_state.quota_key(key(leg)) for leg in selected if leg.harness == 'agy'}
+        for leg in SPAWNABLE_LEGS:
+            if leg.harness != 'agy' or not leg_active(leg):
+                continue
+            model = leg_state.quota_key(key(leg))
+            if model not in selected_models and state.agy_probe_status(model)['state'] == 'limited':
+                add(leg, review=True)
+                selected_models.add(model)
     for leg in selected:
-        # D-3685: a leg booked limited is known-unusable; probing it would only
-        # spend a model run and let the probe failure mask the booked reset.
-        status = state.leg_status(key(leg))
-        if status.get('state') == 'limited':
+        model = key(leg)
+        status = (state.agy_probe_status(model)
+                  if scheduled and leg.harness == 'agy' else state.leg_status(model))
+        evidence = status.get('evidence') or {}
+        limited = status.get('state') == 'limited'
+        quota_reprobe = False
+        if (limited and scheduled and leg.harness == 'agy' and evidence.get('status') == 429
+                and leg_state.routing_status(status).get('state') == 'limited'):
+            now = time.time()
+            last_attempt = state.last_probe_attempt_ts(model, now=now)
+            quota_reprobe = last_attempt is None or now - last_attempt >= 3600
+        if limited and not quota_reprobe:
             # Same row shape as a probed result (reason/seconds/infra included):
             # every probe-row reader keeps working on skipped rows.
             results.append(dict(id=leg.id, ok=False, reason='limited', infra=False, seconds=0.0,
                                 skipped='limited',
-                                reset_at=(status.get('evidence') or {}).get('reset_at')))
+                                reset_at=evidence.get('reset_at')))
             continue
         # Honor the recorded review selection for dual-role legs.
-        probe_role = 'review' if role == 'review' or leg.id in review_ids else role
+        probe_role = 'review' if quota_reprobe or role == 'review' or leg.id in review_ids else role
         probe_kwargs = {'role': probe_role} if probe_role is not None else {}
+        if quota_reprobe:
+            probe_kwargs['quota_reprobe'] = True
         results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)))
     reply = dict(ok=all(row['ok'] for row in results), probes=results)
     if manage_key is not None:

@@ -112,9 +112,12 @@ def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
 
 
 def test_snapshot_auth_refused_in_plan_and_run_record(service, monkeypatch, tmp_path):
+    from plangraph.planner.legs import resolve_harness
     from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
     from plangraph.routing_support.quota_snapshots import from_env
     svc = service()
+    fallback = resolve_harness(LUNA, lambda name: name == 'opencode').leg
+    monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'legs', (GEMINI, fallback, SONNET, OPUS))
     healthy = svc._route(CARD, 'review', ['mimo'], benchmark={})
     calls = []
 

@@ -184,13 +184,39 @@ def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal, harness)
         runner.jobs[job.job_id] = job
         return job
     runner.spawn = spawn
-    service = SpawnService(runner, state=tmp_path)
-    table = tuple(l for l in DEFAULT_LEGS if l.id in ("cx-gpt-6.2-sol-medium", "agy-gemini-4-hydrogen-high"))
-    installed = (lambda _: True) if harness == "codex" else None
-    plan = plan_spawn(CARD, role="implement", legs=table, catalog_rows=(), installed=installed)
+    def leg_status(model, **scope):
+        # Hydrogen is the next available writer once Sol refuses.
+        return {"state": "down" if model == "omniroute/cx-gpt-6.2-astra" else "available",
+                "evidence": None}
+
+    service = SpawnService(runner, state=tmp_path, leg_reader=leg_status)
+    service.client_probe = lambda name: name != "codex" or harness == "codex"
+    plan = service.route(CARD)
+    assert plan.first_leg.id == WRITERS[0]
+    fallback_reason = "client_missing" if harness == "opencode" else None
+    assert (plan.first_leg.harness, plan.first_leg.harness_fallback) == (harness, fallback_reason)
     record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None, _plan=plan))
     assert calls == [("omniroute/cx-gpt-6.2-sol-medium", harness), ("gemini-4-hydrogen-high", "agy")]
     assert record["status"] == "completed"
     assert record["chosen_leg"]["id"] == "agy-gemini-4-hydrogen-high"
     assert record["chosen_leg"]["effort"] == "high"
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
+
+
+def test_mcp_route_reports_latest_agy_probe_attempt(tmp_path, monkeypatch):
+    from plangraph.routing_support import leg_state_flag
+    from plangraph.routing_support.leg_state import LegStateStore
+    from plangraph.spawner.mcp import MCPSpawnerServer
+
+    store = LegStateStore(tmp_path / "legs.sqlite")
+    model = "agy:gemini-4-hydrogen"
+    attempted_at = 1000
+    store.record_probe_pass(model, "probe", now=attempted_at - 1)
+    store.record_probe_fail(model, "probe failed", "probe", now=attempted_at, serving=True)
+    monkeypatch.setattr(leg_state_flag, "default_reader", lambda: store)
+    server = MCPSpawnerServer(state=tmp_path)
+
+    route = asyncio.run(server.call_tool("plangraph_agent_route", {"card": CARD}))
+    assert route["agy_quota_states"][model]["last_probe_at"] == attempted_at
+    hydrogen = next(row for row in route["candidates"] if row["leg"] == WRITERS[2])
+    assert hydrogen["last_probe_at"] == attempted_at

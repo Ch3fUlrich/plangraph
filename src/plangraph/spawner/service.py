@@ -418,9 +418,17 @@ class SpawnService(SeatSpawnMixin):
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
+            from plangraph.planner.legs import refuse_foreign_pin, resolve_harness, service_probe
+            installed = service_probe(self)
+            refuse_foreign_pin(chosen, override_reason, installed)   # rule 3.53: a foreign-harness pin needs a reason
+            if chosen.family == 'gpt' and chosen.harness == 'codex':
+                choice = resolve_harness(chosen, installed)
+                if choice.leg is None:
+                    raise SpawnRefused('client_missing: ' + chosen.id)
+                chosen = choice.leg
+            if role == 'research' and card.get('web_required') and not chosen.has_web_tools:
+                raise SpawnRefused('web_access_unavailable: ' + chosen.id)
             require_available(chosen, self.leg_reader, card)
-            from plangraph.planner.legs import refuse_foreign_pin, service_probe
-            refuse_foreign_pin(chosen, override_reason, service_probe(self))   # rule 3.53: a foreign-harness pin needs a reason
             if role in ('implement', 'review'):
                 from plangraph.planner.route_policy import codex_leg_effort
                 chosen = codex_leg_effort(chosen, card)

@@ -80,6 +80,9 @@ def test_fixture_red(tmp_path: Path) -> None:
         "plangraph/foo/__init__.py": "",
         "plangraph/foo/y.py": "from ..spawner import clients\n",
         "plangraph/foo/z.py": "from . import spawner\nfrom .. import spawner\n",
+        "plangraph/routing_support/leg_state.py": (
+            "def routing_status():\n    from plangraph.spawner.env_redact import busy_refusal\n"
+        ),
         "plangraph/spawner/__init__.py": "",
         "plangraph/spawner/ok.py": "from plangraph.spawner.clients import make\n",
         "plangraph/planner/__init__.py": "",
@@ -97,6 +100,7 @@ def test_fixture_red(tmp_path: Path) -> None:
         "plangraph/keeper/a.py",
         "plangraph/keeper/b.py",
         "plangraph/keeper/x.py",
+        "plangraph/routing_support/leg_state.py",
         "plangraph/stall_watchdog.py",
     ]
 

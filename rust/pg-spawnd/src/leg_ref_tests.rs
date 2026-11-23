@@ -11,7 +11,7 @@ fn synthetic_34_mutations_suggest_or_refuse_never_autocorrect() {
         "cx-gpt-6-luna",
         "glm-5.3-flash-free",
         "omniroute/cx-gpt-6-luna",
-        "omniroute/cx-gpt-6.1-terra",
+        "omniroute/cx-gpt-6.2-sol",
         "omniroute/gc/grok-4.7",
         "omniroute/or-laguna-s-2.1-free",
         "omniroute/or-nemotron-3-super-free",
@@ -62,6 +62,23 @@ fn exact_id_and_unique_model_resolve() {
         assert_eq!(
             resolve_leg(reference, "implement", &catalog()),
             Ok("alpha".into())
+        );
+    }
+}
+#[test]
+fn research_resolves_only_eligible_ids_and_models() {
+    let mut rows = catalog();
+    rows[0].roles.push("research".into());
+    for reference in ["alpha", "provider/model"] {
+        assert_eq!(
+            resolve_leg(reference, "research", &rows),
+            Ok("alpha".into())
+        );
+    }
+    for reference in ["beta", "shared"] {
+        assert_eq!(
+            resolve_leg(reference, "research", &rows),
+            Err(RefError::Role)
         );
     }
 }

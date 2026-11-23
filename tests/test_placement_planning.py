@@ -111,8 +111,91 @@ def test_orchestration_production_local_record(orchestration, monkeypatch, overr
 
 
 def test_research_uses_orchestrate_model_policy():
-    card = {'estimate_tokens': 100}
-    assert plan_spawn(card, role='research').to_dict() == plan_spawn(card, role='orchestrate').to_dict()
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS, LEAD_WRITER
+    from plangraph.planner.route_policy import RoutePolicy
+
+    sol = next(leg for leg in DEFAULT_LEGS if leg.id == LEAD_WRITER)
+    shared = replace(sol, roles=('research', 'orchestrate'))
+    for role in shared.roles:
+        plan = plan_spawn({'estimate_tokens': 100}, role=role, legs=(shared,),
+                          catalog_rows=(), policy=RoutePolicy(banned_families=('gpt',)))
+        assert not plan.legs
+        assert [(row['leg'], row['reason']) for row in plan.skipped] == [
+            (shared.id, 'banned_family')]
+
+
+@pytest.mark.parametrize('estimate', [400_000, 850_000, 900_000])
+def test_research_admits_large_requests(estimate, monkeypatch):
+    from plangraph.planner.route_policy import DEFAULT_POLICY_PATH
+    monkeypatch.setenv('PLANGRAPH_ROUTE_POLICY', str(DEFAULT_POLICY_PATH))
+    def available(model, **scope):
+        return {'state': 'available', 'evidence': None}
+    plan = plan_spawn({'estimate_tokens': estimate}, role='research',
+                      leg_reader=available, catalog_rows=(), installed=lambda _: True)
+    assert plan.error is None
+    assert plan.first_leg.id == 'cx-gpt-6.2-sol-medium'
+    assert all('research' in leg.roles and leg.max_request_tokens >= estimate for leg in plan.legs)
+    assert {leg.id for leg in plan.legs} >= {
+        'agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon-medium',
+        'opencode-go-glm-5.3-flash', 'opencode-go-deepseek-v4-flash',
+        'claude-sonnet-5-5-high',
+    }
+    assert plan.legs[-1].claude_family
+
+
+def test_research_refusal_names_token_limits_and_each_limited_leg(tmp_path):
+    from plangraph.spawner.service import SpawnService
+    def status(state):
+        return lambda model, **scope: {'state': state, 'evidence': None}
+    service = SpawnService(state=tmp_path, leg_reader=status('available'))
+    with pytest.raises(SpawnRefused, match='max_request_tokens'):
+        service.route({'estimate_tokens': 950_000}, role='research')
+    expected = service.route({'estimate_tokens': 400_000}, role='research').legs
+    service = SpawnService(state=tmp_path, leg_reader=status('limited'))
+    with pytest.raises(SpawnRefused) as caught:
+        service.route({'estimate_tokens': 400_000}, role='research')
+    for leg in expected:
+        assert f'skip {leg.id}: limited' in str(caught.value)
+
+
+def test_research_uses_declared_limit_in_a_smaller_window():
+    from dataclasses import replace
+    from plangraph.planner.legs import DEFAULT_LEGS, LEAD_WRITER
+    from plangraph.planner.routing import RouteError, route_card
+    sol = next(leg for leg in DEFAULT_LEGS if leg.id == LEAD_WRITER)
+    legs = (replace(sol, windows=('128k',), max_request_tokens=120_000),)
+    plan = route_card({'estimate_tokens': 120_000}, legs=legs, role='research')
+    assert plan.window_class == '128k'
+    with pytest.raises(RouteError, match='max_request_tokens'):
+        route_card({'estimate_tokens': 120_001}, legs=legs, role='research')
+
+
+def test_research_web_gate_uses_resolved_harness(tmp_path):
+    import json
+    from plangraph.planner.legs import load_legs
+    common = dict(tier='subscription', windows=['1m'], max_request_tokens=900_000,
+                  trains_on_data=False, roles=['research'])
+    config = tmp_path / 'legs.json'
+    config.write_text(json.dumps({'legs': [
+        dict(common, id='codex', harness='codex', family='gpt', web_access=True,
+             model='omniroute/cx-gpt-6.2-sol-medium'),
+        dict(common, id='open-code', harness='opencode', family='glm',
+             model='opencode-go/glm-5.3-flash'),
+    ]}))
+    legs = load_legs(config)
+    def available(model, **scope):
+        return {'state': 'available', 'evidence': None}
+    options = dict(role='research', legs=legs, leg_reader=available, catalog_rows=())
+    card = {'estimate_tokens': 850_000, 'web_required': True}
+    plan = plan_spawn(card, **options)
+    assert [leg.id for leg in plan.legs] == ['codex']
+    assert [(row['leg'], row['reason']) for row in plan.skipped] == [
+        ('open-code', 'web_access_unavailable')]
+    fallback = plan_spawn(card, installed=lambda client: client == 'opencode', **options)
+    assert not fallback.legs
+    assert {row['leg']: row['reason'] for row in fallback.skipped} == {
+        'codex': 'web_access_unavailable', 'open-code': 'web_access_unavailable'}
 
 
 @pytest.mark.parametrize('placed', [False, True])

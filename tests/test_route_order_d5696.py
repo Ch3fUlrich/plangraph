@@ -132,8 +132,7 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
     reasons = {
         'role': '''openrouter-free cx-gpt-6.2-sol-medium cx-gpt-6.2-astra deepseek cx-gpt-6.2-sol
             cx-gpt-6.2-sol-low cx-gpt-6.2-sol-high cx-gpt-6.2-sol-xhigh cx-gpt-6.2-sol-max
-            cx-gpt-6.1-terra-medium
-            cx-gpt-6.1-terra-xhigh muse-ember-max claude-fable-5.2-high claude-sonnet-5-5-xhigh''',
+            muse-ember-max claude-fable-5.2-high claude-sonnet-5-5-xhigh''',
         'not_in_order': '''            console-deepseek-flash opencode-go-beam-free agy-gemini-4-hydrogen-medium qodercli-qwen3.8-flash
             opencode-glm-5.3-flash-free cx-gpt-6-luna opencode-flint-40b-free
             opencode-big-pickle agy-gpt-oss-120b agy-sonnet-5.5 agy-claude-opus agy-opus-5.5
@@ -255,7 +254,7 @@ def test_order_rows_share_the_existing_leg_registry(catalog):
     tables = OPERATOR_ROUTE_ORDERS
     ids = set((*tables['implement'], *tables['planning'], *tables['review']['high'], *tables['review']['complex']))
     assert ids <= catalog.keys()
-    for id in ('cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh', 'muse-ember-max', 'claude-fable-5.2-high'):
+    for id in ('muse-ember-max', 'claude-fable-5.2-high'):
         leg = catalog[id]
         assert leg.disabled and not leg.roles and (leg.windows, leg.max_request_tokens, leg.trains_on_data) == ((), None, None)
 
@@ -285,7 +284,7 @@ def test_d5712_sonnet_source_and_position_2_to_4(catalog):
 
 
 @pytest.mark.parametrize('model,replacement', [('gemini-3.8-flash', 'gemini-4-hydrogen'),
-    ('omniroute/gemini-3.8-flash-high', 'gemini-4-hydrogen'), ('cxa/gpt-6-luna-high', 'gpt-6.1-terra')])
+    ('omniroute/gemini-3.8-flash-high', 'gemini-4-hydrogen'), ('cxa/gpt-6.1-terra-high', 'gpt-6.2-sol')])
 def test_fixed_order_refuses_legacy_with_replacement(catalog, model, replacement):
     with pytest.raises(ValueError, match=replacement):
         ordered((replace(catalog['cx-gpt-6.2-sol-medium'], model=model),), 'implement')
@@ -299,7 +298,7 @@ def test_live_legacy_door_keeps_d5696_open(catalog):
 
 def test_unknown_capability_declarations_are_not_live_admissions(catalog):
     unknown = [leg for leg in catalog.values() if not leg.windows]
-    assert len(unknown) == 4
+    assert len(unknown) == 2
     assert all(leg.disabled and leg.expires is None and not leg.roles for leg in unknown)
 
 

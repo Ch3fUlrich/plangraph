@@ -17,6 +17,8 @@ that cannot be scanned, is over 1 MiB, or nests ``-c``/``eval`` strings past
 three levels is denied.
 """
 import re
+import sys
+from pathlib import Path
 
 from bash_guard_rules2 import lead, scan
 from bash_guard_tests_rule import check_bare_tests, tests_required
@@ -247,6 +249,31 @@ def _pgrep_matches_parent(args, command):
     return bool(pattern) and pattern in command and not args[-1].live and not re.search(r"[\\^$*+?{}\[\]()|]", pattern)
 
 
+def _retired_model_reason(args):
+    for i, word in enumerate(args):
+        option = word.text
+        if option == "--":
+            break
+        if option in ("-m", "--model"):
+            model = args[i + 1].text if i + 1 < len(args) else ""
+        elif option.startswith("--model="):
+            model = option.removeprefix("--model=")
+        elif option.startswith("-m"):
+            model = option[2:].removeprefix("=")
+        else:
+            continue
+        # Use the guard's own checkout so the command cannot select the policy.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+        try:
+            from plangraph.retired_models import RetiredModelError, check_retired
+            try:
+                check_retired(model)
+            except RetiredModelError as exc:
+                return f"bash-guard: DENIED - {exc}"
+        finally:
+            sys.path.pop(0)
+
+
 def _check_simple(cmd, depth, placement_required, pending_loop, command, checkout):
     pos = [w for w in cmd if not w.redir]
     i = lead(pos)
@@ -266,6 +293,10 @@ def _check_simple(cmd, depth, placement_required, pending_loop, command, checkou
         name = _basename(word.text)
         if loop_condition and name == "pgrep" and _pgrep_matches_parent(pos[j + 1:], command):
             return _PGREP_WAIT_MSG
+        if name in ("codex", "codex.exe", "opencode", "opencode.exe"):
+            reason = _retired_model_reason(pos[j + 1:])
+            if reason:
+                return reason
         if name in ("claude", "claude.exe") or (
                 word.live and "claude" in word.text and not _ENV_ASSIGN_RE.match(word.text)):
             if sfx is None:

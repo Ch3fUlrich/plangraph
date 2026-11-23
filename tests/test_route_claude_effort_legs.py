@@ -54,12 +54,13 @@ def test_leg_data():
         assert leg.windows == ('128k', '256k', '1m')
     for leg_id, model in SOL.items():
         leg = BY_ID[leg_id]
+        roles = ('implement', 'research') if leg_id == 'cx-gpt-6.2-sol-medium' else ('implement',)
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.disabled) == (
-            'opencode', model, 'gpt', ('implement',), None), leg_id
+            'codex', model, 'gpt', roles, None), leg_id
     for leg_id, model in LUNA.items():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.tool_mode) == (
-            'opencode', model, 'gpt', ('review',), 'inline-only'), leg_id
+            'codex', model, 'gpt', ('review',), 'inline-only'), leg_id
     assert not any("flash" in leg.model and "gemini" in leg.model for leg in BY_ID.values())
     ids = [leg.id for leg in spawnable_legs()]
     assert len(ids) == len(set(ids))
@@ -67,8 +68,7 @@ def test_leg_data():
 
 def test_explicit_legs_stay_out_of_every_route():
     """D-5206 promotes only Sol xhigh; every other effort leg stays explicit-only."""
-    declarations = {'cx-gpt-6.1-terra-medium', 'cx-gpt-6.1-terra-xhigh',
-                    'muse-ember-max', 'claude-fable-5.2-high'}
+    declarations = {'muse-ember-max', 'claude-fable-5.2-high'}
     from plangraph.planner.legs import REVIEW_FALLBACK_LEGS
     from plangraph.planner.legs import CLAUDE_WRITER_LEGS
     assert {leg.id for leg in EXPLICIT_LEGS} == MANUAL | declarations | {l.id for l in REVIEW_FALLBACK_LEGS} | {l.id for l in CLAUDE_WRITER_LEGS}
@@ -154,6 +154,21 @@ def test_other_writers_still_refused(tmp_path):
             card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
             leg='agy-gpt-oss-120b', dry_run=True,
             override_reason='operator 2026-11-09 explicit writer'))
+
+
+@pytest.mark.parametrize('selector', [
+    {'leg': 'agy-opus-5.5'},
+    {'model': 'claude-opus-5-5-high'},
+    {'leg': 'cx-gpt-6.2-sol-medium'},
+])
+def test_research_pin_checks_web_on_the_launch_harness(tmp_path, selector):
+    service = _svc(tmp_path)
+    service.client_probe = lambda client: client in ('agy', 'opencode')
+    with pytest.raises(SpawnRefused, match='web_access_unavailable'):
+        asyncio.run(service.spawn(
+            card={'estimate_tokens': 20_000, 'web_required': True},
+            prompt='Research public sources', role='research', dry_run=True,
+            override_reason='Test explicit research pin', **selector))
 
 
 @pytest.mark.parametrize('leg_id', sorted(CLAUDE))

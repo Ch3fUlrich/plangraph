@@ -314,12 +314,8 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
     assert_eq!(states["other-account"]["state"], "ok");
     assert_eq!(states["claude-sonnet-5-5"]["state"], "limited");
     for sibling in ["gemini-4-neon", "agy-sonnet"] {
-        assert_eq!(states[sibling]["state"], "limited");
-        assert_eq!(states[sibling]["evidence"]["quota_scope"], "account");
-        assert_eq!(
-            states[sibling]["evidence"]["reset_at"],
-            states["gemini-4-hydrogen"]["evidence"]["reset_at"]
-        );
+        assert_eq!(states[sibling]["state"], "ok");
+        assert!(states[sibling]["evidence"].is_null());
     }
     assert_ne!(
         states["claude-sonnet-5-5"]["evidence"]["quota_scope"],

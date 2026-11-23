@@ -23,8 +23,7 @@ TIER_RUNG: dict[str, int] = {
 
 # D-5696/D-5706 opt-in order inputs, not live admission or capability evidence.
 LEGACY_ROUTE_REPLACEMENTS = {
-    'gemini-3.8-flash': 'gemini-4-hydrogen', 'gpt-6-luna': 'gpt-6.1-terra',
-    'gpt-6.1-sol': 'gpt-6.2-sol',
+    'gemini-3.8-flash': 'gemini-4-hydrogen',
 }
 # D-6550: opt-in catalog ordering shares the live planner's priority tables.
 OPERATOR_ROUTE_ORDERS = {

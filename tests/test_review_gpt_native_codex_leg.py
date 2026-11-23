@@ -45,7 +45,8 @@ def test_argon_is_the_end_of_the_whole_eligible_route():
 
 
 def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
-    from plangraph.planner.legs import REVIEW_GPT, REVIEW_NEON, REVIEW_SONNET
+    """An account-scoped Argon booking leaves Codex and sibling models eligible."""
+    from plangraph.planner.legs import REVIEW_ARGON_LOW, REVIEW_GPT, REVIEW_NEON, REVIEW_SONNET
     from plangraph.planner.route_policy import RoutePolicy
     from plangraph.routing_support.leg_state import LegStateStore
 
@@ -62,7 +63,7 @@ def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
     codex = next(leg for leg in limited.legs if leg.id == REVIEW_GPT)
     assert (codex.id, codex.harness, codex.model) == (REVIEW_GPT, "codex", "gpt-6.2-sol-medium")
     assert REVIEW_SONNET in {leg.id for leg in route("A", ["auth"]).legs}
-    evidence = next(row["evidence"] for row in limited.skipped if row["leg"] == REVIEW_NEON)
-    assert evidence["quota_scope"] == "account"
-    assert evidence["harness"] == "agy" and evidence["account"] == "A"
-    assert REVIEW_NEON in {leg.id for leg in route("B").legs}
+    assert REVIEW_NEON in {leg.id for leg in limited.legs}
+    skipped = next(row for row in limited.skipped if row["leg"] == REVIEW_ARGON_LOW)
+    assert skipped["evidence"]["status"] == 429
+    assert REVIEW_ARGON_LOW in {leg.id for leg in route("B").legs}

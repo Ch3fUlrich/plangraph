@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, asdict, field, replace
+from dataclasses import dataclass, asdict, field
 from plangraph.routing_support.liveness import read_leg_model, unavailable
 from plangraph.routing_support.risk import evaluate_risk, measure_card_shape
 import json
@@ -18,6 +18,7 @@ from plangraph.model_admission import validate_model  # compatibility re-export
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_for_leg, benchmark_rows_from_db)
 from .legs import CODEX_FALLBACK_WRITERS, SONNET_WRITERS, SONNET_WRITER_HARD, DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
+from .legs import LEG_ROLES, research_route_pool
 from .provider_stop import next_leg_after_provider_stop
 from .readiness import WINDOW_TOKENS, USABLE_FRACTION
 from .review_order import review_key, catalog_tiers
@@ -158,18 +159,21 @@ def _fits(effective: int, window_class: str) -> bool:
     return effective <= _window_share(window_class)
 
 
-def pick_window_class(effective: int, floor: str | None = None) -> str:
-    """Smallest class whose 55% share holds ``effective``, never below ``floor``.
+def pick_window_class(effective: int, floor: str | None = None, *, full_window: bool = False) -> str:
+    """Pick the smallest class above the floor, using its 55% share by default.
 
     Raises ``RouteError("estimate too big")`` when even the 1m class is too small.
     """
     if floor is not None and floor not in WINDOW_CLASSES:
         raise ValueError(f"floor must be one of {WINDOW_CLASSES}")
     start = WINDOW_CLASSES.index(floor) if floor is not None else 0
+    limit = WINDOW_TOKENS.__getitem__ if full_window else _window_share
     for window_class in WINDOW_CLASSES[start:]:
-        if _fits(effective, window_class):
+        if effective <= limit(window_class):
             return window_class
     largest = WINDOW_CLASSES[-1]
+    if full_window:
+        raise RouteError(f"estimate too big: {largest} is {limit(largest)} tokens")
     raise RouteError(f"estimate too big: {USABLE_FRACTION_PCT}% of {largest} is {_window_share(largest)} tokens")
 
 
@@ -195,21 +199,26 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     from .legs import LOW_RISK_ONLY_LEGS
     check_route_targets(card, legs)
     effective_role = role if role is not None else card.get("role")
+    research = effective_role == "research"
     exclude_fams = set(exclude_families)
     legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
+    if research:
+        legs = research_route_pool(legs)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
     low_risk = _is_low_risk(card.get("risk", "normal"), tags)
     bad = [t for t in tags if t not in RISK_TAGS]
     if bad:
         raise ValueError(f"unknown risk tags: {bad}")
-    per_leg = effective_role in ('implement', 'review', 'orchestrate') and not overflow
+    per_leg = effective_role in LEG_ROLES and not overflow
     largest = WINDOW_CLASSES[-1]
+    full_window = research and per_leg
+    class_limit = WINDOW_TOKENS.__getitem__ if full_window else _window_share
     # Large spawn estimates reach per-leg admission even above the class share.
-    class_estimate = min(effective, _window_share(largest)) if per_leg else effective
+    class_estimate = min(effective, class_limit(largest)) if per_leg else effective
     window_class = card.get("window_class")
     if window_class is None:
-        window_class = pick_window_class(class_estimate)
+        window_class = pick_window_class(class_estimate, full_window=full_window)
     elif window_class not in WINDOW_CLASSES:
         raise ValueError(f"window_class must be one of {WINDOW_CLASSES}")
     reasons: list[str] = []
@@ -221,16 +230,18 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         reasons.append(f"overflow: window class upgraded to {window_class}")
 
     no_train = bool(_NO_TRAIN_TAGS.intersection(tags))
-    if per_leg and not _fits(class_estimate, window_class):
-        window_class = pick_window_class(class_estimate, floor=window_class)
+    if per_leg and class_estimate > class_limit(window_class):
+        window_class = pick_window_class(class_estimate, floor=window_class, full_window=full_window)
         reasons.append(f'request limit: window class upgraded to {window_class}')
     window_fits = _fits(effective, window_class)
+    serving_windows = WINDOW_CLASSES[WINDOW_CLASSES.index(window_class):] if research else (largest,)
     bound_notes = []
     dropped: dict[str, int] = {}
     eligible: list[tuple[int, int, Leg]] = []
     for pos, leg in enumerate(legs):
-        declared_1m = (per_leg and window_class == largest and largest in leg.windows
-                       and leg.max_request_tokens is not None)
+        declared_bound = (per_leg and leg.max_request_tokens is not None
+                          and (research or window_class == largest)
+                          and any(w in leg.windows for w in serving_windows))
         if not leg_active(leg, now=now):
             why = "disabled"
         elif effective_role == "implement" and implement_family_excluded(leg):
@@ -243,15 +254,17 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             why = "excluded_family"
         elif no_train and leg.trains_on_data:
             why = "trains_on_data"
-        elif declared_1m and effective > leg.max_request_tokens:
+        elif research and card.get("web_required") and not leg.has_web_tools:
+            why = "web_access_unavailable"
+        elif declared_bound and effective > leg.max_request_tokens:
             why = "max_request_tokens"
             bound_notes.append(f"{leg.id}: max_request_tokens {leg.max_request_tokens}")
-        elif per_leg and not declared_1m and leg.max_request_tokens is not None and (
-                effective * 100 > USABLE_FRACTION_PCT * leg.max_request_tokens):
+        elif per_leg and not declared_bound and leg.max_request_tokens is not None and (
+                research or effective * 100 > USABLE_FRACTION_PCT * leg.max_request_tokens):
             why = "window_class"
         elif (not per_leg or leg.max_request_tokens is None) and window_class not in leg.windows:
             why = "window_class"
-        elif not declared_1m and not window_fits:
+        elif not declared_bound and not window_fits:
             why = "over_window_share"
             bound_notes.append(f"{leg.id}: {USABLE_FRACTION_PCT}% of {window_class} is {_window_share(window_class)} tokens")
         elif leg.max_request_tokens is not None and effective > leg.max_request_tokens:
@@ -272,7 +285,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     elif effective_role == "review":
         eligible.sort(key=lambda t: review_key(t[2], t[0], t[1]))
     else:
-        eligible.sort(key=lambda t: (t[0], t[1]))
+        eligible.sort(key=lambda t: (research and t[2].claude_family, t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)
     level, seats = _review(tags)
     return Route(window_class=window_class, harness=plan[0].harness, legs=plan,
@@ -369,10 +382,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     from .legs import REVIEW_ORDER, REVIEW_REQUIRED, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT
     if native_review:
         legs = review_route_pool(legs)
-    if native_implement:
-        # The route picks Codex. Direct callers still resolve the registered gateway leg.
-        legs = tuple(replace(leg, harness="codex") if leg.id == LEAD_WRITER else leg
-                     for leg in legs)
+    if role == "research":
+        legs = research_route_pool(legs)
     harness_skipped = []
     if installed is not None:
         from .legs import resolve_legs
@@ -386,7 +397,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if field in card and (not isinstance(card[field], (list, tuple)) or
                               not all(isinstance(v, str) for v in card[field])):
             raise SpawnRefused(f'{field} must be a list of strings')
-    for field in ('has_tests', 'is_pure_doc', 'is_docs_only', 'repository_review_required', 'hard'):
+    for field in ('has_tests', 'is_pure_doc', 'is_docs_only', 'repository_review_required', 'hard', 'web_required'):
         if field in card and type(card[field]) is not bool:
             raise SpawnRefused(f'{field} must be boolean')
     for field in ('estimate_tokens', 'reviewer_count', 'fanout'):
@@ -405,9 +416,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             policy = load_route_policy()
         except ValueError as exc:
             raise SpawnRefused(str(exc)) from None
-    role = 'orchestrate' if role == 'research' else role
-    if role not in ("implement", "review", "orchestrate"):
-        raise ValueError("role must be implement|review|orchestrate")
+    if role not in LEG_ROLES:
+        raise ValueError(f"role must be {'|'.join(LEG_ROLES)}")
+    score_role = "orchestrate" if role == "research" else role
     from plangraph.routing_support.risk import evaluate_risk, propose_risk_tags
     paths = card.get('paths', card.get('write_set', ()))
     risk_tags = card.get('risk_tags', ())
@@ -434,8 +445,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             not assessment.review_exempt or card.get('risk', 'normal') in ('high', 'critical')
             ):
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
-    from plangraph.routing_support.leg_state import leg_status
+    from plangraph.routing_support.leg_state import leg_status, last_probe_attempt_ts
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
+    probe_time = (getattr(leg_reader, "last_probe_attempt_ts", None)
+                  if leg_reader is not None else last_probe_attempt_ts)
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
     catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
     legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
@@ -475,16 +488,16 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
-    from plangraph.routing_support.leg_state import leg_key
-    def read_status(model):
-        return reader(model, now=now, account=card.get("account"), combo=card.get("combo"))
+    from plangraph.routing_support.leg_state import leg_key, quota_key, routing_status
+    def read_status(model, **scope):
+        return routing_status(reader(model, now=now, account=card.get("account"),
+                                     combo=card.get("combo"), **scope))
 
     def _leg_status(leg_obj):
         # Sonnet's bare model is also the native Claude subscription identity.
         if leg_obj.harness == "agy" and leg_obj.model == REVIEW_SONNET:
             return read_status("agy/" + leg_obj.model)
-        st = read_leg_model(reader, leg_obj, leg_obj.model, now=now,
-                            account=card.get("account"), combo=card.get("combo"))
+        st = read_leg_model(read_status, leg_obj, leg_obj.model)
         if leg_obj.harness == "agy" and "/" not in leg_obj.model:
             alt = read_status(leg_key(leg_obj))
             if unavailable(alt) and (not unavailable(st) or (alt.get('evidence') or {}).get('quota_scope') == 'account'):
@@ -497,7 +510,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
                              ("gemini-4-argon", REVIEW_ARGON_LOW),
                              ("claude-sonnet-5-5", REVIEW_SONNET))}
-    limited = {key for key, state in states.items() if unavailable(state)}
+    agy_models = {leg.id: quota_key(leg_key(leg)) for leg in candidates if leg.harness == "agy"}
+    probe_times = ({model: stamp for model in set(quota_states) | set(agy_models.values())
+                    if (stamp := probe_time(model, now=now)) is not None}
+                   if probe_time is not None else {})
+    quota_states = {model: dict(status, last_probe_at=probe_times[model])
+                    if model in probe_times else status for model, status in quota_states.items()}
+    blocked = {key for key, state in states.items() if unavailable(state)
+               or (state["state"] == "unknown" and state.get("reason"))}
     def quota_limited(state):
         return state["state"] == "limited" and (state.get("evidence") or {}).get("kind") != "auth_refused"
 
@@ -505,13 +525,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     writer_model = next(leg.model for leg in DEFAULT_LEGS if leg.id == LEAD_WRITER)
     # D-6652 correction: the Sonnet writers serve only while the Codex lead is limited (429 or quota).
     codex_limited = native_implement and any(
-        quota_limited(read_status(key)) for key in (writer_model, LEAD_WRITER))
+        quota_limited(read_status(key, harness="codex")) for key in (writer_model, LEAD_WRITER))
     if native_implement and quota_limited(quota_states["agy:gemini-4-hydrogen"]):
         claude_quota_fallback = any(
-            quota_limited(read_status(key)) for key in (writer_model, LEAD_WRITER, REVIEW_GPT))
+            quota_limited(read_status(key, harness="codex"))
+            for key in (writer_model, LEAD_WRITER, REVIEW_GPT))
     # D-6652: the Claude review seat only when both required OpenCode seats are out of the route.
     required_seats_out = native_review and not any(
-        leg.id in REVIEW_REQUIRED and leg.id not in limited and leg.family not in excluded
+        leg.id in REVIEW_REQUIRED and leg.id not in blocked and leg.family not in excluded
         and not policy.skip_reason(leg, role) for leg in candidates)
 
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
@@ -526,15 +547,19 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
     for leg in candidates:
         row = benchmark_for_leg(rows, leg)
-        reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        status = states[leg.id]
+        state_reason = status["state"] if leg.id in blocked else None
+        if state_reason in ("down", "unknown"):
+            state_reason = status.get("reason") or state_reason
+        if leg.id in blocked and (status.get("evidence") or {}).get("kind") == "auth_refused":
+            state_reason = "auth_refused"
+        reason = policy.skip_reason(leg, role) or state_reason
         if (not reason and (native_implement or native_review) and leg.claude_family
                 and not (native_implement and leg.id in SONNET_WRITERS and codex_limited)
                 and not (native_implement and leg.id not in SONNET_WRITERS and claude_quota_fallback)
                 and not (native_review and leg.id == REVIEW_SONNET and (sensitive_review or required_seats_out))):
             reason = ("claude_requires_codex_limited" if native_implement and leg.id in SONNET_WRITERS
                       else "claude_requires_gpt_and_hydrogen_limits")
-        if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
-            reason = 'auth_refused'
         if reason == 'limited' and leg.harness == 'agy':
             reason = agy_limit_reason(leg_key(leg), states[leg.id]) or reason
         if reason == 'limited':
@@ -564,9 +589,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             skipped.append({"leg": leg.id, "reason": reason,
                             "evidence": states[leg.id]["evidence"]})
         detail = {"leg": leg.id, "tier": leg.tier,
-                  "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
+                  "u_core": score_model(dict(row, tier=leg.tier), role=score_role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
                   "p_source": "measured" if row is not None else "prior"}
+        if agy_models.get(leg.id) in probe_times:
+            detail["last_probe_at"] = probe_times[agy_models[leg.id]]
         if row is not None:
             detail.update(intelligence=row.get("aa_intelligence"), cost_per_task=row.get("cost_per_task_usd"))
         if reason:
@@ -579,7 +606,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         "claude_requires_codex_limited",
         "repository_review_tools_unavailable", "benchmark_unmeasured", "opencode_tools_denied")}
     try:
-        route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
+        route = route_card(card, legs=candidates, unavailable=blocked | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
@@ -599,7 +626,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             missing = [ordered[i] for i in tier_positions if i not in positions]
             measured = [dict(benchmark_for_leg(rows, ordered[i]),
                              model_id=ordered[i].id, tier=tier, available=1, active=True) for i in positions]
-            ranked = rank_candidates(measured, role=role, risk=ranking_risk, need_tokens=card["estimate_tokens"])
+            ranked = rank_candidates(measured, role=score_role, risk=ranking_risk, need_tokens=card["estimate_tokens"])
             by_id = {ordered[i].id: ordered[i] for i in positions}
             for i, leg in zip(tier_positions, [by_id[row["model_id"]] for row in ranked] + missing):
                 ordered[i] = leg
@@ -637,7 +664,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if sensitive_review:
             ordered.sort(key=lambda leg: leg.id != REVIEW_SONNET)
         source = "operator-order"
-    ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
+    ordered.sort(key=lambda leg: role in ("orchestrate", "research") and leg.claude_family)  # D-4812/D-297: Claude last
     if role in ('implement', 'review'):
         from plangraph.planner.route_policy import codex_leg_effort
         ordered = [codex_leg_effort(leg, card) for leg in ordered]
