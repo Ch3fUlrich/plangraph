@@ -1,0 +1,1 @@
+Keeper records changes to an item's done criteria in an append-only ledger. Definition edits can include `criteria_reason` and `criteria_evidence` alongside `done_criteria`. The ledger also records the editing principal, time and linked definition event.
