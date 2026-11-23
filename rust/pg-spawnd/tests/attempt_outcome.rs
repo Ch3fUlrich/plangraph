@@ -94,7 +94,7 @@ fn daily_coverage_rejects_conflicting_hosts_within_an_evidence_source() {
 fn daily_inventory_includes_separate_fleet_evidence_and_uses_utc_end_time() {
     let state = tempfile::tempdir().unwrap();
     let midnight = 1_700_006_400;
-    let snapshot = |id, ended, status, host| json!({"run_id":id,"started":midnight-400_000,"ended":ended,"status":status,"host":host});
+    let snapshot = |id, ended, status, host: Option<&str>| json!({"run_id":id,"started":midnight-400_000,"ended":ended,"status":status,"host":host});
     let save = |file: &str, row: Value| {
         let path = state.path().join(file);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
