@@ -717,8 +717,9 @@ def main(root=None):
         env["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(root / "src"), env.get("PYTHONPATH")) if part)
         start = time.monotonic()
-        if (args.local and not args.collect_only and not args.fleet_spawnd_prebuilt
-                and 'tests/test_fleet_snapshot.py' in plan['tests']):
+        fleet = (args.local and not args.collect_only
+                 and 'tests/test_fleet_snapshot.py' in plan['tests'])
+        if fleet and not args.fleet_spawnd_prebuilt:
             # Push preflight runs in a detached checkout, even when the writer
             # already built pg-spawnd in the worktree that launched the hook.
             print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
@@ -728,9 +729,6 @@ def main(root=None):
                     cwd=root, env=env)
                 if build.returncode:
                     return build.returncode
-                verify = subprocess.run([sys.executable, 'tests/_spawnd.py'], cwd=root, env=env)
-                if verify.returncode:
-                    return verify.returncode
             except OSError as error:
                 print(f'CARGO FAIL: could not prepare pg-spawnd ({error})', file=sys.stderr)
                 return 1
@@ -740,6 +738,12 @@ def main(root=None):
                     if not args.collect_only and importlib.util.find_spec("xdist") is not None else [])
         quiet = [] if args.loud else QUIET_FLAGS
         with affected_pytest() as (scratch, run_pytest):
+            if fleet:
+                staged = str(Path(scratch) / ('pg-spawnd.exe' if os.name == 'nt' else 'pg-spawnd'))
+                verify = subprocess.run([sys.executable, 'tests/_spawnd.py', staged], cwd=root, env=env)
+                if verify.returncode:
+                    return verify.returncode
+                env["PLANGRAPH_TEST_FLEET_SPAWND"] = staged
             if args.collect_only:
                 result = run_pytest([sys.executable, "-m", "pytest", *parallel, "--durations=30",
                                      "--collect-only",
