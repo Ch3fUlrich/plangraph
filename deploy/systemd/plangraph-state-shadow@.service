@@ -6,6 +6,7 @@ After=network-online.target
 Type=simple
 UMask=0077
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/plangraph/plangraph.env
 EnvironmentFile=%h/.config/plangraph/state-shadow/%i.env
 ExecStart=%h/.local/bin/plangraph state wait --role %i
 Restart=on-failure

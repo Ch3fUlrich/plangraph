@@ -10,6 +10,7 @@ const BINARIES: &[(&str, &str)] = &[
     ("pg-spawnd", "pg-spawnd"),
     ("plangraph-cli", "plangraph"),
     ("pg-worker-core", "pg-disk-hygiene"),
+    ("pg-worker-core", "turn-budget-hook"),
 ];
 
 fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
@@ -91,8 +92,13 @@ fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
     build
         .current_dir(repo.join("rust"))
         .args(["build", "--release", "--locked"]);
-    for (package, name) in &binaries {
-        build.args(["-p", *package, "--bin", *name]);
+    let packages: std::collections::BTreeSet<_> =
+        binaries.iter().map(|(package, _)| *package).collect();
+    for package in packages {
+        build.args(["-p", package]);
+    }
+    for (_, name) in &binaries {
+        build.args(["--bin", *name]);
     }
     let status = build.status()?;
     if !status.success() {

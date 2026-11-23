@@ -3,6 +3,8 @@ use super::Env;
 
 #[path = "host_sync_quota.rs"]
 mod quota;
+#[path = "host_sync_shadow.rs"]
+mod shadow;
 use std::{
     ffi::OsString,
     fs,
@@ -55,11 +57,19 @@ fn assignment(key: &str, path: &Path) -> io::Result<String> {
     Ok(format!("{key}=\"{value}\"\n"))
 }
 
-fn install(family: &str, home: &Path) -> io::Result<()> {
+fn install(family: &str, home: &Path, args: &[OsString]) -> io::Result<()> {
     // The unit EnvironmentFile= directives use %h/.config.
     let config = home.join(".config/plangraph");
-    match family {
-        "disk-hygiene" => {
+    match (family, args) {
+        ("state-shadow", [plan_order, routing]) => shadow::install(
+            home,
+            &config.join("state-shadow"),
+            [Path::new(plan_order), Path::new(routing)],
+        ),
+        ("state-shadow", _) => Err(io::Error::other(
+            "state-shadow requires PLAN_ORDER_SETTINGS ROUTING_SETTINGS",
+        )),
+        ("disk-hygiene", []) => {
             let repo = home.join("code/plangraph");
             let values = [
                 ("PG_REPO", repo.clone()),
@@ -72,18 +82,20 @@ fn install(family: &str, home: &Path) -> io::Result<()> {
             }
             create(&config.join("disk-hygiene.env"), content.as_bytes())
         }
-        "quota-alarms" => quota::install(home, &config.join("quota-alarms.env")),
-        "keeper-backup" => create(
+        ("quota-alarms", []) => quota::install(home, &config.join("quota-alarms.env")),
+        ("keeper-backup", []) => create(
             &config.join("keeper-backup.env"),
             include_bytes!("../../../deploy/systemd/keeper-backup.env.example"),
         ),
-        _ => Err(io::Error::other(format!("unknown unit family {family}"))),
+        _ => Err(io::Error::other(format!(
+            "unknown unit family or unexpected arguments: {family}"
+        ))),
     }
 }
 
 pub(super) fn run(args: &[OsString]) -> i32 {
-    let [family] = args else {
-        eprintln!("usage: host-sync --install-env FAMILY");
+    let [family, rest @ ..] = args else {
+        eprintln!("usage: host-sync --install-env FAMILY [PLAN_ORDER_SETTINGS ROUTING_SETTINGS]");
         return 2;
     };
     let result = (|| {
@@ -93,7 +105,7 @@ pub(super) fn run(args: &[OsString]) -> i32 {
         let home = Env::from_process()
             .home
             .ok_or_else(|| io::Error::other("HOME is not set"))?;
-        install(family, &home)
+        install(family, &home, rest)
     })();
     match result {
         Ok(()) => 0,
