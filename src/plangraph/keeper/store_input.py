@@ -50,6 +50,8 @@ def _defined_payload(fields):
     so carrying them keeps the event honest without touching the replay.
     """
     payload = {"fields": sorted(fields)}
+    if "done_criteria" in fields:
+        payload["criteria_ledger"] = True
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
     for name in SMALL_FIELDS:
@@ -59,6 +61,37 @@ def _defined_payload(fields):
         if name in fields:
             payload[name] = fields[name]
     return payload
+
+
+def verify_criteria_amendments(conn, all_events):
+    """Check criteria edits covered by the append-only ledger."""
+    amendments = {(row["key"], row["seq"]): (row["original_text"], row["new_text"])
+                  for row in conn.execute(
+                      "SELECT key,seq,original_text,new_text FROM criteria_amendments")}
+    # The first row covers older ledger writers that did not mark their events.
+    first_seq = min((seq for _, seq in amendments), default=None)
+    field = "done_criteria"
+    for event in all_events:
+        payload = event["payload"]
+        if event["type"] != "item_defined" or field not in payload.get("fields", ()):
+            continue
+        key, seq = event["key"], event["seq"]
+        if not payload.get("criteria_ledger") and (first_seq is None or seq < first_seq):
+            continue
+        amendment = amendments.get((key, seq))
+        before, after = payload.get("before", {}), payload.get("after", {})
+        if field not in before or field not in after:
+            if amendment is None:
+                yield {"key": key, "seq": seq, "code": "criteria_amendment_unverifiable",
+                       "field": field, "expected": "before and after values", "got": None}
+            continue
+        expected = (before[field], after[field])
+        if expected[0] == expected[1]:
+            continue
+        if amendment != expected:
+            code = "criteria_amendment_missing" if amendment is None else "criteria_amendment_mismatch"
+            yield {"key": key, "seq": seq, "code": code, "field": field,
+                   "expected": expected, "got": amendment}
 
 
 class InputMixin:

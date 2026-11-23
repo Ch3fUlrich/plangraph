@@ -14,6 +14,7 @@ import hashlib
 import json
 from collections import Counter
 
+from .store_input import verify_criteria_amendments
 from .token_fold import verify_tokens
 
 from .item_fields import SMALL_FIELDS
@@ -348,33 +349,6 @@ def folded_aliases(events):
             and (e.get("payload") or {}).get("rehomed_from")}
 
 
-def _verify_criteria_amendments(conn, all_events):
-    amendments = {(row["key"], row["seq"]): (row["original_text"], row["new_text"])
-                  for row in conn.execute(
-                      "SELECT key,seq,original_text,new_text FROM criteria_amendments")}
-    field = "done_criteria"
-    for event in all_events:
-        payload = event["payload"]
-        if event["type"] != "item_defined" or field not in payload.get("fields", ()):
-            continue
-        key, seq = event["key"], event["seq"]
-        amendment = amendments.get((key, seq))
-        before, after = payload.get("before", {}), payload.get("after", {})
-        if field not in before or field not in after:
-            # Older open-item events may describe either a change or a no-op.
-            if amendment is None:
-                yield {"key": key, "seq": seq, "code": "criteria_amendment_unverifiable",
-                       "field": field, "expected": "before and after values", "got": None}
-            continue
-        expected = (before[field], after[field])
-        if expected[0] == expected[1]:
-            continue
-        if amendment != expected:
-            code = "criteria_amendment_missing" if amendment is None else "criteria_amendment_mismatch"
-            yield {"key": key, "seq": seq, "code": code, "field": field,
-                   "expected": expected, "got": amendment}
-
-
 def verify_integrity(conn):
     """Compare the cached rows against ``fold`` and the evidence table.
 
@@ -473,7 +447,7 @@ def verify_integrity(conn):
             problems.append({"key": key, "code": "cache_extra",
                              "field": None, "expected": None, "got": None})
     problems.extend(verify_tokens(conn, all_events))   # M2B-TOKEN-INTEGRITY
-    problems.extend(_verify_criteria_amendments(conn, all_events))
+    problems.extend(verify_criteria_amendments(conn, all_events))
     want = folded_aliases(all_events)
     have = {r["old_key"]: r["new_key"]
             for r in conn.execute("SELECT old_key,new_key FROM aliases")}

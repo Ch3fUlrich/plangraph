@@ -204,6 +204,9 @@ def test_verify_reports_a_missing_criteria_amendment(w, monkeypatch, active):
             "criteria_evidence": "D-123",
         })
     missing = last_defined(w)["seq"]
+    assert [(p["key"], p["seq"], p["code"]) for p in w.store.verify_integrity()] == [
+        (KEY, missing, "criteria_amendment_missing"),
+    ]
     w.store.edit_definition(w.p("router"), KEY, {
         "done_criteria": "final criteria",
         "criteria_reason": "Cover the recovery path",
@@ -214,12 +217,27 @@ def test_verify_reports_a_missing_criteria_amendment(w, monkeypatch, active):
     ]
 
 
-def test_verify_reports_legacy_criteria_edits_without_inventing_text(w):
+@pytest.mark.parametrize("audit_values", [False, True])
+def test_verify_accepts_legacy_criteria_edits_before_the_ledger(w, audit_values):
+    payload = {"fields": ["done_criteria"]}
+    if audit_values:
+        payload.update(before={"done_criteria": "criteria"}, after={"done_criteria": "legacy edit"})
     with w.store._write():
         w.conn.execute("UPDATE items SET done_criteria=? WHERE key=?", ("legacy edit", KEY))
+        legacy_seq, _ = w.store._append(w.p("router"), KEY, "item_defined", payload, w.clock())
+    assert w.store.verify_integrity() == []
+    w.store.edit_definition(w.p("router"), KEY, {**RATIONALE, "done_criteria": "current"})
+    assert w.conn.execute("SELECT MIN(seq) FROM criteria_amendments").fetchone()[0] > legacy_seq
+    assert w.store.verify_integrity() == []
+    assert w.store.verify_chain() == []
+
+
+def test_verify_reports_criteria_edits_without_audit_values_after_the_ledger_starts(w):
+    w.store.edit_definition(w.p("router"), KEY, {**RATIONALE, "done_criteria": "current"})
+    with w.store._write():
+        w.conn.execute("UPDATE items SET done_criteria=? WHERE key=?", ("unlogged edit", KEY))
         seq, _ = w.store._append(w.p("router"), KEY, "item_defined",
                                  {"fields": ["done_criteria"]}, w.clock())
-    w.store.edit_definition(w.p("router"), KEY, {**RATIONALE, "done_criteria": "current"})
     assert [(p["key"], p["seq"], p["code"]) for p in w.store.verify_integrity()] == [
         (KEY, seq, "criteria_amendment_unverifiable"),
     ]
