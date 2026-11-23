@@ -2,6 +2,8 @@
 import json
 import os
 import runpy
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -13,9 +15,57 @@ LOG_PREFLIGHT = ("import json, os, sys\n"
                  "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text(json.dumps(sys.argv[1:]))\n")
 
 
+@pytest.mark.parametrize("provided", [False, True])
+def test_train_cli_uses_only_the_prebuilt_executable(tmp_path, monkeypatch, provided):
+    binary = tmp_path / "plangraph"
+    binary.touch(mode=0o755)
+    monkeypatch.delenv("PLANGRAPH_TEST_CLI", raising=False)
+    if provided:
+        monkeypatch.setenv("PLANGRAPH_TEST_CLI", str(binary))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("train_cli spawned a subprocess"))
+    if provided:
+        assert train_cli.__wrapped__() == binary
+    else:
+        with pytest.raises(pytest.skip.Exception, match="PLANGRAPH_TEST_CLI"):
+            train_cli.__wrapped__()
+
+
+def test_preflight_builds_train_cli_once_before_affected_tests(repo, monkeypatch, tools_importable):
+    import preflight
+
+    root, base = repo
+    selected = "tests/test_hooks_prepush_paths.py"
+    commit_file(root, selected, "def test_train(): pass\n")
+    binary = root / "plangraph"
+    binary.touch(mode=0o755)
+    calls = []
+
+    def run(command, cwd, env):
+        if command[:2] == ["cargo", "build"]:
+            assert command[command.index("-p") + 1] == "plangraph-cli"
+            calls.append("build")
+            return 0, json.dumps({"reason": "compiler-artifact", "executable": str(binary),
+                                  "target": {"name": "plangraph", "kind": ["bin"]}})
+        if preflight.is_affected_step(command):
+            calls.append("tests")
+            assert preflight.check_timeout(command, cwd, env) == 240
+            assert Path(env["PLANGRAPH_TEST_CLI"]).is_file()
+        return 0, ""
+
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [])
+    monkeypatch.setattr(preflight, "trim_shared_target", lambda _: None)
+    monkeypatch.setenv("PREFLIGHT_TEST_WORKERS", "2")
+    assert preflight.main(["--base", base], root) == 0
+    assert calls == ["build", "tests"]
+
+
 @pytest.fixture
-def train_validator_on_path(train_cli, monkeypatch):
-    monkeypatch.setenv("PATH", str(train_cli.parent), prepend=os.pathsep)
+def train_validator_on_path(train_cli, monkeypatch, tmp_path):
+    bin_dir = tmp_path / "train-bin"
+    bin_dir.mkdir()
+    (bin_dir / "plangraph").symlink_to(train_cli)
+    monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
 
 
 def install_preflight(r, marker):

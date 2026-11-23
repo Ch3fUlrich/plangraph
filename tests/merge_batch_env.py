@@ -20,14 +20,14 @@ STUB = Path(__file__).with_name("merge_batch_gh_stub.py")
 
 @pytest.fixture(scope="session")
 def train_cli():
-    """Build the real validator used by the hook inside hermetic Git fixtures."""
-    command = ["cargo", "build", "--locked", "--manifest-path", str(ROOT / "rust" / "Cargo.toml"),
-               "-p", "plangraph-cli", "--bin", "plangraph", "--message-format=json"]
-    env = dict(os.environ, CARGO_BUILD_JOBS="1")
-    result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, check=True)
-    artifacts = (json.loads(line) for line in result.stdout.splitlines())
-    return next(Path(entry["executable"]) for entry in artifacts
-                if entry.get("executable") and entry["target"]["name"] == "plangraph")
+    """Use the real validator built before pytest starts."""
+    path = os.environ.get("PLANGRAPH_TEST_CLI")
+    if not path:
+        pytest.skip("PLANGRAPH_TEST_CLI must point to a prebuilt plangraph executable")
+    binary = Path(path).resolve()
+    if not shutil.which(str(binary)):
+        pytest.fail("PLANGRAPH_TEST_CLI does not point to an executable file")
+    return binary
 
 
 #: A `git` that interferes with the n-th `git $CRASH_SUB` it is asked to run (see Env.run): kill the parent
