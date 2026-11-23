@@ -20,6 +20,7 @@ from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES, opencode_counterpart
 from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
+from .host_ready import harness_path
 from .inline_diff import InlineDiffError
 from .resolver import host_skip_reason_async, admitted_by_render
 from .service import SpawnService
@@ -111,11 +112,13 @@ def build(request: dict) -> dict:
             if choice.leg is None:
                 raise LaunchRefused('client_missing', 'Codex client unavailable for ' + leg.id)
             leg = choice.leg
-    from plangraph.routing_support.clients import codex_review_client
-    codex, missing_client = (None, None) if request['dry_run'] else codex_review_client(
-        leg.harness, request['role'], request['run_id'])
-    if missing_client:
-        raise LaunchRefused('client_missing', missing_client)
+    codex = None
+    if not request['dry_run'] and leg.harness == 'codex' and request['role'] == 'review':
+        from plangraph.routing_support.clients import codex_review_client
+        env = dict(os.environ, PATH=harness_path(os.environ))
+        codex, missing_client = codex_review_client(leg.harness, request['role'], request['run_id'], env=env)
+        if missing_client:
+            raise LaunchRefused('client_missing', missing_client)
     from plangraph.planner.route_policy import codex_leg_effort
     from .target import admit_leg, quota_paused
     if quota_paused(request['state'], request['role'], leg):

@@ -78,7 +78,7 @@ def test_unknown(request_data):
 @pytest.mark.parametrize('explicit', [False, True])
 def test_tools(request_data, role, tmp_path, explicit, monkeypatch):
     from plangraph.routing_support import clients
-    monkeypatch.setattr(clients, 'resolve_codex_client', lambda: (None, 'fixture'))
+    monkeypatch.setattr(clients, 'resolve_codex_client', lambda env=None: (None, 'fixture'))
     leg_id = 'cx-gpt-6.2-sol' if role == 'implement' else request_data['leg']['id']
     exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')
@@ -87,7 +87,7 @@ def test_tools(request_data, role, tmp_path, explicit, monkeypatch):
     request_data['leg']['explicit'] = explicit
     if role == 'implement' and explicit:
         request_data['leg']['harness'] = 'opencode'
-        monkeypatch.setattr(clients, 'resolve_codex_client', lambda: ('codex', None))
+        monkeypatch.setattr(clients, 'resolve_codex_client', lambda env=None: ('codex', None))
     code, out, err = invoke(request_data)
     assert (code, err) == (0, '')
     result = json.loads(out)
@@ -193,7 +193,7 @@ def test_review_uses_resolved_codex_client(request_data, tmp_path, monkeypatch, 
     executable = tmp_path / 'resolved-codex'
     executable.symlink_to('/bin/true')
     monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client',
-                        lambda: (str(executable) if installed else None, 'fixture search'))
+                        lambda env=None: (str(executable) if installed else None, 'fixture search'))
     request_data.update(leg={'id': REVIEW_GPT, 'harness': 'codex'},
                         writer_families=['gemini'])
 
@@ -568,27 +568,31 @@ def test_launch_accepts_a_registered_repository_diff_ref(request_data):
     assert code == 0, (out, err)
 
 
+@pytest.mark.parametrize('harness', ['opencode', 'codex'])
 def test_review_launch_resolves_latest_nvm_harness_under_user_manager_path(
-        request_data, tmp_path, monkeypatch):
+        request_data, tmp_path, monkeypatch, harness):
     import shutil
+    from plangraph.planner.legs import REVIEW_GPT
     from plangraph.routing_support.clients import build_child_env
 
     manager_path = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('PATH', manager_path)
     monkeypatch.delenv('NVM_DIR', raising=False)
+    monkeypatch.delenv('PLANGRAPH_CODEX_BIN', raising=False)
     monkeypatch.setattr(spec.runner, 'build_child_env', build_child_env)
     node = tmp_path / '.nvm/versions/node'
     for version in ('v9.0.0', 'v24.19.0'):
         bin_dir = node / version / 'bin'
         bin_dir.mkdir(parents=True)
-        (bin_dir / 'opencode').symlink_to('/bin/true')
-    expected = str(node / 'v24.19.0/bin/opencode')
-    request_data.update(leg={'id': 'opencode-glm-5.3-flash-free'})
+        (bin_dir / harness).symlink_to('/bin/true')
+    expected = str(node / 'v24.19.0/bin' / harness)
+    request_data.update(leg={'id': REVIEW_GPT if harness == 'codex' else 'opencode-glm-5.3-flash-free'},
+                        writer_families=['gemini'])
 
     code, out, err = invoke(request_data)
     assert (code, err) == (0, '')
     launch = json.loads(out)
     assert str(node / 'v24.19.0/bin') in launch['env']['PATH'].split(os.pathsep)
     assert launch['argv'][0] == expected
-    assert shutil.which('opencode', path=launch['env']['PATH']) == expected
+    assert shutil.which(harness, path=launch['env']['PATH']) == expected

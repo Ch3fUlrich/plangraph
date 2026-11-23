@@ -1,0 +1,1 @@
+Scheduled review probes discover harnesses in user and NVM installation directories even when systemd supplies a customized PATH. Native Codex review launches use the resolved PATH for their executable check.
