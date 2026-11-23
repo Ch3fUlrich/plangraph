@@ -1,0 +1,1 @@
+Two skills, evidence-acquisition and evidence-article, say how the effect of an improvement is measured and written up as an article with its data, queries and sources; the planning skill names the evidence step and AGENTS.md lists both skills.

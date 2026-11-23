@@ -252,6 +252,12 @@ runs in flight, where their output lands, the next step. A sudden stop (usage li
 loses nothing, and the same session is resumed. Runs of other families keep running through a
 Claude stop because their output is a file.
 
+**Evidence.** A plan that aims at throughput, speed, cost or quality records its baselines
+with `skills/evidence-acquisition/SKILL.md` before the work starts, and each change it lands
+ends as an article (`skills/evidence-article/SKILL.md`): the measured effect, what did not
+work, and what it means for later projects. A proposal names the measurement that will show
+its effect, or it is not ready.
+
 **Attended planning.** When the operator is in the chat, he decides there: no judge run and no
 relay to the router for those decisions. Watching landings, hosts and close passes belongs to
 the orchestrator session, not to the planner. An accepted plan becomes keeper items as in
@@ -311,6 +317,7 @@ research and review. If only Claude is available, record that coverage in the re
 - [ ] Intent written at Layer 1; planning phase(s) scheduled by the operator
 - [ ] Plan graph read first; question batch and conflict follow-up before routed research; refinement recorded
 - [ ] Large plan (section 5a): two families per topic, reports as files, baselines measured, review rounds in one resumed session until no HIGH and no MED, checkpoint card written
+- [ ] Baselines recorded as evidence before the work; every landed improvement written up as an evidence article
 - [ ] Every task passes the section 3 contract; file scopes disjoint; toolchain in each brief
 - [ ] Every task item has a card in the same batch; cards relative-pathed, risk tags explicit
 - [ ] One agent per task; implementers parallel only when independent
