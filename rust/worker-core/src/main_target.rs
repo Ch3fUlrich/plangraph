@@ -1,12 +1,11 @@
 //! A main checkout's own `rust/target` is outside every cap: report it, remove it once idle.
 use crate::disk_hygiene::{scan, Guards, Report};
+use crate::shared_target::CACHEDIR_SIGNATURE;
 use std::{
     fs, io,
     path::Path,
     time::{Duration, SystemTime},
 };
-
-const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
 
 /// Cargo's own markers, never the directory name: its CACHEDIR.TAG or the `.rustc_info.json`
 /// beside a profile directory.

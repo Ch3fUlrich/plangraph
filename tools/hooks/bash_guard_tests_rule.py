@@ -198,6 +198,28 @@ def _inside(path, root, cwd):
 _CARGO_VALUE_OPTIONS = frozenset(("--color", "-Z", "-C", "--config"))
 
 
+def _expand(path, base):
+    return (Path(base) / Path(os.path.expandvars(path)).expanduser()).resolve()
+
+
+def _cargo_workdir(rest, cwd):
+    """Directory cargo builds in: `-C DIR` (before the subcommand), then `--manifest-path`'s directory."""
+    where, it = Path(cwd), iter(rest)
+    for word in it:
+        if word == "-C":
+            where = _expand(next(it, "."), where)
+        elif word in _CARGO_VALUE_OPTIONS:
+            next(it, None)
+        elif not word.startswith(("+", "-")):
+            break
+    for k, word in enumerate(rest):
+        manifest = (rest[k + 1] if word == "--manifest-path" and k + 1 < len(rest)
+                    else word.split("=", 1)[1] if word.startswith("--manifest-path=") else None)
+        if manifest:
+            return _expand(manifest, where).parent
+    return where
+
+
 def _cargo_subcommand(rest):
     """First word of cargo's arguments that is not a +toolchain or a global option."""
     it = iter(rest)
@@ -210,9 +232,8 @@ def _cargo_subcommand(rest):
 
 
 def main_checkout_cargo(command, cwd, depth=0, inherited=None):
-    """Deny message for a cargo build whose target dir is a main checkout's or agent worktree's own."""
-    root = main_checkout_root(cwd)
-    if root is None or depth > 3:
+    """Deny message for a cargo build whose target dir is a main checkout's or agent worktree's own, wherever cwd, `cd`, `-C` or `--manifest-path` put it."""
+    if depth > 3:
         return None
     from bash_guard_rules import _ENV_ASSIGN_RE, _SHELLS, _WRAPPERS, _basename, _shell_strings
     from bash_guard_rules2 import lead, scan
@@ -231,6 +252,9 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
         # Wrapper options are not modelled: every later word may be the command, as check_command reads it.
         wrapped = _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS
         evaled = False
+        if _basename(words[i]) in ("cd", "pushd") and len(words) > i + 1:
+            cwd = _expand(words[i + 1], cwd)  # later commands run there
+            continue
         for j in range(i, len(words)) if wrapped else (i,):
             name = _basename(words[j])
             if name in _SHELLS:
@@ -249,10 +273,14 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
             sub = _cargo_subcommand(rest)
             if sub not in _BUILDING:
                 continue
+            where = _cargo_workdir(rest, cwd)
+            root = main_checkout_root(where)
+            if root is None:
+                continue
             target = next((rest[k + 1] for k, a in enumerate(rest[:-1]) if a == "--target-dir"), None)
             target = target or next((a.split("=", 1)[1] for a in rest if a.startswith("--target-dir=")), None)
             for var in _TARGET_ENVS:
                 target = target or envs.get(var) or os.environ.get(var) or None
-            if target is None or _inside(target, root, cwd):
+            if target is None or _inside(target, root, where):
                 return MAIN_TARGET_MESSAGE % (sub, root)
     return None

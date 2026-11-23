@@ -93,3 +93,46 @@ def test_a_target_dir_environment_inside_the_main_checkout_is_refused(repos, mon
     assert hook("cargo build", main / "rust").returncode == 2
     monkeypatch.setenv("CARGO_TARGET_DIR", str(main.parent / "elsewhere"))
     assert hook("cargo build", main / "rust").returncode == 0
+
+
+@pytest.mark.parametrize("template", [
+    "cargo -C {main}/rust build",
+    "cargo -q -C {main}/rust test",
+    "cargo build --manifest-path {main}/rust/Cargo.toml",
+    "cargo test --manifest-path={main}/rust/Cargo.toml",
+    "cd {main} && cargo build",
+    "cd {main}/rust; cargo test -p x",
+    "bash -c 'cd {main} && cargo build'",
+    "nice bash -c 'cd {main}/rust && cargo clippy'",
+    "cd {main} && CARGO_TARGET_DIR=rust/target cargo build",
+    "cargo -C {main}/rust build --target-dir target",
+])
+def test_cargo_aimed_at_a_main_checkout_from_outside_is_refused(repos, tmp_path, template):
+    main, _ = repos
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    result = hook(template.format(main=main), outside)
+    assert result.returncode == 2, (template, result.stderr)
+    assert b"cargo-target" in result.stderr
+
+
+@pytest.mark.parametrize("template", [
+    "cargo -C {main}/rust build --target-dir /var/cache/shared",
+    "CARGO_TARGET_DIR=/var/cache/shared cargo build --manifest-path {main}/rust/Cargo.toml",
+    "cd {main} && CARGO_TARGET_DIR=/var/cache/shared cargo build",
+    "cd {main} && cargo fmt --check",
+    "cargo build --manifest-path {out}/Cargo.toml",
+])
+def test_cargo_aimed_at_a_main_checkout_with_an_outside_target_is_allowed(repos, tmp_path, template):
+    main, _ = repos
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    assert hook(template.format(main=main, out=outside), outside).returncode == 0
+
+
+def test_cd_out_of_a_main_checkout_leaves_the_refusal_behind(repos, tmp_path):
+    main, _ = repos
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    assert hook(f"cd {outside} && cargo build", main / "rust").returncode == 0
+    assert hook(f"cd {outside} && cd {main} && cargo build", outside).returncode == 2

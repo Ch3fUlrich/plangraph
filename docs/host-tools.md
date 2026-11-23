@@ -53,10 +53,11 @@ server startup to normalize paths in cache keys.
 `sccache --show-stats` shows hits, misses and cache usage. With sccache absent,
 the build environment warns once and Cargo continues without a wrapper.
 
-The shared target cap defaults to 10 GB per root. Under disk pressure or above
+The shared target cap defaults to 32 GiB per root (above one cold full-workspace debug test build, 20.9 to 25.9 GB); `PLANGRAPH_CARGO_TARGET_CAP_GB`, then the host file `cargo-target-cap-gb` in `$XDG_CONFIG_HOME/plangraph`, override it. After each run the post-run trim evicts down to 75% of the cap. Under disk pressure or above
 that cap, cleanup removes oldest idle incremental sessions and stale
 `build/<crate>-<hash>` variants, keeping the newest compile unit and run unit per crate and profile.
-Candidates must be idle over six hours; recent, unknown and sole variants survive.
+Candidates must be idle over one hour; recent, unknown and sole variants survive.
+`pg-disk-hygiene --repo` also reports a main checkout's own `rust/target` and removes it once idle for an hour, identified by cargo's `CACHEDIR.TAG` or `.rustc_info.json`, with no cargo running.
 The cap is a reclamation trigger, not a hard size limit: protected/newest data may
 exceed it. Build dependencies and other cached artifacts remain rebuildable but
 are retained. Each removal rechecks processes and eligibility; a live Cargo
@@ -91,7 +92,7 @@ the other filesystems are still swept. Set `PLANGRAPH_SPAWN_STATE` when records 
 outside the default state directory.
 Threshold options are `--alarm-free-bytes` (default `5368709120`, 5 GiB),
 `--cleanup-free-bytes` (default `10000000000`) and `--shared-target-cap-bytes`
-(default `10000000000`); options take byte counts (10 GB is decimal). Alarm must be positive and no
+(default the configured cap, 32 GiB); options take byte counts (10 GB is decimal). Alarm must be positive and no
 larger than cleanup. JSON reports `free_bytes`, never a usage percentage.
 Rule 7.1 requires at least 5 GiB free to start any writer/run on every host and
 stopping at 2 GiB free. The spawner owns admission and runtime stopping;

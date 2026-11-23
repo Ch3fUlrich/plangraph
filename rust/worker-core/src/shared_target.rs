@@ -22,6 +22,9 @@ fn directories(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// First bytes of the `CACHEDIR.TAG` cargo writes at the root of every target directory.
+pub(crate) const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
 #[cfg(target_os = "linux")]
 fn cargo_output(root: &Path) -> bool {
     let marker = |name| {
@@ -32,8 +35,7 @@ fn cargo_output(root: &Path) -> bool {
             .flatten()
     };
     !root.join(".git").exists()
-        && (marker("CACHEDIR.TAG")
-            .is_some_and(|tag| tag.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55"))
+        && (marker("CACHEDIR.TAG").is_some_and(|tag| tag.starts_with(CACHEDIR_SIGNATURE))
             || marker(".rustc_info.json").is_some_and(|info| {
                 serde_json::from_slice::<serde_json::Value>(&info)
                     .is_ok_and(|value| value.get("rustc_fingerprint").is_some())

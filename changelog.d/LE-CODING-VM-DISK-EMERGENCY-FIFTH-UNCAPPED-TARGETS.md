@@ -1,3 +1,4 @@
 - Refuse a cargo build in a main checkout without a target outside it, evict build-script variants and incremental dirs untouched for an hour (was six), and report and remove an idle main-checkout `rust/target` from the disk guard.
 - The same refusal covers a worktree under `.claude/worktrees` (a writer's checkout held 19 GB of `rust/target` on dell).
 - The guard reads cargo global options before the subcommand and descends into `bash -c`, `eval` and wrapper-passed shell strings; the disk guard removes a main-checkout `rust/target` only on cargo's own markers.
+- The guard resolves `cargo -C DIR`, `--manifest-path` and a leading `cd` before deciding whether the build targets a main checkout; `docs/host-tools.md` states the one-hour idle rule and the 32 GiB cap.
