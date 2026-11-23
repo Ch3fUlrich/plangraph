@@ -13,7 +13,7 @@ import subprocess
 from plangraph.planner.seats import _check_diff_ref
 from plangraph.routing_errors import SpawnRefused
 from plangraph.routing_support import background_process_options
-from .env_redact import _diff_block, PrivateKeyScan
+from .env_redact import _before_review_output, _diff_block, PrivateKeyScan
 
 HEADER = "\n\n=== INLINE DIFF (base {base}, head {head}; assess the change from this material without calling tools) ===\n"
 FOOTER = "\n=== END INLINE DIFF ===\n"
@@ -173,4 +173,5 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
         shown = _withhold_key_hunks(proc.stdout, diff_ref["repo"], timeout) if "@@ -" in proc.stdout else proc.stdout
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InlineDiffError(f"private key check failed: {type(exc).__name__}") from None
-    return prompt + HEADER.format(base=base, head=head) + _diff_block(shown) + FOOTER
+    block = HEADER.format(base=base, head=head) + _diff_block(shown) + FOOTER
+    return _before_review_output(prompt, block)
