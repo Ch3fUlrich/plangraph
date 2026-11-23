@@ -237,24 +237,18 @@ fn check_unique_keys(input: &Input) -> Result<(), String> {
 
 fn read_design(input: &Input, item: &Item, reference: &str) -> Result<String, String> {
     let invalid = || format!("item {} has unreadable design_ref {reference}", item.key);
-    let (root, path) = match reference.split_once(':') {
-        Some((repository, path)) => (
-            input
-                .design_roots
-                .get(repository)
-                .map(PathBuf::as_path)
-                .ok_or_else(invalid)?,
-            path,
-        ),
-        None => {
-            let project = item.key.split_once(':').map(|(project, _)| project);
-            let root = project.and_then(|project| input.design_roots.get(project));
-            (
-                root.map_or_else(|| Path::new("."), PathBuf::as_path),
-                reference,
-            )
-        }
-    };
+    let (repository, path) = reference
+        .split_once(':')
+        .or_else(|| {
+            item.key
+                .split_once(':')
+                .map(|(project, _)| (project, reference))
+        })
+        .ok_or_else(invalid)?;
+    let root = input
+        .design_roots
+        .get(repository)
+        .ok_or_else(|| format!("{}: no design root configured for {repository}", invalid()))?;
     let relative = Path::new(path);
     if path.is_empty()
         || path.contains(['\\', ':'])
