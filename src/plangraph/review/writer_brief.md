@@ -19,6 +19,9 @@ Plan-Item: plangraph:<item>
 Writer: <writer identity supplied by the brief>
 For train resolve and drop commits, also include `Harness: <harness>` in that paragraph.
 Use `Dropped-Part: <key>` in place of `Plan-Item` for drops.
+Write class-wide audit records in the commit body as
+`Class-Search: <pattern> -> <n> hits, <m> changed`.
+To repair an earlier record, put its eight-character commit SHA before the pattern.
 
 === ITEM CONTEXT
 Item key: $item_key

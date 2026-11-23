@@ -189,6 +189,38 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout)
         .contains("FAILED test_example.py::test_example - fixture failure"));
+
+    let malformed = "Class-Search: example -> 1 hit, 1 changed";
+    git(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "malformed audit",
+            "-m",
+            malformed,
+        ],
+    );
+    let malformed_commit = git(root, &["rev-parse", "HEAD"]);
+    fs::write(
+        tools.join("check_new_code_lang.py"),
+        concat!(
+            "import os, subprocess, sys\n",
+            "base = os.environ['CLASS_SEARCH_BASE']\n",
+            "commit = subprocess.check_output(['git', 'log', '-1', '--format=%H%n%b', base + '..HEAD'], text=True)\n",
+            "assert 'Class-Search:' in commit\n",
+            "print(commit)\n",
+            "sys.exit(1)\n",
+        ),
+    ).unwrap();
+    let output = run(&failing_base);
+    assert!(!output.status.success(), "{output:?}");
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        log.contains(&malformed_commit) && log.contains(malformed),
+        "{log}"
+    );
 }
 
 #[test]
