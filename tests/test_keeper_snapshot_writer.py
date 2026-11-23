@@ -300,3 +300,51 @@ def test_startup_snapshot_is_written_under_the_server_lock(tmp_path, monkeypatch
     world.close()
     daemon.run(config.load_config(path), ready=lambda srv: signal.raise_signal(signal.SIGINT))
     assert owned and owned[0] is True, "startup rebuild must hold server.lock"
+
+
+def test_show_answers_during_a_fleet_build_of_7000_records(tmp_path, monkeypatch, capsys):
+    from concurrent.futures import ThreadPoolExecutor
+    from plangraph import fleet_snapshot
+    from test_keeper_api import call
+
+    monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
+    for n in range(7000):
+        path = tmp_path / "runs" / f"run-{n}" / "record.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"run_id": f"run-{n}", "status": "running",
+                                   "host": "fixture", "attempts": ["large record"]}))
+    world = World(tmp_path, backend="sqlite")
+    seed(world, [("A", [])])
+    server = _server(tmp_path, world, debounce=0.02)
+    entered, unblocked = threading.Event(), threading.Event()
+    observed = []
+
+    def project(registry, samples=None, runs=None):
+        observed.append((len(runs), set(runs[0])))
+        entered.set()
+        assert unblocked.wait(5)
+        return {"hosts": [], "running_agents": len(runs)}
+
+    monkeypatch.setattr(fleet_snapshot, "build_fleet", project)
+    try:
+        server.snapshot_writer.mark()
+        assert entered.wait(4)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            try:
+                start = time.monotonic()
+                response = pool.submit(call, server, "/v1/show/demo:A?fmt=json", token=world.tok("reader"))
+                assert response.result(timeout=1)[0] == 200
+                assert time.monotonic() - start < 1
+            finally:
+                unblocked.set()
+        server.flush_snapshot()
+        assert observed == [(7000, {"run_id", "host", "status"})]
+        timing = next(line for line in capsys.readouterr().err.splitlines() if "writer_timing" in line)
+        parts = dict(field.split("=", 1) for field in timing.split() if "=" in field)
+        assert int(parts["hold_ms"]) < 2500
+        assert int(parts["fleet_ms"]) > 0
+    finally:
+        unblocked.set()
+        server.shutdown()
+        server.server_close()
+        world.close()

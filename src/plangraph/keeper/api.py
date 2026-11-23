@@ -565,13 +565,24 @@ class Reaper(threading.Thread):
         self.interval = getattr(server.config, "reap_interval", 60.0)
         #: NOT ``_stop``: ``Thread`` owns that name; shadowing it breaks join.
         self._halt = threading.Event()
+        self._published_reap = 0
 
     def run(self):
         while not self._halt.wait(self.interval):
             try:
                 with timing.RequestTimer(self.server.lock, event="reaper_timing"):
-                    self.server.store.reap(self.server.system)
-                    write_snapshot(self.server, self.server.system)
+                    store = self.server.store
+                    store.reap(self.server.system)
+                    revision = getattr(store, "_reap_revision", 0)
+                    writer = self.server.snapshot_writer
+                    publication = self.server.snapshot_publication
+                    retry = writer is None and publication.requested > publication.latest
+                    if revision != self._published_reap or retry:
+                        if writer is None:
+                            write_snapshot(self.server, self.server.system)
+                        else:
+                            writer.mark()
+                        self._published_reap = revision
                     outage.stamp(self.server.config)      # M2B-OUTBOX: liveness for the outage grace
                     if self.server.anchorer is not None:      # M2B-ANCHOR: done transitions + hourly
                         self.server.anchorer.tick(self.server.store.conn)

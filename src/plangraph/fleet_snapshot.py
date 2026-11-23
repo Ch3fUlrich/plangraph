@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from pathlib import Path
+
+from .keeper.run_records import RunRecordCache
 
 METRICS = (
     "cpu_percent", "ram_available_bytes", "gpu_percent",
@@ -82,16 +85,29 @@ def build_fleet(registry, samples=None, runs=None):
         raise RuntimeError('fleet projection failed') from None
 
 
-def load_fleet(store, samples=None):
-    """Read persisted registry and existing local run records, without side effects.
+class FleetProjection:
+    """Serialize fleet work and retain the projection while its inputs are unchanged."""
 
-    Slice 2 supplies the samples API's host->metrics mapping here. The current
-    bus registry has no class/caps columns, so those remain unknown as well.
-    """
-    from .keeper.run_records import read_run_records
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.runs = RunRecordCache(fields=("run_id", "host", "status"))
+        self.inputs = self.value = None
 
+    def load(self, state, registry, samples):
+        with self.lock:
+            runs = self.runs.read(state)
+            inputs = (registry, samples, runs)
+            if inputs != self.inputs:
+                self.value = build_fleet(registry, samples=samples, runs=runs)
+                self.inputs = inputs
+            return self.value
+
+
+def load_fleet(store, samples=None, *, registry=None, projection=None):
+    """Read persisted registry and local runs, projecting only fields pg-spawnd consumes."""
     state = Path(os.environ.get("PLANGRAPH_SPAWN_STATE") or
                  Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
                  / "plangraph")
-    runs = read_run_records(state)
-    return build_fleet(store.list_bus_hosts(), samples=samples, runs=runs)
+    if registry is None:
+        registry = store.list_bus_hosts()
+    return (projection or FleetProjection()).load(state, registry, samples)
