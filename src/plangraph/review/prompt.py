@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-from string import Template
 from pathlib import Path
+from runpy import run_path
+from string import Template
 
 __all__ = [
     "NO_TOOLS_PREAMBLE",
@@ -25,8 +26,42 @@ NO_TOOLS_PREAMBLE = (
 )
 
 
-def render_brief(role: str, context: dict | None = None, *, rules: str = "") -> str:
-    """Render a versioned brief; substitution never interprets item text."""
+def _claude_writer_trailer(rules: str, launch_record: dict | None) -> str:
+    """Validate declared trailers and render the Claude fleet launch identity."""
+    declared = [line for line in rules.splitlines()
+                if ":" in line and line.split(":", 1)[0].strip().lower() == "writer"]
+    if launch_record is None and not declared:
+        return ""
+
+    # Callers can render a brief from outside this checkout.
+    gate = run_path(str(Path(__file__).resolve().parents[3] / "tools" / "ci_commit_gate.py"))
+
+    for line in declared:
+        violations = gate["message_violations"](f"Writer brief\n\n{line}")
+        if violations:
+            raise ValueError(f"Writer brief refused by CLAUDE_WRITER_RE: {', '.join(violations)}")
+        if launch_record is not None:
+            raise ValueError("Writer brief must take its Writer trailer from the launch record")
+
+    if launch_record is None:
+        return ""
+    model = launch_record.get("model")
+    session_id = launch_record.get("session_id")
+    refusal = f"Writer brief refused by CLAUDE_WRITER_RE: {gate['CLAUDE_WRITER']}"
+    if not all(isinstance(part, str) and part and not any(map(str.isspace, part))
+               for part in (model, session_id)):
+        raise ValueError(refusal)
+    if not model.startswith("claude-"):
+        model = f"claude-{model}"
+    identity = f"{model} {session_id}"
+    if not gate["CLAUDE_WRITER_RE"].fullmatch(identity):
+        raise ValueError(refusal)
+    return f"\nWriter: {identity}"
+
+
+def render_brief(role: str, context: dict | None = None, *, rules: str = "",
+                 launch_record: dict | None = None) -> str:
+    """Render a versioned brief, optionally bound to a Claude fleet writer record."""
     if role not in ("review", "writer"):
         raise ValueError("role must be review or writer")
     fields = ("item_key", "done_criteria", "invariants", "base_sha", "head_sha",
@@ -36,7 +71,8 @@ def render_brief(role: str, context: dict | None = None, *, rules: str = "") -> 
                    if key in fields})
     text = Path(__file__).with_name(role + "_brief.md").read_text(encoding="utf-8")
     prefix, marker, item = text.partition("=== ITEM CONTEXT")
-    return prefix + rules + "\n" + marker + Template(item).substitute(values)
+    writer = _claude_writer_trailer(rules, launch_record) if role == "writer" else ""
+    return prefix + rules + "\n" + marker + writer + Template(item).substitute(values)
 
 
 def load_tail() -> str:

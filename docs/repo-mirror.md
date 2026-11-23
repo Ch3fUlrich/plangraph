@@ -96,6 +96,9 @@ renderers with fixture item context and repository evidence paths. Python render
 subprocesses use the Rust test helper to import from the checkout's `src/`.
 The same context is required for inline review and each judge mode. Only a judge with
 tools receives permission to read repository files.
+The writer fixture passes a fleet launch record to the versioned renderer and checks
+the resulting model and session UUID against the commit gate. It also verifies that
+the renderer refuses the legacy Claude trailer and a missing or shortened session ID.
 
 For the crate's commit-stamped symbol and documentation index, see
 [pg-ctx navigation](../rust/pg-ctx/README.md).
