@@ -97,6 +97,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "docs/rust-hooks.md",
     "docs/spawner-reliability.md",
     "docs/workspace-resolver.md",
+    "skills/batch-writer/SKILL.md",  # The Claude writer launcher embeds the skill.
     "skills/review/SKILL.md",  # Native writer review composition fixture.
     "tools/hooks/install_hooks.sh",  # The lesson Stop hook tests its installer.
     "tools/seat_record.py",  # Native review seat binding fixture.
