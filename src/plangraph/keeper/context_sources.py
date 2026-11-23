@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 from . import timing
 from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell, _did_num, superseded_map
-from .evidence_git import REVERT_GREP, delivery_revert, is_first_parent_merge, plan_items, valid_ref
+from .evidence_git import REVERT_GREP, delivery_revert, is_first_parent_merge, plan_items, trailer_entries, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
@@ -129,7 +129,14 @@ def _work_record(record):
     """Decode a new immutable commit record for the index."""
     sha, parents, date, subject, message = record.split("\x1f", 4)
     revert = delivery_revert(message)
-    return sha, parents.split(), date, subject, () if revert else plan_items(message), revert
+    full, partial = [], []
+    if revert is None:
+        for label, value in trailer_entries(message):
+            if label.lower() == "plan-item":
+                full.append(value)
+            elif label.lower() == "plan-item-part":
+                partial.append(value)
+    return sha, parents.split(), date, subject, full, partial, revert
 
 
 def _work_log(git, repo, refs, target, previous):
@@ -230,10 +237,12 @@ def work_index(git, project, *, fresh=False):
             return None
         origin_stale = True
         problems.append("repository index unavailable")
-    records, reverts = {}, {}
-    for sha, parents, date, subject, trailers, revert in (log[1].values() if log else ()):
+    records, reverts, partial = {}, {}, {}
+    for sha, parents, date, subject, trailers, parts, revert in (log[1].values() if log else ()):
         if revert is not None:
             reverts[sha] = revert
+        if parts:
+            partial[sha] = parts
         records[sha] = (parents, {"sha": sha, "date": date, "subject": subject}, trailers)
 
     def ancestors(head):
@@ -274,13 +283,17 @@ def work_index(git, project, *, fresh=False):
             for sha in introduced:
                 if sha in records and (sha != landing or own_pr):
                     records[sha][1]["merge"] = merge
-    commits, pulls = {}, {}
-    cancelled = _cancelled_delivery(git, repo, {s: records[s][2] for s in merged if s in records and records[s][2]},
-                                    {s: r for s, r in reverts.items() if s in merged})
+    commits, pulls, parts = {}, {}, {}
+    active = {sha: [*row[2], *partial.get(sha, ())] for sha, row in records.items()
+              if sha in merged and (row[2] or sha in partial)}
+    cancelled = _cancelled_delivery(git, repo, active, {s: r for s, r in reverts.items() if s in merged})
     for sha, (_, commit, names) in records.items():
         if sha in merged and sha not in cancelled:
             for name in names:
                 commits.setdefault(name.strip(), []).append(commit)
+            if (commit.get("merge") or {}).get("pr"):
+                for name in partial.get(sha, ()):
+                    parts.setdefault(name.strip(), []).append(commit["merge"])
     for pr in prs or []:
         for sha in ancestors(pr["headRefOid"]) - merged:
             for name in records.get(sha, ([], {}, []))[2]:
@@ -293,7 +306,7 @@ def work_index(git, project, *, fresh=False):
     prs_unverified = prs_expected and (prs is None or origin_stale)
     previous_prs = hit[1].get("last_verified_prs") if hit and prs_expected else None
     verified_prs = pulls if prs is not None and not prs_unverified else None
-    result = {"commits": commits, "prs": verified_prs,
+    result = {"commits": commits, "parts": parts, "prs": verified_prs,
               "last_verified_prs": verified_prs if verified_prs is not None else previous_prs,
               "prs_unverified": prs_unverified,
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
@@ -363,6 +376,15 @@ def indexed_open_pulls(indexes, key, project, *, cached=False):
         if name == project:
             pulls.update(prs.get(bare, ()))
     return sorted(pulls)
+
+
+def indexed_parts(index, key):
+    """The distinct PR merges that brought in a partial item trailer."""
+    if index is None:
+        return []
+    _, bare = _split(key)
+    parts = index.get("parts", {})
+    return list({part["sha"]: part for name in (key, bare) for part in parts.get(name, ())}.values())
 
 
 def indexed_work(index, key, *, limit=COMMIT_LIMIT):
