@@ -17,7 +17,7 @@ pub(crate) fn header(agent: &str, role: &str) -> String {
 pub(crate) fn is_batch(brief: &str) -> bool {
     brief.contains("\n# Items\n") && brief.contains("\n# Run values")
 }
-pub(crate) fn skill_name(brief: &str) -> &'static str {
+pub fn skill_name(brief: &str) -> &'static str {
     if is_batch(brief) {
         "batch-writer"
     } else {
@@ -25,7 +25,7 @@ pub(crate) fn skill_name(brief: &str) -> &'static str {
     }
 }
 /// Header, then the skill byte-identical unless the brief already starts with it, then the brief.
-pub(crate) fn compose(agent: &str, brief: &str, skill: Option<&str>) -> String {
+pub fn compose(agent: &str, brief: &str, skill: Option<&str>) -> String {
     let head = header(agent, "implement");
     let body = brief
         .strip_prefix(head.as_str())

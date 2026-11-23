@@ -63,3 +63,19 @@ the native writer starts its review prompt with a `[tools-only]` block followed 
 a `[review-skill]` block. Inline composition drops both and keeps the versioned brief
 and item text verbatim. Tools legs keep both blocks once. Closing markers are reserved
 in their respective blocks. Marker text in the brief or in quoted findings stays intact.
+
+## Shared batch writer input
+
+To render the same batch for the Rust fleet Claude launcher and the native Codex
+writer, start the prompt file or prompt text with the line
+`PLANGRAPH-BATCH-INPUT-V1` followed by a JSON object. The object has an
+`items` array of `{key, title, brief}` entries and a `run` object. The
+[machine-readable example](../../rust/pg-spawnd/tests/fixtures/batch-writer-input.txt)
+lists the fields, including the fast-check commands, review command and wait in
+seconds, round cap and commit trailers.
+
+Both launchers render Items and Run values with the same Rust renderer. The
+fleet launcher adds the Claude role header and the batch-writer skill bundled
+with the binary. Native Codex adds its own role header, skill and worker
+instructions. The commands in Run values are brief text. The native worker
+enforces its own fast-check and review policy.

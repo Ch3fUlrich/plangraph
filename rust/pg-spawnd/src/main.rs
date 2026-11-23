@@ -44,7 +44,7 @@ mod placement;
 mod pre_review;
 mod prompt;
 mod prompt_git;
-use pg_spawnd::pyjson;
+use pg_spawnd::{pyjson, role_header};
 mod reconcile;
 #[allow(dead_code)]
 mod reconcile_attach;
@@ -64,7 +64,6 @@ mod review_health;
 mod review_retry;
 mod review_split;
 mod review_test_evidence;
-mod role_header;
 mod round_progress;
 mod round_replan;
 mod round_replan_ports;
