@@ -81,7 +81,7 @@ fn actual_seat_verdict_dry_run_reads_pair() {
 #[test]
 fn seat_verdict_artifact_reports_test_evidence() {
     let state = tempfile::tempdir().unwrap();
-    let record = json!({"run_id":"run-test","served_model":"gpt-5","witness_kind":"response",
+    let mut record = json!({"run_id":"run-test","served_model":"gpt-5","witness_kind":"response",
         "finish_reason":"stop","test_gaming":"no","verdict":"PASS"});
     for (tests, expected) in [
         ("", false),
@@ -100,6 +100,17 @@ fn seat_verdict_artifact_reports_test_evidence() {
         .unwrap();
         assert_eq!(evidence["verdict"], "PASS");
         assert_eq!(evidence["tested"], expected);
+    }
+    record["served_model"] = json!("claude-sonnet-5-5");
+    record["chosen_leg"] = json!({"harness":"claude","model":"claude-sonnet-5-5-high"});
+    for (summary, expected) in [("permission denied", "HALT"), ("1 passed in 0.1s", "PASS")] {
+        let text = format!("FILES READ: src/lib.rs\nTESTS: pytest -q tests/test_fixture.py — {summary}\nVERDICT: PASS");
+        write_review_artifacts(state.path(), &record, &text).unwrap();
+        let evidence: Value = serde_json::from_slice(
+            &fs::read(state.path().join("runs/run-test/seat/evidence.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(evidence["verdict"], expected);
     }
 }
 #[test]

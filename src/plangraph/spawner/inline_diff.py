@@ -139,7 +139,7 @@ def refuse_empty_diff(card, role, *, dry_run=False) -> None:
 
 
 def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
-                       allow_document: bool = False) -> str:
+                       allow_document: bool = False, repository_tools: bool = False) -> str:
     """The prompt with the diff inlined. ``diff_ref is None`` returns the prompt
     unchanged only when ``allow_document`` says the caller already decided a
     document review (no diff) is allowed; otherwise the leg must not proceed."""
@@ -173,5 +173,7 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
         shown = _withhold_key_hunks(proc.stdout, diff_ref["repo"], timeout) if "@@ -" in proc.stdout else proc.stdout
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InlineDiffError(f"private key check failed: {type(exc).__name__}") from None
-    block = HEADER.format(base=base, head=head) + _diff_block(shown) + FOOTER
+    header = ("\n\n=== INLINE DIFF (base {base}, head {head}; use repository tools to verify) ===\n"
+              if repository_tools else HEADER)
+    block = header.format(base=base, head=head) + _diff_block(shown) + FOOTER
     return _before_review_output(prompt, block)
