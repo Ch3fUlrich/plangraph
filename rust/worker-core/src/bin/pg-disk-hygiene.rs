@@ -13,7 +13,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
         args,
         state,
         work_disks::configured_mounts(),
-        disk_runtime::processes,
+        disk_runtime::process_references,
         || {
             let temp = env::temp_dir();
             let tmp = Path::new("/tmp");

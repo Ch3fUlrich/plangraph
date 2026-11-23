@@ -50,9 +50,12 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
     )
     .is_err());
     let head = git(dir.path(), &["rev-parse", "HEAD"]).ok().unwrap();
-    let stamps = dir.path().join(".git/fast-checks");
-    std::fs::create_dir(&stamps).unwrap();
-    std::fs::write(stamps.join(&head), "green").unwrap();
+    let stamp = dir
+        .path()
+        .join(".git/plangraph-state/fast-checks")
+        .join(&head);
+    std::fs::create_dir_all(stamp.parent().unwrap()).unwrap();
+    std::fs::write(stamp, "green").unwrap();
     assert_eq!(
         prepare(
             args.as_object().unwrap(),
