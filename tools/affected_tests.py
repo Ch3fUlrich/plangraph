@@ -178,6 +178,9 @@ WORKFLOW_TESTS = {
     "tests/test_split_ci_test_affected_tests.py",
 }
 SMOKE_TEST = "tests/test_affected_tests.py"
+# A change under these packages reaches most of the suite through the runner; the local bound
+# would drop tests CI then fails (LE-AFFECTED-TESTS-MISS-SPAWNER-TARGET-CHANGES), so it is lifted.
+UNBOUNDED_PREFIXES = ("src/plangraph/spawner/", "src/plangraph/planner/", "src/plangraph/routing_support/")
 LOCAL_POLICY_TESTS = {
     "tests/test_spawner_utf8.py",
     "tests/test_check_file_size.py",
@@ -435,7 +438,7 @@ def selection_plan(selected, within, reason, *, bounded=False, priority=(), dire
 
 
 def select_tests(root, changed, within=None, *, files_only=False, local=False,
-                 base="HEAD", head=None):
+                 base="HEAD", head=None, keep_local_bound=False):
     root = Path(root)
     changed = [Path(path).as_posix() for path in changed]
     bounded = local or files_only
@@ -561,8 +564,10 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
             continue
         selected.update(hits)
     selected = {t for t in selected if not t.startswith("tests/browser/")}  # own CI job (D-2821)
-    return selection_plan(selected, within, "reverse imports and explicit file references",
-                          bounded=bounded, priority=priority, direct=direct)
+    reason = "reverse imports and explicit file references"
+    if bounded and not keep_local_bound and any(path.startswith(UNBOUNDED_PREFIXES) for path in changed):
+        bounded, reason = False, reason + "; spawner/planner core change, no local bound"
+    return selection_plan(selected, within, reason, bounded=bounded, priority=priority, direct=direct)
 
 
 def changed_files(root, base, head=None):
@@ -652,6 +657,7 @@ def main(root=None):
     parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
     parser.add_argument("--loud", action="store_true", help="pytest's default report, no quiet flags")
+    parser.add_argument("--keep-local-bound", action="store_true", help="keep the local test bound for spawner/planner core changes (the pre-push hook has a fixed deadline)")
     parser.add_argument("--parts-union", action="store_true", help="a pushed batch or train selects the union of every part's changed files, not only the files parts share")
     parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
@@ -680,7 +686,7 @@ def main(root=None):
     if changed is None:
         changed = batch[0] if batch else changed_files(root, args.base, args.head)
     plan = select_tests(root, changed, within=args.within, files_only=args.files_only, local=args.local,
-                        base=args.base, head=args.head)
+                        base=args.base, head=args.head, keep_local_bound=args.keep_local_bound)
     # Preflight's timeout diagnostics parse the first combined output line.
     print(json.dumps(plan), flush=True)
     if hook_selection:
