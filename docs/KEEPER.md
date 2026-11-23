@@ -317,6 +317,15 @@ A first-parent PR merge into the configured default branch can close open, claim
 
 `keeper.json` sets `require_seats` (default off). `PG_MERGE_CLOSE_REQUIRE_SEATS` or the request field `require_seats` overrides it for that call. Tier `none` takes no seats. With the requirement off, missing seat witnesses are stored in the `seats_missing` flag. The job prints those flags with the closed or would-close row. The `listed` field contains refused keys and reasons, and `plangraph merge-close --count` prints the merged-not-done total from a preview.
 
+`plangraph reconcile-merged --dry-run --state PATH` previews merged work once
+per hour through the user timer. The job atomically replaces the watcher state
+file and emits one JSON batch line to the service journal for routing. Each
+batch contains the merged-open count, refusal counts, and proposed actions.
+The Keeper raises `merged_open_reconcile` on the second consecutive nonzero
+pass and clears it after a zero pass. Routing applies any proposed action
+under its own GO decision.
+
+
 The writer families a seat may not share (`close_merged`, the automatic merge close and the `claude-seat` verifier) are the recorded writers: commit evidence, the `Writer` trailers of the commits that landed the item's `Plan-Item` work, the item's `owner_family`, `writer_model` and the writers of recorded runs. The claimant and delegate principals (an orchestrator such as an L1) count only when no writer is on record at all, so a claude-seat on a diff written by another family closes, a claude-written diff stays refused (`claude_seat_writer_family`) and an unrecorded writer behind a Claude claimant stays refused. `claude-seat` evidence for any merged head of the item counts as that part's seat (`claude_seat_head` only when the head is no merged head of the item), and a high-tier item closes on one claude-seat plus one seat of another family.
 
 The timer and land job use `plangraph merge-close`. The client starts a background scan with `{"refresh":"start"}`, checks `{"refresh":"status"}`, and sends subsequent close requests one project at a time. The scanner reuses parsed history from previous ref tips and cached deployment diffs for unchanged deliveries. A close checks the scanned tip against the locally observed default ref and reports unavailable repositories in `scan_errors`. HTTP close requests return a conflict five minutes after the scan started, at which point the client must request a fresh scan. Pages contain at most 25 candidates by default and return a `next_after` key when more work remains. Send that key as `after` on the next request. Preview requests use `apply: false`.

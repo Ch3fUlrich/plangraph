@@ -247,6 +247,21 @@ def _mint_run_token(store, principal, body, need):
                                 need(body, "role"), need(body, "run_id"))
 
 
+def _close_merged_auto(store, principal, body, need):
+    watch = body.get("watch", False)
+    apply = body.get("apply", True)
+    repos_only = body.get("repos_only", False)
+    project = body.get("project")
+    if type(watch) is not bool or watch and (apply is not False or repos_only or project is not None):
+        raise Refused("validation", "watch requires a dry run across all repositories")
+    report = store.close_merged_auto(
+        principal, project, require_seats=body.get("require_seats"),
+        apply=apply, repos_only=repos_only, frozen=True)
+    if watch:
+        report["alert"] = store._watch_merged_open(report)
+    return report
+
+
 def _set_metrics(store, principal, body, need):
     return store.set_metrics(principal, body.get("day"), body.get("items"))   # role first (403)
 
