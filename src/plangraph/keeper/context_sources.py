@@ -37,6 +37,7 @@ _LANE_LIMIT = 5
 _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
+_MERGE_BODY_ITEM = re.compile(r"^Plan-Item:[ \t]*([A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?)[ \t]*$", re.I | re.M)
 _PR_RE = re.compile(r"#(\d+)")
 _PR_SUFFIX_RE = re.compile(r"\(#([1-9][0-9]*)\)\Z")
 MERGE_REPO_LINE = re.compile(
@@ -128,6 +129,7 @@ def _cancelled_delivery(git, repo, candidates, reverts):
 def _work_record(record):
     """Decode a new immutable commit record for the index."""
     sha, parents, date, subject, message = record.split("\x1f", 4)
+    parents = parents.split()
     revert = delivery_revert(message)
     full, partial = [], []
     if revert is None:
@@ -136,7 +138,9 @@ def _work_record(record):
                 full.append(value)
             elif label.lower() == "plan-item-part":
                 partial.append(value)
-    return sha, parents.split(), date, subject, full, partial, revert
+        if len(parents) > 1:
+            full = list(dict.fromkeys([*full, *_MERGE_BODY_ITEM.findall(message.partition("\n")[2])]))
+    return sha, parents, date, subject, full, partial, revert
 
 
 def _work_log(git, repo, refs, target, previous):
