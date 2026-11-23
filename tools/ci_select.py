@@ -252,7 +252,7 @@ def select(paths: list[str]) -> dict[str, bool]:
             if p.startswith("rust/spikes/"):
                 res["rust-spike"] = True
             if (p.startswith(("rust/worker/", "rust/worker-core/", "rust/pg-spawnd/"))
-                    or fnmatchcase(p, "rust/Cargo.*")):
+                    or fnmatchcase(p, "rust/Cargo.*") or p == "rust/.config/nextest.toml"):
                 res["rust-worker"] = True
             if (
                 (not p.startswith("rust/spikes/") and not p.startswith("rust/worker/"))
@@ -676,7 +676,7 @@ def planned_test_binaries(commands, root):
         owners[str(manifest.resolve())] = manifest.parent
     total = 0
     for command in commands:
-        if command[:2] != ["cargo", "test"]:
+        if command[:2] != ["cargo", "test"] and command[:3] != ["cargo", "nextest", "run"]:
             continue
         crates = [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
         crates += [str(Path(command[i + 1]).resolve()) for i, arg in enumerate(command[:-1])
