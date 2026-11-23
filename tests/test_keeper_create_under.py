@@ -416,3 +416,16 @@ def test_reap_raises_one_gate_capacity_alert_at_190_open_or_done(w):
     w.store.edit_definition(router, "demo:GATE", {"depends_on": ids[:-1]})
     w.store.reap(system)
     assert w.conn.execute(sql).fetchall() == []
+
+
+def test_define_refuses_a_nested_slice_even_after_the_parent_criteria_are_edited(w):
+    router = w.p("router")
+    first = defn("X-S1", under="X", done_criteria="Slice of demo:X: fix the first part")
+    assert w.store.create_items(router, [first])["created"] == ["demo:X-S1"]
+    w.store.edit_definition(router, "demo:X-S1", {"done_criteria": "Revised criteria"})
+    nested = defn("X-S1-S1", under="X-S1",
+                  done_criteria="Slice of demo:X-S1: fix the inner part")
+    before = _snapshot(w)
+    with pytest.raises(Refused, match="parent demo:X-S1 is already a slice"):
+        w.store.create_items(router, [nested])
+    assert _snapshot(w) == before

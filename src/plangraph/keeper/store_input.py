@@ -7,6 +7,9 @@ alias table, so a definition may still name a key that has since been rehomed.
 """
 from __future__ import annotations
 
+import json
+import re
+
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
@@ -23,6 +26,13 @@ _TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
 _MAX_DEPS = 200
 GATE_DEPENDENCY_WARNING = 190
 GATE_KINDS = ("gate", "goal")
+_SLICE_CRITERIA = re.compile(r"^Slice of ([\w.-]+:[\w.-]+):")
+
+
+def slice_parent(item):
+    """Read the parent named by the slice definition emitted by replanning."""
+    match = _SLICE_CRITERIA.match(item.get("done_criteria") or "")
+    return match[1] if match else None
 
 
 def _unfinished_dependencies(keys, items):
@@ -81,6 +91,14 @@ class InputMixin:
             check_host(fields["host"])
         if "wait" in fields:
             check_wait(fields["wait"])
+
+    def _check_slice_attachment(self, gate):
+        key = gate["key"]
+        if slice_parent(gate) or any(
+                json.loads(row["payload"]).get("slice_parent")
+                for row in self.conn.execute(
+                    "SELECT payload FROM events WHERE key=? AND type='item_created'", (key,))):
+            raise Refused("validation", f"parent {key} is already a slice")
 
     def _normalise(self, raw):
         project = raw.get("project")
