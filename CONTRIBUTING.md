@@ -57,6 +57,10 @@ A part (a batch waiting for a train) enters a train only after its own head pass
 
 `tools/merge_batch.py push` runs the Windows tests of the batch head before it pushes: when CI would run the Windows job (any change that selects Rust, a Python-only one included, and always for a `batch/*` or train head, where CI runs the full suite) and `PLANGRAPH_WINDOWS_HOST` names the native Windows ssh host (ws-build), it sends the head as a git bundle, clones it into a disposable directory with its own capped cargo target, runs the `cargo test` commands of the `rust-windows` job of `tests.yml` (parsed from the workflow with PyYAML from `requirements-ci.txt`) with `--no-fail-fast`, and removes the checkout. A red run refuses the push and names the failing test ids; a green one stores `windows ok head=... host=... commands=N seconds=S`, which `go-req` prints (nothing is added when none ran for that head).
 
+`merge_batch build` requires a successful full Tests run on the exact head of
+each part that changes shared test execution, setup, fixtures, or workflows.
+The part table shows the run ID. This requirement also applies with `--force-set`.
+
 Outside lane preflight, with sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned before a private target is created. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). Before any build preflight trims the shared target (over `PLANGRAPH_CARGO_TARGET_CAP_GB` it is removed; `cli-tests/<hash>` builds are kept to the newest `PLANGRAPH_CLI_TESTS_KEEP`, default 3, and 24 h), then builds pg-policy once into `policy-bin/<source hash>` of that target (equal sources share a warm build, different sources never share an artifact; the newest 3 are kept) and hands a private copy to the policy step as `PG_POLICY_BIN`, outside the 60-second check bound. See docs/TESTING.md.
 `tools/merge_batch.py land` merges the batch PR with one `Plan-Item` trailer per item of every included part and for the batch `--plan` key, plus one `Review-Run: KEY RUN_ID PART_HEAD` line per recorded part review, in the merge commit body, and runs `plangraph merge-close` once after the batch landed, so the keeper closes the items its merge names; the job's report goes to stderr and a failure or a missing binary never fails the land.
 `tools/merge_batch.py land` lands in the mode of the `landing.mode` setting of the batch's repository (`tested-ff`, `train-pr-merge`, `single-pr`; D-6540, details in `docs/operations/spawner-land-go.md`). `tested-ff` pushes the batch head with `--force-with-lease` on the tested base after the same gates and reads the outcome from main (no merge commit); `train-pr-merge` merges the batch pull request as above; `single-pr` lands one part only. An unknown mode refuses the land before any GitHub call. Every landing writes a receipt and a telemetry row naming the mode (`landing-report`, `landing-settle`, `landing-backfill`); a landing without its row fails. `tools/ci_select.py select --event push --statuses FILE --tree T --land-creator-id ID` runs only the fast jobs for a commit with the land App's `land-auth` and a matching `ci-full` status, and the full suite otherwise.
@@ -77,6 +81,11 @@ to skip affected tests in a direct run. The pre-push hook runs preflight with
 file-only affected tests for the pushed revision, using the pushing checkout's
 virtual environment when present.
 On landing train refs (`train/*` and `land/train-*`), `PREFLIGHT_FAST=1` forwards `--fast`.
+On `land/*`, `PREFLIGHT_SKIP=1` reports that the local test stage is skipped and
+still runs the fast push gates. Phase pushes ignore that legacy flag and run
+affected preflight. Other refs refuse the flag. On a train push, a missing
+`plangraph` binary is reported by name. An attribution failure identifies the
+resolver commit and the invalid trailer.
 Private scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
 when neither is present, public rules still run but scrub reports SKIP with a reason.
 `PREFLIGHT_TOOLS_DIR` overrides tool paths in direct preflight runs.
