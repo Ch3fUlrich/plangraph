@@ -293,7 +293,7 @@ def test_no_anthropic_implement_leg_removes_sonnet():
     assert {leg.id for leg in DEFAULT_LEGS if "implement" in leg.roles
             and (leg.claude_family or leg.family in ("claude", "anthropic"))} == set()
     assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-sonnet-5.5").roles == ("orchestrate", "review")
-    assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-opus-5.5").roles == ("review",)
+    assert next(leg for leg in DEFAULT_LEGS if leg.id == "agy-opus-5.5").roles == ("review", "research")
 
 
 def test_renamed_and_second_haiku_remain_last():
@@ -518,11 +518,11 @@ def test_d6310_route_orders_low_risk_and_families():
 
     # Retired models absent from routes and rejected
     for leg in spawnable_legs():
-        assert 'gpt-6.1-sol' not in leg.id and 'gpt-6.1-sol' not in leg.model
-        # D-6366: argon is a review leg only; no implement leg serves it.
-        assert 'gemini-4-argon' not in leg.model or leg.roles == ('review',)
+        assert 'gpt-6.1-' not in leg.id and 'gpt-6.1-' not in leg.model
+        # D-6366 retires Argon from implementation.
+        assert 'gemini-4-argon' not in leg.model or leg.roles == ('review', 'research')
     assert not any('argon' in l.id for l in imp.legs)
-    for bad in ('omniroute/cx-gpt-6.1-sol-xhigh',):
+    for bad in ('omniroute/cx-gpt-6.1-sol-xhigh', 'gpt-6.1-terra', 'gpt-6.1-other'):
         assert is_retired(bad)
         with pytest.raises(RetiredModelError):
             check_retired(bad)
@@ -568,6 +568,6 @@ def test_argon_low_review_leg_is_gemini_plan_mode():
     from plangraph.routing_support.clients import build_standalone_fallback_command
     from plangraph.planner.legs import spawnable_legs
     leg = next(l for l in spawnable_legs() if l.id == "agy-gemini-4-argon-low")
-    assert (leg.family, leg.effort, leg.roles, leg.harness) == ("gemini", "low", ("review",), "agy")
+    assert (leg.family, leg.effort, leg.roles, leg.harness) == ("gemini", "low", ("review", "research"), "agy")
     cmd = build_standalone_fallback_command("agy", "review", leg.model, role="review", tool_mode="tools")
     assert cmd[cmd.index("--mode") + 1] == "plan"

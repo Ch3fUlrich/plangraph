@@ -44,7 +44,7 @@ with CatalogDB(catalog_path) as db:
             (model_id, effort, harness, origin, score, cost_per_task_usd, measured_at, source_url)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
             (model_id, effort, harness, origin, score, cost, at, 'https://example.invalid/bench'))
-    for family in ('gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'mimo-v2.6'):
+    for family in ('gpt-6.2-sol', 'gpt-6-luna', 'mimo-v2.6'):
         model_id = 'fixture/' + family
         query = 'SELECT imputed FROM catalog_benchmark_rows WHERE model_id=?'
         record('medium', 'fixture', 'aa-index', 75, model_id=model_id)

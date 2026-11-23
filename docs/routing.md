@@ -4,17 +4,17 @@ Gateway snapshot HTTP 401/403 exclusions appear as `auth_refused` in candidate
 and skipped-leg details, carrying gateway URL, principal, and HTTP status as
 evidence. They do not claim gateway unreachability.
 
-The declared writer order uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
-effort `xhigh`), then `agy-gemini-4-hydrogen-high` (agy harness, D-5903). Hydrogen is enabled,
+`planner.legs.WRITER_ORDER` starts with `cx-gpt-6.2-sol-medium`, `cx-gpt-6.2-astra`,
+then `agy-gemini-4-hydrogen-high` (agy harness, D-5903). Hydrogen is enabled,
 with an unwitnessed seat because AGY emits no served-model telemetry. Quota, cooldown, or a
 confirmed availability refusal advances without an override; safety refusals,
 cancellation, and guards still stop dispatch. Eligibility and harness policy apply first.
-Both designated writers precede all other cost tiers, even when catalog tiers
-change: Sol xhigh, then Hydrogen high (rule 3.23a / D-5212). Other eligible legs
-retain cost-tier order, with subscriptions before pay-as-you-go.
+These three writers precede all other cost tiers even when catalog tiers
+change. Other eligible legs retain cost-tier order, with subscriptions before
+pay-as-you-go.
 Writer and review payment ordering uses one classification function for the
 payment class of raw and catalog-projected legs, treating muse-amber as paid:
-after the implement writer prefix (Sol, then Hydrogen high), no pay-as-you-go leg
+after the implement writer prefix, no pay-as-you-go leg
 precedes a subscription-class leg, and muse-amber precedes paid DeepSeek.
 The designated writers keep that prefix even when catalog tiers reprice them as
 pay-as-you-go; review has no writer prefix. A trial or free slot keeps its position
@@ -27,7 +27,7 @@ routes and is skipped in strict benchmark routes. See
 [spawner benchmark routing](SPAWNER.md#card-driven-routing-core).
 Exhausting all eligible legs still yields no route; writer priority never bypasses
 availability. Role-neutral keeper readiness retains its narrower admission, using
-the current Sol xhigh id so an unavailable default table cannot resurrect plain Sol.
+the registered Sol medium id.
 
 Plain Sol and other Sol effort variants remain active, explicit-only catalog legs
 requiring audited overrides. Claude/Fable/Opus/Sonnet/Haiku never enter automatic
@@ -42,7 +42,7 @@ candidate rows; CLI stderr names each skipped leg, including when no route remai
 An opaque alias for a registered model may use that registration's family proof
 (for example, Big Pickle is GLM); a Claude identity still always vetoes admission.
 
-Route JSON and saved `chosen_leg` include `effort` (`xhigh` by default).
+Route JSON and saved `chosen_leg` include `effort` (medium by default for GPT writers).
 Operator leg JSON preserves its validated `effort` through the loaded leg, route
 plan, saved `chosen_leg`, and attempt rows; omitted or explicit `null` effort
 stays `null`. All other validated leg fields are retained too. The per-run
@@ -52,9 +52,10 @@ renderer declares cx effort models; see [SPAWNER.md](SPAWNER.md#card-driven-rout
 
 `payment_order(..., order_class="standard"|"high"|"complex")` selects catalog
 positions after registered role filtering; it never grants roles or capabilities.
-The implement table lists Sol xhigh, Hydrogen high and non-Claude-Code Sonnet high.
-Hydrogen high is enabled by D-5903; the real registry returns Sol xhigh, Hydrogen high
-and Sonnet high (subject to upstream eligibility).
+Hydrogen high is enabled by D-5903.
+The D-5696/D-5706 opt-in table originally listed Sol xhigh, Hydrogen high and
+non-Claude-Code Sonnet high. See [D-6310 and D-6667](#route-order-and-family-admission-d-6310--rule-353)
+for current registrations and implementation priority.
 The active review legs the route can offer come from `planner.legs.routed_review_legs` (also used by the scheduled review probe).
 Review excludes writer families, requires diff <100k for Haiku, and needs opposing
 eligible cheaper verdicts for Ember. Spec amendment: MiMo and both DeepSeek review
@@ -234,9 +235,18 @@ Implementation routes prioritize `cx-gpt-6.2-sol-medium` (with `cx-gpt-6.2-sol-{
 explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 `opencode/deepseek-v4.1-flash-free` (200k) > `opencode-go/deepseek-v4.1-flash` (1M) >
 `opencode-go/glm-5.3-flash` (1M) on `opencode` as implementation fallback.
-D-6550 (rule 3.66) uses native Codex for the lead writer. Explicit model calls
-can still use the registered OpenCode gateway leg. Claude is eligible
-for automatic writer and review fallback when both GPT Sol and Hydrogen are rate-limited.
+D-6550 (rule 3.66) uses native Codex for GPT legs. GPT falls back to the OpenCode
+gateway model when the Codex client is missing on the selected host. D-6652 below
+defines when native Sonnet can serve as a writer or reviewer.
+D-6667 retires the GPT-6.1 family from leg selection and explicit model launches.
+Use `gpt-6.2-sol` for direct Codex launches. The default writer in `WRITER_ORDER`
+is `cx-gpt-6.2-sol-medium`.
+For native Codex, routing and launch admission check quota and availability independently
+of the OpenCode model listing.
+Missing models and inactive or unreachable providers keep their own skip reasons
+and cannot satisfy the quota fallback.
+AgY quota evidence applies to the model that made the call. Route quota states
+show the last probe time, including a successful recovery probe before reset.
 Credential, authentication and secrets changes prefer the Claude Sonnet high review
 seat, subject to availability and cross-family review.
 D-6652 (rule 3.66 (f), corrected 2026-11-23) changes the review order above and the Claude writer
@@ -258,8 +268,8 @@ of the form `D-<number>`. Native Codex package sessions pass
 A 1M spawn route uses the declared request bound of a leg that supports that class.
 Sol and Astra declare 1,000,000 tokens, including effort variants and native sessions.
 Smaller spawn routes use 55% of declared leg context. Legs without a bound and keeper budgets use the 55% class share.
-Review routes under D-6550 prefer `agy-gemini-4-hydrogen-high` and then
-`gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
+After the required OpenCode seats, the standard review order prefers
+`agy-gemini-4-hydrogen-high` and then `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
 available in their configured order, and the Argon review legs stay last. Repository-required reviews admit OpenCode Go DeepSeek and GLM tools legs, which get checkout reads and scoped test commands.
 A missing verdict or a diff-only acceptance cannot complete a repository review. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
@@ -269,6 +279,15 @@ The five-head benchmark for Flint, Big Pickle and Beam was skipped in this lane.
 The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_risk_and_families`.
 The Rust route reports legs with more than three missing verdicts in their last
 ten completed reviews under `review_health_alerts` and puts them after healthier candidates.
+
+## Research routing
+
+Use `--role research` on the CLI or `role: "research"` in MCP to route or
+spawn a research card. Automatic routing uses research-tagged legs, checks
+estimates against declared request limits, and orders eligible Claude legs last.
+Set `web_required: true` on the card to require web tools on the resolved
+harness. This requirement also applies to explicit leg and model picks.
+If no route remains, the JSON refusal includes each skipped leg and its reason.
 
 ## Automatic work mode (D-5952 / rule 3.41)
 

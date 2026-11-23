@@ -58,11 +58,23 @@ pub(crate) fn run(
             } else {
                 RefusalKind::Benchmark
             },
-            message: if line.is_empty() {
-                "spawn refused".into()
-            } else {
-                line
-            },
+            message: object
+                .as_ref()
+                .and_then(|value| value["error"].as_str())
+                .filter(|_| {
+                    code == 2
+                        && argv
+                            .windows(2)
+                            .any(|pair| pair[0] == "--role" && pair[1] == "research")
+                })
+                .map(pg_worker_core::redact::redact)
+                .unwrap_or_else(|| {
+                    if line.is_empty() {
+                        "spawn refused".into()
+                    } else {
+                        line
+                    }
+                }),
             legs: vec![],
         }),
         n => Err(ToolError::Internal(format!(
@@ -84,8 +96,10 @@ pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
         } else {
             "implement"
         });
-    if !["implement", "review", "orchestrate"].contains(&role) {
-        return Err(parameter("role must be implement, review or orchestrate"));
+    if !["implement", "review", "orchestrate", "research"].contains(&role) {
+        return Err(parameter(
+            "role must be implement, review, orchestrate or research",
+        ));
     }
     let mut argv = vec![
         "route".into(),

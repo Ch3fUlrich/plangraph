@@ -3,11 +3,15 @@
 Snapshot HTTP 401/403 responses are `auth_refused`, distinct from
 `OmniRouteUnreachable`. The diagnostic includes the validated management gateway
 URL, HTTP status, and caller's `PLANGRAPH_PRINCIPAL` (or `unknown` when unset),
-never the key or response body. The adapter retains its `limited` availability
-contract, with `auth_refused` evidence and a detailed reason. Auth refusal clears
+never the key or response body. The adapter returns `down` with
+`auth_refused` evidence and a detailed reason. Auth refusal clears
 cached successful health and bypasses transport retries and recovery probes. A model absent from `opencode models --standalone` (run without the management token variables) is `not_listed` and is returned before any model-run probe; a discovery that fails (timeout, missing binary) is a `leg_state_snapshot_error`, which keeps the retry-then-probe recovery.
 Routing candidates and saved run plans expose `auth_refused` and its evidence;
 an already planned leg records the detailed refusal in its attempt skip reason.
+
+A usable OmniRoute snapshot produces `provider_inactive` for an inactive
+provider and `unreachable` for an advertised model without a provider entry.
+A provider rate-limit window produces `limited` while its reset is in the future.
 
 `plangraph.spawner.leg_state` stores provider 429/402 responses in SQLite at
 `$XDG_STATE_HOME/plangraph/leg-state.sqlite` (default
@@ -56,8 +60,10 @@ disabled skip. Stops with no expiry remain permanent. These local operator stops
 do not override provider availability. A Go quota stop does not suppress a personal
 credential leg; normal routing advances through the remaining eligible inputs.
 When every otherwise eligible provider is limited/down/expired, static manual or
-disabled skips remain visible but do not change the exhausted run's exit 4 into a
-contract refusal. Static-policy-only or request-size failures still refuse.
+disabled skips remain visible without changing the exhausted run's exit 4.
+Missing models and inactive or unreachable providers also preserve exit 4
+when the remaining eligible capacity is exhausted. A route with only those
+skips, only static policy skips, or a request-size failure still refuses.
 
 ## Bounded writer liveness
 
@@ -148,10 +154,12 @@ Scheduled review probes (`--all-reviewers`, `caller='review-probe'`, source `rev
 
 ## AGY quota scope
 
-An `Individual quota reached` refusal with a future reset applies to Antigravity
-legs with the event's account. An omitted account matches an event recorded
-without an account. Route evidence identifies the event, harness and account.
-A model-specific refusal applies to that model and its effort variants.
+An Antigravity 429, including `Individual quota reached`, applies to the model
+that made the call and its effort variants. The event retains its account and
+combo scope. Historical account-wide events cannot establish a model limit.
+The scheduled review sweep re-probes limited AgY models at most once per hour
+with a one-word `OK` request. A successful reply clears the model's limit.
+Route quota states include the latest probe attempt as `last_probe_at`.
 
 Launch admission rereads quota evidence rather than trusting an earlier plan. `QuotaGate` reads the configured local `QUOTA_SNAPSHOT_DB` read-only on every check, even when gateway liveness discovery is disabled; only management API reads are cached for 60 seconds. A provider pool is skipped while every account is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1), until the earliest account reset. A reset-less row holds for 30 minutes from its timestamp or first observation.
 

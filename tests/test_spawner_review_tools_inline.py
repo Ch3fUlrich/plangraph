@@ -138,14 +138,15 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     import time
     from dataclasses import replace
     from unittest.mock import AsyncMock
-    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.legs import DEFAULT_LEGS, resolve_harness
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner.runner import SpawnerRunner, spawn_service
     from plangraph.spawner.service import SpawnService
 
     chosen = next(l for l in DEFAULT_LEGS if l.id == 'mimo-v2.6-flash')
     if scenario == 'no-cap':
-        chosen = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6-luna')
+        luna = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6-luna')
+        chosen = resolve_harness(luna, installed=lambda harness: harness == 'opencode').leg
     role = 'orchestrate' if scenario == 'non-review' else 'review'
     good = 'Review complete\nFILES READ: diff only\nVERDICT: REQUEST_CHANGES'
     exhausted = json.dumps({'type': 'step_finish', 'part': {
@@ -216,6 +217,8 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
     runner = SpawnerRunner(default_cwd=diff_ref['repo'], process_factory=factory)
     monkeypatch.setattr(runner, '_reap_process', reap)
     service = (SpawnService if dispatch == 'base' else spawn_service)(runner=runner, state=tmp_path / 'state')
+    if scenario == 'no-cap':
+        service.client_probe = lambda harness: harness == 'opencode'
     continuation = AsyncMock(wraps=service._continue_writer)
     monkeypatch.setattr(service, '_continue_writer', continuation)
     monkeypatch.setattr(service, '_route', lambda *a, **kw: plan)

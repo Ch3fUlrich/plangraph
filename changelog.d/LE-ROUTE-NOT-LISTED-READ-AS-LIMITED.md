@@ -1,0 +1,1 @@
+Report missing OpenCode models and inactive or unreachable OmniRoute providers separately from quota limits. Route native Codex using its own availability evidence so a discovery miss cannot trigger the Claude fallback.

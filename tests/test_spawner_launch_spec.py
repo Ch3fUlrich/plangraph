@@ -76,13 +76,18 @@ def test_unknown(request_data):
 
 @pytest.mark.parametrize('role', ['implement', 'review'])
 @pytest.mark.parametrize('explicit', [False, True])
-def test_tools(request_data, role, tmp_path, explicit):
+def test_tools(request_data, role, tmp_path, explicit, monkeypatch):
+    from plangraph.routing_support import clients
+    monkeypatch.setattr(clients, 'resolve_codex_client', lambda: (None, 'fixture'))
     leg_id = 'cx-gpt-6.2-sol' if role == 'implement' else request_data['leg']['id']
     exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')
     exe.chmod(0o700)
     request_data.update(role=role, leg={'id': leg_id, 'model': 'untrusted'})
     request_data['leg']['explicit'] = explicit
+    if role == 'implement' and explicit:
+        request_data['leg']['harness'] = 'opencode'
+        monkeypatch.setattr(clients, 'resolve_codex_client', lambda: ('codex', None))
     code, out, err = invoke(request_data)
     assert (code, err) == (0, '')
     result = json.loads(out)
@@ -119,6 +124,21 @@ def test_agy_stream_spec(request_data):
     result = spec.build(request_data)
     assert request_data['prompt'] not in result['argv']
     assert json.loads(result['stdin'])['message']['content'] == result['prompt'] and result['prompt'].endswith(request_data['prompt'])
+
+
+def test_research_stream_spec(request_data):
+    request_data.update(role='research', dry_run=True,
+                        leg={'id': 'agy-gemini-4-hydrogen-high'},
+                        card={'estimate_tokens': 400_000}, writer_families=[])
+    code, out, err = invoke(request_data)
+    assert (code, err) == (0, '')
+    result = json.loads(out)
+    assert result['argv'][0] == 'agy'
+    assert json.loads(result['stdin'])['message']['content'].endswith(request_data['prompt'])
+    assert 'GIT_AUTHOR_EMAIL' not in result['env']
+
+    request_data['card']['web_required'] = True
+    assert invoke(request_data) == (2, '', 'web_access_unavailable: agy-gemini-4-hydrogen-high\n')
 
 
 @pytest.mark.parametrize('leg_id', ['agy-gemini-4-neon-medium', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])

@@ -249,7 +249,7 @@ fn brief_is_deterministic_and_preserves_every_house_rule_and_item_field() {
         "role\nreview",
         "writer_families listing the family of every Writer trailer",
         "Plan-Item: plangraph:PATCH-PR",
-        "Writer: codex/gpt-6.1-sol-medium",
+        "Writer: codex/gpt-6.2-sol-medium",
         "Changelog:",
         "ONE final paragraph",
     ] {

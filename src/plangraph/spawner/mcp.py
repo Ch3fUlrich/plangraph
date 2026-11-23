@@ -124,6 +124,7 @@ CARD_SCHEMA = {'type': 'object', 'required': ['estimate_tokens'], 'properties': 
     'cwd': {'type': 'string', 'description': 'absolute path to an existing git checkout'},
     'max_min': {'type': 'number', 'exclusiveMinimum': 0},
     'estimate_tokens': {'type': 'integer', 'minimum': 1, 'description': 'required: expected tokens of the run'},
+    'web_required': {'type': 'boolean', 'description': 'research: require a harness with web search or fetch'},
     'diff_ref': {'type': 'object', 'description': 'review: {repo, base, head}; inlined for inline-only seats'}}}
 for _tool in TOOLS_METADATA:
     if _tool['name'] in ('plangraph_agent_status', 'plangraph_agent_cancel'):

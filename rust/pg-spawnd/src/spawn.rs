@@ -57,9 +57,9 @@ pub(crate) fn validate(args: &Args) -> Result<(), ToolError> {
     }
     if args
         .get("role")
-        .is_some_and(|v| !matches!(v.as_str(), Some("implement" | "review")))
+        .is_some_and(|v| !matches!(v.as_str(), Some("implement" | "review" | "research")))
     {
-        return Err(parameter("role must be implement or review"));
+        return Err(parameter("role must be implement, review or research"));
     }
     for option in [
         "seats",

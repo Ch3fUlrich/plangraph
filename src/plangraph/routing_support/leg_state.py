@@ -14,6 +14,8 @@ import time
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
+from plangraph.routing_errors import CREDIT_AUTH_MARKER, busy_refusal
+
 REPROBE_MINUTES = 10
 
 #: D-3685/D-6082: cap flat fallback down_s at 24 h; provider-stated resets are uncapped.
@@ -41,6 +43,13 @@ def quota_key(leg):
         return leg
     return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon|neon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
                   r'agy:\1', leg)
+
+
+def _event_keys(leg, agy):
+    if not agy:
+        return (leg,)
+    base = "agy/" + leg[4:]
+    return (leg, base, *(base + "-" + e for e in ("low", "medium", "high", "xhigh", "max")))
 
 
 def _down_seconds(down_s):
@@ -217,14 +226,18 @@ class LegStateStore:
         except sqlite3.Error:
             return None
 
-    def last_probe_attempt_ts(self, leg):
+    def last_probe_attempt_ts(self, leg, now=None):
         """The newest probe attempt (pass or fail); single-flight reuse only."""
         leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
             with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
-                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','review-liveness-probe','provider-probe','probe_failed_leg_serving')", (leg,)).fetchone()[0]
+                return db.execute(
+                    "SELECT max(ts) FROM leg_events WHERE leg_key=? AND ts<=? "
+                    "AND source IN ('liveness-probe','review-liveness-probe','provider-probe','probe_failed_leg_serving')",
+                    (leg, time.time() if now is None else now),
+                ).fetchone()[0]
         except sqlite3.Error:
             return None
 
@@ -238,9 +251,6 @@ class LegStateStore:
         leg = quota_key(leg) if is_agy_harness else leg
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
-        if (reset is not None and is_agy_harness and leg.startswith(('agy:', 'agy/'))
-                and 'individual quota reached' in line.lower()):
-            leg, combo = 'agy:account-wide', None
         if reset is None and down_s is not None:
             # D-3605 (a): no provider reset time; _down_seconds is capped, so
             # the fallback stays inside RESET_CAP_S like every other booking.
@@ -255,25 +265,13 @@ class LegStateStore:
         leg = quota_key(leg) if is_agy_harness else leg
         agy = is_agy_harness and isinstance(leg, str) and leg.startswith("agy:")
         ttl = RESET_CAP_S if agy else EVIDENCE_TTL_S
-        keys = [leg]
-        if agy:
-            base = "agy/" + leg[4:]
-            keys += [base, *(base + "-" + e for e in ("low", "medium", "high", "xhigh", "max"))]
+        keys = _event_keys(leg, agy)
         now = time.time() if now is None else now
         if not self.path.exists() or self.path.stat().st_size == 0:
             return {"state": "ok", "evidence": None}
         try:  # Read-only: no database creation or expiry mutation.
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
-                if is_agy_harness and leg.startswith(('agy:', 'agy/')):
-                    pool = db.execute(
-                        "SELECT * FROM leg_events WHERE leg_key='agy:account-wide' "
-                        "AND account IS ? AND ts<=? AND reset_at>? "
-                        "ORDER BY reset_at DESC,id DESC LIMIT 1", (account, now, now)).fetchone()
-                    if pool is not None:
-                        return {"state": "limited", "evidence": dict(
-                            {k: pool[k] for k in ('status', 'body_excerpt', 'reset_at', 'ts', 'caller')},
-                            event_id=pool['id'], quota_scope='account', harness='agy', account=pool['account'])}
                 rows = db.execute(
                     "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
                     (*keys, account, combo, now))
@@ -299,9 +297,9 @@ class LegStateStore:
                         else:
                             behind = older
                             break
-                    # Probe failures never hide an older provider limit with a future reset (D-3685, D-6082).
+                    # A failed recovery probe leaves the active provider window in force.
                     if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
-                            and behind['reset_at'] is not None and now < behind['reset_at']):
+                            and now < _limit_end(behind)):
                         evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}
@@ -313,11 +311,35 @@ class LegStateStore:
                 if row['source'] not in ('harness-stderr', 'provider-response') and now >= row['ts'] + ttl:
                     return {'state': 'reprobe', 'evidence': evidence}
                 reset = row["reset_at"]
-                state = (("limited" if now < reset else "ok") if reset is not None
-                         else ("limited" if now < row["ts"] + REPROBE_MINUTES * 60 else "reprobe"))
+                state = "limited" if now < _limit_end(row) else ("ok" if reset is not None else "reprobe")
                 return {"state": state, "evidence": evidence}
         except (sqlite3.Error, OSError):
             return {"state": "ok", "evidence": None}
+
+    def agy_probe_status(self, leg, now=None):
+        """Find a booked 429 for the model across the exact routing scopes."""
+        now = time.time() if now is None else now
+        leg = quota_key(leg)
+        status = self.leg_status(leg, now=now)
+        if status['state'] == 'limited' or not self.path.exists():
+            return status
+        keys = _event_keys(leg, leg.startswith("agy:"))
+        placeholders = ",".join("?" for _ in keys)
+        try:
+            with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
+                scopes = db.execute(
+                    f"SELECT DISTINCT account, combo FROM leg_events WHERE leg_key IN ({placeholders}) "
+                    "AND status=429 AND (account IS NOT NULL OR combo IS NOT NULL) "
+                    "AND ts<=? AND COALESCE(reset_at, ts+?)>?",
+                    (*keys, now, REPROBE_MINUTES * 60, now),
+                ).fetchall()
+        except (sqlite3.Error, OSError):
+            return status
+        for account, combo in scopes:
+            scoped = routing_status(self.leg_status(leg, now=now, account=account, combo=combo))
+            if scoped['state'] == 'limited' and scoped['evidence']['status'] == 429:
+                return scoped
+        return status
 
     def active_limit_window(self, now=None):
         """Age of the oldest active provider limit so run-record scans reach uncapped resets."""
@@ -352,6 +374,11 @@ class LegStateStore:
         return dict(ok=ok, reason='' if ok else (row['body_excerpt'] or 'probe failed'), ts=row['ts'])
 
 
+def _limit_end(row):
+    reset = row["reset_at"]
+    return row["ts"] + REPROBE_MINUTES * 60 if reset is None else reset
+
+
 def _default_store():
     return LegStateStore(Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph" / "leg-state.sqlite")
 
@@ -372,12 +399,20 @@ def leg_status(leg, now=None, account=None, combo=None, *, harness=None):
     return _default_store().leg_status(leg, now, account, combo, harness=harness)
 
 
+def agy_probe_status(leg, now=None):
+    return _default_store().agy_probe_status(leg, now=now)
+
+
 def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
     return _default_store().record_probe_fail(leg, reason, caller, now, down_s, account, combo, serving=serving, stderr_excerpt=stderr_excerpt)
 
 
 def last_probe_ts(leg):
     return _default_store().last_probe_ts(leg)
+
+
+def last_probe_attempt_ts(leg, now=None):
+    return _default_store().last_probe_attempt_ts(leg, now=now)
 
 
 def last_probe_outcome(leg):
@@ -405,6 +440,24 @@ class DiscoveryFailed(list):
         self.reason = reason
 
 
+def routing_status(status):
+    """Keep legacy harness cooldowns for outages and auth distinct from quota."""
+    evidence = status.get('evidence') or {}
+    if status['state'] != 'limited' or evidence.get('caller') != 'spawner:harness':
+        return status
+    body = (evidence.get('body_excerpt') or '').lower()
+    if body.startswith('model_unavailable:'):
+        return dict(status, state='down', reason='model_unavailable')
+    if body.startswith(('http 429:', 'http 402:')):
+        return status
+    if body.startswith('http 503:') or busy_refusal(body):
+        return dict(status, state='down', reason='provider_busy')
+    auth = CREDIT_AUTH_MARKER.search(body)
+    if auth and auth[0].startswith(('unauthori', 'authentication ', 'invalid api key')):
+        return dict(status, state='down', reason='auth_refused')
+    return status
+
+
 class LegAdapter:
     """Explicit opt-in reader; one cached boundary shared by routing and probes.
 
@@ -418,6 +471,7 @@ class LegAdapter:
         self.models = self.standalone_models if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
+        self._quarantined = set()
     def __getattr__(self, name):
         return getattr(self.store, name)
     @staticmethod
@@ -442,9 +496,10 @@ class LegAdapter:
     def quarantine(self, leg):
         if self.enabled:
             self.leg_status(leg)
-            self._served.discard(self.identity(leg))
+            self._quarantined.add(self.identity(leg))
     def leg_status(self, leg, **kwargs):
-        if not self.enabled or leg.startswith(("agy:", "agy/")) or leg.startswith(("gemini-4-hydrogen-", "gemini-4-argon-", "gemini-4-neon-", "claude-sonnet-5-5")):
+        if (not self.enabled or kwargs.get('harness') == 'codex' or leg.startswith((
+                "agy:", "agy/", "gemini-4-hydrogen-", "gemini-4-argon-", "gemini-4-neon-", "claude-sonnet-5-5"))):
             return self.store.leg_status(leg, **kwargs)
         from .resolver import OPERATOR_REMOVED_MODELS
         if leg in OPERATOR_REMOVED_MODELS:
@@ -461,6 +516,7 @@ class LegAdapter:
                     raise RuntimeError(f'model discovery failed: {listed.reason}')
                 served = {self.identity(mid) for mid in listed}
                 self._states, self._served = states, served
+                self._quarantined.clear()
                 self._error = None if states else 'unreachable'
             except OmniRouteAuthRefused as exc:
                 self._error = str(exc)
@@ -468,23 +524,32 @@ class LegAdapter:
             except Exception as exc:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
-        state = self._error
-        if not state:
-            identity = self.identity(leg)
-            provider = self._states.get(leg.split('/')[0])
-            if identity not in self._served:
-                state = 'not_listed'
-            elif provider is None:
-                state = 'unreachable'
-            elif provider.stale:
-                state = 'stale'
-            else:
-                state = 'ok' if provider.available else 'unavailable'
-        if state == 'ok' and self.store is not None:
+        if self._error:
+            return dict(state='down' if self._auth_error else 'unknown', reason=self._error,
+                        evidence=dict(self._auth_error) if self._auth_error else None)
+        identity = self.identity(leg)
+        if identity in self._quarantined and self.store is not None:
+            stored = routing_status(self.store.leg_status(leg, **kwargs))
+            if stored['state'] in ('limited', 'down'):
+                return stored
+        if identity not in self._served or identity in self._quarantined:
+            return dict(state='down', reason='not_listed', evidence=None)
+        provider = self._states.get(leg.split('/')[0])
+        if provider is None:
+            return dict(state='down', reason='unreachable', evidence=None)
+        if provider.stale:
+            return dict(state='unknown', reason='stale', evidence=None)
+        if not provider.available:
+            if getattr(provider, 'reason', '') == 'rate_limited':
+                from .quota_snapshots import _ts
+                reset = _ts(provider.until)
+                wall_now = kwargs.get('now')
+                if reset is not None and reset > (time.time() if wall_now is None else wall_now):
+                    return dict(state='limited', reason='rate_limited', evidence=dict(reset_at=reset))
+            return dict(state='down', reason='provider_inactive', evidence=None)
+        if self.store is not None:
             stored = self.store.leg_status(leg, **kwargs)
             # Only a scheduled review-probe down booking overrides a healthy snapshot.
             if stored.get('state') == 'down' and (stored.get('evidence') or {}).get('caller') == 'review-probe':
                 return dict(stored, reason=stored.get('reason') or 'down')
-        # Legacy planner understands limited/down only; preserve explicit reason.
-        return dict(state='ok' if state == 'ok' else 'limited',
-                    reason=state, evidence=dict(self._auth_error) if self._auth_error else None)
+        return dict(state='ok', reason='ok', evidence=None)

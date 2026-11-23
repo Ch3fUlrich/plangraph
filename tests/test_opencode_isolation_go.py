@@ -228,11 +228,12 @@ def test_integration_is_opt_in():
 def test_resolution_preserves_harness(monkeypatch):
     from plangraph.spawner.target import resolve_target
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        {'id': 'omniroute/cx-gpt-6.2-sol', 'combos': ['gpt-test']}])
+        {'id': 'omniroute/cx-gpt-6.2-sol', 'combos': ['gpt-test'], 'harness': 'opencode'}])
     monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
     target, leg = resolve_target('gpt-test')
     assert target == leg.model == 'omniroute/cx-gpt-6.2-sol'
     assert leg.harness == 'opencode'
+    assert leg.harness_fallback is None
 
 
 @pytest.mark.parametrize('target', ['disabled-combo', 'aliases/disabled-combo'])

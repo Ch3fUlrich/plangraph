@@ -46,6 +46,31 @@ def test_provider_exhaustion_keeps_static_policy_refusals_separate():
         assert not provider_exhausted([{'reason': state}, {'reason': 'window_class'}])
 
 
+@pytest.mark.parametrize('reason', ('not_listed', 'provider_inactive', 'unreachable'))
+def test_provider_exhaustion_counts_limits_on_the_eligible_legs(reason):
+    from plangraph.routing_support.liveness import provider_exhausted
+    unavailable = {'reason': reason}
+    assert not provider_exhausted([unavailable])
+    assert provider_exhausted([unavailable, {'reason': 'limited'}])
+
+
+@pytest.mark.parametrize(('line', 'reason'), [
+    ('model_unavailable: model is unavailable', 'model_unavailable'),
+    ('HTTP 503: temporarily unavailable', 'provider_busy'),
+    ('Error: overloaded', 'provider_busy'),
+])
+def test_provider_exhaustion_counts_temporary_harness_outages(store, line, reason):
+    from plangraph.routing_support.liveness import provider_exhausted
+    model = 'opencode-go/glm-5.3-flash'
+    store.record_harness_limit(model, line, 'spawner:harness', now=100)
+    status = ls.routing_status(store.leg_status(model, now=101))
+    assert status['reason'] == reason
+    outage = {'reason': status['reason']}
+    assert provider_exhausted([outage, {'reason': 'not_listed'}])
+    assert provider_exhausted([{'reason': 'limited'}, outage])
+    assert not provider_exhausted([outage, {'reason': 'auth_refused'}])
+
+
 @pytest.mark.parametrize('role', ('implement', 'review', 'orchestrate'))
 @pytest.mark.parametrize('state', ('limited', 'down'))
 def test_role_automatically_falls_back(role, state, monkeypatch):
@@ -476,3 +501,18 @@ def test_argon_efforts_share_one_agy_quota_key(tmp_path):
     adapter = LegAdapter(store, None, lambda: (), enabled=True, clock=lambda: 0)
     assert adapter.leg_status('agy/gemini-4-argon-medium')['state'] == 'limited'
     assert adapter.leg_status('gemini-4-argon-medium') == store.leg_status('gemini-4-argon-medium')  # store, not the gateway
+
+
+def test_agy_429_applies_only_to_the_model_that_was_called(store):
+    store.record_harness_limit('agy/gemini-4-hydrogen-high',
+                               'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h.',
+                               'fixture', now=100, harness='agy')
+    assert store.leg_status('agy/gemini-4-hydrogen-medium', now=101)['state'] == 'limited'
+    assert store.leg_status('agy/gemini-4-argon-low', now=101)['state'] == 'ok'
+
+
+def test_failed_agy_reprobe_preserves_a_recent_429_without_reset(store):
+    model = 'agy/gemini-4-argon-low'
+    store.record_provider_response(model, 429, 'quota', {}, 'fixture', now=100)
+    store.record_probe_fail(model, 'review probe failed', 'review-probe', now=101)
+    assert store.leg_status(model, now=102)['state'] == 'limited'

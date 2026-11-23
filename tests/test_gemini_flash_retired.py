@@ -90,7 +90,8 @@ def test_hydrogen_replaces_writer_position_without_inventing_admission():
     assert WRITER_ORDER[:3] == ('cx-gpt-6.2-sol-medium', 'cx-gpt-6.2-astra', 'agy-gemini-4-hydrogen-high')
     for effort, role in (('high', 'implement'), ('medium', 'review')):
         leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-hydrogen-' + effort)
-        assert leg.disabled is None and leg.roles == (("implement", "review") if effort == "high" else (role,))
+        expected_roles = ("implement", "review") if effort == "high" else (role,)
+        assert leg.disabled is None and leg.roles == (*expected_roles, "research")
         assert (leg.tier, leg.harness, leg.family, leg.effort) == ('subscription', 'agy', 'gemini', effort)
         assert (leg.windows, leg.max_request_tokens, leg.trains_on_data) == (('128k', '256k', '1m'), 900000, False)
         assert leg.tool_mode == 'tools'

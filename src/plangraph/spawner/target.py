@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import re
 
-from plangraph.planner.legs import leg_active
+from plangraph.planner.legs import leg_active, opencode_counterpart
 from plangraph.routing_errors import SpawnRefused
 
 QUOTA_EXEMPT_ROLES = frozenset({'basic-analysis'})
@@ -86,7 +86,31 @@ def resolve_target(target, *, chosen=None):
         if row is not None:
             target = row['id']
             leg = next((l for l in SPAWNABLE_LEGS if l.model == target), None)
+            if leg is not None and leg.harness == 'codex' and row.get('harness') == 'opencode':
+                leg = opencode_counterpart(leg) or leg
     if leg is not None:
         admit_leg(leg)
         target = leg.model
     return target, leg
+
+
+def resolve_launch_target(target, *, chosen=None, client=None):
+    """Resolve the local harness for a direct launch, respecting a pinned client."""
+    if chosen is not None:
+        return resolve_target(target, chosen=chosen)
+    model, leg = resolve_target(target)
+    if leg is None or leg.family != 'gpt' or leg.harness != 'codex':
+        return model, leg
+    from plangraph.planner.legs import own_harness_enabled, resolve_harness
+    if client == 'opencode':
+        # Reuse the registered counterpart. An explicit pin is not a missing-client fallback.
+        counterpart = opencode_counterpart(leg)
+        if counterpart is not None:
+            return counterpart.model, counterpart
+        return model, leg
+    if client is not None or not own_harness_enabled():
+        return model, leg
+    choice = resolve_harness(leg)
+    if choice.leg is None:
+        raise SpawnRefused('client_missing: ' + leg.id)
+    return choice.leg.model, choice.leg

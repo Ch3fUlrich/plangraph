@@ -538,6 +538,8 @@ isolate each live door table and verify the refusal disappears without it.
 
 ## Turn-budget hook development
 
+The Bash guard checks explicit model arguments to Codex and OpenCode against the shared retired-model policy.
+
 The Python `tools/hooks/context_guard.py` carries the AutoOS compaction scan in
 `context_compaction.py` and `ready <handoff-path> [--reason cap|router|operator|planned]`.
 Ready requires a sibling `<stem>.card.md` validated by PATH's `handoff-check`
