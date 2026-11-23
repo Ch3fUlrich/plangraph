@@ -245,3 +245,40 @@ def test_retired_workspace_manifest_rule_does_not_require_crate_docs(test_repo):
     res = run_check(repo, base)
     assert res.returncode == 1, res.stdout
     assert "rust/pg-probe/**" in res.stdout and "docs/context-probes.md" in res.stdout
+
+
+@pytest.mark.parametrize(('source', 'reference', 'area'), [
+    ('tools/tool.rs', 'CONTRIBUTING.md', 'contributing'),
+    ('src/plangraph/keeper/store.rs', 'docs/KEEPER.md', 'keeper'),
+    ('src/plangraph/spawner/launch.rs', 'docs/SPAWNER.md', 'spawner'),
+])
+def test_docs_map_accepts_a_new_item_fragment(test_repo, source, reference, area):
+    repo, _ = test_repo
+    base = commit_files(repo, {'.docs-map': f'{source} -> {reference}\n'}, 'map docs')
+    commit_files(repo, {
+        source: 'fn fixture() {}\n',
+        f'docs/{area}/DOCS-FRAGMENT.md': '## Fixture\n\nDocument the source change.\n',
+        'changelog.d/DOCS-FRAGMENT.md': '- Cover a docs-map fixture.\n',
+    }, 'change documented by fragment')
+    result = run_check(repo, base)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(('fragment', 'already_exists'), [
+    ('docs/spawner/OTHER-AREA.md', False),
+    ('docs/keeper/nested/WRONG-LEVEL.md', False),
+    ('docs/keeper/OLD-ITEM.md', True),
+])
+def test_docs_map_rejects_an_unrelated_or_existing_fragment(test_repo, fragment, already_exists):
+    repo, _ = test_repo
+    files = {'.docs-map': 'src/keeper/** -> docs/KEEPER.md\n'}
+    if already_exists:
+        files[fragment] = 'Old documentation.\n'
+    base = commit_files(repo, files, 'map docs')
+    commit_files(repo, {
+        'src/keeper/store.rs': 'fn fixture() {}\n',
+        fragment: 'Another document.\n',
+    }, 'change with unmatched docs', trailers=['Changelog: skip (test fixture)'])
+    result = run_check(repo, base)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'none of its docs (docs/KEEPER.md) are in diff' in result.stdout
