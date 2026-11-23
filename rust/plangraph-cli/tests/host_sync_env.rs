@@ -185,9 +185,8 @@ fn state_shadow_stages_both_instances_and_registers_measurement_once() {
     let unit = include_str!("../../../deploy/systemd/plangraph-state-shadow@.service");
     let bin = home.join(".local/bin");
     fs::create_dir_all(&bin).unwrap();
-    for name in ["plangraph", "turn-budget-hook"] {
-        std::os::unix::fs::symlink("/bin/true", bin.join(name)).unwrap();
-    }
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_plangraph"), bin.join("plangraph")).unwrap();
+    std::os::unix::fs::symlink("/bin/true", bin.join("turn-budget-hook")).unwrap();
     for path in &settings {
         fs::write(path, r#"{"permissions":{"defaultMode":"default"},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"existing"}]}]}}"#).unwrap();
     }
@@ -216,6 +215,7 @@ fn state_shadow_stages_both_instances_and_registers_measurement_once() {
                 config.join(format!("{role}.{suffix}")).display()
             )));
         }
+        run_shadow_once(home, role, unit, &content);
         let props: serde_json::Value =
             serde_json::from_slice(&fs::read(settings).unwrap()).unwrap();
         assert_eq!(props["permissions"]["defaultMode"], "default");
@@ -250,4 +250,94 @@ fn state_shadow_stages_both_instances_and_registers_measurement_once() {
             assert!(verify.status.success(), "{verify:?}");
         }
     }
+}
+
+fn run_shadow_once(home: &Path, role: &str, unit: &str, environment: &str) {
+    use serde_json::json;
+    use std::{
+        io::{BufRead, BufReader, ErrorKind, Write},
+        net::TcpListener,
+        sync::mpsc,
+        time::Duration,
+    };
+
+    let state = home.join("shadow-state");
+    let config = home.join(".config/plangraph/state-shadow");
+    fs::write(
+        config.join(format!("{role}.token")),
+        format!("{role}-fixture"),
+    )
+    .unwrap();
+    fs::write(
+        config.join(format!("{role}.json")),
+        json!({
+            "role": role, "principal": role, "directory": state, "inbox": home.join("inbox"),
+            "transcript": home.join("session.jsonl"), "session_id": "session",
+            "data_repo": home, "decision_base": "a".repeat(40), "github_repo": "example/fixture",
+            "github_since": "2026-01-01T00:00:00Z", "quota": home.join("quota.json")
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = mpsc::channel::<()>();
+    let name = role.to_owned();
+    let server = std::thread::spawn(move || loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let lines: Vec<_> = BufReader::new(&stream)
+                    .lines()
+                    .map(Result::unwrap)
+                    .take_while(|line| !line.is_empty())
+                    .collect();
+                assert!(lines.iter().any(|line| line
+                    .eq_ignore_ascii_case(&format!("Authorization: Bearer {name}-fixture"))));
+                let body = json!({
+                    "name": name, "role": "router", "projects": [], "rows": [], "next_cursor": 0,
+                    "more": false, "items": [], "messages": [], "hosts": []
+                })
+                .to_string();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                if stopped.recv_timeout(Duration::from_millis(5))
+                    != Err(mpsc::RecvTimeoutError::Timeout)
+                {
+                    break;
+                }
+            }
+            Err(err) => panic!("{err}"),
+        }
+    });
+
+    let exec = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))
+        .unwrap();
+    let mut args = exec.split_whitespace();
+    let binary = args.next().unwrap().replace("%h", home.to_str().unwrap());
+    let output = Command::new(binary)
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", home.join(".local/bin"))
+        .env("PG_URL", url)
+        .envs(
+            environment
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .map(|(key, value)| (key, value.trim_matches('"'))),
+        )
+        .args(args.map(|arg| if arg == "%i" { role } else { arg }))
+        .arg("--once")
+        .output()
+        .unwrap();
+    stop.send(()).unwrap();
+    server.join().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(state.join(role).join("digest-1.txt").is_file());
 }
