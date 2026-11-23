@@ -19,7 +19,10 @@ struct Report<'a> {
     generated_at: chrono::DateTime<Utc>,
     sample_floor: usize,
     bench_source: &'static str,
+    rows_read: usize,
     input_n: usize,
+    excluded_before_since: usize,
+    excluded_missing_route: usize,
     excluded_pinned: usize,
     excluded_unclassified: usize,
     verification_unavailable_cards: usize,
@@ -53,7 +56,7 @@ struct Arm<'a> {
 
 fn arm<'a>(
     votes: &[&'a str],
-    observations: &[&'a Attempt],
+    observations: impl Iterator<Item = &'a Attempt>,
     first_runs: &BTreeSet<&str>,
 ) -> Arm<'a> {
     let mut counts = BTreeMap::new();
@@ -78,10 +81,7 @@ fn arm<'a>(
     };
     let mut first_passes = 0;
     let mut total_cost = 0.0;
-    for row in observations
-        .iter()
-        .filter(|row| leg.is_some() && row.leg.as_deref() == leg)
-    {
+    for row in observations.filter(|row| leg.is_some() && row.leg.as_deref() == leg) {
         result.observed_n += 1;
         if first_runs.contains(row.attempt_id.as_str()) {
             result.first_pass_n += 1;
@@ -126,6 +126,7 @@ fn compare<'a>(rows: &'a [Attempt], bench: &Bench, floor: usize) -> Vec<ClassRow
     let mut identities = BTreeMap::<_, BTreeSet<_>>::new();
     let mut classes = BTreeMap::<_, Vec<_>>::new();
     for row in rows {
+        let Some(route) = &row.route else { continue };
         if let Some(card) = row.card_key.as_deref() {
             first_by_card
                 .entry((row.role.as_str(), card))
@@ -138,11 +139,11 @@ fn compare<'a>(rows: &'a [Attempt], bench: &Bench, floor: usize) -> Vec<ClassRow
                 .insert(identity);
         }
         if let Some(class) = row.task_class.as_deref().filter(|class| !class.is_empty()) {
-            if !row.route.pin {
+            if !route.pin {
                 classes
                     .entry((class, row.role.as_str()))
                     .or_default()
-                    .push(row);
+                    .push((row, route));
             }
         }
     }
@@ -152,13 +153,12 @@ fn compare<'a>(rows: &'a [Attempt], bench: &Bench, floor: usize) -> Vec<ClassRow
         .map(|((task_class, role), observations)| {
             let fixed = observations
                 .iter()
-                .filter_map(|row| row.route.baselines.static_v0.as_deref())
+                .filter_map(|(_, route)| route.baselines.static_v0.as_deref())
                 .collect::<Vec<_>>();
             let mut utility = Vec::new();
             let mut utility_complete_n = 0;
-            for row in &observations {
-                let ranked = row
-                    .route
+            for &(row, route) in &observations {
+                let ranked = route
                     .top5
                     .iter()
                     .filter_map(|candidate| {
@@ -182,7 +182,7 @@ fn compare<'a>(rows: &'a [Attempt], bench: &Bench, floor: usize) -> Vec<ClassRow
                     .max_by(|(a, a_id), (b, b_id)| a.total_cmp(b).then_with(|| b_id.cmp(a_id)))
                 {
                     utility.push(leg);
-                    utility_complete_n += usize::from(ranked.len() == row.route.eligible_n);
+                    utility_complete_n += usize::from(ranked.len() == route.eligible_n);
                 }
             }
             ClassRow {
@@ -191,17 +191,26 @@ fn compare<'a>(rows: &'a [Attempt], bench: &Bench, floor: usize) -> Vec<ClassRow
                 n: observations.len(),
                 below_sample_floor: observations.len() < floor,
                 utility_complete_n,
-                fixed: arm(&fixed, &observations, &first_runs),
-                utility: arm(&utility, &observations, &first_runs),
+                fixed: arm(
+                    &fixed,
+                    observations.iter().map(|&(row, _)| row),
+                    &first_runs,
+                ),
+                utility: arm(
+                    &utility,
+                    observations.iter().map(|&(row, _)| row),
+                    &first_runs,
+                ),
             }
         })
         .collect()
 }
 
 fn write_text(out: &mut dyn Write, report: &Report<'_>) -> std::io::Result<()> {
-    writeln!(out, "Since {} UTC | generated {} | sample floor {} | benchmarks {} | inputs {} | pinned {} | unclassified {} | verification unavailable for {} cards",
+    writeln!(out, "Since {} UTC | generated {} | sample floor {} | benchmarks {} | rows read {} | in window {} | dropped before since {} | dropped missing route {} | dropped pinned {} | dropped unclassified {} | verification unavailable for {} cards",
         report.since, report.generated_at.to_rfc3339(), report.sample_floor, report.bench_source,
-        report.input_n, report.excluded_pinned, report.excluded_unclassified, report.verification_unavailable_cards)?;
+        report.rows_read, report.input_n, report.excluded_before_since, report.excluded_missing_route,
+        report.excluded_pinned, report.excluded_unclassified, report.verification_unavailable_cards)?;
     writeln!(out, "Task class\tRole\tN\tSample\tFixed leg\tFixed picks/scored\tFixed observed\tFixed first pass (n)\tFixed USD/verified (n)\tUtility leg\tUtility picks/scored\tUtility observed\tUtility first pass (n)\tUtility USD/verified (n)\tFully scored runs")?;
     if report.rows.is_empty() {
         writeln!(out, "No classified, unpinned attempts in this window.")?;
@@ -314,6 +323,7 @@ fn run(
     let bench = Bench::open(&catalog).map_err(|_| "cannot read benchmark catalog")?;
     let (mut rows, verification_unavailable_cards) =
         input::attempts(env, file.as_deref(), start, now)?;
+    let rows_read = rows.len();
     rows.retain(|row| row.started_at >= start);
     rows.sort_unstable_by(|a, b| {
         a.started_at
@@ -330,11 +340,20 @@ fn run(
         generated_at: now,
         sample_floor,
         bench_source: bench.source,
+        rows_read,
         input_n: rows.len(),
-        excluded_pinned: rows.iter().filter(|row| row.route.pin).count(),
+        excluded_before_since: rows_read - rows.len(),
+        excluded_missing_route: rows.iter().filter(|row| row.route.is_none()).count(),
+        excluded_pinned: rows
+            .iter()
+            .filter(|row| row.route.as_ref().is_some_and(|route| route.pin))
+            .count(),
         excluded_unclassified: rows
             .iter()
-            .filter(|row| !row.route.pin && row.task_class.as_deref().is_none_or(str::is_empty))
+            .filter(|row| {
+                row.route.as_ref().is_some_and(|route| !route.pin)
+                    && row.task_class.as_deref().is_none_or(str::is_empty)
+            })
             .count(),
         verification_unavailable_cards,
         rows: compare(&rows, &bench, sample_floor),

@@ -23,7 +23,7 @@ pub(super) struct Attempt {
     pub started_at: DateTime<Utc>,
     pub exit_class: String,
     pub cost: Option<f64>,
-    pub route: Route,
+    pub route: Option<Route>,
     pub verified: Option<bool>,
 }
 
@@ -60,6 +60,11 @@ struct Evidence {
     reference: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+struct Telemetry {
+    rows: Vec<Attempt>,
+}
+
 pub(super) fn attempts(
     env: &BTreeMap<String, String>,
     file: Option<&Path>,
@@ -73,15 +78,27 @@ pub(super) fn attempts(
         return Ok((rows, 0));
     }
 
-    let client = Client::new(env)?;
+    let client = if env.contains_key("PG_TELEMETRY_TOKEN_FILE") {
+        Client::with_token_file(env, "PG_TELEMETRY_TOKEN_FILE")?
+    } else {
+        Client::new(env)?
+    };
     // Keeper accepts durations. Allow for clock differences before applying the UTC cutoff locally.
     let seconds = (now - since).num_seconds() + 60;
-    let mut rows: Vec<Attempt> = client.get(&format!("v1/attempts?since={seconds}"))?;
+    let Telemetry { mut rows } = client
+        .get::<Telemetry>(&format!("v1/attempts?scope=telemetry&since={seconds}"))
+        .map_err(|error| {
+            if error == "keeper returned HTTP 403" {
+                format!("{error}. Set PG_TELEMETRY_TOKEN_FILE to an unscoped Keeper reader token")
+            } else {
+                error
+            }
+        })?;
     let cards: BTreeSet<_> = rows
         .iter()
         .filter(|row| {
             row.started_at >= since
-                && !row.route.pin
+                && row.route.as_ref().is_some_and(|route| !route.pin)
                 && row
                     .task_class
                     .as_deref()

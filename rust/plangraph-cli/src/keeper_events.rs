@@ -19,8 +19,15 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn new(env: &BTreeMap<String, String>) -> Result<Self, String> {
+        Self::with_token_file(env, "PG_TOKEN_FILE")
+    }
+
+    pub(crate) fn with_token_file(
+        env: &BTreeMap<String, String>,
+        key: &str,
+    ) -> Result<Self, String> {
         let url = env.get("PG_URL").ok_or("PG_URL required")?;
-        let token_file = env.get("PG_TOKEN_FILE").ok_or("PG_TOKEN_FILE required")?;
+        let token_file = env.get(key).ok_or_else(|| format!("{key} required"))?;
         let token =
             std::fs::read_to_string(token_file).map_err(|_| "cannot read keeper token file")?;
         let agent = ureq::Agent::config_builder()
