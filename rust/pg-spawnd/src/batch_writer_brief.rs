@@ -115,3 +115,96 @@ pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
     run.render(&mut rendered)?;
     Ok(Cow::Owned(rendered))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{render, Cow, PREFIX};
+    use serde_json::{json, Value};
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/batch-writer-input.txt");
+
+    fn fixture() -> Value {
+        serde_json::from_str(FIXTURE.strip_prefix(PREFIX).unwrap()).unwrap()
+    }
+
+    fn assert_rejected(input: Value, error: &str) {
+        let result = render(&format!("{PREFIX}{input}")).unwrap_err();
+        assert!(result.starts_with(error), "{input}: {result}");
+    }
+
+    #[test]
+    fn rejects_invalid_run_values() {
+        for (field, value) in [
+            ("round_cap", json!(0)),
+            ("round_cap", json!(9)),
+            ("review_wait_seconds", json!(0)),
+            ("fast_checks", json!([])),
+            ("trailers", json!([])),
+            ("name", json!(" ")),
+            ("worktree", json!("first\nsecond")),
+            ("review_cmd", json!("review\tcommand")),
+            ("fast_checks", json!(["check\r"])),
+            ("trailers", json!(["Writer: fixture\u{0000}"])),
+        ] {
+            let mut input = fixture();
+            input["run"][field] = value;
+            assert_rejected(input, "invalid batch writer Run values");
+        }
+    }
+
+    #[test]
+    fn accepts_round_cap_boundaries() {
+        for cap in [1, 8] {
+            let mut input = fixture();
+            input["run"]["round_cap"] = json!(cap);
+            let text = format!("{PREFIX}{input}");
+            assert!(render(&text)
+                .unwrap()
+                .contains(&format!("ROUND_CAP: {cap}\n")));
+        }
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_items() {
+        let mut input = fixture();
+        input["items"] = json!([]);
+        assert_rejected(input, "batch writer input requires at least one item");
+
+        for (field, value) in [("key", " "), ("title", "one\ntwo"), ("brief", " \n")] {
+            let mut input = fixture();
+            input["items"][0][field] = json!(value);
+            assert_rejected(
+                input,
+                "batch writer input requires an item key, title and brief",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_bad_json_and_unknown_fields() {
+        let text = format!("{PREFIX}{{");
+        assert!(render(&text)
+            .unwrap_err()
+            .starts_with("invalid batch writer input:"));
+
+        for location in ["", "/items/0", "/run"] {
+            let mut input = fixture();
+            input.pointer_mut(location).unwrap()["extra"] = json!(true);
+            assert_rejected(input, "invalid batch writer input: unknown field `extra`");
+        }
+    }
+
+    #[test]
+    fn renders_crlf_prefix_like_lf_prefix() {
+        let crlf = FIXTURE.replacen('\n', "\r\n", 1);
+        let rendered = render(&crlf).unwrap();
+        assert!(matches!(rendered, Cow::Owned(_)));
+        assert_eq!(rendered, render(FIXTURE).unwrap());
+    }
+
+    #[test]
+    fn borrows_plain_text_unchanged() {
+        let text = "Plain brief\r\nPLANGRAPH-BATCH-INPUT-V1\n  keep whitespace  \n";
+        assert!(matches!(render(text).unwrap(), Cow::Borrowed(brief) if brief == text));
+    }
+}
