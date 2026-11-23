@@ -600,6 +600,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
 #[cfg(unix)]
 #[test]
 fn card_refusals_exit_five_before_codex_starts() {
+    super::review_tests::assert_foreign_trailer_refused(&mut host, |args| git(&cwd, args));
     for (card, reason) in [
         (json!({"effort":"high"}), "effort_needs_decision"),
         (json!({"effort":"low"}), "effort_invalid"),

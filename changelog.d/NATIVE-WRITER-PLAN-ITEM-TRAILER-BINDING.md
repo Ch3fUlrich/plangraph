@@ -1,0 +1,1 @@
+- Native writer checks name the commit and key when a Plan-Item trailer falls outside the writer's assigned brief.
