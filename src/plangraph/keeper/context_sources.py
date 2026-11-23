@@ -319,6 +319,9 @@ def work_index(git, project, *, fresh=False, incremental=False):
               "last_verified_prs": verified_prs if verified_prs is not None else previous_prs,
               "prs_unverified": prs_unverified,
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
+              "revision_order": sorted(records),
+              "merged_history": {sha: (parents, commit if sha not in cancelled and sha not in reverts else None)
+                             for sha, (parents, commit, _) in records.items() if sha in merged},
               "stale": bool(problems), "origin_stale": origin_stale,
               "reason": "; ".join(problems),
               "verified_at": verified_at, "target": target, "ref": ref, "_log": log}
