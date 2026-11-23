@@ -541,6 +541,9 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     assert_eq!(review["verdict"], "ACCEPT", "{review}");
     assert_eq!(review["head"], head.as_str());
     assert_eq!(review["run_id"], "run-rv1");
+    assert!(
+        super::review_tests::saved_prompt(&host, &head, 1).contains("\nwriter status: missing\n")
+    );
     assert_eq!(review["leg"], "agy-gemini-4-hydrogen-high");
     assert_eq!(review["harness"], "agy");
     assert_eq!(review["host"], "fixture-worker");
@@ -552,8 +555,10 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     let unfamiliar_skill =
         extended_skill.replace("name: review", "name: review\nversion: unfamiliar");
     fs::write(skill_dir.join("SKILL.md"), unfamiliar_skill).unwrap();
+    super::review_tests::write_writer_artifacts(&host);
     let review = host.review(&head, None).unwrap();
     assert_eq!(review["verdict"], "ACCEPT", "{review}");
+    super::review_tests::assert_writer_artifacts(&host, &head);
     // OpenCode legs: no result frame in the live log, the answer is the stdout tail.
     let record = json!({"run_id":"run-rv2", "status":"completed",
         "stdout_tail":format!("HIGH src/lib.rs:1 - x\nHEAD: {head}\nVERDICT: REQUEST_CHANGES\n")});
@@ -595,12 +600,12 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
         .review(&head, None)
         .unwrap_err()
         .starts_with("review run returned no record"));
+    super::review_tests::assert_foreign_trailer_refused(&mut host, |args| git(&cwd, args));
 }
 
 #[cfg(unix)]
 #[test]
 fn card_refusals_exit_five_before_codex_starts() {
-    super::review_tests::assert_foreign_trailer_refused(&mut host, |args| git(&cwd, args));
     for (card, reason) in [
         (json!({"effort":"high"}), "effort_needs_decision"),
         (json!({"effort":"low"}), "effort_invalid"),

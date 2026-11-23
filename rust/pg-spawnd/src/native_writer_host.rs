@@ -363,6 +363,14 @@ impl Driver for Host {
         let mut record = record.clone();
         record["cwd"] = json!(self.cwd);
         record["review_dir"] = json!(self.reviews);
+        for (field, file) in [
+            ("writer_status_path", "status.txt"),
+            ("writer_slices_path", "slices.json"),
+        ] {
+            if record[field].is_null() {
+                record[field] = json!(self.reviews.join(file));
+            }
+        }
         if record["plan"]["effort"].is_object() {
             record["attempt_capture"] = json!(1);
         }

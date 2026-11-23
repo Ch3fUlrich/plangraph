@@ -324,7 +324,12 @@ impl Host {
         }
         // Fixed prefix, the review skill as rules and the item context of the versioned
         // review brief, from the one renderer; the context carries the actual evidence.
-        let context = self.brief_context(base, head);
+        let mut context = self.brief_context(base, head);
+        context["writer_run"] = json!({
+            "review_dir": self.reviews,
+            "writer_status_path": writer.get("writer_status_path"),
+            "writer_slices_path": writer.get("writer_slices_path"),
+        });
         let versioned =
             pg_worker_core::writer_families::render_review_brief(&context, "", &trusted_python)?;
         let prompt = self.review_prompt(base, head, prev, &families, &versioned, &skill)?;
