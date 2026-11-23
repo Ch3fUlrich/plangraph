@@ -73,6 +73,10 @@ fn read_runs(data: &Value) -> Result<Vec<Run>, String> {
         if run.item_key.is_empty() {
             run.item_key = row["card"]["item_key"].as_str().unwrap_or("").into();
         }
+        if run.item_keys.is_empty() {
+            run.item_keys =
+                serde_json::from_value(row["card"]["item_keys"].clone()).unwrap_or_default();
+        }
     }
     Ok(runs)
 }
@@ -90,6 +94,10 @@ fn decode_runs(
         {
             if run.item_key.is_empty() {
                 run.item_key = receipt["item_key"].as_str().unwrap_or("").into();
+            }
+            if run.item_keys.is_empty() {
+                run.item_keys =
+                    serde_json::from_value(receipt["item_keys"].clone()).unwrap_or_default();
             }
             if run.host.is_empty() {
                 run.host = receipt["host"].as_str().unwrap_or("").into();
@@ -112,17 +120,24 @@ fn decode_runs(
         if !run.item_key.starts_with("plangraph:") {
             continue;
         }
-        let item = [ready, snapshot]
-            .iter()
-            .flat_map(|r| {
-                ["items", "in_progress", "needs_reconcile"]
-                    .into_iter()
-                    .filter_map(move |k| r.get(k).and_then(Value::as_array))
-                    .flatten()
-            })
-            .find(|i| i["key"].as_str() == Some(&run.item_key));
-        let item = item.ok_or("writer_item_missing")?;
+        let find = |key: &str| {
+            [ready, snapshot]
+                .iter()
+                .flat_map(|r| {
+                    ["items", "in_progress", "needs_reconcile"]
+                        .into_iter()
+                        .filter_map(move |k| r.get(k).and_then(Value::as_array))
+                        .flatten()
+                })
+                .find(|i| i["key"].as_str() == Some(key))
+        };
+        // A batch run holds the files of every one of its items.
+        let item = find(&run.item_key).ok_or("writer_item_missing")?;
         run.files = decode_task(item)?.files;
+        for key in run.item_keys.clone() {
+            let member = find(&key).ok_or("writer_item_missing")?;
+            run.files.extend(decode_task(member)?.files);
+        }
     }
     Ok(runs)
 }

@@ -215,6 +215,45 @@ impl<T: Transport> Launch for Adapters<'_, T> {
             .call("release?fmt=json", Some(json!({"key":key,"epoch":epoch})))
             .map(|_| ())
     }
+    fn rival(
+        &mut self,
+        key: &str,
+        files: &[String],
+        batch: &[String],
+    ) -> Result<Option<String>, String> {
+        if files.is_empty() {
+            return Ok(None);
+        }
+        let snapshot = self.keeper.call("snapshot?fmt=json", None)?;
+        let now = chrono::Utc::now();
+        let others = snapshot["items"]
+            .as_array()
+            .ok_or("snapshot missing items")?;
+        for other in others {
+            let Some(name) = other["key"].as_str() else {
+                continue;
+            };
+            let lapsed = other["lease_until"]
+                .as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .is_some_and(|at| at < now);
+            if name == key
+                || batch.iter().any(|k| k == name)
+                || other["state"] != "claimed"
+                || lapsed
+            {
+                continue;
+            }
+            if decode_task(other).is_ok_and(|task| {
+                task.files
+                    .iter()
+                    .any(|a| files.iter().any(|b| crate::paths::paths_overlap(a, b)))
+            }) {
+                return Ok(Some(name.to_owned()));
+            }
+        }
+        Ok(None)
+    }
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String> {
         let dir = tempfile::Builder::new()
             .prefix("launch-")
@@ -248,6 +287,9 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         }
         run["item_key"] = card["item_key"].clone();
         run["files"] = card["files"].clone();
+        if card["item_keys"].is_array() {
+            run["item_keys"] = card["item_keys"].clone();
+        }
         if crate::atomic::write(&dir.path().join("receipt.json"), run.to_string().as_bytes())
             .is_err()
         {
@@ -379,6 +421,45 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
                     Some(json!({"key":"plangraph:A","epoch":19}))
                 )
             ]
+        );
+    }
+    struct Snapshot(Value);
+    impl Transport for Snapshot {
+        fn call(&self, _: &str, _: Option<Value>) -> Result<Value, String> {
+            Ok(self.0.clone())
+        }
+    }
+    #[test]
+    fn rival_is_a_live_claim_on_an_overlapping_file_outside_the_batch() {
+        let env = Env::new();
+        let temp = tempfile::tempdir().unwrap();
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let past = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        let snapshot = json!({"items":[
+            {"key":"plangraph:ME","state":"claimed","lease_until":future,"note":"files: [\"src/a.rs\"]"},
+            {"key":"plangraph:MATE","state":"claimed","lease_until":future,"note":"files: [\"src/a.rs\"]"},
+            {"key":"plangraph:LAPSED","state":"claimed","lease_until":past,"note":"files: [\"src/a.rs\"]"},
+            {"key":"plangraph:OPEN","state":"open","note":"files: [\"src/a.rs\"]"},
+            {"key":"plangraph:ELSEWHERE","state":"claimed","lease_until":future,"note":"files: [\"src/z.rs\"]"},
+            {"key":"plangraph:THEIRS","state":"claimed","lease_until":future,"note":"files: [\"src/a.rs\"]"}]});
+        let mut a = Adapters {
+            keeper: Snapshot(snapshot),
+            env: &env,
+            repo: temp.path().into(),
+            state: temp.path().into(),
+            host: "dell".into(),
+        };
+        let files = vec!["src/a.rs".to_owned()];
+        let batch = vec!["plangraph:ME".to_owned(), "plangraph:MATE".to_owned()];
+        assert_eq!(
+            a.rival("plangraph:ME", &files, &batch).unwrap().as_deref(),
+            Some("plangraph:THEIRS")
+        );
+        assert_eq!(a.rival("plangraph:ME", &[], &batch).unwrap(), None);
+        let batch = vec!["plangraph:ME".to_owned(), "plangraph:THEIRS".to_owned()];
+        assert_eq!(
+            a.rival("plangraph:ME", &files, &batch).unwrap().as_deref(),
+            Some("plangraph:MATE")
         );
     }
 }
