@@ -343,12 +343,14 @@ fn execute(args: &[String]) -> Result<()> {
                 .env("PG_JAIL", "off")
                 .env("PG_TEST_ALLOW_UNJAILED", "1");
         }
+        if step.label == "new-code-lang" {
+            command.env("CLASS_SEARCH_BASE", &base);
+        }
         command
             .args(&step.args[1..])
             .current_dir(&root)
             .env("FILESIZE_REQUIRE_BASE", &base)
             .env("NEWCODE_BASE", &base)
-            .env("CLASS_SEARCH_BASE", &base)
             .env("CHANGELOG_BASE", &base);
         let status = run_step(&mut command, &step.args[0], &target).map_err(|e| e.to_string())?;
         println!(

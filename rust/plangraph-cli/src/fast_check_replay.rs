@@ -17,7 +17,10 @@ pub(super) fn scrub_test_env(command: &mut Command) {
         .iter()
         .any(|prefix| name.starts_with(prefix))
             || name.split('_').any(|part| part == "SESSION")
-            || matches!(name.as_str(), "PYTEST_ADDOPTS" | "PYTHONPATH")
+            || matches!(
+                name.as_str(),
+                "PYTEST_ADDOPTS" | "PYTHONPATH" | "CLASS_SEARCH_BASE"
+            )
         {
             command.env_remove(key);
         }
