@@ -218,6 +218,7 @@ def _assert_contract(rows, models, legs, pending=()):
         ('leg:console-deepseek-flash@console-deepseek/deepseek-flash', None),
         ('leg:opencode-go-beam-free@opencode-go/beam-free', None),
         ('leg:claude-sonnet-5-5-high@claude/claude-sonnet-5-5-high', 'high'),
+        ('leg:claude-sonnet-5-5-xhigh@claude/claude-sonnet-5-5-xhigh', 'xhigh'),   # D-6652 hard-card writer
         ('catalog:opencode/deepseek-v4.1-flash-free', None),
         ('catalog:opencode-go/glm-5.3-flash', None),
         ('leg:opencode-deepseek-v4.1-flash-free@opencode/deepseek-v4.1-flash-free', None),
