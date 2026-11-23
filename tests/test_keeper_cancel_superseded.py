@@ -148,21 +148,22 @@ def test_remove_dep_op_repairs_a_big_gate_in_a_batch(big):
     assert len(deps(w, "demo:BIG")) == 299
 
 
-def test_define_under_a_gate_with_a_standing_cancelled_dependency_is_accepted(big):
-    w = big
-    out = w.store.create_items(w.p("router"), [defn("NEXT", under="BIG")])
+def test_define_under_a_gate_with_a_standing_cancelled_dependency_is_accepted(w):
+    w.store.create_items(w.p("router"), [
+        defn("STALE"), defn("STALE-GATE", ["STALE"], kind="gate", under="GOAL")])
+    w.conn.execute("UPDATE items SET state='cancelled' WHERE key='demo:STALE'")
+    out = w.store.create_items(w.p("router"), [defn("NEXT", under="STALE-GATE")])
     assert out["created"] == ["demo:NEXT"] and "refused" not in out
-    assert any("demo:BIG" in x and "demo:B7" in x and "cancelled" in x
+    assert any("demo:STALE-GATE" in x and "demo:STALE" in x and "cancelled" in x
                for x in out["warnings"])
-    assert "demo:NEXT" in deps(w, "demo:BIG")
+    assert "demo:NEXT" in deps(w, "demo:STALE-GATE")
     out = w.store.apply_ops(w.p("router"), [{"op": "create", "item": [
-        defn("NEXT2", under="BIG")]}])
+        defn("NEXT2", under="STALE-GATE")]}])
     assert out["applied"] == 1
-    # the edge is still repairable afterwards
-    w.store.edit_definition(w.p("router"), "demo:BIG",
-                            {"depends_on": {"remove": ["demo:B7"]}})
+    w.store.edit_definition(w.p("router"), "demo:STALE-GATE",
+                            {"depends_on": {"remove": ["demo:STALE"]}})
     assert not [p for p in views.validate(w.store._all_items())
-                if p["key"] == "demo:BIG" and p["code"] == "depends_on_cancelled"]
+                if p["key"] == "demo:STALE-GATE" and p["code"] == "depends_on_cancelled"]
 
 
 def test_withdraw_usage_says_in_review_only():
