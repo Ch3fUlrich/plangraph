@@ -1,3 +1,4 @@
+use super::dry_run::ROUTER_CORE_APPEND;
 use super::sandbox::{Launcher, Sandbox, LOCAL, PROMPT, SID};
 use serde_json::{json, Value};
 use std::fs::{self, File};
@@ -321,12 +322,7 @@ pub fn check_router_prompt(launcher: &Launcher) {
         .unwrap()
         + 1;
     let system = args[system].as_str().unwrap();
-    assert!(
-        system.contains("Invoke the skill router-core at startup"),
-        "{system}"
-    );
-    assert!(system.contains("skills/router-core/SKILL.md"), "{system}");
-    assert!(system.contains("Batch mode procedure"), "{system}");
+    assert!(system.ends_with(ROUTER_CORE_APPEND), "{system}");
     assert_eq!(args.last(), Some(&json!(PROMPT)));
 }
 
