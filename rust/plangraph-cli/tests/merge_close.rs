@@ -1,8 +1,10 @@
 //! The merge-close job against a fake keeper: no network, no keeper mutation.
 use plangraph_cli::feeder::{Env, Transport};
-use plangraph_cli::merge_close::{repos_with, require_seats, run_with};
+use plangraph_cli::merge_close::{repos_with, require_seats, run_scheduled_with, run_with};
 use serde_json::{json, Value};
 use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::time::Duration;
 
 struct Fake(Value, RefCell<Vec<(String, Value)>>);
 
@@ -110,4 +112,163 @@ fn a_flagged_close_prints_the_flag_with_its_run_ids() {
         "closed\tdemo:A\ta1\tFLAGGED seats_missing: run-1,run-2\nclosed\tdemo:B\tb1\n\
          would-close\tdemo:C\tc1\tFLAGGED seats_missing\nmerged-not-done\t3\n"
     );
+}
+
+#[test]
+fn follows_a_cursor_and_reports_scan_errors_once() {
+    struct Pages(RefCell<Vec<Value>>);
+    impl Transport for Pages {
+        fn call(&self, _verb: &str, body: Option<Value>) -> Result<Value, String> {
+            let mut calls = self.0.borrow_mut();
+            calls.push(body.unwrap());
+            let first = calls.len() == 1;
+            Ok(json!({
+                "would_close": if first { json!([{"key":"demo:A"}]) } else { json!([{"key":"demo:B"}]) },
+                "next_after": if first { Some("demo:A") } else { None },
+                "scan_errors": {"other": "origin fetch failed"},
+                "merged_not_done": 1
+            }))
+        }
+    }
+    let keeper = Pages(RefCell::default());
+    let out = run_with(&keeper, None, false, Some("demo")).unwrap();
+    assert_eq!(out.merged_not_done, 2);
+    assert_eq!(keeper.0.borrow()[1]["after"], "demo:A");
+    assert_eq!(
+        out.text
+            .matches("scan-error\tother\torigin fetch failed")
+            .count(),
+        1
+    );
+    assert!(out
+        .text
+        .contains("would-close\tdemo:A\t\nwould-close\tdemo:B\t\n"));
+}
+
+#[test]
+fn reports_unproven_deployments_with_their_merge_age() {
+    let keeper = Fake(
+        json!({
+            "merged_not_done": 2,
+            "deployment_pending": [
+                {"key": "demo:A", "age_hours": 24, "missing": ["fixture:unit.timer"]},
+                {"key": "demo:B", "age_hours": 23, "missing": ["live_evidence_missing"]}
+            ]
+        }),
+        RefCell::default(),
+    );
+    let outcome = run_with(&keeper, None, false, Some("demo")).unwrap();
+    assert!(outcome
+        .text
+        .contains("deployment-pending\tdemo:A\t24h\tfixture:unit.timer"));
+    assert!(outcome
+        .text
+        .contains("deployment-pending\tdemo:B\t23h\tlive_evidence_missing"));
+    assert!(outcome.text.contains("merged-not-live\t2\n"));
+}
+
+struct Script(RefCell<VecDeque<(Value, Value)>>);
+
+impl Script {
+    fn new<const N: usize>(steps: [(Value, Value); N]) -> Self {
+        Self(RefCell::new(steps.into()))
+    }
+
+    fn assert_finished(&self) {
+        assert!(self.0.borrow().is_empty(), "unconsumed keeper calls");
+    }
+}
+
+impl Transport for Script {
+    fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
+        let (expected, reply) = self
+            .0
+            .borrow_mut()
+            .pop_front()
+            .expect("unexpected keeper call");
+        assert_eq!(verb, "close_merged_auto");
+        assert_eq!(body, Some(expected));
+        Ok(reply)
+    }
+}
+
+#[test]
+fn scheduled_close_refreshes_then_reads_each_project_page_in_order() {
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            json!({"refresh":"projects"}),
+            json!({"projects":["demo","other"]}),
+        ),
+        (
+            json!({"apply":true,"project":"demo","require_seats":false}),
+            json!({"closed":[{"key":"demo:A"}],"merged_not_done":0,"next_after":"demo:A"}),
+        ),
+        (
+            json!({"apply":true,"project":"demo","require_seats":false,"after":"demo:A"}),
+            json!({"closed":[{"key":"demo:B"}],"merged_not_done":0}),
+        ),
+        (
+            json!({"apply":true,"project":"other","require_seats":false}),
+            json!({"listed":[{"key":"other:A","state":"open","reason":"open lane"}],"merged_not_done":1}),
+        ),
+    ]);
+    let outcome = run_scheduled_with(
+        &keeper,
+        &keeper,
+        Some(false),
+        true,
+        None,
+        false,
+        Duration::from_secs(95),
+    )
+    .unwrap();
+    assert_eq!(outcome.merged_not_done, 1);
+    assert!(outcome
+        .text
+        .starts_with("closed\tdemo:A\t\nclosed\tdemo:B\t\nlisted\tother:A\t"));
+    keeper.assert_finished();
+}
+
+#[test]
+fn scheduled_close_stops_at_the_refresh_deadline_without_paging() {
+    let control = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"running"})),
+    ]);
+    let keeper = Script::new([]);
+    let error =
+        run_scheduled_with(&keeper, &control, None, true, None, false, Duration::ZERO).unwrap_err();
+    assert_eq!(error, "merge index refresh is still running");
+    control.assert_finished();
+    keeper.assert_finished();
+}
+
+#[test]
+fn scheduled_preview_fails_if_the_selected_project_scan_is_incomplete() {
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            json!({"apply":false,"project":"demo"}),
+            json!({"scan_errors":{"demo":"origin fetch failed"},"merged_not_done":0}),
+        ),
+    ]);
+    let error = run_scheduled_with(
+        &keeper,
+        &keeper,
+        None,
+        false,
+        Some("demo"),
+        false,
+        Duration::ZERO,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        "incomplete merge scan: {\"demo\": \"origin fetch failed\"}"
+    );
+    keeper.assert_finished();
 }

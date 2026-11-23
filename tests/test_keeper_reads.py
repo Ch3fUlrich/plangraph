@@ -562,7 +562,8 @@ def test_ready_and_claim_keep_partial_git_adapters_best_effort(w, tmp_path):
     assert w.store.claim(w.p("l1main"), "demo:A")["epoch"] == 1
 
 
-@pytest.mark.parametrize("failure", ["origin", "pr", "missing-head", "gh"])
+@pytest.mark.parametrize("failure", ["origin", "pr", "missing-head", "gh",
+                                     "incremental-missing-head", "incremental-moved-head"])
 def test_ready_reports_unknown_remote_facts_without_using_stale_authority(w, tmp_path, monkeypatch, failure):
     import json
     import subprocess
@@ -570,6 +571,7 @@ def test_ready_reports_unknown_remote_facts_without_using_stale_authority(w, tmp
     from plangraph.keeper.evidence_git import GitAdapter
     sha, head = "a" * 40, "b" * 40
     adapter = GitAdapter({"demo": {"path": str(tmp_path), "ref": "origin/main"}})
+    incremental = failure.startswith("incremental-")
     failed = False
     calls = []
 
@@ -586,12 +588,15 @@ def test_ready_reports_unknown_remote_facts_without_using_stale_authority(w, tmp
             out = sha
         elif args[0] == "for-each-ref":
             out = f"refs/remotes/origin/main {sha}\n"
+            if incremental and not (failed and failure == "incremental-missing-head"):
+                tip = "c" * 40 if failed else head
+                out += f"refs/keeper/pull/71/head {tip}\n"
         elif args[0] == "log":
             # Old on-disk authority says A was merged. A failed origin fetch
             # must neither use this to exclude A nor declare A startable.
             trailer = "demo:A" if failure == "origin" else ""
             out = f"{sha}\x1f\x1f2026-11-15\x1fbase\x1f{trailer}\x1d"
-            if not (failed and failure == "missing-head"):
+            if not (failed and (incremental or failure == "missing-head")):
                 out += f"{head}\x1f{sha}\x1f2026-11-15\x1fpending\x1fdemo:A\x1d"
         else:
             pytest.fail(f"unexpected git call {args}")
@@ -609,7 +614,8 @@ def test_ready_reports_unknown_remote_facts_without_using_stale_authority(w, tmp
     assert not initial["stale"]
     failed = True
     monkeypatch.setattr(src.time, "time", lambda: 1065)
-    stale = src.work_index(adapter, "demo", fresh=True)
+    options = {"incremental": True} if incremental else {}
+    stale = src.work_index(adapter, "demo", fresh=True, **options)
     assert stale["stale"]
     facts = src.indexed_work(stale, "demo:A")
     assert facts["prs"] is None

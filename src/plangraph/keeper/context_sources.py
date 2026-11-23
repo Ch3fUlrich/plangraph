@@ -16,7 +16,6 @@ against a strict character set before they reach a git argument.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import threading
@@ -25,12 +24,13 @@ from urllib.parse import urlsplit
 
 from . import timing
 from .errors import Refused
-from .evidence_decisions import DecisionsAdapter, _decision_cell, _did_num, superseded_map
-from .evidence_git import REVERT_GREP, delivery_revert, is_first_parent_merge, plan_items, valid_ref
+from .evidence_decisions import (DecisionsAdapter, DecisionsUnreadable, _decision_cell,
+                                 decision_book, decisions_naming, superseded_map)
+from .evidence_git import REVERT_GREP, delivery_revert, is_first_parent_merge, plan_items, trailer_entries, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
-           "decisions_naming", "superseded_map", "COMMIT_LIMIT"]
+           "decisions_naming", "superseded_map", "DecisionsUnreadable", "COMMIT_LIMIT"]
 
 COMMIT_LIMIT = 5
 _LANE_LIMIT = 5
@@ -125,14 +125,58 @@ def _cancelled_delivery(git, repo, candidates, reverts):
     return cancelled
 
 
+def _work_record(record):
+    """Decode a new immutable commit record for the index."""
+    sha, parents, date, subject, message = record.split("\x1f", 4)
+    revert = delivery_revert(message)
+    full, partial = [], []
+    if revert is None:
+        for label, value in trailer_entries(message):
+            if label.lower() == "plan-item":
+                full.append(value)
+            elif label.lower() == "plan-item-part":
+                partial.append(value)
+    return sha, parents.split(), date, subject, full, partial, revert
+
+
+def _work_log(git, repo, refs, target, previous):
+    """Keep old commit records and read only history outside the previous ref tips."""
+    if refs is None or target is None:
+        return None
+    heads = {target, *refs.values()}
+    old_heads, old_records = previous or (set(), {})
+    if heads == old_heads:
+        return heads, old_records
+    # Previous refs may have been garbage collected after a force-push.
+    excluded = [f"^{sha}" for sha in sorted(old_heads & old_records.keys())]
+    args = ["log", "--all", "--date-order", "--no-show-signature",
+            "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d", "--end-of-options", target]
+    out = _ok(git, repo, args + excluded) if excluded else None
+    if out is None:
+        out = _ok(git, repo, args)
+        old_records = {}
+    if out is None:
+        return None
+    records = {}
+    for raw in out.split("\x1d"):
+        record = raw.strip("\n")
+        if record.count("\x1f") >= 4 and valid_commit_ref(record.split("\x1f", 1)[0]):
+            parsed = _work_record(record)
+            records[parsed[0]] = parsed
+    for sha, record in old_records.items():
+        records.setdefault(sha, record)
+    return heads, records
+
+
 _WORK_INDEX_CACHE_LOCK = threading.Lock()
 
 
-def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
+def work_index(git, project, *, fresh=False, incremental=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
     Read all commit trailers and topology together, including hosted open PR
-    heads. Unknown inputs remain unknown, as in the claim guard.
+    heads. Fresh reads revalidate the complete log. The merge-close scan may
+    reuse immutable commit history when current fetched refs attest PR heads.
     """
     repo, ref = _repo_ref(git, project)
     if repo is None:
@@ -140,11 +184,7 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     cache = getattr(git, "_context_work_index", {})
     cache_key = (repo, ref)
     hit = cache.get(cache_key)
-    if cached_only:  # a caller holding the keeper lock: the warm answer or nothing, never git or the forge
-        if hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
-            return hit[1]
-        raise Refused("evidence_unverified", f"merge_index_not_warm: {project}")
-    if not fresh and hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
+    if not fresh and hit and time.monotonic() - hit[0] < _REFS_TTL:
         return hit[1]
     step = f"work index for {project}"
     timing.check_io_deadline(step)
@@ -190,23 +230,23 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             problems.append("open PR inventory unavailable")
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
-    out = _ok(git, repo, ["log", "--all", "--date-order", "--no-show-signature",
-                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
+    target = (target or "").strip()
+    refs = dict(line.split(" ", 1) for line in refs_out.splitlines()) if refs_out is not None else None
+    previous = hit[1].get("_log") if incremental and hit else None
+    log = _work_log(git, repo, refs, target or None, previous)
     timing.check_io_deadline(step)
-    if refs_out is None or target is None or out is None:
+    if log is None:
         if not origin:
             return None
         origin_stale = True
         problems.append("repository index unavailable")
-    records, reverts = {}, {}
-    for record in (out or "").split("\x1d"):
-        fields = record.strip("\n").split("\x1f")
-        if len(fields) == 5 and valid_commit_ref(fields[0]):
-            sha, parents, date, subject, trailers = fields
-            if (revert := delivery_revert(trailers)) is not None:
-                reverts[sha] = revert
-            records[sha] = (parents.split(), {"sha": sha, "date": date,
-                            "subject": subject}, [] if sha in reverts else plan_items(trailers))
+    records, reverts, partial = {}, {}, {}
+    for sha, parents, date, subject, trailers, parts, revert in (log[1].values() if log else ()):
+        if revert is not None:
+            reverts[sha] = revert
+        if parts:
+            partial[sha] = parts
+        records[sha] = (parents, {"sha": sha, "date": date, "subject": subject}, trailers)
 
     def ancestors(head):
         seen, todo = set(), [head]
@@ -218,7 +258,10 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             todo.extend(records.get(sha, ([],))[0])
         return seen
 
-    if prs is not None and any(p["headRefOid"] not in records for p in prs):
+    if prs is not None and any(
+            p["headRefOid"] not in records
+            or (incremental and (refs or {}).get(f"refs/keeper/pull/{p['number']}/head") != p["headRefOid"])
+            for p in prs):
         prs = None
         problems.append("PR head commit unavailable")
     merged = ancestors((target or "").strip())
@@ -246,32 +289,35 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             for sha in introduced:
                 if sha in records and (sha != landing or own_pr):
                     records[sha][1]["merge"] = merge
-    commits, pulls = {}, {}
-    cancelled = _cancelled_delivery(git, repo, {s: records[s][2] for s in merged if s in records and records[s][2]},
-                                    {s: r for s, r in reverts.items() if s in merged})
+    commits, pulls, parts = {}, {}, {}
+    active = {sha: [*row[2], *partial.get(sha, ())] for sha, row in records.items()
+              if sha in merged and (row[2] or sha in partial)}
+    cancelled = _cancelled_delivery(git, repo, active, {s: r for s, r in reverts.items() if s in merged})
     for sha, (_, commit, names) in records.items():
         if sha in merged and sha not in cancelled:
             for name in names:
                 commits.setdefault(name.strip(), []).append(commit)
+            if (commit.get("merge") or {}).get("pr"):
+                for name in partial.get(sha, ()):
+                    parts.setdefault(name.strip(), []).append(commit["merge"])
     for pr in prs or []:
         for sha in ancestors(pr["headRefOid"]) - merged:
             for name in records.get(sha, ([], {}, []))[2]:
                 pulls.setdefault(name.strip(), []).append(pr["number"])
     branches = []
-    for line in (refs_out or "").splitlines():
-        name, sha = line.split(" ", 1)
+    for name, sha in (refs or {}).items():
         if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
             branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
     prs_unverified = prs_expected and (prs is None or origin_stale)
     previous_prs = hit[1].get("last_verified_prs") if hit and prs_expected else None
     verified_prs = pulls if prs is not None and not prs_unverified else None
-    result = {"commits": commits, "prs": verified_prs,
+    result = {"commits": commits, "parts": parts, "prs": verified_prs,
               "last_verified_prs": verified_prs if verified_prs is not None else previous_prs,
               "prs_unverified": prs_unverified,
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
               "stale": bool(problems), "origin_stale": origin_stale,
               "reason": "; ".join(problems),
-              "verified_at": verified_at}
+              "verified_at": verified_at, "target": target, "ref": ref, "_log": log}
     timing.check_io_deadline(step)
     with _WORK_INDEX_CACHE_LOCK:
         cache = getattr(git, "_context_work_index", {})
@@ -337,7 +383,16 @@ def indexed_open_pulls(indexes, key, project, *, cached=False):
     return sorted(pulls)
 
 
-def indexed_work(index, key):
+def indexed_parts(index, key):
+    """The distinct PR merges that brought in a partial item trailer."""
+    if index is None:
+        return []
+    _, bare = _split(key)
+    parts = index.get("parts", {})
+    return list({part["sha"]: part for name in (key, bare) for part in parts.get(name, ())}.values())
+
+
+def indexed_work(index, key, *, limit=COMMIT_LIMIT):
     """Resolve full/bare trailers and lane names without I/O."""
     if index is None or index.get("origin_stale"):
         return {"commits": None, "lanes": None, "prs": None}
@@ -347,7 +402,7 @@ def indexed_work(index, key):
                for c in index["commits"].get(name, [])}
     prs = index["prs"]
     ordered = sorted(commits.values(), key=lambda c: index.get("order", {}).get(c["sha"], 0))
-    return {"commits": ordered[:COMMIT_LIMIT],
+    return {"commits": ordered[:limit],
             "lanes": [b for b in index["branches"] if bare.lower() in b.lower()],
             "prs": sorted({p for name in names for p in prs.get(name, [])})
             if prs is not None else None}
@@ -674,57 +729,6 @@ def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, froze
     return list(lanes.values())
 
 
-# ------------------------------------------------------------ decisions
-_BOOK_LOCK = threading.Lock()
-_BOOKS = {}
-_BOOK_SLOTS = 3
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:-]+")
-
-
-class DecisionsUnreadable(Exception):
-    """The decisions authority could not be read for enforcement."""
-
-
-def decision_book(decisions, *, fresh=False):
-    """``{"rows", "superseded", "index"}`` for a :class:`DecisionsAdapter`.
-
-    ``rows`` = ``{"D-n": [row lines]}``, ``superseded`` = :func:`superseded_map`
-    and ``index`` = ``{token: {D-ids}}`` over every key-like token, so naming
-    lookups cost one dict probe.  Built once per file version (path, inode,
-    mtime, size; up to three files kept); an unreadable source is an empty book.
-    ``fresh`` bypasses the cache for enforcement without replacing read books.
-    """
-    if decisions is None:
-        return _build_book({})
-    if fresh:
-        try:
-            rows = getattr(decisions, "_rows_strict", getattr(decisions, "_rows", dict))()
-        except (OSError, UnicodeDecodeError):
-            raise DecisionsUnreadable from None
-        return _build_book({did: tuple(lines) for did, lines in rows.items()})
-    # Origin-backed rows change independently of the working-tree file's stat.
-    path = None if getattr(decisions, "_from_origin", False) else getattr(decisions, "_path", None)
-    try:
-        stat = os.stat(path) if path is not None else None
-    except OSError:
-        stat = None
-    if stat is None:             # no file identity: parse, but do not cache
-        return _build_book(_read_rows(decisions))
-    stamp = (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
-    with _BOOK_LOCK:
-        book = _BOOKS.get(stamp)
-    if book is not None:
-        return book
-    book = _build_book(_read_rows(decisions))
-    with _BOOK_LOCK:
-        for old in [k for k in _BOOKS if k[0] == stamp[0]]:
-            del _BOOKS[old]
-        while len(_BOOKS) >= _BOOK_SLOTS:
-            del _BOOKS[next(iter(_BOOKS))]
-        _BOOKS[stamp] = book
-    return book
-
-
 def decision_texts(decisions, ids):
     """Nonempty DECISION cells for cited ids; state lives only in decision_book.
 
@@ -757,35 +761,3 @@ def decision_texts(decisions, ids):
                 texts[did] = text
                 break
     return texts
-
-
-def _read_rows(decisions):
-    try:
-        return {did: tuple(lines) for did, lines in decisions._rows().items()}
-    except Exception:
-        return {}
-
-
-def _build_book(rows):
-    index = {}
-    for did, lines in rows.items():
-        for line in lines:
-            for token in _TOKEN_RE.findall(line):
-                token = token.strip(".:")
-                if "-" in token or ":" in token:     # key-like only
-                    index.setdefault(token, set()).add(did)
-    return {"rows": rows, "superseded": superseded_map(rows), "index": index}
-
-
-def decisions_naming(book, key):
-    """Decision ids whose row names *key*, sorted by number.
-
-    The full ``project:ID`` key always counts; the bare id counts when it is
-    distinctive (contains ``-`` and is at least 6 chars), since rows often
-    drop the project prefix.  A longer id (``X-FU``) is a different token.
-    """
-    bare = key.split(":", 1)[-1]
-    hits = set(book["index"].get(key, ()))
-    if "-" in bare and len(bare) >= 6:
-        hits |= book["index"].get(bare, set())
-    return sorted(hits, key=_did_num)

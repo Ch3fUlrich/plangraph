@@ -1,0 +1,1 @@
+Merge-close refreshes Keeper's merge index in a background job. It reuses commit history and deployment diffs, checks the indexed tip, reports incomplete scans, and closes items in bounded pages per project.

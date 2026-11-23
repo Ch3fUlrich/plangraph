@@ -1,15 +1,17 @@
 //! `plangraph merge-close`: the keeper closes every item a merge into main names.
 //!
-//! One keeper call (`close_merged_auto`) reads the default branch and closes each open,
+//! The timer refreshes the merge index, then closes each open,
 //! claimed or in-review item named by a `Plan-Item` trailer: no router, no decision id.
 //! The job prints one line per closed item and one line per key the keeper refused or
 //! flagged, with the reason, so routing sees every merged key that stayed open.
 //! A timer runs it every ten minutes, and the batch land step calls [`run_once`].
 use crate::feeder::{Env, SlowKeeper, Transport};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::time::{Duration, Instant};
 
-/// The keeper reads git for every candidate, so the call gets far more than a read verb.
+/// Keep a bound on each keeper call, including a page of close results.
 const MAX_TIME_SECS: u32 = 300;
 const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
 
@@ -43,19 +45,110 @@ pub fn run_with(
     apply: bool,
     project: Option<&str>,
 ) -> Result<Outcome, String> {
-    let mut body = json!({"apply": apply});
-    if let Some(require_seats) = require_seats {
-        body["require_seats"] = json!(require_seats);
+    let mut pass = ClosePass::default();
+    pass.collect(keeper, require_seats, apply, project)?;
+    Ok(pass.finish(false))
+}
+
+#[derive(Default)]
+struct ClosePass {
+    text: String,
+    merged_not_done: u64,
+    scan_errors: BTreeMap<String, String>,
+    deployment_text: String,
+    deployment_count: Option<usize>,
+}
+
+impl ClosePass {
+    fn collect(
+        &mut self,
+        keeper: &dyn Transport,
+        require_seats: Option<bool>,
+        apply: bool,
+        project: Option<&str>,
+    ) -> Result<(), String> {
+        let mut body = json!({"apply": apply});
+        if let Some(require_seats) = require_seats {
+            body["require_seats"] = json!(require_seats);
+        }
+        if let Some(project) = project {
+            body["project"] = json!(project);
+        }
+        loop {
+            let result = keeper.call("close_merged_auto", Some(body.clone()))?;
+            self.merged_not_done += result["merged_not_done"]
+                .as_u64()
+                .ok_or("keeper reply has no merged_not_done count")?;
+            if let Some(errors) = result["scan_errors"].as_object() {
+                for (repo, reason) in errors {
+                    let reason = reason.as_str().ok_or("keeper scan error is not text")?;
+                    self.scan_errors
+                        .insert(repo.clone(), reason.replace(['\n', '\t'], " "));
+                }
+            }
+            page_text(&mut self.text, &result);
+            if let Some(deployments) = result["deployment_pending"].as_array() {
+                *self.deployment_count.get_or_insert(0) += deployments.len();
+                for row in deployments {
+                    deployment_text(&mut self.deployment_text, row);
+                }
+            }
+            let Some(after) = result["next_after"].as_str() else {
+                return if result["next_after"].is_null() {
+                    Ok(())
+                } else {
+                    Err("keeper continuation is not an item key".into())
+                };
+            };
+            if after.is_empty() || body["after"].as_str().is_some_and(|prior| after <= prior) {
+                return Err("keeper continuation did not advance".into());
+            }
+            body["after"] = json!(after);
+        }
     }
-    if let Some(project) = project {
-        body["project"] = json!(project);
+
+    fn finish(mut self, deployment_only: bool) -> Outcome {
+        if deployment_only {
+            self.text.clear();
+        }
+        self.text.push_str(&self.deployment_text);
+        if let Some(count) = self.deployment_count {
+            let _ = writeln!(self.text, "merged-not-live\t{count}");
+        }
+        for (repo, reason) in self.scan_errors {
+            let _ = writeln!(self.text, "scan-error\t{repo}\t{reason}");
+        }
+        let merged_not_done = self.merged_not_done;
+        if !deployment_only {
+            let _ = writeln!(self.text, "merged-not-done\t{merged_not_done}");
+        }
+        Outcome {
+            text: self.text,
+            merged_not_done,
+        }
     }
-    let result = keeper.call("close_merged_auto", Some(body))?;
-    let rows = |name: &str| result[name].as_array().cloned().unwrap_or_default();
-    let merged_not_done = result["merged_not_done"]
+}
+
+fn deployment_text(text: &mut String, row: &Value) {
+    let age = row["age_hours"]
         .as_u64()
-        .ok_or("keeper reply has no merged_not_done count")?;
-    let mut text = String::new();
+        .map_or_else(|| "?".into(), |n| format!("{n}h"));
+    let missing = row["missing"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
+    let _ = writeln!(
+        text,
+        "deployment-pending\t{}\t{age}\t{missing}",
+        row["key"].as_str().unwrap_or("?")
+    );
+}
+
+fn page_text(text: &mut String, result: &Value) {
+    let rows = |name: &str| result[name].as_array().into_iter().flatten();
     for (label, name) in [("closed", "closed"), ("would-close", "would_close")] {
         for row in rows(name) {
             let heads: Vec<&str> = row["prs"]
@@ -73,6 +166,15 @@ pub fn run_with(
             );
         }
     }
+    for row in rows("parts") {
+        let _ = writeln!(
+            text,
+            "merged-part\t{}\t{}\t{}",
+            row["key"].as_str().unwrap_or("?"),
+            row["pr"],
+            row["merge_sha"].as_str().unwrap_or("?")
+        );
+    }
     for row in rows("listed") {
         let _ = writeln!(
             text,
@@ -85,11 +187,6 @@ pub fn run_with(
                 .replace(['\n', '\t'], " ")
         );
     }
-    let _ = writeln!(text, "merged-not-done\t{merged_not_done}");
-    Ok(Outcome {
-        text,
-        merged_not_done,
-    })
 }
 
 /// `\tFLAGGED name: run ids; ...` for the flags a close stored (`seats_missing`), else nothing.
@@ -131,33 +228,104 @@ pub fn repos_with(keeper: &dyn Transport) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// The call the land step makes after a merge: the job with the configured switch.
-pub fn run_once(env: &Env, project: Option<&str>) -> Result<Outcome, String> {
+fn run_scheduled(
+    env: &Env,
+    apply: bool,
+    project: Option<&str>,
+    deployment_only: bool,
+) -> Result<Outcome, String> {
+    let seats = require_seats(env)?;
     let keeper = SlowKeeper {
         env,
         max_time_secs: MAX_TIME_SECS,
     };
-    run_with(&keeper, require_seats(env)?, true, project)
+    let control = SlowKeeper {
+        env,
+        max_time_secs: 10,
+    };
+    run_scheduled_with(
+        &keeper,
+        &control,
+        seats,
+        apply,
+        project,
+        deployment_only,
+        Duration::from_secs(95),
+    )
 }
 
-/// `merge-close [--count | --repos] [--project NAME]`; `--count` prints only the number of
-/// merged items that are not done and `--repos` the scanned repositories, one per line;
-/// neither changes anything.
+/// Run the scheduled refresh and paged close using the supplied keeper transports.
+pub fn run_scheduled_with(
+    keeper: &dyn Transport,
+    control: &dyn Transport,
+    seats: Option<bool>,
+    apply: bool,
+    project: Option<&str>,
+    deployment_only: bool,
+    refresh_timeout: Duration,
+) -> Result<Outcome, String> {
+    control.call("close_merged_auto", Some(json!({"refresh": "start"})))?;
+    let deadline = Instant::now() + refresh_timeout;
+    loop {
+        let reply = control.call("close_merged_auto", Some(json!({"refresh": "status"})))?;
+        match reply["scan"].as_str() {
+            Some("ready") => break,
+            Some("running") if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_secs(1))
+            }
+            Some("running") => return Err("merge index refresh is still running".into()),
+            _ => return Err("keeper reply has no valid merge index status".into()),
+        }
+    }
+    let mut pass = ClosePass {
+        deployment_count: Some(0),
+        ..ClosePass::default()
+    };
+    if let Some(project) = project {
+        pass.collect(keeper, seats, apply, Some(project))?;
+    } else {
+        let reply = control.call("close_merged_auto", Some(json!({"refresh": "projects"})))?;
+        for project in reply["projects"]
+            .as_array()
+            .ok_or("keeper reply has no project list")?
+        {
+            let project = project.as_str().ok_or("keeper project name is not text")?;
+            pass.collect(keeper, seats, apply, Some(project))?;
+        }
+    }
+    if !apply && !pass.scan_errors.is_empty() {
+        return Err(format!("incomplete merge scan: {:?}", pass.scan_errors));
+    }
+    Ok(pass.finish(deployment_only))
+}
+
+/// The call the land step makes after a merge: the job with the configured switch.
+pub fn run_once(env: &Env, project: Option<&str>) -> Result<Outcome, String> {
+    run_scheduled(env, true, project, false)
+}
+
+/// `merge-close [--count | --repos | --deploy-status] [--project NAME]`.
+/// The flags only report counts, repositories, or unproven deployments.
 pub fn run(env: &Env, args: &[String]) -> i32 {
     let mut count = false;
     let mut repos = false;
+    let mut deploy_status = false;
     let mut project = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--count" => count = true,
             "--repos" => repos = true,
+            "--deploy-status" => deploy_status = true,
             "--project" => match rest.next() {
                 Some(name) => project = Some(name.as_str()),
                 None => return usage(),
             },
             _ => return usage(),
         }
+    }
+    if u8::from(count) + u8::from(repos) + u8::from(deploy_status) > 1 {
+        return usage();
     }
     if repos {
         let keeper = SlowKeeper {
@@ -175,23 +343,14 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
             }
         };
     }
-    let outcome = if count {
-        let keeper = SlowKeeper {
-            env,
-            max_time_secs: MAX_TIME_SECS,
-        };
-        require_seats(env)
-            .and_then(|seats| run_with(&keeper, seats, false, project))
-            .map(|o| Outcome {
-                text: format!("{}\n", o.merged_not_done),
-                ..o
-            })
-    } else {
-        run_once(env, project)
-    };
+    let outcome = run_scheduled(env, !(count || deploy_status), project, deploy_status);
     match outcome {
         Ok(done) => {
-            print!("{}", done.text);
+            if count {
+                println!("{}", done.merged_not_done);
+            } else {
+                print!("{}", done.text);
+            }
             0
         }
         Err(reason) => {
@@ -202,6 +361,8 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
 }
 
 fn usage() -> i32 {
-    eprintln!("usage: plangraph merge-close [--count | --repos] [--project NAME]");
+    eprintln!(
+        "usage: plangraph merge-close [--count | --repos | --deploy-status] [--project NAME]"
+    );
     2
 }

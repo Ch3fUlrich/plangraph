@@ -1,4 +1,5 @@
 """The deploy gate reads the same merged work on every close path (LE-MERGED-UNIT-NEVER-DEPLOYED)."""
+import os
 import sys
 
 import pytest
@@ -211,7 +212,7 @@ def test_a_snapshot_older_than_the_work_the_close_proves_is_stale(env):  # noqa:
     git(root, "checkout", "-q", "main")
     git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #51 from x/later", "later")
     result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
-    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+    assert result["closed"] == [] and "merge_index_tip_changed" in result["listed"][0]["reason"]
     assert env.store._item("demo:A")["state"] == "open"
     # A fresh warm-up sees both PRs and finds the unit.
     again = frozen(env, require_seats=False)
@@ -259,7 +260,7 @@ def test_a_snapshot_of_a_rebuilt_ref_is_stale_even_with_the_same_tagged_commit(e
     git(root, "checkout", "-q", "main")
     git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #54 from x/redo", "redo")
     result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
-    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+    assert result["closed"] == [] and "merge_index_tip_changed" in result["listed"][0]["reason"]
     assert env.store._item("demo:A")["state"] == "open"
     again = frozen(env, require_seats=False)
     assert again["closed"] == [] and "deploy_pending" in again["listed"][0]["reason"]
@@ -542,3 +543,53 @@ def test_train_part_merge_commit_own_unit_counts_for_the_part_key(env):  # noqa:
 
     pinned = _train_with_part(env, build, evil=evil)
     assert ("A", "deploy/systemd/resolved.service") in env.store._deploy_changes(pinned)[1]
+
+
+@pytest.mark.parametrize("env", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(
+    not os.environ.get("PG_DSN"), reason="PG_DSN not set"))], indirect=True)
+def test_merge_close_reports_the_age_of_unproven_unit_and_live_work(env):
+    from plangraph.keeper.evidence_types import as_epoch
+
+    env.store.edit_definition(env.p("router"), "demo:A", {"note": "Deploy-Hosts: fixture"})
+    env.store.edit_definition(env.p("router"), "demo:B", {
+        "done_criteria": "Live: merge-close finishes under 120 seconds."})
+    _land_with_unit(env.repo.root, name="timer")
+    env.repo.land("live-clause", "Plan-Item: demo:B", 97)
+    env.clock.t = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main")) + 26 * 3600
+    preview = frozen(env, require_seats=False, apply=False)
+    pending = {row["key"]: row for row in preview["deployment_pending"]}
+    assert pending["demo:A"]["missing"] == ["fixture:new.service"]
+    assert pending["demo:B"]["missing"] == ["live_evidence_missing"]
+    assert all(row["age_hours"] >= 26 and row["merged_at"] for row in pending.values())
+    assert preview["merged_not_done"] == 2
+    assert [row["key"] for row in preview["would_close"]] == ["demo:B"]
+    assert all(env.store._item(key)["state"] == "open" for key in pending)
+    applied = frozen(env, require_seats=False)
+    assert [row["key"] for row in applied["closed"]] == ["demo:B"]
+    assert [row["key"] for row in applied["listed"]] == ["demo:A"]
+    assert applied["deployment_pending"] == preview["deployment_pending"]
+    assert applied["merged_not_done"] == 1
+    assert env.store._item("demo:B")["state"] == "done"
+    assert [(row["key"], row["code"]) for row in env.store.alerts(env.p("reader"))["findings"]
+            if row["code"] == "deploy_pending"] == [("demo:A", "deploy_pending")]
+
+
+def test_a_live_clause_requires_verified_evidence_from_after_the_merge(env):
+    from plangraph.keeper.evidence import VERIFIERS
+    from plangraph.keeper.evidence_types import as_epoch
+
+    key = "demo:A"
+    env.store.edit_definition(env.p("router"), key, {"done_criteria": "Live: observe the service in use."})
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    env.repo.land("live", f"Plan-Item: {key}", 98)
+    merged = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main"))
+    env.clock.t = merged - 60
+    proof = {"host": "fixture", "unit": "test.service", "is_active": "active"}
+    assert env.store.add_evidence_router(env.p("router"), key, "deploy", proof)["verified"]
+    env.clock.t = merged + 60
+    preview = frozen(env, require_seats=False, apply=False)
+    assert preview["deployment_pending"][0]["key"] == key
+    assert preview["would_close"][0]["key"] == key
+    assert env.store.add_evidence_router(env.p("router"), key, "deploy", proof)["verified"]
+    result = frozen(env, require_seats=False, apply=False)
+    assert result["deployment_pending"] == [] and result["would_close"][0]["key"] == key

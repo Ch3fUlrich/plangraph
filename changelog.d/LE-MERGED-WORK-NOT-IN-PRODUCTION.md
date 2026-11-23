@@ -1,0 +1,1 @@
+`plangraph merge-close --deploy-status` reports active merged items awaiting deployment evidence, with their age since merge. Automatic close also holds an item with an explicit Live clause until verified post-merge deploy evidence is recorded.

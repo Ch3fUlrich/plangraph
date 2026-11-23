@@ -1,0 +1,1 @@
+Keeper serves show, ready, and snapshot from independent committed read transactions. When a writer is busy, Keeper records the read audits after the writer releases the lock. Manual close deploy scans release the request lock, and merge proof metadata is shared by items from the same merge.

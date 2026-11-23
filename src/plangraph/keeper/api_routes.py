@@ -7,8 +7,12 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
+import threading
+from copy import copy
+from time import monotonic
 import urllib.parse
 
 from ..inbox import routes as _inbox
@@ -338,15 +342,78 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "record_run": _record_run}
 
 
+class MergeRefresh:
+    """Publish a complete scan to HTTP close calls, including partial-scan errors."""
+
+    MAX_AGE_SECONDS = 300
+
+    def __init__(self, server):
+        self.server = server
+        self.state = "idle"
+        self.used = False
+        self.expires_at = 0.0
+
+    def control(self, action):
+        server = self.server
+        if action == "projects":
+            projects = sorted({project for _, project in server.store.merge_candidates()})
+            if not projects and self.state == "ready":
+                self.used = True
+            return {"projects": projects}
+        if action not in ("start", "status"):
+            raise Refused("validation", "refresh must be start, status or projects")
+        if action == "start" and self.state != "running":
+            now = monotonic()
+            if self.state == "idle" or self.used or now >= self.expires_at:
+                # Bound reuse from the beginning of the scan, when it starts fetching default refs.
+                self.expires_at = now + self.MAX_AGE_SECONDS
+                self.state, self.used = "running", False
+                threading.Thread(target=self._build, name="keeper-merge-index", daemon=True).start()
+        return {"scan": self.state}
+
+    def consume(self):
+        if self.state == "running":
+            raise Refused("conflict", "merge index refresh is running")
+        if self.state == "ready":
+            if monotonic() >= self.expires_at:
+                raise Refused("conflict", "merge index expired; start a refresh")
+            self.used = True
+
+    def _build(self):
+        server = self.server
+        try:
+            with server.lock:
+                scan = copy(server.store)
+                candidates = scan.merge_candidates()
+            scan.warm_merge_scan(candidates)
+            published = {field: scan.__dict__[field] for field in
+                         ("_warmed", "_lanes", "_deploy_warm", "_merge_scan_errors")}
+        except Exception as exc:
+            published = dict(_warmed={}, _lanes={}, _deploy_warm={},
+                             _merge_scan_errors={"*": f"merge_scan_failed: {type(exc).__name__}"})
+        with server.lock:
+            server.store.__dict__.update(published)
+            self.state = "ready"
+        logging.getLogger("plangraph.keeper").info("merge_index_refresh repos=%d failed=%d",
+            len(published["_warmed"]), len(published["_merge_scan_errors"]))
+
+
+def _close_merged_auto(store, principal, body, need):
+    from . import timing
+    with timing.io_budget(90):
+        return store.close_merged_auto(
+            principal, body.get("project"), require_seats=body.get("require_seats"),
+            apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True,
+            limit=25 if body.get("limit") is None else body["limit"], after=body.get("after"))
+
+
 #: Write verbs whose store method checks the role itself and admits more than the
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "land": lambda store, principal, body, need: store.land(principal, body),
                       "record_spawn_attempt": lambda store, principal, body, need:
                           store.record_spawn_attempt(principal, body),
-                      "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
-                          principal, body.get("project"), require_seats=body.get("require_seats"),
-                          apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True),
+                      "close_merged_auto": _close_merged_auto,
                       "close_on_decision": _close_on_decision,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,
