@@ -418,27 +418,38 @@ def test_reap_raises_one_gate_capacity_alert_at_190_open_or_done(w):
     assert w.conn.execute(sql).fetchall() == []
 
 
-def test_define_refuses_a_nested_slice_even_after_the_parent_criteria_are_edited(w):
+@pytest.mark.parametrize("rehome", [False, True])
+def test_define_refuses_a_nested_slices_json_entry_after_parent_criteria_are_edited(w, rehome):
     router = w.p("router")
-    first = defn("X-S1", under="X", done_criteria="Slice of demo:X: fix the first part")
+    first = defn("X-S1", under="X", slice_parent="demo:X",
+                 done_criteria="The first part passes its regression test")
     assert w.store.create_items(router, [first])["created"] == ["demo:X-S1"]
     w.store.edit_definition(router, "demo:X-S1", {
         "done_criteria": "Revised criteria",
         "criteria_reason": "Clarify the first slice",
         "criteria_evidence": "D-123",
     })
-    nested = defn("X-S1-S1", under="X-S1",
-                  done_criteria="Slice of demo:X-S1: fix the inner part")
+    parent = "demo:X-S1"
+    if rehome:
+        parent = w.store.rehome(router, parent, "other")["new"]
+    nested = defn("X-S1-S1", under="X-S1", slice_parent=parent,
+                  done_criteria="The inner part passes its regression test")
     before = _snapshot(w)
-    with pytest.raises(Refused, match="parent demo:X-S1 is already a slice"):
+    with pytest.raises(Refused, match=f"parent {parent} is already a slice"):
         w.store.create_items(router, [nested])
     assert _snapshot(w) == before
 
 
 def test_define_attaches_a_non_slice_under_a_slice(w):
     router = w.p("router")
-    first = defn("X-S1", under="X", done_criteria="Slice of demo:X: fix the first part")
+    first = defn("X-S1", under="X", slice_parent="X", done_criteria="Fix the first part")
     w.store.create_items(router, [first])
     result = w.store.create_items(router, [defn("FOLLOWUP", under="X-S1")])
     assert result["attached"] == [{"key": "demo:FOLLOWUP", "under": "demo:X-S1"}]
     assert w.store._item("demo:X-S1")["depends_on"] == ["demo:FOLLOWUP"]
+
+
+@pytest.mark.parametrize("under", [None, "Y"])
+def test_define_requires_slice_parent_to_match_under(w, under):
+    with pytest.raises(Refused, match="slice_parent must match under"):
+        w.store.create_items(w.p("router"), [defn("X-S1", under=under, slice_parent="X")])
