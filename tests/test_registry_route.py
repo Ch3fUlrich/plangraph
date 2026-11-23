@@ -193,8 +193,7 @@ def test_route_skips_paused_harness_per_role():
     assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-4-neon-medium"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
     assert writer.first_leg.id == "cx-gpt-6.2-sol-medium"
-    # The historical table retains its declared OpenCode harness. A pause must
-    # remove every OpenCode writer from that table.
+    # The pause removes OpenCode writers while the native GPT legs stay eligible.
     paused = plan_spawn(CARD, role="implement", policy=RoutePolicy(
         paused_harnesses={"opencode": ("review",)}),
         leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
@@ -205,14 +204,17 @@ def test_route_skips_paused_harness_per_role():
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
         paused_ids, "paused_harness")
-    assert [leg.id for leg in paused.legs] == ['agy-gemini-4-hydrogen-high']
+    assert [(leg.id, leg.harness) for leg in paused.legs] == [
+        ('cx-gpt-6.2-sol-medium', 'codex'), ('cx-gpt-6.2-astra', 'codex'),
+        ('agy-gemini-4-hydrogen-high', 'agy')]
 
-    # The same policy admits the D-6550 lead writer through native Codex.
-    native = plan_spawn(CARD, role="implement", legs=DEFAULT_LEGS, policy=RoutePolicy(
+    # Without Codex, its OpenCode fallbacks are subject to the same pause.
+    fallback = plan_spawn(CARD, role="implement", legs=DEFAULT_LEGS, policy=RoutePolicy(
         paused_harnesses={"opencode": ("review",)}),
+        installed=lambda harness: harness != "codex",
         leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
-    assert [(leg.id, leg.harness) for leg in native.legs] == [
-        ('cx-gpt-6.2-sol-medium', 'codex'), ('agy-gemini-4-hydrogen-high', 'agy')]
+    assert [(leg.id, leg.harness) for leg in fallback.legs] == [('agy-gemini-4-hydrogen-high', 'agy')]
+    assert {s["leg"]: s["reason"] for s in fallback.skipped}["cx-gpt-6.2-sol-medium"] == "paused_harness"
 
 
 def test_explicit_policy_argument_wins():
