@@ -78,7 +78,7 @@ class ReapMixin:
                 self._finding(key, code, msg, now)
         for key in sorted(previous - near_cap.keys()):
             self._alerts_resolve(key, now, code=code)
-        return bool(near_cap or previous)
+        return near_cap.keys() != previous
 
     def _age_priorities(self, principal, now):
         """Drop an open, unclaimed 10 (after 3 days) or 9 (after 7) one level.

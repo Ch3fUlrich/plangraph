@@ -413,7 +413,9 @@ def test_reap_raises_one_gate_capacity_alert_at_190_open_or_done(w):
     revision = getattr(w.store, "_reap_revision", 0)
     w.store.reap(system)
     assert w.store._reap_revision > revision
+    revision = w.store._reap_revision
     w.store.reap(system)
+    assert w.store._reap_revision == revision
     assert [row["key"] for row in w.conn.execute(sql)] == ["demo:GATE"]
     w.store.edit_definition(router, "demo:GATE", {"depends_on": ids[:-1]})
     revision = w.store._reap_revision
