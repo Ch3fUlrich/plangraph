@@ -23,7 +23,7 @@ fn directories(path: &Path) -> io::Result<Vec<PathBuf>> {
 }
 
 #[cfg(target_os = "linux")]
-fn cargo_output(root: &Path) -> bool {
+pub(crate) fn cargo_output(root: &Path) -> bool {
     let marker = |name| {
         let path = root.join(name);
         let meta = fs::symlink_metadata(&path).ok()?;
@@ -40,16 +40,17 @@ fn cargo_output(root: &Path) -> bool {
             }))
 }
 
-/// True when `root` is cargo's own output: cargo's marker present and no `.git` entry.
+/// True when `root` is cargo's own output: cargo's marker present, or marked builds in the
+/// spawner's build roots, and no `.git` entry.
 #[cfg(target_os = "linux")]
 pub(crate) fn identified(root: &Path) -> bool {
-    cargo_output(root)
+    cargo_output(root) || crate::shared_build_roots::recognized(root)
 }
 
 /// Recognize debug output by Cargo's target and profile markers before whole-profile eviction.
 #[cfg(target_os = "linux")]
 pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
-    if !cargo_output(root) {
+    if !identified(root) {
         return Ok(vec![]);
     }
     let mut candidates = vec![];
@@ -71,6 +72,13 @@ pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
         }
         let (bytes, newest) = crate::disk_hygiene::scan(&profile)?;
         candidates.push((newest, profile, bytes));
+    }
+    for (newest, build, bytes) in crate::shared_build_roots::all(root)? {
+        if crate::private_targets::owned(&build)?
+            && crate::reap_journal::check_mounts(&build.canonicalize()?).is_ok()
+        {
+            candidates.push((newest, build, bytes));
+        }
     }
     candidates.sort();
     Ok(candidates
@@ -159,6 +167,8 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
             }
         }
     }
+    #[cfg(target_os = "linux")]
+    candidates.extend(crate::shared_build_roots::stale(root)?);
     candidates.retain(|(newest, _, _)| {
         now.duration_since(*newest).unwrap_or_default() > Duration::from_secs(6 * 3600)
     });

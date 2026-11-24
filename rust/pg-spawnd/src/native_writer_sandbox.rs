@@ -53,6 +53,10 @@ pub(crate) const ENV_ALLOW: &[&str] = &[
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "PLANGRAPH_CARGO_TARGET_DIR",
+    // The host's compiler cache: the writer builds through the same sccache wrapper.
+    "RUSTC_WRAPPER",
+    "SCCACHE_DIR",
+    "SCCACHE_CACHE_SIZE",
 ];
 
 fn allowed(name: &OsStr) -> bool {
@@ -101,6 +105,28 @@ pub(crate) fn writable_roots(
         }
     }
     roots
+}
+
+/// The compiler cache directory the writer needs to write when the host builds through a
+/// wrapper: `SCCACHE_DIR` of the inherited environment, created, and added to `roots`.
+pub(crate) fn with_compiler_cache(
+    mut roots: Vec<PathBuf>,
+    inherited: &[(OsString, OsString)],
+) -> std::io::Result<Vec<PathBuf>> {
+    let value = |name: &str| {
+        inherited
+            .iter()
+            .find(|(key, value)| key == name && !value.is_empty())
+            .map(|(_, value)| value)
+    };
+    if let (Some(_), Some(dir)) = (value("RUSTC_WRAPPER"), value("SCCACHE_DIR")) {
+        let dir = PathBuf::from(dir);
+        if dir.is_absolute() && !roots.contains(&dir) {
+            std::fs::create_dir_all(&dir)?;
+            roots.push(dir);
+        }
+    }
+    Ok(roots)
 }
 
 #[cfg(test)]

@@ -613,3 +613,72 @@ fn push_reclaim_counts_allocated_bytes_like_the_push_preflight() {
         "{error}"
     );
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_subtracts_what_each_removal_frees_in_allocated_bytes() {
+    // Every unit is a sparse file: 8 MiB apparent, one block allocated. Subtracting apparent
+    // sizes from the allocated total would stop after the first removal.
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, units) = over_cap_target(parent.path());
+    for unit in &units {
+        let sparse = fs::File::create(unit.join("sparse")).unwrap();
+        sparse.set_len(8 << 20).unwrap();
+        for path in [
+            unit.join("sparse"),
+            unit.join("build-script-build"),
+            unit.clone(),
+        ] {
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 3600);
+            fs::File::open(path).unwrap().set_modified(old).unwrap();
+        }
+    }
+    // No whole-profile eviction: only the stale units can bring the target under the cap.
+    fs::remove_file(target.join("debug/.cargo-lock")).unwrap();
+    let cap = crate::disk_measure::allocated_bytes(&target).unwrap() / 4;
+    reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap();
+    assert!(crate::disk_measure::allocated_bytes(&target).unwrap() <= cap);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_recognizes_and_prunes_a_target_that_holds_only_policy_builds() {
+    let parent = tempfile::tempdir().unwrap();
+    let checkout = parent.path().join("checkout");
+    let target = parent.path().join("target");
+    fs::create_dir(&checkout).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 3600);
+    let builds: Vec<_> = (0..6u64)
+        .map(|n| {
+            let build = target.join(format!("policy-bin/{n:016x}"));
+            fs::create_dir_all(&build).unwrap();
+            fs::write(
+                build.join("CACHEDIR.TAG"),
+                b"Signature: 8a477f597d28d172789f06886806bc55",
+            )
+            .unwrap();
+            fs::write(build.join("policy"), vec![1u8; 64 * 1024]).unwrap();
+            for path in [
+                build.join("policy"),
+                build.join("CACHEDIR.TAG"),
+                build.clone(),
+            ] {
+                fs::File::open(path)
+                    .unwrap()
+                    .set_modified(old - std::time::Duration::from_secs(n))
+                    .unwrap();
+            }
+            build
+        })
+        .collect();
+    // The target has no marker of its own: only its policy-bin builds are Cargo output.
+    let cap = crate::disk_measure::allocated_bytes(&target).unwrap() / 2;
+    reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap();
+    assert!(crate::disk_measure::allocated_bytes(&target).unwrap() <= cap);
+    // The newest build outlives the oldest ones.
+    assert!(builds[0].exists() || !builds[5].exists());
+    // A Git entry in the target still refuses the reclaim and removes nothing more.
+    let (_, other, _) = over_cap_target(&parent.path().join("second"));
+    fs::create_dir(other.join(".git")).unwrap();
+    assert!(reclaim_before_push_using(&checkout, &other, 1, || Ok((vec![], false))).is_err());
+}

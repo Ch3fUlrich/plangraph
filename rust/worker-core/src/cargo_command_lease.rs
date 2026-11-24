@@ -6,7 +6,7 @@
 //! dies, whatever the cause; the Cargo child dies with it, so a cancelled command strands neither.
 //! A nested Cargo command, and the preflight or fast-check commands that already hold the lease,
 //! mark the environment with [`HELD_ENV`] and run without taking it again.
-use crate::cargo_cache::writer_lease;
+use crate::cargo_cache::{lease_file, writer_lease};
 use std::{
     ffi::{OsStr, OsString},
     io,
@@ -23,9 +23,12 @@ pub const WAIT: Duration = Duration::from_secs(60);
 pub const WAIT_ENV: &str = "PLANGRAPH_CARGO_SHIM_WAIT_MS";
 const POLL: Duration = Duration::from_millis(100);
 
-/// True when an outer process already holds the lease for exactly this target.
+/// True when an outer process already holds the lease for this target: the same lock file,
+/// whichever spelling or symlink alias names the target.
 pub fn outer_holds(target: &Path, held: Option<&OsStr>) -> bool {
-    held.is_some_and(|held| Path::new(held) == target)
+    held.is_some_and(|held| {
+        Path::new(held) == target || lease_file(Path::new(held)) == lease_file(target)
+    })
 }
 
 /// First `cargo` on `path` that is not the shim `own` itself.
