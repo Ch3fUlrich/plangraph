@@ -167,3 +167,5 @@ Launch admission rereads quota evidence rather than trusting an earlier plan. `Q
 recorded observation time. `--db` selects an explicit read-only snapshot store.
 
 Model discovery runs the harness found by `resolve_harness_binary` (`routing_support/clients.py`), never a bare `opencode` on the unit's PATH. A missing binary is a host fault: the leg state is `down` with reason `harness_missing: <name> <searched paths>`, not `unknown`, `unreachable` or a timeout.
+
+A leg reads its provider state under the OmniRoute provider id of its model prefix (`omniroute_provider_id`, catalog seed: `mimo` is `xiaomi-mimo`). A prefix missing from the snapshot is `down` / `unreachable` with `evidence.looked_up_provider` naming the id looked up.
