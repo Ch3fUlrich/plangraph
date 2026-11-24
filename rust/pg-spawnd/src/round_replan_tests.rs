@@ -406,6 +406,20 @@ fn an_escalation_replan_plans_on_the_strongest_leg_and_leaves_the_pr_open() {
         routed,
         "route REPLAN p:I escalated | PR https://forge/p/1 kept open | slices p:I-S1 p:I-S2"
     );
+    // The saved record names the planning leg, the open PR and the nothing-defined state.
+    for path in std::fs::read_dir(job_dir(dir.path()))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+    {
+        let job = load(&path).ok().unwrap();
+        assert_eq!(job["plan"]["leg"], "strong");
+        assert_eq!(job["reason"], ESCALATED);
+        assert_eq!(
+            (job["closed"].clone(), job["defined"].clone()),
+            (json!(false), json!([]))
+        );
+    }
     // One idempotency key per level.
     let keys = ports.keys.borrow();
     assert_eq!(keys.len(), 2);
