@@ -149,7 +149,7 @@ fn fast_checks_replays_changed_tests_without_trailers() {
 
     fs::write(
         root.join("tests/conftest.py"),
-        "import pytest\n\n@pytest.fixture\ndef new_fixture():\n    return 2\n",
+        "from pytest import fixture\n\n@fixture\ndef new_fixture():\n    return 2\n",
     )
     .unwrap();
     fs::write(
