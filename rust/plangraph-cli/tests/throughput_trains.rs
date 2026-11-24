@@ -80,6 +80,7 @@ fn train(mode: Mode) -> Train {
     git(&repo, &["init", "-q", "-b", "main"]);
     let at = "2026-11-21T10:00:00Z";
     output(dated(&repo, at).args(["commit", "-q", "--allow-empty", "-m", "base"]));
+    let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
     git(&repo, &["checkout", "-q", "-b", "train"]);
     let mut heads = Vec::new();
     for part in 1..=6 {
@@ -133,6 +134,11 @@ fn train(mode: Mode) -> Train {
          PRIMARY KEY(repo,landed_sha));",
         )
         .unwrap();
+    // An earlier landing (the base) bounds the train from below.
+    connection.execute(
+        "INSERT INTO landing VALUES('fixture/repo',?1,'t0','[0]','2026-11-21T08:00:00Z','2026-11-21T09:30:00Z',0,0,0)",
+        [&base],
+    ).unwrap();
     connection.execute(
         "INSERT INTO landing VALUES('fixture/repo',?1,'t','[1,2,3,4,5,6]','2026-11-21T11:00:00Z','2026-11-21T12:00:00Z',2,1,3)",
         [&landed],
@@ -198,13 +204,23 @@ impl Train {
     }
 }
 
+/// The report row of the six-part train (the fixture has an earlier landing too).
+fn train_row(report: &Value) -> &Value {
+    report["trains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["train"] == "t")
+        .unwrap()
+}
+
 fn six_parts_are_joined(mode: Mode) {
     let train = train(mode);
     train.collect("2026-11-22T00:00:00Z");
     let connection = Connection::open(&train.db).unwrap();
     let rows: Vec<(String, i64, i64)> = connection
         .prepare(
-            "SELECT head,commits,seconds FROM throughput_accept_part WHERE train=?1 ORDER BY head",
+            "SELECT head,commits,seconds FROM throughput_accept_part WHERE sha=?1 ORDER BY head",
         )
         .unwrap()
         .query_map([&train.landed], |row| {
@@ -213,12 +229,13 @@ fn six_parts_are_joined(mode: Mode) {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    let wait = if mode == Mode::PrMerge { 10800 } else { 3600 };
+    // The wait ends at the landing's own time, whatever the commit times of the parts' merges.
+    let wait = 10800;
     let mut expected: Vec<_> = train.heads.iter().map(|h| (h.clone(), 2, wait)).collect();
     expected.sort();
     assert_eq!(rows, expected, "one row and two commits per part head");
     let report = train.report();
-    let row = &report["trains"][0];
+    let row = train_row(&report);
     assert_eq!(row["accepted_parts"], 6, "{report}");
     assert_eq!(row["attempts"], 3, "1 + ci_reruns: {report}");
     assert_eq!(row["ci_reruns"], 2, "{report}");
@@ -237,8 +254,8 @@ fn six_parts_are_joined(mode: Mode) {
             .iter()
             .map(|h| h["batches_merged"].as_u64().unwrap())
             .sum::<u64>(),
-        6,
-        "a train's parts are merged in one hour"
+        7,
+        "the train's six parts in one hour and the earlier landing's one"
     );
     assert_eq!(
         report["models"][0]["tokens_per_landed_commit"], 50.0,
@@ -279,7 +296,11 @@ fn a_landing_after_a_partial_hour_cutoff_is_not_counted_in_that_hour() {
         noon["batches_merged"], 6,
         "the 12:45 landing is after the 12:30 cutoff: {report}"
     );
-    assert_eq!(report["trains"].as_array().unwrap().len(), 1, "{report}");
+    assert_eq!(
+        report["trains"].as_array().unwrap().len(),
+        2,
+        "the 12:45 landing is not collected: {report}"
+    );
 }
 
 const LEGACY: &str = "
@@ -343,4 +364,58 @@ fn a_database_of_the_first_collector_reports_its_history_before_and_after_an_upg
         models.iter().any(|m| m["model"] == "fixture-model"),
         "{report}"
     );
+}
+
+#[test]
+fn recollecting_a_landing_does_not_count_a_migrated_legacy_acceptance_twice() {
+    let train = train(Mode::PrMerge);
+    let connection = Connection::open(&train.db).unwrap();
+    connection.execute_batch(LEGACY).unwrap();
+    // The first collector counted the landing once, under its landed SHA.
+    connection
+        .execute(
+            "INSERT INTO throughput_accept VALUES('fixture/repo',?1,1763683300,900,'old-model',500,12)",
+            [&train.landed],
+        )
+        .unwrap();
+    train.collect("2026-11-22T00:00:00Z");
+    train.collect("2026-11-22T00:00:00Z");
+    let per_landing: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM throughput_accept_part WHERE sha=?1",
+            [&train.landed],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        per_landing, 6,
+        "six verified parts replace the legacy sample"
+    );
+    let report = train.report();
+    assert_eq!(train_row(&report)["accepted_parts"], 6, "{report}");
+    let commits: u64 = report["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["model"] == "fixture-model")
+        .map(|m| m["landed_commits"].as_u64().unwrap())
+        .sum();
+    assert_eq!(commits, 12, "{report}");
+}
+
+#[test]
+fn a_part_that_arrives_on_its_own_does_not_displace_its_trains_row() {
+    let train = train(Mode::TestedFastForward);
+    train.collect("2026-11-22T00:00:00Z");
+    // The earlier window is collected again: the first-parent arrivals of the parts see the same heads.
+    train.collect("2026-11-21T11:00:00Z");
+    let connection = Connection::open(&train.db).unwrap();
+    let on_landing: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM throughput_accept_part WHERE sha=?1",
+            [&train.landed],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(on_landing, 6);
 }

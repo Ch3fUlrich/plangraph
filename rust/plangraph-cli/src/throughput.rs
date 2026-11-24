@@ -24,9 +24,6 @@ struct Hour {
 struct Arrival {
     sha: String,
     at: i64,
-    /// The landing this arrival belongs to: itself when it is a landed SHA, else the next landed SHA on main
-    /// (a tested fast-forward brings its parts' merges before the landed head).
-    train: String,
     commits: u64,
     /// Every commit the arrival made reachable, oldest first, with its parents.
     members: Vec<(String, Vec<String>)>,
@@ -101,13 +98,63 @@ fn arrivals(reference: &str, project: &str, start: i64, end: i64) -> Result<Vec<
             Ok(Arrival {
                 sha: sha.into(),
                 at,
-                train: String::new(),
                 commits: members.len() as u64,
                 members,
                 items,
             })
         })
         .collect()
+}
+
+/// What each landing in the window brought to main: the commits reachable from its landed SHA and not from the
+/// previous landing that is its ancestor, at the landing's own time. Parts reach main under SHAs of their own in a
+/// tested fast-forward, and a train may start before the window, so the join reads the landed history, not the
+/// first-parent arrivals of the window.
+fn train_arrivals(
+    db: &database::Db,
+    repo: &str,
+    start: i64,
+    end: i64,
+) -> Result<Vec<Arrival>, String> {
+    let landings = db.landings(repo)?;
+    let mut trains = Vec::new();
+    for (index, (sha, at)) in landings.iter().enumerate() {
+        if !(start..end).contains(at) {
+            continue;
+        }
+        let previous = landings[..index]
+            .iter()
+            .rev()
+            .find(|(earlier, _)| git(&["merge-base", "--is-ancestor", earlier, sha]).is_ok());
+        // The first landing recorded has no earlier landing to bound its train: it takes what its first parent
+        // did not have, which is the whole train in PR-merge mode.
+        let range = match previous {
+            Some((earlier, _)) => format!("{earlier}..{sha}"),
+            None if git(&["rev-parse", "--verify", "--quiet", &format!("{sha}^")]).is_ok() => {
+                format!("{sha}^..{sha}")
+            }
+            None => sha.clone(),
+        };
+        let Ok(listing) = git(&["rev-list", "--parents", "--reverse", "-n", "20000", &range])
+        else {
+            continue;
+        };
+        let members: Vec<(String, Vec<String>)> = listing
+            .lines()
+            .map(|line| {
+                let mut fields = line.split_whitespace().map(str::to_owned);
+                (fields.next().unwrap_or_default(), fields.collect())
+            })
+            .collect();
+        trains.push(Arrival {
+            sha: sha.clone(),
+            at: *at,
+            commits: members.len() as u64,
+            members,
+            items: Vec::new(),
+        });
+    }
+    Ok(trains)
 }
 
 fn timestamp(text: &str) -> Result<i64, String> {
@@ -179,15 +226,8 @@ fn collect(
         .step_by(HOUR as usize)
         .map(|t| (t, Hour::default()))
         .collect();
-    let mut arrivals = arrivals(reference, project, start, end)?;
-    let landings = db.landing_shas(repo)?;
-    let mut next: Option<String> = None;
-    for arrival in arrivals.iter_mut().rev() {
-        if landings.contains(&arrival.sha) {
-            next = Some(arrival.sha.clone());
-        }
-        arrival.train = next.clone().unwrap_or_else(|| arrival.sha.clone());
-    }
+    let arrivals = arrivals(reference, project, start, end)?;
+    let trains = train_arrivals(db, repo, start, end)?;
     for arrival in &arrivals {
         hours
             .get_mut(&(arrival.at.div_euclid(HOUR) * HOUR))
@@ -196,7 +236,7 @@ fn collect(
     }
     snapshot(keeper, project, start, end, &mut hours)?;
     let inputs = runs::Inputs::load(env)?;
-    db.store(repo, end, &hours, &arrivals, &inputs)?;
+    db.store(repo, end, &hours, &arrivals, &trains, &inputs)?;
     let display =
         |seconds| DateTime::<Utc>::from_timestamp(seconds, 0).map(|time| time.to_rfc3339());
     Ok(json!({"hours": hours.len(), "from": display(start), "through": display(end)}))

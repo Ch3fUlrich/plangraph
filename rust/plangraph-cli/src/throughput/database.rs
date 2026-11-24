@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS throughput_quota_window (
     PRIMARY KEY(repo,bucket,provider,account,window)
 );
 CREATE TABLE IF NOT EXISTS throughput_accept_part (
-    repo TEXT NOT NULL, sha TEXT NOT NULL, head TEXT NOT NULL, landed INTEGER NOT NULL,
+    repo TEXT NOT NULL, head TEXT NOT NULL, sha TEXT NOT NULL, landed INTEGER NOT NULL,
     seconds INTEGER NOT NULL, model TEXT, tokens INTEGER, commits INTEGER NOT NULL,
-    train TEXT NOT NULL, PRIMARY KEY(repo,sha,head)
+    legacy INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(repo,head)
 );";
 
 fn database_error(error: rusqlite::Error) -> String {
@@ -84,9 +84,9 @@ fn accept_source(connection: &Connection) -> rusqlite::Result<&'static str> {
     Ok(if table_exists(connection, "throughput_accept_part")? {
         "throughput_accept_part"
     } else if table_exists(connection, "throughput_accept")? {
-        "(SELECT repo,sha,sha AS head,landed,seconds,model,tokens,commits,sha AS train FROM throughput_accept)"
+        "(SELECT repo,sha,sha AS head,landed,seconds,model,tokens,commits FROM throughput_accept)"
     } else {
-        "(SELECT NULL AS repo,NULL AS sha,NULL AS head,0 AS landed,0 AS seconds,NULL AS model,NULL AS tokens,0 AS commits,NULL AS train WHERE 0)"
+        "(SELECT NULL AS repo,NULL AS sha,NULL AS head,0 AS landed,0 AS seconds,NULL AS model,NULL AS tokens,0 AS commits WHERE 0)"
     })
 }
 
@@ -151,14 +151,17 @@ impl Db {
             .map_err(database_error)
     }
 
-    /// The landed SHAs the lander recorded for `repo`: where a train's parts arrive on main.
-    pub fn landing_shas(&self, repo: &str) -> Result<std::collections::HashSet<String>, String> {
+    /// The landings the lander recorded for `repo`, oldest first: landed SHA and landing time.
+    pub fn landings(&self, repo: &str) -> Result<Vec<(String, i64)>, String> {
         let connection = self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let mut statement = connection
-            .prepare("SELECT landed_sha FROM landing WHERE repo=?1")
+            .prepare(
+                "SELECT landed_sha, unixepoch(landed_at) AS at FROM landing
+                 WHERE repo=?1 AND unixepoch(landed_at) IS NOT NULL ORDER BY at, landed_sha",
+            )
             .map_err(database_error)?;
         let rows = statement
-            .query_map([repo], |row| row.get(0))
+            .query_map([repo], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(database_error)?;
         rows.collect::<rusqlite::Result<_>>()
             .map_err(database_error)
@@ -170,6 +173,7 @@ impl Db {
         end: i64,
         hours: &BTreeMap<i64, Hour>,
         arrivals: &[Arrival],
+        trains: &[Arrival],
         inputs: &Inputs,
     ) -> Result<(), String> {
         let first = hours.first_key_value().ok_or("no throughput hours")?.0;
@@ -181,7 +185,8 @@ impl Db {
         transaction.execute_batch(SCHEMA).map_err(database_error)?;
         Self::migrate_legacy(&transaction).map_err(database_error)?;
         Self::write_hours(&transaction, repo, end, hours, inputs).map_err(database_error)?;
-        Self::write_arrivals(&transaction, repo, arrivals, inputs).map_err(database_error)?;
+        Self::write_arrivals(&transaction, repo, arrivals, trains, inputs)
+            .map_err(database_error)?;
         transaction
             .execute(
                 "INSERT INTO throughput_daily
@@ -202,8 +207,8 @@ impl Db {
     fn migrate_legacy(connection: &Connection) -> rusqlite::Result<()> {
         if table_exists(connection, "throughput_accept")? {
             connection.execute_batch(
-                "INSERT OR IGNORE INTO throughput_accept_part(repo,sha,head,landed,seconds,model,tokens,commits,train)
-                 SELECT repo,sha,sha,landed,seconds,model,tokens,commits,sha FROM throughput_accept;",
+                "INSERT OR IGNORE INTO throughput_accept_part(repo,head,sha,landed,seconds,model,tokens,commits,legacy)
+                 SELECT repo,sha,sha,landed,seconds,model,tokens,commits,1 FROM throughput_accept;",
             )?;
         }
         if table_exists(connection, "throughput_quota_hourly")? {
@@ -274,32 +279,53 @@ impl Db {
         connection: &Connection,
         repo: &str,
         arrivals: &[Arrival],
+        trains: &[Arrival],
         inputs: &Inputs,
     ) -> rusqlite::Result<()> {
         let mut landing = connection.prepare("INSERT INTO throughput_item_landing VALUES(?1,?2,?3)
             ON CONFLICT(repo,item) DO UPDATE SET landed=MIN(throughput_item_landing.landed,excluded.landed)")?;
-        let mut acceptance = connection.prepare(
-            "INSERT INTO throughput_accept_part(repo,sha,head,landed,seconds,model,tokens,commits,train)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
-            ON CONFLICT(repo,sha,head) DO UPDATE SET landed=excluded.landed,seconds=excluded.seconds,train=excluded.train,
-            model=excluded.model,tokens=excluded.tokens,commits=excluded.commits",
+        // A commit that arrives on its own never replaces the row of the train that carried its part.
+        let mut arrival_row = connection.prepare(
+            "INSERT INTO throughput_accept_part(repo,head,sha,landed,seconds,model,tokens,commits)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+            ON CONFLICT(repo,head) DO UPDATE SET sha=excluded.sha,landed=excluded.landed,
+            seconds=excluded.seconds,model=excluded.model,tokens=excluded.tokens,commits=excluded.commits,legacy=0
+            WHERE throughput_accept_part.legacy=1 OR throughput_accept_part.sha=excluded.sha",
         )?;
+        let mut train_row = connection.prepare(
+            "INSERT INTO throughput_accept_part(repo,head,sha,landed,seconds,model,tokens,commits)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+            ON CONFLICT(repo,head) DO UPDATE SET sha=excluded.sha,landed=excluded.landed,
+            seconds=excluded.seconds,model=excluded.model,tokens=excluded.tokens,commits=excluded.commits,legacy=0",
+        )?;
+        // Verified part rows replace the legacy sample of the same landing: it counted that landing once.
+        let mut retire = connection
+            .prepare("DELETE FROM throughput_accept_part WHERE repo=?1 AND sha=?2 AND legacy=1")?;
         for arrival in arrivals {
             for item in &arrival.items {
                 landing.execute(params![repo, item, arrival.at])?;
             }
-            for (head, accepted) in inputs.accepted_parts(arrival) {
-                acceptance.execute(params![
-                    repo,
-                    arrival.sha,
-                    head,
-                    arrival.at,
-                    accepted.seconds,
-                    accepted.model,
-                    accepted.tokens,
-                    accepted.commits,
-                    arrival.train
-                ])?;
+        }
+        for (set, row) in [(arrivals, &mut arrival_row), (trains, &mut train_row)] {
+            for arrival in set {
+                let parts = inputs.accepted_parts(arrival);
+                for (head, accepted) in &parts {
+                    row.execute(params![
+                        repo,
+                        head,
+                        arrival.sha,
+                        arrival.at,
+                        accepted.seconds,
+                        accepted.model,
+                        accepted.tokens,
+                        accepted.commits
+                    ])?;
+                }
+                if !parts.is_empty() {
+                    for (member, _) in &arrival.members {
+                        retire.execute(params![repo, member])?;
+                    }
+                }
             }
         }
         Ok(())
@@ -380,7 +406,7 @@ impl Db {
             1+{reruns} AS attempts, {reruns} AS ci_reruns, {left_out} AS drops, {fix_tasks} AS fix_tasks,
             1.0*({build})/60/NULLIF(json_array_length(l.parts),0) AS minutes_per_merged_batch,
             COUNT(a.head) AS accepted_parts, AVG(a.seconds) AS accept_to_main_seconds
-            FROM landing l LEFT JOIN {accept} a ON a.repo=l.repo AND a.train=l.landed_sha
+            FROM landing l LEFT JOIN {accept} a ON a.repo=l.repo AND a.sha=l.landed_sha
             WHERE l.repo=?1 AND {in_window}
             GROUP BY l.train,l.landed_sha ORDER BY l.landed_at,l.landed_sha"))?;
         let hours = query("SELECT strftime('%Y-%m-%dT%H:00:00Z',h.bucket,'unixepoch') AS hour,h.commits,h.items_closed,
