@@ -70,7 +70,10 @@ def benchmark_for_leg(rows, leg):
         exact = next((cell for cell in cells if cell['legacy'] and
                       (leg.effort is None or cell['effort'] == effort) and
                       cell['harness'] in ('', leg.harness)), None)
-    return _utility_row(exact) if exact is not None and exact['score'] is not None else None
+    if exact is None or exact['score'] is None:
+        return None
+    utility = _utility_row(exact)
+    return dict(utility, coding_index=row['coding_index']) if row.get('coding_index') is not None else utility
 
 
 def benchmark_rows_from_db(path):
@@ -89,17 +92,17 @@ def benchmark_rows_from_db(path):
                 return {}, [f"{path}: missing benchmark table (catalog_benchmarks or model_benchmarks)"]
             result = {}
             cells = benchmark_cells(conn)
+            coding = {}
             if cells is not None:
                 if "coding_index" in {c[1] for c in conn.execute("PRAGMA table_info(catalog_benchmarks)")}:
                     # the coding index the view does not carry
                     coding = dict(conn.execute("SELECT model_id, coding_index FROM catalog_benchmarks"))
-                    for model, values in cells.items():
-                        for cell in values:
-                            cell.setdefault("coding_index", coding.get(model))
                 for model, values in cells.items():
                     first = next((row for row in values if row['legacy']), values[0])
                     result[model] = dict(_utility_row(first), benchmark_rows=values,
                                          benchmark_row_count=len(values))
+                    if coding.get(model) is not None:   # model-level: the cells stay the catalog's own rows
+                        result[model]["coding_index"] = coding[model]
                 raw_rows = ()
             else:
                 raw_rows = conn.execute(f'SELECT * FROM "{table}"')
