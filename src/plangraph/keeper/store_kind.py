@@ -14,6 +14,8 @@ re-labelled, and the kind cannot flip back and forth).
 """
 from __future__ import annotations
 
+import re
+
 from .errors import Refused
 from .item_fields import KIND_DEFAULTS
 
@@ -53,3 +55,54 @@ class KindMixin:
             self._append(principal, key, "kind_set",
                          {"kind": kind, "was": "lane", "operator": True, "wait": wait}, now)
         return {"key": key, "kind": kind, "was": "lane"}
+
+    def lift_operator_gate(self, principal, key, decision_id):
+        return self._run(principal, "lift_operator_gate", key,
+                         lambda now: self._lift_operator_gate(principal, key, decision_id, now))
+
+    def _lift_operator_gate(self, principal, key, decision_id, now):
+        """Clear ``operator`` (and so ``waits_on_operator``) once the operator lifted the step.
+
+        No edit, ``set_kind`` or owner change can clear the flag.  The router names the
+        decision that lifted the gate: its row must be an OPERATOR row that names the key.
+        One ``operator_gate_lifted`` event records the D-id and the actor.
+        """
+        from .store_runs import _operator_authority
+
+        self._require_role(principal, "router")
+        if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
+            raise Refused("validation", "lift_operator_gate needs the operator decision id (D-n)")
+        item = self._get_or_refuse(key)
+        self._assert_unlocked(item)
+        row = self._operator_gate_row(item, decision_id, now)
+        if not _operator_authority(row):
+            raise Refused("evidence_unverified", f"{decision_id} is not an OPERATOR decision")
+        names = (item["key"], item["id"])
+        if not any(re.search(rf"(?<![\w:-]){re.escape(n)}(?![\w-])", row.get("decision", ""))
+                   for n in names):
+            raise Refused("evidence_unverified", f"{decision_id} does not name {key}")
+        with self._write():
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            if not fresh["operator"]:
+                raise Refused("bad_state", f"{key} has no operator gate to lift")
+            cursor = self.conn.execute(
+                "UPDATE items SET operator=0, updated_at=? WHERE key=? AND operator=1 AND epoch=?",
+                (self._iso(now), key, fresh["epoch"]))
+            self._row_guard(cursor, key, fresh["state"], fresh["epoch"])
+            self._append(principal, key, "operator_gate_lifted",
+                         {"decision_id": decision_id, "operator": False}, now)
+        return {"key": key, "operator": False, "waits_on_operator": False,
+                "decision_id": decision_id}
+
+    def _operator_gate_row(self, item, decision_id, now):
+        decisions = self._ctx(item, now).decisions
+        fields = getattr(decisions, "fields", None)
+        try:
+            row = fields(decision_id) if callable(fields) else None
+        except Exception:  # noqa: BLE001 - an unreadable file fails closed
+            row = None
+        if not row:
+            raise Refused("evidence_unverified",
+                          f"decision {decision_id} is missing, ambiguous or unreadable")
+        return row

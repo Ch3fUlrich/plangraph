@@ -34,7 +34,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "grant_apply", "revoke_apply",
                "rehome", "record_run", "record_spawn_attempt", "answer", "mint_run_token", "replay",
-                "withdraw_review", "reopen", "set_kind", "set_metrics", "requeue",
+                "withdraw_review", "reopen", "set_kind", "lift_operator_gate", "set_metrics", "requeue",
                "close_merged", "close_merged_auto",
                # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
                "governor_override", "phase_plan",
@@ -208,6 +208,13 @@ def _set_kind(store, principal, body, need):
     return store.set_kind(principal, need(body, "key"), body.get("kind"))   # role first (403)
 
 
+def _lift_operator_gate(store, principal, body, need):
+    extra = set(body) - {"key", "decision_id"}
+    if extra and getattr(principal, "role", None) == "router":   # a non-router gets 403 first
+        raise Refused("validation", f"unexpected fields {sorted(extra)}")
+    return store.lift_operator_gate(principal, need(body, "key"), body.get("decision_id"))
+
+
 def _grant_verb(name):
     def call(store, principal, body, need):
         store._require_role(principal, "router")      # a non-router gets 403 first
@@ -331,6 +338,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,
                 "set_kind": _set_kind,
+                "lift_operator_gate": _lift_operator_gate,
                 "requeue": lambda store, principal, body, need: store.requeue(
                     principal, need(body, "key"), body.get("reason", "")),
                 "answer": _answer,

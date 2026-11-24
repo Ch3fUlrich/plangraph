@@ -2,7 +2,7 @@
 
 ``apply_ops(principal, ops, batch_ref=None, base_seq=None, dry_run=False)``
 applies a list of BATCH.md ops (create, edit, legacy_state, add_evidence,
-close_on_decision, cancel, priority, rehome, set_kind, add_dep, remove_dep) in
+close_on_decision, cancel, priority, rehome, set_kind, lift_operator_gate, add_dep, remove_dep) in
 ONE ``BEGIN IMMEDIATE`` transaction, all or nothing.  The router owns the verb;
 an ``oversight`` principal may use it for its narrow grant only (see
 :mod:`.oversight_policy`), with ``batch_ref`` required; a role ``l1`` principal
@@ -61,6 +61,7 @@ _OPS = {
     "priority": {"op", "key", "priority"},
     "rehome": {"op", "key", "new_project", "host"},
     "set_kind": {"op", "key", "kind"},
+    "lift_operator_gate": {"op", "key", "decision_id"},
     "add_dep": {"op", "key", "dep"},
     "remove_dep": {"op", "key", "dep"},
 }
@@ -217,6 +218,8 @@ class OpsMixin:
             raise Refused("validation", f"{name} needs a key")
         if name == "priority":
             CreateMixin._checked_priority(op.get("priority"))
+        if name == "lift_operator_gate" and not isinstance(op.get("decision_id"), str):
+            raise Refused("validation", "lift_operator_gate needs a decision_id")
         if name == "set_kind" and not isinstance(op.get("kind"), str):
             raise Refused("validation", "set_kind needs a kind")
         if name in ("add_dep", "remove_dep") \
@@ -328,6 +331,8 @@ class OpsMixin:
             return self._priority(principal, key, op["priority"], now)
         if name == "set_kind":
             return self._set_kind(principal, key, op["kind"], now)
+        if name == "lift_operator_gate":
+            return self._lift_operator_gate(principal, key, op["decision_id"], now)
         if name == "rehome":
             return self._rehome(principal, key, op.get("new_project"),
                                 op.get("host"), now)
