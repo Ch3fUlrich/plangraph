@@ -156,3 +156,28 @@ assert "message-time: 2099-01-01T04:02:00Z" in result["content"][0]["text"], res
         .unwrap();
     assert!(output.status.success(), "{output:?}");
 }
+
+#[test]
+fn a_stamp_ten_minutes_ahead_is_refused_and_the_current_minute_passes() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        % 86400;
+    let stamp = |seconds: u64| format!("{:02}:{:02}Z", seconds / 3600, (seconds / 60) % 60);
+    assert!(run(
+        "SendMessage",
+        json!({"message": format!("Merged at {}", stamp(now))})
+    )
+    .status
+    .success());
+    if now < 86400 - 720 {
+        let ahead = stamp(now + 600);
+        let refused = run(
+            "SendMessage",
+            json!({"message": format!("Merged at {ahead}")}),
+        );
+        assert_eq!(refused.status.code(), Some(2));
+        assert!(String::from_utf8(refused.stderr).unwrap().contains(&ahead));
+    }
+}
