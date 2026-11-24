@@ -10,6 +10,20 @@ use std::{
 
 const MAX_WORKERS: usize = 16;
 const TIMEOUT: Duration = Duration::from_secs(3);
+/// A WSL guest (plan on stdin) or Windows host (cmd.exe text) answers through a slower hop;
+/// `remote_ps.SLOW_HOST_FACTOR` is the same factor.
+const SLOW_HOST_FACTOR: u32 = 3;
+
+fn timeout_for(command: &str, input: Option<&str>) -> Duration {
+    if input.is_some()
+        || command.starts_with("if not exist")
+        || command.starts_with("(if not exist")
+    {
+        TIMEOUT * SLOW_HOST_FACTOR
+    } else {
+        TIMEOUT
+    }
+}
 
 fn row(name: &str, detail: &str) -> Value {
     json!({"name": name, "status": if detail == "ok" { "pass" } else { "fail" }, "detail": detail})
@@ -102,7 +116,7 @@ fn ssh(target: &str, command: &str, input: Option<&str>) -> io::Result<Option<i3
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + timeout_for(command, input);
     if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
         // A stalled reader must not outlast the deadline: write from a thread.
         let text = text.to_owned();

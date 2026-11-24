@@ -269,6 +269,9 @@ def sandbox_refusal(row):
     return f'{SANDBOX_UNAVAILABLE} {detail}; operator action: review the bwrap AppArmor profile or user namespace sysctl'
 
 
+REMOTE_PLACEMENT_CLOSED = 'remote placement closed'
+
+
 def ready_records(config, role='implement'):
     records = {}
     registry = registry_caps()
@@ -283,6 +286,8 @@ def ready_records(config, role='implement'):
                 row['work_drives'] = data['work_drives']
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
+        if config.get('registry') and row.get('remote_placement') is not True:
+            row.setdefault('refusal', REMOTE_PLACEMENT_CLOSED)  # the host's switch is off
         caps = host_caps(registry, name, role)
         if caps is None:
             row.setdefault('refusal', 'missing or malformed registry caps')
