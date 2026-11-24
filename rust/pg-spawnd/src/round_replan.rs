@@ -162,8 +162,62 @@ pub(crate) fn enqueue(state: &Path, item: &str, pr: &str, reason: &str) -> Resul
     if path.exists() {
         return Ok(false);
     }
-    let job = json!({"item":item, "pr":pr, "reason":reason, "plan":null,
+    let job = json!({"item":item, "pr":pr, "reason":reason, "queued_at":now(), "plan":null,
         "defined":[], "closed":false, "report":"pending", "error":null});
+    save(&path, &job)?;
+    Ok(true)
+}
+
+fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
+/// The sent replan of the escalation to `level` as a prompt addendum for the resumed writer:
+/// the slices with their files and the open findings, verbatim.
+pub(crate) fn escalation_brief(state: &Path, item: &str, pr: &str, level: u64) -> Option<String> {
+    let job = load(&escalation_path(state, item, pr, level)).ok()?;
+    if job["report"] != "sent" || job["plan"].is_null() {
+        return None;
+    }
+    let mut text = format!(
+        "REPLAN of {item} after the stall (level {level}): continue on this PR and keep to these slices.\n"
+    );
+    for slice in job["plan"]["slices"].as_array().into_iter().flatten() {
+        let files: Vec<&str> = slice["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        text += &format!(
+            "- {}: {}\n",
+            slice["key"].as_str().unwrap_or(""),
+            files.join(", ")
+        );
+    }
+    let findings = job["plan"]["slices"][0]["findings"].as_array();
+    for finding in findings.into_iter().flatten().filter_map(Value::as_str) {
+        text += &format!("Open finding: {finding}\n");
+    }
+    Some(text)
+}
+
+/// Queue the job that reports a batch the rounds sent back when there is no PR to replan:
+/// nothing is planned, defined or closed, only the routing line is delivered.
+pub(crate) fn enqueue_return(state: &Path, item: &str, reason: &str) -> Result<bool, ToolError> {
+    std::fs::create_dir_all(job_dir(state))
+        .map_err(|_| parameter("replan_state_unavailable: job directory missing"))?;
+    let id = Sha256::digest(format!("{item}\nreturn\n{reason}").as_bytes());
+    let path = job_dir(state).join(format!("replan-{id:x}.json"));
+    if path.exists() {
+        return Ok(false);
+    }
+    let job = json!({"item":item, "pr":"", "reason":reason, "kind":"return", "queued_at":now(),
+        "plan":{"leg":null, "slices":[]}, "defined":[], "closed":false, "report":"pending",
+        "error":null});
     save(&path, &job)?;
     Ok(true)
 }
@@ -173,6 +227,17 @@ pub(crate) fn enqueue(state: &Path, item: &str, pr: &str, reason: &str) -> Resul
 pub(crate) fn escalation_sent(state: &Path, item: &str, pr: &str, level: u64) -> bool {
     load(&escalation_path(state, item, pr, level))
         .is_ok_and(|job| job["report"] == "sent" && !job["plan"].is_null())
+}
+
+/// Every saved replan job of the state directory.
+pub(crate) fn jobs(state: &Path) -> Vec<Value> {
+    std::fs::read_dir(job_dir(state))
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter_map(|p| load(&p).ok())
+        .collect()
 }
 
 /// Queue the replan record of an escalation to `level`: the slices of the PR are planned and
@@ -193,7 +258,8 @@ pub(crate) fn enqueue_escalation(
     if path.exists() {
         return Ok(false);
     }
-    let job = json!({"item":item, "pr":pr, "reason":ESCALATED, "level":level, "plan":null,
+    let job = json!({"item":item, "pr":pr, "reason":ESCALATED, "level":level, "queued_at":now(),
+        "plan":null,
         "defined":[], "closed":false, "report":"pending", "error":null});
     save(&path, &job)?;
     Ok(true)
@@ -256,8 +322,12 @@ fn report_key(job: &Value) -> String {
         .as_u64()
         .map(|l| format!("\n{l}"))
         .unwrap_or_default();
+    let kind = job["kind"]
+        .as_str()
+        .map(|k| format!("\n{k}\n{}", job["reason"].as_str().unwrap_or("")))
+        .unwrap_or_default();
     let id = Sha256::digest(format!(
-        "replan-report\n{}\n{}{level}",
+        "replan-report\n{}\n{}{level}{kind}",
         job["item"].as_str().unwrap_or(""),
         job["pr"].as_str().unwrap_or("")
     ));
@@ -292,7 +362,8 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         .as_array()
         .cloned()
         .unwrap_or_default();
-    let keep_open = job["reason"] == ESCALATED;
+    let returned = job["kind"] == "return";
+    let keep_open = job["reason"] == ESCALATED || returned;
     for slice in slices.iter().filter(|_| !keep_open) {
         let key = slice["key"].clone();
         if job["defined"].as_array().is_some_and(|d| d.contains(&key)) {
@@ -314,13 +385,21 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         } else {
             "closed unmerged"
         };
-        let line = format!(
-            "REPLAN {} {} | PR {} {state} | slices {}",
-            job["item"].as_str().unwrap_or(""),
-            job["reason"].as_str().unwrap_or(""),
-            job["pr"].as_str().unwrap_or(""),
-            keys.join(" ")
-        );
+        let line = if returned {
+            format!(
+                "REPLAN {} {} | no PR, batch returned to the keeper",
+                job["item"].as_str().unwrap_or(""),
+                job["reason"].as_str().unwrap_or("")
+            )
+        } else {
+            format!(
+                "REPLAN {} {} | PR {} {state} | slices {}",
+                job["item"].as_str().unwrap_or(""),
+                job["reason"].as_str().unwrap_or(""),
+                job["pr"].as_str().unwrap_or(""),
+                keys.join(" ")
+            )
+        };
         // Saved before the send and kept when the process dies in between: the next run sends
         // the same line under the same key and the receiver drops the repeat.
         job["report_line"] = json!(line);

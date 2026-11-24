@@ -158,8 +158,20 @@ fn a_check_judged_round_followed_by_a_card_without_failing_checks_is_admitted() 
         .remove("failing_checks");
     let admitted = run(dir.path(), &args).ok().unwrap();
     assert_eq!(admitted.fields["writer_round"], 2);
-    // The unknown check count after the round is 0: green.
-    assert_eq!(admitted.fields["previous_confirmed_blockers"], json!([0]));
+    // The unknown check count after the round keeps the count it started with: no credit.
+    assert_eq!(admitted.fields["previous_confirmed_blockers"], json!([5]));
+}
+
+#[test]
+fn a_review_card_without_a_check_count_cannot_reset_a_stall() {
+    let dir = tempfile::tempdir().unwrap();
+    book(dir.path(), &[red(5), red(5), red(5)]);
+    let mut args = card("review_finding", 0);
+    args["card"]
+        .as_object_mut()
+        .unwrap()
+        .remove("failing_checks");
+    assert!(message(run(dir.path(), &args)).starts_with("round_replan_pending"));
 }
 
 #[test]
@@ -256,8 +268,7 @@ fn the_report_ignores_dry_run_and_voided_attempts() {
         ),
     ] {
         let mut base = json!({"role":"implement", "item_key":"p:Ghost", "writer_round":1,
-            "round_cause":"red_ci", "round_replan":"queued", "round_escalation_reason":"no_progress",
-            "started":5.0});
+            "round_cause":"red_ci", "started":5.0});
         base.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
@@ -265,9 +276,39 @@ fn the_report_ignores_dry_run_and_voided_attempts() {
             .ok()
             .unwrap();
     }
-    let report = report(&crate::records::list_runs(dir.path()), 0.0, f64::MAX);
+    let report = report(
+        dir.path(),
+        &crate::records::list_runs(dir.path()),
+        0.0,
+        f64::MAX,
+    );
     assert_eq!(report["items"], json!({}));
     assert_eq!(report["escalations_per_day"], json!({}));
+}
+
+#[test]
+fn a_batch_waiting_for_its_replan_is_reported_by_the_day_the_job_was_queued() {
+    let dir = tempfile::tempdir().unwrap();
+    book(dir.path(), &[red(5), red(5), red(5)]);
+    assert!(message(run(dir.path(), &card("red_ci", 5))).starts_with("round_replan_pending"));
+    let queued = replans(dir.path())[0]["queued_at"].as_f64().unwrap();
+    let day = chrono::DateTime::from_timestamp(queued as i64, 0)
+        .unwrap()
+        .format("%Y-%m-%d")
+        .to_string();
+    let records = crate::records::list_runs(dir.path());
+    let waiting = report(dir.path(), &records, 0.0, f64::MAX);
+    assert_eq!(waiting["items"]["p:I"]["rounds"], 3);
+    assert_eq!(waiting["items"]["p:I"]["escalations"], 1);
+    assert_eq!(waiting["items"]["p:I"]["replans"], 1);
+    assert_eq!(waiting["escalations_per_day"], json!({ day.clone(): 1 }));
+    // A retry after the job finished adds no event and moves no day.
+    finish_replans(dir.path());
+    let again = report(dir.path(), &records, 0.0, f64::MAX);
+    assert_eq!(again["escalations_per_day"], json!({ day: 1 }));
+    // A window before the queueing sees none of it.
+    let before = report(dir.path(), &records, 0.0, queued);
+    assert_eq!(before["items"]["p:I"]["escalations"], 0);
 }
 
 #[test]
@@ -388,7 +429,7 @@ fn round_nine_is_refused_and_the_batch_goes_back_with_a_replan() {
 }
 
 #[test]
-fn the_report_counts_rounds_by_cause_escalations_and_replans_per_day() {
+fn the_report_counts_rounds_by_cause_escalations_and_replans() {
     let dir = tempfile::tempdir().unwrap();
     book(dir.path(), &[red(5), red(5), red(5)]);
     assert!(message(run(dir.path(), &card("fast_check", 5))).starts_with("round_replan_pending"));
@@ -409,13 +450,12 @@ fn the_report_counts_rounds_by_cause_escalations_and_replans_per_day() {
     .ok()
     .unwrap();
     let records = crate::records::list_runs(dir.path());
-    let report = report(&records, 0.0, f64::MAX);
+    let report = report(dir.path(), &records, 0.0, f64::MAX);
     let item = &report["items"]["p:I"];
     assert_eq!(item["rounds"], 4);
     assert_eq!(item["by_cause"], json!({"red_ci":3, "fast_check":1}));
     assert_eq!(item["escalations"], 1);
     assert_eq!(item["replans"], 1);
-    assert_eq!(report["escalations_per_day"], json!({"1970-01-12":1}));
     assert_eq!(report["max_rounds"], 4);
     assert_eq!(report["over_cap"], json!([]));
 }

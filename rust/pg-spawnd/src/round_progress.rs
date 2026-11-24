@@ -160,6 +160,8 @@ pub(crate) struct Admission {
     // Held until the run record (or refusal) has been persisted, never across wait().
     _lock: Option<LockGuard>,
     pub fields: Value,
+    /// The delivered replan of a stalled loop, appended to the prompt of the resumed writer.
+    pub prompt_addendum: Option<String>,
 }
 /// Admit the next writer round. A stall of the rule queues a replan record and still admits the
 /// round on the same writer; only the ceiling, an accepted verdict or the spent narrow exception
@@ -168,6 +170,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     let untracked = || Admission {
         _lock: None,
         fields: json!({}),
+        prompt_addendum: None,
     };
     if args.get("role").is_some_and(|v| v != "implement") {
         return Ok(untracked());
@@ -256,7 +259,13 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     let counts: Vec<_> = summaries
         .iter()
         .enumerate()
-        .map(|(i, s)| s["confirmed_blockers"].as_u64().unwrap() + after(i).unwrap_or(0))
+        .map(|(i, s)| {
+            // A card that omits the check count keeps the round's own start count: unknown
+            // evidence never credits progress.
+            let checks_after = after(i)
+                .unwrap_or_else(|| history[i]["round_failing_checks"].as_u64().unwrap_or(0));
+            s["confirmed_blockers"].as_u64().unwrap() + checks_after
+        })
         .collect();
     if next > MAX_ROUNDS {
         return Err(refused("round_cap"));
@@ -286,6 +295,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         return Err(refused("round_exception_invalid"));
     }
     let (mut new_level, mut why, mut replan) = (level, Value::Null, Value::Null);
+    let mut addendum = None;
     if let (Some(reason), false) = (reason, narrow) {
         // A stall needs a durable replan job, and the round launches only after that replan
         // planned its slices and reported; until then it is refused without using a round.
@@ -303,6 +313,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
             return Err(refused("round_replan_pending"));
         }
         replan = json!("done");
+        addendum = crate::round_replan::escalation_brief(state, item, pr, new_level);
     }
     Ok(Admission {
         _lock: Some(lock),
@@ -310,6 +321,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         "round_pr":pr, "round_verdict_file":path, "narrow_fix":narrow,
         "previous_confirmed_blockers":counts, "round_cause":cause, "round_failing_checks":checks,
         "round_escalation":new_level, "round_escalation_reason":why, "round_replan":replan}),
+        prompt_addendum: addendum,
     })
 }
 
@@ -330,6 +342,17 @@ pub(crate) fn record_refusal(
     crate::records::annotate_item(&mut base, &args["card"], &mut vec![]);
     // A stop of the round rule starts the durable replan of the PR (round_replan).
     let dry = args.get("dry_run") == Some(&json!(true));
+    if let (Some(item), None, false) = (base["item_key"].as_str(), args["card"]["pr"].as_str(), dry)
+    {
+        // No PR to replan: the batch still goes back, by one delivered routing line.
+        if ["no_progress", "slow_progress", "round_cap"].contains(&reason) {
+            match crate::round_replan::enqueue_return(state, item, reason) {
+                Ok(true) => base["replan"] = json!("returned"),
+                Ok(false) => {}
+                Err(e) => base["replan_error"] = json!(e.into_error_data().message),
+            }
+        }
+    }
     if let (Some(item), Some(pr), false) =
         (base["item_key"].as_str(), args["card"]["pr"].as_str(), dry)
     {

@@ -56,8 +56,10 @@ pub(crate) fn level(history: &[Value]) -> (u64, usize) {
 }
 
 /// Per item rounds by cause, escalations and replans, escalations per day, and the items over
-/// the ceiling, for the runs started in `[since, until)` (seconds).
-pub(crate) fn report(records: &[Value], since: f64, until: f64) -> Value {
+/// the ceiling. Rounds come from the runs started in `[since, until)` (seconds); escalations and
+/// replans come from the replan jobs queued in the window, dated by the queueing, so a batch
+/// waiting for its replan shows up and a retry never moves the day.
+pub(crate) fn report(state: &std::path::Path, records: &[Value], since: f64, until: f64) -> Value {
     #[derive(Default)]
     struct Item {
         rounds: u64,
@@ -78,25 +80,17 @@ pub(crate) fn report(records: &[Value], since: f64, until: f64) -> Value {
         ) else {
             continue;
         };
-        if at < since || at >= until {
-            continue;
-        }
         let voided = record["round_void"] == true && record["status"] != "completed";
         let status = record["status"].as_str();
-        if status == Some("refused") {
-            // A refusal that queued the replan of the batch it sends back.
-            if record["replan"] == "queued" {
-                items.entry(item.to_string()).or_default().replans += 1;
-            }
-            continue;
-        }
-        if !record["writer_round"].is_u64() || voided || status == Some("dry_run") {
+        if at < since
+            || at >= until
+            || !record["writer_round"].is_u64()
+            || voided
+            || matches!(status, Some("dry_run" | "refused"))
+        {
             continue;
         }
         let entry = items.entry(item.to_string()).or_default();
-        if record["round_replan"].is_string() {
-            entry.replans += 1;
-        }
         entry.rounds += 1;
         *entry
             .causes
@@ -107,7 +101,17 @@ pub(crate) fn report(records: &[Value], since: f64, until: f64) -> Value {
                     .to_string(),
             )
             .or_default() += 1;
-        if record["round_escalation_reason"].is_string() {
+    }
+    for job in crate::round_replan::jobs(state) {
+        let (Some(item), Some(at)) = (job["item"].as_str(), job["queued_at"].as_f64()) else {
+            continue;
+        };
+        if at < since || at >= until {
+            continue;
+        }
+        let entry = items.entry(item.to_string()).or_default();
+        entry.replans += 1;
+        if job["reason"] == crate::round_replan::ESCALATED {
             entry.escalations += 1;
             let day = chrono::DateTime::from_timestamp(at as i64, 0)
                 .map(|t| t.format("%Y-%m-%d").to_string())

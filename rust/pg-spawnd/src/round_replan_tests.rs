@@ -425,3 +425,41 @@ fn an_escalation_replan_plans_on_the_strongest_leg_and_leaves_the_pr_open() {
     assert_eq!(keys.len(), 2);
     assert_ne!(keys[0], keys[1]);
 }
+
+#[test]
+fn a_batch_sent_back_without_a_pr_still_gets_one_delivered_routing_line() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(enqueue_return(dir.path(), "p:I", "no_progress")
+        .ok()
+        .unwrap());
+    assert!(!enqueue_return(dir.path(), "p:I", "no_progress")
+        .ok()
+        .unwrap());
+    let ports = Fixture::default();
+    let done = run_pending(dir.path(), &ports);
+    assert_eq!(done[0].1, "done");
+    assert_eq!(ports.count("plan"), 0);
+    assert_eq!(ports.count("close"), 0);
+    assert_eq!(ports.count("define"), 0);
+    assert_eq!(
+        ports.calls.borrow().last().unwrap(),
+        "route REPLAN p:I no_progress | no PR, batch returned to the keeper"
+    );
+    // The refusal path queues it for a PR-less card, once, and never on a dry run.
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = crate::placement::Args::new();
+    args.insert("card".into(), json!({"item_key":"p:I"}));
+    let error = crate::round_progress::refused("no_progress");
+    let first = crate::round_progress::record_refusal(dir.path(), "fixture", &args, error)
+        .ok()
+        .unwrap();
+    assert_eq!(first["replan"], "returned");
+    args.insert("dry_run".into(), json!(true));
+    let dry_dir = tempfile::tempdir().unwrap();
+    let error = crate::round_progress::refused("round_cap");
+    let dry = crate::round_progress::record_refusal(dry_dir.path(), "fixture", &args, error)
+        .ok()
+        .unwrap();
+    assert!(dry.get("replan").is_none());
+    assert!(!dry_dir.path().join("replans").exists());
+}
