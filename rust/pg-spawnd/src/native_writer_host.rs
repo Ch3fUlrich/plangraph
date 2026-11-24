@@ -162,6 +162,20 @@ impl Host {
             .current_dir(&self.cwd);
         Ok(command)
     }
+    /// Reclaim `target` to `cap` from the host before the push. The supervisor runs outside the
+    /// writer sandbox: the real Git directory of the target is visible here, and no per-command
+    /// lease of the writer is held any more.
+    #[cfg(target_os = "linux")]
+    fn reclaim_at(
+        &self,
+        target: &Path,
+        cap: u64,
+        processes: impl FnMut() -> std::io::Result<(Vec<PathBuf>, bool)>,
+    ) -> Result<(), String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
+        pg_worker_core::disk_runtime::reclaim_before_push_using(&self.cwd, target, cap, processes)
+            .map(|_| ())
+    }
     fn ledger_row(&self, record: &Value) -> Result<Value, String> {
         let directory = self
             .record_path
@@ -362,6 +376,20 @@ impl Driver for Host {
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
         self.checks().map(|_| ())
     }
+    #[cfg(target_os = "linux")]
+    fn reclaim_target(&mut self) -> Result<(), String> {
+        if self.push_ref.is_none() {
+            return Ok(());
+        }
+        let target = pg_worker_core::cargo_cache::shared_cache_roots()
+            .map_err(|e| e.to_string())?
+            .remove(0);
+        self.reclaim_at(
+            &target,
+            pg_worker_core::cargo_pool::configured_cap_bytes(),
+            pg_worker_core::disk_runtime::process_references,
+        )
+    }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         let Some(target) = self.push_ref.clone() else {
             return Ok(None);
@@ -461,6 +489,10 @@ mod review_tests;
 #[path = "native_writer_host_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+#[path = "native_writer_host_reclaim_tests.rs"]
+mod reclaim_tests;
 #[cfg(test)]
 #[path = "native_writer_host_sandbox_tests.rs"]
 mod sandbox_tests;

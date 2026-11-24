@@ -85,7 +85,10 @@ writer's `PATH` is a link to `pg-spawnd`, which runs the real Cargo under the le
 skips the lease when that variable already names the target. A shared lease opens the lock file
 read-only (the host creates it before the sandboxed writer starts), because the sandbox writes only
 inside the target, not beside it. Cap and trim refusals name the pids that hold the lease, read
-from `/proc/locks`. Continuous cap sampling in these two paths and exact-head fast-check
+from `/proc/locks`. Before the protected push the supervisor reclaims an over-cap target from the
+host under the exclusive lease (resolving a symlinked target once to its real directory); a real
+`.git` entry in the target, a running build or a held lease leaves a `push_pending` receipt, and a
+retry pushes the same accepted head without a writer turn or a review. Continuous cap sampling in these two paths and exact-head fast-check
 stamps remain open.
 
 Worktree cache cleanup requires a clean worktree idle for over 24 hours.
