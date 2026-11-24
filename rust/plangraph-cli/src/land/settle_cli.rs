@@ -1,7 +1,7 @@
 //! `plangraph land-train settle`: the real effects of [`super::settle`] (GitHub through `gh`, the keeper
 //! through `plangraph merge-close`, the hosts through `plangraph landing verify-hosts`, git, and the
 //! guarded `pg-spawnd writer-stop`) and the command that creates or resumes a settlement state file.
-use super::settle::{Effects, HostReceipt, PartState, PrState, Proof, Settlement, Step};
+use super::settle::{Applied, Effects, HostReceipt, PartState, PrState, Proof, Settlement, Step};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -97,6 +97,39 @@ pub(super) fn parse_pr_view(raw: &str) -> Result<(PrState, String), String> {
     Ok((state, head.to_owned()))
 }
 
+/// `plangraph merge-close` prints one `listed` line per merged key the keeper refused or flagged. A
+/// part's items are closed unless one of them is listed; an already closed item prints nothing.
+pub(super) fn parse_close_report(report: &str, items: &[String]) -> Applied {
+    for line in report.lines() {
+        let mut fields = line.split('\t');
+        if let (Some("listed"), Some(key)) = (fields.next(), fields.next()) {
+            if items.iter().any(|item| item == key) {
+                let why: Vec<&str> = fields.collect();
+                return Applied::Kept(format!("{key} {}", why.join(" ")));
+            }
+        }
+    }
+    Applied::Done
+}
+
+/// `pg-spawnd writer-stop` exits 0 when it keeps a writer; the report row says which.
+pub(super) fn parse_stop_report(raw: &str) -> Result<Applied, String> {
+    let rows: Value = serde_json::from_str(raw).map_err(|_| "invalid writer stop report")?;
+    let [row] = rows.as_array().map(Vec::as_slice).unwrap_or(&[]) else {
+        return Err("writer stop report needs exactly one row".into());
+    };
+    match row["status"].as_str() {
+        Some("stopped") => Ok(Applied::Done),
+        Some("kept") => Ok(Applied::Kept(
+            row["reason"]
+                .as_str()
+                .unwrap_or("no reason given")
+                .to_owned(),
+        )),
+        _ => Err("writer stop report row has no status".into()),
+    }
+}
+
 pub(super) fn parse_hosts(raw: &str) -> Result<Vec<HostReceipt>, String> {
     let v: Value = serde_json::from_str(raw).map_err(|_| "invalid verify-hosts output")?;
     v["verified"]
@@ -115,8 +148,8 @@ pub(super) fn parse_hosts(raw: &str) -> Result<Vec<HostReceipt>, String> {
 struct Real {
     repo: String,
     dir: PathBuf,
-    /// The keeper closes by merge evidence for every merged item in one pass; one pass per run is enough.
-    keeper_passed: bool,
+    /// The keeper closes by merge evidence for every merged item in one pass; its report is read per part.
+    keeper_report: Option<String>,
 }
 
 impl Effects for Real {
@@ -152,14 +185,16 @@ impl Effects for Real {
         }
     }
 
-    fn close_items(&mut self, _part: &PartState, _proof: &Proof) -> Result<(), String> {
-        if self.keeper_passed {
-            return Ok(());
+    fn close_items(&mut self, part: &PartState, _proof: &Proof) -> Result<Applied, String> {
+        // The keeper proves a folded part through the train merge itself; one pass covers every part.
+        if self.keeper_report.is_none() {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            self.keeper_report = Some(output(Command::new(exe).arg("merge-close"), "merge-close")?);
         }
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        output(Command::new(exe).arg("merge-close"), "merge-close")?;
-        self.keeper_passed = true;
-        Ok(())
+        Ok(parse_close_report(
+            self.keeper_report.as_deref().unwrap_or_default(),
+            &part.items,
+        ))
     }
 
     fn verify_hosts(&mut self, merge: &str) -> Result<Vec<HostReceipt>, String> {
@@ -187,17 +222,17 @@ impl Effects for Real {
         .map(drop)
     }
 
-    fn stop_writer(&mut self, part: &PartState, merge: &str) -> Result<(), String> {
+    fn stop_writer(&mut self, part: &PartState, merge: &str) -> Result<Applied, String> {
         let Some(record) = &part.writer_record else {
-            return Ok(());
+            return Ok(Applied::Done);
         };
-        output(
+        let raw = output(
             Command::new("pg-spawnd")
                 .args(["writer-stop", merge])
                 .arg(record),
             "pg-spawnd writer-stop",
-        )
-        .map(drop)
+        )?;
+        parse_stop_report(&raw)
     }
 
     /// The hold of rule 3.64 is the `hold_released` field of the state file; nothing else to switch.
@@ -227,7 +262,7 @@ pub(super) fn run(flags: &BTreeMap<String, String>) -> Result<Vec<String>, Strin
     let mut fx = Real {
         repo: settlement.repo.clone(),
         dir: PathBuf::from(need("repo-dir")?),
-        keeper_passed: false,
+        keeper_report: None,
     };
     let now = || {
         std::time::SystemTime::now()

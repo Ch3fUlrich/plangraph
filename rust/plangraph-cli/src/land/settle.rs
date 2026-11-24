@@ -91,16 +91,25 @@ pub enum Proof {
     TrainMerge { merge: String, part_head: String },
 }
 
+/// What an effect did for one part: finished it, or refused it for a reason that can clear.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Applied {
+    Done,
+    Kept(String),
+}
+
 /// Everything a step does outside the state file. Each method is safe to repeat.
 pub trait Effects {
     fn pr_head(&mut self, pr: u64) -> Result<(PrState, String), String>;
     /// Whether `sha` is an ancestor of (or equal to) the landed merge commit.
     fn in_landed_tree(&mut self, sha: &str, merge: &str) -> Result<bool, String>;
-    fn close_items(&mut self, part: &PartState, proof: &Proof) -> Result<(), String>;
+    /// The keeper closes the part's items on merge evidence; `Kept` when it refused or flagged one.
+    fn close_items(&mut self, part: &PartState, proof: &Proof) -> Result<Applied, String>;
     fn verify_hosts(&mut self, merge: &str) -> Result<Vec<HostReceipt>, String>;
     fn close_pr(&mut self, pr: u64) -> Result<(), String>;
     fn reopen_pr(&mut self, pr: u64) -> Result<(), String>;
-    fn stop_writer(&mut self, part: &PartState, merge: &str) -> Result<(), String>;
+    /// The guarded stop; `Kept` when it left the writer running.
+    fn stop_writer(&mut self, part: &PartState, merge: &str) -> Result<Applied, String>;
     fn end_hold(&mut self) -> Result<(), String>;
 }
 
@@ -289,7 +298,14 @@ impl Settlement {
                 );
             }
         }
-        fx.close_items(&part, &proof)?;
+        if let Applied::Kept(why) = fx.close_items(&part, &proof)? {
+            return self.hold(
+                i,
+                Held::Items,
+                format!("keeper kept the item open: {why}"),
+                now,
+            );
+        }
         self.parts[i].close_items = Step::Done(format!("closed {} item(s)", part.items.len()));
         self.note(
             "items_closed",
@@ -315,6 +331,17 @@ impl Settlement {
             return Ok(());
         }
         let (state, head) = fx.pr_head(part.pr)?;
+        if state == PrState::Closed && head != part.head {
+            // A crash after the close call but before the reread: a push that arrived in between is
+            // still on the closed pull request. Give it back.
+            fx.reopen_pr(part.pr)?;
+            return self.hold(
+                i,
+                Held::Pr,
+                format!("pushed to {head} during close; reopened"),
+                now,
+            );
+        }
         if state != PrState::Open {
             self.parts[i].close_pr = Step::Done("already closed".into());
             return Ok(());
@@ -370,7 +397,9 @@ impl Settlement {
                 now,
             );
         }
-        fx.stop_writer(&part, &self.merge)?;
+        if let Applied::Kept(why) = fx.stop_writer(&part, &self.merge)? {
+            return self.hold(i, Held::Writer, format!("writer kept running: {why}"), now);
+        }
         self.parts[i].stop_writer = Step::Done(format!("stopped at {writer}"));
         self.note("writer_stopped", format!("#{}", part.pr), now());
         Ok(())
