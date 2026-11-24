@@ -477,3 +477,24 @@ def test_seeded_silent_run_publishes_stall_episode(tmp_path, monkeypatch):
     assert w.main(['tick']) == 0
     assert len(list((tmp_path / 'watchdog/outbox').glob('*.json'))) == 1
     assert len(list((tmp_path / 'watchdog/alerts').glob('*.json'))) == 1
+
+
+def test_round_watch_tick_runs_the_rust_watchdog_at_the_given_clock(tmp_path):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        out = '{"rule": "round-wait-stopped", "task": "a"}\nnot json\n'
+        return subprocess.CompletedProcess(argv, 0, stdout=out)
+
+    findings = w.round_watch_tick(tmp_path, now=1700000000.5, run=run)
+    assert seen == [['pg-spawnd', 'round-watch', '--state', str(tmp_path), '--now-ms', '1700000000500']]
+    assert findings == [{'rule': 'round-wait-stopped', 'task': 'a'}]
+
+
+def test_round_watch_tick_without_the_binary_is_a_finding_not_a_failure(tmp_path):
+    def run(argv, **kwargs):
+        raise FileNotFoundError(argv[0])
+
+    assert w.round_watch_tick(tmp_path, run=run) == [
+        {'rule': 'round-watch-unavailable', 'reason': 'FileNotFoundError'}]
