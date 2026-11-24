@@ -206,55 +206,103 @@ fn copies_a_file(line: &str) -> bool {
     !line.trim_start().starts_with("//") && line.contains("fs::copy(")
 }
 
-/// The code of the statement that starts at the first line, up to its `;`, without comments.
+/// The code of the statement that starts at the first line, up to its `;`, without line or block comments.
 fn statement(lines: &[&str]) -> String {
     let mut text = String::new();
+    let mut in_block = false;
     for line in lines {
-        let code = line.split("//").next().unwrap_or("");
+        let mut code = String::new();
+        let mut rest: &str = line;
+        loop {
+            if in_block {
+                match rest.find("*/") {
+                    Some(end) => {
+                        rest = &rest[end + 2..];
+                        in_block = false;
+                    }
+                    None => break,
+                }
+            } else {
+                let line_comment = rest.find("//");
+                let block = rest.find("/*");
+                match (line_comment, block) {
+                    (Some(l), b) if b.is_none_or(|b| l < b) => {
+                        code.push_str(&rest[..l]);
+                        break;
+                    }
+                    (_, Some(b)) => {
+                        code.push_str(&rest[..b]);
+                        rest = &rest[b + 2..];
+                        in_block = true;
+                    }
+                    _ => {
+                        code.push_str(rest);
+                        break;
+                    }
+                }
+            }
+        }
         if let Some(end) = code.find(';') {
             text.push_str(&code[..=end]);
             break;
         }
-        text.push_str(code);
+        text.push_str(&code);
         text.push(' ');
     }
     text
 }
 
-/// What is inside the parentheses of the first `fs::copy(`.
-fn copy_arguments(statement: &str) -> &str {
+/// The first argument of the first `fs::copy(`: the file that is copied.
+fn copy_source(statement: &str) -> &str {
+    copy_arguments(statement).0
+}
+
+/// The second argument of the first `fs::copy(`: where the copy is published.
+fn copy_destination(statement: &str) -> &str {
+    copy_arguments(statement).1
+}
+
+/// The first two arguments of the first `fs::copy(`, split at the top-level comma.
+fn copy_arguments(statement: &str) -> (&str, &str) {
     let Some(start) = statement.find("fs::copy(").map(|at| at + "fs::copy(".len()) else {
-        return "";
+        return ("", "");
     };
-    let mut depth = 1;
+    let (mut depth, mut quoted, mut comma) = (0, false, None);
     for (offset, ch) in statement[start..].char_indices() {
+        let at = start + offset;
         match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => {
                 if depth == 0 {
-                    return &statement[start..start + offset];
+                    return match comma {
+                        Some(first) => (&statement[start..first], &statement[first + 1..at]),
+                        None => (&statement[start..at], ""),
+                    };
                 }
+                depth -= 1;
             }
+            ',' if !quoted && depth == 0 && comma.is_none() => comma = Some(at),
             _ => {}
         }
     }
-    &statement[start..]
+    (&statement[start..], "")
 }
 
 /// Copies that are production code or data no test executes. A copied executable belongs on
 /// `write_executable(path, fs::read(source))`; a data exemption names the copied file, so the executable
 /// copy next to it is still refused.
 fn copy_is_not_an_executable(path: &str, statement: &str) -> bool {
-    let arguments = copy_arguments(statement);
-    let data = |name: &str| arguments.contains(name);
+    let source = copy_source(statement);
+    let data = |name: &str| source.contains(name);
     match path {
         // Production installers and mirrors.
         "pg-hook/src/commit_msg.rs" | "pg-ctx/src/mirror_backend.rs" => true,
         "pg-hook/tests/status_files.rs" => data(".gitignore"),
         "pg-keeper-backup/tests/units.rs" => data(".timer"),
         "pg-spawnd/tests/toolchain_pin.rs" => data("rust-toolchain.toml"),
-        "pg-spawnd/src/cli_review_tests.rs" => data("record.json"),
+        // A run record JSON, named by where it lands: its source is a variable.
+        "pg-spawnd/src/cli_review_tests.rs" => copy_destination(statement).contains("record.json"),
         // A Python module the hook runs through the interpreter.
         "pg-hook/tests/commit_message.rs" => data("ci_commit_gate.py"),
         // A hook file the test only compares byte for byte.
@@ -370,5 +418,22 @@ fn a_comment_naming_a_data_file_does_not_exempt_an_executable_copy() {
         assert!(!copy_is_not_an_executable(path, &statement(&lines)), "{lines:?}");
     }
     let data = statement(&["std::fs::copy(tools.join(\"ci_commit_gate.py\"), to).unwrap();"]);
+    assert!(copy_is_not_an_executable(path, &data));
+}
+
+#[test]
+fn only_the_copied_source_can_name_a_data_file() {
+    let path = "pg-hook/tests/commit_message.rs";
+    for lines in [
+        vec!["std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), tools.join(\"ci_commit_gate.py\")).unwrap();"],
+        vec!["std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), hook).unwrap(); /* ci_commit_gate.py */"],
+        vec!["std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), /* ci_commit_gate.py */ hook).unwrap();"],
+        vec!["std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), hook)", "/* the", "ci_commit_gate.py", "*/ .unwrap();"],
+    ] {
+        assert!(!copy_is_not_an_executable(path, &statement(&lines)), "{lines:?}");
+    }
+    let data = statement(&[
+        "std::fs::copy(root.join(\"tools\").join(\"ci_commit_gate.py\"), to).unwrap();",
+    ]);
     assert!(copy_is_not_an_executable(path, &data));
 }

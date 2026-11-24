@@ -675,52 +675,62 @@ class ContextMixin:
 
     def _deploy_inventory_row(self, item, now):
         """``{"deployment_pending": row}`` for merged work without deploy proof, else ``{}``; never closes."""
-        return self._deploy_state(item, now, named_only_ok=True)[3]
+        return self._deploy_state(item, now)[3]
 
-    def _deploy_state(self, item, now, named_only_ok=False):
+    def _deploy_state(self, item, now):
         """``(pinned item, merge proofs, pending host:unit pairs, {"deployment_pending": row} or {}, scan token)``.
 
-        ``named_only_ok`` (the inventory) lets an item whose only delivery is a ``Merge-Repo:`` merge
-        stand on that merge's commit time, since it has no tagged commit to prove.
+        An item whose only delivery is a ``Merge-Repo:`` merge has no tagged commit to prove: its proof is
+        one synthetic entry (``synthetic``) standing on that merge's commit time, enough for a deployment
+        row and never for a close.
         """
         token, changes = self._auto_deploy_scan(item)
         pinned = dict(item, _close_head=token[0])
         try:
             proofs = self._merged_auto_proofs(pinned)
         except Refused as exc:
-            if not (named_only_ok and token[3] is not None and exc.msg == "merged_on_default_missing"):
+            if token[3] is None or exc.msg != "merged_on_default_missing":
                 raise
-            at = token[3] if token[3] != float("inf") else None
-            proofs = [{"merged_at": None if at is None else datetime.fromtimestamp(at, timezone.utc).isoformat()}]
-        pending = self._deploy_pending(pinned, changes, token, self._proof_cutoff(proofs, token))
-        missing = self._deploy_missing(item, proofs, pending)
+            proofs = [{"merged_at": self._landing_iso(token[3]), "synthetic": True}]
+        cutoff = self._proof_cutoff(proofs, token)
+        pending = self._deploy_pending(pinned, changes, token, cutoff)
+        missing = self._deploy_missing(item, pending, cutoff)
         return pinned, proofs, pending, (
-            {"deployment_pending": self._deployment_row(missing, proofs, now)} if missing else {}), token
+            {"deployment_pending": self._deployment_row(missing, proofs, token, now)} if missing else {}), token
 
     @staticmethod
-    def _proof_cutoff(proofs, token):
-        """Epoch seconds before which deploy proof says nothing of the landed work: the last merge, tagged
-        or named by ``Merge-Repo:``. An unreadable merge time leaves nothing proven."""
+    def _landing_iso(epoch):
+        return None if epoch is None or epoch == float("inf") else datetime.fromtimestamp(
+            epoch, timezone.utc).isoformat()
+
+    @staticmethod
+    def _landing_stamps(proofs, token):
+        """Merge times (epoch seconds, ``None`` when unreadable) of every landing: tagged and named."""
         stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
         named = token[3] if len(token) > 3 else None
-        if named is not None:
-            stamps.append(named)
+        return stamps + ([named] if named is not None else [])
+
+    @classmethod
+    def _proof_cutoff(cls, proofs, token):
+        """Epoch seconds before which deploy proof says nothing of the landed work: the last landing, tagged
+        or named by ``Merge-Repo:``, for units and ``Live:`` clauses alike. An unreadable time leaves nothing proven."""
+        stamps = cls._landing_stamps(proofs, token)
         return float("inf") if None in stamps or not stamps else max(stamps)
 
-    def _deploy_missing(self, item, proofs, pending):
+    def _deploy_missing(self, item, pending, cutoff):
         """The unproven ``host:unit`` pairs, plus ``live_evidence_missing`` for an unproven ``Live:`` clause."""
         missing = list(pending)
-        if self._live_evidence_missing(item, proofs):
+        if self._live_evidence_missing(item, cutoff):
             missing.append("live_evidence_missing")
         return missing
 
-    @staticmethod
-    def _deployment_row(missing, proofs, now):
-        landed = [(stamp, proof["merged_at"]) for proof in proofs
-                  if (stamp := as_epoch(proof["merged_at"])) is not None]
-        earliest = min(landed, default=None)
-        return {"missing": missing, "merged_at": earliest[1] if earliest else None,
-                "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}
+    @classmethod
+    def _deployment_row(cls, missing, proofs, token, now):
+        """How long the work has waited: counted from the earliest landing, the named merge included."""
+        stamps = cls._landing_stamps(proofs, token)
+        earliest = None if None in stamps or not stamps else min(stamps)
+        return {"missing": missing, "merged_at": cls._landing_iso(earliest),
+                "age_hours": int(max(0, now - earliest) // 3600) if earliest is not None else None}
 
     def _auto_merge_candidates(self, project, after, limit, inventory=False):
         states = ("done",) if inventory else self.AUTO_STATES

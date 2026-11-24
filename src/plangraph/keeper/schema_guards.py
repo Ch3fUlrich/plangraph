@@ -160,6 +160,15 @@ _LOCKED = (
     " OR EXISTS (SELECT 1 FROM items i WHERE i.key = {k} AND i.state = 'cancelled')"
 )
 
+# A unit that starts after its item closed is proved by one more ``deploy`` evidence row and its
+# ``evidence_added`` event: the only writes the lock lets through, and never for a cancelled item.
+_DEPLOY_PROOF_EVENT = (
+    "NOT (NEW.type = 'evidence_added' AND json_extract(NEW.payload, '$.kind') = 'deploy'"
+    " AND NOT EXISTS (SELECT 1 FROM items i WHERE i.key = NEW.key AND i.state = 'cancelled'))")
+_DEPLOY_PROOF_ROW = (
+    "NOT (NEW.kind = 'deploy'"
+    " AND NOT EXISTS (SELECT 1 FROM items i WHERE i.key = NEW.key AND i.state = 'cancelled'))")
+
 TRIGGERS = f"""
 -- Events are append-only, full stop.
 CREATE TRIGGER trg_events_append_only_update
@@ -173,12 +182,12 @@ BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 -- Neither events nor evidence may be written for a locked key.
 CREATE TRIGGER trg_events_locked_insert
 BEFORE INSERT ON events
-WHEN {_LOCKED.format(k='NEW.key')}
+WHEN ({_LOCKED.format(k='NEW.key')}) AND {_DEPLOY_PROOF_EVENT}
 BEGIN SELECT RAISE(ABORT, 'key is locked'); END;
 
 CREATE TRIGGER trg_evidence_locked_insert
 BEFORE INSERT ON evidence
-WHEN {_LOCKED.format(k='NEW.key')}
+WHEN ({_LOCKED.format(k='NEW.key')}) AND {_DEPLOY_PROOF_ROW}
 BEGIN SELECT RAISE(ABORT, 'key is locked'); END;
 
 -- Both, because UPDATE can move a row *onto* a locked key.

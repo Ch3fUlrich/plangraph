@@ -16,6 +16,8 @@ pub const MAX_AGE_HOURS: u64 = 24;
 pub const MAX_EXCEPTION_DAYS: i64 = 14;
 /// A saved report older than this (seconds) is refused: its ages and host states are stale.
 pub const MAX_REPORT_AGE_SECS: i64 = 3600;
+/// How far a timestamp may lie ahead of the gate's clock before it is not believed.
+pub const MAX_CLOCK_SKEW_SECS: i64 = 300;
 
 /// Live state of one deploy target on one host.
 pub trait HostProbe {
@@ -132,8 +134,12 @@ fn exception_defect(exception: &Value, today: NaiveDate) -> Option<String> {
 /// Hours since the row's merge, read at gate time; unknown (and so blocking) when the merge time is
 /// missing or unreadable. The age the keeper printed is never trusted: a saved report only gets older.
 fn age_hours(row: &Value, now: i64) -> Option<u64> {
-    let merged = DateTime::parse_from_rfc3339(row["merged_at"].as_str()?).ok()?;
-    Some((now - merged.timestamp()).max(0) as u64 / 3600)
+    let merged = DateTime::parse_from_rfc3339(row["merged_at"].as_str()?)
+        .ok()?
+        .timestamp();
+    // A merge time ahead of the clock beyond the skew is wrong data, not a brand-new merge.
+    let age = now.checked_sub(merged)?;
+    (age >= -MAX_CLOCK_SKEW_SECS).then(|| age.max(0) as u64 / 3600)
 }
 
 /// The GO decision for a report: pending rows older than `max_age_hours` (or of unknown age) block,
@@ -197,7 +203,14 @@ pub fn validate_report(report: &Value, now: i64) -> Result<(), String> {
     let made = report["generated_at"]
         .as_i64()
         .ok_or("report has no generated_at")?;
-    if now - made > MAX_REPORT_AGE_SECS || made - now > 300 {
+    // Checked arithmetic: a timestamp at the edge of the range is a refusal, never a panic.
+    let fresh = now
+        .checked_sub(made)
+        .is_some_and(|age| age <= MAX_REPORT_AGE_SECS)
+        && made
+            .checked_sub(now)
+            .is_none_or(|ahead| ahead <= MAX_CLOCK_SKEW_SECS);
+    if !fresh {
         return Err(format!(
             "report was generated at {made}, not within an hour of {now}"
         ));

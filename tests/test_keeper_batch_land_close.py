@@ -345,27 +345,33 @@ def test_proof_older_than_the_merge_a_merge_repo_line_names_does_not_clear_its_u
     git(root, "checkout", "-q", "main")
     git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #46 from x/unit", "unit")
     named = git(root, "rev-parse", "HEAD")
-    env.conn.execute("UPDATE items SET description=?, note='Deploy-Hosts: host-a' WHERE key='demo:A'",
+    env.conn.execute("UPDATE items SET description=?, note='Deploy-Hosts: host-a',"
+                     " done_criteria='Tests pass. Live: the unit runs' WHERE key='demo:A'",
                      (f"Merge-Repo: demo {named}",))
     monkeypatch.setattr(env.store.ctx["git"], "commit_time", lambda repo, sha: 2_524_608_000.0)  # 2050
     _deploy_row(env, "demo:A", "2040-01-01T00:00:00+00:00")  # after the tagged merge, before the named one
     assert auto(env, require_seats=False, apply=False)["deployment_pending"][0]["missing"] == [
-        "host-a:new.service"]
+        "host-a:new.service", "live_evidence_missing"]  # the unit and the Live: clause share the cutoff
     _deploy_row(env, "demo:A", "2099-01-01T00:00:00+00:00")
     assert auto(env, require_seats=False, apply=False)["deployment_pending"] == []
 
 
-def test_the_public_evidence_verb_takes_deploy_proof_for_a_completed_item(env):  # noqa: F811
-    _land_with_unit(env.repo.root)
-    _done(env, "demo:A", note="Deploy-Hosts: host-a")
-    assert _inventory(env, inventory=True)["deployment_pending"][0]["missing"] == ["host-a:new.service"]
+def test_the_public_evidence_verb_takes_deploy_proof_for_a_normally_closed_item(env):  # noqa: F811
     from plangraph.keeper.evidence import VERIFIERS
+    env.conn.execute("UPDATE items SET note='Deploy-Hosts: host-a' WHERE key='demo:A'")
+    env.repo.land("docs", "Plan-Item: demo:A", 40)
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+    assert env.store._item("demo:A")["state"] == "done"  # closed by review_passed: locked for every other write
+    _land_with_unit(env.repo.root, name="late", pr=60)  # a unit that ships after the close
+    assert _inventory(env, inventory=True)["deployment_pending"][0]["missing"] == ["host-a:new.service"]
     env.store.verifiers["deploy"] = VERIFIERS["deploy"]
     env.clock.t = 4_000_000_000.0
     out = env.store.add_evidence_router(env.p("router"), "demo:A", "deploy", {
         "host": "host-a", "unit": "new.service", "is_active": "active"})
     assert out["verified"] is True and env.store._item("demo:A")["state"] == "done"
     assert _inventory(env, inventory=True)["deployment_pending"] == []
+    from plangraph.keeper import events
+    assert events.verify_chain(env.conn) == [] and events.verify_integrity(env.conn) == []
     with pytest.raises(Refused):  # no other proof lands on a completed item
         env.store.add_evidence_router(env.p("router"), "demo:A", "decision", {"id": "D-1"})
 
@@ -386,3 +392,37 @@ def test_a_watch_request_cannot_ask_for_the_inventory(env):  # noqa: F811
     with pytest.raises(Refused, match="watch cannot combine"):
         api_routes._close_merged_auto(env.store, env.p("system"),
                                       {"watch": True, "apply": False, "inventory": True}, None)
+
+
+def test_an_open_item_delivered_only_by_a_merge_repo_line_still_gets_its_row(env):  # noqa: F811
+    _land_with_unit(env.repo.root, tagged=False)
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=?, note='Deploy-Hosts: host-a' WHERE key='demo:A'",
+                     (f"Merge-Repo: demo {merge}",))
+    report = auto(env, require_seats=False, apply=False)
+    assert [row["key"] for row in report["deployment_pending"]] == ["demo:A"]
+    assert report["deployment_pending"][0]["missing"] == ["host-a:new.service"]
+    assert "merged_on_default_missing" in report["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_a_missing_review_seat_keeps_the_live_evidence_row(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 41)
+    env.conn.execute("UPDATE items SET done_criteria='Tests pass. Live: the service answers' WHERE key='demo:A'")
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    report = env.store.close_merged_auto(env.p("system"), apply=False, frozen=True)  # seats required, none cited
+    assert "NO-WITNESS" in report["listed"][0]["reason"].upper().replace("_", "-")
+    assert report["deployment_pending"][0]["missing"] == ["live_evidence_missing"]
+
+
+def test_the_age_of_a_row_counts_from_the_named_merge_not_only_the_tagged_one(env, monkeypatch):  # noqa: F811
+    import time
+    _land_with_unit(env.repo.root, tagged=True)  # tagged merge: just now
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=?, note='Deploy-Hosts: host-a' WHERE key='demo:A'",
+                     (f"Merge-Repo: demo {merge}",))
+    now = time.time()
+    env.clock.t = now
+    monkeypatch.setattr(env.store.ctx["git"], "commit_time", lambda repo, sha: now - 48 * 3600)
+    row = auto(env, require_seats=False, apply=False)["deployment_pending"][0]
+    assert row["age_hours"] >= 47
