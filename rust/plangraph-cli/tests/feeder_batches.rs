@@ -36,6 +36,7 @@ struct Host {
     registry: Arc<Mutex<Registry>>,
     files: BTreeMap<String, Vec<String>>,
     fail_start: bool,
+    fail_release: bool,
     queued: bool,
     /// Held after the first claim until the other host has claimed as well.
     meet: Option<Arc<Barrier>>,
@@ -55,6 +56,7 @@ impl Host {
             registry: registry.clone(),
             files,
             fail_start: false,
+            fail_release: false,
             queued: false,
             meet: None,
         }
@@ -110,6 +112,9 @@ impl Launch for Host {
         Ok(json!({"run_id":"run-1","status":if self.queued {"queued"} else {"running"}}))
     }
     fn release(&mut self, key: &str, _: u64) -> Result<(), String> {
+        if self.fail_release {
+            return Err("release denied".into());
+        }
         let mut registry = self.registry.lock().unwrap();
         registry.claimed.remove(key);
         registry.released.push(key.to_owned());
@@ -432,4 +437,54 @@ fn a_yielding_seed_releases_its_batch_and_the_tick_picks_again() {
         ["plangraph:ALPHA-1", "plangraph:ALPHA-2"]
     );
     assert!(!registry.claimed.contains_key("plangraph:ALPHA-2"));
+}
+
+#[test]
+fn a_release_that_fails_when_the_seed_yields_is_reported() {
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 5, &["src/b.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    registry
+        .lock()
+        .unwrap()
+        .claimed
+        .insert("plangraph:OTHER".into(), vec!["src/a.rs".into()]);
+    let mut host = Host::new(&registry, &items);
+    host.fail_release = true;
+    let row = drive(&ready(items), &mut host, "dell", 2, false);
+    let reasons: Vec<String> = row["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| format!("{} {}", r["item_key"], r["reason"]))
+        .collect();
+    // The yielding seed and the released mate both name their failed release.
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("ALPHA-1") && r.contains("release failed")),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("ALPHA-2") && r.contains("release failed")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_batch_larger_than_the_record_can_hold_is_an_invalid_policy() {
+    let items = vec![item("ALPHA-1", 9, &["src/a.rs"])];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    for (size, refused) in [(MAX_BATCH_ITEMS, false), (MAX_BATCH_ITEMS + 1, true)] {
+        let mut host = Host::new(&registry, &items);
+        let row = drive(&ready(items.clone()), &mut host, "dell", size, true);
+        assert_eq!(row["decision"] == "refused", refused, "{size}: {row}");
+        if refused {
+            assert_eq!(row["reason"], "invalid_policy");
+        }
+    }
 }

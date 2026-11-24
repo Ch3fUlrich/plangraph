@@ -242,11 +242,13 @@ impl<T: Transport> Launch for Adapters<'_, T> {
             {
                 continue;
             }
-            if decode_task(other).is_ok_and(|task| {
+            // A claim whose scope cannot be read is a rival: unknown files may overlap.
+            let overlaps = decode_task(other).is_ok_and(|task| {
                 task.files
                     .iter()
                     .any(|a| files.iter().any(|b| crate::paths::paths_overlap(a, b)))
-            }) {
+            });
+            if overlaps || decode_task(other).is_err() {
                 return Ok(Some(name.to_owned()));
             }
         }
@@ -453,6 +455,26 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
         assert_eq!(
             a.rival("plangraph:ME", &files, &batch).unwrap().as_deref(),
             Some("plangraph:MATE")
+        );
+    }
+    #[test]
+    fn a_claim_with_unreadable_files_is_a_rival() {
+        let env = Env::new();
+        let temp = tempfile::tempdir().unwrap();
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let snapshot = json!({"items":[
+            {"key":"plangraph:BROKEN","state":"claimed","lease_until":future,"note":"files: {\"invalid\":true}"}]});
+        let mut a = Adapters {
+            keeper: Snapshot(snapshot),
+            env: &env,
+            repo: temp.path().into(),
+            state: temp.path().into(),
+            host: "dell".into(),
+        };
+        let files = vec!["src/a.rs".to_owned()];
+        assert_eq!(
+            a.rival("plangraph:ME", &files, &[]).unwrap().as_deref(),
+            Some("plangraph:BROKEN")
         );
     }
 }

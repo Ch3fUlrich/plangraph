@@ -47,8 +47,8 @@ fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, Spaw
                 }
             }
             Err(e) => {
-                release_held(&claimed, launch);
-                return Err(SpawnError::Claim(e));
+                let failures = release_held(&claimed, launch);
+                return Err(SpawnError::Start(with_failures(e.to_string(), &failures)));
             }
         }
     }
@@ -65,23 +65,40 @@ fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, Spaw
                 dropped.push(json!({"item_key":item.key,"reason":reason}));
             }
             Err(e) => {
-                release_held(&claimed, launch);
-                return Err(SpawnError::Start(format!("reservation check failed: {e}")));
+                let failures = release_held(&claimed, launch);
+                return Err(SpawnError::Start(with_failures(
+                    format!("reservation check failed: {e}"),
+                    &failures,
+                )));
             }
         }
     }
     // A batch without its seed is not the next work in priority order: release it whole and
     // let the caller pick again, so lower-priority items never overtake the seed's slot.
     if held.first().is_none_or(|(t, _)| t.key != batch[0].key) {
-        release_held(&held, launch);
+        // A claim that cannot be released stays held until its lease ends: say so.
+        for (key, error) in release_held(&held, launch) {
+            dropped.push(json!({"item_key":key,"reason":format!("release failed: {error}")}));
+        }
         return Ok((Vec::new(), dropped));
     }
     Ok((held, dropped))
 }
-fn release_held(held: &[(Task, u64)], launch: &mut impl Launch) {
-    for (item, epoch) in held {
-        let _ = launch.release(&item.key, *epoch);
-    }
+/// Release each claim by its own epoch; the failures, as (key, error), stay held until expiry.
+fn release_held(held: &[(Task, u64)], launch: &mut impl Launch) -> Vec<(String, String)> {
+    held.iter()
+        .filter_map(|(item, epoch)| {
+            launch
+                .release(&item.key, *epoch)
+                .err()
+                .map(|e| (item.key.clone(), e))
+        })
+        .collect()
+}
+fn with_failures(reason: String, failures: &[(String, String)]) -> String {
+    failures.iter().fold(reason, |reason, (key, error)| {
+        format!("{reason}; release of {key} failed: {error}")
+    })
 }
 /// The card and brief of one writer run for `items`: the plain item card for one item, the
 /// first item's card with every key and the union of the files for a batch.
