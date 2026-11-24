@@ -4,9 +4,7 @@ WORKTREE: fixture-checkout
 BASE: 1111111111111111111111111111111111111111
 WRITER_FAMILY: gpt
 STATUS_FILE: fixture-status
-FAST_CHECKS:
-- git diff --check
-- cargo fmt --check
+FAST_CHECKS: plangraph fast-checks --owned-worktree
 REVIEW_CMD: fixture-review
 REVIEW_WAIT_SECONDS: 60
 ROUND_CAP: 3

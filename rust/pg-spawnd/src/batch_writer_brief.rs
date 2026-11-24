@@ -4,6 +4,8 @@ use serde::Deserialize;
 use std::{borrow::Cow, fmt::Write};
 
 const PREFIX: &str = "PLANGRAPH-BATCH-INPUT-V1\n";
+const FAST_CHECKS_COMMAND: &str = "plangraph fast-checks --owned-worktree";
+const RECEIPT_NOTES_REF: &str = "refs/notes/plangraph-fast-checks";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,7 +30,13 @@ struct RunValues {
     base: String,
     writer_family: String,
     status_file: String,
+    /// Older producers still send their own list; the brief names the one stamp command instead.
+    #[serde(default)]
+    #[allow(dead_code)]
     fast_checks: Vec<String>,
+    /// The writer pushes `lane/<NAME>` after every item commit (a host that pushes itself leaves it off).
+    #[serde(default)]
+    push: bool,
     review_cmd: String,
     review_wait_seconds: u64,
     round_cap: u8,
@@ -42,8 +50,9 @@ fn single_line(value: &str) -> bool {
 impl RunValues {
     fn render(self, brief: &mut String) -> Result<(), String> {
         let worktree = self.worktree.clone();
+        let name = self.name.clone();
         let fields = [
-            ("NAME", self.name),
+            ("NAME", self.name.clone()),
             ("WORKTREE", self.worktree),
             ("BASE", self.base),
             ("WRITER_FAMILY", self.writer_family),
@@ -53,13 +62,8 @@ impl RunValues {
             || !single_line(&self.review_cmd)
             || self.review_wait_seconds == 0
             || !(1..=8).contains(&self.round_cap)
-            || self.fast_checks.is_empty()
             || self.trailers.is_empty()
-            || self
-                .fast_checks
-                .iter()
-                .chain(&self.trailers)
-                .any(|value| !single_line(value))
+            || self.trailers.iter().any(|value| !single_line(value))
         {
             return Err("invalid batch writer Run values".into());
         }
@@ -67,9 +71,16 @@ impl RunValues {
         for (label, value) in fields {
             writeln!(brief, "{label}: {value}").unwrap();
         }
-        brief.push_str("FAST_CHECKS:\n");
-        for check in self.fast_checks {
-            writeln!(brief, "- {check}").unwrap();
+        // One command runs every fast check of the head and writes its receipt; a list of
+        // separate commands is how a failing early batch was once read past.
+        writeln!(brief, "FAST_CHECKS: {FAST_CHECKS_COMMAND}").unwrap();
+        if self.push {
+            writeln!(
+                brief,
+                "PUSH: git push origin HEAD:refs/heads/lane/{} {RECEIPT_NOTES_REF}",
+                name
+            )
+            .unwrap();
         }
         writeln!(
             brief,
@@ -177,12 +188,10 @@ mod tests {
             ("round_cap", json!(0)),
             ("round_cap", json!(9)),
             ("review_wait_seconds", json!(0)),
-            ("fast_checks", json!([])),
             ("trailers", json!([])),
             ("name", json!(" ")),
             ("worktree", json!("first\nsecond")),
             ("review_cmd", json!("review\tcommand")),
-            ("fast_checks", json!(["check\r"])),
             ("trailers", json!(["Writer: fixture\u{0000}"])),
         ] {
             let mut input = fixture();
@@ -211,6 +220,32 @@ mod tests {
         }
         // A worktree that is not a checkout has no list to print and the brief stays valid.
         assert!(!render(FIXTURE).unwrap().contains("GATE_PATHS"));
+    }
+
+    #[test]
+    fn a_brief_names_the_one_stamp_command_and_the_lane_push_only_when_asked() {
+        let mut input = fixture();
+        input["run"]["fast_checks"] = json!(["git diff --check", "cargo fmt --check"]);
+        let text = format!("{PREFIX}{input}");
+        let plain = render(&text).unwrap();
+        assert!(
+            plain.contains("\nFAST_CHECKS: plangraph fast-checks --owned-worktree\n"),
+            "{plain}"
+        );
+        assert!(
+            !plain.contains("cargo fmt --check") && !plain.contains("\nPUSH:"),
+            "{plain}"
+        );
+        input["run"]["push"] = json!(true);
+        let text = format!("{PREFIX}{input}");
+        let pushing = render(&text).unwrap();
+        let name = input["run"]["name"].as_str().unwrap();
+        assert!(
+            pushing.contains(&format!(
+                "\nPUSH: git push origin HEAD:refs/heads/lane/{name} refs/notes/plangraph-fast-checks\n"
+            )),
+            "{pushing}"
+        );
     }
 
     #[test]

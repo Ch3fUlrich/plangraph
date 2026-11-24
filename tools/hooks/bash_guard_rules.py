@@ -264,7 +264,15 @@ def _polls_with_sleep(commands):
         pos = [w for w in cmd if not w.redir]
         i = lead(pos)
         looped |= any(w.plain and w.text in _LOOP_WORDS for w in pos[:i + 1])
-        names.update(_basename(w.text) for w in pos[i:] if not _ENV_ASSIGN_RE.match(w.text))
+        while i < len(pos) and _ENV_ASSIGN_RE.match(pos[i].text):
+            i += 1
+        if i >= len(pos):
+            continue
+        # Only the executable counts (and what a wrapper runs): `echo gh` and `grep ssh f` poll nothing.
+        head = _basename(pos[i].text)
+        names.add(head)
+        if head in _WRAPPERS:
+            names.update(_basename(w.text) for w in pos[i + 1:])
     return looped and "sleep" in names and bool(names & set(_POLLED))
 
 
