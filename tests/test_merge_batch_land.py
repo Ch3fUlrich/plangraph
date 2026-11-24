@@ -332,14 +332,14 @@ def test_push_takes_over_a_batch_pr_a_dead_push_created(env):
     assert "| #1 |" in env.load()["prs"]["100"]["body"]
 
 
-def go_ready(env, *, seats=True, first_files=None, third=False, second_follow_up=False, first_trailer=""):
+def go_ready(env, *, seats=True, first_files=None, third=False, second_follow_up=False, first_trailer="", prs=None):
     env.branch_pr(1, first_files or {"a.txt": "a\n"}, item="ITEM-A", trailer=first_trailer)
     env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
     if second_follow_up:
         env.push_commit(2, {"b.txt": "b\n", "follow-up.txt": "follow-up\n"})
     if third:
         env.branch_pr(3, {"c.txt": "c\n"}, item="ITEM-C")
-    prs = "1,2,3" if third else "1" if first_files is not None else "1,2"
+    prs = prs or ("1,2,3" if third else "1" if first_files is not None else "1,2")
     assert env.run("build", "--name", "g1", "--prs", prs,
                    "--plan", "plangraph:BATCH").returncode == 0
     assert env.run("push", "--name", "g1").returncode == 0
