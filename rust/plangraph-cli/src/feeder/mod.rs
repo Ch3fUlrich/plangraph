@@ -54,6 +54,8 @@ pub struct Policy {
     pub estimate_tokens: u64,
     /// Related ready items one writer batch may hold; 1 keeps one item per run.
     pub batch_max_items: usize,
+    /// Effective brief rules supplied to the native launch independently of the prompt.
+    pub writer_policy: pg_worker_core::writer_brief::Policy,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -68,6 +70,10 @@ impl Default for Policy {
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
             batch_max_items: 1,
+            writer_policy: pg_worker_core::writer_brief::Policy {
+                revision: "native-driver-1".into(),
+                rules: Vec::new(),
+            },
         }
     }
 }
@@ -190,7 +196,15 @@ pub fn brief(item: &Task, house_rules: &str) -> String {
         .as_str()
         .map(str::to_string)
         .unwrap_or_else(|| item.done_criteria.to_string());
-    let metadata: BTreeMap<_, _> = [
+    let metadata = task_metadata(item);
+    format!("Plan item: {}\nTitle: {}\n\n{}\n\nDone criteria:\n{}\n\nFiles:\n{}\n\nNotes:\n{}\n\nTask metadata:\n{}\n\n{}\n",
+        item.key,item.title,item.description.as_deref().unwrap_or(""),done,item.files.join("\n"),
+        item.fields.get("note").and_then(Value::as_str).unwrap_or(""),serde_json::to_string(&metadata).expect("JSON values"),
+        house_rules.replace("{{item_key}}",&item.key).trim())
+}
+
+fn task_metadata(item: &Task) -> BTreeMap<&'static str, &Value> {
+    [
         "pr",
         "pr_url",
         "pr_number",
@@ -200,11 +214,7 @@ pub fn brief(item: &Task, house_rules: &str) -> String {
     ]
     .into_iter()
     .filter_map(|k| item.fields.get(k).map(|v| (k, v)))
-    .collect();
-    format!("Plan item: {}\nTitle: {}\n\n{}\n\nDone criteria:\n{}\n\nFiles:\n{}\n\nNotes:\n{}\n\nTask metadata:\n{}\n\n{}\n",
-        item.key,item.title,item.description.as_deref().unwrap_or(""),done,item.files.join("\n"),
-        item.fields.get("note").and_then(Value::as_str).unwrap_or(""),serde_json::to_string(&metadata).expect("JSON values"),
-        house_rules.replace("{{item_key}}",&item.key).trim())
+    .collect()
 }
 
 pub fn card(item: &Task, repo: &str, review_dir: &str, policy: &Policy) -> Value {

@@ -1,0 +1,1 @@
+- Render complete writer item specifications before concise lane rules and validate the typed launch policy before admitting a writer. Native resumes preserve the local head and group review findings by file.

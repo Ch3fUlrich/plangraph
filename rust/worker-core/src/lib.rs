@@ -113,6 +113,7 @@ pub mod workspace_resolver;
 pub mod workspace_verify;
 pub mod worktree;
 pub mod writer_blob;
+pub mod writer_brief;
 pub mod writer_cleanup;
 pub mod writer_families;
 pub mod writer_result;

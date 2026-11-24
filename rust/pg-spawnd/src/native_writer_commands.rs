@@ -74,13 +74,55 @@ impl Host {
         {
             return Err("push_ref must name refs/heads/...".into());
         }
-        self.brief = pg_spawnd::batch_writer_brief::render(
-            request["prompt"].as_str().ok_or("prompt missing")?,
-        )?
-        .into_owned();
+        let prompt = request["prompt"].as_str().ok_or("prompt missing")?;
+        if let Some(input) = pg_spawnd::batch_writer_brief::Input::decode(prompt)? {
+            validate_batch(&input, &request["card"])?;
+            self.brief = prompt.into();
+        } else {
+            self.brief = pg_spawnd::batch_writer_brief::render(prompt)?.into_owned();
+        }
         self.effort = writer_effort(&request["card"])?;
         self.review_override = super::review_route::review_override(&request["card"])?;
         Ok(())
+    }
+}
+
+fn validate_batch(
+    input: &pg_spawnd::batch_writer_brief::Input,
+    card: &Value,
+) -> Result<(), String> {
+    let policy = card
+        .get("writer_policy")
+        .ok_or("effective batch writer policy missing")?;
+    pg_spawnd::batch_writer_brief::compose(input, "codex", true, Some(policy))?;
+    let keys: std::collections::BTreeSet<_> =
+        input.items.iter().map(|item| item.key.as_str()).collect();
+    let mismatch = || "batch writer items differ from the card assignment".to_owned();
+    let primary = [&card["item_key"], &card["item"]]
+        .into_iter()
+        .find(|key| !key.is_null() && key.as_str() != Some(""));
+    if let Some(assigned) = card.get("item_keys").filter(|keys| !keys.is_null()) {
+        let assigned = assigned.as_array().ok_or_else(mismatch)?;
+        let set = assigned
+            .iter()
+            .map(|key| key.as_str().ok_or_else(mismatch))
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        if assigned.len() != set.len() || set != keys {
+            return Err(mismatch());
+        }
+    } else if primary.is_some() && keys.len() != 1 {
+        return Err(mismatch());
+    }
+    if primary.is_some_and(|key| !key.as_str().is_some_and(|key| keys.contains(key))) {
+        return Err(mismatch());
+    }
+    Ok(())
+}
+
+pub(crate) fn check_brief(prompt: &str, card: &Value) -> Result<(), String> {
+    match pg_spawnd::batch_writer_brief::Input::decode(prompt)? {
+        Some(input) => validate_batch(&input, card),
+        None => pg_spawnd::batch_writer_brief::render(prompt).map(|_| ()),
     }
 }
 
@@ -146,6 +188,8 @@ pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
         return Err("saved writer request names another record".into());
     }
     let _supervisor = crate::writer_control::supervisor_guard(record)?;
+    let saved = read_record(record)?;
+    Host::from_request(&request, &saved, record.to_owned())?.configure(&request)?;
     let mut resumed = crate::writer_control::take_resume(record)?;
     resumed.as_object().ok_or("invalid saved writer record")?;
     native_writer::clear_ended(&mut resumed, native_writer::SAVED_REOPEN_FIELDS);
@@ -239,7 +283,13 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
     if host.disk_gb()? < 5 {
         return Err("disk_low: need 5 GB free to start".into());
     }
-    let prompt = read_prompt(prompt_path)?;
+    let mut prompt = read_prompt(prompt_path)?;
+    if record["review"]["verdict"] == "REQUEST_CHANGES" {
+        prompt = format!(
+            "{}\n\n{prompt}",
+            native_writer::fix_round(&record["review"])
+        );
+    }
     let log_offset = fs::metadata(directory.join("native.log"))
         .map_err(|e| format!("native session log unavailable: {e}"))?
         .len();
@@ -298,4 +348,29 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
             .into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn invalid_saved_request_keeps_the_stop_marker() {
+    let fixture = tempfile::tempdir().unwrap();
+    let directory = fixture
+        .path()
+        .join("runs/run-0123456789abcdef0123456789abcdef");
+    fs::create_dir_all(&directory).unwrap();
+    let record = directory.join("record.json");
+    let saved = json!({"run_id":"run-0123456789abcdef0123456789abcdef", "status":"stopped",
+        "session_id":"fixture", "cwd":directory, "repo":directory, "tool_path":"fixture"});
+    fs::write(&record, saved.to_string()).unwrap();
+    let marker = directory.join("landing-stop.json");
+    fs::write(&marker, saved.to_string()).unwrap();
+    fs::write(
+        directory.join("native-request.json"),
+        json!({"record_path":record, "prompt":"PLANGRAPH-BATCH-INPUT-V1\n{"}).to_string(),
+    )
+    .unwrap();
+    let error = resume_saved(vec![record.to_string_lossy().into()]).unwrap_err();
+    assert!(error.contains("invalid batch writer input"), "{error}");
+    assert_eq!(read_record(&marker).unwrap(), saved);
+    assert_eq!(read_record(&record).unwrap(), saved);
 }

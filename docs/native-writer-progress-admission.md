@@ -21,7 +21,7 @@ write a JSON verdict there, using the returned writer run ID:
   "verdict": "REQUEST_CHANGES",
   "findings": [
     {"severity": "MED", "confirmed": true, "clear_fix": true,
-     "text": "The complete confirmed finding, verbatim."}
+     "path": "src/example.rs", "text": "The complete confirmed finding, verbatim."}
   ]
 }
 ```
@@ -31,7 +31,9 @@ consistent across the writer history; changing PR does not reset an item.
 The orchestrator confirms findings; the spawner counts only `confirmed: true`
 HIGH and MED entries. LOW and unconfirmed entries remain in the snapshot.
 Each finding needs nonempty text and a boolean `confirmed`; `clear_fix` is
-optional and defaults to false. `ACCEPT` requires no confirmed blockers and
+optional and defaults to false. The optional `path` identifies the cited file.
+Native review derives the path from the finding citation, groups paths on fix
+turns and keeps findings with no path. `ACCEPT` requires no confirmed blockers and
 prevents further writer admission for that item. Findings are retained verbatim.
 Missing, malformed, oversized, or differently bound verdicts refuse admission;
 counts supplied directly on the card are never trusted.
@@ -46,7 +48,7 @@ records refuse admission. Runs for an item must use
 one shared state directory. Copying state between hosts is not implemented.
 
 The stop rule has one owner, `stop_reason` in `rust/pg-spawnd/src/round_progress.rs`; the
-Python setting, the batch-writer skill and R-batch-04 quote it. A count must be strictly
+Python setting and R-batch-04 quote it. A count must be strictly
 below every earlier count to reset the miss streak, and round 1 counts as a miss until a
 later round is lower. 3 rounds in a row without a new best refuse the next writer with
 `no_progress` (`5,5,5` refuses writer 4; `6,4,3,2` admits writer 5). From round 3 on a

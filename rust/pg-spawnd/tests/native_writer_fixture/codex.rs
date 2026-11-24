@@ -3,6 +3,8 @@ import sys, pathlib, subprocess, json
 if sys.argv[1] == 'sandbox':
     sys.exit(subprocess.call(sys.argv[sys.argv.index('--') + 1:]))
 prompt = sys.stdin.read()
+if 'Writer receives the complete typed item.' in prompt:
+    print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text': 'fixture-captured-prompt ' + prompt}}))
 if 'sandbox error marker' in prompt:
     print(json.dumps({'type':'thread.started','thread_id':'sandbox-error-session'}))
     print(json.dumps({'type':'item.completed','item':{'type':'command_execution','exit_code':1,'aggregated_output':'bwrap: setting up uid map: Permission denied'}}))
@@ -16,7 +18,8 @@ if 'resume' in sys.argv:
     expected = ('brief marker' if 'external fix' in prompt else
                 'brief marker client marker' if 'client marker' in original else
                 'brief marker reject marker\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n')
-    assert heading and original == expected, original
+    assert heading and (original == expected or ('external fix' in prompt and
+        'Writer receives the complete typed item.' in original)), original
 if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in prompt:
     import os, signal
     attempts = pathlib.Path('attempts')

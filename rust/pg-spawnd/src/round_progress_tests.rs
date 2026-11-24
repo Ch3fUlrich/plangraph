@@ -331,15 +331,6 @@ fn the_places_that_quote_the_stop_rule_name_no_other_round_number() {
         .next()
         .unwrap()
         .to_string();
-    let skill = text("skills/batch-writer/SKILL.md");
-    let step = skill
-        .split("10. On REQUEST_CHANGES")
-        .nth(1)
-        .unwrap()
-        .split("## Never")
-        .next()
-        .unwrap()
-        .to_string();
     let settings = text("src/plangraph/settings.py");
     let setting = settings
         .lines()
@@ -348,11 +339,7 @@ fn the_places_that_quote_the_stop_rule_name_no_other_round_number() {
         .to_string();
     let allowed = [1, STALL_ROUNDS, MAX_ROUNDS, MAX_ROUNDS + 1];
     let number = regex_lite_numbers;
-    for (name, body) in [
-        ("R-batch-04", card),
-        ("batch-writer step 10", step),
-        ("settings.py", setting),
-    ] {
+    for (name, body) in [("R-batch-04", card), ("settings.py", setting)] {
         for n in number(&body) {
             assert!(allowed.contains(&n), "{name} names the round number {n}");
         }

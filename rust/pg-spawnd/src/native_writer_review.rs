@@ -30,9 +30,24 @@ pub(super) fn review_diff_base<'a>(
 pub(super) const TOOLS_ONLY_OPEN: &str = "[tools-only]";
 pub(super) const TOOLS_ONLY_CLOSE: &str = "[/tools-only]";
 
+fn batch_items(brief: &str) -> Option<Vec<pg_worker_core::writer_brief::Item>> {
+    pg_spawnd::batch_writer_brief::Input::decode(brief)
+        .expect("native writer validates its brief before admission")
+        .map(|input| input.items)
+}
+
+fn item_keys(brief: &str) -> Vec<String> {
+    let Some(items) = batch_items(brief) else {
+        return context::item_keys(brief);
+    };
+    let mut keys: Vec<_> = items.into_iter().map(|item| item.key).collect();
+    keys.sort_unstable();
+    keys
+}
+
 /// Oldest-first Git records pair the commit body with its Plan-Item trailer values.
 fn skipped_items(brief: &str, log: &str) -> Vec<String> {
-    let keys = context::item_keys(brief);
+    let keys = item_keys(brief);
     let mut skipped = BTreeMap::new();
     let mut records = log.split_terminator('\0');
     while let (Some(body), Some(trailers)) = (records.next(), records.next()) {
@@ -154,7 +169,7 @@ impl Host {
         Ok(log)
     }
     fn check_item_trailers(&self, pin: &str) -> Result<(), String> {
-        let assigned = context::item_keys(&self.brief);
+        let assigned = item_keys(&self.brief);
         let range = format!("{pin}..HEAD");
         let mut args = vec![
             "log",
@@ -187,15 +202,23 @@ impl Host {
     /// the diff adds with their first callers, and the exact-head check and session logs.
     fn brief_context(&self, base: &str, head: &str) -> Value {
         let mut context = json!({"base_sha": base, "head_sha": head});
-        let keys = context::item_keys(&self.brief);
+        let keys = item_keys(&self.brief);
         if !keys.is_empty() {
             context["item_key"] = json!(keys.join(", "));
         }
-        if let Some(done) = context::done_criteria(&self.brief) {
-            context["done_criteria"] = json!(done);
-        }
-        if let Some(invariants) = context::invariants(&self.brief) {
-            context["invariants"] = json!(invariants);
+        if let Some(items) = batch_items(&self.brief) {
+            context["done_criteria"] = json!(items
+                .iter()
+                .map(|item| format!("{}\n{}", item.key, item.done_criteria))
+                .collect::<Vec<_>>()
+                .join("\n\n"));
+        } else {
+            if let Some(done) = context::done_criteria(&self.brief) {
+                context["done_criteria"] = json!(done);
+            }
+            if let Some(invariants) = context::invariants(&self.brief) {
+                context["invariants"] = json!(invariants);
+            }
         }
         let diff = self.git(&["diff", "-U0", base, head]).unwrap_or_default();
         let symbols = context::changed_symbols(&diff, &|path| {
@@ -277,7 +300,8 @@ impl Host {
         } else {
             format!("[review-skill]\n{skill}\n[/review-skill]\n\n")
         };
-        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR. To read the review diff, run:\ngit diff {diff_base} {head}\n{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let brief = pg_spawnd::batch_writer_brief::render(&self.brief)?;
+        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR. To read the review diff, run:\ngit diff {diff_base} {head}\n{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{brief}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", families.join(", "));
         let messages = self.git(&[
             "log",
             "--reverse",
@@ -336,7 +360,7 @@ impl Host {
         )?;
         let max_min = 60;
         let writer = crate::records::read_record_file(&self.record_path).unwrap_or(Value::Null);
-        let brief_keys = context::item_keys(&self.brief);
+        let brief_keys = item_keys(&self.brief);
         let item = writer["item_key"].as_str().or(match brief_keys.as_slice() {
             [key] => Some(key.as_str()),
             _ => None,
@@ -550,7 +574,8 @@ pub(crate) fn review_verdict(text: &str, head: &str, paths: &[String]) -> Value 
         return weak("weak_verdict");
     }
     let tested = crate::review_test_evidence::reported(text).is_some();
-    json!({"verdict":verdict,"head":head,"text":text,"tested":tested})
+    let findings = crate::round_progress::review_findings(text, paths);
+    json!({"verdict":verdict,"head":head,"text":text,"tested":tested,"findings":findings})
 }
 /// Spawner CLI argv prefix for review runs; PLANGRAPH_NATIVE_REVIEW_CLI (a JSON string
 /// array) replaces the default `python3 -m plangraph.spawner.cli`.

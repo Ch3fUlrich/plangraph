@@ -176,11 +176,15 @@ items of every host (the keeper snapshot, queued runs included): a claim whose f
 another live claim outside the batch is released by its own epoch and skipped as
 `files_reserved_by:<key>`, so two hosts that claim at once never both keep overlapping files
 (both may yield; the next tick retries). A failed launch releases only its own batch's claims.
-The card of a batch lists every key as `item_keys` and the union of the files. Its brief is a `PLANGRAPH-BATCH-INPUT-V1` payload (one item per key, one `Plan-Item` trailer each), so the run receives the batch-writer skill, not the single-task one.
+The card of a multi-item batch lists its `item_keys` and the union of the files.
+Every launch, including one-item batches, uses `PLANGRAPH-BATCH-INPUT-V2` with one
+`Plan-Item` trailer per key. The native driver owns fast checks and review.
 
-`--house-rules PATH` defaults to `deploy/feeder/house-rules.md`. Brief generation
-preserves the keeper title, description (including Why/How), done criteria and
-files and notes/PR/CI metadata, rendering string done criteria as plain text and appending that template with `{{item_key}}` substituted. The card fixes
+Brief generation preserves the full Keeper title, description, done criteria, files
+and notes/PR/CI metadata. Set the effective `writer_policy` and its `revision` in the
+feeder policy. The launch card carries the policy for validation before admission.
+`--house-rules PATH` is retained for compatibility with earlier service invocations.
+The card fixes
 `run_kind` to `native-codex` and `base_ref` to `refs/heads/main`; it also includes
 repo, item key, review directory, files and the policy token estimate. Successful prompts
 and cards remain in private `launch-*` directories beside the event log for the

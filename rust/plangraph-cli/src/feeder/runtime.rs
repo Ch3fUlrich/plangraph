@@ -12,7 +12,6 @@ struct Options {
     live: bool,
     policy: PathBuf,
     facts: PathBuf,
-    rules: PathBuf,
     repo: PathBuf,
 }
 fn options(home: &Path, args: &[String]) -> Result<Options, String> {
@@ -21,7 +20,6 @@ fn options(home: &Path, args: &[String]) -> Result<Options, String> {
         live: false,
         policy: "deploy/feeder/policy.toml".into(),
         facts: home.join(".config/plangraph/feeder-facts.json"),
-        rules: "deploy/feeder/house-rules.md".into(),
         repo: std::env::current_dir().map_err(|_| "cwd unavailable")?,
     };
     let mut once = false;
@@ -35,7 +33,7 @@ fn options(home: &Path, args: &[String]) -> Result<Options, String> {
             "--policy" | "--facts" | "--house-rules" | "--repo" => {
                 let value = PathBuf::from(args.next().ok_or("option requires a path")?);
                 match arg.as_str() { "--policy" => o.policy=value, "--facts" => { o.facts=value; explicit_facts = true; },
-                    "--house-rules" => o.rules=value, _ => o.repo=value }
+                    "--house-rules" => (), _ => o.repo=value }
             }
             _ => return Err("usage: plangraph feed --once [--dry-run] [--live-facts | --facts PATH] [--policy PATH] [--house-rules PATH] [--repo PATH]".into()),
         }
@@ -106,14 +104,13 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     if !eligible {
         return Ok(json!({"decision":"idle","reason":"no_eligible_item","capacity":measurement}));
     }
-    let rules = fs::read_to_string(&o.rules).map_err(|_| "house rules unreadable")?;
     let reviews = home.join(".local/share/plangraph/handoffs/plan-order/reviews");
     let mut row = tick(
         &ready,
         &running,
         &facts,
         &policy,
-        &rules,
+        "",
         &o.repo.to_string_lossy(),
         &reviews.to_string_lossy(),
         o.dry,

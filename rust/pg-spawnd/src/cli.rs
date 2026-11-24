@@ -203,6 +203,42 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);
     }
+    if verb.as_deref() == Some("writer-brief") {
+        use std::io::Read;
+        let mut payload = String::new();
+        std::io::stdin()
+            .take(8 * 1024 * 1024 + 1)
+            .read_to_string(&mut payload)
+            .map_err(|e| format!("read writer brief: {e}"))?;
+        if payload.len() > 8 * 1024 * 1024 {
+            return Err("writer brief exceeds transport limit".into());
+        }
+        let request: serde_json::Value = serde_json::from_str(&payload)
+            .map_err(|e| format!("invalid writer brief request: {e}"))?;
+        let prompt = request["prompt"]
+            .as_str()
+            .ok_or("writer brief prompt missing")?;
+        return match rest.as_slice() {
+            [mode] if mode == "check-native" => {
+                crate::native_writer_host::check_brief(prompt, &request["card"])
+            }
+            [mode, agent] if mode == "compose" => {
+                let input = pg_spawnd::batch_writer_brief::Input::decode(prompt)?
+                    .ok_or("typed writer brief required")?;
+                if input.pushed_fix.is_some() {
+                    return Err("pushed Claude fix rounds require fleet-launch".into());
+                }
+                let policy = request
+                    .get("policy")
+                    .filter(|value| !value.is_null())
+                    .ok_or("effective batch writer policy missing")?;
+                let prompt =
+                    pg_spawnd::batch_writer_brief::compose(&input, agent, false, Some(policy))?;
+                write!(out, "{prompt}").map_err(|error| error.to_string())
+            }
+            _ => Err("usage: pg-spawnd writer-brief check-native | compose AGENT".into()),
+        };
+    }
     if verb.as_deref() == Some("writer-stop") {
         return crate::writer_control::stop_cli(rest);
     }

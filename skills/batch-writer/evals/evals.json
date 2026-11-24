@@ -2,13 +2,13 @@
   {
     "id": "batch-writer-one-session",
     "prompt": "You received a brief with five related items. Carry it out.",
-    "must": ["One commit per item", "Never start another agent except through REVIEW_CMD", "Run REVIEW_CMD exactly as the Run values spell it"],
-    "must_not": ["push after each item", "one writer per item"]
+    "must": ["one commit per item", "Run the checks named for this turn", "report checks verbatim"],
+    "must_not": ["REVIEW_CMD", "keeper.cli"]
   },
   {
     "id": "batch-writer-fix-loop",
     "prompt": "The review of your head returned REQUEST_CHANGES with two HIGH findings.",
-    "must": ["fix every confirmed HIGH and MED finding", "Stop by the one stop rule", "After ACCEPT make no further commit"],
-    "must_not": ["wait for the orchestrator to review", "choose your own reviewer leg"]
+    "must": ["test the root cause", "Class-Search:", "Keep the worktree and commits on a native resume"],
+    "must_not": ["git reset --hard", "choose your own reviewer leg"]
   }
 ]

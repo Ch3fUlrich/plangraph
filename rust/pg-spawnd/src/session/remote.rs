@@ -2,8 +2,8 @@ use super::{
     paths::{basename, io_text, normalize, read_text, repr, resolve, shell_quote, Paths},
     placement::Host,
     process::capture,
-    read_writer_prompt,
     storage::{next_seq, record_path, register_child},
+    writer_brief::read_writer_prompt,
     Caps, Request,
 };
 use crate::pyjson::preserve_order;
@@ -53,7 +53,12 @@ if rc == 0:
 sys.exit(rc)
 "#;
 
-fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String> {
+fn send(
+    request: &Request,
+    paths: &Paths,
+    host: &Host,
+    policy: Option<&Value>,
+) -> Result<Output, String> {
     let args = &request.args;
     let seq = if args.respawn || args.dry {
         None
@@ -81,9 +86,15 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
                 format!("{},{}", caps.handoff, caps.hard),
             ]);
         }
-        restart.prompt.clone()
+        restart
+            .prompt
+            .wire
+            .clone()
+            .unwrap_or_else(|| restart.prompt.text.clone())
     } else {
-        read_writer_prompt(prompt).map_err(|e| io_text(&e, prompt))?
+        let loaded = read_writer_prompt(prompt, policy.and_then(|p| p.get("writer_brief")))
+            .map_err(|e| io_text(&e, prompt))?;
+        loaded.wire.unwrap_or(loaded.text)
     };
     let mcp = args
         .option("mcp")
@@ -136,9 +147,10 @@ pub(super) fn launch(
     request: &Request,
     paths: &Paths,
     host: &Host,
+    policy: Option<&Value>,
     out: &mut dyn Write,
 ) -> io::Result<i32> {
-    let output = match send(request, paths, host) {
+    let output = match send(request, paths, host, policy) {
         Ok(output) => output,
         Err(error) => {
             eprintln!(

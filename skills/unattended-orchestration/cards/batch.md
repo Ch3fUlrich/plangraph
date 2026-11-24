@@ -1,7 +1,7 @@
 # Batch
 
 Role: the batch-mode orchestrator and its writers. One strong writer takes several related
-cards, starts an independent reviewer on its head and fixes findings in the same session.
+cards and fixes findings in the same session. The launch path assigns review ownership.
 The orchestrator combines accepted heads into one batch PR.
 
 R-batch-01: Give one strong writer a brief of related cards with disjoint write sets, in one worktree at the fetched origin default head.
@@ -10,11 +10,20 @@ R-batch-01: Give one strong writer a brief of related cards with disjoint write 
   While Codex is not served, Claude Sonnet or Opus write batches, in Claude Code or through agy; no batch waits for a quota reset (routing DECISIONS 3.58 (2), D-6366).
   Launch with the agent-neutral writer driver (today plan-order `bin/writer.sh NAME WORKTREE BRIEF`; the spawner route picks the leg).
   (why: one context per change set avoids per-card handoffs and cold restarts; source: routing DECISIONS 3.56 (1) D-6357, plangraph:BATCH-PORT-WRITER-DRIVER, LE-BATCH-DRIVER-SINGLE-AGENT)
-R-batch-02: Every brief names the goal, Plan-Item keys, scope files, checks, commit trailers, round cap and status file ending `<NAME> DONE`.
+R-batch-02: Send full Keeper description and done criteria, assigned Plan-Item keys, scope, commit trailers and status path in typed batch input.
+  Use `PLANGRAPH-BATCH-INPUT-V2` for feeder batches of every size and for `plangraph batch-size --brief` with typed `run` and `policy`.
+  The launcher supplies the effective policy and its revision. Forward and respawn the wire payload for validation at delivery.
+  Fleet supplies `writer_brief` from its launch policy. The Python launcher reads `PLANGRAPH_WRITER_BRIEF_POLICY` as JSON.
+  Render the specifications before the writer rules and the run block. Keep the run block within 150 words. Saved V1 native requests remain replayable.
+  Cut over the external plan-order `bin/writer.sh` producer before measuring a full day of delivered Claude briefs.
+  Compare word counts, generic share and instruction counts with the 2026-11-24 audit.
   (why: fixed fields let the driver check completion; source: briefs-0511/SKILLMODES-1.md, plangraph:BATCH-PORT-WRITER-DRIVER)
 R-batch-03: Run fast checks on the exact head before review; require its fast-checks stamp before starting the seat.
   (why: review and CI must not find gate failures first; source: plan-order/bin/fast-checks.sh and review.sh)
 R-batch-04: Start an other-family review with repository access on the exact head, fix confirmed HIGH/MED findings and repeat while progress permits.
+  The native driver owns checks and review. A writer-owned launch supplies a typed review command and wait.
+  A pushed Claude fix supplies the authorized ref and SHA to fleet-launch. It verifies the ref, worktree cleanliness and ancestry before reset.
+  The caller of `pg-spawnd resume --prompt-file` writes additional instructions. The native driver formats findings from its recorded review and retains the ended run's HEAD.
   Native admission: `rust/pg-spawnd/src/round_progress.rs` records confirmed HIGH+MED per writer round.
   Stop rule (one owner): 3 rounds in a row that bring the count no lower than the best so far refuse the next writer with `no_progress`;
   from round 3 on a count still above half of the round-1 count refuses with `slow_progress`; round 9 always refuses with `round_cap`.

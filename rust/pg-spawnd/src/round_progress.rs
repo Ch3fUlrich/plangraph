@@ -12,12 +12,76 @@ mod tests;
 fn refused(reason: &str) -> ToolError {
     crate::placement::parameter(format!("{reason}: writer round admission refused"))
 }
-/// The one owner of the writer review-round stop rule (the Python setting, the batch-writer
-/// skill and the batch card quote it): the loop ends when `STALL_ROUNDS` rounds in a row bring
+/// The one owner of the writer review-round stop rule (the Python setting and the batch card
+/// quote it): the loop ends when `STALL_ROUNDS` rounds in a row bring
 /// the HIGH+MED count no lower than the best count so far, when from round `STALL_ROUNDS`
 /// on the count is still above half of the round-1 count, and never runs past `MAX_ROUNDS`.
 pub(crate) const MAX_ROUNDS: u64 = 8;
 pub(crate) const STALL_ROUNDS: u64 = 3;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct Finding {
+    severity: String,
+    pub(crate) text: String,
+    pub(crate) path: Option<String>,
+    confirmed: bool,
+}
+
+/// Read the review's one-line findings. A missing or ambiguous citation leaves the path empty.
+pub(crate) fn review_findings(text: &str, changed_paths: &[String]) -> Vec<Finding> {
+    static LINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"^\s*(?:[-*>#]+\s*)?(?:[0-9]+[.)]\s*)?(?:FINDING:\s*)?[*\[]*(HIGH|MED|LOW|P[12])\b",
+        )
+        .unwrap()
+    });
+    static CITATION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?:^|[\s`])([\p{L}\w./-]+):[1-9][0-9]*(?:\b|$)").unwrap()
+    });
+    text.lines()
+        .filter_map(|line| {
+            let severity = LINE.captures(line)?;
+            let citation = severity.get(0).unwrap().end();
+            let citation = line[citation..]
+                .split_once(" - ")
+                .map_or(&line[citation..], |(where_, _)| where_);
+            let mut known = changed_paths.iter().filter(|path| {
+                citation
+                    .trim_start_matches([' ', ':', '*', ']', '`'])
+                    .strip_prefix(path.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '`', ' ']))
+            });
+            let path = match (known.next(), known.next()) {
+                (Some(path), None) => Some(path.clone()),
+                (None, _) => CITATION.captures(citation).map(|m| m[1].to_owned()),
+                _ => None,
+            };
+            Some(Finding {
+                severity: match &severity[1] {
+                    "P1" => "HIGH",
+                    "P2" => "MED",
+                    other => other,
+                }
+                .into(),
+                text: line.trim().to_owned(),
+                path,
+                confirmed: true,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn findings_from(review: &Value) -> Vec<Finding> {
+    serde_json::from_value(review["findings"].clone())
+        .unwrap_or_else(|_| review_findings(review["text"].as_str().unwrap_or(""), &[]))
+}
+
+pub(crate) fn blocker_count(review: &Value) -> u64 {
+    findings_from(review)
+        .iter()
+        .filter(|finding| finding.confirmed && matches!(finding.severity.as_str(), "HIGH" | "MED"))
+        .count() as u64
+}
 
 /// Why the next writer round (`next`) must not start, given the confirmed HIGH+MED count of
 /// every round so far.
@@ -70,6 +134,12 @@ pub(crate) fn summarize(
         if !matches!(severity, "HIGH" | "MED" | "LOW")
             || finding["text"].as_str().is_none_or(|s| s.trim().is_empty())
             || finding.get("clear_fix").is_some_and(|v| !v.is_boolean())
+            || finding.get("path").is_some_and(|path| {
+                !path.is_null()
+                    && path.as_str().is_none_or(|path| {
+                        path.trim().is_empty() || path.chars().any(char::is_control)
+                    })
+            })
         {
             return Err(invalid());
         }

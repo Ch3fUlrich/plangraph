@@ -566,6 +566,14 @@ async def native_spawn(self, card, options):
     from .host_ready import harness_path
     tool_env = dict(os.environ)
     tool_env['PATH'] = harness_path(tool_env, native_writer=True)
+    prompt = options.get('prompt', '')
+    if prompt.startswith('PLANGRAPH-BATCH-INPUT-') or '<!-- PLANGRAPH-BATCH-PROMPT-V2 -->' in prompt.splitlines()[:4]:
+        validator = await asyncio.create_subprocess_exec(
+            binary, 'writer-brief', 'check-native', stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, env=tool_env)
+        _, error = await validator.communicate(json.dumps(dict(card=card, prompt=prompt)).encode())
+        if validator.returncode:
+            raise SpawnRefused(error.decode(errors='replace').strip())
     # Resolve on the placed host before creating a run or acknowledging admission.
     probe = await asyncio.create_subprocess_exec(binary, 'native-tools', '--check-sandbox',
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=tool_env)
@@ -596,7 +604,7 @@ async def native_spawn(self, card, options):
     annotate_native(record, card)
     directory = self._path(record['run_id']).parent
     self._save(record)
-    request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))
+    request = dict(record=record, card=card, prompt=prompt, record_path=str(self._path(record['run_id'])))
     atomic_write_private(directory / 'native-request.json', json.dumps(request))
     from .host_ready import cargo_lease, cargo_child_env
     lease = None

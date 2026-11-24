@@ -113,6 +113,7 @@ fn with_failures(reason: String, failures: &[(String, String)]) -> String {
 /// first item's card with every key and the union of the files for a batch.
 fn batch_card(items: &[Task], repo: &str, reviews: &str, policy: &Policy) -> Value {
     let mut c = card(&items[0], repo, reviews, policy);
+    c["writer_policy"] = json!(policy.writer_policy);
     if items.len() > 1 {
         let mut files: Vec<&String> = items.iter().flat_map(|t| &t.files).collect();
         files.sort();
@@ -122,22 +123,34 @@ fn batch_card(items: &[Task], repo: &str, reviews: &str, policy: &Policy) -> Val
     }
     c
 }
-/// The native-codex identity every commit of a feeder run carries (deploy/feeder/house-rules.md);
-/// the commit gate refuses a commit without a Writer trailer.
+/// The commit gate requires the identity of the native feeder writer.
 const WRITER_TRAILER: &str = "Writer: codex/gpt-6.2-sol-medium (native-codex spawner run)";
-/// The shared batch writer input (`PLANGRAPH-BATCH-INPUT-V1`) that pg-spawnd renders into the
-/// `# Items` and `# Run values` sections, so a batch gets the batch-writer skill. The native
-/// worker enforces its own fast-check and review policy; the values here are the brief's text.
-fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
-    if items.len() == 1 {
-        return brief(&items[0], rules);
-    }
-    let named: Vec<Value> = items
+fn batch_brief(items: &[Task], policy: &Policy, reviews: &str) -> Result<String, String> {
+    use pg_worker_core::writer_brief::{Input, Item, Review, RunValues};
+    let named = items
         .iter()
-        .map(|t| {
-            let title = t.title.lines().next().unwrap_or("").trim();
-            json!({"key":t.key, "title":if title.is_empty() { &t.key } else { title },
-                "brief":brief(t, rules)})
+        .map(|task| {
+            let mut context = Vec::new();
+            if let Some(note) = task
+                .fields
+                .get("note")
+                .and_then(Value::as_str)
+                .filter(|note| !note.trim().is_empty())
+            {
+                context.push(format!("Notes:\n{note}"));
+            }
+            let metadata = task_metadata(task);
+            if !metadata.is_empty() {
+                context.push(format!("Task metadata:\n{}", json!(metadata)));
+            }
+            Item {
+                key: task.key.clone(),
+                title: task.title.clone(),
+                description: task.description.clone().unwrap_or_default(),
+                done_criteria: task.done_criteria.as_str().unwrap_or_default().into(),
+                files: task.files.clone(),
+                context: (!context.is_empty()).then(|| context.join("\n\n")),
+            }
         })
         .collect();
     let mut trailers: Vec<String> = items
@@ -145,22 +158,30 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
         .map(|t| format!("Plan-Item: {}", t.key))
         .collect();
     trailers.push(WRITER_TRAILER.into());
-    trailers.push("Changelog: a changelog.d/<ITEM>.md fragment, or a Changelog: skip (<reason>) trailer on every commit without one".into());
+    trailers.push("Harness: codex".into());
+    trailers.push("Changelog: <fragment path or skip (reason)>".into());
     let slug = items[0]
         .key
         .rsplit(':')
         .next()
         .unwrap_or("batch")
         .to_ascii_lowercase();
-    let input = json!({"items":named, "run":{
-        "name":format!("feeder-{slug}"), "worktree":"the run worktree (the current directory)",
-        "base":"origin/main at launch", "writer_family":"gpt",
-        "status_file":format!("{}/status.txt", reviews.trim_end_matches('/')),
-        "fast_checks":["python3 tools/affected_tests.py --base origin/main --head HEAD --local --files-only --run -n 2",
-            "python3 tools/preflight.py --base origin/main --head HEAD --lane"],
-        "review_cmd":"the native worker starts the review of another family on the exact head",
-        "review_wait_seconds":1800, "round_cap":8, "trailers":trailers}});
-    format!("PLANGRAPH-BATCH-INPUT-V1\n{input}")
+    Input {
+        items: named,
+        run: RunValues {
+            name: format!("feeder-{slug}"),
+            base: "origin/main".into(),
+            status_file: format!("{}/status.txt", reviews.trim_end_matches('/')),
+            review: Review::Driver {},
+            policy_revision: policy.writer_policy.revision.clone(),
+            rules: policy.writer_policy.rules.clone(),
+            trailers,
+        },
+        policy: policy.writer_policy.clone(),
+        context: None,
+        pushed_fix: None,
+    }
+    .encode()
 }
 /// One bounded tick. Refused claims are decisions about that item, not a reason
 /// to starve the rest of the order. Infrastructure/start failures stop the tick.
@@ -170,7 +191,7 @@ pub fn tick(
     runs: &[Run],
     facts: &HostFacts,
     policy: &Policy,
-    rules: &str,
+    _legacy_rules: &str,
     repo: &str,
     reviews: &str,
     dry: bool,
@@ -187,8 +208,14 @@ pub fn tick(
             return json!({"decision":"refused","item_key":seed.key,"reason":reason,"skipped":skipped});
         }
         if dry {
+            let brief = match batch_brief(&batch, policy, reviews) {
+                Ok(brief) => brief,
+                Err(reason) => {
+                    return json!({"decision":"refused","item_key":seed.key,"reason":reason,"skipped":skipped,"error":true})
+                }
+            };
             let mut row = json!({"decision":"would_spawn",
-                "card":batch_card(&batch, repo, reviews, policy), "brief":batch_brief(&batch, rules, reviews)});
+                "card":batch_card(&batch, repo, reviews, policy), "brief":brief});
             row["item_key"] = json!(seed.key);
             row["skipped"] = json!(skipped);
             return row;
@@ -213,7 +240,8 @@ pub fn tick(
         }
         let items: Vec<Task> = held.iter().map(|(t, _)| t.clone()).collect();
         let c = batch_card(&items, repo, reviews, policy);
-        let started = launch.start(&c, &batch_brief(&items, rules, reviews));
+        let started =
+            batch_brief(&items, policy, reviews).and_then(|brief| launch.start(&c, &brief));
         match started {
             Ok(run) => {
                 let mut row = decided(run);

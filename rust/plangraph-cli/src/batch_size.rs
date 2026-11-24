@@ -9,6 +9,7 @@
 //! batch: one item fewer after skipped items or a HIGH that survived two rounds, one more
 //! after a batch accepted in round 1.
 use crate::paths::{paths_overlap, repo_relative};
+use pg_worker_core::writer_brief;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -42,6 +43,9 @@ pub struct Item {
     /// The item text (Why, How, Done when) the brief carries; `brief` refuses an item without.
     #[serde(default)]
     pub text: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub done_criteria: Option<String>,
     /// Repository-relative files or module paths from the planner's file list.
     #[serde(default)]
     pub files: Vec<String>,
@@ -84,6 +88,8 @@ pub struct Input {
     /// The `NAME: value` lines of the brief's Run values block, in key order.
     #[serde(default)]
     pub run_values: BTreeMap<String, String>,
+    pub run: Option<writer_brief::RunValues>,
+    pub policy: Option<writer_brief::Policy>,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -286,6 +292,45 @@ pub fn brief(input: &Input, plan: &Plan) -> Result<String, String> {
     if !waiting.is_empty() {
         out.push_str(&format!("Left for the next batch: {}\n", waiting.join(" ")));
     }
+    if let (Some(run), Some(policy)) = (&input.run, &input.policy) {
+        let items = plan
+            .keys
+            .iter()
+            .map(|key| {
+                let missing = || format!("item {key} has incomplete typed writer fields");
+                let item = input
+                    .items
+                    .iter()
+                    .find(|item| item.key == *key)
+                    .ok_or_else(missing)?;
+                Ok(writer_brief::Item {
+                    key: key.clone(),
+                    title: item.title.clone().ok_or_else(missing)?,
+                    description: item.description.clone().ok_or_else(missing)?,
+                    done_criteria: item.done_criteria.clone().ok_or_else(missing)?,
+                    files: item.files.clone(),
+                    context: design_block(input, item)?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut run = run.clone();
+        run.trailers.retain(|line| {
+            line.strip_prefix("Plan-Item: ")
+                .is_none_or(|key| plan.keys.iter().any(|assigned| assigned == key))
+        });
+        return writer_brief::Input {
+            items,
+            run,
+            policy: policy.clone(),
+            context: Some(out),
+            pushed_fix: None,
+        }
+        .encode()
+        .map(|wire| wire + "\n");
+    }
+    if input.run.is_some() || input.policy.is_some() {
+        return Err("typed batch-size brief requires both run and policy".into());
+    }
     out.push_str("\n# Items\n");
     for key in &plan.keys {
         let missing_text = || format!("item {key} has no text for the brief");
@@ -301,22 +346,8 @@ pub fn brief(input: &Input, plan: &Plan) -> Result<String, String> {
             .filter(|t| !t.is_empty())
             .ok_or_else(missing_text)?;
         out.push_str(&format!("\n## {key}\n{text}\n"));
-        if let Some(reference) = item.design_ref.as_deref() {
-            let design = read_design(input, item, reference)?;
-            let fence = "`".repeat(
-                3 + design
-                    .split(|ch| ch != '`')
-                    .map(str::len)
-                    .max()
-                    .unwrap_or(0),
-            );
-            out.push_str(&format!(
-                "\nDesign input (`{reference}`)\n{fence}\n{design}"
-            ));
-            if !design.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(&format!("{fence}\n"));
+        if let Some(design) = design_block(input, item)? {
+            out.push_str(&format!("\n{design}\n"));
         }
     }
     out.push_str("\n# Run values\n");
@@ -324,6 +355,24 @@ pub fn brief(input: &Input, plan: &Plan) -> Result<String, String> {
         out.push_str(&format!("{name}: {value}\n"));
     }
     Ok(out)
+}
+
+fn design_block(input: &Input, item: &Item) -> Result<Option<String>, String> {
+    let Some(reference) = item.design_ref.as_deref() else {
+        return Ok(None);
+    };
+    let design = read_design(input, item, reference)?;
+    let fence = "`".repeat(
+        3 + design
+            .split(|ch| ch != '`')
+            .map(str::len)
+            .max()
+            .unwrap_or(0),
+    );
+    let newline = if design.ends_with('\n') { "" } else { "\n" };
+    Ok(Some(format!(
+        "Design input (`{reference}`)\n{fence}\n{design}{newline}{fence}"
+    )))
 }
 
 /// `plangraph batch-size INPUT.json [--brief]`: print the plan as JSON, or with `--brief` the

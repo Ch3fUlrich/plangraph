@@ -2,7 +2,9 @@ mod card;
 
 use super::{
     paths::{io_text, Paths},
-    policy, read_writer_prompt, settings, Caps, Request,
+    policy, settings,
+    writer_brief::{read_writer_prompt, WriterPrompt},
+    Caps, Request,
 };
 use regex::Regex;
 use serde_json::Value;
@@ -14,7 +16,7 @@ use std::{
 pub(super) struct Restart {
     pub card: PathBuf,
     pub handoff: PathBuf,
-    pub prompt: String,
+    pub prompt: WriterPrompt,
 }
 
 pub(super) fn prepare(
@@ -31,11 +33,12 @@ pub(super) fn prepare(
     };
     let caps = policy::select_caps(active_policy, &args.role, request.override_cap.as_ref()).caps;
     let supplied = Path::new(&args.prompt);
-    let supplied = read_writer_prompt(supplied)
-        .map_err(|e| format!("prompt file: {}", io_text(&e, supplied)))?;
+    let mut supplied =
+        read_writer_prompt(supplied, active_policy.and_then(|p| p.get("writer_brief")))
+            .map_err(|e| format!("prompt file: {}", io_text(&e, supplied)))?;
     let window = settings::effective_window(caps.hard);
     let cwd = Path::new(&args.cwd);
-    for named in handoff_paths(&supplied) {
+    for named in handoff_paths(&supplied.text) {
         let path = card::absolute(cwd, &paths.home, named);
         if path != card.handoff {
             return Err(format!(
@@ -44,7 +47,7 @@ pub(super) fn prepare(
             ));
         }
     }
-    check_caps(&supplied, caps, &window)?;
+    check_caps(&supplied.text, caps, &window)?;
     const RESTART_PREFIX: &str = "Restart from handoff ";
     let mut prompt = format!(
         "{RESTART_PREFIX}{}. Run `resume-digest` first.\n\nModel: {}\nEffort: {}\nCaps: handoff {}, hard {}.\n",
@@ -53,23 +56,30 @@ pub(super) fn prepare(
     // The watchdog supplies a restart line and a blank separator. A forwarded
     // Rust restart can already carry the entire generated preamble.
     let body = supplied
+        .text
         .strip_prefix(&prompt)
         .or_else(|| {
             supplied
+                .text
                 .starts_with(RESTART_PREFIX)
-                .then(|| supplied.split_once('\n').map_or("", |(_, body)| body))
+                .then(|| supplied.text.split_once('\n').map_or("", |(_, body)| body))
         })
-        .map_or(supplied.as_str(), |body| {
+        .map_or(supplied.text.as_str(), |body| {
             body.strip_prefix('\n').unwrap_or(body)
         });
-    if !body.is_empty() {
+    if supplied.wire.is_some() {
+        supplied.text = crate::batch_writer_brief::with_launch_context(&supplied.text, &prompt);
+    } else if !body.is_empty() {
         prompt.push('\n');
         prompt.push_str(body);
+        supplied.text = prompt;
+    } else {
+        supplied.text = prompt;
     }
     Ok(Some(Restart {
         card: card.path,
         handoff: card.handoff,
-        prompt,
+        prompt: supplied,
     }))
 }
 

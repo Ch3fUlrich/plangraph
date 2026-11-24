@@ -12,6 +12,7 @@ struct Fake {
     disk_after_prepare: Option<u64>,
     gates: bool,
     failures: usize,
+    fail_turn: Option<usize>,
     refreshes: usize,
     refresh_error: bool,
     stop_on_refresh: bool,
@@ -34,6 +35,7 @@ struct Fake {
     reviews: Vec<Option<serde_json::Value>>,
     defer_review_on: Option<usize>,
     fail_first_review: bool,
+    first_review_text: Option<&'static str>,
     pushed: Vec<String>,
     push_failures: usize,
     /// Turns from this call number on return the Codex usage-limit error.
@@ -67,7 +69,7 @@ impl Driver for Fake {
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
         self.calls.push(session.map(str::to_owned));
         self.prompts.push(prompt.into());
-        if self.calls.len() <= self.failures {
+        if self.calls.len() <= self.failures || self.fail_turn == Some(self.calls.len()) {
             return Err("codex killed: SIGKILL".into());
         }
         if self.quota_from.is_some_and(|from| self.calls.len() >= from) {
@@ -144,6 +146,11 @@ impl Driver for Fake {
             "{}VERDICT: {verdict}\n",
             "HIGH a.rs:1 - finding\n".repeat(high)
         );
+        let text = if self.reviews.len() == 1 {
+            self.first_review_text.unwrap_or(&text)
+        } else {
+            &text
+        };
         Ok(
             json!({"verdict":verdict, "head":self.review_head.unwrap_or(head),
             "run_id":format!("run-review{}", self.reviews.len()), "text":text}),
@@ -202,6 +209,9 @@ fn native_missing_final_review_resumes_same_session_and_records_host_head() {
     assert_eq!(record["review"]["run_id"], "run-review2");
     assert_eq!(record["exit_code"], 0);
 }
+
+#[path = "native_writer_fix_round_tests.rs"]
+mod fix_round;
 #[test]
 fn native_disk_floor_and_stale_base_prevent_execution() {
     for (mut driver, code) in [
@@ -763,7 +773,9 @@ fn round_stop_is_the_round_progress_rule_capped_at_max_rounds() {
     assert_eq!(round_stop(&[5, 4, 3, 2, 1]), None);
     assert_eq!(round_stop(&[16, 8, 7, 6, 5, 4, 3, 2]), Some("round_cap"));
     assert_eq!(
-        high_med("HIGH a.rs:1 x\n- MED b.rs:2 y\nLOW c\nVERDICT: REQUEST_CHANGES\n"),
+        crate::round_progress::blocker_count(
+            &json!({"text":"HIGH a.rs:1 x\n- MED b.rs:2 y\nLOW c\nVERDICT: REQUEST_CHANGES\n"})
+        ),
         2
     );
 }

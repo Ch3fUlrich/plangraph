@@ -12,6 +12,9 @@ fn item(key: &str, kind: &str, bytes: Option<u64>) -> Item {
         kind: kind.into(),
         expected_bytes: bytes,
         text: Some(format!("Why: {key}\nHow: h\nDone when: d")),
+        title: None,
+        description: None,
+        done_criteria: None,
         files: Vec::new(),
         design_ref: None,
     }
@@ -30,7 +33,45 @@ fn input(writer: Writer, sizes: &[u64]) -> Input {
         limit_bytes: None,
         last: None,
         run_values: BTreeMap::new(),
+        run: None,
+        policy: None,
     }
+}
+
+#[test]
+fn typed_brief_uses_full_fields_for_only_the_selected_items() {
+    let description = format!("Why: {}\nHow: preserve full fields", "word ".repeat(90));
+    let mut input: Input = serde_json::from_value(serde_json::json!({
+        "writer": {"aa_intelligence":1, "context_window":10000},
+        "items": (0..4).map(|i| serde_json::json!({
+            "key":format!("demo:ITEM-{i}"), "kind":"lane", "title":format!("Item {i}"),
+            "description":description, "done_criteria":format!("Done {i}"), "expected_bytes": 100
+        })).collect::<Vec<_>>(),
+        "run": {"name":"batch", "base":"origin/main", "status_file":"status.txt",
+            "review":{"owner":"writer", "command":"fixture-review", "wait_seconds":60},
+            "policy_revision":"fixture", "rules":[],
+            "trailers": (0..4).map(|i| format!("Plan-Item: demo:ITEM-{i}")).collect::<Vec<_>>()},
+        "policy": {"revision":"fixture", "rules":[]}
+    }))
+    .unwrap();
+    let plan = plan(&input);
+    let wire = brief(&input, &plan).unwrap();
+    let payload = writer_brief::Input::decode(&wire).unwrap().unwrap();
+    assert_eq!(plan.count, 3);
+    assert_eq!(payload.items.len(), plan.count);
+    assert!(payload
+        .items
+        .iter()
+        .all(|item| item.description == description));
+    assert!(!payload
+        .run
+        .trailers
+        .iter()
+        .any(|line| line.ends_with("ITEM-3")));
+    input.items[0].done_criteria = None;
+    assert!(brief(&input, &plan)
+        .unwrap_err()
+        .contains("incomplete typed writer fields"));
 }
 
 #[test]

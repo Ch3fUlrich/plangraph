@@ -329,9 +329,23 @@ pub fn check_router_prompt(launcher: &Launcher) {
 
 pub fn check_batch_prompt(launcher: &Launcher) {
     let s = Sandbox::new(launcher);
+    let wire = json!({
+        "items": [{"key":"demo:FIXTURE", "title":"brief marker",
+            "description":"Why: shared launch fixture\nHow: exercise the launch boundary",
+            "done_criteria":"Writer receives this entire specification."}],
+        "run": {"name":"fixture-batch", "base":"origin/main", "status_file":"status.txt",
+            "review":{"owner":"writer", "command":"fixture-review", "wait_seconds":60},
+            "policy_revision":"fixture", "rules":[{"id":"affected_tests", "jobs":2}],
+            "trailers":["Plan-Item: demo:FIXTURE", "Writer: fixture"]},
+        "policy": {"revision":"fixture", "rules":[{"id":"affected_tests", "jobs":2}]}
+    });
+    let policy_path = s.path("router/ops/fleet-launch-policy.json");
+    let mut policy: Value = serde_json::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
+    policy["writer_brief"] = wire["policy"].clone();
+    fs::write(policy_path, policy.to_string()).unwrap();
     fs::write(
         s.path("prompt"),
-        include_str!("../fixtures/batch-writer-input.txt"),
+        format!("PLANGRAPH-BATCH-INPUT-V2\n{wire}"),
     )
     .unwrap();
     let out = s.launch("writer").output().unwrap();
@@ -349,14 +363,18 @@ pub fn check_batch_prompt(launcher: &Launcher) {
         .unwrap()
         .as_str()
         .unwrap();
-    let skill = include_str!("../../../../skills/batch-writer/SKILL.md");
     assert!(
-        prompt.starts_with(&format!("{}\n\n{skill}", header("claude", "implement"))),
+        prompt.starts_with(&header("claude", "implement")),
         "{prompt}"
     );
-    assert!(prompt.contains("\n# Items\n"), "{prompt}");
-    assert_eq!(
-        prompt.split_once("# Run values").map(|(_, run)| run),
-        include_str!("../fixtures/batch-writer-run-values.txt").strip_prefix("# Run values"),
-    );
+    let spec = prompt
+        .find("Writer receives this entire specification.")
+        .unwrap();
+    let rules = prompt.find("# Writer rules").unwrap();
+    let run = prompt.split_once("\n# Run values\n").unwrap().1;
+    assert!(spec < rules, "{prompt}");
+    assert_eq!(prompt.matches("# Writer rules").count(), 1);
+    assert!(run.split_whitespace().count() <= 150);
+    assert!(run.contains("fixture-review"));
+    assert!(run.contains("--files-only --run -n 2"));
 }

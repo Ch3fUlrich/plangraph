@@ -72,12 +72,6 @@ pub(crate) fn round_stop(counts: &[u64]) -> Option<&'static str> {
     }
     crate::round_progress::stop_reason(counts, counts.len() as u64, false)
 }
-/// HIGH+MED (P1/P2) finding lines of a review text.
-pub(crate) fn high_med(text: &str) -> u64 {
-    text.lines()
-        .filter(|line| crate::pre_review::finding_description(line).is_some())
-        .count() as u64
-}
 pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> Value {
     record["manifest"] = json!({
         "name":record["run_id"], "host":record["host"], "worktree":record["cwd"],
@@ -161,6 +155,13 @@ fn lifecycle(
     record: &mut Value,
     brief: &str,
 ) -> Result<i32, (i32, String)> {
+    let prompt = pg_spawnd::batch_writer_brief::Input::decode(brief)
+        .and_then(|typed| {
+            typed
+                .map(|input| pg_spawnd::batch_writer_brief::compose(&input, "codex", true, None))
+                .transpose()
+        })
+        .map_err(|e| (5, e))?;
     admit_disk(driver)?;
     let mut saved_session = if record["landing_resume"] == true {
         Some(
@@ -178,24 +179,30 @@ fn lifecycle(
     admit_disk(driver)?;
     record["base_admitted"] = json!(true);
     driver.save(record).map_err(|e| (6, e))?;
-    let skill = driver.skill(crate::role_header::skill_name(brief)).ok();
-    let prompt = crate::role_header::compose("codex", brief, skill.as_deref());
+    let prompt = prompt.unwrap_or_else(|| {
+        let skill = driver.skill(crate::role_header::skill_name(brief)).ok();
+        crate::role_header::compose("codex", brief, skill.as_deref())
+    });
     for attempt in 1..=3 {
         record["manifest"]["try_count"] = json!(attempt);
         driver.save(record).map_err(|e| (6, e))?;
         // A relaunched session inherits the open findings of the last review.
-        let open = (record["review"]["verdict"] == "REQUEST_CHANGES")
-            .then(|| record["review"]["text"].as_str().unwrap_or("").to_owned());
-        let launch = match open {
-            Some(text) => format!(
-                "{prompt}\nOpen findings of the last review on this worktree; fix them:\n{text}\n"
-            ),
-            None => match latest_push_failure(record) {
-                Some(failure) => {
-                    format!("{prompt}\nUnresolved push failure on this worktree:\n{failure}\n")
-                }
+        let launch = if record["review"]["verdict"] == "REQUEST_CHANGES" {
+            pg_spawnd::batch_writer_brief::with_launch_context(
+                &prompt,
+                &format!(
+                    "Open findings of the last review:\n{}",
+                    fix_round(&record["review"])
+                ),
+            )
+        } else {
+            match latest_push_failure(record) {
+                Some(failure) => pg_spawnd::batch_writer_brief::with_launch_context(
+                    &prompt,
+                    &format!("Unresolved push failure on this worktree:\n{failure}"),
+                ),
                 None => prompt.clone(),
-            },
+            }
         };
         match writer_attempt(driver, record, &launch, saved_session.take().as_deref()) {
             Err((_, error)) if error == STOPPED => return Err((10, error)),
@@ -296,6 +303,34 @@ fn latest_push_failure(record: &Value) -> Option<&str> {
     (record["review"]["head"] == failure["head"])
         .then(|| failure["output"].as_str())
         .flatten()
+}
+
+pub(crate) fn fix_round(review: &Value) -> String {
+    use std::{collections::BTreeMap, fmt::Write};
+    let head = review["head"]
+        .as_str()
+        .unwrap_or("recorded in the last review");
+    let mut out = format!(
+        "The review of your head {head} requests changes. Keep your local HEAD. Fix confirmed HIGH and MED findings with a failing regression test, or refute each with evidence. Commit and end your turn.\n"
+    );
+    let findings = crate::round_progress::findings_from(review);
+    if findings.is_empty() {
+        out.push_str(review["text"].as_str().unwrap_or(""));
+    }
+    let mut groups = BTreeMap::<Option<&str>, Vec<&str>>::new();
+    for finding in &findings {
+        groups
+            .entry(finding.path.as_deref())
+            .or_default()
+            .push(&finding.text);
+    }
+    for (path, findings) in groups {
+        writeln!(out, "\n### {}", path.unwrap_or("Findings without a file")).unwrap();
+        for finding in findings {
+            writeln!(out, "- {finding}\n  Reproduce the root cause and search for the same class. Record one `Class-Search: <pattern> -> <n> hits, <m> changed` line.").unwrap();
+        }
+    }
+    out
 }
 
 fn round_cap(record: &Value) -> bool {
@@ -580,14 +615,14 @@ fn writer_attempt(
                 }
             }
         }
-        let text = record["review"]["text"].as_str().unwrap_or("").to_owned();
+        let count = crate::round_progress::blocker_count(&record["review"]);
         if record["round_counts"].as_array().is_none() {
             record["round_counts"] = json!([]);
         }
         record["round_counts"]
             .as_array_mut()
             .unwrap()
-            .push(json!(high_med(&text)));
+            .push(json!(count));
         let counts: Vec<u64> = record["round_counts"]
             .as_array()
             .unwrap()
@@ -604,7 +639,8 @@ fn writer_attempt(
             record["round_stop"] = json!("no_session");
             return Ok(3);
         }
-        resume(driver, record, &session, &format!("The review of your head {head} requests changes. Fix every confirmed HIGH and MED finding with a test that fails without the fix, or refute it with evidence in your final message; commit and end your turn; keep this session.\n----- review -----\n{text}\n----- end of review -----"))?;
+        let prompt = fix_round(&record["review"]);
+        resume(driver, record, &session, &prompt)?;
     }
 }
 #[cfg(test)]

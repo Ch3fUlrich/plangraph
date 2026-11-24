@@ -3,7 +3,7 @@ name: unattended-orchestration
 description: Orchestrating unattended work via the plangraph spawner and keeper.
 ---
 
-Brief order: use the versioned `src/plangraph/review/{writer,review}_brief.md`
+Piecewise and review brief order: use the versioned `src/plangraph/review/{writer,review}_brief.md`
 templates via `plangraph.review.prompt.render_brief`. Keep role, rules, Rust language
 line, gates and commit trailer format first; put item context and task data last.
 A byte-identical fixed prefix lets the prompt cache reuse it across items.
@@ -73,10 +73,10 @@ A quota-exhausted strong writer leg does not count as served.
 | Mode | Who writes | Brief starts with | Reviews | `auto` choice |
 | --- | --- | --- | --- | --- |
 | `piecewise` (single task) | one worker per card | `skills/implement/SKILL.md` | the orchestrator starts one or two per card by risk | no strong writer leg is served |
-| `batch` | one strong writer per brief of related cards | `skills/batch-writer/SKILL.md` | writer starts another-family review after fast checks, then fixes | a strong writer leg is served |
+| `batch` | one strong writer per brief of related cards | full item specifications | launch path names the owner of the other-family review | a strong writer leg is served |
 
-The mode is chosen per run, not per session: one orchestrator may run a batch and a single
-task side by side, and the first block of the brief fixes the workflow of that run.
+The launch path selects the mode per run. One orchestrator may run a batch and a
+single task side by side.
 In batch mode a card with no related ready card goes out as a batch of one, with the same
 writer review loop. A manual `piecewise` setting, or `auto` with no strong writer leg,
 sends single tasks to workers and keeps the reviews with the orchestrator.
@@ -104,10 +104,9 @@ In every mode:
 - Speedups that do not require smarter agents are the default (rule 3.41).
 
 Batch rules, including the writer round stop rule: [batch](cards/batch.md).
-Every batch writer brief starts with `skills/batch-writer/SKILL.md` verbatim, every
-single-task brief with `skills/implement/SKILL.md` and every review prompt, in both
-modes, with `skills/review/SKILL.md`: an agent that is not told the workflow in its
-prompt does not follow it.
+Batch input carries the whole item specifications and the effective typed launch
+policy. The launcher renders the specifications before the writer skill and run
+values. Piecewise briefs and review prompts use their corresponding role skills.
 These batch-specific instructions govern grouped writers and their in-session fix loop;
 the per-card L3 contract above describes `piecewise` work.
 

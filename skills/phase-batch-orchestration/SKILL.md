@@ -26,9 +26,9 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 - **Package writer**: the first implement leg the spawner route serves, Codex first.
   While Codex is not served, Claude Sonnet or Opus write packages, in Claude Code or
   through agy; a package never waits for a quota reset.
-- **Reviewer**: every writer starts the review of its own head by another model
-  family and fixes the findings in its session (`skills/batch-writer/SKILL.md`,
-  `skills/review/SKILL.md`); the orchestrator adds one read of the merge delta at the
+- **Reviewer**: the launch path names who starts the other-family review of the
+  checked head. The native driver starts it for Codex. The writer fixes the findings
+  in its session. The orchestrator adds one read of the merge delta at the
   batch head ([batch card](../unattended-orchestration/cards/batch.md)).
 - **Router**: writes the GO row, logs operator decisions.
 
@@ -54,9 +54,9 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 
 ## Writer brief (fixed rules)
 
-Every writer brief starts with `skills/batch-writer/SKILL.md` verbatim (byte-identical
-in every brief), then the items, then the run values. Where a line below differs from
-that skill, the skill wins.
+Supply the full item fields and the effective typed launch policy. The launcher
+renders the item specifications first, then the writer rules and a small run block.
+See the [batch card](../unattended-orchestration/cards/batch.md) for the transport.
 
 - One commit per task; trailers `Plan-Item:`, `Writer:`, and `Changelog: skip (...)`
   when the commit adds no fragment.

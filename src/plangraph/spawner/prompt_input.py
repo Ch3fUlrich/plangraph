@@ -197,6 +197,20 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
     if head is None:
         return prompt
     body = prompt[len(head):].lstrip('\n') if prompt.startswith(head) else prompt
+    if _ROLE_KEY.get(role) == 'implement' and '<!-- PLANGRAPH-BATCH-PROMPT-V2 -->' in body.splitlines()[:4]:
+        raise SpawnRefused('forward a typed batch input, not a pre-rendered batch prompt')
+    if _ROLE_KEY.get(role) == 'implement' and body.startswith('PLANGRAPH-BATCH-INPUT-') and not body.startswith('PLANGRAPH-BATCH-INPUT-V1\n'):
+        from plangraph.fleet_snapshot import _projection_binary
+        try:
+            policy = json.loads(os.environ.get('PLANGRAPH_WRITER_BRIEF_POLICY', 'null'))
+            result = subprocess.run(
+                [_projection_binary(), 'writer-brief', 'compose', agent_key(harness, leg_id)],
+                input=json.dumps(dict(prompt=body, policy=policy)), text=True, capture_output=True, timeout=30)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            raise SpawnRefused(f'writer brief validation failed: {exc}') from exc
+        if result.returncode:
+            raise SpawnRefused(result.stderr.strip())
+        return result.stdout
     # A toolless inline seat gets the inline rules from its header only: the review skill below
     # it demands test runs and file reads, and origin/main may serve a skill older than the header.
     inline_review = tool_mode in TOOLLESS_MODES and _ROLE_KEY.get(role) == 'review'

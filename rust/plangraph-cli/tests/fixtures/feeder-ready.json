@@ -60,6 +60,9 @@
     },
     {
       "key": "plangraph:BUILD-CI-FIX",
+      "title": "Repair the CI build",
+      "description": "Why: CI is failing.\nHow: Fix the failing gate.",
+      "done_criteria": "The gate passes.",
       "priority": 0,
       "created_at": "2026-05-01T00:00:00Z",
       "project": "plangraph",

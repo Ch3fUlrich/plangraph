@@ -14,6 +14,7 @@ mod settings;
 mod storage;
 #[cfg(test)]
 mod tests;
+mod writer_brief;
 
 use arguments::{Arguments, ParseError};
 pub(crate) use external_run::agent_roster;
@@ -25,7 +26,6 @@ use request::Request;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
-    borrow::Cow,
     io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -143,7 +143,7 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
         }
     };
     if !placement.local(&host) {
-        return remote::launch(&request, paths, &host, out);
+        return remote::launch(&request, paths, &host, policy.as_ref(), out);
     }
     let admission = Admission::check(
         &request,
@@ -151,7 +151,14 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
         placement.policy_host(&host),
         &paths.state,
     );
-    local(&request, paths, &admission, host.name(), out)
+    local(
+        &request,
+        paths,
+        &admission,
+        host.name(),
+        policy.as_ref(),
+        out,
+    )
 }
 
 fn local(
@@ -159,6 +166,7 @@ fn local(
     paths: &Paths,
     admission: &Admission,
     host: &str,
+    policy: Option<&Value>,
     out: &mut dyn Write,
 ) -> io::Result<i32> {
     let args = &request.args;
@@ -195,8 +203,14 @@ fn local(
         return Ok(2);
     }
     let prompt_path = Path::new(&args.prompt);
-    let supplied = || read_writer_prompt(prompt_path);
-    let prompt = match request
+    let supplied = || {
+        writer_brief::read_writer_prompt(prompt_path, policy.and_then(|p| p.get("writer_brief")))
+    };
+    let writer_brief::WriterPrompt {
+        text: prompt,
+        pushed_fix,
+        ..
+    } = match request
         .restart
         .as_ref()
         .map_or_else(supplied, |restart| Ok(restart.prompt.clone()))
@@ -318,6 +332,13 @@ fn local(
         )?;
         return Ok(0);
     }
+    if let Some(fix) = pushed_fix {
+        if let Err(error) = writer_brief::reset_pushed_fix(Path::new(&args.cwd), &fix) {
+            log("refused", Some(&name));
+            eprintln!("fleet-launch: pushed fix refused: {error}");
+            return Ok(2);
+        }
+    }
     if storage::ledger(admission, true, "starting", Some(&name)).is_err() {
         eprintln!("fleet-launch: fallback ledger unavailable; not starting");
         return Ok(2);
@@ -387,15 +408,4 @@ fn local(
         writeln!(out, "fleet-launch: started-unknown {name}")?;
     }
     Ok(0)
-}
-
-fn read_writer_prompt(path: &Path) -> io::Result<String> {
-    let text = read_text(path)?;
-    match crate::batch_writer_brief::render(&text).map_err(io::Error::other)? {
-        Cow::Borrowed(_) => Ok(text),
-        Cow::Owned(brief) => {
-            const SKILL: &str = include_str!("../../../../skills/batch-writer/SKILL.md");
-            Ok(crate::role_header::compose("claude", &brief, Some(SKILL)))
-        }
-    }
 }

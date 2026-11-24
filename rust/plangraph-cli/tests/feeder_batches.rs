@@ -13,6 +13,7 @@ fn facts(host: &str) -> HostFacts {
 }
 fn item(key: &str, priority: i64, files: &[&str]) -> Value {
     json!({"key":format!("plangraph:{key}"),"title":key,"priority":priority,"state":"open",
+        "description":"Why: exercise feeder launch\nHow: send the full item", "done_criteria":"Writer receives the item.",
         "created_at":"2026-01-01T00:00:00Z","note":format!("files: {}", json!(files))})
 }
 fn ready(items: Vec<Value>) -> Value {
@@ -348,6 +349,28 @@ fn dry_run_shows_the_batch_without_claiming() {
         .iter()
         .any(|t| t.as_str().unwrap().starts_with("Writer: ")));
     assert!(registry.lock().unwrap().claimed.is_empty());
+}
+
+#[test]
+fn incomplete_brief_releases_each_claim_without_starting_a_writer() {
+    let seed = item("ALPHA-1", 9, &["src/a.rs"]);
+    let mut missing = item("ALPHA-2", 8, &["src/b.rs"]);
+    missing["done_criteria"] = Value::Null;
+    let items = vec![seed, missing];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    let row = drive(&ready(items), &mut host, "dell", 2, false);
+    assert_eq!(row["decision"], "refused", "{row}");
+    let registry = registry.lock().unwrap();
+    assert!(registry.started.is_empty());
+    assert!(registry.claimed.is_empty());
+    assert_eq!(
+        registry.releases,
+        [
+            ("plangraph:ALPHA-1".into(), 100),
+            ("plangraph:ALPHA-2".into(), 101)
+        ]
+    );
 }
 
 #[test]

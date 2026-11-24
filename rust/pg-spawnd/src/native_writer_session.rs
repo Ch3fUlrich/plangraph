@@ -16,7 +16,10 @@ fn follow_up_payload(
     session: Option<&str>,
     prompt: &str,
 ) -> Result<String, String> {
-    let turn = format!("{prompt}\nReview directory: {}\n", host.reviews.display());
+    let turn = pg_spawnd::batch_writer_brief::with_launch_context(
+        prompt,
+        &format!("Review directory: {}", host.reviews.display()),
+    );
     if session.is_none() {
         return Ok(turn);
     }
@@ -25,7 +28,8 @@ fn follow_up_payload(
         .suffix(".md")
         .tempfile_in(directory)
         .map_err(|e| format!("follow-up brief: {e}"))?;
-    write!(file, "{}\n\n# Follow-up\n\n{turn}", host.brief)
+    let brief = pg_spawnd::batch_writer_brief::render(&host.brief)?;
+    write!(file, "{brief}\n\n# Follow-up\n\n{turn}")
         .and_then(|()| file.as_file().sync_all())
         .map_err(|e| format!("follow-up brief: {e}"))?;
     let path = file

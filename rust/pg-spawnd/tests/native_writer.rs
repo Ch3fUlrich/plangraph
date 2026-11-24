@@ -4,8 +4,6 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
-#[path = "common/binary.rs"]
-mod binary;
 #[path = "native_writer_fixture/codex.rs"]
 mod codex_fixture;
 use std::{fs, path::Path, process::Command};
@@ -178,11 +176,7 @@ for tool in ('cargo', 'git', 'codex'):
         pg_worker_core::executable_test_support::write_executable(&codex, codex_fixture::CODEX);
         codex
     };
-    let spawnd = if systemd_path {
-        env!("CARGO_BIN_EXE_pg-spawnd")
-    } else {
-        binary::spawnd()
-    };
+    let spawnd = env!("CARGO_BIN_EXE_pg-spawnd");
     std::os::unix::fs::symlink(spawnd, bin.join("fixture-spawnd")).unwrap();
     // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
     let review_cli = dir.join("review-cli.py");
@@ -292,6 +286,7 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
 import asyncio, json, os, pathlib, time
 from unittest.mock import patch
 from plangraph.spawner.service import SpawnService
+from plangraph.routing_errors import SpawnRefused
 from plangraph.spawner.base_fresh import admitted_spawn
 from plangraph.spawner import overflow, seat_spawn
 root = pathlib.Path(os.environ['FIXTURE_DIR'])
@@ -312,7 +307,27 @@ async def check():
     card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main', item_key='demo:FIXTURE',
                 review_leg='claude-sonnet-5-5-high', review_override_reason='D-6550 fixture credential review')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
-        prompt = os.environ['FIXTURE_BATCH_INPUT'] if os.environ['FIXTURE_SYSTEMD_PATH'] == '1' else 'brief marker'
+        if os.environ['FIXTURE_SYSTEMD_PATH'] == '1':
+            prompt = os.environ['FIXTURE_BATCH_INPUT']
+        else:
+            policy = dict(revision='fixture', rules=[])
+            value = dict(items=[dict(key='demo:FIXTURE', title='brief marker',
+                description='Why: verify the prompt at the launch boundary\nHow: capture actual Codex stdin',
+                done_criteria='Writer receives the complete typed item.')],
+                run=dict(name='fixture', base='origin/main', status_file='status.txt', review=dict(owner='driver'),
+                    policy_revision='fixture', rules=[], trailers=['Plan-Item: demo:FIXTURE', 'Writer: fixture']),
+                policy=policy)
+            card['writer_policy'] = policy
+            prompt = 'PLANGRAPH-BATCH-INPUT-V2\n' + json.dumps(value)
+            invalid = dict(value, run=dict(value['run'], policy_revision='stale'))
+            try:
+                await service.spawn(card=card, prompt='PLANGRAPH-BATCH-INPUT-V2\n' + json.dumps(invalid),
+                    wait_seconds=0)
+            except SpawnRefused as refused:
+                assert 'stale batch writer' in str(refused), refused
+            else:
+                raise AssertionError('direct native launch accepted a stale brief')
+            assert not service.tasks
         run = await admitted_spawn(service, dict(card=card, prompt=prompt))
         assert run.get('base_admitted') or run['status'] != 'running', run
         assert run['run_id'] in service.tasks, run
@@ -341,6 +356,13 @@ async def check():
         assert pathlib.Path(record['resolved_tools']['codex']) == expected, record
         assert str(expected.parent) in record['tool_path'].split(os.pathsep), record
         return
+    log = (pathlib.Path(record['cwd']).parent / 'native.log').read_text()
+    capture = next(json.loads(line)['item']['text'].removeprefix('fixture-captured-prompt ')
+        for line in log.splitlines() if 'fixture-captured-prompt' in line)
+    assert capture.index('Writer receives the complete typed item.') < capture.index('# Writer rules'), capture
+    assert capture.count('# Writer rules') == 1, capture
+    run_block = capture.split('\n# Run values\n', 1)[1].split('\nReview directory:', 1)[0]
+    assert len(run_block.split()) <= 150 and 'the driver runs fast checks and review' in run_block, capture
     # A remote ref that is absent must never resolve the local-only branch.
     subprocess = __import__('subprocess')
     prompt_file = root/'external-fix.md'
