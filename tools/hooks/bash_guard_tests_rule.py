@@ -175,6 +175,7 @@ def shared_target():
 
 
 _TARGET_ENVS = ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR")
+_TRACKED = _TARGET_ENVS + ("CARGO_HOME",)  # the variables that decide where cargo builds
 _BUILDING = frozenset(("build", "b", "check", "c", "test", "t", "nextest", "clippy", "run", "r",
                        "bench", "doc", "d", "rustc", "llvm-cov"))
 
@@ -235,55 +236,71 @@ def _nearest_checkout(path):
     return None
 
 
-def _configured_target(rest, cwd, envs, host_env):
-    """`build.target-dir` from `--config` or a cargo config file: (path, directory it is relative to), else (None, cwd).
-
-    Files are read from cwd upward (the nearest wins), then `$CARGO_HOME/config.toml`; a relative path
-    in one is relative to the directory that holds its `.cargo`, one given with `--config` to cwd.
-    """
+def _toml_target(text):
+    """`build.target-dir` of TOML text (a file, or the `build.target-dir=VALUE` of `--config`), else None."""
     try:
         import tomllib
-    except ImportError:  # Python < 3.11: no TOML reader
-        return None, cwd
+        value = tomllib.loads(text)["build"]["target-dir"]
+    except (ImportError, ValueError, KeyError, TypeError):  # no TOML reader, not TOML, or no such key
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _configured_target(rest, cwd, envs, host_env):
+    """`build.target-dir` as cargo reads it: (path, directory it is relative to), else (None, cwd).
+
+    Cargo's order: `--config` on the command line (the last one that sets it; `KEY=VALUE`, relative to cwd, or a
+    config FILE, relative to its directory's parent), then `CARGO_BUILD_TARGET_DIR`, then the files from cwd
+    upward (the nearest wins; `.cargo/config` is used when it exists beside a `config.toml`) and
+    `$CARGO_HOME/config.toml`, relative to the parent of the directory that holds the file.
+    """
+    found = (None, cwd)
     for k, word in enumerate(rest):
         given = (rest[k + 1] if word == "--config" and k + 1 < len(rest)
-                 else word.split("=", 1)[1] if word.startswith("--config=") else "")
-        if given.startswith("build.target-dir"):
+                 else word.split("=", 1)[1] if word.startswith("--config=") else None)
+        if given is None:
+            continue
+        if given.startswith("build.target-dir") and (value := _toml_target(given)) is not None:
+            found = (value, cwd)
+        elif "=" not in given or Path(_expand(given, cwd)).is_file():
             try:
-                value = tomllib.loads(given)["build"]["target-dir"]
-            except (tomllib.TOMLDecodeError, KeyError, TypeError):
-                continue
-            if isinstance(value, str):
-                return value, cwd
+                file = _expand(given, cwd)
+                if (value := _toml_target(file.read_text())) is not None:
+                    found = (value, file.parent.parent)
+            except OSError:
+                pass
+    if found[0] is not None:
+        return found
+    value = envs["CARGO_BUILD_TARGET_DIR"] if "CARGO_BUILD_TARGET_DIR" in envs else host_env.get("CARGO_BUILD_TARGET_DIR")
+    if value:
+        return value, cwd
     cargo_home = (envs["CARGO_HOME"] if "CARGO_HOME" in envs else host_env.get("CARGO_HOME")) or str(Path.home() / ".cargo")
-    homes = [(Path(directory) / ".cargo", Path(directory)) for directory in (cwd, *Path(cwd).parents)]
-    homes.append((_expand(cargo_home, cwd), _expand(cargo_home, cwd).parent))
-    for config_dir, base in homes:
-        for name in ("config.toml", "config"):
+    directories = [Path(d) / ".cargo" for d in (cwd, *Path(cwd).parents)] + [_expand(cargo_home, cwd)]
+    for directory in directories:
+        for name in ("config", "config.toml"):
             try:
-                value = tomllib.loads((config_dir / name).read_text())["build"]["target-dir"]
-            except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError):
+                value = _toml_target((directory / name).read_text())
+            except OSError:
                 continue
-            if isinstance(value, str):
-                return value, base
+            if value is not None:
+                return value, directory.parent
+            break  # the file cargo reads in this directory has no target-dir
     return None, cwd
 
 
 def _cargo_target_checkout(rest, envs, workdir, host_env=None):
     """The one target resolver: the main checkout or agent worktree a cargo build would fill, else None.
 
-    The target is `--target-dir`, then `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET_DIR`, relative to the
-    directory cargo runs in (cwd, `cd`, `-C`; never `--manifest-path`); with none, cargo writes
+    The target is `--target-dir`, `CARGO_TARGET_DIR`, then cargo's configuration (`_configured_target`), relative
+    to the directory cargo runs in (cwd, `cd`, `-C`; never `--manifest-path`); with none, cargo writes
     `<workspace>/target` inside the checkout the manifest's directory belongs to.
     """
     where, project = workdir
+    host_env = os.environ if host_env is None else host_env
     target = next((rest[k + 1] for k, a in enumerate(rest[:-1]) if a == "--target-dir"), None)
     target = target or next((a.split("=", 1)[1] for a in rest if a.startswith("--target-dir=")), None)
-    host_env = os.environ if host_env is None else host_env
-    for var in _TARGET_ENVS:
-        # A name mapped to None was unset (`env -u`, `unset`): it must not fall back to the hook's own environment.
-        value = envs[var] if var in envs else host_env.get(var)
-        target = target or value or None
+    # A name mapped to None was unset (`env -u`, `unset`): it must not fall back to the hook's own environment.
+    target = target or (envs["CARGO_TARGET_DIR"] if "CARGO_TARGET_DIR" in envs else host_env.get("CARGO_TARGET_DIR")) or None
     if target is None:
         target, where = _configured_target(rest, where, envs, host_env)
     if target is None:
@@ -306,135 +323,207 @@ def _cargo_subcommand(rest):
 
 
 def _env_apply(words, base):
-    """`env`'s options and assignments, applied in the order `env` reads them.
+    """What the `env` among `words` (the words before the command) does to the environment `base`.
 
-    Returns (environment, cleared): names mapped to None were unset; with `-i` only what follows survives.
+    Returns (environment, cleared, reached): names mapped to None are unset; `-i` clears everything before it;
+    `reached` is False when `env` would run something else than the next word (an option after an assignment:
+    GNU env parses options first, then NAME=VALUE operands, then the command).
     """
-    from bash_guard_rules import _ENV_ASSIGN_RE
-    env, cleared, it = dict(base), False, iter(words)
-    for word in it:
-        if word in ("-i", "--ignore-environment", "-"):
+    from bash_guard_rules import _ENV_ASSIGN_RE, _basename
+    k = next((n for n, w in enumerate(words) if _basename(w) == "env"), None)
+    if k is None:
+        return dict(base), False, True
+    env, cleared, rest, n = dict(base), False, words[k + 1:], 0
+    while n < len(rest) and rest[n].startswith("-") and rest[n] != "--":
+        word, n = rest[n], n + 1
+        if word == "-" or word == "--ignore-environment":
             env, cleared = {}, True
-        elif word in ("-u", "--unset"):
-            env[next(it, "")] = None
+        elif word == "--unset" or word == "--chdir" or word == "--split-string":
+            arg, n = (rest[n] if n < len(rest) else ""), n + 1
+            if word == "--unset":
+                env[arg] = None
         elif word.startswith("--unset="):
             env[word.split("=", 1)[1]] = None
-        elif _ENV_ASSIGN_RE.match(word):
-            name, value = word.split("=", 1)
-            env[name] = value
-    return env, cleared
+        elif not word.startswith("--"):
+            for pos, letter in enumerate(word[1:], 1):
+                if letter == "i":
+                    env, cleared = {}, True
+                elif letter in "uCS":  # takes the rest of the word, else the next word
+                    arg = word[pos + 1:]
+                    if not arg:
+                        arg, n = (rest[n] if n < len(rest) else ""), n + 1
+                    if letter == "u":
+                        env[arg] = None
+                    break
+    n += n < len(rest) and rest[n] == "--"
+    while n < len(rest) and _ENV_ASSIGN_RE.match(rest[n]):
+        name, value = rest[n].split("=", 1)
+        env[name], n = value, n + 1
+    return env, cleared, not (n < len(rest) and rest[n].startswith("-"))
 
 
 class _ShellVars:
-    """Shell variables: `exported` is what later commands receive (None = unset or unexported);
-    `local` holds the values of variables that are not exported yet."""
+    """The tracked variables as one shell sees them: a current value and, independently, whether it is exported."""
 
     def __init__(self, exported=None):
-        self.exported, self.local = dict(exported or {}), {}
+        self.value, self.exported = {}, {}
+        for name, value in (exported or {}).items():  # None: unset by an enclosing `env -u` or `unset`
+            self.value[name], self.exported[name] = value, value is not None
 
-    def _is_exported(self, name):
-        return (self.exported[name] if name in self.exported else os.environ.get(name)) is not None
+    def _get(self, name):
+        if name in self.value:
+            return self.value[name], self.exported.get(name, False)
+        host = os.environ.get(name)  # the hook's own environment is what the shell started with
+        return host, host is not None
 
-    def _value(self, name):
-        if name in self.exported:
-            return self.exported[name]
-        return self.local[name] if name in self.local else os.environ.get(name)
+    def environment(self):
+        """What a command receives: exported values, None for a name that is set but not exported or unset."""
+        return {name: value if self.exported.get(name) else None for name, value in self.value.items()}
 
-    def assign(self, word, export=False):
-        """`NAME=VAL` / `NAME+=VAL`: an exported variable stays exported with the new value."""
-        name, has_value, value = word.partition("=")
-        if name.endswith("+") and has_value:
-            name, value = name[:-1], (self._value(name[:-1]) or "") + value
-        if name not in _TARGET_ENVS or not has_value:
+    def assign(self, word, export=None):
+        """`NAME=VAL` / `NAME+=VAL` / bare `NAME`, optionally exporting (True) or unexporting (False) it."""
+        name, has_value, text = word.partition("=")
+        append = has_value and name.endswith("+")
+        name = name[:-1] if append else name
+        if name not in _TRACKED:
             return
-        if export or self._is_exported(name):
-            self.exported[name] = value
+        current, exported = self._get(name)
+        if has_value:
+            self.value[name] = (current or "") + text if append else text
         else:
-            self.local[name] = value
+            self.value.setdefault(name, current)
+        self.exported[name] = exported if export is None else export
 
     def unset(self, name):
-        self.exported[name] = None
-        self.local.pop(name, None)
+        self.value[name], self.exported[name] = None, False
 
     def declare(self, builtin, args):
-        """`export` / `declare` / `typeset`: -x or `export` exports; `export -n` and `declare +x` stop exporting."""
+        """`export` / `declare` / `typeset`: `export` and -x export; `export -n` and `declare +x` stop exporting."""
         flags = "".join(w[1:] for w in args if re.match(r"^-[A-Za-z]+$", w))
         unflags = "".join(w[1:] for w in args if re.match(r"^\+[A-Za-z]+$", w))
-        unexport = "n" in flags if builtin == "export" else "x" in unflags
-        export = not unexport and (builtin == "export" or "x" in flags)
+        if builtin == "export":
+            export = False if "n" in flags else True
+        else:
+            export = True if "x" in flags else False if "x" in unflags else None
         for word in args:
-            name = word.partition("=")[0].removesuffix("+")
-            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
-                continue
-            current = self._value(name)
-            if unexport:
-                if current is not None:
-                    self.local[name] = current
-                self.exported[name] = None
-            self.assign(word, export=export)
-            if export and "=" not in word and name in self.local:  # `export NAME` after `NAME=VAL`
-                self.exported[name] = self.local.pop(name)
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?(=|$)", word):
+                self.assign(word, export)
+
+
+class _Shell:
+    """One possible state of the shell running a command list: its directory and variables."""
+
+    def __init__(self, cwd, variables):
+        self.cwd, self.variables = cwd, variables
+
+    def copy(self):
+        clone = _ShellVars()
+        clone.value, clone.exported = dict(self.variables.value), dict(self.variables.exported)
+        return _Shell(self.cwd, clone)
+
+    def key(self):
+        return (str(self.cwd), tuple(sorted(self.variables.value.items())), tuple(sorted(self.variables.exported.items())))
+
+
+_MAX_SHELLS = 16  # possible states kept when conditional commands branch; beyond it the oldest are kept
+_OPENERS = frozenset(("if", "while", "until", "for", "select", "case", "{", "function", "coproc"))
+_CLOSERS = frozenset(("fi", "done", "}", "esac"))
 
 
 def main_checkout_cargo(command, cwd, depth=0, inherited=None):
-    """Deny message for a cargo build whose target dir is a main checkout's or agent worktree's own, wherever cwd, `cd`, `-C` or `--manifest-path` put it."""
+    """Deny message for a cargo build whose target dir is a main checkout's or agent worktree's own, wherever cwd, `cd`, `-C` or `--manifest-path` put it.
+
+    The shell state (directory, exported variables) follows the command list: a `cd` or `export` reaches later
+    commands only from the current shell (not a subshell, `$( )`, pipeline or background job); one that may not
+    run (after `&&` or `||`, inside `if`, a loop, a group) leaves both possibilities open and a build is
+    refused when either would fill a checkout.
+    """
     if depth > 3:
         return None
     from bash_guard_rules import _ENV_ASSIGN_RE, _SHELLS, _WRAPPERS, _basename, _shell_strings
-    from bash_guard_rules2 import lead, scan
-    cwd = Path(cwd or Path.cwd())
-    commands, _ = scan(command)
-    variables = _ShellVars(inherited)  # what later commands see
-    for cmd in commands:
+    from bash_guard_rules2 import lead, scan_flow
+    commands, flow = scan_flow(command)
+    levels = [[_Shell(Path(cwd or Path.cwd()), _ShellVars(inherited))]]  # the possible states at each scope depth
+    compound = [0]  # open `if` / loop / group constructs at each scope depth
+    for cmd, (before, after, level) in zip(commands, flow):
+        if level and before == "":  # the first command of a subshell or substitution: a copy of the enclosing state
+            del levels[level:], compound[level:]
+            levels.append([shell.copy() for shell in levels[level - 1]])
+            compound.append(0)
+        del levels[level + 1:], compound[level + 1:]
+        shells = levels[level]
         pos = [w for w in cmd if not w.redir]
         words = [w.text for w in pos]
         i = lead(pos)
+        first = words[0] if words else ""
+        compound[level] += first in _OPENERS
+        pipelined = before in ("|", "|&") or after in ("|", "|&", "&")  # runs in a subshell of its own
+        conditional = before in ("&&", "||") or i > 0 or compound[level] > 0
         start = i
         while i < len(words) and _ENV_ASSIGN_RE.match(words[i]):
             i += 1
-        # only the assignments before the command word are its environment
-        envs = {**variables.exported, **dict(w.split("=", 1) for w in words[start:i])}
-        if i >= len(words):
-            for word in words[start:i]:  # a bare `NAME=VAL` changes a variable that is already exported
-                variables.assign(word)
-            continue
-        if _basename(words[i]) == "unset":
-            for name in words[i + 1:]:
-                if not name.startswith("-"):
-                    variables.unset(name)
-            continue
-        if _basename(words[i]) in ("export", "declare", "typeset"):
-            variables.declare(_basename(words[i]), words[i + 1:])
-            continue
-        # Wrapper options are not modelled: every later word may be the command, as check_command reads it.
-        wrapped = _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS or any(_basename(w) in _PGTEST for w in words[i:i + 3])
-        evaled = False
-        if _basename(words[i]) in ("cd", "pushd") and len(words) > i + 1:
-            cwd = _expand(words[i + 1], cwd)  # later commands run there
-            continue
-        for j in range(i, len(words)) if wrapped else (i,):
-            name = _basename(words[j])
-            if name in _SHELLS:
-                nested = _shell_strings(pos, j + 1)
-            elif name == "eval" and not evaled:
-                evaled, nested = True, [" ".join(words[j + 1:])]
-            else:
-                nested = []
-            env, cleared = _env_apply(words[i:j], envs)  # `env -u` / `env NAME=VAL` before this word
-            wrapped_env = {**{var: None for var in _TARGET_ENVS}, **env} if cleared else env
-            for string in nested:
-                reason = main_checkout_cargo(string, cwd, depth + 1, wrapped_env)
-                if reason:
-                    return reason
-            if name != "cargo":
+        prefix = dict(w.split("=", 1) for w in words[start:i])  # only the assignments before the command word
+        changed = []  # the states this command leaves behind, were it to run
+        for shell in shells:
+            envs = {**shell.variables.environment(), **prefix}
+            if i >= len(words) or _basename(words[i]) in ("unset", "export", "declare", "typeset", "cd", "pushd"):
+                after_run = shell.copy()
+                if i >= len(words):
+                    for word in words[start:i]:  # a bare `NAME=VAL` changes a variable that is already exported
+                        after_run.variables.assign(word)
+                elif _basename(words[i]) == "unset":
+                    for name in words[i + 1:]:
+                        if not name.startswith("-"):
+                            after_run.variables.unset(name)
+                elif _basename(words[i]) in ("export", "declare", "typeset"):
+                    after_run.variables.declare(_basename(words[i]), words[i + 1:])
+                elif len(words) > i + 1:
+                    after_run.cwd = _expand(words[i + 1], shell.cwd)  # later commands run there
+                changed.append(after_run)
                 continue
-            rest = words[j + 1:]
-            if "--" in rest:  # what follows goes to the program cargo runs, not to cargo
-                rest = rest[:rest.index("--")]
-            sub = _cargo_subcommand(rest)
-            if sub not in _BUILDING:
-                continue
-            root = _cargo_target_checkout(rest, env, _cargo_workdir(rest, cwd), {} if cleared else None)
-            if root is not None:
-                return MAIN_TARGET_MESSAGE % (sub, root, shared_target())
+            reason = _check_run(words, pos, i, envs, shell.cwd, depth)
+            if reason:
+                return reason
+            changed.append(shell)
+        if not pipelined and changed != shells:
+            kept = changed if not conditional else [*shells, *changed]
+            unique = {shell.key(): shell for shell in kept}
+            levels[level] = list(unique.values())[:_MAX_SHELLS]
+        compound[level] = max(0, compound[level] - (first in _CLOSERS))
+    return None
+
+
+def _check_run(words, pos, i, envs, cwd, depth):
+    """Deny message when the command at words[i] (a wrapper, a shell or cargo itself) runs a cargo build into a checkout."""
+    from bash_guard_rules import _SHELLS, _WRAPPERS, _basename, _shell_strings
+    # Wrapper options are not modelled: every later word may be the command, as check_command reads it.
+    wrapped = _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS or any(_basename(w) in _PGTEST for w in words[i:i + 3])
+    evaled = False
+    for j in range(i, len(words)) if wrapped else (i,):
+        name = _basename(words[j])
+        if name in _SHELLS:
+            nested = _shell_strings(pos, j + 1)
+        elif name == "eval" and not evaled:
+            evaled, nested = True, [" ".join(words[j + 1:])]
+        else:
+            nested = []
+        env, cleared, reached = _env_apply(words[i:j], envs)  # `env -u` / `env NAME=VAL` before this word
+        if not reached:
+            continue
+        wrapped_env = {**{var: None for var in _TRACKED}, **env} if cleared else env
+        for string in nested:
+            reason = main_checkout_cargo(string, cwd, depth + 1, wrapped_env)
+            if reason:
+                return reason
+        if name != "cargo":
+            continue
+        rest = words[j + 1:]
+        if "--" in rest:  # what follows goes to the program cargo runs, not to cargo
+            rest = rest[:rest.index("--")]
+        sub = _cargo_subcommand(rest)
+        if sub not in _BUILDING:
+            continue
+        root = _cargo_target_checkout(rest, env, _cargo_workdir(rest, cwd), {} if cleared else None)
+        if root is not None:
+            return MAIN_TARGET_MESSAGE % (sub, root, shared_target())
     return None

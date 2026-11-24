@@ -1,5 +1,7 @@
 """A cargo build inside a main checkout without a shared target is refused (LE-CODING-VM-DISK-EMERGENCY-FIFTH-UNCAPPED-TARGETS)."""
 import json
+import os
+import shutil
 import subprocess
 import sys
 
@@ -370,8 +372,9 @@ def test_options_after_the_double_dash_belong_to_the_program_not_to_cargo(repos,
     ("export CARGO_TARGET_DIR=/var/cache/shared; export -n CARGO_TARGET_DIR; export CARGO_TARGET_DIR; cargo build", 0),
     ("CARGO_TARGET_DIR=/var/cache/shared; unset CARGO_TARGET_DIR; export CARGO_TARGET_DIR; cargo build", 2),
     ("env -u CARGO_TARGET_DIR CARGO_TARGET_DIR=/var/cache/shared cargo build", 0),
-    ("env CARGO_TARGET_DIR=/var/cache/shared -u CARGO_TARGET_DIR cargo build", 2),
-    ("env -i CARGO_TARGET_DIR=/var/cache/shared -u CARGO_TARGET_DIR cargo build", 2),
+    # GNU env reads options before assignments: a later `-u` is the command it tries to run, never cargo.
+    ("env CARGO_TARGET_DIR=/var/cache/shared -u CARGO_TARGET_DIR cargo build", 0),
+    ("env -i CARGO_TARGET_DIR=/var/cache/shared -u CARGO_TARGET_DIR cargo build", 0),
 ])
 def test_shell_values_export_state_and_env_options_are_read_in_order(repos, command, expected):
     main, _ = repos
@@ -417,3 +420,142 @@ def test_a_config_option_on_the_command_line_sets_the_target(repos, tmp_path):
     assert hook(f"cargo --config 'build.target-dir=\"{main}/rust/target\"' build", out).returncode == 2
     assert hook("cargo build --config 'build.target-dir=\"/var/cache/shared\"'", main / "rust").returncode == 0
     assert hook("cargo build --config 'build.jobs=2'", main / "rust").returncode == 2
+
+
+@pytest.mark.parametrize("command, expected", [
+    # A subshell, a command substitution, a pipeline stage or a background job changes nothing for later commands.
+    ("(export CARGO_TARGET_DIR=/var/cache/shared); cargo build", 2),
+    ("echo $(export CARGO_TARGET_DIR=/var/cache/shared); cargo build", 2),
+    ("export CARGO_TARGET_DIR=/var/cache/shared | cat; cargo build", 2),
+    ("export CARGO_TARGET_DIR=/var/cache/shared & cargo build", 2),
+    ("(cd /; true); cargo build", 2),
+    ("(unset CARGO_HOME); cargo build", 2),
+    # Inside the subshell the export is in effect.
+    ("(export CARGO_TARGET_DIR=/var/cache/shared; cargo build)", 0),
+    ("(export CARGO_TARGET_DIR=/var/cache/shared; cargo build); cargo test", 2),
+    # A command that may not run leaves both possibilities open.
+    ("false && export CARGO_TARGET_DIR=/var/cache/shared; cargo build", 2),
+    ("true && export CARGO_TARGET_DIR=/var/cache/shared; cargo build", 2),
+    ("true || export CARGO_TARGET_DIR=/var/cache/shared; cargo build", 2),
+    ("if false; then export CARGO_TARGET_DIR=/var/cache/shared; fi; cargo build", 2),
+    ("if true; then\n  export CARGO_TARGET_DIR=/var/cache/shared\nfi\ncargo build", 2),
+    ("for x in 1; do export CARGO_TARGET_DIR=/var/cache/shared; done; cargo build", 2),
+    ("{ export CARGO_TARGET_DIR=/var/cache/shared; }; cargo build", 2),
+    ("true && cd /; cargo build", 2),  # may or may not have left the checkout
+    # Unconditional exports in the current shell still count.
+    ("export CARGO_TARGET_DIR=/var/cache/shared\ncargo build", 0),
+    ("export CARGO_TARGET_DIR=/var/cache/shared && cargo build", 0),
+    ("export CARGO_TARGET_DIR=/var/cache/shared || true; cargo build", 0),
+    ("export CARGO_TARGET_DIR=/var/cache/shared; cd /; cargo build", 0),
+    ("cd / && cargo build", 0),
+    ("true; export CARGO_TARGET_DIR=/var/cache/shared; cargo build", 0),
+])
+def test_exports_and_cd_follow_subshell_scope_and_control_flow(repos, command, expected):
+    main, _ = repos
+    assert hook(command, main).returncode == expected, command
+
+
+@pytest.mark.parametrize("command, expected", [
+    # The current value and the export attribute are independent.
+    ("CARGO_TARGET_DIR=/var/cache/shared; export CARGO_TARGET_DIR=rust/target; export CARGO_TARGET_DIR; cargo build", 2),
+    ("CARGO_TARGET_DIR=rust/target; export CARGO_TARGET_DIR; CARGO_TARGET_DIR=/var/cache/shared; cargo build", 0),
+    ("export CARGO_TARGET_DIR; CARGO_TARGET_DIR=/var/cache/shared; cargo build", 0),
+    ("export CARGO_TARGET_DIR; CARGO_TARGET_DIR=rust/target; cargo build", 2),
+    ("export -n CARGO_TARGET_DIR; CARGO_TARGET_DIR=/var/cache/shared; cargo build", 2),
+    ("export CARGO_TARGET_DIR=/var/cache; export -n CARGO_TARGET_DIR; CARGO_TARGET_DIR+=/shared; export CARGO_TARGET_DIR; cargo build", 0),
+    ("export CARGO_TARGET_DIR=rust; export -n CARGO_TARGET_DIR; CARGO_TARGET_DIR+=/target; export CARGO_TARGET_DIR; cargo build", 2),
+    ("export CARGO_TARGET_DIR=/var/cache/shared; unset CARGO_TARGET_DIR; CARGO_TARGET_DIR=rust/target; cargo build", 2),
+])
+def test_one_current_value_and_its_export_attribute_are_tracked_apart(repos, command, expected):
+    main, _ = repos
+    assert hook(command, main).returncode == expected, command
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("env -uCARGO_TARGET_DIR cargo build", 2),
+    ("env -iuCARGO_TARGET_DIR cargo build", 2),
+    ("env -i -uCARGO_TARGET_DIR cargo build", 2),
+    ("env --unset CARGO_TARGET_DIR cargo build", 2),
+    ("env -uRUSTFLAGS cargo build", 0),
+    ("env -u CARGO_TARGET_DIR -u RUSTFLAGS cargo build", 2),
+    ("env -uCARGO_TARGET_DIR CARGO_TARGET_DIR=/var/cache/shared cargo build", 0),
+    ("env -- CARGO_TARGET_DIR=/var/cache/other cargo build", 0),
+    ("env -uCARGO_TARGET_DIR bash -c 'cargo build'", 2),
+    ("env -iuCARGO_TARGET_DIR bash -c 'cargo build'", 2),
+])
+def test_env_option_forms_reach_cargo_like_gnu_env(repos, monkeypatch, command, expected):
+    main, _ = repos
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/var/cache/shared")
+    assert hook(command, main / "rust").returncode == expected, command
+
+
+def test_an_exported_cargo_home_decides_which_user_config_is_read(repos, tmp_path):
+    main, _ = repos
+    home = tmp_path / "other-home"
+    home.mkdir()
+    (home / "config.toml").write_text(f'[build]\ntarget-dir = "{main}/rust/target"\n')
+    out = tmp_path / "elsewhere"
+    out.mkdir()
+    assert hook(f"export CARGO_HOME={home}; cargo build", out).returncode == 2
+    assert hook(f"CARGO_HOME={home} cargo build", out).returncode == 2
+    assert hook(f"unset CARGO_HOME; CARGO_HOME={home}; cargo build", out).returncode == 0  # not exported
+    assert hook(f"CARGO_HOME={home}; cargo build", out).returncode == 2  # the variable is exported already
+    assert hook(f"export CARGO_HOME={home}; unset CARGO_HOME; cargo build", out).returncode == 0
+    assert hook(f"env CARGO_HOME={home} bash -c 'cargo build'", out).returncode == 2
+    assert hook(f"export CARGO_HOME={home}; export CARGO_TARGET_DIR=/var/cache/shared; cargo build", out).returncode == 0
+
+
+def _cargo_target(cwd, args, env):
+    """The target directory real cargo resolves, or None when cargo is not installed."""
+    import shutil
+    if not shutil.which("cargo"):
+        return None
+    run = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline", *args], cwd=cwd,
+                         capture_output=True, text=True, env={**os.environ, **env})
+    return json.loads(run.stdout)["target_directory"]
+
+
+def test_the_guard_resolves_cargo_configuration_the_way_cargo_does(repos, tmp_path, monkeypatch):
+    import shlex
+    main, _ = repos
+    if not shutil.which("cargo"):
+        pytest.skip("cargo is not installed")
+    pkg = tmp_path / "pkg"
+    (pkg / "src").mkdir(parents=True)
+    (pkg / "Cargo.toml").write_text('[package]\nname = "p"\nversion = "0.1.0"\nedition = "2021"\n')
+    (pkg / "src" / "main.rs").write_text("fn main() {}\n")
+    shared, inside = "/var/cache/shared", f"{main}/rust/target"
+    work = main / "rust"
+    (work / ".cargo").mkdir()
+    both = work / ".cargo"
+    file_config = tmp_path / "cfg" / "x.toml"
+    file_config.parent.mkdir()
+    file_config.write_text(f'[build]\ntarget-dir = "{inside}"\n')
+    manifest = ["--manifest-path", str(pkg / "Cargo.toml")]
+    scenarios = [  # (config.toml text, config text, cargo args, env)
+        (f'target-dir = "{inside}"', f'target-dir = "{shared}"', [], {}),  # `config` wins beside config.toml
+        (f'target-dir = "{shared}"', f'target-dir = "{inside}"', [], {}),
+        (None, None, ["--config", f'build.target-dir="{inside}"', "--config", f'build.target-dir="{shared}"'], {}),
+        (None, None, ["--config", f'build.target-dir="{shared}"', "--config", f'build.target-dir="{inside}"'], {}),
+        (None, None, ["--config", f'build.target-dir="{inside}"'], {"CARGO_BUILD_TARGET_DIR": shared}),
+        (None, None, ["--config", f'build.target-dir="{shared}"'], {"CARGO_BUILD_TARGET_DIR": inside}),
+        (None, None, ["--config", f'build.target-dir="{inside}"'], {"CARGO_TARGET_DIR": shared}),
+        (None, None, ["--config", str(file_config)], {}),
+        (None, None, ["--config", str(file_config), "--config", f'build.target-dir="{shared}"'], {}),
+        (f'target-dir = "{inside}"', None, [], {"CARGO_BUILD_TARGET_DIR": shared}),
+        (None, None, [], {"CARGO_TARGET_DIR": shared, "CARGO_BUILD_TARGET_DIR": inside}),
+        (None, None, [], {"CARGO_TARGET_DIR": inside, "CARGO_BUILD_TARGET_DIR": shared}),
+    ]
+    for toml, plain, args, env in scenarios:
+        for name, text in (("config.toml", toml), ("config", plain)):
+            path = both / name
+            path.unlink(missing_ok=True)
+            if text is not None:
+                path.write_text(f"[build]\n{text}\n")
+        for var in ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR"):
+            monkeypatch.delenv(var, raising=False)
+        resolved = _cargo_target(work, [*args, *manifest], env)
+        want = 2 if resolved.startswith(str(main)) else 0
+        prefix = "".join(f"{k}={shlex.quote(v)} " for k, v in env.items())
+        command = f"{prefix}cargo build {' '.join(shlex.quote(a) for a in [*args, *manifest])}"
+        assert hook(command, work).returncode == want, (command, toml, plain, resolved)
