@@ -65,6 +65,9 @@ def test_a_pre_pr_lane_merge_closes_on_the_decision_row_naming_its_sha(env):
     [("D-123", "Merged demo:C")],                             # row names no sha
     [("D-123", "Merged demo:B at {sha}")],                    # row names another key
     [("D-999", "Merged demo:C at {sha}")],                    # the subject names another decision
+    [("D-123", "NO GO demo:C, merge {sha}")],                 # a refusal row naming the exact sha
+    [("D-123", "No-go: demo:C cancelled, merge {sha}")],      # a documented cancel names it too
+    [("D-123", "Reverted demo:C at {sha}")],
 ])
 def test_a_pre_pr_lane_merge_without_a_vouching_row_is_listed_as_lane_merge_unproven(env, rows):
     lane_merge(env, rows)
@@ -149,3 +152,12 @@ def test_a_non_frozen_close_reads_the_decisions_document_once_per_proof(env, mon
     env.store._lane_merge_decision(state(env, "demo:C"), {
         "sha": git(env.repo.root, "rev-parse", "HEAD"), "subject": "Merge lane/x into main (D-123 fixture lane)"}, 0)
     assert len(reads) == 1
+
+
+def test_an_alias_with_an_invalid_ref_is_the_same_repository_for_merge_close_and_check(env):
+    """One identity (resolved path, validated ref) for both readers of the registry."""
+    from plangraph.keeper import cli_check
+    repos = {"demo": str(env.repo.root), "alias": {"path": str(env.repo.root), "ref": "bad ref"}}
+    env.store.ctx["git"] = GitAdapter(repos)
+    assert env.store._scan_projects({"project": "demo"}) == ["demo"]
+    assert [names for _, names in cli_check.duplicate_repos(repos)] == [["alias", "demo"]]
