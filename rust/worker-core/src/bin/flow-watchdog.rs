@@ -235,7 +235,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|alert| alert.active.as_str())
         // A missing observation does not clear an active alert.
         .chain(previous.lines().filter(|line| {
-            (line.starts_with("busy-quiet ") && validated.is_err())
+            (hosts::is_host_line(line) && validated.is_err())
+                || validated
+                    .as_ref()
+                    .is_ok_and(|s| hosts::retained(line, &s.hosts))
+                || (line.starts_with("busy-quiet ") && validated.is_err())
                 || (line.starts_with("writer-idle ")
                     && validated
                         .as_ref()
