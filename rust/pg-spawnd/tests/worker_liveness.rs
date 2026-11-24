@@ -168,7 +168,8 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
                 "remote":"origin","import_roots":[],"cache_env":{}}},
             "env":{"PG_INSTALL_BINARY":"/opt/pg-spawnd","PG_INSTALL_STAMP":"/opt/pg-spawnd.stamp",
                    "PLANGRAPH_WORK_MOUNTS":"/mnt/work",
-                   "PG_REJOIN_LEG_PROBES":"{\"codex\":[\"leg-probe\",\"codex\"]}"}
+                   "PG_REJOIN_LEG_PROBES":"{\"codex\":[\"leg-probe\",\"codex\"]}",
+                   "PG_INSTALL_HOOKS":"{\"turn\":\"/opt/hook\"}"}
         })
     };
     fs::write(
@@ -193,17 +194,27 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
     .unwrap();
     fs::write(
         dead.join("record.json"),
-        r#"{"run_id":"run-dead","host":"worker","status":"running","events":[]}"#,
+        r#"{"run_id":"run-dead","host":"worker","status":"running","item_key":"plangraph:ITEM","events":[]}"#,
     )
     .unwrap();
+    pg_worker_core::executable_test_support::write_private_executable(
+        bin.join("keeper-cli"),
+        r#"#!/bin/sh
+case "$1" in
+release) echo "$2" > "$FIXTURE_ROOT/released";;
+show) if [ -f "$FIXTURE_ROOT/released" ]; then echo '{"state":"open"}'; else echo '{"state":"claimed"}'; fi;;
+esac
+"#,
+    );
     pg_worker_core::executable_test_support::write_private_executable(
         bin.join("ssh"),
         r#"#!/bin/sh
 # Any command the gate was not expected to run fails the rejoin.
 case "$*" in
 *check-install*) echo '{"event":"pg_spawnd_install","status":"stale","reason":"source_sha_mismatch"}';;
-*worker-active-runs*) echo '{"host":"worker","runs":["run-live"]}';;
-*"env PLANGRAPH_SPAWN_STATE="*"--changed-since"*) echo '{"rows":[{"run_id":"run-example","status":"completed","phase":"ended","ended":123.5,"exit_code":0},{"run_id":"run-queued","status":"limited","phase":"ended"}],"next_cursor":1,"more":false}';;
+*worker-active-runs*) echo '{"host":"worker","runs":[],"live":["run-live"],"dead":["run-dead"],"terminal":{"run-example":{"status":"completed","ended":123.5,"exit_code":0},"run-queued":{"status":"limited","ended":null,"exit_code":null}}}';;
+*"sha256sum /opt/hook"*) echo "bbbb  /opt/hook";;
+*"--reap"*) ;;
 *"rev-parse origin/main"*) echo bbbb;;
 *"leg-probe codex"*) ;;
 *"rev-parse HEAD"*) if [ -f "$FIXTURE_ROOT/synced" ]; then echo bbbb; else echo aaaa; fi;;
@@ -244,6 +255,8 @@ esac
             .env("XDG_CONFIG_HOME", root)
             .env("PATH", &bin)
             .env("FIXTURE_ROOT", root)
+            .env("PG_KEEPER_CLI", bin.join("keeper-cli"))
+            .env("PG_MAIN_HOOK_SHA256", r#"{"turn":"aaaa"}"#)
             .env("PG_MAIN_SHA", "a".repeat(40))
             .env("PG_MAIN_SHA256", "b".repeat(64))
             .output()
@@ -267,7 +280,19 @@ esac
         json!(["plangraph"])
     );
     // A stale installed binary is flagged with check-install's reason, not blocked.
-    assert_eq!(record["flags"][0], "binary: source_sha_mismatch");
+    assert!(record["flags"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("binary: source_sha_mismatch"));
+    assert!(record["flags"][0]
+        .as_str()
+        .unwrap()
+        .contains("stale hooks: turn"));
+    // The dead run's Keeper claim was released and read back.
+    assert_eq!(
+        fs::read_to_string(root.join("released")).unwrap().trim(),
+        "plangraph:ITEM"
+    );
     assert_eq!(store.phase().unwrap(), Phase::Ready);
     let settled: Value =
         serde_json::from_slice(&fs::read(row.join("record.json")).unwrap()).unwrap();

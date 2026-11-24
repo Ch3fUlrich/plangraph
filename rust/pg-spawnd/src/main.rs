@@ -82,6 +82,7 @@ mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
 mod work_mode_config;
+mod worker_inventory;
 mod worker_liveness;
 mod worker_rejoin;
 mod writer_control;

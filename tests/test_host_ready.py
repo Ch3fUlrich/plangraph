@@ -672,3 +672,44 @@ def test_host_record_keeps_native_sandbox_failure(tmp_path):
     assert result['sandbox_ok'] is False
     assert result['sandbox_error'] == error
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result
+
+
+def _free(table):
+    def free(path):
+        if isinstance(table[path], Exception):
+            raise table[path]
+        return table[path]
+    return free
+
+
+def test_an_unreadable_secondary_drive_does_not_stop_a_healthy_one():
+    free = _free({'/bad': OSError('mount gone'), '/ok': 30.0})
+    assert source.select_drive([('/bad', 5.0), ('/ok', 5.0)], lambda: None, free) == ('/ok', None)
+    with pytest.raises(OSError, match='mount gone'):
+        source.select_drive([('/bad', 5.0)], lambda: None, free)
+
+
+def test_build_drives_set_the_cargo_target_and_enforce_their_floor(monkeypatch, tmp_path):
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    policy = {'build_drives': [{'path': str(tmp_path / 'a'), 'disk_floor_gb': 20},
+                               {'path': str(tmp_path / 'b'), 'disk_floor_gb': 20}]}
+    free = {str(tmp_path / 'a'): 30.0, str(tmp_path / 'b'): 90.0}
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: free[path])
+    assert h.shared_cargo_target(policy) == tmp_path / 'b' / 'cargo-target'
+    free[str(tmp_path / 'b')] = 10.0
+    assert h.shared_cargo_target(policy) == tmp_path / 'a' / 'cargo-target'
+    free[str(tmp_path / 'a')] = 19.0
+    with pytest.raises(OSError, match='disk_low: no build drive meets its floor'):
+        h.shared_cargo_target(policy)
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'env'))
+    assert h.shared_cargo_target(policy) == tmp_path / 'env'
+
+
+def test_the_workstation_config_puts_the_cargo_target_on_g(monkeypatch):
+    from pathlib import Path
+    from plangraph.settings import _policy_data
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'deploy/workstation/work-drives.json')
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100.0)
+    policy = _policy_data(Path(__file__).resolve().parents[1])
+    assert str(h.shared_cargo_target(policy)) == '/mnt/work-g/plangraph/build/cargo-target'

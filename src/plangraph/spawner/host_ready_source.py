@@ -164,6 +164,33 @@ def configured_work_drives(policy):
     return parsed
 
 
+def configured_build_target(policy, free_gb):
+    """The Cargo target on the `build_drives` entry with the most free space above its floor.
+
+    None when the policy lists no build drive. Refuses with `disk_low` when every
+    listed drive is under its floor or unreadable.
+    """
+    drives = policy.get('build_drives')
+    if not drives:
+        return None
+    best, shortfalls = None, []
+    for entry in drives:
+        floor = float(entry.get('disk_floor_gb', 5))
+        try:
+            free = free_gb(entry['path'])
+        except OSError as error:
+            shortfalls.append(f"{entry['path']}: {error}")
+            continue
+        if free >= floor:
+            if best is None or free > best[0]:
+                best = (free, entry['path'])
+        else:
+            shortfalls.append(f"{entry['path']}: {free:.2f} GB < floor {floor:g} GB")
+    if best is None:
+        raise OSError('disk_low: no build drive meets its floor (' + '; '.join(shortfalls) + ')')
+    return Path(best[1]).expanduser().absolute() / 'cargo-target'
+
+
 def select_drive(drives, cleanup, free_gb, *, check=None):
     """Pick the drive with the most free space among those meeting their floor and any extra checks.
 
@@ -174,9 +201,14 @@ def select_drive(drives, cleanup, free_gb, *, check=None):
         raise ValueError('select_work_drive select_drive needs at least one drive')
 
     def pick():
-        best, first_low = None, None
+        best, first_low, first_error = None, None, None
         for path, floor in drives:
-            free = free_gb(path)
+            try:
+                free = free_gb(path)
+            except OSError as error:
+                # An unreadable drive is ineligible; the others may still qualify.
+                first_error = first_error or error
+                continue
             low = (free, floor) if free < floor else check(path) if check else None
             if low is None:
                 if best is None or free > best[0]:
@@ -185,6 +217,8 @@ def select_drive(drives, cleanup, free_gb, *, check=None):
                 first_low = low
         if best is not None:
             return best[1], None
+        if first_low is None and first_error is not None:
+            raise first_error
         return None, first_low
 
     selected, low = pick()

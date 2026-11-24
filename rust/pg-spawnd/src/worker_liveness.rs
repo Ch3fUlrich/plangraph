@@ -24,13 +24,7 @@ fn now() -> Result<u64, String> {
 }
 
 pub(crate) fn registry() -> Result<HostRegistry, String> {
-    let config = env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .ok_or("cannot resolve fleet configuration directory")?;
-    HostRegistry::load(&config.join("plangraph/hosts.json"))
-        .map_err(|_| "fleet host registry unavailable or invalid".into())
+    crate::state::host_registry()
 }
 
 pub(crate) fn remote(host: &HostEntry) -> Result<Command, String> {
@@ -119,8 +113,21 @@ pub(crate) fn inventory(args: &[String], out: &mut dyn Write) -> Result<(), Stri
     } else {
         PathBuf::from(&host.state_dir)
     };
+    let belongs = |row: &Value| {
+        row["host"]
+            .as_str()
+            .and_then(|host| registry.resolve(host))
+            .is_some_and(|entry| entry.id == *name)
+    };
+    let found = crate::worker_inventory::scan_host(&state, belongs);
+    // `runs` stays every active record; `live` and `dead` say which have a session.
     let runs = active_run_ids(&state, &registry, name);
-    writeln!(out, "{}", json!({"host":name,"runs":runs})).map_err(|error| error.to_string())
+    writeln!(
+        out,
+        "{}",
+        json!({"host":name,"runs":runs,"live":found.live,"dead":found.dead,"terminal":found.terminal})
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn parse_inventory(host: &str, bytes: &[u8]) -> Option<BTreeSet<String>> {

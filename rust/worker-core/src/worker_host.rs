@@ -17,7 +17,7 @@ pub use liveness::Observation;
 #[path = "worker_host_rejoin.rs"]
 mod rejoin;
 pub use rejoin::{
-    FloorReport, InstallReport, LegReport, RejoinError, RejoinHost, RunFate, SyncReport,
+    FloorReport, InstallReport, LegReport, ReapReport, RejoinError, RejoinHost, RunFate, SyncReport,
 };
 
 /// An outage longer than this holds the host in `rejoining` until the rejoin gate passes.
@@ -44,6 +44,9 @@ struct State {
     maintenance_until: Option<u64>,
     #[serde(default)]
     needs_rejoin: bool,
+    /// Counts outages: a rejoin only commits for the outage it reconciled.
+    #[serde(default)]
+    outage_episode: u64,
     #[serde(default, rename = "rejoin", skip_serializing)]
     _legacy_rejoin: Option<serde::de::IgnoredAny>,
     #[serde(default)]
@@ -60,6 +63,9 @@ impl State {
         let was_rejoining = self.phase == Phase::Rejoining;
         self.maintenance_until = self.maintenance_until.filter(|until| *until > now);
         if !reachable {
+            if self.outage_since.is_none() {
+                self.outage_episode += 1;
+            }
             self.outage_since.get_or_insert(now);
             self.missed = self.missed.saturating_add(1);
         }

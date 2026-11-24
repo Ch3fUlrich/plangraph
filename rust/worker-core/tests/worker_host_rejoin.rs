@@ -1,6 +1,6 @@
 use pg_worker_core::worker_host::{
-    FloorReport, InstallReport, LegReport, Observation, Phase, RejoinError, RejoinHost, RunFate,
-    Store, SyncReport,
+    FloorReport, InstallReport, LegReport, Observation, Phase, ReapReport, RejoinError, RejoinHost,
+    RunFate, Store, SyncReport,
 };
 use std::{collections::BTreeSet, fs, io};
 use tempfile::tempdir;
@@ -9,6 +9,8 @@ use tempfile::tempdir;
 struct Fake<'a> {
     /// A healthy liveness probe that lands while the gate runs.
     probe_during: Option<&'a Store>,
+    /// The host drops and returns again while the gate runs, with a new run in flight.
+    second_outage: Option<&'a Store>,
     calls: Vec<String>,
     stale_binary: bool,
     fail_sync: bool,
@@ -16,6 +18,7 @@ struct Fake<'a> {
     working_legs: Vec<String>,
     fates: Vec<(String, RunFate)>,
     unchecked: Vec<String>,
+    stale_left: u64,
 }
 
 impl Fake<'_> {
@@ -74,9 +77,12 @@ impl RejoinHost for Fake<'_> {
         self.calls.push(format!("settle {run} {fate:?}"));
         Ok(())
     }
-    fn sweep_worktrees(&mut self) -> io::Result<()> {
-        self.calls.push("sweep".into());
-        Ok(())
+    fn reap_worktrees(&mut self) -> io::Result<ReapReport> {
+        self.calls.push("reap".into());
+        Ok(ReapReport {
+            removed: 2,
+            remaining: self.stale_left,
+        })
     }
     fn check_floors(&mut self) -> io::Result<FloorReport> {
         self.calls.push("floors".into());
@@ -89,6 +95,24 @@ impl RejoinHost for Fake<'_> {
     }
     fn probe_legs(&mut self) -> io::Result<LegReport> {
         self.calls.push("legs".into());
+        if let Some(store) = self.second_outage {
+            for (now, ssh) in [(1_100, false), (1_160, false), (1_220, true)] {
+                store
+                    .observe_liveness(Observation {
+                        now,
+                        ssh,
+                        tailscale: Some(ssh),
+                        remote_runs: None,
+                        placed_runs: if ssh {
+                            Default::default()
+                        } else {
+                            ["run-new".to_string()].into()
+                        },
+                    })
+                    .unwrap();
+            }
+        }
+
         Ok(LegReport {
             working: self.working_legs.clone(),
             failed: vec!["agy".into()],
@@ -135,7 +159,7 @@ fn rejoin_runs_every_step_settles_unknown_runs_and_sets_ready() {
             "settle run-dead Dead",
             "settle run-finished Finished",
             "settle run-live Live",
-            "sweep",
+            "reap",
             "floors",
             "legs"
         ]
@@ -164,6 +188,11 @@ fn a_failed_step_keeps_the_host_out_of_placement_and_records_the_attempt() {
         ),
         ("floors", |host: &mut Fake| host.disk_ok = false, "floors"),
         ("legs", |host: &mut Fake| host.working_legs.clear(), "legs"),
+        (
+            "stale worktrees left",
+            (|host: &mut Fake| host.stale_left = 3) as fn(&mut Fake),
+            "reap",
+        ),
         (
             "unmeasured floor",
             (|host: &mut Fake| host.unchecked = vec!["ram: no source".into()]) as fn(&mut Fake),
@@ -248,4 +277,31 @@ fn a_host_lost_during_the_gate_stays_held_and_the_receipt_says_blocked() {
     let error = store.rejoin(&mut host, 1_000).unwrap_err();
     assert!(matches!(error, RejoinError::NotRejoining(_)), "{error}");
     assert!(store.refusal().unwrap().is_some());
+}
+
+#[test]
+fn a_second_outage_during_the_gate_keeps_the_host_held_and_the_new_runs_unknown() {
+    let state = tempdir().unwrap();
+    let store = Store::new(state.path(), "worker-a").unwrap();
+    outage(&store);
+    let mut host = Fake::healthy();
+    host.second_outage = Some(&store);
+    let error = store.rejoin(&mut host, 1_000).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RejoinError::NotRejoining("a new outage began during the gate")
+        ),
+        "{error}"
+    );
+    assert_eq!(store.phase().unwrap(), Phase::Rejoining);
+    assert!(store.refusal().unwrap().is_some());
+    let pending: Vec<_> = fs::read_dir(state.path().join("rejoin")).unwrap().collect();
+    assert_eq!(pending.len(), 1);
+    assert!(pending[0]
+        .as_ref()
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with("blocked.json"));
 }
