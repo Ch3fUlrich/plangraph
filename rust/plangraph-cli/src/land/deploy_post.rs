@@ -179,7 +179,10 @@ fn write_rows(
             is_active: run.is_active.clone(),
             kind: run.oneshot.then(|| "oneshot".to_owned()),
             result: run.result.clone(),
-            exec_main_exit_timestamp: run.exec_main_exit_timestamp.clone(),
+            exec_main_exit_timestamp: run
+                .exec_main_exit_timestamp
+                .as_deref()
+                .map(|t| exit_rfc3339(t).unwrap_or_else(|| t.to_owned())),
         })
         .map_err(|e| format!("deploy row {key} for {}: {e}", name(t)))?;
     }
@@ -262,28 +265,28 @@ pub fn apply(
         }
         let outcome = baseline(installer, t)
             .and_then(|before| {
-                installer
+                let started = installer
                     .install(&t.host, &t.family)
-                    .map_err(|e| format!("install: {e}"))
-                    .and_then(|()| {
-                        installer
-                            .read_run(&t.host, &t.family)
-                            .map_err(|e| format!("first run: {e}"))
-                    })
-                    .map(|run| (before, run))
+                    .map_err(|e| format!("install: {e}"))?;
+                let run = installer
+                    .read_run(&t.host, &t.family)
+                    .map_err(|e| format!("first run: {e}"))?;
+                Ok((before, started, run))
             })
-            .and_then(|(before, run)| {
+            .and_then(|(before, started, run)| {
                 let now = (gate.clock)();
-                if run.good(&t.family, gate, before, now) {
+                if run.good(&t.family, gate, before, now, started.as_deref()) {
                     paired_timer_row(installer, t, &run, targets, gate).map(|timer| (run, timer))
                 } else {
                     Err(format!(
-                        "first run of {} on {} is not good (is_active={}, result={}, exited={})",
+                        "first run of {} on {} is not good (is_active={}, result={}, exited={}, invocation={}, started={})",
                         t.family,
                         t.host,
                         run.is_active,
                         run.result.as_deref().unwrap_or("-"),
-                        run.exec_main_exit_timestamp.as_deref().unwrap_or("-")
+                        run.exec_main_exit_timestamp.as_deref().unwrap_or("-"),
+                        run.invocation.as_deref().unwrap_or("-"),
+                        started.as_deref().unwrap_or("-")
                     ))
                 }
             });

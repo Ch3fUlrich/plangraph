@@ -287,3 +287,66 @@ fn a_failed_read_before_the_install_leaves_no_baseline_so_the_target_fails() {
         "installed without a baseline"
     );
 }
+
+#[test]
+fn a_timers_invocation_between_the_baseline_and_the_install_is_not_proof_of_this_install() {
+    // The timer ran the service after the baseline read: a newer exit time, but not the invocation the
+    // install started.
+    let mut host = ran_at("2026-11-24T00:59:30Z");
+    host.runs.get_mut("a.service").unwrap().invocation = Some("timer-run".into());
+    host.started
+        .insert("a.service".into(), "install-run".into());
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    let r = run(
+        &[target("a.service", "alpha", &["demo:A"])],
+        &host,
+        &rows,
+        &mut state,
+    )
+    .unwrap();
+    assert!(r
+        .failed
+        .unwrap()
+        .1
+        .contains("invocation=timer-run, started=install-run"));
+    assert!(rows.0.borrow().is_empty());
+    // An install that reports no invocation proves nothing either.
+    let mut host = ran_at("2026-11-24T00:59:30Z");
+    host.runs.get_mut("a.service").unwrap().invocation = None;
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    let r = run(
+        &[target("a.service", "alpha", &["demo:A"])],
+        &host,
+        &rows,
+        &mut state,
+    )
+    .unwrap();
+    assert!(r.failed.is_some() && rows.0.borrow().is_empty());
+}
+
+#[test]
+fn a_fractional_systemd_exit_time_is_written_as_rfc_3339_for_the_keeper() {
+    assert_eq!(
+        exit_rfc3339("Tue 2026-11-24 01:00:00.5 UTC").as_deref(),
+        Some("2026-11-24T01:00:00.500Z")
+    );
+    assert_eq!(
+        exit_rfc3339("Tue 2026-11-24 01:00:00 UTC").as_deref(),
+        Some("2026-11-24T01:00:00Z")
+    );
+    let host = ran_at("Tue 2026-11-24 01:00:00 UTC");
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    run(
+        &[target("a.service", "alpha", &["demo:A"])],
+        &host,
+        &rows,
+        &mut state,
+    )
+    .unwrap();
+    let rows = rows.0.borrow();
+    let service = rows.iter().find(|r| r.unit == "a.service").unwrap();
+    assert_eq!(
+        service.exec_main_exit_timestamp.as_deref(),
+        Some("2026-11-24T01:00:00Z")
+    );
+}

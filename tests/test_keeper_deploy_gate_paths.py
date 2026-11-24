@@ -496,6 +496,58 @@ def test_train_deploy_gate_ignores_a_unit_a_later_part_removes(env):  # noqa: F8
     assert "alpha:kept.service" in reason and "gone.service" not in reason
 
 
+def test_train_deploy_gate_keeps_a_unit_the_landing_merge_itself_adds(env):  # noqa: F811
+    """A unit created while resolving the landing merge is part of what landed, not filtered as unshipped."""
+    root = env.repo.root
+    base = git(root, "rev-parse", "main")
+    git(root, "checkout", "-q", "-b", "train")
+    git(root, "checkout", "-q", "-b", "units", base)
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/own.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "unit\n\nPlan-Item: demo:B")
+    git(root, "checkout", "-q", "train")
+    git(root, "merge", "-q", "--no-ff", "-m", "Train 9: merge units\n\nDeploy: alpha", "units")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "--no-commit", "train")
+    (root / "deploy/systemd/resolved.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "Landing train 9 (#57)\n\nDeploy: alpha")
+
+    store = env.store
+    item = store._pin_close(store._item("demo:B"))
+    assert store._deploy_changes(item)[1] == {("A", "deploy/systemd/own.service"),
+                                              ("A", "deploy/systemd/resolved.service")}
+
+
+def test_train_deploy_gate_uses_the_net_status_of_a_binary_a_later_part_re_adds(env):  # noqa: F811
+    """An existing binary one part removes and a later part adds back is modified by the train, not added."""
+    root = env.repo.root
+    (root / "rust/demo/src").mkdir(parents=True)
+    (root / "rust/demo/src/main.rs").write_text("fn main() {}\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "existing binary")
+    base = git(root, "rev-parse", "main")
+    git(root, "checkout", "-q", "-b", "train")
+    git(root, "checkout", "-q", "-b", "rm", base)
+    git(root, "rm", "-q", "rust/demo/src/main.rs")
+    git(root, "commit", "-q", "-m", "remove\n\nPlan-Item: demo:B")
+    git(root, "checkout", "-q", "train")
+    git(root, "merge", "-q", "--no-ff", "-m", "Train 9: merge rm\n\nDeploy: alpha", "rm")
+    git(root, "checkout", "-q", "-b", "readd", "train")
+    (root / "rust/demo/src").mkdir(parents=True)
+    (root / "rust/demo/src/main.rs").write_text("fn main() { 1; }\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "readd\n\nPlan-Item: demo:C")
+    git(root, "checkout", "-q", "train")
+    git(root, "merge", "-q", "--no-ff", "-m", "Train 9: merge readd\n\nDeploy: alpha", "readd")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m", "Landing train 9 (#57)", "train")
+
+    result = auto(env, require_seats=False)
+    assert sorted(c["key"] for c in result["closed"]) == ["demo:B", "demo:C"], result["listed"]
+
+
 @pytest.mark.parametrize("subject", ["Landing train 9: 1 batch (#57)", "Old batch delivery (#57)"])
 def test_train_deploy_gate_keeps_other_keys_units_out_of_a_shared_part(env, subject):  # noqa: F811
     """Two keys share one part: only the key whose own commit adds a unit, or the untagged

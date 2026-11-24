@@ -31,7 +31,14 @@ fn the_command_installer_runs_install_read_and_disable_with_host_and_name() {
         path.display()
     );
     let inst = CommandInstaller { argv: sh(&script) };
-    inst.install("alpha", "a.service").unwrap();
+    assert_eq!(inst.install("alpha", "a.service").unwrap(), None);
+    let printing = CommandInstaller {
+        argv: sh("echo inv-9"),
+    };
+    assert_eq!(
+        printing.install("alpha", "a.service").unwrap().as_deref(),
+        Some("inv-9")
+    );
     assert_eq!(
         inst.read_run("alpha", "a.timer").unwrap().is_active,
         "active"
@@ -214,12 +221,12 @@ fn deploy_apply_end_to_end_writes_rows_then_resumes_and_a_failure_blocks_the_rer
         "install.sh",
         &format!(
             r#"M={m}
-[ "$1" = install ] && touch "$M"
+[ "$1" = install ] && touch "$M" && [ "$3" = a.service ] && echo inv-1
 if [ "$1" = read ]; then
   if [ "$3" = a.timer ]; then echo '{{"is_active":"active"}}'
   else
     [ -e "$M" ] || {{ echo '{{"is_active":"absent"}}'; exit 0; }}
-    echo '{{"is_active":"inactive","result":"success","exec_main_exit_timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","oneshot":true}}'
+    echo '{{"is_active":"inactive","result":"success","exec_main_exit_timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","oneshot":true,"invocation":"inv-1"}}'
   fi
 fi
 exit 0"#,

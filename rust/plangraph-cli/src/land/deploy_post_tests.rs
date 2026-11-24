@@ -22,6 +22,7 @@ pub(super) fn active() -> RunRead {
         result: None,
         exec_main_exit_timestamp: None,
         oneshot: false,
+        invocation: None,
     }
 }
 
@@ -31,6 +32,7 @@ pub(super) fn oneshot_ok() -> RunRead {
         result: Some("success".into()),
         exec_main_exit_timestamp: Some("2026-11-24T01:00:00Z".into()),
         oneshot: true,
+        invocation: Some("inv-1".into()),
     }
 }
 
@@ -58,16 +60,22 @@ pub(super) struct Host {
     /// Oneshots whose read before the install fails (a transient error, not an absent unit).
     pub(super) before_fails: BTreeSet<String>,
     pub(super) installed: RefCell<BTreeSet<String>>,
+    /// The invocation an install reports starting, when it is not the one the run shows.
+    pub(super) started: BTreeMap<String, String>,
 }
 
 impl Installer for Host {
-    fn install(&self, host: &str, family: &str) -> Result<(), String> {
+    fn install(&self, host: &str, family: &str) -> Result<Option<String>, String> {
         self.calls
             .borrow_mut()
             .push(format!("install {family}@{host}"));
         NOW.with(|n| n.set(n.get() + self.install_takes * 1_000_000));
         self.installed.borrow_mut().insert(family.to_owned());
-        Ok(())
+        Ok(self
+            .started
+            .get(family)
+            .cloned()
+            .or_else(|| self.runs.get(family).and_then(|r| r.invocation.clone())))
     }
     fn read_run(&self, host: &str, family: &str) -> Result<RunRead, String> {
         self.calls
@@ -86,6 +94,7 @@ impl Installer for Host {
                 result: None,
                 exec_main_exit_timestamp: None,
                 oneshot: false,
+                invocation: None,
             }));
         }
         self.runs
@@ -200,7 +209,7 @@ fn a_failed_first_run_disables_the_timer_writes_no_row_and_stops_the_rest() {
 fn an_install_failure_is_a_failed_first_run() {
     struct Broken;
     impl Installer for Broken {
-        fn install(&self, _: &str, _: &str) -> Result<(), String> {
+        fn install(&self, _: &str, _: &str) -> Result<Option<String>, String> {
             Err("no space".into())
         }
         fn read_run(&self, _: &str, _: &str) -> Result<RunRead, String> {
@@ -209,6 +218,7 @@ fn an_install_failure_is_a_failed_first_run() {
                 result: None,
                 exec_main_exit_timestamp: None,
                 oneshot: false,
+                invocation: None,
             })
         }
         fn disable(&self, _: &str, _: &str) -> Result<(), String> {
@@ -240,9 +250,10 @@ fn a_binary_needs_installed_and_has_no_timer_to_disable() {
         result: None,
         exec_main_exit_timestamp: None,
         oneshot: false,
+        invocation: None,
     };
-    assert!(ok.good("bin:tool", &gate(), None, T0));
-    assert!(!ok.good("a.service", &gate(), None, T0));
+    assert!(ok.good("bin:tool", &gate(), None, T0, Some("inv-1")));
+    assert!(!ok.good("a.service", &gate(), None, T0, Some("inv-1")));
 }
 
 #[test]
@@ -359,12 +370,15 @@ fn a_timer_shipped_for_other_items_still_gets_a_row_for_every_service_item() {
 #[test]
 fn the_documented_read_json_is_judged_good() {
     let oneshot: RunRead = serde_json::from_str(
-        r#"{"is_active":"inactive","oneshot":true,"result":"success","exec_main_exit_timestamp":"2026-11-24T01:00:00Z"}"#,
+        r#"{"is_active":"inactive","oneshot":true,"result":"success","exec_main_exit_timestamp":"2026-11-24T01:00:00Z","invocation":"inv-1"}"#,
     )
     .unwrap();
-    assert!(oneshot.good("a.service", &gate(), None, T0));
+    assert!(oneshot.good("a.service", &gate(), None, T0, Some("inv-1")));
     let bin: RunRead = serde_json::from_str(r#"{"is_active":"installed"}"#).unwrap();
-    assert!(bin.good("bin:tool", &gate(), None, T0));
+    assert!(bin.good("bin:tool", &gate(), None, T0, Some("inv-1")));
     let svc: RunRead = serde_json::from_str(r#"{"is_active":"active"}"#).unwrap();
-    assert!(svc.good("a.service", &gate(), None, T0) && svc.good("a.timer", &gate(), None, T0));
+    assert!(
+        svc.good("a.service", &gate(), None, T0, Some("inv-1"))
+            && svc.good("a.timer", &gate(), None, T0, Some("inv-1"))
+    );
 }

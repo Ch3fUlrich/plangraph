@@ -20,6 +20,9 @@ from test_keeper_close_merged_scan import _git
     ({"result": "exit-code", "is_active": "active"}, "host-a", "active", True),
     ({"exec_main_exit_timestamp": "2026-11-01T12:00:00Z"}, "host-a", "active", True),
     ({"exec_main_exit_timestamp": "Sun 2026-11-01 12:01:00 UTC"}, "host-a", "active", False),
+    # deploy-apply writes fractional exit times as RFC 3339 (the keeper rejects a fraction in the systemd form)
+    ({"exec_main_exit_timestamp": "2026-11-01T12:01:00.500Z"}, "host-a", "active", False),
+    ({"exec_main_exit_timestamp": "Sun 2026-11-01 12:01:00.5 UTC"}, "host-a", "active", True),
     ({"exec_main_exit_timestamp": "inf"}, "host-a", "active", True),
     ({}, "host-b", "active", True),
     ({}, "host-a", "inactive", True),

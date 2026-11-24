@@ -34,8 +34,10 @@ impl CommandInstaller {
 }
 
 impl Installer for CommandInstaller {
-    fn install(&self, host: &str, family: &str) -> Result<(), String> {
-        self.run("install", host, family).map(|_| ())
+    fn install(&self, host: &str, family: &str) -> Result<Option<String>, String> {
+        let out = self.run("install", host, family)?;
+        let id = String::from_utf8_lossy(&out).trim().to_owned();
+        Ok((!id.is_empty()).then_some(id))
     }
     fn read_run(&self, host: &str, family: &str) -> Result<RunRead, String> {
         let out = self.run("read", host, family)?;

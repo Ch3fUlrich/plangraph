@@ -226,23 +226,23 @@ def landed_deploy_work(git, repo, parent, tip, merge, key, *, train):
     parts = list(git._train_deploy_changes(repo, parent, tip, names)) if train else []
     changes.extend(change for _, _, paths in parts for change in paths)
     if train:
-        # A unit one part adds and a later part removes is not delivered: judge each part's paths against
-        # what the whole train nets out to, as the deploy plan does.
-        net = _train_net_paths(git, repo, parent, tip)
+        # A unit one part adds and a later part removes is not delivered: judge each part's paths by what
+        # the landing merge itself changes against its first parent (its own resolution included), with the
+        # net status; a part's status only attributes the path.
+        net = _landing_net(git, repo, parent, merge)
         if net is not None:
-            changes = [change for change in changes if change[1] in net]
-            parts = [(part, part_merge, [change for change in paths if change[1] in net])
+            changes = [(net[path], path) for _, path in changes if path in net]
+            parts = [(part, part_merge, [(net[path], path) for _, path in paths if path in net])
                      for part, part_merge, paths in parts]
     return changes, parts
 
 
-def _train_net_paths(git, repo, parent, tip):
-    """Paths the train changes against its base (``None`` when git cannot say), deleted ones excluded."""
-    base = git._run(repo, ["merge-base", "--end-of-options", parent, tip])
-    if base.returncode != 0 or not valid_commit_ref(base.stdout.strip()):
+def _landing_net(git, repo, parent, merge):
+    """Path -> net status the landing *merge* brings against *parent* (``None`` when git cannot say)."""
+    if not (valid_commit_ref(parent) and valid_commit_ref(merge)):
         return None
     try:
-        return {path for status, path in git._name_status(repo, ["--end-of-options", base.stdout.strip(), tip])
+        return {path: status for status, path in git._name_status(repo, ["--end-of-options", parent, merge])
                 if status != "D"}
     except RuntimeError:
         return None
