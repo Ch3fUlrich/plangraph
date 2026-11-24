@@ -470,6 +470,32 @@ def test_train_deploy_hosts_are_read_from_the_part_that_ships_the_unit(env):  # 
     assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:B"]
 
 
+def test_train_deploy_gate_ignores_a_unit_a_later_part_removes(env):  # noqa: F811
+    """Part one adds two units, a stacked part two removes one: only the surviving unit is required."""
+    root = env.repo.root
+    base = git(root, "rev-parse", "main")
+    git(root, "checkout", "-q", "-b", "train")
+    git(root, "checkout", "-q", "-b", "units", base)
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/gone.service").write_text("[Service]\n")
+    (root / "deploy/systemd/kept.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "units\n\nPlan-Item: demo:B")
+    git(root, "checkout", "-q", "train")
+    git(root, "merge", "-q", "--no-ff", "-m", "Train 9: merge units\n\nDeploy: alpha", "units")
+    git(root, "checkout", "-q", "-b", "drop", "train")
+    git(root, "rm", "-q", "deploy/systemd/gone.service")
+    git(root, "commit", "-q", "-m", "drop gone\n\nPlan-Item: demo:C")
+    git(root, "checkout", "-q", "train")
+    git(root, "merge", "-q", "--no-ff", "-m", "Train 9: merge drop", "drop")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m", "Landing train 9 (#57)", "train")
+
+    result = auto(env, require_seats=False)
+    reason = next(r["reason"] for r in result["listed"] if r["key"] == "demo:B")
+    assert "alpha:kept.service" in reason and "gone.service" not in reason
+
+
 @pytest.mark.parametrize("subject", ["Landing train 9: 1 batch (#57)", "Old batch delivery (#57)"])
 def test_train_deploy_gate_keeps_other_keys_units_out_of_a_shared_part(env, subject):  # noqa: F811
     """Two keys share one part: only the key whose own commit adds a unit, or the untagged

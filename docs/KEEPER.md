@@ -309,7 +309,7 @@ The landing journal saves the prepared mode and receipt inputs with the train he
 A train GO row with `GO-KEYS [project:A,project:B]` scopes `close-merged` to the listed full keys. The final delivery needs its own GO. Earlier partial deliveries need to be on its default-branch history.
 Legacy rows may also vouch for a key through a named part head inside their GO-HEAD. That head is recorded as `go_part`.
 The delivery index excludes reverted work and drop commits. Reverting a revert or delivering the work again can restore the delivery evidence.
-Deploy evidence uses the part diffs that carry the key. Without an item-level `Deploy-Hosts:` declaration, the part's `Deploy:` trailers supply hosts for its shipped units. A key carried only by the aggregate train merge uses its whole diff. A declined close prints `REFUSED` with the reason.
+Deploy evidence uses the part diffs that carry the key. Without an item-level `Deploy-Hosts:` declaration, the part's `Deploy:` trailers supply hosts for its shipped units. A key carried only by the aggregate train merge uses its whole diff. In a landed train, a path a later part removes (a unit one part adds and another deletes) is not a deploy requirement: the paths are judged against the train's net diff. A declined close prints `REFUSED` with the reason.
 
 For a timer-driven service, report `type: oneshot`, `result: success` and `exec_main_exit_timestamp` from `LC_ALL=C systemctl --user --utc show -p Type -p Result -p ExecMainExitTimestamp UNIT`. Keeper compares the exit timestamp with the latest first-parent change to the service or timer on the configured default ref. Closing also requires verified `is_active: active` evidence for the same-name `.timer` on the same host.
 

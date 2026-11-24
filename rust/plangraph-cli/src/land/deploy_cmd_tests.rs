@@ -218,7 +218,7 @@ fn deploy_apply_end_to_end_writes_rows_then_resumes_and_a_failure_blocks_the_rer
 if [ "$1" = read ]; then
   if [ "$3" = a.timer ]; then echo '{{"is_active":"active"}}'
   else
-    [ -e "$M" ] || exit 1
+    [ -e "$M" ] || {{ echo '{{"is_active":"absent"}}'; exit 0; }}
     echo '{{"is_active":"inactive","result":"success","exec_main_exit_timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","oneshot":true}}'
   fi
 fi

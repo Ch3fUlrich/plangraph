@@ -69,7 +69,7 @@ the GO-REQ (only passing targets) and one `blocker` line per refused target; `--
 `plangraph land-train deploy-apply --plan FILE --go ROW --plan-digest HEX --evidence FILE --repo DIR
 --landed-head SHA [--main-ref REF] --state FILE --install-cmd CMD --row-cmd CMD` is the post-merge step.
 `--plan` is the `--plan-out` file, generated from the net train (a unit one part adds and a later part removes is
-no target). `--evidence` is the protected GO evidence of the approved train: it must verify with no refusal,
+no target, and the keeper's deploy requirements of a landed train skip it the same way). `--evidence` is the protected GO evidence of the approved train: it must verify with no refusal,
 and its head and base must be the plan's train and base. `--plan-digest` is the `plan-digest:` line
 `deploy-plan` printed (SHA-256 of the whole plan, item keys included); it only guards against edits as long as
 the approved GO is where the caller reads it from (the GO evidence does not carry it yet: see the keeper item
@@ -77,12 +77,14 @@ below). `--go` must be that plan's own `deploy:` line; `--landed-head` is the ve
 (`--main-ref`, default `origin/main`). Before anything is installed the plan is checked against git: its train
 is merged into the landed head, the head is on main, each family is in the net diff `base..train`, a unit still
 exists in the landed tree, each item key belongs to a commit that touches the family (or, for a family an
-untagged commit touches, to the train), and a state file saved for another train is refused. `CMD
+untagged commit touches, to the items of that commit's own part), and a state file saved for another train is refused. `CMD
 install|read|disable HOST NAME` installs a family, prints one run of it as JSON (`is_active`: `active`, or
 `installed` for a `bin:` family; a oneshot service adds `"oneshot": true`, `result` and
 `exec_main_exit_timestamp`, and its `.timer` is read the same way) or disables a unit; `CMD KEY` receives the
-keeper `deploy` row as JSON on stdin. A oneshot is read before and after its install: its first run counts only
-with `result=success` and an exit time after the landed head's commit time, strictly after the exit time it
+keeper `deploy` row as JSON on stdin. Every target is read before its install; the read reports `{"is_active":"absent"}` for a unit
+that is not installed yet, and a failed read stops the target before it is installed (without a baseline nothing
+proves the install ran it). A oneshot's first run counts only with `result=success` and an exit time (kept to the
+microsecond, as the keeper compares it) after the landed head's commit time, strictly after the exit time it
 showed before the install (a new run, not the last deploy's) and not after the clock read following the read
 (the keeper rejects later times), and its `.timer` must be active, with a row for each item of the service
 that the timer's own target does not cover. Rows go to the items that ship the family: the items of the commits

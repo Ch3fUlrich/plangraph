@@ -193,6 +193,24 @@ fn service_of<'a>(timer: &Target, targets: &'a [Target]) -> Option<&'a Target> {
         .find(|s| s.host == timer.host && paired_timer(&s.family).as_deref() == Some(&timer.family))
 }
 
+/// The exit time (microseconds) the unit showed before this install. A unit that reports `absent` has none;
+/// a read that fails or an exit time that cannot be read leaves no baseline to prove the run is new, so the
+/// target fails.
+fn baseline(installer: &dyn Installer, t: &Target) -> Result<Option<i64>, String> {
+    let run = installer
+        .read_run(&t.host, &t.family)
+        .map_err(|e| format!("read before install: {e}"))?;
+    if run.is_active == ABSENT {
+        return Ok(None);
+    }
+    match run.exec_main_exit_timestamp.as_deref() {
+        None => Ok(None),
+        Some(text) => exit_micros(text)
+            .map(Some)
+            .ok_or_else(|| format!("exit time {text:?} before install is unreadable")),
+    }
+}
+
 /// Installs `targets` (timers first). A timer whose service the train also ships is held: its rows and its
 /// checkpoint wait until that service has passed, so a failed service leaves no timer evidence behind.
 /// `checkpoint` is called after every state change so the caller can save it.
@@ -242,20 +260,19 @@ pub fn apply(
             release(&mut held, &id, rows, state, &mut report, checkpoint)?;
             continue;
         }
-        // The exit time the unit shows before this install, if it runs at all yet.
-        let before = installer
-            .read_run(&t.host, &t.family)
-            .ok()
-            .and_then(|r| r.exec_main_exit_timestamp.as_deref().and_then(exit_epoch));
-        let outcome = installer
-            .install(&t.host, &t.family)
-            .map_err(|e| format!("install: {e}"))
-            .and_then(|()| {
+        let outcome = baseline(installer, t)
+            .and_then(|before| {
                 installer
-                    .read_run(&t.host, &t.family)
-                    .map_err(|e| format!("first run: {e}"))
+                    .install(&t.host, &t.family)
+                    .map_err(|e| format!("install: {e}"))
+                    .and_then(|()| {
+                        installer
+                            .read_run(&t.host, &t.family)
+                            .map_err(|e| format!("first run: {e}"))
+                    })
+                    .map(|run| (before, run))
             })
-            .and_then(|run| {
+            .and_then(|(before, run)| {
                 let now = (gate.clock)();
                 if run.good(&t.family, gate, before, now) {
                     paired_timer_row(installer, t, &run, targets, gate).map(|timer| (run, timer))

@@ -19,6 +19,8 @@ fn an_unparsable_stale_or_future_exit_time_is_a_failed_first_run_through_the_dis
         "",
         "2001-01-01T00:00:00Z",        // before the landed head (stale run)
         "2099-01-01T00:00:00Z",        // after "now"
+        "2026-11-24T01:00:03Z",        // three seconds ahead: the keeper rejects it
+        "2026-11-24T01:00:00.9Z",      // a fraction ahead: the keeper keeps the fraction
         "Mon 2001-09-09 01:46:39 UTC", // stale, systemd form
     ] {
         let host = ran_at(bad);
@@ -52,13 +54,18 @@ fn an_unparsable_stale_or_future_exit_time_is_a_failed_first_run_through_the_dis
 }
 
 #[test]
-fn exit_epoch_reads_both_systemd_forms() {
+fn exit_micros_reads_both_systemd_forms() {
     assert_eq!(
-        exit_epoch("2026-11-24T01:00:00Z"),
-        exit_epoch("Tue 2026-11-24 01:00:00 UTC")
+        exit_micros("2026-11-24T01:00:00Z"),
+        exit_micros("Tue 2026-11-24 01:00:00 UTC")
     );
-    assert_eq!(exit_epoch("1970-01-01T00:00:10Z"), Some(10));
-    assert_eq!(exit_epoch("t"), None);
+    assert_eq!(exit_micros("1970-01-01T00:00:10Z"), Some(10_000_000));
+    assert_eq!(exit_micros("1970-01-01T00:00:10.25Z"), Some(10_250_000));
+    assert_eq!(
+        exit_micros("Tue 2026-11-24 01:00:00.5 UTC"),
+        Some(T0 + 500_000)
+    );
+    assert_eq!(exit_micros("t"), None);
 }
 
 #[test]
@@ -139,7 +146,7 @@ fn a_result_from_before_this_install_is_not_this_installs_first_run() {
     )
     .unwrap();
     assert_eq!(r.deployed, ["a.service@alpha"], "{:?}", r.failed);
-    assert_eq!(T0, exit_epoch("2026-11-24T01:00:00Z").unwrap());
+    assert_eq!(T0, exit_micros("2026-11-24T01:00:00Z").unwrap());
 }
 
 #[test]
@@ -257,4 +264,26 @@ fn only_the_targets_the_go_row_names_are_installed() {
     let e = named_targets(&plan, "deploy: bad.service@alpha").unwrap_err();
     assert!(e.contains("not a passing target"), "{e}");
     assert!(named_targets(&plan, "no deploy here").is_err());
+}
+
+#[test]
+fn a_failed_read_before_the_install_leaves_no_baseline_so_the_target_fails() {
+    // The pre-install read fails (not "absent") and the unit shows an old success afterwards: without a
+    // baseline nothing proves this install ran it, so no row is written.
+    let mut host = ran_at("2026-11-24T00:59:00Z");
+    host.before_fails.insert("a.service".into());
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    let r = run(
+        &[target("a.service", "alpha", &["demo:A"])],
+        &host,
+        &rows,
+        &mut state,
+    )
+    .unwrap();
+    assert!(r.failed.unwrap().1.contains("read before install"));
+    assert!(rows.0.borrow().is_empty());
+    assert!(
+        !host.installed.borrow().contains("a.service"),
+        "installed without a baseline"
+    );
 }

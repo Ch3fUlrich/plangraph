@@ -225,7 +225,27 @@ def landed_deploy_work(git, repo, parent, tip, merge, key, *, train):
     changes = part_changes(git, repo, parent, tip, merge, names, train_resolution=train)
     parts = list(git._train_deploy_changes(repo, parent, tip, names)) if train else []
     changes.extend(change for _, _, paths in parts for change in paths)
+    if train:
+        # A unit one part adds and a later part removes is not delivered: judge each part's paths against
+        # what the whole train nets out to, as the deploy plan does.
+        net = _train_net_paths(git, repo, parent, tip)
+        if net is not None:
+            changes = [change for change in changes if change[1] in net]
+            parts = [(part, part_merge, [change for change in paths if change[1] in net])
+                     for part, part_merge, paths in parts]
     return changes, parts
+
+
+def _train_net_paths(git, repo, parent, tip):
+    """Paths the train changes against its base (``None`` when git cannot say), deleted ones excluded."""
+    base = git._run(repo, ["merge-base", "--end-of-options", parent, tip])
+    if base.returncode != 0 or not valid_commit_ref(base.stdout.strip()):
+        return None
+    try:
+        return {path for status, path in git._name_status(repo, ["--end-of-options", base.stdout.strip(), tip])
+                if status != "D"}
+    except RuntimeError:
+        return None
 
 
 def part_changes(git, repo, parent, part, merge, names, *, train_resolution=False):

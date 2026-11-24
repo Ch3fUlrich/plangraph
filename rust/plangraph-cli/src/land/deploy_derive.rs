@@ -98,13 +98,45 @@ pub(super) struct Touched {
     pub hosts: BTreeSet<String>,
 }
 
+/// The `rev-list` arguments of each part of a built train: the commits a first-parent merge brought in
+/// (its second parent, less its first), and each first-parent commit that is no merge on its own; a train with neither is one part.
+pub(super) fn part_revs(repo: &Path, base: &str, train: &str) -> Result<Vec<Vec<String>>, String> {
+    use super::git;
+    let range = format!("{base}..{train}");
+    let chain = git::out(
+        repo,
+        &[
+            "rev-list",
+            "--first-parent",
+            "--reverse",
+            "--parents",
+            &range,
+        ],
+    )?;
+    let mut parts = Vec::new();
+    for line in chain.lines() {
+        let ids: Vec<&str> = line.split_whitespace().collect();
+        match ids.as_slice() {
+            [_, p1, p2, ..] => parts.push(vec![p2.to_string(), format!("^{p1}")]),
+            [c, _] => parts.push(vec![format!("{c}^!")]),
+            _ => {}
+        }
+    }
+    if parts.is_empty() {
+        parts.push(vec![range]);
+    }
+    Ok(parts)
+}
+
 pub(super) fn touched_in(
     repo: &Path,
-    range: &str,
+    revs: &[String],
     net: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<Touched, String> {
     use super::git;
-    let shas = git::bytes(repo, &["rev-list", "--no-merges", "--reverse", range])?;
+    let mut args = vec!["rev-list", "--no-merges", "--reverse"];
+    args.extend(revs.iter().map(String::as_str));
+    let shas = git::bytes(repo, &args)?;
     let mut out = Touched::default();
     for sha in String::from_utf8_lossy(&shas).split_whitespace() {
         let message = git::bytes(repo, &["show", "-s", "--format=%B", sha])?;
@@ -155,7 +187,7 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
     use super::build::part_base;
     let from = part_base(repo, base, part.parent.as_ref());
     let net = families_between_merge_base(repo, from, &part.head)?;
-    let touched = touched_in(repo, &format!("{from}..{}", part.head), &net)?;
+    let touched = touched_in(repo, &[format!("{from}..{}", part.head)], &net)?;
     let mut shipped = touched.by_family;
     // The keeper's rule (`part_changes`): an untagged follow-up belongs to every item the part has own
     // work for, so a family it touches goes to all the part's items.
