@@ -388,9 +388,13 @@ JSON integer. The daemon applies it at startup to claim, worker claim, and claim
 batch before writing. Overlapping claims share in-flight authority lookups and
 can wait up to the earlier of the leader's deadline and their own deadline. A
 lookup error is shared with waiting claims. A deadline refusal names the
-preflight step that ran out of time. Independent checkouts refresh in parallel,
-with up to four workers per scan. A later claim refreshes repository authority
-again, even when a previous work index is recent.
+preflight step that ran out of time. A claim refreshes only the item's own
+repository from origin; other repositories serve their last built index. The
+keys of one `claim-batch` share that refresh, so a batch costs one origin refresh
+per repository; a later claim refreshes repository authority again, even when a
+previous work index is recent. `GET /v1/health` reports
+`claim_preflight_s`; the CLI bounds `claim` and `claim-batch` by that budget plus
+15 seconds instead of a fixed 15 seconds.
 
 `pg define` and `pg define --edit` refuse review clauses in `done_criteria`
 or `description` that pin a model or leg from the routing catalog. Ask for
