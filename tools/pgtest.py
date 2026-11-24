@@ -257,11 +257,20 @@ def report_batches(batches):
 
 
 def with_result_line(run, is_run):
-    """Run `run()`; a `--run` that exits non-zero before any batch reported still prints the one AFFECTED line."""
+    """Run `run()`; a `--run` that ends without any batch reported (a refusal, an argparse exit, a
+    collection-only run) still prints the one AFFECTED line."""
     _REPORTED.clear()
-    code = run()
-    if code and is_run and not _REPORTED:
-        print(f"AFFECTED rc={code} batches=0 failed=1", flush=True)
+
+    def finish(code):
+        if is_run and not _REPORTED:
+            print(f"AFFECTED rc={code} batches=0 failed={1 if code else 0}", flush=True)
+
+    try:
+        code = run()
+    except SystemExit as exit_:
+        finish(exit_.code if isinstance(exit_.code, int) else int(exit_.code is not None))
+        raise
+    finish(code)
     return code
 
 
