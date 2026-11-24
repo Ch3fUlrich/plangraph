@@ -12,6 +12,8 @@ mod unit_env;
 #[path = "host_sync_release.rs"]
 mod release;
 
+#[path = "host_sync_dry_run.rs"]
+mod dry_run;
 #[path = "host_sync_protoc.rs"]
 mod protoc;
 #[path = "host_sync_wsl.rs"]
@@ -79,6 +81,12 @@ pub fn run_cli(args: &[OsString]) -> i32 {
     if matches!(args.first(), Some(flag) if flag == "--install-release") {
         return release::run(&args[1..]);
     }
+    if matches!(args.first(), Some(flag) if flag == "--install-dry-run") {
+        return dry_run::run(&args[1..]);
+    }
+    if matches!(args, [flag] if flag == "--install-dry-run-here") {
+        return dry_run::run_here();
+    }
     if matches!(args, [flag] if flag == "--check-protoc") {
         return protoc::run();
     }
@@ -89,7 +97,7 @@ pub fn run_cli(args: &[OsString]) -> i32 {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
-            eprintln!("usage: host-sync [--data-dir PATH] [--bin-dir PATH] | --install-release REPO | --install-env FAMILY | --check-protoc | --install-wsl-guard POLICY HOST");
+            eprintln!("usage: host-sync [--data-dir PATH] [--bin-dir PATH] | --install-release REPO | --install-env FAMILY | --install-dry-run [--registry FILE] [--repo DIR] HOST FAMILY | --check-protoc | --install-wsl-guard POLICY HOST");
             return 2;
         }
     };
