@@ -1,4 +1,5 @@
-use super::round_time::{classify_command, Cause, Class, Reader};
+use super::round_reader::Reader;
+use super::round_time::{classify_command, Cause, Class};
 use serde_json::{json, Value};
 
 pub(crate) const T0: i64 = 1_700_000_000_000;
@@ -26,13 +27,16 @@ impl Transcript {
             .push(json!({"type":"api-request","timestamp":stamp(at)}));
     }
     pub fn text(&mut self, at: i64, end_turn: bool) {
+        self.text_in(at, &format!("m{at}"), end_turn);
+    }
+    pub fn text_in(&mut self, at: i64, message: &str, end_turn: bool) {
         self.0.push(json!({"type":"assistant","timestamp":stamp(at),
-            "message":{"stop_reason": if end_turn {"end_turn"} else {"tool_use"},
+            "message":{"id":message,"stop_reason": if end_turn {"end_turn"} else {"tool_use"},
             "content":[{"type":"text","text":"x"}]}}));
     }
     pub fn tool(&mut self, at: i64, id: &str, name: &str, input: Value) {
         self.0.push(json!({"type":"assistant","timestamp":stamp(at),
-            "message":{"stop_reason":"tool_use",
+            "message":{"id":format!("m{at}"),"stop_reason":"tool_use",
             "content":[{"type":"tool_use","id":id,"name":name,"input":input}]}}));
     }
     pub fn result(&mut self, at: i64, id: &str, background: Option<&str>) {
@@ -197,18 +201,86 @@ fn a_gap_without_evidence_is_unknown() {
     assert_eq!(cause(&t.read().rows[0], Cause::Unknown), 40_000);
 }
 
+/// The writer started `cargo test` in the background and then waits on its output file.
+pub(crate) fn explicit_wait(task: &str, wait_call: &str) -> Transcript {
+    let mut t = Transcript::new();
+    t.prompt(0, "p1");
+    t.request(1_000);
+    t.tool(
+        2_000,
+        "u1",
+        "Bash",
+        json!({"command":"cargo test -p x","run_in_background":true}),
+    );
+    t.result(2_500, "u1", Some(task));
+    t.request(3_000);
+    t.tool(4_000, "u2", "Bash", json!({"command": wait_call}));
+    t
+}
+
 #[test]
 fn open_wait_names_the_task_and_counts_the_open_tail() {
-    let t = background_test_wait();
-    let mut cut = Transcript(t.0[..6].to_vec());
-    let reader = cut.read();
-    let wait = reader.open_wait(T0 + 6_000 + 16 * MIN).expect("blocked");
+    let call = "until grep -q rc= /t/tasks/bg1.output; do sleep 15; done";
+    let mut t = explicit_wait("bg1", call);
+    let wait = t.read().open_wait(T0 + 4_000 + 16 * MIN).expect("blocked");
     assert_eq!(wait.task_id, "bg1");
     assert_eq!(wait.class, Class::Test);
     assert_eq!(wait.command, "cargo test -p x");
     assert_eq!(wait.waited_ms, 16 * MIN);
-    cut.notified(6_000 + 20 * MIN, "bg1");
-    assert_eq!(cut.read().open_wait(T0 + 30 * MIN), None);
+    // The wait call returns, or the command is reported finished: the wait is closed.
+    t.result(4_000 + 16 * MIN, "u2", None);
+    assert_eq!(t.read().open_wait(T0 + 30 * MIN), None);
+    let mut done = explicit_wait("bg1", call);
+    done.notified(4_000 + 16 * MIN, "bg1");
+    done.result(4_000 + 16 * MIN, "u2", None);
+    assert_eq!(done.read().open_wait(T0 + 30 * MIN), None);
+}
+
+#[test]
+fn an_idle_writer_or_an_unnamed_sleep_is_no_wait_to_stop() {
+    let t = background_test_wait();
+    let idle = Transcript(t.0[..6].to_vec()).read();
+    assert_eq!(idle.open_wait(T0 + 60 * MIN), None, "idle after end_turn");
+    assert_eq!(
+        idle.running().len(),
+        1,
+        "the command is still known for its owner record"
+    );
+    let unnamed = explicit_wait("bg1", "sleep 900").read();
+    assert_eq!(unnamed.open_wait(T0 + 60 * MIN), None, "names no task");
+    let other = explicit_wait(
+        "bg1",
+        "until grep -q rc= /t/tasks/zzzz.output; do sleep 5; done",
+    );
+    assert_eq!(
+        other.read().open_wait(T0 + 60 * MIN),
+        None,
+        "names another task"
+    );
+}
+
+#[test]
+fn a_new_round_closes_the_wait() {
+    let mut t = explicit_wait(
+        "bg1",
+        "until grep -q rc= /t/tasks/bg1.output; do sleep 15; done",
+    );
+    t.prompt(5 * MIN, "p2");
+    assert_eq!(t.read().open_wait(T0 + 60 * MIN), None);
+}
+
+#[test]
+fn writing_is_one_message_and_a_new_message_without_a_request_is_unknown() {
+    let mut t = Transcript::new();
+    t.prompt(0, "p1");
+    t.request(1_000);
+    t.text_in(2_000, "m1", false);
+    t.text_in(5_000, "m1", false);
+    t.text_in(9_000, "m2", true);
+    let row = &t.read().rows[0];
+    assert_eq!(cause(row, Cause::ModelWrite), 3_000);
+    assert_eq!(cause(row, Cause::Unknown), 4_000);
+    assert_eq!(cause(row, Cause::ModelWait), 1_000);
 }
 
 #[test]

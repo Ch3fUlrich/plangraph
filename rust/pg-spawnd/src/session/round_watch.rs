@@ -6,7 +6,7 @@
 //! second time. Every step is written to the state file before it acts, so a restart
 //! finishes a pending stop or notification instead of repeating it.
 
-use super::round_time::{OpenWait, Reader};
+use super::{round_reader::Reader, round_time::OpenWait};
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Map, Value};
 use std::{fs, io, path::Path};
@@ -23,12 +23,23 @@ pub struct Owner {
     pub start_time: Option<u64>,
 }
 
+/// What a stop found.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stop {
+    /// The recorded process is gone or is no longer that command: nothing was signalled.
+    Gone,
+    /// The watchdog signalled it and nothing of it is left.
+    Ended,
+    Survivors,
+}
+
 /// Effects of the watchdog. The real host reads /proc and signals; tests fake it.
 pub trait Host {
     /// The one live process of `session` that runs `command`; none when it is gone or ambiguous.
     fn resolve_owner(&self, session: &str, command: &str) -> Option<Owner>;
-    /// End the owner and its process group; true once nothing of it is left.
-    fn stop(&self, owner: &Owner) -> bool;
+    /// End the recorded owner and its process group, only while that very process
+    /// (same start time) still runs `command`.
+    fn stop(&self, owner: &Owner, command: &str) -> Stop;
     /// Queue one line for `recipient`; `key` makes a second queue of it a no-op.
     fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()>;
 }
@@ -61,10 +72,28 @@ impl Phase {
 /// What one tick did, for the log.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    Stopped { task_id: String, command: String },
-    StopPending { task_id: String },
-    Notified { task_id: String },
-    Blocked { round_key: String, command: String },
+    Stopped {
+        task_id: String,
+        command: String,
+    },
+    StopPending {
+        task_id: String,
+    },
+    /// The command finished by itself before the stop: no strike, no notice.
+    Finished {
+        task_id: String,
+    },
+    /// No recorded owner: nothing is signalled on a guess.
+    OwnerUnknown {
+        task_id: String,
+    },
+    Notified {
+        task_id: String,
+    },
+    Blocked {
+        round_key: String,
+        command: String,
+    },
 }
 
 fn action_key(round_key: &str, task_id: &str) -> String {
@@ -140,6 +169,8 @@ pub fn tick(
     let reader = Reader::read(session, transcript);
     let mut state = read_state(state_path);
     let mut done = Vec::new();
+    record_owners(session, &reader, &mut state, host, state_path)?;
+    let open = reader.open_wait(now_ms);
     // A stop or a notification written before a crash is finished first.
     let pending: Vec<(String, Phase, OpenWait)> = state["actions"]
         .as_object()
@@ -157,7 +188,6 @@ pub fn tick(
             (phase != Phase::Notified).then(|| (key.clone(), phase, wait))
         })
         .collect();
-    let open = reader.open_wait(now_ms);
     for (key, phase, wait) in pending {
         // A stop is only authorised while the same wait is still open: a command that
         // finished, a wait that returned or a new round releases it without a strike.
@@ -175,7 +205,7 @@ pub fn tick(
     }
     if let Some(wait) = open.filter(|w| w.waited_ms > WAIT_LIMIT_MS) {
         let key = action_key(&wait.round_key, &wait.task_id);
-        if phase_of(&state, &key).is_none() {
+        if phase_of(&state, &key).is_none() && state["actions"][&key].is_null() {
             set_phase(&mut state, &key, Phase::Stopping, &wait);
             state["actions"][&key]["waited_ms"] = json!(wait.waited_ms);
             write_state(state_path, &state)?;
@@ -194,6 +224,45 @@ pub fn tick(
     Ok(done)
 }
 
+/// Remember who runs each background command the first time it is seen, so a stop
+/// later goes to that recorded process and never to whatever matches then.
+fn record_owners(
+    session: &str,
+    reader: &Reader,
+    state: &mut Value,
+    host: &dyn Host,
+    state_path: &Path,
+) -> io::Result<()> {
+    let mut changed = false;
+    for task in reader.running() {
+        let key = action_key(&task.round_key, &task.task_id);
+        if state["owners"][&key].is_object() {
+            continue;
+        }
+        if let Some(owner) = host.resolve_owner(session, &task.command) {
+            state["owners"][&key] = json!({"pid": owner.pid, "start_time": owner.start_time});
+            changed = true;
+        }
+    }
+    if changed {
+        write_state(state_path, state)?;
+    }
+    Ok(())
+}
+
+fn owner_of(state: &Value, key: &str) -> Option<Owner> {
+    let record = state["owners"][key].as_object()?;
+    Some(Owner {
+        pid: u32::try_from(record.get("pid")?.as_u64()?).ok()?,
+        start_time: record.get("start_time").and_then(Value::as_u64),
+    })
+}
+
+fn settle(state: &mut Value, key: &str, phase: &str, state_path: &Path) -> io::Result<()> {
+    state["actions"][key]["phase"] = json!(phase);
+    write_state(state_path, state)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish(
     session: &str,
@@ -206,15 +275,37 @@ fn finish(
     done: &mut Vec<Action>,
 ) -> io::Result<()> {
     if phase == Phase::Stopping {
-        // A missing owner after a written stop means the command is already gone.
-        let ended = host
-            .resolve_owner(session, &wait.command)
-            .is_none_or(|owner| host.stop(&owner));
-        if !ended {
-            done.push(Action::StopPending {
+        let Some(owner) = owner_of(state, key) else {
+            settle(state, key, "unowned", state_path)?;
+            done.push(Action::OwnerUnknown {
                 task_id: wait.task_id.clone(),
             });
             return Ok(());
+        };
+        // The signal is written down first: a crash after it leaves a record that
+        // lets the next tick tell "ended by us" from "ended by itself".
+        let signalled = state["actions"][key]["signalled"] == json!(true);
+        state["actions"][key]["signalled"] = json!(true);
+        write_state(state_path, state)?;
+        let result = match host.stop(&owner, &wait.command) {
+            Stop::Gone if signalled => Stop::Ended,
+            other => other,
+        };
+        match result {
+            Stop::Survivors => {
+                done.push(Action::StopPending {
+                    task_id: wait.task_id.clone(),
+                });
+                return Ok(());
+            }
+            Stop::Gone => {
+                settle(state, key, "finished", state_path)?;
+                done.push(Action::Finished {
+                    task_id: wait.task_id.clone(),
+                });
+                return Ok(());
+            }
+            Stop::Ended => {}
         }
         set_phase(state, key, Phase::Stopped, wait);
         write_state(state_path, state)?;
@@ -227,6 +318,18 @@ fn finish(
     if phase == Phase::Stopped {
         let count = strikes(state, &wait.round_key);
         let blocked = count >= STRIKE_LIMIT;
+        if blocked && state["blocked"].is_null() {
+            // The round is closed before anyone is told: relaunch refuses from here on.
+            state["blocked"] = json!({
+                "round_key": wait.round_key, "command": wait.command,
+                "reason": "second wait over the cap in one round",
+            });
+            write_state(state_path, state)?;
+            done.push(Action::Blocked {
+                round_key: wait.round_key.clone(),
+                command: wait.command.clone(),
+            });
+        }
         let text = line(wait, count);
         let recipients: &[&str] = if blocked {
             &[session, "routing"]
@@ -237,16 +340,6 @@ fn finish(
             .iter()
             .all(|who| host.notify(who, &format!("{key}>{who}"), &text).is_ok());
         if sent {
-            if blocked {
-                state["blocked"] = json!({
-                    "round_key": wait.round_key, "command": wait.command,
-                    "reason": "second wait over the cap in one round",
-                });
-                done.push(Action::Blocked {
-                    round_key: wait.round_key.clone(),
-                    command: wait.command.clone(),
-                });
-            }
             set_phase(state, key, Phase::Notified, wait);
             write_state(state_path, state)?;
             done.push(Action::Notified {
@@ -263,4 +356,24 @@ pub fn blocked_outcome(state_path: &Path) -> Option<Value> {
     state["blocked"]
         .is_object()
         .then(|| state["blocked"].clone())
+}
+
+/// The action file of one session under a spawn state directory.
+pub fn state_file(spawn_state: &Path, session: &str) -> std::path::PathBuf {
+    spawn_state
+        .join("round-watch")
+        .join(format!("{session}.json"))
+}
+
+/// Spawn state directory, resolved as the watchdog and the session store resolve it.
+pub fn spawn_state_dir() -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("PLANGRAPH_SPAWN_STATE").filter(|v| !v.is_empty()) {
+        return dir.into();
+    }
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|home| home.join(".local/state")))
+        .unwrap_or_default();
+    base.join("plangraph")
 }
