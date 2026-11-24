@@ -127,3 +127,33 @@ def test_set_problems_name_what_breaks_the_plan_rules():
     big = set_problems(plan_batches([P(1, lines=2000)], "main"))
     assert big == ["1 PR(s) and 2000 lines are over the caps (--max-prs 6, --max-lines 1200)"]
 
+
+
+def test_deploy_blocker_items_are_filed_with_pg_define_when_the_keeper_is_configured(monkeypatch, tmp_path, capsys):
+    """The filing path of the go-req deploy blockers: configured files, failing reports, unconfigured skips."""
+    import subprocess
+    import types
+
+    items = tmp_path / "blockers.json"
+    items.write_text('{"items": []}')
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs.get("env", {}).get("PYTHONPATH", "")))
+        return types.SimpleNamespace(returncode=calls_rc[0], stderr="keeper refused\n", stdout="")
+
+    calls_rc = [0]
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: True)
+    merge_batch_plan.file_deploy_blockers(items)
+    argv, pythonpath = calls[0]
+    assert argv[1:] == ["-m", "plangraph.keeper.cli", "define", "--file", str(items)]
+    assert str(ROOT / "src") in pythonpath.split(":")
+    assert capsys.readouterr().err == ""
+    calls_rc[0] = 1  # a refused define is reported, never fatal
+    merge_batch_plan.file_deploy_blockers(items)
+    assert "deploy blocker items not filed: keeper refused" in capsys.readouterr().err
+    monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: False)
+    calls.clear()
+    merge_batch_plan.file_deploy_blockers(items)
+    assert calls == [] and "keeper is not configured" in capsys.readouterr().err
