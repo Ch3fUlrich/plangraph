@@ -231,19 +231,21 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
-    def record_quota_recovery(self, leg, caller, now=None):
+    def record_quota_recovery(self, leg, caller, now=None, account=None, combo=None):
         """A passed probe proves the account serves: end the older quota limits of a sibling leg.
 
-        ``leg_status`` drops the leg's quota evidence (provider 429/402 limits, in every
-        account/combo scope) booked up to this row and keeps everything else: probe failures
-        and model-unavailable, busy or auth bookings stand. The row is no liveness evidence
-        (``last_probe_ts`` and the single-flight attempt time never see it).
+        ``account``/``combo`` is the scope the probe verified. ``leg_status`` drops the leg's
+        provider 429/402 limits booked up to this row (by time, then event id) and keeps
+        everything else: probe failures and model-unavailable, busy and auth bookings stand.
+        Harness-stderr limits are leg-level evidence, as for a probe pass, and end in every scope;
+        provider-response limits end only in the scope the probe verified. The row is no liveness
+        evidence (``last_probe_ts`` and the single-flight attempt time never see it).
         """
         leg = quota_key(leg)
         if not caller:
             raise LegStateError("requires successful provider response caller")
         with self._connect() as db:
-            db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, None, None, 200, "", None, None, time.time() if now is None else now, caller, "quota-recovery"))
+            db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "quota-recovery"))
 
     def last_quota_clear_ts(self, leg):
         """Newest evidence that the leg's account serves again: its own passed probe or a sibling's recovery."""
@@ -436,11 +438,21 @@ def _is_quota_limit(row):
 
 
 def _without_recovered_quota(rows):
-    """Rows newest first: a quota-recovery row ends every quota limit booked at or before it."""
-    recovery = next((r for r in rows if r['source'] == 'quota-recovery'), None)
-    if recovery is None:
+    """Drop the quota limits a quota-recovery row ends; see ``record_quota_recovery``.
+
+    Rows are newest first; "booked up to" compares (ts, id) as the query orders them, so a
+    limit booked after the recovery at the same timestamp stands.
+    """
+    recoveries = [r for r in rows if r['source'] == 'quota-recovery']
+    if not recoveries:
         return rows
-    return [r for r in rows if r['source'] != 'quota-recovery' and not (r['ts'] <= recovery['ts'] and _is_quota_limit(r))]
+
+    def ended(row):
+        return _is_quota_limit(row) and any(
+            (row['ts'], row['id']) <= (rec['ts'], rec['id'])
+            and (row['source'] == 'harness-stderr' or (row['account'], row['combo']) == (rec['account'], rec['combo']))
+            for rec in recoveries)
+    return [r for r in rows if r['source'] != 'quota-recovery' and not ended(r)]
 
 
 def _limit_end(row):
@@ -460,8 +472,8 @@ def record_probe_pass(leg, caller, now=None, account=None, combo=None):
     return _default_store().record_probe_pass(leg, caller, now, account, combo)
 
 
-def record_quota_recovery(leg, caller, now=None):
-    return _default_store().record_quota_recovery(leg, caller, now)
+def record_quota_recovery(leg, caller, now=None, account=None, combo=None):
+    return _default_store().record_quota_recovery(leg, caller, now, account, combo)
 
 
 def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, down_s=None, *, harness=None):

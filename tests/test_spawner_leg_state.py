@@ -558,3 +558,21 @@ def test_quota_recovery_ends_only_quota_evidence_in_every_scope(tmp_path):
     assert store.last_quota_clear_ts("plain") == now + 60 and store.last_quota_clear_ts("nothing") is None
     store.record_harness_limit("plain", limit, "spawner:harness", now=now + 120, harness="codex")
     assert store.leg_status("plain", now=now + 121)["state"] == "limited"
+
+
+def test_quota_recovery_clears_provider_limits_only_in_the_verified_scope_and_orders_by_event_id(tmp_path):
+    store = ls.LegStateStore(tmp_path / "legs.sqlite")
+    now = 1_000_000.0
+    body = "usage limit"
+    store.record_provider_response("sib", 429, body, {"retry-after": "259200"}, "spawner", now=now)
+    store.record_provider_response("sib", 429, body, {"retry-after": "259200"}, "spawner", now=now, account="a1", combo="c1")
+    assert store.leg_status("sib", now=now + 1, account="a1", combo="c1")["state"] == "limited"
+    store.record_quota_recovery("sib", "review-probe", now=now + 5)   # the sweep verified the unscoped account
+    assert store.leg_status("sib", now=now + 6)["state"] == "ok"
+    assert store.leg_status("sib", now=now + 6, account="a1", combo="c1")["state"] == "limited"   # another account's 429 stands
+    store.record_quota_recovery("sib", "review-probe", now=now + 7, account="a1", combo="c1")
+    assert store.leg_status("sib", now=now + 8, account="a1", combo="c1")["state"] == "ok"
+    # A 429 booked at the recovery's own timestamp, after it, is newer by event id and stands.
+    store.record_quota_recovery("sib", "review-probe", now=now + 20)
+    store.record_provider_response("sib", 429, body, {"retry-after": "259200"}, "spawner", now=now + 20)
+    assert store.leg_status("sib", now=now + 21)["state"] == "limited"

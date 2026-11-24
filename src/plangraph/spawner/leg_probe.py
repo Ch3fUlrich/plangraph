@@ -341,7 +341,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 # account serves again, so the limit ends on every sibling key, without liveness evidence.
                 for model in quota_models(key(leg), leg.harness):
                     if model != key(leg):
-                        state.record_quota_recovery(model, caller)
+                        state.record_quota_recovery(model, caller, account=getattr(leg, 'account', None),
+                                                     combo=getattr(leg, 'combo', None))
             elif quota:
                 for model in quota_models(key(leg), leg.harness):
                     state.record_harness_limit(model, quota, caller, harness=leg.harness,
