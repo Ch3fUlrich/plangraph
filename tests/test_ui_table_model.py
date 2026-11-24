@@ -48,7 +48,7 @@ if (mode === "t1") {
   var eq = JSON.stringify(d1) === JSON.stringify(d2);
   d1.filters.project.push("zzz"); d1.sort[0].col = "title";
   emit({ outs: outs, echo: IN.cases, idem: idem, defEq: eq,
-         def2Clean: d2.filters.project.length === 0 && d2.sort[0].col === "priority" });
+         def2Clean: d2.filters.project.length === 0 && d2.sort[0].col === "category" });
 } else if (mode === "t4") {
   var ctx4 = PlanUI.tableContext(vmOf(IN.bigPath || P.fix));
   ctx4.rows.forEach(function (r) { deepFreeze(r); });
@@ -106,19 +106,20 @@ TABLE_STATES = ["ready", "blocked", "claimed", "in_review", "open", "done", "can
 TABLE_COLUMNS = [
     ("state", "State", 112, False, "asc", True), ("project", "Project", 120, False, "asc", True),
     ("title", "Title", 420, False, "asc", True), ("phase", "Phase", 150, False, "asc", True),
-    ("owner", "Owner", 130, False, "asc", True), ("priority", "Prio", 64, True, "desc", True),
+    ("owner", "Owner", 130, False, "asc", True), ("category", "Category", 120, True, "asc", True),
+    ("priority", "Prio", 64, True, "desc", True),
     ("est", "Est h", 64, True, "desc", True), ("kind", "Kind", 80, False, "asc", False),
     ("op", "Op", 56, False, "desc", True), ("unblocks", "Unblocks", 88, True, "desc", True),
 ]
 TABLE_METRICS = {"rowH": 36, "groupH": 32, "detailH": 128, "overscan": 6}
-DEFAULT_COLS = ["state", "project", "title", "phase", "owner", "priority", "est", "op", "unblocks"]
+DEFAULT_COLS = ["state", "project", "title", "phase", "owner", "category", "priority", "est", "op", "unblocks"]
 
 
 def defaults():
     """C5 tableDefaults, written out from the contract."""
-    return {"sort": [{"col": "priority", "dir": "desc"}],
+    return {"sort": [{"col": "category", "dir": "asc"}, {"col": "priority", "dir": "desc"}],
             "filters": {"project": [], "phase": [], "state": [], "owner": [],
-                        "priority": [], "kind": [], "op": False},
+                        "priority": [], "kind": [], "category": [], "op": False},
             "search": "", "cols": list(DEFAULT_COLS), "group": "project>phase", "collapsed": []}
 
 

@@ -185,3 +185,29 @@ def cmd_render(args, session):
     )
     kg_export.run(snapshot.get("items") or [], out.parent)
     return EXIT_OK
+
+
+def cmd_categories(args, session):
+    from .cli_verbs import read
+
+    return read(session, "categories", {"project": args.project} if args.project else {},
+                fmt.categories_text)
+
+
+def cmd_add_category(args, session):
+    from .cli_verbs import write
+
+    return write(session, "add_category", {"name": args.name})
+
+
+def cmd_rank_categories(args, session):
+    from .cli_verbs import write
+
+    return write(session, "rank_categories", {"project": args.project, "order": args.order})
+
+
+def cmd_backfill_categories(args, session):
+    from .cli_verbs import write
+
+    return write(session, "backfill_categories",
+                 {"project": args.project, "dry_run": args.dry_run})

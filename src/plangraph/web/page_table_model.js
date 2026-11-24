@@ -12,7 +12,8 @@
   var TABLE_COLUMNS = [
     col("state", "State", 112, false, "asc", true), col("project", "Project", 120, false, "asc", true),
     col("title", "Title", 420, false, "asc", true), col("phase", "Phase", 150, false, "asc", true),
-    col("owner", "Owner", 130, false, "asc", true), col("priority", "Prio", 64, true, "desc", true),
+    col("owner", "Owner", 130, false, "asc", true), col("category", "Category", 120, true, "asc", true),
+    col("priority", "Prio", 64, true, "desc", true),
     col("est", "Est h", 64, true, "desc", true), col("kind", "Kind", 80, false, "asc", false),
     col("op", "Op", 56, false, "desc", true), col("unblocks", "Unblocks", 88, true, "desc", true)
   ];
@@ -22,9 +23,7 @@
   PlanUI.TABLE_METRICS = TABLE_METRICS;
 
   var prevNaturalCmp = PlanUI.naturalCmp;
-  function naturalCmp(a, b) {
-    return prevNaturalCmp ? prevNaturalCmp(a, b) : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
-  }
+  function naturalCmp(a, b) { return prevNaturalCmp ? prevNaturalCmp(a, b) : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" }); }
   PlanUI.naturalCmp = prevNaturalCmp || naturalCmp;
   function operatorNeeded(row) { return !!(row && row.operator && row.display !== "done" && row.display !== "cancelled"); }
   function plainAsc(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
@@ -42,14 +41,14 @@
         projIdx[p.name] = idx;
       });
     }
-    var byKey = {}, rowIdx = new Map(), oSet = {}, phSet = {}, kSet = {}, prSet = {}, missing = false;
+    var byKey = {}, rowIdx = new Map(), oSet = {}, phSet = {}, kSet = {}, prSet = {}, cSet = {}, missing = false;
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
       if (!r) continue;
       rowIdx.set(r, i);
       if (r.key) byKey[r.key] = r;
       if (r.owner) oSet[r.owner] = true; if (r.phase) phSet[r.phase] = true;
-      if (r.kind) kSet[r.kind] = true; if (r.priority != null) prSet[Number(r.priority) || 0] = true;
+      if (r.kind) kSet[r.kind] = true; if (r.category) cSet[r.category] = true; if (r.priority != null) prSet[Number(r.priority) || 0] = true;
       if (projIdx[r.project == null ? "" : r.project] === undefined) missing = true;
     }
     if (missing && projIdx[""] === undefined) {
@@ -59,7 +58,7 @@
     return {
       rows: rows, projects: projects, projIdx: projIdx, rowIdx: rowIdx,
       owners: Object.keys(oSet).sort(plainAsc), phases: Object.keys(phSet).sort(naturalCmp),
-      kinds: Object.keys(kSet).sort(plainAsc),
+      kinds: Object.keys(kSet).sort(plainAsc), categories: Object.keys(cSet).sort(plainAsc),
       priorities: Object.keys(prSet).map(Number).sort(function (a, b) { return a - b; }),
       byKey: byKey, total: rows.length
     };
@@ -67,9 +66,9 @@
 
   function tableDefaults() {
     return {
-      sort: [{ col: "priority", dir: "desc" }],
-      filters: { project: [], phase: [], state: [], owner: [], priority: [], kind: [], op: false },
-      search: "", cols: ["state", "project", "title", "phase", "owner", "priority", "est", "op", "unblocks"],
+      sort: [{ col: "category", dir: "asc" }, { col: "priority", dir: "desc" }],
+      filters: { project: [], phase: [], state: [], owner: [], priority: [], kind: [], category: [], op: false },
+      search: "", cols: ["state", "project", "title", "phase", "owner", "category", "priority", "est", "op", "unblocks"],
       group: "project>phase", collapsed: []
     };
   }
@@ -111,7 +110,7 @@
       filters: {
         project: normList(sf.project, false), phase: normList(sf.phase, false),
         state: normList(sf.state, false), owner: normList(sf.owner, false),
-        priority: normList(sf.priority, true), kind: normList(sf.kind, false), op: Boolean(sf.op)
+        priority: normList(sf.priority, true), kind: normList(sf.kind, false), category: normList(sf.category, false), op: Boolean(sf.op)
       },
       search: st.search == null ? "" : String(st.search),
       cols: cols.length ? cols : ["title"],
@@ -129,7 +128,7 @@
     if (!ctx || !Array.isArray(ctx.rows)) return [];
     var rows = ctx.rows, f = (st && st.filters) || {};
     var pSet = makeSet(f.project), phSet = makeSet(f.phase), sSet = makeSet(f.state);
-    var oSet = makeSet(f.owner), prSet = makeSet(f.priority), kSet = makeSet(f.kind);
+    var oSet = makeSet(f.owner), prSet = makeSet(f.priority), kSet = makeSet(f.kind), cSet = makeSet(f.category);
     var op = !!f.op, search = st ? (st.search == null ? "" : String(st.search).trim()) : "";
 
     return rows.filter(function (r) {
@@ -138,7 +137,7 @@
       if (sSet && !sSet[r.display]) return false;
       if (oSet && !oSet[r.owner]) return false;
       if (prSet && !prSet[Number(r.priority) || 0]) return false;
-      if (kSet && !kSet[r.kind]) return false;
+      if ((kSet && !kSet[r.kind]) || (cSet && !cSet[r.category || ""])) return false;
       if (op && !operatorNeeded(r)) return false;
       if (search && PlanUI.Query && PlanUI.Query.match && !PlanUI.Query.match(r, search)) return false;
       return true;
@@ -160,7 +159,8 @@
       d = naturalCmp(a.phase || "", b.phase || "") || ((p1 === undefined ? 9999 : p1) - (p2 === undefined ? 9999 : p2));
     } else if (col === "title" || col === "owner" || col === "kind") {
       d = plainAsc(String(a[col] || "").toLowerCase(), String(b[col] || "").toLowerCase());
-    } else if (col === "priority") d = PlanUI.effectivePriority(a) - PlanUI.effectivePriority(b);
+    } else if (col === "category") d = PlanUI.categoryRank(a) - PlanUI.categoryRank(b);
+    else if (col === "priority") d = PlanUI.effectivePriority(a) - PlanUI.effectivePriority(b);
     else if (col === "est") d = (Number(a.estimate_h) || 0) - (Number(b.estimate_h) || 0);
     else if (col === "unblocks") d = (a.unblocks ? a.unblocks.length : 0) - (b.unblocks ? b.unblocks.length : 0);
     else if (col === "op") d = (operatorNeeded(a) ? 1 : 0) - (operatorNeeded(b) ? 1 : 0);
@@ -169,7 +169,7 @@
 
   function tableSort(rows, st, ctx) {
     if (!rows || !rows.length) return [];
-    var sortKeys = (st && Array.isArray(st.sort)) ? st.sort : [{ col: "priority", dir: "desc" }];
+    var sortKeys = (st && Array.isArray(st.sort)) ? st.sort : tableDefaults().sort;
     var safeCtx = ctx || { projIdx: {} };
     var decorated = rows.map(function (r, i) {
       var orig = (ctx && ctx.rowIdx && ctx.rowIdx.has(r)) ? ctx.rowIdx.get(r) : ((ctx && ctx.rows) ? ctx.rows.indexOf(r) : i);

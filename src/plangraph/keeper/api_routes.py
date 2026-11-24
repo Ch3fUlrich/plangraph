@@ -26,10 +26,12 @@ __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
               "answers", "progress", "changelog", "audit-meta", "metrics",
-              "jev_report", "write_context", "events", "attempts", "spawn_attempt_coverage"}
+              "jev_report", "write_context", "events", "attempts", "spawn_attempt_coverage",
+              "categories"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "claim_batch", "delegate", "heartbeat", "heartbeat_batch", "release",
-               "add_evidence", "add_evidence_router", "incident", "reconfirm", "submit", "verdict",
+               "add_evidence", "add_evidence_router", "incident", "reconfirm",
+               "add_category", "rank_categories", "backfill_categories", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "grant_apply", "revoke_apply",
@@ -61,6 +63,7 @@ READ_CALLS = {
     "needs_you": lambda store, who, project: store.needs_you(who, project=project),
     "answers": lambda store, who, project: store.answers(who, project=project),
     "progress": lambda store, who, project: store.progress(who, project=project),
+    "categories": lambda store, who, project: store.categories(who, project),
     "jev_report": lambda store, who, project: store.jev_report(who, project=project),
     "apply_grants": lambda store, who, project: {"grants": store.apply_grants(who)},
 }
@@ -428,6 +431,15 @@ def _close_merged_auto(store, principal, body, need):
 #: Write verbs whose store method checks the role itself and admits more than the
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
+                      "reconfirm": lambda store, principal, body, need:
+                          store.reconfirm(principal, need(body, "key"), body.get("decision")),
+                      "add_category": lambda store, principal, body, need:
+                          store.add_category(principal, need(body, "name")),
+                      "rank_categories": lambda store, principal, body, need:
+                          store.rank_categories(principal, need(body, "project"), body.get("order")),
+                      "backfill_categories": lambda store, principal, body, need:
+                          store.backfill_categories(principal, need(body, "project"),
+                                                    dry_run=bool(body.get("dry_run"))),
                       "land": lambda store, principal, body, need: store.land(principal, body),
                       "record_spawn_attempt": lambda store, principal, body, need:
                           store.record_spawn_attempt(principal, body),

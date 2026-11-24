@@ -19,6 +19,14 @@ if (mode === "rows") {
   rows.forEach(function (r, i) { ctx.rowIdx.set(r, i); });
   var out = PlanUI.tableSort(rows, { sort: IN.sort }, ctx);
   emit(out.map(function (r) { return r.key; }));
+} else if (mode === "defaults") {
+  var rows = IN.rows, ctx = { rows: rows, projIdx: {}, rowIdx: new Map() };
+  rows.forEach(function (r, i) { ctx.rowIdx.set(r, i); });
+  var st = PlanUI.tableDefaults();
+  var sorted = PlanUI.tableSort(rows, st, ctx).map(function (r) { return r.key; });
+  st.filters.category = ["cleanup"];
+  var kept = PlanUI.tableFilter(PlanUI.tableContext({ items: rows, projects: [] }), st).map(function (r) { return r.key; });
+  emit({ sorted: sorted, kept: kept, sort: st.sort, cats: PlanUI.tableContext({ items: rows }).categories });
 }
 """
 
@@ -47,3 +55,31 @@ def test_the_priority_column_sorts_by_the_effective_value(tmp_path):
     got = run_node(tmp_path, RUNNER, "sort",
                    {"rows": rows, "sort": [{"col": "priority", "dir": "desc"}]})
     assert got == ["b", "a", "c"]
+
+
+@need_node
+def test_default_sort_is_category_rank_before_priority_and_filters_by_category(tmp_path):
+    rows = [{"key": "eff", "priority": 10, "category": "efficiency-tokens", "category_rank": 1},
+            {"key": "none", "priority": 12},
+            {"key": "speed", "priority": 8, "category": "speed", "category_rank": 0},
+            {"key": "clean", "priority": 1, "category": "cleanup", "category_rank": 8}]
+    got = run_node(tmp_path, RUNNER, "defaults", {"rows": rows})
+    assert got["sorted"] == ["speed", "eff", "clean", "none"]
+    assert got["sort"] == [{"col": "category", "dir": "asc"}, {"col": "priority", "dir": "desc"}]
+    assert got["kept"] == ["clean"]
+    assert got["cats"] == ["cleanup", "efficiency-tokens", "speed"]
+
+
+@need_node
+def test_the_record_carries_the_category_and_its_rank(tmp_path):
+    snap = json.loads(Path(FIXTURE).read_text(encoding="utf-8"))
+    snap["items"][0].update(category="speed", category_rank=0)
+    snap["categories"] = [{"name": "speed", "rank": 0}]
+    path = tmp_path / "snap.json"
+    path.write_text(json.dumps(snap), encoding="utf-8")
+    runner = RUNNER_BOOT + """
+var vm = vmOf(IN.snapshot), rec = vm.items.get(IN.key);
+emit({ category: rec.category, rank: rec.category_rank, list: vm.categories });
+"""
+    got = run_node(tmp_path, runner, "x", {"snapshot": str(path), "key": snap["items"][0]["key"]})
+    assert got == {"category": "speed", "rank": 0, "list": [{"name": "speed", "rank": 0}]}
