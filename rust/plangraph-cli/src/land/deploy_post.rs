@@ -6,92 +6,9 @@
 //! are reported. The step keeps a [`PostState`] of finished targets, so a rerun after an interruption
 //! (the resumable hook of LAND-RESUMABLE-AFTER-MERGE) skips what is done and never redoes an install.
 use super::deploy::{DeployPlan, Target};
+pub use super::deploy_run::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-
-/// What one read of the first run of a target reports, in the fields the keeper `deploy` evidence checks.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunRead {
-    /// `systemctl is-active` of the unit, or `installed` for a host binary.
-    pub is_active: String,
-    /// Oneshot service: its `Result=` and `ExecMainExitTimestamp=`.
-    #[serde(default)]
-    pub result: Option<String>,
-    #[serde(default)]
-    pub exec_main_exit_timestamp: Option<String>,
-    #[serde(default)]
-    pub oneshot: bool,
-}
-
-/// What the step verifies a first run against: the commit time of the verified landed head (a oneshot must
-/// have exited after it, and not in the future), and the (family, host) targets the preflight refused.
-#[derive(Clone, Debug, Default)]
-pub struct Gate {
-    pub fresh_after: i64,
-    pub now: i64,
-    pub excluded: BTreeSet<(String, String)>,
-}
-
-/// Epoch seconds of a systemd exit timestamp: RFC 3339, or the `Sun 2026-11-01 12:01:00 UTC` form.
-pub fn exit_epoch(text: &str) -> Option<i64> {
-    use chrono::{DateTime, NaiveDateTime};
-    let text = text.trim();
-    DateTime::parse_from_rfc3339(text)
-        .map(|d| d.timestamp())
-        .or_else(|_| {
-            NaiveDateTime::parse_from_str(text.trim_end_matches(" UTC"), "%a %Y-%m-%d %H:%M:%S")
-                .map(|d| d.and_utc().timestamp())
-        })
-        .ok()
-}
-
-impl RunRead {
-    /// Whether the first run counts as good: a oneshot reports `success` and a valid exit time after the
-    /// landed head and not in the future, a binary is `installed`, anything else is `active`.
-    pub fn good(&self, family: &str, gate: &Gate) -> bool {
-        if self.oneshot {
-            let exited = self
-                .exec_main_exit_timestamp
-                .as_deref()
-                .and_then(exit_epoch);
-            return self.result.as_deref() == Some("success")
-                && exited.is_some_and(|e| e > gate.fresh_after && e <= gate.now);
-        }
-        let want = if family.starts_with("bin:") {
-            "installed"
-        } else {
-            "active"
-        };
-        self.is_active == want
-    }
-}
-
-/// The keeper `deploy` evidence of one (family, host) for one item.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DeployRow {
-    pub key: String,
-    pub host: String,
-    pub unit: String,
-    pub is_active: String,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exec_main_exit_timestamp: Option<String>,
-}
-
-/// The host side of the step: install a family, read one run of it, disable a unit.
-pub trait Installer {
-    fn install(&self, host: &str, family: &str) -> Result<(), String>;
-    fn read_run(&self, host: &str, family: &str) -> Result<RunRead, String>;
-    fn disable(&self, host: &str, unit: &str) -> Result<(), String>;
-}
-
-/// Where the deploy rows go (the keeper).
-pub trait RowSink {
-    fn write(&self, row: &DeployRow) -> Result<(), String>;
-}
 
 /// The unit whose timer or trigger a failed first run switches off; a host binary has none.
 pub fn unit_to_disable(family: &str) -> Option<String> {
@@ -228,7 +145,57 @@ fn paired_timer_row(
     Ok(Some((timer, keys)))
 }
 
-/// Installs `targets` (timers first). `checkpoint` is called after every state change so the caller can save it.
+fn timer_row(key: &str, host: &str, unit: &str) -> DeployRow {
+    DeployRow {
+        key: key.to_owned(),
+        host: host.to_owned(),
+        unit: unit.to_owned(),
+        is_active: "active".into(),
+        kind: None,
+        result: None,
+        exec_main_exit_timestamp: None,
+    }
+}
+
+/// The rows of one verified target: for a oneshot, first the paired timer's row for the items that need
+/// one, then the service row.
+fn write_rows(
+    rows: &dyn RowSink,
+    t: &Target,
+    run: &RunRead,
+    paired: &Option<(String, BTreeSet<String>)>,
+) -> Result<(), String> {
+    for key in &t.items {
+        if let Some((timer, keys)) = paired {
+            if keys.contains(key) {
+                rows.write(&timer_row(key, &t.host, timer))
+                    .map_err(|e| format!("deploy row {key} for {timer}: {e}"))?;
+            }
+        }
+        rows.write(&DeployRow {
+            key: key.clone(),
+            host: t.host.clone(),
+            unit: t.family.clone(),
+            is_active: run.is_active.clone(),
+            kind: run.oneshot.then(|| "oneshot".to_owned()),
+            result: run.result.clone(),
+            exec_main_exit_timestamp: run.exec_main_exit_timestamp.clone(),
+        })
+        .map_err(|e| format!("deploy row {key} for {}: {e}", name(t)))?;
+    }
+    Ok(())
+}
+
+/// The service target a shipped timer target triggers on the same host, if the train ships both.
+fn service_of<'a>(timer: &Target, targets: &'a [Target]) -> Option<&'a Target> {
+    targets
+        .iter()
+        .find(|s| s.host == timer.host && paired_timer(&s.family).as_deref() == Some(&timer.family))
+}
+
+/// Installs `targets` (timers first). A timer whose service the train also ships is held: its rows and its
+/// checkpoint wait until that service has passed, so a failed service leaves no timer evidence behind.
+/// `checkpoint` is called after every state change so the caller can save it.
 pub fn apply(
     targets: &[Target],
     gate: &Gate,
@@ -243,15 +210,39 @@ pub fn apply(
         ));
     }
     let mut report = PostReport::default();
-    // A shipped timer comes up before the oneshot service it triggers, whose gate reads that timer.
     let mut ordered: Vec<&Target> = targets.iter().collect();
     ordered.sort_by_key(|t| !t.family.ends_with(".timer"));
+    // Held timers by the id of the service that releases them.
+    let mut held: BTreeMap<String, (Target, RunRead)> = BTreeMap::new();
+    let release = |held: &mut BTreeMap<String, (Target, RunRead)>,
+                   service: &str,
+                   rows: &dyn RowSink,
+                   state: &mut PostState,
+                   report: &mut PostReport,
+                   checkpoint: &mut dyn FnMut(&PostState) -> Result<(), String>|
+     -> Result<(), String> {
+        if let Some((timer, run)) = held.remove(service) {
+            write_rows(rows, &timer, &run, &None)?;
+            if timer.items.is_empty() {
+                report.notes.push(format!(
+                    "{} has no item key: no deploy row written",
+                    name(&timer)
+                ));
+            }
+            state.done.insert(name(&timer));
+            checkpoint(state)?;
+            report.deployed.push(name(&timer));
+        }
+        Ok(())
+    };
     for (i, t) in ordered.iter().copied().enumerate() {
         let id = name(t);
         if state.done.contains(&id) {
-            report.skipped_done.push(id);
+            report.skipped_done.push(id.clone());
+            release(&mut held, &id, rows, state, &mut report, checkpoint)?;
             continue;
         }
+        let started = (gate.clock)();
         let outcome = installer
             .install(&t.host, &t.family)
             .map_err(|e| format!("install: {e}"))
@@ -261,7 +252,8 @@ pub fn apply(
                     .map_err(|e| format!("first run: {e}"))
             })
             .and_then(|run| {
-                if run.good(&t.family, gate) {
+                let now = (gate.clock)();
+                if run.good(&t.family, gate, started, now) {
                     paired_timer_row(installer, t, &run, targets, gate).map(|timer| (run, timer))
                 } else {
                     Err(format!(
@@ -275,35 +267,12 @@ pub fn apply(
                 }
             });
         match outcome {
-            Ok((run, timer)) => {
-                for key in &t.items {
-                    if let Some(timer) = timer
-                        .as_ref()
-                        .filter(|(_, keys)| keys.contains(key))
-                        .map(|(t, _)| t)
-                    {
-                        rows.write(&DeployRow {
-                            key: key.clone(),
-                            host: t.host.clone(),
-                            unit: timer.clone(),
-                            is_active: "active".into(),
-                            kind: None,
-                            result: None,
-                            exec_main_exit_timestamp: None,
-                        })
-                        .map_err(|e| format!("deploy row {key} for {timer}: {e}"))?;
-                    }
-                    rows.write(&DeployRow {
-                        key: key.clone(),
-                        host: t.host.clone(),
-                        unit: t.family.clone(),
-                        is_active: run.is_active.clone(),
-                        kind: run.oneshot.then(|| "oneshot".to_owned()),
-                        result: run.result.clone(),
-                        exec_main_exit_timestamp: run.exec_main_exit_timestamp.clone(),
-                    })
-                    .map_err(|e| format!("deploy row {key} for {id}: {e}"))?;
-                }
+            Ok((run, _)) if service_of(t, targets).is_some() => {
+                let service = service_of(t, targets).map(name).unwrap_or_default();
+                held.insert(service, (t.clone(), run));
+            }
+            Ok((run, paired)) => {
+                write_rows(rows, t, &run, &paired)?;
                 if t.items.is_empty() {
                     report
                         .notes
@@ -311,14 +280,20 @@ pub fn apply(
                 }
                 state.done.insert(id.clone());
                 checkpoint(state)?;
-                report.deployed.push(id);
+                report.deployed.push(id.clone());
+                release(&mut held, &id, rows, state, &mut report, checkpoint)?;
             }
             Err(why) => {
-                if let Some(unit) = unit_to_disable(&t.family) {
-                    if let Err(e) = installer.disable(&t.host, &unit) {
+                let mut off: Vec<(String, String)> = held
+                    .values()
+                    .map(|(h, _)| (h.host.clone(), h.family.clone()))
+                    .collect();
+                off.extend(unit_to_disable(&t.family).map(|u| (t.host.clone(), u)));
+                for (host, unit) in off {
+                    if let Err(e) = installer.disable(&host, &unit) {
                         report
                             .notes
-                            .push(format!("could not disable {unit} on {}: {e}", t.host));
+                            .push(format!("could not disable {unit} on {host}: {e}"));
                     }
                 }
                 state.failed = Some(id.clone());

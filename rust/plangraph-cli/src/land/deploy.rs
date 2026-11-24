@@ -62,12 +62,23 @@ pub struct DeployPlan {
     /// Probed and passed: exactly what the GO-REQ names.
     pub targets: Vec<Target>,
     pub blockers: Vec<Blocker>,
-    /// The built train this plan belongs to (the manifest's `train_sha`); `deploy-apply` binds to it.
+    /// The built train this plan belongs to (the manifest's `train_sha`) and its base; `deploy-apply`
+    /// checks the plan against what that train really changed.
     #[serde(default)]
     pub train_sha: String,
+    #[serde(default)]
+    pub base: String,
 }
 
 impl DeployPlan {
+    /// SHA-256 of the whole plan (train, base, targets with their item keys, blockers). The approved GO
+    /// carries it, so a plan edited after approval no longer matches.
+    pub fn digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let text = serde_json::to_vec(self).unwrap_or_default();
+        format!("{:x}", Sha256::digest(text))
+    }
+
     /// `deploy: unit@host, ...` for the GO-REQ; `deploy: none` when no part ships a family.
     pub fn go_req(&self) -> String {
         if self.targets.is_empty() {
@@ -238,6 +249,7 @@ pub fn deploy_plan(
             })
             .collect(),
         train_sha: String::new(),
+        base: String::new(),
     }
 }
 
@@ -267,6 +279,7 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
     let parts = derive(Path::new(need("repo")?), &manifest)?;
     let mut plan = deploy_plan(&parts, &declared, &authorized, &probe);
     plan.train_sha = manifest.train_sha.clone();
+    plan.base = manifest.base.clone();
     if let Some(out) = flags.get("plan-out") {
         let text = serde_json::to_vec_pretty(&plan).map_err(|e| e.to_string())?;
         std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
@@ -275,7 +288,7 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
         let text = serde_json::to_vec_pretty(&plan.blocker_items()).map_err(|e| e.to_string())?;
         std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
     }
-    let mut lines = vec![plan.go_req()];
+    let mut lines = vec![plan.go_req(), format!("plan-digest: {}", plan.digest())];
     lines.extend(
         plan.blockers
             .iter()

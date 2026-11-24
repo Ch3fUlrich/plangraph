@@ -1,5 +1,7 @@
+use super::deploy::{deploy_plan, DeployPlan, Finding, PartDeploy, Probe};
 use super::deploy_post::*;
-use super::deploy_post_tests::{active, gate, oneshot_ok, run, target, Host, Rows};
+use super::deploy_post_tests::{active, gate, oneshot_ok, run, set, target, Host, Rows, T0};
+use std::collections::BTreeMap;
 
 fn ran_at(timestamp: &str) -> Host {
     let mut host = Host::default();
@@ -79,4 +81,160 @@ fn a_service_gets_no_row_when_its_shipped_timer_was_refused_at_preflight() {
     .unwrap();
     assert!(r.failed.unwrap().1.contains("refused at preflight"));
     assert!(rows.0.borrow().is_empty());
+}
+
+#[test]
+fn a_slow_install_does_not_make_its_own_result_future_dated() {
+    // The install takes two seconds and the oneshot exits at its end: the clock is read after the read.
+    let mut host = Host {
+        install_takes: 2,
+        ..Host::default()
+    };
+    let mut run_read = oneshot_ok();
+    run_read.exec_main_exit_timestamp = Some("2026-11-24T01:00:02Z".into());
+    host.runs.insert("a.service".into(), run_read);
+    host.runs.insert("a.timer".into(), active());
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    let r = run(
+        &[target("a.service", "alpha", &["demo:A"])],
+        &host,
+        &rows,
+        &mut state,
+    )
+    .unwrap();
+    assert_eq!(r.deployed, ["a.service@alpha"], "{:?}", r.failed);
+}
+
+#[test]
+fn a_result_from_before_this_install_is_not_this_installs_first_run() {
+    // The oneshot's last exit is older than the install window (a run from before this deploy).
+    let host = ran_at("2026-11-24T00:00:00Z"); // an hour before the clock at T0
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    let r = run(
+        &[target("a.service", "alpha", &["demo:A"])],
+        &host,
+        &rows,
+        &mut state,
+    )
+    .unwrap();
+    assert!(r.failed.is_some());
+    assert!(rows.0.borrow().is_empty());
+    assert_eq!(T0, exit_epoch("2026-11-24T01:00:00Z").unwrap());
+}
+
+#[test]
+fn a_shipped_timer_leaves_no_evidence_when_its_service_fails() {
+    // Timer shipped by item B, service by item A; the service's first run fails.
+    let mut host = Host::default();
+    let mut bad = oneshot_ok();
+    bad.result = Some("exit-code".into());
+    host.runs.insert("a.service".into(), bad);
+    host.runs.insert("a.timer".into(), active());
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    let targets = [
+        target("a.service", "alpha", &["demo:A"]),
+        target("a.timer", "alpha", &["demo:B"]),
+    ];
+    let r = run(&targets, &host, &rows, &mut state).unwrap();
+    assert_eq!(r.failed.as_ref().unwrap().0, "a.service@alpha");
+    assert!(
+        rows.0.borrow().is_empty(),
+        "the timer row was written before its service passed"
+    );
+    assert!(state.done.is_empty(), "the timer was checkpointed done");
+    assert!(host
+        .calls
+        .borrow()
+        .contains(&"disable a.timer@alpha".to_string()));
+}
+
+#[test]
+fn a_held_timer_is_recorded_once_its_service_passes() {
+    let mut host = Host::default();
+    host.runs.insert("a.service".into(), oneshot_ok());
+    host.runs.insert("a.timer".into(), active());
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    let targets = [
+        target("a.service", "alpha", &["demo:A"]),
+        target("a.timer", "alpha", &["demo:B"]),
+    ];
+    let r = run(&targets, &host, &rows, &mut state).unwrap();
+    assert_eq!(r.deployed, ["a.service@alpha", "a.timer@alpha"]);
+    let mut got: Vec<_> = rows
+        .0
+        .borrow()
+        .iter()
+        .map(|r| (r.key.clone(), r.unit.clone()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("demo:A", "a.service"),
+            ("demo:A", "a.timer"),
+            ("demo:B", "a.timer")
+        ]
+        .map(|(k, u)| (k.to_string(), u.to_string()))
+    );
+    assert!(state.done.contains("a.timer@alpha") && state.done.contains("a.service@alpha"));
+}
+
+struct Dry(Vec<&'static str>);
+impl Probe for Dry {
+    fn probe(&self, host: &str, family: &str) -> Result<(), Vec<Finding>> {
+        if self.0.contains(&family) {
+            Err(vec![Finding {
+                kind: "env".into(),
+                name: format!("{host}.env"),
+            }])
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The fixture train: part 1 ships `u.service` (item demo:B, host alpha), part 2 is unitless, part 3 ships
+/// `bad.service` whose dry run fails.
+fn fixture_plan() -> DeployPlan {
+    let part = |pr, families: &[&str], item: &str| PartDeploy {
+        pr,
+        families: set(families),
+        items: set(&[item]),
+        trailer_hosts: set(&["alpha"]),
+        shipped: BTreeMap::new(),
+    };
+    deploy_plan(
+        &[
+            part(1, &["u.service"], "demo:B"),
+            part(2, &[], "demo:A"),
+            part(3, &["bad.service"], "demo:C"),
+        ],
+        &BTreeMap::new(),
+        &set(&["alpha"]),
+        &Dry(vec!["bad.service"]),
+    )
+}
+
+#[test]
+fn the_plan_carries_the_items_of_each_family_and_drops_a_refused_family_with_its_blocker() {
+    let plan = fixture_plan();
+    assert_eq!(plan.go_req(), "deploy: u.service@alpha");
+    assert_eq!(plan.targets[0].items, set(&["demo:B"]));
+    assert_eq!(plan.blockers.len(), 1);
+    assert_eq!(
+        plan.blockers[0].key,
+        "plangraph:LE-DEPLOY-BLOCKED-BAD-SERVICE-ALPHA"
+    );
+}
+
+#[test]
+fn only_the_targets_the_go_row_names_are_installed() {
+    let plan = fixture_plan();
+    let t = named_targets(&plan, "deploy: u.service@alpha").unwrap();
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0].items, set(&["demo:B"]));
+    assert!(named_targets(&plan, "deploy: none").unwrap().is_empty());
+    let e = named_targets(&plan, "deploy: bad.service@alpha").unwrap_err();
+    assert!(e.contains("not a passing target"), "{e}");
+    assert!(named_targets(&plan, "no deploy here").is_err());
 }

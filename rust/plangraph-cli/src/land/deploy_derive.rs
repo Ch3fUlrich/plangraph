@@ -60,9 +60,47 @@ fn name_status_families(raw: &[u8]) -> BTreeSet<String> {
         .collect()
 }
 
+/// The families the net diff `from..to` ships, and the `Plan-Item` keys its commits carry: what a landed
+/// train really contains, for checking a deploy plan against it.
+pub(super) fn shipped_between(
+    repo: &Path,
+    from: &str,
+    to: &str,
+) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
+    use super::git;
+    let diff = git::bytes(
+        repo,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-renames",
+            "--name-status",
+            "-z",
+            from,
+            to,
+            "--",
+        ],
+    )?;
+    let log = git::bytes(
+        repo,
+        &[
+            "log",
+            "--no-merges",
+            "--format=%B%x00",
+            &format!("{from}..{to}"),
+        ],
+    )?;
+    let items = String::from_utf8_lossy(&log)
+        .split('\0')
+        .flat_map(|m| trailers(m, "Plan-Item"))
+        .collect();
+    Ok((name_status_families(&diff), items))
+}
+
 /// What one part ships, read from its own commits and its own diff only. A family is shipped by the net
-/// diff; the items and hosts of a family come from the commits whose own change touches it, so a docs-only
-/// key of the same part inherits neither the family nor its hosts.
+/// diff; the items and hosts of a family come from the commits whose own change touches it (an untagged
+/// follow-up counts for all the part's items), so a docs-only key of the same part inherits neither the
+/// family nor its hosts.
 pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, String> {
     use super::{build::part_base, git};
     let from = part_base(repo, base, part.parent.as_ref());
@@ -70,6 +108,7 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
     let shas = git::bytes(repo, &["rev-list", "--no-merges", "--reverse", &range])?;
     let (mut items, mut hosts) = (BTreeSet::new(), BTreeSet::new());
     let mut touched: BTreeMap<String, Shipped> = BTreeMap::new();
+    let mut untagged_families: BTreeSet<String> = BTreeSet::new();
     for sha in String::from_utf8_lossy(&shas).split_whitespace() {
         let message = git::bytes(repo, &["show", "-s", "--format=%B", sha])?;
         let message = String::from_utf8_lossy(&message).into_owned();
@@ -93,9 +132,12 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
             ],
         )?;
         for family in name_status_families(&changed) {
-            let e = touched.entry(family).or_default();
+            let e = touched.entry(family.clone()).or_default();
             e.items.extend(commit_items.iter().cloned());
             e.trailer_hosts.extend(commit_hosts.iter().cloned());
+            if commit_items.is_empty() {
+                untagged_families.insert(family);
+            }
         }
     }
     let diff = git::bytes(
@@ -114,6 +156,13 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
     )?;
     let families = name_status_families(&diff);
     touched.retain(|f, _| families.contains(f));
+    // The keeper's rule (`part_changes`): an untagged follow-up belongs to every item the part has own
+    // work for, so a family it adds goes to all the part's items.
+    for family in &untagged_families {
+        if let Some(e) = touched.get_mut(family) {
+            e.items.extend(items.iter().cloned());
+        }
+    }
     Ok(PartDeploy {
         pr: part.pr,
         families,

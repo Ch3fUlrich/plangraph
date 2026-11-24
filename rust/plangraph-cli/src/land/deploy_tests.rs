@@ -264,3 +264,36 @@ fn a_docs_only_item_of_a_shared_part_inherits_neither_the_family_nor_its_hosts()
     let plan = deploy_plan(&parts, &declared, &hosts(&["alpha", "beta"]), &pass());
     assert_eq!(plan.go_req(), "deploy: train.service@alpha");
 }
+
+/// An item's unit added in an untagged follow-up commit still belongs to the item (the keeper's
+/// `part_changes` rule): the item gets the unit and the host it declares.
+#[test]
+fn a_unit_added_in_an_untagged_follow_up_goes_to_the_items_of_its_part() {
+    let fx = Fx::new();
+    let p = fx.path();
+    let tagged = commit(&fx, &[("docs/a.md", "a\n")], "work\n\nPlan-Item: demo:B");
+    g(p, &["checkout", "-q", "--detach", &tagged]);
+    std::fs::create_dir_all(p.join("deploy/systemd")).unwrap();
+    std::fs::write(p.join("deploy/systemd/late.service"), "[Service]\n").unwrap();
+    g(p, &["add", "-A"]);
+    g(p, &["commit", "-q", "-m", "follow-up without trailers"]);
+    let head = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["checkout", "-q", "main"]);
+    let input = BuildInput {
+        repo: p,
+        build: "b1".into(),
+        base: fx.base(),
+        parts: vec![part(1, &head, None)],
+        attributes: String::new(),
+        cap: None,
+        resolutions: vec![],
+        protected: vec![],
+    };
+    let manifest = build(&input).unwrap().manifest.unwrap();
+    let parts = derive(p, &manifest).unwrap();
+    let declared = BTreeMap::from([("demo:B".to_string(), vec!["alpha".to_string()])]);
+    let plan = deploy_plan(&parts, &declared, &hosts(&["alpha"]), &pass());
+    assert_eq!(plan.go_req(), "deploy: late.service@alpha");
+    assert_eq!(plan.targets[0].items, ["demo:B".to_string()].into());
+    assert!(plan.blockers.is_empty(), "{plan:?}");
+}

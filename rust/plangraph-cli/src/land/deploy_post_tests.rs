@@ -1,4 +1,4 @@
-use super::deploy::{deploy_plan, DeployPlan, Finding, PartDeploy, Probe, Target};
+use super::deploy::Target;
 use super::deploy_post::*;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,10 +34,25 @@ pub(super) fn oneshot_ok() -> RunRead {
     }
 }
 
+/// The fixture oneshot exits at this instant; the test clock starts there.
+pub(super) const T0: i64 = 1_795_482_000; // 2026-11-24T01:00:00Z
+
+thread_local! {
+    static NOW: std::cell::Cell<i64> = const { std::cell::Cell::new(T0) };
+}
+
+pub(super) fn clock() -> i64 {
+    NOW.with(|n| n.get())
+}
+
 #[derive(Default)]
 pub(super) struct Host {
     pub(super) runs: BTreeMap<String, RunRead>,
     pub(super) calls: RefCell<Vec<String>>,
+    /// Seconds the test clock advances while an install runs.
+    pub(super) install_takes: i64,
+    /// Targets whose read fails.
+    pub(super) unreadable: BTreeSet<String>,
 }
 
 impl Installer for Host {
@@ -45,12 +60,16 @@ impl Installer for Host {
         self.calls
             .borrow_mut()
             .push(format!("install {family}@{host}"));
+        NOW.with(|n| n.set(n.get() + self.install_takes));
         Ok(())
     }
     fn read_run(&self, host: &str, family: &str) -> Result<RunRead, String> {
         self.calls
             .borrow_mut()
             .push(format!("read {family}@{host}"));
+        if self.unreadable.contains(family) {
+            return Err("unreadable".into());
+        }
         self.runs
             .get(family)
             .cloned()
@@ -74,11 +93,12 @@ impl RowSink for Rows {
     }
 }
 
-/// Landed head at epoch 1e9; the oneshot fixture exited on 2026-11-24; "now" is far later.
+/// Landed head at epoch 1e9; the test clock is at [`T0`], the instant the oneshot fixture exited.
 pub(super) fn gate() -> Gate {
+    NOW.with(|n| n.set(T0));
     Gate {
         fresh_after: 1_000_000_000,
-        now: 4_000_000_000,
+        clock,
         excluded: BTreeSet::new(),
     }
 }
@@ -198,8 +218,8 @@ fn a_binary_needs_installed_and_has_no_timer_to_disable() {
         exec_main_exit_timestamp: None,
         oneshot: false,
     };
-    assert!(ok.good("bin:tool", &gate()));
-    assert!(!ok.good("a.service", &gate()));
+    assert!(ok.good("bin:tool", &gate(), T0, T0));
+    assert!(!ok.good("a.service", &gate(), T0, T0));
 }
 
 #[test]
@@ -227,66 +247,6 @@ fn a_rerun_skips_finished_targets_and_a_recorded_failure_blocks_it() {
     assert_eq!(saved.len(), 1, "state is saved after each finished target");
     state.failed = Some("c.service@alpha".into());
     assert!(run(&targets, &host, &rows, &mut state).is_err());
-}
-
-struct Dry(Vec<&'static str>);
-impl Probe for Dry {
-    fn probe(&self, host: &str, family: &str) -> Result<(), Vec<Finding>> {
-        if self.0.contains(&family) {
-            Err(vec![Finding {
-                kind: "env".into(),
-                name: format!("{host}.env"),
-            }])
-        } else {
-            Ok(())
-        }
-    }
-}
-
-/// The fixture train: part 1 ships `u.service` (item demo:B, host alpha), part 2 is unitless, part 3 ships
-/// `bad.service` whose dry run fails.
-fn fixture_plan() -> DeployPlan {
-    let part = |pr, families: &[&str], item: &str| PartDeploy {
-        pr,
-        families: set(families),
-        items: set(&[item]),
-        trailer_hosts: set(&["alpha"]),
-        shipped: BTreeMap::new(),
-    };
-    deploy_plan(
-        &[
-            part(1, &["u.service"], "demo:B"),
-            part(2, &[], "demo:A"),
-            part(3, &["bad.service"], "demo:C"),
-        ],
-        &BTreeMap::new(),
-        &set(&["alpha"]),
-        &Dry(vec!["bad.service"]),
-    )
-}
-
-#[test]
-fn the_plan_carries_the_items_of_each_family_and_drops_a_refused_family_with_its_blocker() {
-    let plan = fixture_plan();
-    assert_eq!(plan.go_req(), "deploy: u.service@alpha");
-    assert_eq!(plan.targets[0].items, set(&["demo:B"]));
-    assert_eq!(plan.blockers.len(), 1);
-    assert_eq!(
-        plan.blockers[0].key,
-        "plangraph:LE-DEPLOY-BLOCKED-BAD-SERVICE-ALPHA"
-    );
-}
-
-#[test]
-fn only_the_targets_the_go_row_names_are_installed() {
-    let plan = fixture_plan();
-    let t = named_targets(&plan, "deploy: u.service@alpha").unwrap();
-    assert_eq!(t.len(), 1);
-    assert_eq!(t[0].items, set(&["demo:B"]));
-    assert!(named_targets(&plan, "deploy: none").unwrap().is_empty());
-    let e = named_targets(&plan, "deploy: bad.service@alpha").unwrap_err();
-    assert!(e.contains("not a passing target"), "{e}");
-    assert!(named_targets(&plan, "no deploy here").is_err());
 }
 
 #[test]
@@ -317,7 +277,7 @@ fn a_good_oneshot_with_an_inactive_timer_is_a_failed_first_run() {
 }
 
 #[test]
-fn a_shipped_timer_goes_first_and_is_not_written_twice() {
+fn a_shipped_timer_is_installed_first_but_recorded_after_its_service_and_not_written_twice() {
     let mut host = Host::default();
     host.runs.insert("a.service".into(), oneshot_ok());
     host.runs.insert("a.timer".into(), active());
@@ -328,9 +288,20 @@ fn a_shipped_timer_goes_first_and_is_not_written_twice() {
         target("a.timer", "alpha", &["demo:A"]),
     ];
     let r = run(&targets, &host, &rows, &mut state).unwrap();
-    assert_eq!(r.deployed, ["a.timer@alpha", "a.service@alpha"]);
+    assert_eq!(r.deployed, ["a.service@alpha", "a.timer@alpha"]);
+    assert!(
+        host.calls
+            .borrow()
+            .iter()
+            .position(|c| c == "install a.timer@alpha")
+            < host
+                .calls
+                .borrow()
+                .iter()
+                .position(|c| c == "install a.service@alpha")
+    );
     let units: Vec<_> = rows.0.borrow().iter().map(|r| r.unit.clone()).collect();
-    assert_eq!(units, ["a.timer", "a.service"]);
+    assert_eq!(units, ["a.service", "a.timer"]);
 }
 
 #[test]
@@ -368,9 +339,9 @@ fn the_documented_read_json_is_judged_good() {
         r#"{"is_active":"inactive","oneshot":true,"result":"success","exec_main_exit_timestamp":"2026-11-24T01:00:00Z"}"#,
     )
     .unwrap();
-    assert!(oneshot.good("a.service", &gate()));
+    assert!(oneshot.good("a.service", &gate(), T0, T0));
     let bin: RunRead = serde_json::from_str(r#"{"is_active":"installed"}"#).unwrap();
-    assert!(bin.good("bin:tool", &gate()));
+    assert!(bin.good("bin:tool", &gate(), T0, T0));
     let svc: RunRead = serde_json::from_str(r#"{"is_active":"active"}"#).unwrap();
-    assert!(svc.good("a.service", &gate()) && svc.good("a.timer", &gate()));
+    assert!(svc.good("a.service", &gate(), T0, T0) && svc.good("a.timer", &gate(), T0, T0));
 }
