@@ -255,21 +255,32 @@ class ContextMixin:
 
     # -------------------------------------------------------------- ready
     def _work_indexes(self, projects, *, fresh=False, shared=None):
+        """Work indexes of every scanned repository.
+
+        A fresh read (the claim guard) refreshes only *projects* from origin, and
+        shares one refresh per repository between the keys of a batch and across
+        claims inside ``claim_index_window_s``; the other repositories serve their
+        last built index.
+        """
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
         names = {*projects, *(scan() if scan is not None else ())}
         if not fresh:
             return {name: src.work_index_cached(git, name) for name in sorted(names)}
         indexes = {} if shared is None else shared
-        missing = tuple(sorted(names - indexes.keys()))
+        missing = tuple(sorted(set(projects) - indexes.keys()))
         if missing:
             indexes.update(timing.share_inflight(
-                ("work indexes", id(git), missing), lambda: self._claim_work_indexes(git, missing),
+                ("work indexes", id(git), missing), lambda: self._claim_work_indexes(
+                    git, missing, self.claim_index_window_s),
                 step=f"work index for {missing[0]}" if len(missing) == 1 else "work indexes"))
-        return {name: indexes[name] for name in sorted(names)}
+        return {name: indexes[name] if name in projects else timing.share_inflight(
+                    ("cached work", id(git), name), lambda name=name: src.work_index_cached(git, name),
+                    step=f"work index for {name}")
+                for name in sorted(names)}
 
     @staticmethod
-    def _claim_work_indexes(git, names):
+    def _claim_work_indexes(git, names, window=0):
         groups = {}
         for name in names:
             repo, _ = src._repo_ref(git, name)
@@ -278,7 +289,7 @@ class ContextMixin:
         def load(group):
             return {name: timing.share_inflight(
                 ("work", id(git), name),
-                lambda: src.work_index(git, name, fresh=True),
+                lambda: src.work_index(git, name, fresh=True, window=window),
                 step=f"work index for {name}") for name in group}
 
         if len(groups) == 1:
@@ -447,7 +458,7 @@ class ContextMixin:
             raise Refused("bad_state", f"{item['key']} carried by "
                           + ", ".join(f"#{number}" for number in prs))
         unknown = [name for name, entry in indexes.items()
-                   if entry and entry.get("prs_unverified")]
+                   if name == project and entry and entry.get("prs_unverified")]
         if not stale_checks:
             adapter = self._adapter("decisions")
             with timing.outside_request_lock():
