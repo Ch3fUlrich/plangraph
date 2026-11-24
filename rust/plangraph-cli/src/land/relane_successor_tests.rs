@@ -296,3 +296,32 @@ fn a_second_writer_phrase_later_in_the_note_is_not_the_lane() {
     assert_eq!(by["lane/replacement-r1"], "");
     assert!(by["lane/victim-lane-r1"].contains("previous writer replacement"));
 }
+
+#[test]
+fn a_partial_row_left_by_an_interrupted_write_is_cut_off_before_the_next_row() {
+    let fx = Fx::new();
+    let head = fx.lane("lane/torn-r1", "w-t", &[("a.txt", "t\n2\n3\n")]);
+    let onto = fx.advance("c.txt", "1\n2\nmain\n");
+    let record = fx._dir.path().join("relane.jsonl");
+    let whole = "{\"kind\":\"REBASED\",\"lane\":\"lane/earlier-r1\"}\n";
+    std::fs::write(&record, format!("{whole}{{\"kind\":\"REB")).unwrap();
+    let l = [spec("lane/torn-r1", head, "w-t")];
+    relane_cli::relane_all_with(&fx.work, "origin", &onto, true, &l, Some(&record)).unwrap();
+    let text = std::fs::read_to_string(&record).unwrap();
+    assert!(text.starts_with(whole) && text.ends_with('\n'), "{text}");
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["lane"], "lane/torn-r1");
+    // A file that never had a newline is emptied of its fragment too.
+    std::fs::write(&record, "{\"kind\"").unwrap();
+    relane_cli::relane_all_with(&fx.work, "origin", &onto, true, &l, Some(&record)).unwrap();
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(&record)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 1);
+}

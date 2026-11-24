@@ -1,1 +1,2 @@
 `land-train relane` and `relane-open` take `--record FILE` and append one JSON line per relaned lane (old head, new head, patch-id equality, counts, successor, onto); the settlement writes it as `relane-<merge>.jsonl`. A successor is adopted only when every commit's tree matches the fresh replay in order, its patch-id equality is its own, and the lane name is read from the first `writer NAME` field of the Writer note.
+The record file is repaired before each append: a partial row left by an interrupted run is cut off, and a row is written in one write and synced.

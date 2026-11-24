@@ -142,7 +142,7 @@ child replays only what follows its parent's recorded head, onto the parent's ne
 head, `patch_ids_equal`, own commit counts: the record for the seat evidence rule, which moves the probe PR and decides the seat
 re-run), `CURRENT`, `CONFLICT <lane> <files>` (the lane is untouched), `REFUSED` (head not the recorded one, no writer naming the
 lane, no own commit left, a foreign commit, a merge with edits of its own, parent not relaned, next branch without the new main)
-and `RETRY` (git or network failure). With `--record FILE` every `REBASED` and `CURRENT` lane also appends one JSON line (`kind`, lane, old head, new head, `patch_ids_equal`, counts, successor branch, `onto`); the settlement writes `relane-<merge>.jsonl` in the merge-batch state directory, the file the seat evidence rule and the probe-PR move read. Moving the probe PR and re-running a seat are not done by this verb. Exit 3: a lane was not relaned (final; the step advances). Exit 4 (`retry:`, also main
+and `RETRY` (git or network failure). With `--record FILE` every `REBASED` and `CURRENT` lane also appends one JSON line (`kind`, lane, old head, new head, `patch_ids_equal`, counts, successor branch, `onto`); the settlement writes `relane-<merge>.jsonl` in the merge-batch state directory, the file the seat evidence rule and the probe-PR move read. A partial last row of an interrupted run is cut off before the next row is written. Moving the probe PR and re-running a seat are not done by this verb. Exit 3: a lane was not relaned (final; the step advances). Exit 4 (`retry:`, also main
 without the merge or a failing `gh`): the `cleanup` step stays open and runs again.
 
 ## Cutting a slice or landing branch

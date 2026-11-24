@@ -43,16 +43,28 @@ fn append_record(
     onto: &str,
     r: &super::relane::Report,
 ) -> Result<(), String> {
-    use std::io::Write;
+    use std::io::{Read, Seek, SeekFrom, Write};
     let mut line = serde_json::to_value(r).map_err(|e| e.to_string())?;
     line["kind"] = kind.into();
     line["onto"] = onto.into();
+    let fail = |e: std::io::Error| format!("retry: relane record {}: {e}", record.display());
     let mut file = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
         .open(record)
-        .map_err(|e| format!("retry: relane record {}: {e}", record.display()))?;
-    writeln!(file, "{line}").map_err(|e| format!("retry: relane record: {e}"))
+        .map_err(fail)?;
+    // An interrupted run can leave a partial row at the end; it is cut off so every row stays one JSON value.
+    let mut text = Vec::new();
+    file.read_to_end(&mut text).map_err(fail)?;
+    let whole = text.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    file.set_len(whole as u64).map_err(fail)?;
+    file.seek(SeekFrom::Start(whole as u64)).map_err(fail)?;
+    // One write of the whole row, then to disk: a row is either all there or cut off by the next run.
+    file.write_all(format!("{line}\n").as_bytes())
+        .map_err(fail)?;
+    file.sync_all().map_err(fail)
 }
 
 pub fn relane_all_with(
