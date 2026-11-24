@@ -131,6 +131,16 @@ ISO timestamps carry their own date and offset. The guard allows one minute
 beyond the current clock. Prefix approximate times with `about`, as in
 `about 04:0xZ`. A refusal identifies the timestamp and exits 2.
 
+The `SendMessage` tool is only covered where the host's Claude settings register
+the hook; the fleet client and `fleet_msg_send` check the text themselves. Without
+the settings entry and an installed `pg-hook` a guessed stamp such as `05:4xZ`
+goes through unchecked. Entry, per hook (`message-time`, `message-route`):
+`{"matcher": "SendMessage", "hooks": [{"type": "command", "command": "sh -c 'test -x \"$1\" || exit 1; exec \"$1\" message-time' _ ~/.local/share/plangraph/hooks/pg-hook"}]}`
+under `hooks.PreToolUse`.
+
+Read git times as UTC: `git log --date=iso-strict` or `TZ=UTC git log --date=format-local:%H:%MZ`.
+A bare `--date=format:` prints the committer's offset (`+01:00`), which is not `Z`.
+
 ## Git commit messages
 
 Run `tools/hooks/install_hooks.sh --git` with the host's shared
