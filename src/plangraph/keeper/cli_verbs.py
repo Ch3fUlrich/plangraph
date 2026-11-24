@@ -596,6 +596,11 @@ def cmd_set_kind(args, session):
                  lambda r: f"{r.get('key')} kind {r.get('was')} -> {r.get('kind')}")
 
 
+def cmd_lift_operator_gate(args, session):
+    return write(session, "lift_operator_gate", {"key": args.key, "decision_id": args.decision},
+                 lambda r: f"{r.get('key')} operator gate lifted by {r.get('decision_id')}")
+
+
 def cmd_close(args, session):
     if args.batch is None and getattr(args, "decision_ref", None) is None:
         return _refuse(RefusedCli("validation", "one of the arguments --decision-ref --batch is required"))

@@ -46,6 +46,7 @@ HANDLERS = {
     "withdraw": cli_verbs.cmd_withdraw,
     "reopen": cli_verbs.cmd_reopen,
     "set-kind": cli_verbs.cmd_set_kind,
+    "lift-operator-gate": cli_verbs.cmd_lift_operator_gate,
     "close-merged": cli_output_verbs.cmd_close_merged,
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
@@ -188,6 +189,10 @@ def _add_writes(sub):
     set_kind = _p(sub, "set-kind", help="router: turn an open lane into a question / operator_task")
     set_kind.add_argument("key")
     set_kind.add_argument("kind", help="question or operator_task (the keeper checks)")
+
+    lift = _p(sub, "lift-operator-gate", help="router: clear the operator flags of an item the operator released")
+    lift.add_argument("key")
+    lift.add_argument("decision", help="the OPERATOR decision (D-n) that lifted the step and names the key")
 
     merged = _p(sub, "close-merged", help="router: close one merged review on a GO decision")
     merged.add_argument("key")

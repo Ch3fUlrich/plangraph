@@ -303,6 +303,8 @@ def fold(events, unknown=None):
             item["kind"] = payload.get("kind", item["kind"])
             item["wait"] = payload.get("wait", item["wait"])
             item["operator"] = payload.get("operator", item["operator"])
+        elif kind == "operator_gate_lifted":   # router lifts an operator gate (D-id in the payload)
+            item["operator"] = bool(payload.get("operator", False))
         elif kind == "state_set":   # set_state / park: design-3 states; claim fields are untouched unless the payload says released
             item["state"] = payload.get("state", item["state"])
             if payload.get("worker_complete"):
