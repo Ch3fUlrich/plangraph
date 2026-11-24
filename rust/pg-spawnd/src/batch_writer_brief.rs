@@ -302,6 +302,19 @@ mod tests {
     }
 
     #[test]
+    fn both_harnesses_carry_the_same_run_values_and_fast_checks() {
+        let brief = render(FIXTURE).unwrap();
+        let tail = |agent: &str| {
+            let prompt = crate::role_header::compose(agent, &brief, None);
+            prompt[prompt.find("# Run values").unwrap()..].to_owned()
+        };
+        let expected = include_str!("../tests/fixtures/batch-writer-run-values.txt");
+        assert_eq!(tail("claude"), expected.replace("\r\n", "\n"));
+        assert_eq!(tail("codex"), tail("claude"));
+        assert!(tail("claude").contains("FAST_CHECKS:\n- git diff --check\n- cargo fmt --check\n"));
+    }
+
+    #[test]
     fn borrows_plain_text_unchanged() {
         let text = "Plain brief\r\nPLANGRAPH-BATCH-INPUT-V1\n  keep whitespace  \n";
         assert!(matches!(render(text).unwrap(), Cow::Borrowed(brief) if brief == text));
