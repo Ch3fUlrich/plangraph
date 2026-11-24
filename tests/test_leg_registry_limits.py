@@ -84,3 +84,35 @@ def test_opencode_counterparts_of_codex_legs_are_bound_by_the_registry_window():
         assert counterpart.max_request_tokens <= limit["context"] - limit["output"], counterpart.id
         seen += 1
     assert seen >= 10
+
+
+def test_every_registry_leg_follows_an_altered_registry_and_the_cap_applies_separately():
+    """Import legs.py against a registry whose windows differ from the shipped file: a typed
+    number anywhere (mimo, glm, the capped deepseek leg) cannot match the altered bounds."""
+    import subprocess, sys, os, json as _json
+    script = (
+        "import copy, json, sys\n"
+        "from plangraph.routing_support import opencode_overlay as o\n"
+        "real = o.load_root_providers\n"
+        "def altered(path=None):\n"
+        "    providers = real(path)\n"
+        "    sizes = {'mimo-v2.6-flash': (300000, 20000), 'mimo-v2.6-pro': (310000, 20000),\n"
+        "             'opencode-go/glm-5.3-flash': (320000, 20000), 'deepseek-direct-flash': (60000, 10000)}\n"
+        "    for provider in providers.values():\n"
+        "        for key, model in provider.get('models', {}).items():\n"
+        "            if key in sizes:\n"
+        "                model['limit'] = {'context': sizes[key][0], 'output': sizes[key][1]}\n"
+        "    return providers\n"
+        "o.load_root_providers = altered\n"
+        "from plangraph.planner.legs import DEFAULT_LEGS, POLICY_REQUEST_CAPS\n"
+        "print(json.dumps({l.id: l.max_request_tokens for l in DEFAULT_LEGS}))\n"
+        "print(json.dumps(POLICY_REQUEST_CAPS))\n"
+    )
+    env = dict(os.environ, PYTHONPATH=str(REGISTRY.parents[2] / "src"))
+    out = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    bounds, caps = (_json.loads(line) for line in out.stdout.strip().splitlines())
+    assert bounds["mimo-v2.6-flash"] == 280_000 and bounds["mimo-v2.6-pro"] == 290_000
+    assert bounds["opencode-go-glm-5.3-flash"] == 300_000
+    # capability below the cap: the registry decides (50,000), not the cap (100,000)
+    assert caps["deepseek"] == 100_000 and bounds["deepseek"] == 50_000

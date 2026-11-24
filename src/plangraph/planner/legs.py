@@ -93,6 +93,12 @@ POLICY_REQUEST_CAPS = {"deepseek": 100_000}
 RESEARCH_REQUEST_CAP = 900_000
 
 
+def _policy_request_tokens(leg_id, provider, model):
+    """The registry bound of a leg, lowered only by its named routing-policy cap."""
+    bound = _registry_request_tokens(provider, model)
+    return min(bound, POLICY_REQUEST_CAPS.get(leg_id, bound))
+
+
 def _registry_request_tokens(provider, model):
     """Largest request an opencode leg takes: the registry context minus its output reserve.
 
@@ -244,8 +250,7 @@ DEFAULT_LEGS = (
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k", "256k", "1m"), 900000,
         False, roles=("review", "implement", "research"), web_access=True),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",),
-             max_request_tokens=min(_registry_request_tokens("omniroute", "deepseek-direct-flash"),
-                                    POLICY_REQUEST_CAPS["deepseek"])),
+             max_request_tokens=_policy_request_tokens("deepseek", "omniroute", "deepseek-direct-flash")),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
         tool_mode="prompt-only",
