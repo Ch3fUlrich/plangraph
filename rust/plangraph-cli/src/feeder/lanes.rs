@@ -86,6 +86,28 @@ pub(super) fn lane_cards(sessions: &Path) -> BTreeMap<String, Vec<String>> {
         .collect()
 }
 
+/// The spawner lists a launched session as one run whose `item_key` is the whole card string.
+/// Replace it with the keys the launcher record parsed from that card, and mark the row as a
+/// lane card so each key resolves on its own (a key that left the ready list never fails a tick).
+pub(super) fn mark_lane_cards(data: &mut Value, cards: &BTreeMap<String, Vec<String>>) {
+    for row in data["runs"].as_array_mut().into_iter().flatten() {
+        // The launcher registers the spawner row before it publishes its session record, so a
+        // fleet-session row with no record yet is split by its own card string.
+        let fleet =
+            row["run_kind"] == "fleet-session" || row["card"]["run_kind"] == "fleet-session";
+        let keys: Vec<String> = match row["run_id"].as_str().and_then(|id| cards.get(id)) {
+            Some(keys) => keys.clone(),
+            None if fleet => item_keys(row["item_key"].as_str().unwrap_or(""))
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            None => continue,
+        };
+        row["item_key"] = json!(keys.first().map_or("", String::as_str));
+        row["item_keys"] = json!(keys.iter().skip(1).collect::<Vec<_>>());
+        row["lane_card"] = json!(true);
+    }
+}
 /// Where the lane evidence comes from; the roster and pid probes are injected for tests.
 pub(super) struct Evidence<'a> {
     pub sessions: &'a Path,

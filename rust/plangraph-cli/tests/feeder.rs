@@ -434,6 +434,21 @@ fn shipped_policy_preserves_host_caps_and_admission_floors() {
     assert_eq!(p.ram_per_run_bytes, 4_000_000_000);
     assert_eq!(p.quota_floor_percent, 10.0);
     assert_eq!(p.cpu_pressure_max_percent, 50.0);
+    // The tick deadline must end before the service's own timeout (10 s of slack at least).
+    let unit = include_str!("../../../deploy/systemd/pg-feeder.service");
+    let timeout: u64 = unit
+        .lines()
+        .find_map(|l| l.strip_prefix("TimeoutStartSec="))
+        .expect("service timeout")
+        .trim()
+        .parse()
+        .expect("seconds");
+    assert!(
+        p.tick_budget_seconds + 10 <= timeout,
+        "{} vs {timeout}",
+        p.tick_budget_seconds
+    );
+    assert_eq!(p.tick_budget_seconds, 100);
     for (pressure, admitted) in [(49.0, true), (50.0, true), (51.0, false)] {
         let f = HostFacts {
             cpu_pressure_avg300: Some(pressure),
