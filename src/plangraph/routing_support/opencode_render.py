@@ -99,7 +99,6 @@ def configured_gateway_url(providers: dict, env) -> str | None:
 
     The configured omniroute endpoint comes first, then the environment overrides,
     then the omniroute ``options`` endpoint; invalid candidates are skipped.
-    Admission probes use this same resolution so they test the URL the launch uses.
     """
     omniroute = providers.get("omniroute")
     child_settings = omniroute.get("settings") if isinstance(omniroute, dict) else None

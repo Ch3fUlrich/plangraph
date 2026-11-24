@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import logging
 
+from plangraph.routing_errors import SpawnRefused
+
 _parse_warned = False
 _content_warned = False
 UNKNOWN_PROVIDERS = object()
@@ -169,6 +171,23 @@ def prepare_gateway_env(base_env, model):
     from .opencode_render import render_gateway_providers
     env = overlay_env(base_env)
     return env, render_gateway_providers(env, model)
+
+
+def review_child_env(model=None):
+    """Mirror runner.spawn's review env (writer_launch returns no review extras).
+
+    The fresh run nonce and later session tag do not affect routing evidence.
+    Use the runner's default envelope, including headers that trigger rendering.
+    Witness checks and leg-state admission both read this child config.
+    """
+    from .clients import build_child_env, build_routing_envelope_headers
+    env = build_child_env({}, headers=build_routing_envelope_headers(
+        role='review', risk='normal', min_intelligence=44.0, required_context=32000))
+    if isinstance(model, str) and model.startswith(('mimo/', 'omniroute/')):
+        env, refusal = prepare_gateway_env(env, model)
+        if refusal:
+            raise SpawnRefused('witness required: ' + refusal)
+    return env
 
 
 #: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,

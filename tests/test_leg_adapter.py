@@ -504,13 +504,29 @@ def test_leg_without_a_gateway_listener_is_down_before_spawn(tmp_path, listener,
     assert len(seen) == 1
 
 
-def test_gateway_url_reads_the_provider_base_url(tmp_path):
-    cfg = tmp_path / 'providers.json'
-    cfg.write_text('{"providers": {"mimo": {"settings": {"baseURL": "http://127.0.0.1:8080/v1"}}, "opencode": {}, "omniroute": {"settings": {"baseURL": "http://127.0.0.1:8080/v1"}}}}')
-    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', cfg) == 'http://127.0.0.1:8080/v1'
-    assert leg_state.gateway_url('opencode/big-pickle', cfg) is None
-    assert leg_state.gateway_url('claude-sonnet-5-5', cfg) is None
-    assert leg_state.gateway_url('omniroute/deepseek-v4.1-flash', cfg) is None
+@pytest.fixture
+def launch_env(monkeypatch, tmp_path):
+    """A process environment with no gateway override and no per-user endpoint file."""
+    for name in ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL', 'AUTOOS_OMNIROUTE_URL',
+                 'PLANGRAPH_PROVIDERS_FILE', 'OPENCODE_CONFIG_CONTENT'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+    return monkeypatch
+
+
+def use_providers(env, tmp_path, text):
+    path = tmp_path / 'providers.json'
+    path.write_text(text)
+    env.setenv('PLANGRAPH_PROVIDERS_FILE', str(path))
+
+
+def test_gateway_url_reads_the_provider_base_url(tmp_path, launch_env):
+    use_providers(launch_env, tmp_path, '{"providers": {"mimo": {"settings": {"baseURL": "http://127.0.0.1:8080/v1"}}, "opencode": {}, "omniroute": {"settings": {"baseURL": "http://127.0.0.1:8080/v1"}}}}')
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro') == 'http://127.0.0.1:8080/v1'
+    assert leg_state.gateway_url('opencode/big-pickle') is None
+    assert leg_state.gateway_url('claude-sonnet-5-5') is None
+    assert leg_state.gateway_url('omniroute/deepseek-v4.1-flash') is None
 
 
 def test_tcp_gateway_probe_refuses_a_closed_port():
@@ -525,35 +541,37 @@ def test_tcp_gateway_probe_refuses_a_closed_port():
         _socket.create_connection = real
 
 
-def providers_file(tmp_path, text):
-    path = tmp_path / 'providers.json'
-    path.write_text(text)
-    return path
+@pytest.mark.parametrize('override', ['PLANGRAPH_GATEWAY_URL', 'OMNIROUTE_BASE_URL'])
+def test_gateway_url_is_the_endpoint_the_launch_overlay_selects(launch_env, override):
+    """The shipped root config names a loopback endpoint; a per-run override displaces it at launch."""
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro') == 'http://127.0.0.1:8080/v1'
+    launch_env.setenv(override, 'http://host-a.example:9000')
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro') == 'http://host-a.example:9000/v1'
 
 
-MIMO_ROOT = ('{"providers": {"mimo": {"settings": {"baseURL": "http://127.0.0.1:8080/v1"}},'
-             ' "omniroute": {"settings": %s}}}')
-
-
-def test_gateway_url_follows_the_launcher_endpoint_for_gateway_providers(tmp_path):
-    cfg = providers_file(tmp_path, MIMO_ROOT % '{}')
-    env = {'OMNIROUTE_BASE_URL': 'http://host-a.example:9000'}
-    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', cfg, env) == 'http://host-a.example:9000/v1'
-    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', cfg, {}) == 'http://127.0.0.1:8080/v1'
-    # The configured omniroute endpoint outranks the environment, as in the launcher.
-    cfg = providers_file(tmp_path, MIMO_ROOT % '{"baseURL": "http://cfg.example:1/v1"}')
-    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', cfg, env) == 'http://cfg.example:1/v1'
+def test_route_admits_mimo_when_the_launch_endpoint_listens(tmp_path, launch_env):
+    from plangraph.planner.routing import plan_spawn
+    launch_env.setenv('PLANGRAPH_GATEWAY_URL', 'http://host-a.example:9000')
+    seen = []
+    reader = gateway(tmp_path, ('omniroute/mimo-v2.6-pro',), UPSTREAM,
+                     gateway_probe=lambda url: seen.append(url) or url.startswith('http://host-a.example:'))
+    card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
+    plan = plan_spawn(card, role='review', writer_families=('gpt',), leg_reader=reader.leg_status)
+    assert 'mimo-v2.6-pro' in [leg.id for leg in plan.legs]
+    assert seen == ['http://host-a.example:9000/v1']
 
 
 @pytest.mark.parametrize('text', ['{not json', '{"providers": []}', '{"providers": {"mimo": 5}}',
                                   '{"providers": {"mimo": {"settings": {"baseURL": 5}}}}',
                                   '{"providers": {"mimo": {"settings": {"baseURL": "not a url"}}}}'])
-def test_gateway_url_survives_malformed_provider_config(tmp_path, text):
-    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', providers_file(tmp_path, text), {}) is None
+def test_gateway_url_survives_malformed_provider_config(tmp_path, launch_env, text):
+    use_providers(launch_env, tmp_path, text)
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro') is None
 
 
-def test_tcp_gateway_probe_does_not_raise_on_an_invalid_port():
-    assert leg_state.tcp_gateway_probe('http://127.0.0.1:99999/v1') is False
+@pytest.mark.parametrize('url', ['http://a..b:80/v1', 'http://127.0.0.1:99999/v1', 'http:///v1'])
+def test_tcp_gateway_probe_does_not_raise_on_a_malformed_endpoint(url):
+    assert leg_state.tcp_gateway_probe(url) is False
 
 
 def test_gateway_leg_with_a_known_alias_pool_does_not_borrow_another_pool(tmp_path):
@@ -570,3 +588,10 @@ def test_empty_provider_list_is_down_unreachable_not_a_fallback_trigger(tmp_path
     status = gateway(tmp_path, ('omniroute/deepseek-v4.1-flash',), {})('omniroute/deepseek-v4.1-flash')
     assert (status['state'], status['reason']) == ('down', 'unreachable')
     assert not _needs_fallback(status)
+
+
+def test_valid_empty_provider_list_wins_over_a_failed_model_discovery(tmp_path):
+    from plangraph.routing_support.leg_state import DiscoveryFailed
+    reader = gateway(tmp_path, DiscoveryFailed('TimeoutExpired'), {})
+    status = reader('omniroute/deepseek-v4.1-flash')
+    assert (status['state'], status['reason']) == ('down', 'unreachable')

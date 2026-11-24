@@ -488,22 +488,34 @@ def routing_status(status):
     return status
 
 
-def gateway_url(leg, path=None, env=None):
+def gateway_url(leg):
     """Endpoint a direct provider prefix is launched against, or None when none is known.
 
-    A gateway provider (mimo) is launched against the gateway endpoint the opencode
-    renderer resolves, so admission uses that same resolution. The shared ``omniroute``
-    prefix has no entry: its snapshot already proves the gateway answers. A missing,
-    unreadable or malformed provider config, or an invalid URL, names no endpoint.
+    The mimo gateway provider is launched against the child config the runner builds
+    (child env, launch overlay, renderer), so admission reads the endpoint from that same
+    pipeline, never from the raw root config. Any other direct provider names its own
+    ``settings.baseURL``. The shared ``omniroute`` prefix has no entry: its snapshot already
+    proves the gateway answers. A missing or malformed provider config, a refused render or
+    an invalid URL names no endpoint.
     """
+    import json
     from .opencode_overlay import load_root_providers
-    from .opencode_render import _is_valid_url, _normalize_gateway_url, configured_gateway_url
+    from .opencode_render import _is_valid_url, _normalize_gateway_url
     prefix = leg.split('/')[0] if '/' in leg else ''
-    providers = load_root_providers(path) if prefix not in ('', 'omniroute') else None
+    if prefix in ('', 'omniroute'):
+        return None
+    if prefix == 'mimo':
+        from .opencode_overlay import review_child_env
+        try:
+            config = json.loads(review_child_env(leg)['OPENCODE_CONFIG_CONTENT'])
+            settings = config['providers'][prefix]['settings']
+            url = settings['baseURL']
+        except Exception:   # no endpoint: a refused render, a missing key or unreadable config
+            return None
+        return url if isinstance(url, str) and _is_valid_url(url) else None
+    providers = load_root_providers()
     if not isinstance(providers, dict) or not isinstance(providers.get(prefix), dict):
         return None
-    if prefix == 'mimo' and (url := configured_gateway_url(providers, os.environ if env is None else env)):
-        return url
     settings = providers[prefix].get('settings')
     url = settings.get('baseURL') if isinstance(settings, dict) else None
     return _normalize_gateway_url(url) if isinstance(url, str) and _is_valid_url(url) else None
@@ -516,13 +528,10 @@ def tcp_gateway_probe(url, timeout=1.0):
     try:
         parts = urlsplit(url)
         port = parts.port or (443 if parts.scheme == 'https' else 80)
-    except ValueError:
-        return False
-    if not parts.hostname:
-        return False
-    try:
+        if not parts.hostname:
+            return False
         socket.create_connection((parts.hostname, port), timeout=timeout).close()
-    except OSError:
+    except (OSError, ValueError):   # UnicodeError (a malformed hostname) is a ValueError
         return False
     return True
 
@@ -566,7 +575,7 @@ class LegAdapter:
                  clock=time.monotonic, ttl_s=60, gateway_probe=None, gateway_url=gateway_url):
         self.store, self.provider = store, provider
         # D-6800: with a probe, a leg whose base URL has no listener is down before spawn.
-        self.gateway_probe, self.gateway_url, self._gateway = gateway_probe, gateway_url, {}
+        self.gateway_probe, self.gateway_url, self._gateway, self._urls = gateway_probe, gateway_url, {}, {}
         self.models = self.standalone_models if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
@@ -609,14 +618,17 @@ class LegAdapter:
             self._auth_error = None
             try:
                 states = self.provider.snapshot()
-                listed = self.models() if callable(self.models) else self.models
-                if isinstance(listed, DiscoveryFailed):
-                    # Not "every model is unlisted": keep the snapshot-error retry and probe.
-                    raise RuntimeError(f'model discovery failed: {listed.reason}')
-                served = {self.identity(mid) for mid in listed}
+                served = set()
+                if states:   # an empty provider list excludes every leg, whatever discovery says
+                    listed = self.models() if callable(self.models) else self.models
+                    if isinstance(listed, DiscoveryFailed):
+                        # Not "every model is unlisted": keep the snapshot-error retry and probe.
+                        raise RuntimeError(f'model discovery failed: {listed.reason}')
+                    served = {self.identity(mid) for mid in listed}
                 self._states, self._served = states, served
                 self._quarantined.clear()
                 self._gateway.clear()
+                self._urls.clear()
                 self._error = None if states else 'unreachable'   # an empty provider list names no pool
             except OmniRouteAuthRefused as exc:
                 self._error = str(exc)
@@ -636,7 +648,9 @@ class LegAdapter:
                 return stored
         if identity not in self._served or identity in self._quarantined:
             return dict(state='down', reason='not_listed', evidence=None)
-        url = self.gateway_url(leg) if self.gateway_probe else None
+        url = None
+        if self.gateway_probe:   # the endpoint is resolved once per leg per snapshot window
+            url = self._urls[leg] if leg in self._urls else self._urls.setdefault(leg, self.gateway_url(leg))
         if url is not None:
             if url not in self._gateway:
                 self._gateway[url] = bool(self.gateway_probe(url))
