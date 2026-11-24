@@ -347,6 +347,81 @@ fn stamp_green_accepts_only_a_green_receipt_of_that_head() {
 }
 
 #[test]
+fn a_receipt_pushed_with_the_lane_head_is_read_green_from_a_second_clone() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = dir.path().join("remote.git");
+    let writer = dir.path().join("writer");
+    let orchestrator = dir.path().join("orchestrator");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    fs::create_dir_all(&writer).unwrap();
+    git(&writer, &["init", "-q"]);
+    git(
+        &writer,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&writer, &["commit", "--allow-empty", "-qm", "item"]);
+    let head = git(&writer, &["rev-parse", "HEAD"]);
+    // The receipt note exactly as `fast-checks --owned-worktree` writes it.
+    let receipt = format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.000\n");
+    git(
+        &writer,
+        &[
+            "notes",
+            "--ref=plangraph-fast-checks",
+            "add",
+            "-f",
+            "-m",
+            &receipt,
+            &head,
+        ],
+    );
+    // The one documented push: the lane head and the receipt note together.
+    git(
+        &writer,
+        &[
+            "push",
+            "-q",
+            "origin",
+            "HEAD:refs/heads/lane/x",
+            "refs/notes/plangraph-fast-checks",
+        ],
+    );
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            remote.to_str().unwrap(),
+            orchestrator.to_str().unwrap(),
+        ],
+    );
+    let ask = || {
+        Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .current_dir(&orchestrator)
+            .args(["fast-checks", "--stamp-green", &head])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    git(&orchestrator, &["fetch", "-q", "origin", "lane/x"]);
+    assert!(!ask(), "the lane head alone carries no receipt");
+    git(
+        &orchestrator,
+        &[
+            "fetch",
+            "-q",
+            "origin",
+            "refs/notes/plangraph-fast-checks:refs/notes/plangraph-fast-checks",
+        ],
+    );
+    assert!(ask(), "the fetched note is a green receipt of that head");
+}
+
+#[test]
 fn fast_checks_plan_for_a_spawner_python_change_tests_pg_spawnd() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for path in [

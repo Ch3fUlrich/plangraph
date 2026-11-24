@@ -3,13 +3,15 @@ import json
 import os
 import runpy
 import shutil
+import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from merge_batch_env import train_cli  # noqa: F401
-from test_hooks_prepush import HOOK, commit_file, fake_ip, git, push_line, repo, run_hook  # noqa: F401
+from test_hooks_prepush import HOOK, ZERO, commit_file, fake_ip, git, push_line, repo, run_hook  # noqa: F401
 
 LOG_PREFLIGHT = ("import json, os, sys\n"
                  "from pathlib import Path\n"
@@ -119,7 +121,7 @@ def test_a_lane_push_runs_no_preflight_and_no_tests(repo, tmp_path):
     env = install_preflight(r, tmp_path / "argv")
     # a failing unit test in the pushed tree: the lane hook does not run it
     head = commit_file(r, "tests/test_broken.py", "def test_broken():\n    assert False\n")
-    res = run_hook(r, [push_line("lane/x", head, base)], {**env, "PG_LANE_PUSH_UNSTAMPED": "1"})
+    res = run_hook(r, [push_line("lane/x", head, base)], {**env, **stub_plangraph(tmp_path, green=True)[0]})
     assert res.returncode == 0, res.stdout + res.stderr
     assert not (tmp_path / "argv").exists(), "preflight ran for a lane push"
 
@@ -227,7 +229,7 @@ def test_scrub_still_refuses_on_both_paths(repo, tmp_path, ref):
     head = git(r, "rev-parse", "HEAD").strip()
     res = run_hook(r, [push_line(ref, head, "0" * 40)],
                    {"TEST_PREFLIGHT_MARKER": str(tmp_path / "argv"), "PLANGRAPH_TRAIN_MANIFEST": str(_one(tmp_path, part)),
-                    "PG_LANE_PUSH_UNSTAMPED": "1"})
+                    **(stub_plangraph(tmp_path, green=True)[0] if ref.startswith("lane/") else {})})
     assert res.returncode == 1
     assert "app/net.py:1: ipv4" in res.stdout + res.stderr
     assert not (tmp_path / "argv").exists()
@@ -258,7 +260,7 @@ def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
     head = git(r, "rev-parse", "HEAD").strip()
     res = run_hook(r, [push_line(ref, head, "0" * 40)],
                    {"TEST_PREFLIGHT_MARKER": str(tmp_path / "argv"), "PLANGRAPH_TRAIN_MANIFEST": str(_one(tmp_path, part)),
-                    "PG_LANE_PUSH_UNSTAMPED": "1"})
+                    **(stub_plangraph(tmp_path, green=True)[0] if ref.startswith("lane/") else {})})
     assert res.returncode == 1, res.stdout + res.stderr
     assert "missing Writer trailer" in res.stdout + res.stderr
     assert "outside its manifest" not in res.stderr and "out of manifest order" not in res.stderr
@@ -270,7 +272,7 @@ def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
 def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, lane):
     """A lane ref skips preflight altogether; main and tags run it without --lane."""
     r, base = repo
-    env = {**install_preflight(r, tmp_path / "argv"), "PG_LANE_PUSH_UNSTAMPED": "1"}
+    env = {**install_preflight(r, tmp_path / "argv"), **stub_plangraph(tmp_path, green=True)[0]}
     head = commit_file(r, "app/other.py", "y = 2\n")
     line = f"{ref} {head} {ref} {base}" if ref != "refs/tags/v9" else f"{ref} {head} {ref} {'0' * 40}"
     res = run_hook(r, [line], env)
@@ -321,3 +323,104 @@ def test_a_train_push_permits_only_attributed_resolves_and_drops(repo, tmp_path,
         assert ("outside its manifest" if extra == "foreign-parent" else "extra commit") in result.stderr
         if extra in ("no-harness", "drop-no-harness"):
             assert f"train commit {head} is an extra commit without a valid Harness trailer" in result.stderr
+
+
+# WRITER-PUSHES-EACH-ITEM-COMMIT / LE-FAST-CHECKS-RESULT-READ-FROM-TAIL: a lane/* push is scrub, commit gate and stamp only.
+BOUND_SECONDS = 20
+
+
+def stub_plangraph(tmp_path, green):
+    """A `plangraph` on PATH that answers the stamp question; the log shows what the hook asked."""
+    directory = tmp_path / "bin"
+    directory.mkdir(exist_ok=True)
+    log = tmp_path / "plangraph.log"
+    tool = directory / "plangraph"
+    tool.write_text(f'#!/bin/sh\necho "$@" >> {log}\nexit {0 if green else 1}\n')
+    tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    return {"PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"}, log
+
+
+def lane_line(sha, remote=ZERO, name="pr10"):
+    return f"refs/heads/lane/{name} {sha} refs/heads/lane/{name} {remote}"
+
+
+def with_tripwire_preflight(r):
+    """A pushed tree whose preflight would leave a mark: a lane push must never run it."""
+    mark = r.parent / "preflight-ran"
+    return commit_file(r, "tools/preflight.py",
+                       "import os, pathlib\npathlib.Path(os.environ['PREFLIGHT_MARK']).write_text('ran')\n"), mark
+
+
+def test_lane_push_with_green_stamp_runs_no_preflight_and_stays_fast(repo, tmp_path):
+    r, _ = repo
+    head, mark = with_tripwire_preflight(r)
+    env, log = stub_plangraph(tmp_path, green=True)
+    start = time.monotonic()
+    res = run_hook(r, [lane_line(head)], {**env, "PREFLIGHT_MARK": str(mark)})
+    elapsed = time.monotonic() - start
+    assert res.returncode == 0, res.stderr
+    assert not mark.exists(), "preflight ran for a lane push"
+    assert f"fast-checks --stamp-green {head}" in log.read_text()
+    assert elapsed < BOUND_SECONDS, f"lane push took {elapsed:.1f}s"
+    assert git(r, "worktree", "list").count("\n") == 1, "the hook left a worktree"
+
+
+def test_lane_push_without_a_green_stamp_is_refused(repo, tmp_path):
+    r, _ = repo
+    head = commit_file(r, "app/lane.txt", "clean\n")
+    env, _ = stub_plangraph(tmp_path, green=False)
+    res = run_hook(r, [lane_line(head)], env)
+    assert res.returncode == 1
+    assert "no green fast-checks stamp" in res.stderr
+
+
+def test_the_old_unstamped_flag_no_longer_bypasses_the_stamp(repo, tmp_path):
+    r, _ = repo
+    head = commit_file(r, "app/lane.txt", "clean\n")
+    env, _ = stub_plangraph(tmp_path, green=False)
+    res = run_hook(r, [lane_line(head)], {**env, "PG_LANE_PUSH_UNSTAMPED": "1"})
+    assert res.returncode == 1
+    assert "no green fast-checks stamp" in res.stderr
+
+
+def test_the_receipt_note_ref_rides_with_the_lane_push_without_gates(repo, tmp_path):
+    r, _ = repo
+    head = commit_file(r, "app/lane.txt", "clean\n")
+    env, log = stub_plangraph(tmp_path, green=True)
+    notes = "refs/notes/plangraph-fast-checks"
+    res = run_hook(r, [lane_line(head), f"{notes} {head} {notes} {ZERO}"], env)
+    assert res.returncode == 0, res.stderr
+    assert log.read_text().count("--stamp-green") == 1, "only the lane head is asked for a stamp"
+
+
+def test_lane_push_still_scrubs_and_runs_the_commit_gate(repo, tmp_path):
+    r, _ = repo
+    env, _ = stub_plangraph(tmp_path, green=True)
+    hit = commit_file(r, "app/lane.txt", f"ip = {fake_ip()}\n")
+    assert run_hook(r, [lane_line(hit)], env).returncode == 1
+    git(r, "reset", "-q", "--hard", "HEAD~1")
+    git(r, "commit", "-q", "--allow-empty", "-m", "no trailers")
+    bare = git(r, "rev-parse", "HEAD").strip()
+    res = run_hook(r, [lane_line(bare)], env)
+    assert res.returncode == 1
+    assert "Plan-Item" in res.stderr or "Writer" in res.stderr
+
+
+def test_concurrent_pushes_from_two_worktrees_leave_both_worktrees_in_place(repo, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    r, base = repo
+    trees = []
+    for name in ("one", "two"):
+        tree = tmp_path / f"wt-{name}"
+        git(r, "worktree", "add", "-q", "-b", f"lane/{name}", str(tree), base)
+        git(tree, "config", "user.name", "t")
+        git(tree, "config", "user.email", "t@example.invalid")
+        trees.append((name, tree, commit_file(tree, f"app/{name}.txt", "clean\n")))
+    env, _ = stub_plangraph(tmp_path, green=True)
+    with ThreadPoolExecutor(2) as pool:
+        results = list(pool.map(lambda t: run_hook(t[1], [lane_line(t[2], name=t[0])], env), trees))
+    for result in results:
+        assert result.returncode == 0, result.stderr
+    assert all(tree.is_dir() for _, tree, _ in trees)
+    assert git(r, "worktree", "list", "--porcelain").count("worktree ") == 3
