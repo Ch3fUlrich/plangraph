@@ -8,6 +8,7 @@ transaction/authorisation core.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -93,16 +94,24 @@ class SupportMixin:
         if not ids or not valid_commit_ref(sha):
             return None
         from .store_waiver import _names_item as names_item  # circular at import time
-        decisions = self._ctx(item, now).decisions
-        for did in ids:
-            try:
-                text = decisions.text(did) if decisions.has(did) else None
-            except Exception:  # noqa: BLE001 - an unreadable row never vouches
-                text = None
-            if (text and re.search(rf"(?<![0-9a-fA-F]){re.escape(sha)}(?![0-9a-fA-F])", text, re.I)
-                    and names_item(text, item["key"]) and self._verify_evidence(
-                        item, "decision", {"id": did}, now).ok):
-                return did
+        # A frozen close reads the rows the warm scan captured (none captured: nothing vouches);
+        # any other close reads the document once.
+        frozen = self.__dict__.get("_frozen_lanes")
+        texts = ((self.__dict__.get("_landing_decisions") or {}).get("texts") or {}) if frozen else {}
+        with contextlib.nullcontext() if frozen else self._decisions_snapshot(item, now):
+            for did in ids:
+                if frozen:
+                    text, known = texts.get(did), did in texts
+                else:
+                    decisions = self._ctx(item, now).decisions
+                    try:
+                        text = decisions.text(did) if decisions.has(did) else None
+                    except Exception:  # noqa: BLE001 - an unreadable row never vouches
+                        text = None
+                    known = text is not None and self._verify_evidence(item, "decision", {"id": did}, now).ok
+                if (text and known and re.search(rf"(?<![0-9a-fA-F]){re.escape(sha)}(?![0-9a-fA-F])", text, re.I)
+                        and names_item(text, item["key"])):
+                    return did
         raise Refused("evidence_unverified", f"lane_merge_unproven: {sha[:12]} {', '.join(ids)}")
 
     def _lane_merge_proof(self, item, merge, parents, go_pr, go_head, now):
