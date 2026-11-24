@@ -28,6 +28,15 @@ fn main() {
         .nth(1)
         .cloned()
         .unwrap_or_default();
+    // Tables of the live schema (and of the archive and scratch database unless told).
+    let live_tables: usize = std::env::var("FAKE_DOCKER_TABLES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(43);
+    let archive_tables: usize = std::env::var("FAKE_DOCKER_ARCHIVE_TABLES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(live_tables);
     let fail = |what: &str| -> ! {
         eprintln!(
             "{what} (password {})",
@@ -44,7 +53,7 @@ fn main() {
             fail("pg_restore: input file does not appear to be a valid archive")
         }
         "pg_restore" if tool.contains(&"-l".to_owned()) => {
-            for i in 0..43 {
+            for i in 0..archive_tables {
                 println!("{}; 1259 {} TABLE keeper t{i} keeper", 200 + i, 16000 + i);
                 println!("{}; 0 {} TABLE DATA keeper t{i} keeper", 300 + i, 16000 + i);
             }
@@ -57,7 +66,7 @@ fn main() {
                     "COPY keeper.events (payload, seq) FROM stdin;\nrow\t{seq}\nother\t1\n\\.\n"
                 );
             } else {
-                std::fs::write(scratch_state_path(), format!("43|{seq}\n")).unwrap();
+                std::fs::write(scratch_state_path(), format!("{archive_tables}|{seq}\n")).unwrap();
             }
         }
         "psql" if sql.starts_with("CREATE DATABASE") => {
@@ -74,10 +83,12 @@ fn main() {
                 Err(_) => fail("scratch database holds no keeper schema"),
             }
         }
-        "psql" if sql.contains("max(seq)") => println!(
-            "{}",
-            std::env::var("FAKE_DOCKER_SEQ").unwrap_or_else(|_| "19200".into())
-        ),
+        "psql" if sql.contains("information_schema.tables") && sql.contains("max(seq)") => {
+            println!(
+                "{}|{live_tables}",
+                std::env::var("FAKE_DOCKER_SEQ").unwrap_or_else(|_| "19200".into())
+            )
+        }
         other => fail(&format!("unexpected tool {other}")),
     }
 }

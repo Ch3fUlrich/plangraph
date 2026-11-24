@@ -1,0 +1,1 @@
+Run the per-batch step list of the batch step contract in pg-spawnd: a runner with retry, fix-round and resume rules, a stage row and saved list per step, shell steps for worktree, fast checks and push, and the keeper landing journal for the stages it knows.

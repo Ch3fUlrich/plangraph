@@ -1,4 +1,4 @@
-use pg_keeper_backup::pg::{count_tables, redact, Pg, ScratchState};
+use pg_keeper_backup::pg::{count_tables, redact, LiveState, Pg, ScratchState};
 use pg_keeper_backup::{ledger, names, restore_test, retention, run_dump, Verify};
 use std::cell::RefCell;
 use std::io::Write;
@@ -36,6 +36,8 @@ fn path_at(seq: u64, day: u64) -> PathBuf {
 struct Fake {
     seq: u64,
     tables: usize,
+    /// Table count of the live catalog (what a dump run expects by default).
+    live_tables: usize,
     scratch_seq: u64,
     collide: bool,
     calls: RefCell<Vec<String>>,
@@ -46,6 +48,7 @@ impl Fake {
         Self {
             seq,
             tables: 43,
+            live_tables: 43,
             scratch_seq: seq,
             collide: false,
             calls: RefCell::new(Vec::new()),
@@ -71,9 +74,12 @@ fn listing(tables: usize) -> String {
 }
 
 impl Pg for Fake {
-    fn max_seq(&self, _: &str) -> Result<u64, String> {
-        self.log("max_seq");
-        Ok(self.seq)
+    fn live_state(&self, _: &str) -> Result<LiveState, String> {
+        self.log("live_state");
+        Ok(LiveState {
+            seq: self.seq,
+            tables: self.live_tables,
+        })
     }
     fn dump(&self, _: &str, out: &mut dyn Write) -> Result<(), String> {
         self.log("dump");
@@ -211,8 +217,8 @@ fn retention_plan_orders_by_stamp_then_seq_and_ignores_foreign_names() {
 fn a_failed_dump_leaves_no_file_and_no_ledger_line() {
     struct Broken(Fake);
     impl Pg for Broken {
-        fn max_seq(&self, s: &str) -> Result<u64, String> {
-            self.0.max_seq(s)
+        fn live_state(&self, s: &str) -> Result<LiveState, String> {
+            self.0.live_state(s)
         }
         fn dump(&self, _: &str, out: &mut dyn Write) -> Result<(), String> {
             out.write_all(b"half").unwrap();
@@ -256,7 +262,7 @@ fn a_failed_dump_leaves_no_file_and_no_ledger_line() {
 fn restore_test_refuses_a_dump_older_than_seq_19096_before_touching_postgres() {
     let fake = Fake::new(19096);
     let old = path_at(19095, 0);
-    let err = restore_test(&fake, &old, "keeper", 43, names::MIN_SEQ)
+    let err = restore_test(&fake, &old, "keeper", Some(43), names::MIN_SEQ)
         .err()
         .unwrap();
     assert!(err.contains("older than 19096"), "{err}");
@@ -267,7 +273,7 @@ fn restore_test_refuses_a_dump_older_than_seq_19096_before_touching_postgres() {
 fn restore_test_passes_on_a_fresh_dump_and_drops_the_scratch() {
     let fake = Fake::new(19096);
     let name = path_at(19096, 0);
-    let report = restore_test(&fake, &name, "keeper", 43, names::MIN_SEQ).unwrap();
+    let report = restore_test(&fake, &name, "keeper", Some(43), names::MIN_SEQ).unwrap();
     assert_eq!((report.seq, report.tables), (19096, 43));
     assert_eq!(
         *fake.calls.borrow(),
@@ -280,13 +286,15 @@ fn restore_test_rejects_wrong_table_count_and_stale_content_and_still_drops() {
     let name = path_at(19200, 0);
     let mut few = Fake::new(19200);
     few.tables = 42;
-    assert!(restore_test(&few, &name, "keeper", 43, names::MIN_SEQ)
-        .unwrap_err()
-        .contains("42 tables"));
+    assert!(
+        restore_test(&few, &name, "keeper", Some(43), names::MIN_SEQ)
+            .unwrap_err()
+            .contains("42 tables")
+    );
     // a renamed old dump: the scratch content is older than the name says
     let mut renamed = Fake::new(19200);
     renamed.scratch_seq = 18000;
-    let err = restore_test(&renamed, &name, "keeper", 43, names::MIN_SEQ).unwrap_err();
+    let err = restore_test(&renamed, &name, "keeper", Some(43), names::MIN_SEQ).unwrap_err();
     assert!(err.contains("differs from archive max seq"), "{err}");
     assert_eq!(
         renamed.calls.borrow().last().map(String::as_str),
@@ -301,11 +309,18 @@ fn restore_test_only_accepts_dump_names() {
         &fake,
         Path::new("/x/keeper.db"),
         "keeper",
-        43,
+        Some(43),
         names::MIN_SEQ
     )
     .is_err());
-    assert!(restore_test(&fake, Path::new("/x/a.dump"), "Keeper;", 43, names::MIN_SEQ).is_err());
+    assert!(restore_test(
+        &fake,
+        Path::new("/x/a.dump"),
+        "Keeper;",
+        Some(43),
+        names::MIN_SEQ
+    )
+    .is_err());
 }
 
 #[test]
@@ -341,7 +356,7 @@ fn the_password_never_appears_in_text_or_arguments() {
 }
 
 const VERIFY: Verify = Verify {
-    tables: 43,
+    tables: Some(43),
     min_seq: names::MIN_SEQ,
 };
 
@@ -350,7 +365,7 @@ fn a_name_collision_never_drops_a_database_this_run_did_not_create() {
     let mut fake = Fake::new(19200);
     fake.collide = true;
     let name = path_at(19200, 0);
-    assert!(restore_test(&fake, &name, "keeper", 43, names::MIN_SEQ).is_err());
+    assert!(restore_test(&fake, &name, "keeper", Some(43), names::MIN_SEQ).is_err());
     assert_eq!(*fake.calls.borrow(), ["list", "inspect", "create"]);
 }
 
@@ -520,4 +535,90 @@ fn a_ledger_failure_publishes_no_archive_under_a_dump_name() {
         "{err}"
     );
     assert_eq!(files(dir.path()), [ledger::LEDGER_NAME]);
+}
+
+fn verify_of(tables: Option<usize>) -> Verify {
+    Verify {
+        tables,
+        min_seq: names::MIN_SEQ,
+    }
+}
+
+#[test]
+fn a_dump_of_a_schema_with_n_tables_verifies_against_n_without_an_override() {
+    for n in [43, 65] {
+        let mut fake = Fake::new(29701);
+        fake.tables = n;
+        fake.live_tables = n;
+        let dir = tempfile::tempdir().unwrap();
+        let out = run_dump(&fake, dir.path(), "keeper", 14, NOW, Some(&verify_of(None))).unwrap();
+        assert_eq!(out.entry.verified, "yes", "{n} tables");
+        assert!(out.entry.file.ends_with(".dump"), "{}", out.entry.file);
+        // the catalog is read once, in the same call as max(seq)
+        let reads = fake.calls.borrow();
+        assert_eq!(reads.iter().filter(|c| *c == "live_state").count(), 1);
+    }
+}
+
+#[test]
+fn a_listing_that_differs_from_the_catalog_count_fails_the_dump_verify() {
+    let mut fake = Fake::new(29701);
+    fake.live_tables = 65;
+    fake.tables = 43; // the archive holds fewer tables than the live schema
+    let dir = tempfile::tempdir().unwrap();
+    let err = run_dump(&fake, dir.path(), "keeper", 14, NOW, Some(&verify_of(None)))
+        .err()
+        .unwrap();
+    assert!(err.contains("listing has 43 tables, expected 65"), "{err}");
+    assert!(files(dir.path())
+        .iter()
+        .any(|f| f.ends_with(".dump.unverified")));
+
+    // the restored database is compared with the catalog count too
+    let mut scratch = Fake::new(29701);
+    scratch.live_tables = 65;
+    scratch.tables = 65;
+    let ok_dir = tempfile::tempdir().unwrap();
+    assert!(run_dump(
+        &scratch,
+        ok_dir.path(),
+        "keeper",
+        14,
+        NOW,
+        Some(&verify_of(None))
+    )
+    .is_ok());
+}
+
+#[test]
+fn an_explicit_tables_override_beats_the_catalog_count() {
+    let mut fake = Fake::new(29701);
+    fake.live_tables = 65;
+    fake.tables = 43;
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_dump(
+        &fake,
+        dir.path(),
+        "keeper",
+        14,
+        NOW,
+        Some(&verify_of(Some(43))),
+    )
+    .unwrap();
+    assert_eq!(out.entry.verified, "yes");
+}
+
+#[test]
+fn restore_test_without_a_count_reads_the_catalog_after_the_seq_floor() {
+    let mut fake = Fake::new(29701);
+    fake.tables = 65;
+    fake.live_tables = 65;
+    let name = path_at(29701, 0);
+    let report = restore_test(&fake, &name, "keeper", None, names::MIN_SEQ).unwrap();
+    assert_eq!(report.tables, 65);
+    assert_eq!(fake.calls.borrow()[0], "live_state");
+
+    let old = Fake::new(19095);
+    assert!(restore_test(&old, &path_at(19095, 0), "keeper", None, names::MIN_SEQ).is_err());
+    assert!(old.calls.borrow().is_empty());
 }
