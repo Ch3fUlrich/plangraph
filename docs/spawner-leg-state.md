@@ -11,6 +11,7 @@ an already planned leg records the detailed refusal in its attempt skip reason.
 
 A usable OmniRoute snapshot produces `provider_inactive` for an inactive
 provider and `unreachable` for an advertised model without a provider entry.
+A gateway-prefixed leg (`omniroute/<model>`; `mimo/` folds onto it for the listing check) takes the state of the upstream pool whose name starts the model name, else of any available row, because the snapshot is keyed by upstream provider. A direct provider whose configured base URL has no listener is `down` with reason `gateway_unreachable` before spawn (D-6800); the shared `omniroute` prefix is never probed.
 A provider rate-limit window produces `limited` while its reset is in the future.
 
 `plangraph.spawner.leg_state` stores provider 429/402 responses in SQLite at

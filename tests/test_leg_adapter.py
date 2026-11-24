@@ -447,3 +447,79 @@ def test_snapshot_error_probe_without_reason_is_named_not_unknown(snapshot_failu
     case = snapshot_failure
     reason = asyncio.run(leg_probe.before_launch(case.runner, case.leg, 'review', False))
     assert reason == 'leg_state_snapshot_error: OSError: snapshot unavailable; probe: leg_probe_failed'
+
+
+def gateway(tmp_path, listed, snapshot, **kw):
+    provider = SimpleNamespace(snapshot=lambda: snapshot)
+    store = leg_state.LegStateStore(tmp_path / 'state')
+    return leg_state.LegAdapter(store, provider, lambda: listed, enabled=True, clock=lambda: 0, **kw)
+
+
+UPSTREAM = {'deepseek': SimpleNamespace(available=True, stale=False, reason='', until=''),
+            'opencode-go': SimpleNamespace(available=True, stale=False, reason='', until='')}
+
+
+def test_gateway_prefixed_leg_resolves_its_upstream_pool(tmp_path):
+    reader = gateway(tmp_path, ('omniroute/deepseek-v4.1-flash',), UPSTREAM)
+    assert reader('omniroute/deepseek-v4.1-flash')['state'] == 'ok'
+
+
+def test_gateway_leg_follows_the_pool_of_its_model(tmp_path):
+    pools = dict(UPSTREAM, deepseek=SimpleNamespace(available=False, stale=False, reason='inactive', until=''))
+    reader = gateway(tmp_path, ('omniroute/deepseek-v4.1-flash',), pools)
+    assert reader('omniroute/deepseek-v4.1-flash')['reason'] == 'provider_inactive'
+
+
+def test_gateway_leg_without_a_named_pool_uses_any_available_row(tmp_path):
+    pools = dict(UPSTREAM, deepseek=SimpleNamespace(available=False, stale=False, reason='inactive', until=''))
+    reader = gateway(tmp_path, ('omniroute/spark-1.3-contributor',), pools)
+    assert reader('omniroute/spark-1.3-contributor')['state'] == 'ok'
+
+
+def test_gateway_leg_empty_snapshot_stays_unreachable(tmp_path):
+    reader = gateway(tmp_path, ('omniroute/deepseek-v4.1-flash',), {})
+    assert reader('omniroute/deepseek-v4.1-flash')['reason'] == 'unreachable'
+
+
+def test_mimo_leg_is_served_by_its_gateway_listing(tmp_path):
+    reader = gateway(tmp_path, ('omniroute/mimo-v2.6-flash',), UPSTREAM)
+    assert reader('mimo/mimo-v2.6-flash')['reason'] != 'not_listed'
+    assert reader('mimo/mimo-v2.6-pro')['reason'] == 'not_listed'
+
+
+@pytest.mark.parametrize(('listener', 'state'), [(False, 'down'), (True, 'ok')])
+def test_leg_without_a_gateway_listener_is_down_before_spawn(tmp_path, listener, state):
+    seen = []
+    def probe(url):
+        seen.append(url)
+        return listener
+    reader = gateway(tmp_path, ('omniroute/mimo-v2.6-pro',), UPSTREAM, gateway_probe=probe,
+                     gateway_url=lambda leg: 'http://127.0.0.1:8080/v1' if leg.startswith('mimo/') else None)
+    status = reader('mimo/mimo-v2.6-pro')
+    assert status['state'] == state
+    if not listener:
+        assert status['reason'] == 'gateway_unreachable'
+    assert seen == ['http://127.0.0.1:8080/v1']
+    assert reader('omniroute/mimo-v2.6-pro')['state'] == 'ok'
+    assert len(seen) == 1
+
+
+def test_gateway_url_reads_the_provider_base_url(tmp_path):
+    cfg = tmp_path / 'providers.json'
+    cfg.write_text('{"providers": {"mimo": {"settings": {"baseURL": "http://127.0.0.1:8080/v1"}}, "opencode": {}, "omniroute": {"settings": {"baseURL": "http://127.0.0.1:8080/v1"}}}}')
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', cfg) == 'http://127.0.0.1:8080/v1'
+    assert leg_state.gateway_url('opencode/big-pickle', cfg) is None
+    assert leg_state.gateway_url('claude-sonnet-5-5', cfg) is None
+    assert leg_state.gateway_url('omniroute/deepseek-v4.1-flash', cfg) is None
+
+
+def test_tcp_gateway_probe_refuses_a_closed_port():
+    import socket as _socket
+    real = _socket.create_connection
+    try:
+        _socket.create_connection = lambda *a, **k: (_ for _ in ()).throw(ConnectionRefusedError())
+        assert leg_state.tcp_gateway_probe('http://127.0.0.1:8080/v1') is False
+        _socket.create_connection = lambda *a, **k: SimpleNamespace(close=lambda: None)
+        assert leg_state.tcp_gateway_probe('http://127.0.0.1:8080/v1') is True
+    finally:
+        _socket.create_connection = real

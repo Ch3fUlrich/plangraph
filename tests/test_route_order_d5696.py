@@ -59,6 +59,7 @@ def test_standard_review_order_efforts_and_writer_fence(catalog):
         ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-hydrogen-high', 'high'),
         ('mimo-v2.6-pro', None),
+        ('omniroute-deepseek-flash', None),   # D-6803
         ('opencode-deepseek-v4.1-flash-free', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
@@ -67,7 +68,7 @@ def test_standard_review_order_efforts_and_writer_fence(catalog):
         ('agy-gemini-4-argon-medium', 'medium'),
     ]
     assert ordered(result, 'review', writer_families=('claude',),
-                   diff_tokens=99999) == result[:6] + result[7:]
+                   diff_tokens=99999) == result[:7] + result[8:]
 
 
 @pytest.mark.parametrize('order_class', ['high', 'complex'])
@@ -75,8 +76,9 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
     from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
     assert OPERATOR_ROUTE_ORDERS['review'][order_class] == (
         'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
-        'agy-gemini-4-hydrogen-high', 'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-        'agy-gemini-4-neon-medium',
+        'agy-gemini-4-hydrogen-high', 'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'omniroute-deepseek-flash',
+        'opencode-deepseek-v4.1-flash-free', 'agy-gemini-4-neon-medium',   # D-6803
+       
         'claude-sonnet-5-5-high', 'mimo-v2.6-flash', 'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium')
     result = ordered(catalog.values(), 'review', order_class=order_class,
                      writer_families=('gpt',), diff_tokens=1000)
@@ -85,6 +87,7 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
         ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-hydrogen-high', 'high'),
         ('mimo-v2.6-pro', None),
+        ('omniroute-deepseek-flash', None),   # D-6803
         ('opencode-deepseek-v4.1-flash-free', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
@@ -136,7 +139,7 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
         'not_in_order': '''            console-deepseek-flash opencode-go-beam-free agy-gemini-4-hydrogen-medium qodercli-qwen3.8-flash
             opencode-glm-5.3-flash-free cx-gpt-6-luna opencode-flint-40b-free
             opencode-big-pickle agy-gpt-oss-120b agy-sonnet-5.5 agy-claude-opus agy-opus-5.5
-            omniroute-deepseek-flash omniroute-muse-spark agy-opus
+            omniroute-muse-spark agy-opus
             opencode-go-qwen3.8-max omniroute-grok-4.7 opencode-go-muse-spark
             opencode-console-muse-spark claude-haiku-5.5 agy-claude-sonnet-5-5-low
             agy-claude-sonnet-5-5-medium agy-claude-sonnet-5-5-high agy-claude-opus-5-5-low
@@ -148,6 +151,7 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
                                  ('opencode-go-glm-5.3-flash', None),
                                  ('gpt-6.2-sol-medium', 'medium'),
                                  ('mimo-v2.6-pro', None),
+                                 ('omniroute-deepseek-flash', None),
                                  ('opencode-deepseek-v4.1-flash-free', None),
                                  ('claude-sonnet-5-5-high', 'high'),
                                  ('mimo-v2.6-flash', None)]

@@ -488,6 +488,59 @@ def routing_status(status):
     return status
 
 
+def gateway_url(leg, path=None):
+    """Base URL a direct provider prefix sends requests to, or None when it names none.
+
+    The shared gateway prefix has no entry: its snapshot already proves the gateway answers,
+    and each host's own opencode config says where it listens.
+    """
+    from .opencode_overlay import load_root_providers
+    prefix = leg.split('/')[0] if '/' in leg else ''
+    provider = ((load_root_providers(path) or {}) if prefix not in ('', 'omniroute') else {}).get(prefix)
+    url = ((provider or {}).get('settings') or {}).get('baseURL') if isinstance(provider, dict) else None
+    return url if isinstance(url, str) and url else None
+
+
+def tcp_gateway_probe(url, timeout=1.0):
+    """True when something accepts a TCP connection at the URL's host and port."""
+    import socket
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    if not parts.hostname:
+        return False
+    try:
+        socket.create_connection((parts.hostname, parts.port or (443 if parts.scheme == 'https' else 80)),
+                                 timeout=timeout).close()
+    except OSError:
+        return False
+    return True
+
+
+def _gateway_pool(states, leg):
+    """State of the upstream pool serving a gateway-routed model.
+
+    The snapshot is keyed by upstream provider, not by the gateway prefix: take the pool
+    whose name starts the model name, else any row of the answering gateway. An available
+    row wins over an unavailable one.
+    """
+    name = identity_model(leg).split('/', 1)[-1]
+    named = [row for key, row in states.items()
+             if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-'))]
+    rows = named or list(states.values())
+    return next((row for row in rows if row.available and not row.stale), rows[0] if rows else None)
+
+
+GATEWAY_ALIASES = (('mimo/', 'omniroute/'),)
+
+
+def identity_model(model):
+    """Standalone identity of a model id: effort suffix dropped, gateway aliases folded."""
+    for alias, target in GATEWAY_ALIASES:
+        if model.startswith(alias):
+            model = target + model[len(alias):]
+    return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
+
+
 class LegAdapter:
     """Explicit opt-in reader; one cached boundary shared by routing and probes.
 
@@ -496,8 +549,10 @@ class LegAdapter:
     """
 
     def __init__(self, store, provider, models=None, *, enabled=False,
-                 clock=time.monotonic, ttl_s=60):
+                 clock=time.monotonic, ttl_s=60, gateway_probe=None, gateway_url=gateway_url):
         self.store, self.provider = store, provider
+        # D-6800: with a probe, a leg whose base URL has no listener is down before spawn.
+        self.gateway_probe, self.gateway_url, self._gateway = gateway_probe, gateway_url, {}
         self.models = self.standalone_models if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
@@ -518,7 +573,7 @@ class LegAdapter:
         return result.stdout.splitlines()
     @staticmethod
     def identity(model):
-        return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
+        return identity_model(model)
 
     def __call__(self, leg, **kwargs):
         return self.leg_status(leg, **kwargs)
@@ -547,6 +602,7 @@ class LegAdapter:
                 served = {self.identity(mid) for mid in listed}
                 self._states, self._served = states, served
                 self._quarantined.clear()
+                self._gateway.clear()
                 self._error = None if states else 'unreachable'
             except OmniRouteAuthRefused as exc:
                 self._error = str(exc)
@@ -564,7 +620,15 @@ class LegAdapter:
                 return stored
         if identity not in self._served or identity in self._quarantined:
             return dict(state='down', reason='not_listed', evidence=None)
+        url = self.gateway_url(leg) if self.gateway_probe else None
+        if url is not None:
+            if url not in self._gateway:
+                self._gateway[url] = bool(self.gateway_probe(url))
+            if not self._gateway[url]:
+                return dict(state='down', reason='gateway_unreachable', evidence=None)
         provider = self._states.get(leg.split('/')[0])
+        if provider is None and identity.startswith('omniroute/'):
+            provider = _gateway_pool(self._states, leg)
         if provider is None:
             return dict(state='down', reason='unreachable', evidence=None)
         if provider.stale:
