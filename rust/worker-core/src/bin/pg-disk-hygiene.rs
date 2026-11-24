@@ -230,7 +230,7 @@ fn execute_with(
             .collect();
         if let Err(error) = pg_worker_core::idle_targets::sweep(
             &legacy,
-            &guards,
+            &private_guards,
             SystemTime::now(),
             apply,
             &mut report,
