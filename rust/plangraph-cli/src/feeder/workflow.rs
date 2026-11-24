@@ -52,9 +52,11 @@ fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, Spaw
             }
         }
     }
-    let own: Vec<String> = claimed.iter().map(|(t, _)| t.key.clone()).collect();
+    // Claims this host still holds or has not checked yet: a member that yielded is released
+    // and no longer a batch mate for the checks after it.
+    let mut own: Vec<String> = claimed.iter().map(|(t, _)| t.key.clone()).collect();
     let mut held: Vec<(Task, u64)> = Vec::new();
-    for (item, epoch) in &claimed {
+    for (at, (item, epoch)) in claimed.iter().enumerate() {
         match launch.rival(&item.key, &item.files, &own) {
             Ok(None) => held.push((item.clone(), *epoch)),
             Ok(Some(rival)) => {
@@ -62,10 +64,15 @@ fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, Spaw
                     Ok(()) => format!("files_reserved_by:{rival}"),
                     Err(e) => format!("files_reserved_by:{rival}; release failed: {e}"),
                 };
+                own.retain(|key| *key != item.key);
                 dropped.push(json!({"item_key":item.key,"reason":reason}));
             }
             Err(e) => {
-                let failures = release_held(&claimed, launch);
+                // Release what is still claimed: the held members and this one with the
+                // unchecked rest. A yielded member was released already.
+                let mut pending = held.clone();
+                pending.extend(claimed[at..].iter().cloned());
+                let failures = release_held(&pending, launch);
                 return Err(SpawnError::Start(with_failures(
                     format!("reservation check failed: {e}"),
                     &failures,

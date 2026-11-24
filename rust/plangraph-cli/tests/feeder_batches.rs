@@ -34,6 +34,8 @@ struct Registry {
     /// The epoch the keeper issued for each claim, and each release as (key, epoch).
     epochs: BTreeMap<String, u64>,
     releases: Vec<(String, u64)>,
+    /// Each rival check as (key, the batch it was told is this host's own).
+    rival_batches: Vec<(String, Vec<String>)>,
 }
 struct Host {
     registry: Arc<Mutex<Registry>>,
@@ -98,6 +100,11 @@ impl Launch for Host {
         files: &[String],
         batch: &[String],
     ) -> Result<Option<String>, String> {
+        self.registry
+            .lock()
+            .unwrap()
+            .rival_batches
+            .push((key.to_owned(), batch.to_vec()));
         if self.rival_error_at.as_deref() == Some(key) {
             return Err("snapshot unreachable".into());
         }
@@ -601,4 +608,44 @@ fn a_failed_launch_and_a_yielded_member_release_by_their_own_epochs() {
     let registry = registry.lock().unwrap();
     assert_released_with_own_epochs(&registry, &["plangraph:ALPHA-1", "plangraph:ALPHA-2"]);
     assert!(registry.claimed.contains_key("plangraph:OTHER"));
+}
+
+#[test]
+fn a_rival_check_error_after_a_yield_releases_only_the_claims_still_held() {
+    // ALPHA-2 yields to OTHER; the check of ALPHA-3 then errors.
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 8, &["src/b.rs"]),
+        item("ALPHA-3", 7, &["src/c.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    registry
+        .lock()
+        .unwrap()
+        .claimed
+        .insert("plangraph:OTHER".into(), vec!["src/b.rs".into()]);
+    let mut host = Host::new(&registry, &items);
+    host.rival_error_at = Some("plangraph:ALPHA-3".into());
+    let row = drive(&ready(items), &mut host, "dell", 3, false);
+    assert_eq!(row["decision"], "refused", "{row}");
+    let registry = registry.lock().unwrap();
+    // Each claim is released once: the yielded member is not released again.
+    assert_released_with_own_epochs(
+        &registry,
+        &[
+            "plangraph:ALPHA-1",
+            "plangraph:ALPHA-2",
+            "plangraph:ALPHA-3",
+        ],
+    );
+    let told_later: Vec<&String> = registry
+        .rival_batches
+        .iter()
+        .find(|(key, _)| key == "plangraph:ALPHA-3")
+        .map(|(_, batch)| batch.iter().collect())
+        .unwrap();
+    assert!(
+        !told_later.iter().any(|k| *k == "plangraph:ALPHA-2"),
+        "{told_later:?}"
+    );
 }
