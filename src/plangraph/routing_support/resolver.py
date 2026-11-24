@@ -615,7 +615,8 @@ def score_model(
     risk_l = _validate_risk(risk)
     role_l = _validate_role(role)
 
-    intel = _validated_metric(model, "aa_intelligence")
+    from plangraph.planner.benchmarks import row_quality   # lazy: the planner imports this module
+    intel = row_quality(model)
     cost = _validated_metric(model, "cost_per_task_usd", default=0.20)
     burn = _validated_metric(model, "pool_burn_weight", default=1.0)
     _speed_for_model(model)
@@ -667,7 +668,8 @@ def rank_candidates(
     # Validate every candidate before entering the ranking loop.  This keeps the
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
-    for c in candidates:
+    from plangraph.planner.benchmarks import consistent_scale   # lazy: the planner imports this module
+    for c in consistent_scale(candidates):
         if not catalog_row_admitted(c):
             continue
         d = dict(c)
@@ -691,7 +693,7 @@ def rank_candidates(
                 out_band.append(item)
 
         # Sort in_band by speed descending, then score descending as tertiary tie breaker
-        in_band.sort(key=lambda x: (x[2], x[1]), reverse=True)
+        in_band.sort(key=lambda x: (not x[0].get("imputed"), x[2], x[1]), reverse=True)  # measured before imputed
         for item in in_band:
             ranked.append(item[0])
 

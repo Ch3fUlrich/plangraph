@@ -2,10 +2,21 @@
 import time
 
 
-def agy_limit_reason(model, state):
+def _limited_until(state):
     reset = (state.get('evidence') or {}).get('reset_at')
-    if model.startswith(('agy:', 'agy/')) and state['state'] == 'limited' and reset:
+    if state['state'] == 'limited' and reset:
         return 'limited_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset))
+
+
+def agy_limit_reason(model, state):
+    if model.startswith(('agy:', 'agy/')):
+        return _limited_until(state)
+
+
+def codex_limit_reason(leg, state):
+    """A recorded Codex usage-limit reply keeps its reset time in the route's skip reason."""
+    if getattr(leg, 'harness', None) == 'codex':
+        return _limited_until(state)
 
 
 def unavailable(state):
@@ -19,11 +30,11 @@ def provider_exhausted(skipped):
     policy = {'banned_family', 'off_family', 'paused_harness', 'excluded_family',
               'inline_only_needs_diff', 'no_verdict_seat', 'explicit_only',
               'review_route_excluded', 'low_risk_only', 'claude_requires_gpt_and_hydrogen_limits',
-              'claude_requires_codex_limited'}
+              'claude_requires_codex_limited', 'effort_channel', 'stale_row', 'canary_pending'}
     unavailable_legs = {'not_listed', 'provider_inactive', 'unreachable'}
     exhausted = lambda r: r in capacity_reasons or r.startswith(('quota_until ', 'limited_until '))
     return any(exhausted(r) for r in reasons) and all(
-        exhausted(r) or r in policy or r in unavailable_legs or r.startswith('disabled:') for r in reasons)
+        exhausted(r) or r in policy or r in unavailable_legs or r.startswith(('disabled:', 'needs_')) for r in reasons)
 
 
 def read_leg_model(read, leg, model, **scope):
