@@ -444,5 +444,206 @@ def test_pytest_quarantine_is_applied_during_collection(tmp_path):
         assert f'QUARANTINED {nodeid} owner=plangraph:FIX-THE-FLAKE mode={mode}' in result.stdout
 
 
+@pytest.mark.skipif(sys.platform != 'linux', reason='checks an isolated Linux process group')
+@pytest.mark.parametrize(('parallel', 'phase'), [(False, 'call'), (True, 'call'), (True, 'setup'), (True, 'teardown')])
+def test_pytest_deadline_reports_hang_and_keeps_running(tmp_path, parallel, phase):
+    import signal
+    import subprocess
+
+    from plangraph.spawner.proc_kill import alive
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text('pytest_plugins = ("_split_ci_environment",)\n')
+    (tmp_path / 'test_hang.py').write_text(
+        'from pathlib import Path\n'
+        'import os, subprocess, sys, pytest\n'
+        'from threading import Event\n\n'
+        'def block():\n'
+        '    child = subprocess.Popen([sys.executable, "-c", "from threading import Event; Event().wait()"])\n'
+        '    Path("child.pid").write_text(str(child.pid))\n'
+        '    Path("worker.pid").write_text(str(os.getpid()))\n'
+        '    Event().wait()\n'
+        '@pytest.fixture\ndef fixture():\n'
+        + {'setup': '    block()\n', 'teardown': '    yield\n    block()\n', 'call': '    return block\n'}[phase]
+        + f'def test_blocked(fixture):\n    {"fixture()" if phase == "call" else "pass"}\n'
+        'def test_after_hang():\n'
+        '    assert int(Path("worker.pid").read_text()) == os.getpid()\n',
+    )
+    (tmp_path / 'test_other_scope.py').write_text('def test_other_scope(): pass\n')
+    worker_args = []
+    if parallel:
+        pytest.importorskip('xdist')
+        worker_args = ['-p', 'xdist.plugin', '-n', '2', '--dist', 'loadscope']
+    command = subprocess.Popen(
+        [sys.executable, '-m', 'pytest', '-q', '-o', 'test_deadline=2', *worker_args, str(tmp_path)],
+        cwd=tmp_path, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    try:
+        output, _ = command.communicate(timeout=20)
+        assert command.returncode == pytest.ExitCode.TESTS_FAILED, output
+        expected = {'call': '1 failed, 2 passed', 'setup': '2 passed, 1 error', 'teardown': '3 passed, 1 error'}
+        assert expected[phase] in output and 'INTERNALERROR' not in output
+        assert 'HUNG test_hang.py::test_blocked' in output
+        assert 'in block' in output
+        assert not alive(int((tmp_path / 'child.pid').read_text()), None)
+    finally:
+        if command.poll() is None:
+            os.killpg(command.pid, signal.SIGKILL)
+            command.wait(timeout=5)
+
+
+def _run_without_pthread_kill(tmp_path, body, deadline_signal):
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text(
+        'import signal\n'
+        'pytest_plugins = ("_split_ci_environment",)\n\n'
+        'def pytest_configure(config):\n'
+        '    import _split_ci_environment as plugin\n'
+        '    plugin._PTHREAD_KILL = None\n'
+        f'    plugin._DEADLINE_SIGNAL = signal.{deadline_signal}\n',
+    )
+    (tmp_path / 'test_hang.py').write_text(body)
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-o', 'test_deadline=2', str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    return result, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('deadline_signal', ['SIGUSR2', 'SIGINT'])
+@pytest.mark.parametrize('phase', ['call', 'teardown'])
+def test_pytest_deadline_interrupts_main_thread_without_pthread_kill(tmp_path, phase, deadline_signal):
+    """Windows has no pthread_kill (and carries the deadline on SIGINT): the hung test still fails."""
+    import signal
+
+    if getattr(signal, deadline_signal, None) is None:
+        pytest.skip(f'{deadline_signal} does not exist on this platform')
+    result, output = _run_without_pthread_kill(
+        tmp_path,
+        'import time, pytest\n\n'
+        'def spin():\n'
+        '    while True:\n        time.sleep(0.01)\n\n'
+        '@pytest.fixture\ndef fixture():\n'
+        + {'call': '    return spin\n', 'teardown': '    yield\n    spin()\n'}[phase]
+        + f'def test_blocked(fixture):\n    {"fixture()" if phase == "call" else "pass"}\n\n'
+        'def test_after_hang():\n    pass\n',
+        deadline_signal,
+    )
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert {'call': '1 failed, 1 passed', 'teardown': '2 passed, 1 error'}[phase] in output, output
+    assert 'HUNG test_hang.py::test_blocked' in output and 'in spin' in output, output
+    assert 'INTERNALERROR' not in output, output
+
+
+def test_pytest_deadline_sigint_fallback_keeps_a_real_ctrl_c(tmp_path):
+    """Where SIGINT carries the deadline, a user's Ctrl-C still interrupts the session."""
+    result, output = _run_without_pthread_kill(
+        tmp_path,
+        'import os, signal, time\n\n'
+        'def test_ctrl_c():\n'
+        '    signal.raise_signal(signal.SIGINT)\n'
+        '    time.sleep(10)\n\n'
+        'def test_not_reached():\n    pass\n',
+        'SIGINT',
+    )
+    assert result.returncode == pytest.ExitCode.INTERRUPTED, output
+    assert 'KeyboardInterrupt' in output and 'HUNG' not in output, output
+
+
+def test_long_test_deadline_covers_a_slow_session_fixture_only_where_marked(tmp_path):
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text(
+        'import pytest, time\n'
+        'pytest_plugins = ("_split_ci_environment",)\n\n'
+        '@pytest.fixture(scope="session")\n'
+        'def slow_build():\n    time.sleep(4)\n',
+    )
+    (tmp_path / 'test_marked.py').write_text(
+        'import pytest\n\n'
+        'pytestmark = pytest.mark.long_test_deadline(30, reason="builds a binary in its fixture")\n\n'
+        'def test_marked(slow_build):\n    pass\n',
+    )
+    (tmp_path / 'test_unmarked.py').write_text(
+        'import time\n\n'
+        'def test_unmarked_slow():\n    time.sleep(4)\n',
+    )
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-o', 'test_deadline=2', str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert 'HUNG test_unmarked.py::test_unmarked_slow' in output, output
+    assert 'HUNG test_marked.py' not in output and '1 failed, 1 passed' in output, output
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='checks the thread-directed deadline signal')
+@pytest.mark.parametrize('parallel', [False, True])
+@pytest.mark.parametrize('patch', [
+    'monkeypatch.setattr(threading, "Thread", lambda *a, **k: object())',
+    'monkeypatch.setattr(threading.Thread, "daemon", property(lambda self: False, lambda self, value: 1 / 0))',
+    'monkeypatch.setattr(threading.Thread, "__init__", lambda self, *a, **k: None)',
+])
+def test_pytest_deadline_survives_tests_that_patch_threading(tmp_path, parallel, patch):
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text('pytest_plugins = ("_split_ci_environment",)\n')
+    (tmp_path / 'test_patch.py').write_text(
+        'import threading\n\n'
+        'def test_patches_threading(monkeypatch):\n'
+        f'    {patch}\n\n'
+        + ''.join(f'def test_after_{n}():\n    assert threading.Thread.__init__ is not None\n\n' for n in range(4)),
+    )
+    worker_args = []
+    if parallel:
+        pytest.importorskip('xdist')
+        worker_args = ['-p', 'xdist.plugin', '-n', '2', '--dist', 'load']
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *worker_args, str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert '5 passed' in output and 'error' not in output.lower(), output
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='checks the thread-directed deadline signal')
+def test_pytest_deadline_arming_failure_fails_only_that_test(tmp_path):
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text('pytest_plugins = ("_split_ci_environment",)\n')
+    (tmp_path / 'test_arm.py').write_text(
+        'import _split_ci_environment as plugin\n\n'
+        'def test_cannot_arm_teardown(monkeypatch):\n'
+        '    def refuse(*args):\n        raise RuntimeError("can\'t start new thread")\n'
+        '    monkeypatch.setattr(plugin, "_START_ALARM_THREAD", refuse)\n\n'
+        + ''.join(f'def test_after_{n}():\n    pass\n\n' for n in range(3)),
+    )
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert '4 passed, 1 error' in output, output
+    assert 'could not arm the test deadline' in output and 'INTERNALERROR' not in output, output
+
+
 def _nested_pytest_env():
     return {key: value for key, value in os.environ.items() if not key.startswith('PYTEST_')}
