@@ -136,7 +136,13 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
 #[derive(Default, Deserialize, Serialize)]
 pub struct Ledger {
     pub done: BTreeMap<String, String>,
+    /// Pull requests found closed or merged: never read or touched again.
+    #[serde(default)]
+    pub closed: BTreeSet<u64>,
 }
+
+/// What `pr_head` answers for a pull request that is no longer open.
+pub const NOT_OPEN: &str = "pull request is not open";
 
 /// Run the automatic fixes the tasks call for. `lookup` reads a pull request's head, `fix` applies one.
 /// A (pull request, class) is reserved before the fix runs, so a crash or a refusal never repeats it.
@@ -154,6 +160,9 @@ pub fn pass(
         let (Some(class), Some(pr)) = (RedClass::from_name(&task.class), task.pr) else {
             continue;
         };
+        if ledger.closed.contains(&pr) {
+            continue;
+        }
         let fixed: BTreeSet<(String, RedClass)> = ledger
             .done
             .keys()
@@ -170,16 +179,32 @@ pub fn pass(
         else {
             continue;
         };
+        let head = match heads.entry(pr).or_insert_with(|| lookup(pr)).clone() {
+            Ok(head) => head,
+            Err(error) if error == NOT_OPEN => {
+                ledger.closed.insert(pr);
+                super::save(&path, &ledger)?;
+                continue;
+            }
+            Err(error) => {
+                rows.push(format!(
+                    "autofix {} {}: lookup failed: {}",
+                    task.head,
+                    class.name(),
+                    super::logs::scrub(&error)
+                ));
+                continue;
+            }
+        };
+        if head.sha != task.head_sha {
+            continue; // a newer head has its own run; nothing is reserved
+        }
         let key = format!("{}:{}", task.head, class.name());
         ledger
             .done
             .insert(key.clone(), format!("job {}: started", task.job_id));
         super::save(&path, &ledger)?;
-        let looked = heads.entry(pr).or_insert_with(|| lookup(pr)).clone();
-        let outcome = looked.and_then(|head| {
-            if head.sha != task.head_sha {
-                return Ok(Outcome::Stale);
-            }
+        let outcome = {
             let scratch = dir.join("autofix-scratch");
             let _ = std::fs::remove_dir_all(&scratch);
             let subject = format!(
@@ -199,7 +224,7 @@ pub fn pass(
             );
             let _ = std::fs::remove_dir_all(&scratch);
             result
-        });
+        };
         let text = match &outcome {
             Ok(Outcome::Pushed(sha)) => format!("pushed {sha}"),
             Ok(Outcome::Unchanged) => "unchanged; left to the fix writer".into(),
@@ -229,9 +254,13 @@ pub fn pass(
     Ok(rows)
 }
 
-/// The head of pull request `pr` as GitHub reports it; a head from a fork is refused.
+/// The head of pull request `pr` as GitHub reports it; a closed or merged pull request answers `NOT_OPEN` and a
+/// head from a fork is refused.
 pub fn pr_head(gh: &mut impl Github, repo: &str, pr: u64) -> Result<PrHead> {
     let value = gh.value(&format!("pulls/{pr}"))?;
+    if value["state"] != "open" {
+        return Err(NOT_OPEN.into());
+    }
     let full = value["head"]["repo"]["full_name"]
         .as_str()
         .unwrap_or_default();
