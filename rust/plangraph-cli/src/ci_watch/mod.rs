@@ -13,6 +13,9 @@ pub mod main_freeze_gh;
 mod main_freeze_gh_tests;
 #[cfg(test)]
 mod main_freeze_tests;
+mod sweep;
+#[cfg(test)]
+mod sweep_tests;
 #[cfg(test)]
 mod tests;
 
@@ -40,6 +43,9 @@ pub struct Task {
     pub keeper_defined: bool,
     #[serde(default)]
     pub keeper_key: Option<String>,
+    /// The head commit of the failing run; the sweep cancels the item once the pull request moves on.
+    #[serde(default)]
+    pub sha: Option<String>,
 }
 #[derive(Deserialize)]
 struct Flakes {
@@ -155,6 +161,18 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
         },
     )?;
     let mut rows = rows;
+    rows.extend(sweep::sweep(
+        &mut Gh { repo: repo.clone() },
+        &dir,
+        dry,
+        |key: &str, reason: &str| {
+            if use_keeper {
+                keeper::cancel_for(env, key, reason)
+            } else {
+                Ok(())
+            }
+        },
+    )?);
     if args.iter().any(|a| a == "--main-freeze") && !dry {
         rows.extend(run_main_freeze(
             &repo,
@@ -204,6 +222,10 @@ fn scan(
     let prs = gh.pages("pulls?state=open&per_page=100", None)?;
     let mut heads = BTreeMap::new();
     for pr in prs {
+        // A draft, a CI probe and a landing train belong to their own writer, never to a fix lane.
+        if sweep::not_a_fix_lane_pr(&pr) {
+            continue;
+        }
         let sha = text(&pr["head"], "sha")?.to_owned();
         heads.insert(sha, number(&pr, "number")?);
     }
@@ -347,6 +369,7 @@ fn scan(
                 priority: 10,
                 keeper_defined: old_defined,
                 keeper_key,
+                sha: Some(sha.to_owned()),
             };
             output.push(format!(
                 "{}task: {}",
