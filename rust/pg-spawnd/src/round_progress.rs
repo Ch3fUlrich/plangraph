@@ -398,21 +398,22 @@ pub(crate) fn record_refusal(
             let findings =
                 crate::round_replan_ports::last_round_findings_of(state, item, &Value::Null)
                     .unwrap_or_default();
-            // The keeper claims are on the card's items, not on the ledger key.
-            let claims: Vec<String> = match args["card"]["item_keys"].as_array() {
-                Some(list) => list
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .filter(|s| crate::records::valid_item(s))
-                    .map(String::from)
-                    .collect(),
-                None => base["item_key"]
-                    .as_str()
-                    .map(String::from)
-                    .into_iter()
-                    .collect(),
-            };
-            match crate::round_replan::enqueue_return(state, item, reason, &findings, &claims) {
+            // The keeper claims are the receipts the card carries (item -> epoch), never the
+            // ledger key; a card without them leaves the job pending with an explicit error.
+            let claims: Option<std::collections::BTreeMap<String, u64>> =
+                args["card"]["claims"].as_object().map(|map| {
+                    map.iter()
+                        .filter(|(k, v)| crate::records::valid_item(k) && v.is_u64())
+                        .map(|(k, v)| (k.clone(), v.as_u64().unwrap()))
+                        .collect()
+                });
+            match crate::round_replan::enqueue_return(
+                state,
+                item,
+                reason,
+                &findings,
+                claims.as_ref(),
+            ) {
                 Ok(true) => base["replan"] = json!("returned"),
                 Ok(false) => {}
                 Err(e) => base["replan_error"] = json!(e.into_error_data().message),

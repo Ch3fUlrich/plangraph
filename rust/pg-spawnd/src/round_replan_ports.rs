@@ -264,7 +264,14 @@ impl Ports for CommandPorts<'_> {
     }
 
     fn claim_epoch(&self, item: &str) -> Result<Option<u64>, ToolError> {
-        let shown = self.show(item)?;
+        // The keeper's own answer: a snapshot read during an outage is not evidence.
+        let shown = parse(
+            &self.exec.run(
+                Tool::Keeper,
+                &strings(&["--json", "show", item, "--authoritative"]),
+            )?,
+            "keeper",
+        )?;
         Ok(if shown["state"] == "claimed" {
             shown["epoch"].as_u64()
         } else {

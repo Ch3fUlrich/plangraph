@@ -325,7 +325,7 @@ fn the_report_ignores_dry_run_and_voided_attempts() {
 #[test]
 fn returns_are_not_replans_and_a_job_of_the_earlier_schema_is_still_reported() {
     let dir = tempfile::tempdir().unwrap();
-    crate::round_replan::enqueue_return(dir.path(), "p:Back", "round_cap", &[], &[])
+    crate::round_replan::enqueue_return(dir.path(), "p:Back", "round_cap", &[], None)
         .ok()
         .unwrap();
     // An older job file without queued_at is dated by the file.
