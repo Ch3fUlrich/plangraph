@@ -270,8 +270,16 @@ launch uses SSH. The recorded Tailscale result helps diagnose a link failure.
 After two misses the worker is refused and `pg alerts` lists an open
 finding with the affected run IDs. The probe combines the coordinator's
 placed run records with the last available remote inventory. Recovery clears
-the finding and records which runs to check. Placement continues to apply its
-regular readiness checks after recovery.
+the finding and records which runs to check. An outage of more than ten
+minutes leaves the host `rejoining`, which placement refuses, until
+`pg-spawnd rejoin HOST` passes on the coordinator. It runs the host's
+`plangraph-host-sync.service`, flags an installed binary that differs from
+`PG_MAIN_SHA` and `PG_MAIN_SHA256` (with the host's `PG_INSTALL_BINARY` and
+`PG_INSTALL_STAMP`), settles each unknown run (finished, live or dead), starts
+`pg-worktree-sweep.service`, checks the work-disk and RAM floors and runs the
+legs in the host's `PG_REJOIN_LEG_PROBES` (JSON of leg to argv). A failed step
+keeps the host rejoining. Each attempt writes `rejoin/HOST-TIME-*.json` in the
+state directory; success sets the host ready.
 
 An operator or router with coordinator state access can use
 `pg-spawnd worker-maintenance HOST END_UNIX_SECONDS` to block placement
