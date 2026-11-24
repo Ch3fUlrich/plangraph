@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import tomllib
 from datetime import datetime
 from pathlib import Path
@@ -175,27 +174,16 @@ def _normalize_path(p: str) -> str:
 
 
 def _is_ci_deps(p: str) -> bool:
-    return (
-        p.startswith(".github/")
-        or p == "requirements-ci.txt"
-        or p == "tools/ci_select.py"
-    )
+    return p.startswith(".github/") or p in ("requirements-ci.txt", "tools/ci_select.py")
 
 
 def _is_docs_class(p: str) -> bool:
-    basename = p.split("/")[-1]
-    return (
-        p.endswith(".md")
-        or p.startswith("docs/")
-        or basename.startswith("CHANGELOG")
-        or basename == ".docs-map"
-    )
+    base = p.split("/")[-1]
+    return p.endswith(".md") or p.startswith("docs/") or base.startswith("CHANGELOG") or base == ".docs-map"
 
 
 def _is_known(p: str) -> bool:
-    if _is_docs_class(p):
-        return True
-    return any(p.startswith(prefix) for prefix in KNOWN_PREFIXES)
+    return _is_docs_class(p) or any(p.startswith(prefix) for prefix in KNOWN_PREFIXES)
 
 
 def select(paths: list[str]) -> dict[str, bool]:
@@ -316,13 +304,9 @@ def ci_full_description(run_id, attempt, tested_tree: str, head_tree: str):
 
 
 def landing_evidence(statuses, tree: str, creator_id):
-    """``"<run id> attempt <n>"`` when the commit is a tested landing, else None (the full suite runs).
-
-    A tested landing has the newest ``land-auth`` status in state success, created by ``creator_id`` (the id of
-    the land App's bot user; statuses report their creator, and an unset id never matches), whose description
-    names an evidence run and attempt, and the newest ``ci-full`` status in state success whose description
-    names that same run and attempt and the tree of this commit (``tree``). Anything else, a newer failed
-    ``land-auth`` included, is not tested: a push run then runs everything, as before."""
+    """``"<run id> attempt <n>"`` when the commit is a tested landing, else None (the full suite runs): the newest
+    ``land-auth`` is a success by ``creator_id`` (the land App's bot) naming a run and attempt, and the newest
+    ``ci-full`` is a success naming the same run and attempt and the tree of this commit."""
     if not creator_id or not tree:
         return None
     auth = _latest(statuses, LAND_AUTH)
@@ -338,17 +322,18 @@ def landing_evidence(statuses, tree: str, creator_id):
     return f"{named.group(1)} attempt {named.group(2)}"
 
 
-def reword_evidence(statuses, run, old_head: str, new_head: str, old_tree: str, new_tree: str):
-    """Evidence text when a commit that only differs from ``old_head`` in its message may reuse its green full run.
-    Both commits must have the same non-empty Git tree. The newest ``ci-full`` status of the old head must be
-    success and name a run and attempt that the verified run record (``run``: the Actions run of the old head)
-    confirms: same run id, head ``old_head``, this workflow on a pull request, the latest attempt, concluded
-    success. Anything else is None and the suite runs again."""
+def reword_evidence(statuses, run, old_head: str, new_head: str, old_tree: str, new_tree: str, jobs=()):
+    """Evidence text when a commit that differs from ``old_head`` only in its message may reuse its green full run:
+    the same non-empty tree, a success ``ci-full`` status of the old head published by github-actions, the run
+    record ``run`` confirming that run and attempt (old head, this workflow, pull request, latest attempt,
+    success) and ``jobs`` of that attempt the full matrix, all green (an affected-only run never qualifies)."""
     if not new_tree or old_tree != new_tree or not old_head or old_head == new_head:
         return None
     full = _latest(statuses, CI_FULL)
     seen = _FULL_EVIDENCE.fullmatch((full or {}).get("description") or "")
     if not full or full.get("state") != "success" or not seen or seen.group(3) != new_tree:
+        return None
+    if (full.get("creator") or {}).get("login") != "github-actions[bot]" or _load_tool("merge_batch_land").full_job_problems(jobs):
         return None
     run = run or {}
     if (str(run.get("id")), str(run.get("run_attempt"))) != seen.group(1, 2) or run.get("head_sha") != old_head:
@@ -378,7 +363,7 @@ def gate(needs: dict, require_full: bool = False) -> list[str]:
         problems.append("select: merge candidate ran the affected selection, not the full suite")
     for suite in ALWAYS + SUITES + ("rust-windows",):
         selection = "rust" if suite == "rust-windows" else suite
-        selected = outputs.get("full") == "true" or suite in ALWAYS or outputs.get(selection) != "false"
+        selected = (outputs.get("full") == "true" and outputs.get("tested") != "true") or suite in ALWAYS or outputs.get(selection) != "false"
         if not selected:
             continue
 
@@ -461,20 +446,23 @@ _OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (\S+)|test (\S+) \.\.\. (ok|FA
 
 
 def changed_tests(root, base: str, head: str) -> dict:
-    """Python test files (not browser) and Rust ``#[test]`` fns the part changed, as [manifest, name]."""
+    """Python test files (not browser) and the Rust ``#[test]`` fns whose lines the part touched (body edits
+    included), as [manifest, name]. A test fn spans from its attribute to the closing brace at its indent."""
     git = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, check=True, text=True).stdout  # noqa: E731
-    python = [p for p in git("diff", "--name-only", "--diff-filter=AMR", f"{base}...{head}", "--", "tests").splitlines()
+    diff = f"{base}...{head}"
+    python = [p for p in git("diff", "--name-only", "--diff-filter=AMR", diff, "--", "tests").splitlines()
               if re.fullmatch(r"tests/(?!browser/)(?:\w+/)*test_\w+\.py", p)]
-    rust, path, prev = [], "", ""
-    for line in git("diff", "-U1", "--diff-filter=AM", f"{base}...{head}", "--", "rust").splitlines():
-        if line.startswith("+++ "):
-            path = line[6:] if line.endswith(".rs") else ""
-        elif path and "#[test]" in prev and (m := re.match(r"\+\s*(?:async )?fn (\w+)", line)):
-            owner = Path(path).parent
-            while not (Path(root) / owner / "Cargo.toml").exists() and owner != owner.parent:
-                owner = owner.parent
-            rust.append([f"{owner}/Cargo.toml", m.group(1)])
-        prev = line
+    rust = []
+    for path in git("diff", "--name-only", "--diff-filter=AM", diff, "--", "rust").splitlines():
+        hunks = re.findall(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", git("diff", "-U0", diff, "--", path), re.M) if path.endswith(".rs") else []
+        touched = {n for c, d in hunks for n in (range(int(c), int(c) + int(d or 1)) if int(d or 1) else (int(c), int(c) + 1))}
+        text = git("show", f"{head}:{path}") if touched else ""
+        owner = Path(path).parent
+        while not (Path(root) / owner / "Cargo.toml").exists() and owner != owner.parent:
+            owner = owner.parent
+        for m in re.finditer(r"^([ \t]*)#\[(?:\w+::)?test\b.*\n(?:\1#\[.*\n)*\1(?:async )?fn (\w+)(?:.*\{\}|.*\n(?:.*\n)*?\1\})", text, re.M):
+            if touched & set(range(text.count("\n", 0, m.start()) + 1, text.count("\n", 0, m.end()) + 2)):
+                rust.append([f"{owner}/Cargo.toml", m[2]])
     return {"python": python, "rust": rust}
 
 
@@ -488,7 +476,7 @@ def replay_commands(changed: dict, runs: int = 5, workers: bool = True) -> list[
     return commands
 
 
-def replay(root, changed: dict, out, workers: bool = True, runs: int = 5) -> dict:
+def replay(root, changed: dict, out, workers: bool = True, runs: int = 5, head: str = "") -> dict:
     """Run the replay, keep every log. FLAKY ids passed and failed among the runs; failed: every run or no outcome."""
     Path(out).mkdir(parents=True, exist_ok=True)
     path = os.pathsep.join(filter(None, [str(Path(root) / "src"), os.environ.get("PYTHONPATH")]))
@@ -505,9 +493,21 @@ def replay(root, changed: dict, out, workers: bool = True, runs: int = 5) -> dic
     flaky = sorted(t for t, r in seen.items() if len(r) == 2)
     failed += sorted(t for t, r in seen.items() if True not in r)
     result = {"flaky": flaky, "failed": failed, "logs": {t: [seen[t][False], seen[t][True]] for t in flaky},
-              "ok": not flaky and not failed, "runs": runs}
+              "ok": not flaky and not failed, "runs": runs, "head": head, "changed": changed}
     (Path(out) / "replay.json").write_text(json.dumps(result), encoding="utf-8")
     return result
+
+
+def replay_dir(head: str) -> Path:
+    """Where the entry replay of a part head is kept: ``<telemetry>/entry-replay/<head>`` (readiness reads it)."""
+    return Path(os.environ.get("PLANGRAPH_TELEMETRY_DIR") or Path.home() / ".local/share/plangraph/telemetry") / "entry-replay" / head
+
+
+def replay_receipt(head: str):
+    try:
+        return json.loads((replay_dir(head) / "replay.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 def attempt_key(attempt):
@@ -536,6 +536,11 @@ def ready_problems(facts: dict) -> list[str]:
         problems.append("seconds-fast checks did not pass on this head")
     if not facts.get("entry_set"):
         problems.append("entry set did not pass on this head")
+    replay = facts.get("replay") or {}
+    if (facts.get("truncated") or any(re.fullmatch(r"tests/(?!browser/)(?:\w+/)*test_\w+\.py|rust/.*\.rs", f) for f in facts.get("files", []))) \
+            and not (replay.get("ok") and replay.get("head") == facts.get("head") and replay.get("runs", 0) >= 5):
+        problems.append("no passing five-run replay of the changed tests bound to this head")
+    problems += [f"FLAKY: {t} (logs {' and '.join(replay['logs'][t])})" for t in replay.get("flaky", [])]
     if facts.get("windows_required"):
         if facts.get("windows") is None:
             problems.append("native Windows entry run missing")
@@ -554,17 +559,15 @@ def part_cost(jobs: list[dict], pr: int, head: str) -> dict:
     rows = [{"name": j["name"], "queue_seconds": _seconds(j["created_at"], j["started_at"]),
              "run_seconds": _seconds(j["started_at"], j["completed_at"]),
              "runner": "warm" if "self-hosted" in j.get("labels", []) else "cold"} for j in jobs]
-    first = min(j["created_at"] for j in jobs)
-    last = max(j["completed_at"] for j in jobs)
+    wall = _seconds(min(j["created_at"] for j in jobs), max(j["completed_at"] for j in jobs))
     return {"pr": pr, "head": head, "jobs": rows, "queue_seconds": sum(r["queue_seconds"] for r in rows),
-            "run_seconds": sum(r["run_seconds"] for r in rows), "wall_seconds": _seconds(first, last)}
+            "run_seconds": sum(r["run_seconds"] for r in rows), "wall_seconds": wall}
 
 
 def write_part_cost(path, record: dict) -> None:
     """Append one JSON line to the part-cost telemetry file."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with Path(path).open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
@@ -578,8 +581,8 @@ def main(argv: list[str] | None = None) -> int:
     select_parser.add_argument("--head", type=str, default=None, help="Head commit SHA")
     select_parser.add_argument("--files", nargs="*", default=None, help="Explicit list of files")
     entry_parser = subparsers.add_parser("entry-set", help="the entry set of a part head; --run executes it")
-    entry_parser.add_argument("--base", required=True)
-    entry_parser.add_argument("--head", required=True)
+    for flag in ("base", "head"):
+        entry_parser.add_argument(f"--{flag}", required=True)
     entry_parser.add_argument("--root", default=".")
     entry_parser.add_argument("--run", action="store_true")
     entry_parser.add_argument("--replay-dir", default="", help="logs of the five-run replay of changed tests")
@@ -599,13 +602,11 @@ def main(argv: list[str] | None = None) -> int:
     select_parser.add_argument("--statuses", default=None, help="JSON list of the commit statuses of the pushed commit")
     select_parser.add_argument("--tree", default="", help="tree id of the pushed commit")
     select_parser.add_argument("--land-creator-id", type=int, default=None, help="id of the land App's bot user")
-    for flag in ("old-head", "new-head", "old-tree", "old-run"):   # reword reuse (reword_evidence)
-        select_parser.add_argument(f"--{flag}", default="", help="previous head, new head, its tree, run record file")
+    for flag in ("old-head", "new-head", "old-tree", "old-run", "old-jobs"):   # reword reuse (reword_evidence)
+        select_parser.add_argument(f"--{flag}", default="", help="previous head, new head, its tree, run and jobs files")
     ci_full_parser = subparsers.add_parser("ci-full")
-    ci_full_parser.add_argument("--run-id", required=True)
-    ci_full_parser.add_argument("--attempt", required=True)
-    ci_full_parser.add_argument("--tested-tree", required=True)
-    ci_full_parser.add_argument("--head-tree", required=True)
+    for flag in ("run-id", "attempt", "tested-tree", "head-tree"):
+        ci_full_parser.add_argument(f"--{flag}", required=True)
 
     gate_parser.add_argument("--needs", type=str, required=True, help="JSON string of needs object")
 
@@ -654,12 +655,13 @@ def main(argv: list[str] | None = None) -> int:
                 if args.event == "push":
                     evidence = landing_evidence(statuses, args.tree, args.land_creator_id)
                 else:
-                    run = json.loads(Path(args.old_run).read_text(encoding="utf-8")) if args.old_run else {}
-                    evidence = reword_evidence(statuses, run, args.old_head, args.new_head, args.old_tree, args.tree)
+                    run, jobs = (json.loads(Path(f).read_text(encoding="utf-8")) if f else {} for f in (args.old_run, args.old_jobs))
+                    evidence = reword_evidence(statuses, run, args.old_head, args.new_head, args.old_tree, args.tree,
+                                               jobs.get("jobs", []) if isinstance(jobs, dict) else jobs)
             except (OSError, ValueError):
                 evidence = None  # an unreadable record is no evidence: the full suite runs
-        if evidence:
-            selection = {s: False for s in SUITES} | {"full": False}
+        if evidence:   # a reuse on a pull request keeps full=true: ci-gate still verifies a computed GO
+            selection = {s: False for s in SUITES} | {"full": args.event == "pull_request"}
         lines = [f"{s}={'true' if selection[s] else 'false'}" for s in SUITES]
         lines.append(f"full={'true' if selection['full'] else 'false'}")
         if evidence:
@@ -688,9 +690,8 @@ def main(argv: list[str] | None = None) -> int:
             if subprocess.run(command, cwd=cwd, env=None if is_cargo else python_env).returncode:
                 print(f"entry-set: FAIL: {' '.join(command[:4])}", file=sys.stderr)
                 failed = 1
-        changed = changed_tests(root, args.base, args.head) if args.run else {}
-        if changed.get("python") or changed.get("rust"):
-            result = replay(root, changed, args.replay_dir or tempfile.mkdtemp(prefix="entry-replay-"))
+        if args.run:   # the receipt of readiness is written even when no test changed
+            result = replay(root, changed_tests(root, args.base, args.head), args.replay_dir or replay_dir(args.head), head=args.head)
             for test in result["flaky"]:
                 print(f"entry-set: FLAKY: {test} (logs {' and '.join(result['logs'][test])})", file=sys.stderr)
             for test in result["failed"]:
@@ -740,10 +741,9 @@ def rust_bound(binaries, load, cores, *, floor=RUST_TIMEOUT):
 def host_load():
     """(1-minute load average, cores); load 0 where the platform has none."""
     try:
-        load = os.getloadavg()[0]
+        return os.getloadavg()[0], os.cpu_count() or 2
     except (OSError, AttributeError):
-        load = 0.0
-    return load, os.cpu_count() or 2
+        return 0.0, os.cpu_count() or 2
 
 
 #: One-minute load per CPU at or above this marks a host busy. The fast-check dispatcher in
