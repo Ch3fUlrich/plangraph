@@ -17,6 +17,7 @@ fn run(key: &str, files: &[&str]) -> Run {
         role: "implement".into(),
         files: files.iter().map(|s| (*s).into()).collect(),
         item_keys: vec![],
+        ..Run::default()
     }
 }
 

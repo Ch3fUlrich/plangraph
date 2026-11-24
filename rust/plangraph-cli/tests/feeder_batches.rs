@@ -414,6 +414,7 @@ fn an_active_batch_run_excludes_open_items_of_every_family_it_holds() {
         status: "running".into(),
         role: "implement".into(),
         files: vec!["src/a.rs".into()],
+        ..Run::default()
     };
     let picked = pick(&ready(items), &[run], &Policy::default()).unwrap();
     assert_eq!(picked.key, "plangraph:GAMMA-1");

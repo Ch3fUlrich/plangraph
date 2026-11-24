@@ -91,11 +91,29 @@ pub struct Run {
     /// Every item of a batch run; empty for a run of one item.
     #[serde(default, deserialize_with = "null_default")]
     pub item_keys: Vec<String>,
+    /// The writer's harness session: kept on the record after an accepted head so a fix round
+    /// resumes it.
+    #[serde(default, deserialize_with = "null_default")]
+    pub session_id: String,
+    /// The writer's checkout; a resumed fix round keeps it.
+    #[serde(default, deserialize_with = "null_default")]
+    pub cwd: String,
 }
 impl Run {
     /// Whether this run works on `key`, as its item or as a member of its batch.
     pub fn holds(&self, key: &str) -> bool {
         self.item_key == key || self.item_keys.iter().any(|k| k == key)
+    }
+    /// An accepted writer has exited and freed its capacity (`writer()` is false) but kept its
+    /// session and checkout: a fix round resumes this run instead of starting a fresh writer.
+    pub fn resumable(&self) -> bool {
+        !self.active()
+            && self.status == "completed"
+            && !self.session_id.is_empty()
+            && !self.cwd.is_empty()
+            && !self.host.is_empty()
+            && self.role != "review"
+            && self.role != "research"
     }
     pub fn active(&self) -> bool {
         !pg_worker_core::run::record::releases_ownership(&self.status)
@@ -109,6 +127,15 @@ impl Run {
     pub fn writer(&self) -> bool {
         !self.diagnostic() && self.active() && self.role != "review" && self.role != "research"
     }
+}
+
+/// The ended writer run whose saved session a fix round for `key` resumes; none while a run
+/// holding `key` is an active writer.
+pub fn fix_session<'a>(runs: &'a [Run], key: &str) -> Option<&'a Run> {
+    if runs.iter().any(|r| r.holds(key) && r.writer()) {
+        return None;
+    }
+    runs.iter().find(|r| r.holds(key) && r.resumable())
 }
 
 fn null_default<'de, D, T>(de: D) -> Result<T, D::Error>
