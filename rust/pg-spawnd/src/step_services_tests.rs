@@ -154,7 +154,10 @@ fn a_batch_runs_to_train_join_through_the_real_actions() {
             vec![run(5, "in_progress", None)],
             vec![
                 run(5, "completed", Some("success")),
-                run(6, "completed", Some("skipped")),
+                CiRun {
+                    name: "lint".into(),
+                    ..run(6, "completed", Some("skipped"))
+                },
             ],
         ],
         5,
@@ -175,8 +178,8 @@ fn a_batch_runs_to_train_join_through_the_real_actions() {
         actions.keeper.0,
         vec![vec!["demo:A".to_owned(), "demo:B".to_owned()]]
     );
-    // The green run the train join consumes is the CI class output, not a made up id.
-    assert_eq!(actions.train.0, vec![(HEAD.to_owned(), 12, 6, 1)]);
+    // The run the train join consumes is the required workflow's passing run.
+    assert_eq!(actions.train.0, vec![(HEAD.to_owned(), 12, 5, 1)]);
 }
 
 #[test]
@@ -477,4 +480,18 @@ fn train_command_without_a_command_fails_with_a_reason() {
         .join(HEAD, 1, 1, 1)
         .unwrap_err()
         .contains("no train join command"));
+}
+
+#[test]
+fn a_required_workflow_that_only_skipped_is_not_green() {
+    let mut actions = services(vec![vec![run(5, "completed", Some("skipped"))]], 5);
+    let error = actions.ci_class(HEAD, 12).unwrap_err();
+    assert!(
+        error.contains("required workflow CI has no passing run"),
+        "{error}"
+    );
+    assert_eq!(
+        actions.ci.1, 1,
+        "waiting longer cannot change a skipped run"
+    );
 }

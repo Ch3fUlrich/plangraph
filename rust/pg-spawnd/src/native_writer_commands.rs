@@ -314,6 +314,7 @@ pub(crate) fn step_host(
     id: &str,
     base: &str,
     findings: PathBuf,
+    steps: PathBuf,
 ) -> Result<StepHost, String> {
     let directory = run_dir(state, id).map_err(|_| "unknown run id")?;
     let path = directory.join("record.json");
@@ -330,7 +331,7 @@ pub(crate) fn step_host(
     host.configure(&request)?;
     let (repo, worktree) = (host.repo.clone(), host.cwd.clone());
     Ok(StepHost {
-        agents: crate::native_writer_steps::AgentSteps::new(host, base.to_owned(), findings),
+        agents: crate::native_writer_steps::AgentSteps::new(host, base.to_owned(), findings, steps),
         repo,
         worktree,
         _owner: owner,

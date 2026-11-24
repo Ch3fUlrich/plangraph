@@ -8,7 +8,8 @@ use crate::native_writer::{quota, Driver};
 use crate::writer_control::STOPPED;
 use pg_spawnd::step_runner::StepActions;
 use pg_worker_core::batch_steps::{
-    CiClass, Claim, FastChecks, Fix, Push, Review, TrainJoin, Verdict, Worktree, Write,
+    BatchSteps, CiClass, Claim, FastChecks, Fix, Push, ResultOf, Review, Step, TrainJoin, Verdict,
+    Worktree, Write,
 };
 use serde_json::Value;
 use std::path::PathBuf;
@@ -17,19 +18,23 @@ pub(crate) struct AgentSteps<D: Driver> {
     pub driver: D,
     /// The base the batch was cut from: a writer turn must commit beyond it.
     pub base: String,
-    /// Where the text of every review is kept, one file per review run, so a fix turn of a
-    /// resumed list still reads the findings its `review` reference names.
+    /// Where every review run is kept, one file per run, so a fix turn of a resumed list
+    /// still reads the findings its `review` reference names.
     pub findings: PathBuf,
+    /// The steps file: the committed rows are the only record of which reviews count. A review
+    /// run kept in `findings` whose row was never saved (a kill in between) is not counted.
+    pub steps: PathBuf,
     /// A usage limit or a stop ends the batch at once: another turn only spends the quota.
     halted: Option<String>,
 }
 
 impl<D: Driver> AgentSteps<D> {
-    pub(crate) fn new(driver: D, base: String, findings: PathBuf) -> Self {
+    pub(crate) fn new(driver: D, base: String, findings: PathBuf, steps: PathBuf) -> Self {
         Self {
             driver,
             base,
             findings,
+            steps,
             halted: None,
         }
     }
@@ -50,30 +55,61 @@ impl<D: Driver> AgentSteps<D> {
         })
     }
 
-    /// The review state that must outlive the process: the last REQUEST_CHANGES review, for
-    /// the delta review of the next round, and the HIGH+MED count of every round, for the
-    /// stop rule.
-    fn state_path(&self, name: &str) -> PathBuf {
-        self.findings.join(name)
+    /// The reviews of the committed rows, oldest first, each with its kept run. The runner
+    /// saves a row only after its action returned, so a review whose row is missing never
+    /// counted toward the stop rule and never became the previous review of a delta.
+    fn committed_reviews(&self) -> Vec<(Verdict, Value)> {
+        let Ok(bytes) = std::fs::read(&self.steps) else {
+            return Vec::new();
+        };
+        let Ok(steps) = serde_json::from_slice::<BatchSteps>(&bytes) else {
+            return Vec::new();
+        };
+        steps
+            .rows
+            .iter()
+            .filter_map(|row| match &row.step {
+                Step::Review {
+                    result: ResultOf::Completed { output },
+                    ..
+                } => Some((output.verdict, self.kept(&output.review)?)),
+                _ => None,
+            })
+            .collect()
     }
 
-    fn previous(&self) -> Option<Value> {
-        let text = std::fs::read_to_string(self.state_path("previous.json")).ok()?;
+    fn kept(&self, run: &str) -> Option<Value> {
+        let text = std::fs::read_to_string(self.findings_path(run).ok()?).ok()?;
         serde_json::from_str(&text).ok()
     }
 
-    fn rounds(&self) -> Vec<(String, u64)> {
-        std::fs::read_to_string(self.state_path("rounds.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str::<Vec<(String, u64)>>(&text).ok())
-            .unwrap_or_default()
+    /// The review the next one is a delta of: the last committed one, when it asked for changes.
+    fn previous(&self) -> Option<Value> {
+        let (verdict, run) = self.committed_reviews().pop()?;
+        matches!(verdict, Verdict::RequestChanges).then_some(run)
     }
 
-    fn keep(&self, name: &str, value: &impl serde::Serialize) -> Result<(), String> {
-        std::fs::create_dir_all(&self.findings).map_err(|err| err.to_string())?;
-        let bytes = serde_json::to_vec(value).map_err(|err| err.to_string())?;
-        std::fs::write(self.state_path(name), bytes)
-            .map_err(|err| format!("review state {name} not kept: {err}"))
+    /// Save what the review admission reads from the writer's record (`base_fresh`): the
+    /// admitted base, the review basis, the exact head and its passed checks, and the previous
+    /// review a delta review starts from.
+    fn publish_review_state(
+        &mut self,
+        head: &str,
+        basis: &crate::native_writer::ReviewBase,
+    ) -> Result<(), String> {
+        let mut record = self.driver.load()?;
+        record["base_admitted"] = serde_json::json!(true);
+        record["base_sha"] = serde_json::json!(basis.base);
+        record["review_base"] = serde_json::json!(basis);
+        record["final_head"] = serde_json::json!(head);
+        record["fast_checks"] = serde_json::json!({"head": head, "status": "passed"});
+        match self.previous() {
+            Some(previous) => record["review"] = previous,
+            None => {
+                record.as_object_mut().map(|fields| fields.remove("review"));
+            }
+        }
+        self.driver.save(&record)
     }
 
     /// The stamp the push may consume: the one this driver wrote for exactly `head`.
@@ -94,7 +130,7 @@ impl<D: Driver> AgentSteps<D> {
         if !plain {
             return Err(format!("review run id {run:?} is not a plain id"));
         }
-        Ok(self.findings.join(format!("{run}.txt")))
+        Ok(self.findings.join(format!("{run}.json")))
     }
 }
 
@@ -138,21 +174,8 @@ impl<D: Driver> StepActions for AgentSteps<D> {
         let id = run["run_id"].as_str().unwrap_or_default();
         let path = self.findings_path(id)?;
         std::fs::create_dir_all(&self.findings).map_err(|err| err.to_string())?;
-        let text = run["text"].as_str().unwrap_or_default().to_owned();
-        std::fs::write(&path, &text).map_err(|err| format!("review text not kept: {err}"))?;
-        match verdict {
-            Verdict::RequestChanges => {
-                let mut rounds = self.rounds();
-                if !rounds.iter().any(|(seen, _)| seen == id) {
-                    rounds.push((id.to_owned(), crate::native_writer::high_med(&text)));
-                }
-                self.keep("rounds.json", &rounds)?;
-                self.keep("previous.json", &run)?;
-            }
-            Verdict::Accept => {
-                let _ = std::fs::remove_file(self.state_path("previous.json"));
-            }
-        }
+        std::fs::write(&path, run.to_string())
+            .map_err(|err| format!("review run not kept: {err}"))?;
         Ok(Review {
             verdict,
             review: id.to_owned(),
@@ -160,11 +183,22 @@ impl<D: Driver> StepActions for AgentSteps<D> {
     }
 
     fn fix(&mut self, head: &str, session: &str, review: &str) -> Result<Fix, String> {
-        let text = std::fs::read_to_string(self.findings_path(review)?)
-            .map_err(|err| format!("findings of review {review} unreadable: {err}"))?;
+        let rounds: Vec<Value> = self
+            .committed_reviews()
+            .into_iter()
+            .filter(|(verdict, _)| matches!(verdict, Verdict::RequestChanges))
+            .map(|(_, run)| run)
+            .collect();
+        let Some(this) = rounds.iter().find(|run| run["run_id"] == review) else {
+            return Err(format!("review {review} is not a recorded review"));
+        };
+        let text = this["text"].as_str().unwrap_or_default().to_owned();
         // The shared round stop rule decides before every fix: no progress, slow progress or
         // the cap ends the batch instead of spending another turn.
-        let counts: Vec<u64> = self.rounds().iter().map(|(_, count)| *count).collect();
+        let counts: Vec<u64> = rounds
+            .iter()
+            .map(|run| crate::native_writer::high_med(run["text"].as_str().unwrap_or_default()))
+            .collect();
         if let Some(reason) = crate::native_writer::round_stop(&counts) {
             return Err(format!("round_stop: {reason}"));
         }
@@ -200,17 +234,17 @@ impl<D: Driver> StepActions for AgentSteps<D> {
     /// The driver's gates write the stamp the review seat reads (the worktree's own git
     /// directory), so one receipt serves checks, review and push.
     fn fast_checks(&mut self, head: &str) -> Result<FastChecks, String> {
-        if let Some(basis) = self.driver.prepare_review(head)? {
-            if basis.head != head {
-                return Err(format!(
-                    "the package was rebased onto a newer main as {}; start the checks again",
-                    basis.head
-                ));
-            }
-        }
+        // The gates read files: they speak for `head` only when the tree is the committed one.
+        self.driver.clean()?;
+        // A main that moved is refused here, before the checkout changes: the step list binds
+        // every later step to this head, so a rebase underneath it would strand them.
+        let basis = self.driver.probe_review_base(head)?;
         self.driver.fast_checks(head)?;
         let stamp = self.driver.stamp_path(head).filter(|path| path.is_file());
         let stamp = stamp.ok_or_else(|| format!("fast checks left no stamp for {head}"))?;
+        if let Some(basis) = basis {
+            self.publish_review_state(head, &basis)?;
+        }
         Ok(FastChecks {
             stamp: stamp.to_string_lossy().into_owned(),
         })

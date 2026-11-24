@@ -27,6 +27,12 @@ struct Fake {
     /// Where stamps are written; fast checks of a fake without one leave none.
     stamp_dir: Option<std::path::PathBuf>,
     prepared: usize,
+    dirty: bool,
+    /// The driver reports a review basis; with `main_moved` it refuses instead.
+    probe: bool,
+    main_moved: bool,
+    record: Value,
+    saved: Vec<Value>,
     /// HIGH finding lines per review text.
     findings: usize,
     /// The base `prepare` resolves, when not BASE.
@@ -96,8 +102,34 @@ impl Driver for Fake {
         self.booked += 1;
         Ok(())
     }
-    fn save(&mut self, _: &Value) -> Result<(), String> {
+    fn save(&mut self, record: &Value) -> Result<(), String> {
+        self.saved.push(record.clone());
         Ok(())
+    }
+    fn clean(&mut self) -> Result<(), String> {
+        if self.dirty {
+            return Err("the worktree differs from the committed tree: tools/gate.py".into());
+        }
+        Ok(())
+    }
+    fn probe_review_base(
+        &mut self,
+        head: &str,
+    ) -> Result<Option<crate::native_writer::ReviewBase>, String> {
+        match (self.probe, self.main_moved) {
+            (false, _) => Ok(None),
+            (true, true) => Err("origin/main moved since the base was pinned".into()),
+            (true, false) => Ok(Some(crate::native_writer::ReviewBase {
+                head: head.into(),
+                base: BASE.into(),
+                main: sha('5'),
+                observed_main: sha('5'),
+                mode: "current",
+            })),
+        }
+    }
+    fn load(&mut self) -> Result<Value, String> {
+        Ok(self.record.clone())
     }
 }
 
@@ -145,18 +177,57 @@ impl StepActions for Stack {
     }
 }
 
-struct Keep(Vec<String>);
+/// Keeps the step names, and the list in the steps file like the subcommand does.
+struct Keep(Vec<String>, pg_spawnd::step_runner_log::StepLog);
 
 impl StageSink for Keep {
     fn record(&mut self, steps: &BatchSteps) -> Result<(), String> {
         self.0
             .push(step_name(&steps.rows.last().unwrap().step).to_owned());
-        Ok(())
+        self.1.record(steps)
     }
 }
 
+/// What the runner does after a review action returns: save the row.
+fn commit(steps_path: &std::path::Path, head: &str, review: &Review) {
+    let mut list: BatchSteps = std::fs::read(steps_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(BatchSteps {
+            version: 1,
+            repo: "demo/repo".into(),
+            batch_key: "b".into(),
+            rows: Vec::new(),
+        });
+    let at = list.rows.len() as i64;
+    list.rows.push(StepAttempt {
+        step: Step::Review {
+            head: head.into(),
+            stamp: "stamp".into(),
+            result: ResultOf::Completed {
+                output: Review {
+                    verdict: review.verdict,
+                    review: review.review.clone(),
+                },
+            },
+        },
+        stage: Stage {
+            step_index: list.rows.len(),
+            attempt: 1,
+            started_at_ms: at,
+            ended_at_ms: at,
+        },
+    });
+    std::fs::write(steps_path, serde_json::to_vec(&list).unwrap()).unwrap();
+}
+
 fn agents(fake: Fake, dir: &std::path::Path) -> AgentSteps<Fake> {
-    AgentSteps::new(fake, BASE.into(), dir.join("findings"))
+    AgentSteps::new(
+        fake,
+        BASE.into(),
+        dir.join("findings"),
+        dir.join("steps.json"),
+    )
 }
 
 fn brief(dir: &std::path::Path) -> String {
@@ -181,7 +252,15 @@ fn the_runner_drives_write_review_fix_review_over_the_driver() {
         brief: brief(dir.path()),
     };
     let mut runner = Runner::new(inputs, Limits::default());
-    let mut sink = Keep(Vec::new());
+    let mut sink = Keep(
+        Vec::new(),
+        pg_spawnd::step_runner_log::StepLog {
+            path: dir.path().join("steps.json"),
+            journal_repo: None,
+            item_keys: vec![],
+            base: BASE.into(),
+        },
+    );
     let mut now = 0;
     let outcome = runner.run(&mut stack, &mut sink, &mut || {
         now += 1;
@@ -284,7 +363,12 @@ fn a_review_on_another_head_is_no_verdict() {
             Ok(())
         }
     }
-    let mut steps = AgentSteps::new(Moved(Fake::default()), BASE.into(), dir.path().join("f"));
+    let mut steps = AgentSteps::new(
+        Moved(Fake::default()),
+        BASE.into(),
+        dir.path().join("f"),
+        dir.path().join("steps.json"),
+    );
     let error = steps.review(&sha('1'), "stamp").unwrap_err();
     assert!(error.contains("another head"), "{error}");
 }
@@ -295,6 +379,7 @@ fn a_fix_that_changes_nothing_fails() {
     let mut steps = agents(
         Fake {
             no_commit: true,
+            verdicts: vec!["REQUEST_CHANGES"],
             heads: vec![sha('1')],
             stamped: vec![sha('1')],
             ..Fake::default()
@@ -302,6 +387,7 @@ fn a_fix_that_changes_nothing_fails() {
         dir.path(),
     );
     let review = steps.review(&sha('1'), "stamp").unwrap();
+    commit(&steps.steps, &sha('1'), &review);
     let error = steps
         .fix(&sha('1'), "writer-session", &review.review)
         .unwrap_err();
@@ -318,7 +404,7 @@ fn a_fix_of_a_review_that_was_never_kept_fails_without_a_turn() {
     let dir = tempfile::tempdir().unwrap();
     let mut steps = agents(Fake::default(), dir.path());
     let error = steps.fix(&sha('1'), "s", "run-missing").unwrap_err();
-    assert!(error.contains("unreadable"), "{error}");
+    assert!(error.contains("not a recorded review"), "{error}");
     assert!(steps.driver.turns.is_empty());
 }
 
@@ -411,7 +497,9 @@ fn changes(steps: &mut AgentSteps<Fake>, head: &str, count: usize) -> Review {
     steps.driver.stamped.push(head.into());
     steps.driver.verdicts = vec!["REQUEST_CHANGES"];
     steps.driver.findings = count;
-    steps.review(head, "stamp").unwrap()
+    let review = steps.review(head, "stamp").unwrap();
+    commit(&steps.steps, head, &review);
+    review
 }
 
 #[test]
@@ -423,7 +511,8 @@ fn the_previous_review_survives_a_restart_for_the_delta_review() {
     // A new process: the adapter and the driver are new, the findings directory is the same.
     let mut second = agents(Fake::default(), dir.path());
     second.driver.stamped.push(sha('2'));
-    second.review(&sha('2'), "stamp").unwrap();
+    let accepted = second.review(&sha('2'), "stamp").unwrap();
+    commit(&second.steps, &sha('2'), &accepted);
     let previous = second.driver.reviews[0].1.as_ref().expect("a delta review");
     assert_eq!(previous["head"], head.as_str());
     assert!(previous["text"].as_str().unwrap().contains("HIGH a.rs:1"));
@@ -472,4 +561,111 @@ fn the_eighth_round_is_the_last_even_when_every_round_improves() {
         steps.fix(&head, "s", &id).unwrap_err(),
         "round_stop: round_cap"
     );
+}
+
+#[test]
+fn a_review_killed_before_its_row_does_not_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = agents(Fake::default(), dir.path());
+    let first = changes(&mut steps, &sha('b'), 2);
+    // A second review ran and was kept, but the process died before the runner saved its row.
+    steps.driver.stamped.push(sha('c'));
+    steps.driver.verdicts = vec!["REQUEST_CHANGES"];
+    steps.review(&sha('c'), "stamp").unwrap();
+    // After the restart the reviews on record are the first alone: it is the delta base, and
+    // the stop rule sees one round, not two.
+    let mut again = agents(Fake::default(), dir.path());
+    again.driver.stamped.push(sha('d'));
+    again.review(&sha('d'), "stamp").unwrap();
+    assert_eq!(
+        again.driver.reviews[0].1.as_ref().unwrap()["head"],
+        sha('b').as_str()
+    );
+    assert!(again.fix(&sha('b'), "s", &first.review).is_ok());
+}
+
+fn stamping(dir: &std::path::Path, fake: Fake) -> AgentSteps<Fake> {
+    agents(
+        Fake {
+            stamp_dir: Some(dir.to_owned()),
+            ..fake
+        },
+        dir,
+    )
+}
+
+#[test]
+fn a_tree_that_differs_from_the_commit_gets_no_gates_and_no_stamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = stamping(
+        dir.path(),
+        Fake {
+            dirty: true,
+            ..Fake::default()
+        },
+    );
+    let error = steps.fast_checks(&sha('1')).unwrap_err();
+    assert!(error.contains("differs from the committed tree"), "{error}");
+    assert!(steps.driver.stamped.is_empty(), "the gates did not run");
+    assert!(!dir.path().join(sha('1')).exists());
+}
+
+#[test]
+fn a_main_that_moved_is_refused_before_any_gate_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = stamping(
+        dir.path(),
+        Fake {
+            probe: true,
+            main_moved: true,
+            ..Fake::default()
+        },
+    );
+    let error = steps.fast_checks(&sha('1')).unwrap_err();
+    assert!(error.contains("moved"), "{error}");
+    assert!(steps.driver.stamped.is_empty());
+    assert!(
+        steps.driver.saved.is_empty(),
+        "nothing was published for the head"
+    );
+}
+
+#[test]
+fn the_review_admission_fields_are_published_before_the_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = stamping(
+        dir.path(),
+        Fake {
+            probe: true,
+            record: json!({"run_id": "run-x", "status": "running", "base_sha": sha('9')}),
+            ..Fake::default()
+        },
+    );
+    let head = sha('1');
+    steps.fast_checks(&head).unwrap();
+    let saved = &steps.driver.saved[0];
+    assert_eq!(saved["base_admitted"], true);
+    assert_eq!(saved["base_sha"], BASE, "the base the review basis names");
+    assert_eq!(saved["final_head"], head.as_str());
+    assert_eq!(
+        saved["fast_checks"],
+        json!({"head": head, "status": "passed"})
+    );
+    assert_eq!(saved["review_base"]["mode"], "current");
+    assert_eq!(saved["review_base"]["head"], head.as_str());
+    assert_eq!(saved["run_id"], "run-x", "the rest of the record is kept");
+    assert!(
+        saved.get("review").is_none(),
+        "no round yet, so no delta base"
+    );
+
+    // After a round that asked for changes the next head's record carries it as the delta base.
+    changes(&mut steps, &head, 1);
+    let next = sha('2');
+    steps.fast_checks(&next).unwrap();
+    assert_eq!(
+        steps.driver.saved[1]["review"]["verdict"],
+        "REQUEST_CHANGES"
+    );
+    assert_eq!(steps.driver.saved[1]["review"]["head"], head.as_str());
 }
