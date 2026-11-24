@@ -29,7 +29,7 @@ READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "jev_report", "write_context", "events", "attempts", "spawn_attempt_coverage"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "claim_batch", "delegate", "heartbeat", "heartbeat_batch", "release",
-               "add_evidence", "add_evidence_router", "incident", "submit", "verdict",
+               "add_evidence", "add_evidence_router", "incident", "reconfirm", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "grant_apply", "revoke_apply",

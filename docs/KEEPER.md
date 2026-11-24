@@ -137,6 +137,12 @@ token overlap of title+description, files when both name them, threshold 0.6, sa
 copy with the matching keys until each is answered `similar={KEY: supersedes|depends_on|distinct}`; the answer is stored in the
 `item_created` event. A legacy import only warns.
 
+**Premise precision (KEEPER-STALE-PREMISE-PRECISION).** The premise gate ignores a newer decision that is the item's own `source`, whose
+row orders, GOes or defines the item without a scope word, or whose `(HH:MMZ` stamp lies within 2 h after the define (id within 150 of the
+counter then; the log has no class column or session, so the rows are read by text). `reconfirm KEY D-NNN` records, as an audited
+`item_defined` event with no field change, that the premise was read against that decision: it clears `newer_decisions` and retired premises
+up to it. `alerts` reports `force_stale_claims` in the alert window.
+
 ## Verbs (Store) — role rules, state machine, errors
 Every verb: authenticate → authorise → validate → one transaction (event + cache + edges) → audit_log row (ok or refused).
 Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, bad_transition, locked, epoch_stale, lease_held, cycle, validation,
