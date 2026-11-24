@@ -95,17 +95,21 @@ fn po_ref(branch: &str) -> String {
     format!("refs/po/{branch}")
 }
 
-/// Git that talks to the remote: the caller's own environment (credentials), no prompts.
-fn plain(dir: &Path) -> Command {
+/// Git that talks to the remote: the caller's own environment (credentials, hook configuration), no prompts,
+/// but never the caller's repository variables (GIT_DIR, GIT_INDEX_FILE ...): it works in `dir` only.
+pub(super) fn plain(dir: &Path) -> Result<Command, String> {
     let mut c = Command::new("git");
     c.current_dir(dir)
         .env("LC_ALL", "C")
         .env("GIT_TERMINAL_PROMPT", "0");
-    c
+    for variable in git::out(dir, &["rev-parse", "--local-env-vars"])?.lines() {
+        c.env_remove(variable);
+    }
+    Ok(c)
 }
 
 fn plain_run(dir: &Path, args: &[&str]) -> Result<(), String> {
-    let o = plain(dir)
+    let o = plain(dir)?
         .args(args)
         .output()
         .map_err(|e| format!("git {args:?}: {e}"))?;
@@ -161,7 +165,7 @@ fn writers(dir: &Path, commit: &str) -> Result<String, String> {
 }
 
 /// Held while a ref of this clone is pushed: two pushes of one clone never run at the same time.
-fn push_lock(repo: &Path) -> Result<std::fs::File, String> {
+pub(super) fn push_lock(repo: &Path) -> Result<std::fs::File, String> {
     let common = git::out(
         repo,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -190,8 +194,17 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
     let onto = match git::out(repo, &["rev-parse", "--verify", &onto_spec]) {
         Ok(sha) => sha,
         Err(_) => {
-            // The new main may not be fetched yet; only the commit is needed, no ref is moved.
-            plain_run(repo, &["fetch", "--no-tags", l.remote, l.onto])?;
+            // The new main may not be fetched yet; only the commit is needed: no ref and no FETCH_HEAD is written.
+            plain_run(
+                repo,
+                &[
+                    "fetch",
+                    "--no-tags",
+                    "--no-write-fetch-head",
+                    l.remote,
+                    l.onto,
+                ],
+            )?;
             git::out(repo, &["rev-parse", "--verify", &onto_spec])?
         }
     };
@@ -202,6 +215,7 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
         &[
             "fetch",
             "--no-tags",
+            "--no-write-fetch-head",
             l.remote,
             &format!("+refs/heads/{}:{tracking}", l.branch),
         ],

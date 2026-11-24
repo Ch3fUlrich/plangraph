@@ -106,6 +106,8 @@ fn two_lanes_relaned_in_parallel_in_one_clone_keep_only_their_own_commits() {
     assert!(a.patch_ids_equal && b.patch_ids_equal);
     assert_eq!((a.own_before, a.own_after), (1, 1));
     assert_ne!(a.old_head, a.new_head);
+    // Neither the lane fetches nor the fetch of the new main touched FETCH_HEAD.
+    assert!(!fx.work.join(".git/FETCH_HEAD").exists());
     // The remote lanes themselves were not moved: the new head is a new branch.
     assert_eq!(g(&fx.origin, &["rev-parse", "lane/one-r1"]), a.old_head);
 }
@@ -230,4 +232,57 @@ fn next_branch_counts_up() {
     assert_eq!(next_branch("lane/x-r4"), "lane/x-r5");
     assert_eq!(next_branch("lane/x"), "lane/x-r2");
     assert_eq!(next_branch("lane/x-rest"), "lane/x-rest-r2");
+}
+
+#[test]
+fn remote_git_never_inherits_the_callers_repository_variables() {
+    let fx = Fx::new();
+    let cmd = super::relane::plain(&fx.work).unwrap();
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
+        assert!(
+            cmd.get_envs().any(|(k, v)| k == var && v.is_none()),
+            "{var} is not removed"
+        );
+    }
+}
+
+/// A pre-push hook that notes when two pushes of the clone are inside it at once.
+#[cfg(unix)]
+#[test]
+fn pushes_of_one_clone_never_overlap() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::new();
+    fx.lane("lane/one-r1", "w-one", &[("a.txt", "one\n2\n3\n")]);
+    fx.lane("lane/two-r1", "w-two", &[("b.txt", "1\ntwo\n3\n")]);
+    let onto = fx.advance("c.txt", "1\n2\nmain\n");
+    let marks = fx.work.join(".git/marks");
+    std::fs::create_dir_all(&marks).unwrap();
+    let hook = fx.work.join(".git/hooks/pre-push");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nm='{}'\nmkdir \"$m/busy\" 2>/dev/null || touch \"$m/overlap\"\nsleep 0.4\nrmdir \"$m/busy\" 2>/dev/null\ntouch \"$m/ran-$$\"\n",
+            marks.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::thread::scope(|s| {
+        let a = s.spawn(|| relane(&fx.input("lane/one-r1", &onto)).unwrap());
+        let b = s.spawn(|| relane(&fx.input("lane/two-r1", &onto)).unwrap());
+        rebased(a.join().unwrap());
+        rebased(b.join().unwrap());
+    });
+    let ran = std::fs::read_dir(&marks)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("ran-")
+        })
+        .count();
+    assert_eq!(ran, 2, "both pushes went through the hook");
+    assert!(!marks.join("overlap").exists(), "two pushes ran at once");
 }
