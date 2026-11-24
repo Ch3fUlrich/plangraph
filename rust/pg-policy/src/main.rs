@@ -250,9 +250,10 @@ fn class_search(args: &[String]) -> Result<Vec<String>, String> {
         }
         revisions.iter().map(String::as_str).collect()
     };
-    let format =
-        Regex::new(r"^Class-Search: (?:([0-9a-f]{8}) )?(\S.*) -> ([0-9]+) hits, ([0-9]+) changed$")
-            .unwrap();
+    let format = Regex::new(
+        r"^Class-Search: (?:([0-9a-f]{8}) )?(\S.*) -> ([0-9]+) hits?, ([0-9]+) changed$",
+    )
+    .unwrap();
     let resolution = Regex::new(r"^Train [0-9]+: resolve(?:\s|$)").unwrap();
     let valid_counts = |fields: &regex::Captures<'_>| {
         let hits = fields[3].parse::<usize>();
@@ -299,7 +300,10 @@ fn class_search(args: &[String]) -> Result<Vec<String>, String> {
         let detail = if malformed.is_empty() {
             String::new()
         } else {
-            format!(": {}", malformed.join("; "))
+            format!(
+                ": {}; expected `Class-Search: <pattern> -> <n> hits, <m> changed` (`hit` for 1, nothing after `changed`, m <= n)",
+                malformed.join("; ")
+            )
         };
         findings.push(format!(
             "{sha}: missing or invalid Class-Search in fix commit body or a later commit on HEAD{detail}"
