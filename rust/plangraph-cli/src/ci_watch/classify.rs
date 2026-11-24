@@ -25,7 +25,9 @@ pub enum Action {
     RerunOnce,
     /// A machine-applicable fix, committed by the watcher with the given `Hand-Edit` trailer line.
     AutoFix {
-        command: &'static str,
+        command: &'static [&'static str],
+        /// Directory, below the repository root, the command runs in.
+        dir: &'static str,
         trailer: String,
     },
     /// A narrow fix writer started from the class, the job and its log lines.
@@ -157,10 +159,15 @@ pub fn classify_job(job: &str, log: &str, known_flake: bool) -> RedClass {
     let lower = log.to_ascii_lowercase();
     let name = job.to_ascii_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|n| lower.contains(n));
-    if has(INFRASTRUCTURE) {
+    // A log that names failing tests is a code failure even when the test prints a network or tool phrase.
+    let names_tests = log.contains(" FAILED ")
+        || log.contains("... FAILED")
+        || lower.contains("panicked at")
+        || lower.contains("test result: failed");
+    if !names_tests && has(INFRASTRUCTURE) {
         return RedClass::Infrastructure;
     }
-    if has(CONFIGURATION) {
+    if !names_tests && has(CONFIGURATION) {
         return RedClass::Configuration;
     }
     let clippy = lints(log);
@@ -183,7 +190,6 @@ pub fn classify_job(job: &str, log: &str, known_flake: bool) -> RedClass {
     if lower.contains("missing writer trailer")
         || lower.contains("malformed writer trailer")
         || lower.contains("missing plan-item")
-        || (name.contains("changelog") && lower.contains("changelog: skip"))
     {
         return RedClass::MissingTrailer;
     }
@@ -221,6 +227,16 @@ pub fn classify_run(classes: &[RedClass]) -> RedClass {
     }
 }
 
+/// The lines a fix task and a failure record carry so a writer starts where the class says: the job class, the
+/// run class, where to look first and the failed job id. Empty for a row that has no class.
+pub fn brief_lines(class: &str, run_class: &str, job_id: u64) -> String {
+    if class.is_empty() {
+        return String::new();
+    }
+    let start = RedClass::from_name(class).map_or("the log lines below", RedClass::start_at);
+    format!("Class: {class} (run: {run_class})\nStart at: {start}\nFailed job id: {job_id}\n")
+}
+
 /// Line a commit made for this job carries: the gate's `Hand-Edit` form naming the class and the job id.
 pub fn hand_edit_trailer(class: RedClass, job_id: u64) -> String {
     format!(
@@ -243,10 +259,11 @@ pub fn decide(
         RedClass::Fmt | RedClass::Clippy if !fixed.contains(&(head.to_owned(), class)) => {
             Action::AutoFix {
                 command: if class == RedClass::Fmt {
-                    "cargo fmt --all"
+                    &["cargo", "fmt", "--all"]
                 } else {
-                    "cargo clippy --fix --allow-dirty --all-targets"
+                    &["cargo", "clippy", "--fix", "--allow-dirty", "--all-targets"]
                 },
+                dir: "rust",
                 trailer: hand_edit_trailer(class, job_id),
             }
         }

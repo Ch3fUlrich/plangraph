@@ -88,11 +88,13 @@ fn run_class_is_mixed_when_jobs_differ() {
 #[test]
 fn mechanical_class_is_fixed_once_per_head_and_the_commit_names_the_job() {
     let mut fixed = no_fixes();
-    let Action::AutoFix { command, trailer } = decide(RedClass::Fmt, "pr-9", 77, false, &fixed)
+    let Action::AutoFix {
+        command, trailer, ..
+    } = decide(RedClass::Fmt, "pr-9", 77, false, &fixed)
     else {
         panic!("fmt is mechanical")
     };
-    assert_eq!(command, "cargo fmt --all");
+    assert_eq!(command, ["cargo", "fmt", "--all"]);
     assert!(
         trailer.starts_with("Hand-Edit: ") && trailer.contains("job 77"),
         "{trailer}"
@@ -143,4 +145,28 @@ fn infrastructure_brief_starts_at_the_runner_not_the_code() {
         .start_at()
         .contains("not the batch's code"));
     assert!(RedClass::Configuration.start_at().contains("workflow"));
+}
+
+#[test]
+fn a_changelog_job_that_prints_the_skip_success_line_is_not_a_trailer_failure() {
+    let log =
+        "changelog: skip used by 4aba1166 (fixture text only)\nFAIL: docs map missing an entry";
+    assert_eq!(
+        classify_job("Changelog fragment and docs", log, false),
+        RedClass::Unknown
+    );
+}
+
+#[test]
+fn a_log_that_names_failing_tests_is_code_even_with_a_network_phrase() {
+    let log = "test net::tests::retry ... FAILED\nHTTP 503 from the mock server";
+    assert_eq!(classify_job("Rust", log, false), RedClass::Code);
+}
+
+#[test]
+fn the_brief_lines_carry_class_run_class_job_and_start() {
+    let text = brief_lines("configuration", "mixed", 9);
+    assert!(text.contains("Class: configuration (run: mixed)"));
+    assert!(text.contains("Failed job id: 9") && text.contains("workflow"));
+    assert_eq!(brief_lines("", "", 0), "");
 }
