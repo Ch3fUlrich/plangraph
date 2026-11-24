@@ -1,0 +1,1 @@
+- The disk guard's main-checkout `rust/target` sweep keeps a pinned or live target and a target owned by another user, like the private-target sweep; only an idle, owned, marker-identified target is removed (checkout-root pins and symlinked ancestors still allow sweeping).
