@@ -65,3 +65,18 @@ request timeline (`reopened`, `renamed`). A same-head cause with no timeline eve
 The "newer push" rows (23) confirm the likely cause. Thirteen runs have a different one: a train pull request was closed and reopened
 (or edited) on the same head, which starts a run that cancels the one in flight. Who closes and reopens is
 not read from the data (one account does every action). A follow-up item covers it (CI-REOPEN-CANCELS-LANDING-RUN in the batch slices).
+
+## Query
+
+Exported on 2026-11-24 (the runs are the GitHub Actions runs of workflow `tests`):
+
+```sh
+gh api --paginate 'repos/<owner>/<repo>/actions/runs?status=cancelled&created=>=2026-11-21T19:00:00Z&per_page=100' \
+  --jq '.workflow_runs[] | select(.head_branch|startswith("land/")) | .id'
+```
+
+returned 36 run ids, the 36 rows above; the same query without the branch filter returned 41. Each row's cause
+comes from the jobs of the run (`actions/runs/<id>/jobs`, latest cancelled job end) and from the pull request timeline
+(`issues/<pr>/timeline`, events `reopened` and `renamed`). The follow-up item is proposed as
+`plangraph:CI-REOPEN-CANCELS-LANDING-RUN` in the batch slices (`~/.local/state/po/<batch>.slices.json`, keeper define
+form); it has a registered keeper key only after the orchestrator defines it.

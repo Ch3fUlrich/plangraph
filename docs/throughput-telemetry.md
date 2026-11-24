@@ -62,4 +62,8 @@ items, items landed and batches merged per UTC hour. A landing database without 
 reports it null, and `attempts` is null when `ci_reruns` is. Red runs, one row per batch and fix rounds by cause are not in the landing row and stay unread (slice THROUGHPUT-BATCH-ROWS).
 Quota rows (`throughput_quota_window`) hold provider, account, window, the percent and the reset the snapshot
 names; a missing reset or a stale snapshot is null. Rows an earlier collector wrote to `throughput_quota_hourly`
-and `throughput_accept` are no longer read.
+and `throughput_accept` are carried into the new tables by the next collection (`INSERT OR IGNORE`, the old tables
+stay), and a report made before that collection reads them from the old tables. Each part row also names its train:
+the landed SHA it arrives under in PR-merge mode, else the next landed SHA on main, because a tested fast-forward
+brings the parts' merges under SHAs of their own before the landed head. Hourly counts of items landed and batches
+merged stop at the hour's observed end (`through`), so a landing after a partial-hour cutoff is not counted.
