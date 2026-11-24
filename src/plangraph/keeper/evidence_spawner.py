@@ -49,8 +49,10 @@ def _tests_reported(text):
             fence = None if fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) else fence or marker[1]
         elif fence is None and line.startswith("TESTS:"):
             body = line[6:].strip().lower()
+    zero = re.search(r"\b0\s+(?:passed|failed|selected|collected|ran|tests?)\b|\bno tests\b", body or "")
     return bool(body) and not re.search(r"requires approval|not permitted|denied|disallowed", body) \
-        and not re.match(r"(?:none|no|not|n/a|skipped|could not|cannot|can not|did not)\b", body)
+        and not re.match(r"(?:none|no|not|n/a|skipped|could not|cannot|can not|did not)\b", body) \
+        and not (zero and not re.search(r"\b[1-9][0-9]*\s+(?:passed|failed|selected|collected|ran|tests?)\b", body))
 
 
 def _recorded_harness_seat(record, completion, text, head):
