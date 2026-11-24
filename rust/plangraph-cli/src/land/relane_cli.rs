@@ -139,13 +139,11 @@ fn lane_stem(branch: &str) -> &str {
     }
 }
 
-/// `text` holds `stem` as a whole lane name: not inside a longer one (`alpha` is not in `alpha-extra`).
-fn names_lane(text: &str, stem: &str) -> bool {
-    let name = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.';
-    text.match_indices(stem).any(|(at, _)| {
-        !text[..at].chars().next_back().is_some_and(name)
-            && !text[at + stem.len()..].chars().next().is_some_and(name)
-    })
+/// The lane name in a `Writer` value such as `claude-x uuid (high writer NAME, Claude Code, host, D-1)`: the
+/// field after `writer`, not any word of the value (a host or a family can equal another lane's name).
+fn writer_lane(writer: &str) -> Option<&str> {
+    let (_, rest) = writer.rsplit_once(" writer ")?;
+    Some(rest.split([',', ')']).next()?.trim())
 }
 
 /// The `Writer` trailer value of the lane's newest commit that has one (a merge of main has none), when it
@@ -162,7 +160,7 @@ fn writer_of(pr: &Pr) -> String {
                 .find_map(|l| l.strip_prefix("Writer: "))
         })
         .map(str::trim)
-        .filter(|w| names_lane(w, lane_stem(&pr.head_ref_name)))
+        .filter(|w| writer_lane(w) == Some(lane_stem(&pr.head_ref_name)))
         .unwrap_or("")
         .to_owned()
 }

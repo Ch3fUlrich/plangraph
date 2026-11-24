@@ -132,12 +132,12 @@ them into a keeper table needs a keeper schema step that is not part of this cha
 `plangraph land-train relane-open --repo DIR --github OWNER/NAME --remote NAME --merge SHA --push true` runs first in the final
 `cleanup` step of the keeper settlement journal, and after a landing without the journal too. It fetches main (the merge must be
 on it) and relanes every open `lane/` pull request onto that tip. A lane's recorded head is its PR head; its recorded writer is the
-newest `Writer` trailer of the PR that names the lane as a whole name (the lane name comes from the branch, so a lane holding
-only another lane's commits, or a longer name that contains it, has none and is refused). `relane --repo DIR --remote NAME --onto SHA --spec FILE [--push true]` takes a JSON array
+newest `Writer` trailer of the PR that names the lane in its `writer NAME` field (the lane name comes from the branch, so a lane holding
+only another lane's commits has none and is refused, whatever its other fields say). `relane --repo DIR --remote NAME --onto SHA --spec FILE [--push true]` takes a JSON array
 of `{branch, head, writer, parent: {branch, head} | null}`, parents first (rust/plangraph-cli/src/land/relane*.rs). One lane after
 the other, each is fetched into `refs/po/fetch/<lane>` (never FETCH_HEAD; results go to `refs/po/result/<next>`) and rebased in a
 worktree of its own with `--empty=drop`: a patch already on main is dropped, not a conflict. The new head is pushed as the next
-`-rN` branch under a per-clone push lock; a successor an earlier run pushed is adopted (`CURRENT`) only when it holds the lane's own patches on the new main; one that predates the new main is passed over for the next free `-rN`, and one that matches neither is refused. A stacked
+`-rN` branch under a per-clone push lock; a successor an earlier run pushed is adopted (`CURRENT`, with the same old head, new head, patch-id and count record) only when its tree equals the fresh result, with no merge and no commit more or less; one that predates the new main is passed over for the next free `-rN` (20 names), and one that is neither is refused. A stacked
 child replays only what follows its parent's recorded head, onto the parent's new head. Result lines: `REBASED` (old head, new
 head, `patch_ids_equal`, own commit counts: the record for the seat evidence rule, which moves the probe PR and decides the seat
 re-run), `CURRENT`, `CONFLICT <lane> <files>` (the lane is untouched), `REFUSED` (head not the recorded one, no writer naming the

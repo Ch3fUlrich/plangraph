@@ -1,0 +1,1 @@
+`land-train relane` adopts a pushed successor only when its tree equals the fresh result with no merge or extra commit, scans 20 successor names and adopts the last on retry, prints the full record for `CURRENT` too, and takes a lane's writer only from the `writer NAME` field of the trailer; `land-train cut` has a test where git itself does not parse the hidden `Gate-Edit`.

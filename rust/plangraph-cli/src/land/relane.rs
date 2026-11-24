@@ -41,6 +41,26 @@ pub struct Report {
     pub pushed: Option<String>,
 }
 
+impl Report {
+    /// `old -> new`, patch-id equality, own commit counts and the successor branch: what a later step needs
+    /// whether this run pushed the successor or an earlier one did.
+    fn record(&self) -> String {
+        format!(
+            "{} {} -> {} patch_ids_equal={} own {}->{}{}",
+            self.lane,
+            self.old_head,
+            self.new_head,
+            self.patch_ids_equal,
+            self.own_before,
+            self.own_after,
+            self.pushed
+                .as_ref()
+                .map(|p| format!(" pushed {p}"))
+                .unwrap_or_default()
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// The lane already contains the new main: nothing to rebase.
@@ -65,20 +85,8 @@ pub enum Outcome {
 impl Outcome {
     pub fn line(&self) -> String {
         match self {
-            Outcome::Current(r) => format!("CURRENT {} {}", r.lane, r.new_head),
-            Outcome::Rebased(r) => format!(
-                "REBASED {} {} -> {} patch_ids_equal={} own {}->{}{}",
-                r.lane,
-                r.old_head,
-                r.new_head,
-                r.patch_ids_equal,
-                r.own_before,
-                r.own_after,
-                r.pushed
-                    .as_ref()
-                    .map(|p| format!(" pushed {p}"))
-                    .unwrap_or_default()
-            ),
+            Outcome::Current(r) => format!("CURRENT {}", r.record()),
+            Outcome::Rebased(r) => format!("REBASED {}", r.record()),
             Outcome::Conflict { lane, files } => {
                 format!("CONFLICT {lane} {}", files.join(" "))
             }
@@ -232,35 +240,44 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
         );
     }
     let equal = patch_ids(repo, &own_range)? == patch_ids(repo, &format!("{onto}..{new}"))?;
-    // The first free successor name: a successor an earlier run pushed is adopted when it is that run's result
-    // on this main; one that predates the new main is passed over, never overwritten.
+    // The first free successor name among MAX_SUCCESSORS: a successor an earlier run pushed is adopted when it is
+    // exactly that run's result on this main; one that predates the new main is passed over, never overwritten.
     let mut target = next_branch(l.branch);
+    let mut free = !l.push;
     for _ in 0..MAX_SUCCESSORS {
-        if !l.push {
+        if free {
             break;
         }
         let Some(tip) = remote_branch(repo, l.remote, &target)? else {
+            free = true;
             break;
         };
-        if git::is_ancestor(repo, &onto, &tip)? {
-            let theirs = own_commits(repo, &format!("{onto}..{tip}"))?;
-            let same = !theirs.is_empty()
-                && foreign(repo, &theirs, l.writer)?.is_none()
-                && patch_ids(repo, &format!("{onto}..{tip}"))?
-                    == patch_ids(repo, &format!("{onto}..{new}"))?;
-            if !same {
-                return refuse(
-                    l.branch,
-                    format!("{target} holds none of this lane's own patches on the new main"),
-                );
-            }
-            let r = report(l, &old, &tip, equal, &before, &theirs, Some(target));
-            return Ok(Outcome::Current(r));
+        if !git::is_ancestor(repo, &onto, &tip)? {
+            target = next_branch(&target);
+            continue;
         }
-        target = next_branch(&target);
+        let theirs = own_commits(repo, &format!("{onto}..{tip}"))?;
+        // Patch ids ignore whitespace and cannot tell a call inside a conditional from one outside it: the
+        // trees must be equal, with no merge and no commit more or less than the fresh result has.
+        let exact = theirs.len() == after.len()
+            && foreign(repo, &theirs, l.writer)?.is_none()
+            && git::out(repo, &["rev-list", "--merges", &format!("{onto}..{tip}")])?.is_empty()
+            && git::out(repo, &["rev-parse", &format!("{tip}^{{tree}}")])?
+                == git::out(repo, &["rev-parse", &format!("{new}^{{tree}}")])?;
+        if !exact {
+            return refuse(
+                l.branch,
+                format!("{target} is not this lane's result on the new main"),
+            );
+        }
+        let r = report(l, &old, &tip, equal, &before, &theirs, Some(target));
+        return Ok(Outcome::Current(r));
     }
-    if l.push && remote_branch(repo, l.remote, &target)?.is_some() {
-        return refuse(l.branch, format!("no free successor name up to {target}"));
+    if !free {
+        return refuse(
+            l.branch,
+            format!("no free successor name within {MAX_SUCCESSORS}"),
+        );
     }
     git::out(repo, &["update-ref", &result_ref(&target), &new])?;
     let pushed = if l.push {

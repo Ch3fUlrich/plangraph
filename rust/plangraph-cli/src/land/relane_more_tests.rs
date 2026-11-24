@@ -261,7 +261,21 @@ fn a_second_run_after_a_push_finds_the_branch_and_reports_the_lane_done() {
     assert!(first[0].starts_with("REBASED lane/twice-r1"), "{first:?}");
     let pushed = g(&fx.origin, &["rev-parse", "lane/twice-r2"]);
     let second = relane_cli::relane_all(&fx.work, "origin", &onto, true, &spec).unwrap();
-    assert_eq!(second, [format!("CURRENT lane/twice-r1 {pushed}")]);
+    assert!(
+        second[0].starts_with("CURRENT lane/twice-r1 "),
+        "{second:?}"
+    );
+    assert!(
+        second[0].contains(&format!("-> {pushed} ")) && second[0].contains("pushed lane/twice-r2"),
+        "{second:?}"
+    );
+    assert!(
+        second[0].contains(&format!(
+            "{} ->",
+            g(&fx.origin, &["rev-parse", "lane/twice-r1"])
+        )),
+        "{second:?}"
+    );
     assert_eq!(g(&fx.origin, &["rev-parse", "lane/twice-r2"]), pushed);
 }
 

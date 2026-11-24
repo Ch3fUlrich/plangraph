@@ -275,11 +275,26 @@ fn a_gate_edit_the_source_already_carries_must_be_granted_too() {
 }
 
 #[test]
-fn a_gate_edit_hidden_in_the_body_next_to_a_cherry_pick_line_is_refused() {
+fn a_gate_edit_git_does_not_parse_in_the_source_but_the_gate_sees_after_cutting_is_refused() {
     let fx = Fx::new();
+    // The `(cherry picked ...)` paragraph is the last one, so git finds no Gate-Edit trailer in the source;
+    // cutting drops it and the paragraph before becomes the trailer block the commit gate reads.
     let src = fx.source(
-        "a.txt",
-        &format!("{TRAILERS}\nsome words\n(cherry picked from commit ab12)\nGate-Edit: D-88"),
+        ".github/workflows/w.yml",
+        &format!("{TRAILERS}\nGate-Edit: D-88\n\n(cherry picked from commit ab12)"),
+    );
+    let parsed = g(
+        fx.p(),
+        &[
+            "log",
+            "-1",
+            "--format=%(trailers:key=Gate-Edit,valueonly)",
+            &src,
+        ],
+    );
+    assert!(
+        parsed.is_empty(),
+        "the fixture must hide it from git: {parsed}"
     );
     let err = fx
         .cut_granted(std::slice::from_ref(&src), &[], &["D-1".to_string()])
@@ -289,4 +304,5 @@ fn a_gate_edit_hidden_in_the_body_next_to_a_cherry_pick_line_is_refused() {
         "{err}"
     );
     assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
+    fx.cut_granted(&[src], &[], &["D-88".to_string()]).unwrap();
 }
