@@ -736,3 +736,15 @@ def test_new_uncommitted_rust_test_selects_the_bare_python_guard_only_without_he
     assert new in pre_commit
     assert guard in module.select_tests(tmp_path, pre_commit)["tests"]
     assert module.changed_files(tmp_path, "HEAD", "HEAD") == []
+
+
+def test_local_cap_never_drops_the_subprocess_guard_for_a_rust_test_change(tmp_path):
+    guard = "tests/test_spawner_import_guard.py"
+    changed = ["rust/crate/tests/new_probe.rs", *(f"tests/test_filler_{i:02d}.py" for i in range(45))]
+    for relative in (guard, *changed):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    plan = selector().select_tests(tmp_path, changed, files_only=True, local=True, base="HEAD")
+    assert len(plan["tests"]) == 39 and plan["ci_deferred"] > 0
+    assert guard in plan["tests"]
