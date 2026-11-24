@@ -2494,6 +2494,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-train-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pg-usage"
 version = "0.1.0"
 dependencies = [
