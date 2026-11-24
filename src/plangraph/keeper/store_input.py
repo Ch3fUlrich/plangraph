@@ -50,7 +50,7 @@ def _defined_payload(fields):
         payload["criteria_ledger"] = True
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
-    for name in SMALL_FIELDS + ("supersedes", "category"):
+    for name in SMALL_FIELDS + ("supersedes", "category", "similar"):
         if name in fields:
             payload[name] = fields[name]
     for name in ("estimate_h", "estimate_src"):
@@ -268,6 +268,32 @@ class InputMixin:
                 raise Refused("validation", f"{key}: {target} already supersedes it (cycle)")
         return out
 
+    @staticmethod
+    def _refuse_unanswered(key, matches, answers):
+        open_ = [(m, s) for m, s in matches if m not in answers]
+        if open_:
+            raise Refused("conflict", f"{key} looks like open item(s) "
+                          + ", ".join(f"{m} ({s:.2f})" for m, s in open_)
+                          + "; answer each as similar={key: supersedes|depends_on|distinct}"
+                          " (supersedes, depends_on or distinct) and retry")
+
+    def _edit_similar(self, key, me, fields, items):
+        """The near-copy gate for an edit that changes title or description: the
+        resulting item must not look like another open item unless each match is
+        answered; the answers are applied exactly as at create."""
+        if not ({"title", "description"} & fields.keys()):
+            return
+        answers = check_similar_answers(fields.get("similar") or {}, key)
+        answers = fields["similar"] = {self._qualify(me["project"], k): v for k, v in answers.items()}
+        self._refuse_unanswered(key, similar_items(me, items), answers)
+        index = {item["key"]: item for item in items}
+        for field, answer in (("depends_on", "depends_on"), ("supersedes", "supersedes")):
+            added = {k for k, v in answers.items() if v == answer and k in index}
+            if added - set(me.get(field) or []):
+                me[field] = sorted(set(me.get(field) or []) | added)
+                fields[field] = (self._checked_supersedes(key, me[field], index, me["project"])
+                                 if field == "supersedes" else me[field])
+
     def _answer_similar(self, defs, before, legacy):
         """One check for every creation path: refuse a near copy of an open item
         until each match is answered; apply the answers; return warnings."""
@@ -280,11 +306,7 @@ class InputMixin:
             if legacy:   # existing data must stay loadable: say, never refuse
                 warnings += [f"{key} looks like open item {m} ({s:.2f})" for m, s in matches]
                 continue
-            open_ = [m for m, _ in matches if m not in answers]
-            if open_:
-                shown = ", ".join(f"{m} ({s:.2f})" for m, s in matches if m in open_)
-                raise Refused("conflict", f"{key} looks like open item(s) {shown}; answer each as "
-                              "similar={key: supersedes|depends_on|distinct} (supersedes, depends_on or distinct) and retry")
+            self._refuse_unanswered(key, matches, answers)
             deps, sups = set(definition["depends_on"]), set(definition["supersedes"])
             for target, answer in answers.items():
                 if answer == "depends_on" and target in index:

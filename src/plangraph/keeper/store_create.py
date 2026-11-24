@@ -42,7 +42,7 @@ _ACTIVE_EDITABLE = _TIER_FIELDS | frozenset(("done_criteria", "depends_on"))
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
              "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "estimate_src",
              "done_criteria", "design_ref", "evidence_kinds",
-             "depends_on", "track", "owner", "note", "review_tier", "supersedes", "category")
+             "depends_on", "track", "owner", "note", "review_tier", "supersedes", "category", "similar")
 _MAX_BATCH = 500
 #: KEEPER-PRIORITY-LEVELS-AND-AGING: a lesson that happened once starts here;
 #: each repeat INCIDENT LOG line raises it one level (10 at most).
@@ -561,8 +561,9 @@ class CreateMixin:
                 edit_fields.get("done_criteria", item.get("done_criteria")),
                 resulting_tier)
         check_fix_limit(candidate, {key})
+        self._edit_similar(key, me, edit_fields, candidate)
         self._validate_change(candidate, before, affected={key})
-        assignments = [field for field in edit_fields if field != "depends_on"]
+        assignments = [field for field in edit_fields if field not in ("depends_on", "similar")]
         # F4 audit: the claimed/in-review exception is the router editing an
         # active item's definition, so the event says what every changed field
         # was and became.  ``depends_on`` reports the final (qualified,
