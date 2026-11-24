@@ -108,12 +108,6 @@ See [doctor checks](operations/spawner-doctor.md). To check Omnigraph health and
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged. See [session stop and Linux tool cleanup](spawner-sessions.md).
 
-Review seat admission per leg: `route_policy.json` `review_seat_admission` (`legs`: leg id to maximum concurrent
-seats, `queue_wait_seconds`, `poll_seconds`) rides on the review route as `seat_admission`. The native spawner
-counts live review runs plus fresh slot reservations (`<state>/seat-slots/`) per leg, queues a seat beyond the bound,
-routes again each poll (a leg that booked a 429 leaves the route at once), and past the wait bound moves to the next
-routed leg with room or refuses `seat_queue_timeout` so the caller starts its fallback seats.
-
 CLI and overflow admission use the worker-core memory rule:
 `effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as
 free memory and `warmup.ramp_mb[role]` as the reservation (an unknown role
@@ -669,6 +663,6 @@ maintenance. Fixture Git failures retain stderr; Windows fixture subprocesses
 use CREATE_NO_WINDOW. The cache-survival assertion also runs in a 50-iteration
 stress test. Windows CI and recorded reruns provide platform evidence.
 
-Native writer progress admission: [run contract](native-writer-progress-admission.md). Disk floor guards, allocated Cargo cap accounting and cleanup-before-refusal: [disk admission](operations/spawner-disk-admission.md).
+Native writer progress admission: [run contract](native-writer-progress-admission.md). Review seat admission per leg: [seat admission](checkpoints/LE-SEAT-BURST-DRAINS-SMART-REVIEW-LEG.md). Disk floor guards, allocated Cargo cap accounting and cleanup-before-refusal: [disk admission](operations/spawner-disk-admission.md).
 
 [Per-item checkpoint and status notes](checkpoints/), e.g. [keeper-refused completion deliveries](checkpoints/LE-KEEPER-REFUSED-CALL-LOOPS.md). Add new notes there, one file per item, rather than appending here.
