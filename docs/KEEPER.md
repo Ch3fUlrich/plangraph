@@ -129,6 +129,14 @@ two events that finish an item (X7b adds the router's decision close beside the 
 and may set `corrects` to a DONE key (validated by the store: target must be `done`). Events table: `BEFORE UPDATE/DELETE` always abort.
 `principals`/`audit_log` are not locked.
 
+**Superseded and duplicate items (ITEM-SUPERSEDE-GATE).** `supersedes` (item keys, editable, column since schema v28) retires the named
+items: `claim` refuses them (`superseded by KEY`, not overridable by `force_stale`; cancel the superseder or drop its link) and `ready`
+lists them under `needs_reconcile`, so the feeder drops them, as it does items whose cited decision was retired (`superseded_premises`,
+`superseded_contract`). Every create path (`define`, `apply_ops`/md-sync, plan import) runs one similarity check (`item_fields.similar_items`:
+token overlap of title+description, files when both name them, threshold 0.6, same project and kind, open items only) and refuses a near
+copy with the matching keys until each is answered `similar={KEY: supersedes|depends_on|distinct}`; the answer is stored in the
+`item_created` event. A legacy import only warns.
+
 ## Verbs (Store) — role rules, state machine, errors
 Every verb: authenticate → authorise → validate → one transaction (event + cache + edges) → audit_log row (ok or refused).
 Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, bad_transition, locked, epoch_stale, lease_held, cycle, validation,

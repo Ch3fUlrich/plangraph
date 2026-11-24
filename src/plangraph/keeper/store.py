@@ -460,4 +460,6 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             return json.dumps(list(value))
         if field == "operator":
             return 1 if value else 0
+        if field == "supersedes":
+            return json.dumps(list(value)) if value else None
         return value
