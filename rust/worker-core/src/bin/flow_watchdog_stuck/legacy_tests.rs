@@ -7,6 +7,8 @@ mod tests {
             writer_activity: None,
             review_leg_activity: None,
             host_idle_capacity: Default::default(),
+            pool_use: None,
+            pool_reports: Vec::new(),
             idle_messages: Vec::new(),
             hosts: Vec::new(),
             stuck: Default::default(),

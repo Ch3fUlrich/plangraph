@@ -242,3 +242,26 @@ collectors must supply a coherent, fresh snapshot on each invocation; the checke
 has no freshness inference. Live collection and the resume-digest, orchestrator
 heartbeat and scheduler integrations remain open; these entry points are absent
 from this checkout. They should consume this check rather than reimplement it.
+
+## ChatGPT pool use (`pool_use`)
+
+Optional `pool_use` block (one object or an array, one per window) of the snapshot:
+`pool`, `window`, `now`, `window_start`, `reset_at`, `used_pct` (0-100), and per leg
+`live` runs, `waiting` ready work, plus `admission_slots` (what host admission still
+allows). `plangraph quota pool` prints the `used_pct`/window fields from the gateway
+quota snapshots (mean used over the accounts, earliest reset ahead, window length from
+the window key; unknown windows are left out); the collector adds the rest. Each tick:
+
+- prints the digest line `POOL <pool> window=<w> used=<n>% pace=<n>% live[leg=n,..] waiting[leg=n,..]`;
+- `pace` is the share of the window elapsed. Used below 70 % of pace with ready work
+  queues one `POOL-UNDERUSE ... waiting=<n> startable=<min(waiting, admission_slots)>`
+  alert (standing identity `pool-underuse <pool> <window>`, kept while the block is missing);
+- hands the dispatcher hook `PLANGRAPH_POOL_START` (JSON argv, same contract as
+  `PLANGRAPH_WATCHDOG_DELIVERY`) one `pool-fill` event with the runs to start per leg, never
+  more than `admission_slots`; admission itself still runs on every start;
+- appends a row to `<state>/pool-use.jsonl` (time, used, pace, waiting, startable, live),
+  at most one per ten minutes per window. A window already past its reset is stale: no alert.
+
+`pool-use-check SAMPLE.json [ROWS.jsonl]` is the same check for digest and scheduler callers.
+A stored usage limit also ends at a successful probe: the quota-snapshot gate stops limiting a
+leg when its last probe passed after the pool's newest snapshot.

@@ -103,8 +103,106 @@ pub(crate) fn remaining_for(rows: &Value, target: &str, now: i64, max_age: i64) 
         .reduce(f64::max)
 }
 
+/// Seconds a quota window lasts, from its key (`daily`, `weekly`, `5h`, `7d`); `None` when unknown.
+fn window_seconds(key: &str) -> Option<i64> {
+    match key {
+        "day" | "daily" => return Some(86_400),
+        "week" | "weekly" => return Some(604_800),
+        _ => {}
+    }
+    let (n, unit) = key.split_at(key.len().checked_sub(1)?);
+    let n: i64 = n.parse().ok().filter(|n| *n > 0)?;
+    Some(
+        n * if unit == "h" {
+            3_600
+        } else if unit == "d" {
+            86_400
+        } else {
+            return None;
+        },
+    )
+}
+/// One pool-use sample per window of `target`: the mean used percent over the accounts'
+/// newest fresh rows, and the earliest reset still ahead (`pool_use` input of the watchdog;
+/// `live`, `waiting` and `admission_slots` are filled by the caller). Windows without a
+/// known length, a reset in the future or a fresh row are left out, never guessed.
+pub(crate) fn pool_use_samples(rows: &Value, target: &str, now: i64, max_age: i64) -> Vec<Value> {
+    let mut latest: BTreeMap<(String, String), (i64, f64, Option<i64>)> = BTreeMap::new();
+    for r in rows.as_array().into_iter().flatten() {
+        let Some((provider, account)) = identity(r) else {
+            continue;
+        };
+        let (Some(w), Some(at)) = (window(r), observed(r).and_then(stamp)) else {
+            continue;
+        };
+        let Some(used) = remaining_percent(r).map(|left| 100.0 - left) else {
+            continue;
+        };
+        if provider != target || at > now || now - at > max_age {
+            continue;
+        }
+        let reset = field(r, &["next_reset_at", "nextResetAt", "resetAt"]).and_then(stamp);
+        let entry = latest
+            .entry((w.into(), account.into()))
+            .or_insert((at, used, reset));
+        if at >= entry.0 {
+            *entry = (at, used, reset);
+        }
+    }
+    let mut windows: BTreeMap<String, Vec<(f64, Option<i64>)>> = BTreeMap::new();
+    for ((w, _), (_, used, reset)) in latest {
+        windows.entry(w).or_default().push((used, reset));
+    }
+    windows
+        .into_iter()
+        .filter_map(|(w, accounts)| {
+            let length = window_seconds(&w)?;
+            let reset = accounts
+                .iter()
+                .filter_map(|a| a.1)
+                .filter(|r| *r > now)
+                .min()?;
+            let used = accounts.iter().map(|a| a.0).sum::<f64>() / accounts.len() as f64;
+            Some(serde_json::json!({"pool":target,"window":w,"now":now,
+                "window_start":reset - length,"reset_at":reset,"used_pct":used}))
+        })
+        .collect()
+}
+/// `plangraph quota pool [--db PATH]`: print the pool-use samples of the codex pool as JSON.
+fn run_pool(env: &Env, args: &[String]) -> i32 {
+    let mut effective = env.clone();
+    match args {
+        [] => {}
+        [flag, path] if flag == "--db" && !path.is_empty() => {
+            effective.insert("QUOTA_SNAPSHOT_DB".into(), path.clone());
+        }
+        _ => {
+            eprintln!("usage: plangraph quota pool [--db PATH]");
+            return 2;
+        }
+    }
+    let rows = std::env::current_dir()
+        .ok()
+        .and_then(|repo| quota_snapshots(&effective, &repo).ok());
+    let Some(rows) = rows else {
+        eprintln!("quota unknown");
+        return 1;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    println!(
+        "{}",
+        Value::Array(pool_use_samples(&rows, "codex", now, 10_800))
+    );
+    0
+}
+
 /// Print the most recent available observation for each provider, account and window.
 pub fn run_status(env: &Env, args: &[String]) -> i32 {
+    if args.first().is_some_and(|a| a == "pool") {
+        return run_pool(env, &args[1..]);
+    }
     let mut effective = env.clone();
     match args {
         [] => {}
@@ -207,5 +305,31 @@ mod tests {
             {"provider":"codex","connection_id":"b","window_key":"day","created_at":"2026-01-01 00:00:01","remaining_percentage":40}
         ]);
         assert_eq!(remaining(&rows, 1767225602, 10800), Some(40.0));
+    }
+    #[test]
+    fn pool_use_samples_are_per_window_with_earliest_reset_and_mean_use() {
+        let now = 1_800_000_000;
+        let row = |a: &str, w: &str, left: i64, reset: i64| {
+            json!({"provider":format!("codex:{a}"),
+            "window_key":w,"created_at":now - 60,"remaining_percentage":left,"next_reset_at":reset})
+        };
+        let rows = json!([
+            row("a", "weekly", 80, now + 3 * 86_400),
+            row("b", "weekly", 60, now + 2 * 86_400),
+            row("a", "5h", 100, now + 3_600),
+            row("a", "odd", 10, now + 3_600),
+            row("a", "daily", 10, now - 5),
+            json!({"provider":"claude","window_key":"weekly","created_at":now - 60,
+                "remaining_percentage":1,"next_reset_at":now + 100}),
+        ]);
+        let got = pool_use_samples(&rows, "codex", now, 10_800);
+        let by = |w: &str| got.iter().find(|s| s["window"] == w).cloned();
+        let weekly = by("weekly").unwrap();
+        assert_eq!(weekly["used_pct"], 30.0);
+        assert_eq!(weekly["reset_at"], now + 2 * 86_400);
+        assert_eq!(weekly["window_start"], now + 2 * 86_400 - 604_800);
+        assert_eq!(by("5h").unwrap()["used_pct"], 0.0);
+        assert!(by("odd").is_none() && by("daily").is_none() && got.len() == 2);
+        assert!(pool_use_samples(&rows, "codex", now + 20_000, 10_800).is_empty());
     }
 }
