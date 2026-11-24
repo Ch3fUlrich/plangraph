@@ -371,3 +371,8 @@ fell through to a different leg. Missing benchmark evidence stays null.
 ## Worker claim bases
 
 A worker card claimed against an accepted landing-train part receives the train head in `base_sha`. A retry of the same live lease uses the pinned SHA. Ordinary claims use the phase branch tip when one is available, otherwise the configured base branch tip.
+
+## Planner pack order
+
+`planner.context_pack` puts the card and files first and the check-output tail last, so a
+`check_fail` retry shares a byte-identical prefix; layout in `docs/PLANNER-KIT.md`.
