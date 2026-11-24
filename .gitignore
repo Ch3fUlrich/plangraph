@@ -12,6 +12,9 @@ logs/
 .venv/
 .devstack/
 
+# Shared Cargo lease lock files sit beside a target directory, never in the tree.
+*.plangraph-lock
+
 # Built Git hook
 /tools/hooks/commit-msg
 /tools/hooks/.commit-msg-gate
