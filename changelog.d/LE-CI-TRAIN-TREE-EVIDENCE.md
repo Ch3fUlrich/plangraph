@@ -1,0 +1,1 @@
+`tools/ci_select.py select` reuses the green full run of a train commit's previous head when a reword leaves the Git tree equal (`reword_evidence`: same tree, `ci-full` success, verified latest green attempt of this workflow); a different tree, an unverified run or a red latest attempt runs the suite again. See `docs/ci-gate.md`.
