@@ -110,3 +110,48 @@ fn deploy_manifest_pg_spawnd_paths_follow_host_roles() {
         Some("/usr/local/bin/pg-spawnd")
     );
 }
+
+#[test]
+fn deploy_manifest_installed_names_of_template_families_differ_from_their_sources() {
+    let repo = repo();
+    let manifest = Manifest::load_from_repo(&repo).unwrap();
+    let unit = |name: &str| manifest.unit.iter().find(|u| u.name == name).unwrap();
+    let ctx = unit("ctx-watchdog");
+    assert_eq!(ctx.enable_unit().unwrap(), "ctx-watchdog.timer.in");
+    assert_eq!(ctx.installed_enable_unit().unwrap(), "ctx-watchdog.timer");
+    assert_eq!(
+        ctx.installed_service_unit().as_deref(),
+        Some("ctx-watchdog.service")
+    );
+    let stall = unit("stall-watchdog");
+    assert_eq!(stall.enable_unit().unwrap(), "watchdog.timer");
+    assert_eq!(
+        stall.installed_enable_unit().unwrap(),
+        "plangraph-stall-watchdog.timer"
+    );
+    assert_eq!(
+        stall.installed_service_unit().as_deref(),
+        Some("plangraph-stall-watchdog.service")
+    );
+}
+
+#[test]
+fn deploy_manifest_stall_watchdog_without_its_installer_fails_the_installer_check() {
+    let repo = repo();
+    let mut manifest = Manifest::load_from_repo(&repo).unwrap();
+    let units = scan::unit_files(&repo).unwrap();
+    assert!(manifest.installer_problems(&repo, &units).is_empty());
+    manifest
+        .unit
+        .iter_mut()
+        .find(|u| u.name == "stall-watchdog")
+        .unwrap()
+        .installer = None;
+    let problems = manifest.installer_problems(&repo, &units);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("deploy/watchdog/watchdog.service")),
+        "{problems:?}"
+    );
+}

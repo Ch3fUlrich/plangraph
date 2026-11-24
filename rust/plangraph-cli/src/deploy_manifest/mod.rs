@@ -73,6 +73,8 @@ pub struct Installer {
     pub step: String,
     /// The unit names the step writes.
     pub renders: Vec<String>,
+    /// The installed timer (else service) the step enables: one of `renders`, never a source file name.
+    pub enable: String,
 }
 
 impl Installer {
@@ -93,7 +95,14 @@ impl Installer {
                 "{what}: installer needs a step and the unit names it renders"
             ));
         }
-        if self.renders.iter().any(|r| !scan::is_unit_name(r)) {
+        if !self.renders.contains(&self.enable) {
+            return Err(format!("{what}: installer enable must be one of renders"));
+        }
+        if self
+            .renders
+            .iter()
+            .any(|r| !scan::is_unit_name(r) || r.ends_with(".in"))
+        {
             return Err(format!("{what}: installer renders must be unit file names"));
         }
         Ok(())
@@ -204,6 +213,27 @@ impl UnitEntry {
                 self.name
             )),
         }
+    }
+
+    /// The unit that is enabled on the host: what the installer writes and enables for a template
+    /// family, else the unit file itself (`enable_unit`).
+    pub fn installed_enable_unit(&self) -> Result<&str, String> {
+        match &self.installer {
+            Some(installer) => Ok(&installer.enable),
+            None => self.enable_unit(),
+        }
+    }
+
+    /// The installed service the enabled timer starts, if the family has one.
+    pub fn installed_service_unit(&self) -> Option<String> {
+        let Some(installer) = &self.installer else {
+            return self.service_unit();
+        };
+        let service = installer
+            .enable
+            .strip_suffix(".timer")
+            .map(|s| format!("{s}.service"))?;
+        installer.renders.contains(&service).then_some(service)
     }
 
     /// The service the enabled timer starts (`foo.timer` starts `foo.service`), if the family has one.

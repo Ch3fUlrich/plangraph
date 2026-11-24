@@ -6,7 +6,8 @@
 # env_family names the `host-sync --install-env` family that creates the env files from documented defaults;
 # without it a missing env file is reported by name for the operator (secrets are never created).
 # dir names the directory under deploy/ that holds the unit files when it is not deploy/systemd ("." is deploy/ itself).
-# installer names the script and step that render a template unit (*.in, or @ROOT@ placeholders) into the installed units.
+# installer names the script and step that render a template unit (*.in, or @ROOT@ placeholders) into the installed
+# units, the unit names it writes (renders) and the one it enables (enable); the files above are sources, not installed names.
 # install_paths on a binary lists every path a consumer runs it from, each with the roles it applies to;
 # no list means only ~/.local/bin/<bin>, and a binary used from two places lists both.
 # env_files are file names under ~/.config/plangraph (or /etc/plangraph for system units), never values;
@@ -53,6 +54,7 @@ first_run = "systemctl --user is-active plangraph-stall-watchdog.timer; the unit
 via = "deploy/bootstrap.sh"
 step = "python -m plangraph.spawner.stall_watchdog install --host linux"
 renders = ["plangraph-stall-watchdog.service", "plangraph-stall-watchdog.timer", "plangraph-remote-probe.service", "plangraph-remote-probe.timer"]
+enable = "plangraph-stall-watchdog.timer"
 
 [[unit]]
 name = "ctx-watchdog"
@@ -66,6 +68,7 @@ first_run = "systemctl --user is-enabled ctx-watchdog.timer after bootstrap with
 via = "deploy/bootstrap.sh"
 step = "install_ctx_watchdog renders ctx-watchdog.service and ctx-watchdog.timer into the user unit directory"
 renders = ["ctx-watchdog.service", "ctx-watchdog.timer"]
+enable = "ctx-watchdog.timer"
 
 [[unit]]
 name = "pg-feeder"
