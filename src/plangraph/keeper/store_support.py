@@ -60,6 +60,21 @@ def _json_dict(value):
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _superseded_map(index, cleared=frozenset(), resolve=lambda key: key):
+    """``{old key: [superseding keys]}``; only a cancelled superseder retires nothing
+    (a done one keeps the old item retired, so it cannot overwrite its replacement).
+    A link follows rehome aliases, and a pair the router re-confirmed is cleared."""
+    out = {}
+    for other in index.values():
+        if other.get("state") == "cancelled":
+            continue
+        for old in other.get("supersedes") or []:
+            old = resolve(old)
+            if (old, other["key"]) not in cleared:
+                out.setdefault(old, []).append(other["key"])
+    return out
+
+
 class SupportMixin:
     """Row hydration, event append and evidence-verification helpers."""
 
@@ -432,6 +447,48 @@ class SupportMixin:
         item["operator"] = bool(item.get("operator"))
         item["supersedes"] = _json_list(item.get("supersedes"))
         return item
+
+    def _superseded(self, index):
+        if not any(item.get("supersedes") for item in index.values()):
+            return {}                      # no links: no cleared-pair or alias reads
+        return _superseded_map(index, self._cleared_supersessions(), self.resolve_key)
+
+    def _link_revision(self, old, new):
+        """The seq of the event that put the link *old* <- *new* in force; ``None`` when it is not.
+        Removing the link and adding it again is a new revision."""
+        rev = None
+        for row in self.conn.execute(
+                "SELECT seq, payload FROM events WHERE key=? AND type IN ('item_created','item_defined')"
+                " ORDER BY seq", (new,)):
+            links = _json_dict(row["payload"]).get("supersedes")
+            if links is None:
+                continue
+            if old in [self.resolve_key(k) for k in links]:
+                rev = rev or row["seq"]
+            else:
+                rev = None
+        return rev
+
+    def _cleared_supersessions(self):
+        """``{(old key, superseder key)}`` the router re-confirmed (audited ``premise_reconfirmed``)
+        for the link as it stands: a link removed and added again is not cleared."""
+        out = set()
+        for row in self.conn.execute(
+                "SELECT key, payload FROM events WHERE type='premise_reconfirmed'"):
+            data = _json_dict(row["payload"])
+            if (mark := data.get("supersession")) and data.get("link_rev") \
+                    and data["link_rev"] == self._link_revision(row["key"], mark):
+                out.add((row["key"], mark))
+        return out
+
+    def _refuse_superseded(self, key):
+        """Refuse every claim of an item that a non-cancelled item supersedes; the
+        superseder keys otherwise (the one gate for every role, also under the lock)."""
+        found = self._superseders(key)
+        if found:
+            raise Refused("bad_state", f"{key} superseded by {', '.join(found)} (cancel the "
+                          "superseding item, or drop its supersedes link while it is open)")
+        return found
 
     def _superseders(self, key):
         """Keys of non-cancelled items whose ``supersedes`` names *key* (or an old key that
