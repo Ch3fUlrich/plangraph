@@ -354,12 +354,11 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
 #[test]
 fn invalid_saved_request_keeps_the_stop_marker() {
     let fixture = tempfile::tempdir().unwrap();
-    let directory = fixture
-        .path()
-        .join("runs/run-0123456789abcdef0123456789abcdef");
+    let run_id = "run-fixture";
+    let directory = run_dir(fixture.path(), run_id).unwrap();
     fs::create_dir_all(&directory).unwrap();
     let record = directory.join("record.json");
-    let saved = json!({"run_id":"run-0123456789abcdef0123456789abcdef", "status":"stopped",
+    let saved = json!({"run_id":run_id, "status":"stopped",
         "session_id":"fixture", "cwd":directory, "repo":directory, "tool_path":"fixture"});
     fs::write(&record, saved.to_string()).unwrap();
     let marker = directory.join("landing-stop.json");
