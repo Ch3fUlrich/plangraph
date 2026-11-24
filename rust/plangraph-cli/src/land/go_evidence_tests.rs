@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 /// The pinned workflow text: the file the verifier compiles in.
 const WORKFLOW_TEXT: &str = include_str!("../../../../.github/workflows/tests.yml");
 
-const REPO: &str = "owner/name";
-const BASE: &str = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0";
-const HEAD: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+pub(super) const REPO: &str = "owner/name";
+pub(super) const BASE: &str = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0";
+pub(super) const HEAD: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
 const TREE: &str = "7777777777777777777777777777777777777777";
 const RUN: &str = "run-abababababababababababababababab";
 
@@ -47,7 +47,7 @@ fn receipt(run: u64, attempt: u32, tree: &str, state: &str) -> Value {
 }
 
 /// A GitHub that answers from a table; `pulls/9` may answer differently on its second read.
-struct Fake {
+pub(super) struct Fake {
     table: BTreeMap<String, Value>,
     pull_reads: u32,
     moved_on_second_read: bool,
@@ -63,7 +63,7 @@ fn jobs(attempt: u32) -> Vec<Value> {
 }
 
 impl Fake {
-    fn new() -> Fake {
+    pub(super) fn new() -> Fake {
         let mut t = BTreeMap::new();
         t.insert(
             "git/ref/heads/main".into(),
@@ -154,7 +154,7 @@ impl Github for Fake {
     }
 }
 
-fn answer(tip: &str, state: State) -> Answer {
+pub(super) fn answer(tip: &str, state: State) -> Answer {
     Answer {
         tip: tip.into(),
         state,
@@ -164,11 +164,11 @@ fn answer(tip: &str, state: State) -> Answer {
     }
 }
 
-fn receipt_for_admit() -> AdmitReceipt {
+pub(super) fn receipt_for_admit() -> AdmitReceipt {
     admit_receipt(BASE, HEAD, "m1", RUN)
 }
 
-const ROWS: &str = "\
+pub(super) const ROWS: &str = "\
 | D-100 | name | GO #9 GO-HEAD a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 | router | parts 2 |
 | D-101 | name | NO GO #9 GO-HEAD a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 | router | |
 | D-102 | name | GO #8 GO-HEAD a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 | router | |
@@ -176,10 +176,11 @@ const ROWS: &str = "\
 | D-104 | name | (15:46Z) GO owner/name PR #9 GO-HEAD A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1 | router | |
 | D-105 | name | GO #9 GO-HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | router | |
 | D-106 | name | GATE-EDIT .github/workflows/ GO-HEAD a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 | operator | |
+| D-107 | name | GATE-EDIT tools/ GO-HEAD a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 | router | |
 | garbage | name | GO #9 GO-HEAD a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 | router | |
 ";
 
-fn inputs<'a>(rows: &'a str, receipt: &'a AdmitReceipt, main: &'a Answer) -> Inputs<'a> {
+pub(super) fn inputs<'a>(rows: &'a str, receipt: &'a AdmitReceipt, main: &'a Answer) -> Inputs<'a> {
     Inputs {
         repo: REPO,
         pr: 9,
@@ -192,7 +193,7 @@ fn inputs<'a>(rows: &'a str, receipt: &'a AdmitReceipt, main: &'a Answer) -> Inp
     }
 }
 
-fn codes(e: &super::go_verify::Evidence) -> Vec<&'static str> {
+pub(super) fn codes(e: &super::go_verify::Evidence) -> Vec<&'static str> {
     verify(e, &Pins::protected().unwrap())
         .iter()
         .map(|r| r.code)
@@ -300,7 +301,9 @@ fn a_gate_edit_row_is_a_grant_for_its_head_only() {
         json!({"merge_base_commit": {"sha": BASE}, "files": [{"filename": ".github/workflows/tests.yml"}]}),
     );
     let e = collect(&mut gh, &inputs(ROWS, &r, &main)).unwrap();
+    // Only the operator's row is a grant: D-107 is written by the router and does not count.
     assert_eq!(e.grants.len(), 1);
+    assert_eq!(e.grants[0].d_id, "D-106");
     assert_eq!(codes(&e), Vec::<&str>::new());
     let no_grant = ROWS.replace("GATE-EDIT", "GATE-EDIT-NOT");
     let mut gh = Fake::new();
@@ -320,10 +323,7 @@ fn base64_decodes_what_github_sends() {
 }
 
 #[test]
-fn the_cli_refuses_missing_flags_and_the_receipt_round_trips() {
-    let home = std::path::Path::new("/nonexistent");
-    let none = BTreeMap::new();
-    assert_eq!(run_cli(home, &none).unwrap_err(), "missing --pr");
+fn the_receipt_round_trips() {
     let r = receipt_for_admit();
     let back: AdmitReceipt = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
     assert_eq!(back, r);

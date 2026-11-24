@@ -8,10 +8,10 @@ use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest,
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID and writes the go-evidence receipt to --receipt-out FILE\n\
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR (--manifest FILE | --spans FILE) (--authorized-hosts A,B | --registry FILE) --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
-  plangraph land-train go-evidence --repo DIR --pr N --manifest FILE --receipt FILE --rows FILE --out FILE\n\
+  plangraph land-train go-evidence --repo DIR --pr N --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE --item KEY --review-run ID --out FILE\n\
   plangraph land-train go-verify --evidence FILE\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
@@ -146,6 +146,48 @@ fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
         .map_err(|e| format!("{path}: {e}"))
 }
 
+fn keeper_config(home: &Path) -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("plangraph/keeper.json")
+}
+
+/// The proof `verify`, `review`, `admit` and `go-evidence` share: the artifacts belong together, the freeze
+/// holds, and the replay of the manifest and of the result match the repository. Returns the manifest and
+/// the delta of the replay.
+fn prove(
+    flags: &std::collections::BTreeMap<String, String>,
+    parts: &[PartIn],
+    protected: &[String],
+) -> Result<(Manifest, super::delta::Delta), String> {
+    let need = |k: &str| {
+        flags
+            .get(k)
+            .cloned()
+            .ok_or_else(|| format!("{USAGE}\nmissing --{k}"))
+    };
+    let manifest: Manifest = read(&need("manifest")?)?;
+    let repo = PathBuf::from(need("repo")?);
+    let open: BuildOpen = read(&need("open")?)?;
+    let freeze: Freeze = read(&need("freeze")?)?;
+    let result: BuildResult = read(&need("result")?)?;
+    let adopted = match flags.get("resolution-log") {
+        Some(p) => adopted_from_log(p, &manifest.build)?,
+        None => vec![],
+    };
+    bind_artifacts(&open, &freeze, &manifest, &result)?;
+    check_freeze(&open, &result.snapshot, &freeze).map_err(|e| format!("freeze refused: {e:?}"))?;
+    if freeze.selection != parts {
+        return Err(
+            "freeze refused: the selection is not the one recomputed by the verifier".into(),
+        );
+    }
+    let delta = build::verify_manifest_with(&repo, &manifest, parts, &adopted, protected)?;
+    build::verify_result(&repo, &manifest.base, &result, Some(&manifest))?;
+    Ok((manifest, delta))
+}
+
 pub fn run(home: &Path, args: &[String]) -> i32 {
     let python = || crate::base_fresh::python_command(None);
     match run_inner(home, args, &python) {
@@ -192,7 +234,7 @@ pub(super) fn run_inner(
         return super::deploy::run_cli(&flags);
     }
     if cmd == "go-evidence" {
-        return super::go_evidence::run_cli(home, &flags);
+        super::go_evidence::reject_removed_flags(&flags)?;
     }
     if cmd == "go-verify" {
         return super::go_verify::run_cli(&flags);
@@ -261,28 +303,17 @@ pub(super) fn run_inner(
                 &answer.tip,
             )
         }
-        "verify" | "review" | "admit" => {
-            let manifest: Manifest = read(&need("manifest")?)?;
+        "verify" | "review" | "admit" | "go-evidence" => {
+            let (manifest, delta) = prove(&flags, &parts, &protected)?;
             let repo = PathBuf::from(need("repo")?);
-            let open: BuildOpen = read(&need("open")?)?;
-            let freeze: Freeze = read(&need("freeze")?)?;
-            let result: BuildResult = read(&need("result")?)?;
-            let adopted = match flags.get("resolution-log") {
-                Some(p) => adopted_from_log(p, &manifest.build)?,
-                None => vec![],
-            };
-            bind_artifacts(&open, &freeze, &manifest, &result)?;
-            check_freeze(&open, &result.snapshot, &freeze)
-                .map_err(|e| format!("freeze refused: {e:?}"))?;
-            if freeze.selection != parts {
-                return Err(
-                    "freeze refused: the selection is not the one recomputed by the verifier"
-                        .into(),
-                );
+            if cmd == "go-evidence" {
+                // The admit proof is re-run here, so the evidence rests on it and not on a file a caller wrote.
+                let packet = super::delta::ReviewPacket::new(&delta, &repo, &manifest, python)?;
+                let run_id = need("review-run")?;
+                packet.require_review(&keeper_config(home), &need("item")?, &run_id, python)?;
+                let bytes = std::fs::read(need("manifest")?).map_err(|e| e.to_string())?;
+                return super::go_evidence::run_cli(home, &flags, &manifest, &bytes, &run_id);
             }
-            let delta =
-                build::verify_manifest_with(&repo, &manifest, &parts, &adopted, &protected)?;
-            build::verify_result(&repo, &manifest.base, &result, Some(&manifest))?;
             let mut lines = vec![format!(
                 "train {} matches its manifest, result and freeze",
                 manifest.build
@@ -290,24 +321,12 @@ pub(super) fn run_inner(
             if flags.contains_key("delta-out") || cmd != "verify" {
                 let packet = super::delta::ReviewPacket::new(&delta, &repo, &manifest, python)?;
                 if cmd == "admit" {
-                    let config = std::env::var_os("XDG_CONFIG_HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| home.join(".config"))
-                        .join("plangraph/keeper.json");
-                    let run_id = need("review-run")?;
-                    packet.require_review(&config, &need("item")?, &run_id, python)?;
-                    if let Some(path) = flags.get("receipt-out") {
-                        let digest = super::go_evidence::manifest_digest(
-                            &std::fs::read(need("manifest")?).map_err(|e| e.to_string())?,
-                        );
-                        let receipt = super::go_evidence::admit_receipt(
-                            &manifest.base,
-                            &manifest.train_sha,
-                            &digest,
-                            &run_id,
-                        );
-                        write(Path::new(path), &receipt)?;
-                    }
+                    packet.require_review(
+                        &keeper_config(home),
+                        &need("item")?,
+                        &need("review-run")?,
+                        python,
+                    )?;
                 }
                 if cmd == "review" {
                     let run_id = packet.dispatch(&repo, &need("item")?, python)?;
