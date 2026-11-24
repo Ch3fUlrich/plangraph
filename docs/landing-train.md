@@ -126,3 +126,16 @@ subject, head, host, start, end, result. `report --last N` prints, per train, th
 critical path (parallel jobs count once), idle time between stages and the bottleneck stage, then the stage with the most
 critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
 them into a keeper table needs a keeper schema step that is not part of this change.
+
+## Settlement after the merge
+
+`plangraph land-train settle --state FILE --repo-dir DIR [--init FILE]` (rust/plangraph-cli/src/land/settle.rs) runs the
+steps after a train merges from a state file that holds the landed manifest (train, merge commit, parts with items, writer
+and folded flag). The state is written before the first effect and after every result, so a crash resumes at the step it
+stopped in; a finished step never runs again. Order: close each part's items (a folded part through the train merge),
+verify the host sync (three distinct hosts at the merge commit), close the folded pull requests, stop the writers.
+Refusals are `held` and checked again on the next run: an item stays open when its pull request moved after the freeze or
+its writer has commits outside the landed tree; a pull request is read, closed and read again, and reopened and left
+open when a push arrived in between; a writer is stopped only when its head is in the landed tree and its pull request is
+closed. Ownership, READY time, CI, eviction and host-sync facts are recorded as events. `hold_released` in the state file
+turns true when every step is done and the hosts are current, which ends the hold on new batches (rule 3.64).
