@@ -283,7 +283,7 @@ fn config_file_is_read_from_the_config_home() {
 #[test]
 fn review_seats_leave_a_temp_shared_target_for_the_default_pool_and_hygiene_lists_their_slots() {
     use pg_worker_core::{cargo_cache::review_fallback_primary, cargo_pool::existing_review_slots};
-    let home = std::path::Path::new("/home/fixture");
+    let home = std::path::Path::new("/fixture/homedir");
     let default = home.join(".cache/plangraph/cargo-target");
     // The workstation's 99.5 GB directory: a shared target configured under /tmp.
     assert_eq!(
