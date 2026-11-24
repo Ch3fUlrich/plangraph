@@ -4,7 +4,7 @@ mod binary;
 
 use pg_worker_core::worker_host::{Phase, Store};
 use serde_json::{json, Value};
-use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+use std::{fs, process::Command};
 
 #[test]
 fn two_misses_emit_one_alert_and_recovery_keeps_the_affected_runs() {
@@ -151,7 +151,8 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
     let state = root.join("state");
     let bin = root.join("bin");
     let row = state.join("runs/run-example");
-    for dir in [&config, &row, &bin] {
+    let queued = state.join("runs/run-queued");
+    for dir in [&config, &row, &queued, &bin] {
         fs::create_dir_all(dir).unwrap();
     }
     let host = |id: &str, transport: &str| {
@@ -160,7 +161,8 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
             "state_dir":state,"session_mb":1,"roles":["implement"],
             "caps":{"max_runs":2,"max_writers":1,"max_seats":1,"max_sessions":1,"mem_floor_mb":1},
             "warmup":{"warmup_s":1,"ramp_mb":{"implement":1}},
-            "repos":{}
+            "repos":{},
+            "env":{"PG_INSTALL_BINARY":"/opt/pg-spawnd","PG_INSTALL_STAMP":"/opt/pg-spawnd.stamp"}
         })
     };
     fs::write(
@@ -173,20 +175,23 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
         r#"{"run_id":"run-example","host":"worker","status":"running","events":[]}"#,
     )
     .unwrap();
-    let ssh = bin.join("ssh");
     fs::write(
-        &ssh,
+        queued.join("record.json"),
+        r#"{"run_id":"run-queued","host":"worker","status":"queued","events":[]}"#,
+    )
+    .unwrap();
+    pg_worker_core::executable_test_support::write_private_executable(
+        bin.join("ssh"),
         r#"#!/bin/sh
 case "$*" in
+*check-install*) echo '{"event":"pg_spawnd_install","status":"stale","reason":"source_sha_mismatch"}';;
 *worker-active-runs*) echo '{"host":"worker","runs":[]}';;
-*--changed-since*) echo '{"rows":[{"run_id":"run-example","status":"completed","phase":"ended"}],"next_cursor":1,"more":false}';;
+*--changed-since*) echo '{"rows":[{"run_id":"run-example","status":"completed","phase":"ended"},{"run_id":"run-queued","status":"limited","phase":"ended"}],"next_cursor":1,"more":false}';;
 *work-disk*) echo '"/mnt/work"';;
 *"probe --host-id"*) echo '{"mem_available_mb":4096}';;
 esac
 "#,
-    )
-    .unwrap();
-    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    );
 
     let store = Store::new(&state, "worker").unwrap();
     let tick = |now, ssh| {
@@ -199,7 +204,7 @@ esac
                 placed_runs: if ssh {
                     Default::default()
                 } else {
-                    ["run-example".to_string()].into()
+                    ["run-example".to_string(), "run-queued".to_string()].into()
                 },
             })
             .unwrap()
@@ -213,6 +218,8 @@ esac
             .env("PLANGRAPH_SPAWN_STATE", &state)
             .env("XDG_CONFIG_HOME", root)
             .env("PATH", &bin)
+            .env("PG_MAIN_SHA", "a".repeat(40))
+            .env("PG_MAIN_SHA256", "b".repeat(64))
             .output()
             .unwrap()
     };
@@ -221,12 +228,21 @@ esac
     let record: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(
         record["runs"],
-        json!([{"run":"run-example","fate":"finished"}])
+        json!([
+            {"run":"run-example","fate":"finished"},
+            {"run":"run-queued","fate":"finished"}
+        ])
     );
+    // A stale installed binary is flagged with check-install's reason, not blocked.
+    assert_eq!(record["flags"][0], "binary: source_sha_mismatch");
     assert_eq!(store.phase().unwrap(), Phase::Ready);
     let settled: Value =
         serde_json::from_slice(&fs::read(row.join("record.json")).unwrap()).unwrap();
     assert_eq!(settled["status"], "completed");
+    // A queued run that ended limited cannot walk queued -> limited; it is settled as failed.
+    let queued: Value =
+        serde_json::from_slice(&fs::read(queued.join("record.json")).unwrap()).unwrap();
+    assert_eq!(queued["status"], "failed");
     // A ready host has nothing to rejoin.
     assert!(!rejoin().status.success());
 }
