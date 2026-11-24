@@ -40,7 +40,8 @@ Codex/OpenCode are stopped with SIGTERM through a pidfd opened for the recorded 
 re-checked against `pid_start`, so a reused pid is never hit, and `stopped` is published only
 after the whole process is confirmed gone through the pidfd (10 s; a survivor logs `stop-failed`
 and the record stays unmarked). A zombie leader whose other threads still run is a running
-process, not a gone one.
+process, not a gone one: a zombie leader counts as gone only when the kernel reports through
+the pidfd that every thread has exited, never from a scan of `/proc`.
 
 A kept session logs its reason once per cause (`stop_refused` in the record, set only after the
 log line was appended, so a failed append is retried by the next tick): `no-job-state`,
@@ -55,12 +56,15 @@ the stop), worktree (inode and git dir), status_head, round, stopped_ts, reason}
 worktree stay null when their lookup failed. `resume.handle` is the "resumable" mark; the lane
 gets `<lane>.resume.json` with the same handle. A stop belongs to the launch that produced it (`resume.launch_ts`, `launch_run`, `handle`
 must equal the record's `ts`, `run_id` and handle), so a `fleet-launch --respawn` copy of the
-record is a live session again. Before a session is touched, the snapshot of the stop (head,
-worktree, status head, round, reason, time) is saved in the record as `stop_pending`; a stop
-whose record write then fails exits 2, and the next tick, once the runtime shows the session
-stopped, publishes from that snapshot without a second stop. A session that survives the stop
-leaves no snapshot. Each lane keeps the copy of its latest stopped launch: a missing or older
-copy is rewritten, a newer one is left. A kernel lock (flock on
+record is a live session again. Before a session is touched, the snapshot of the stop (head, worktree, status head, round,
+reason, time) is written to `<record>.pending` next to the record, and the runtime is looked at
+again right before the signal. The sidecar goes only after the stop line is in the log. A stop
+whose record write or log append fails exits 2, and the next tick, once the runtime shows the
+session stopped, finishes it from that snapshot without a second stop; a sidecar of a session
+that still runs is an attempt that never finished and is removed (one that cannot be removed is
+reported). Each lane keeps the copy of its latest stopped launch, ordered by stop time, then launch, then
+session name: a missing or earlier copy is rewritten (publication and repair alike), a later one
+is left. A kernel lock (flock on
 `<state>/launch/pg-session-resume.lock`) keeps two ticks apart: a second one prints that the
 lock is held and leaves the work to the first.
 

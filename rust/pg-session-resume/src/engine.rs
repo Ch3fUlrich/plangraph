@@ -77,13 +77,44 @@ fn refuse_once(host: &mut dyn Host, rec: &mut Record, line: &str, why: &str) {
     save(host, rec);
 }
 
-/// The lane's resume file: the lane-side copy of the launch record's resume handle.
+/// One order for the copies of a lane: the later stop wins, a stop of the same second is told
+/// apart by its launch, and the session name settles what is left.
+fn stop_order(stopped_ts: Option<u64>, launch_ts: Option<u64>, name: &str) -> (u64, u64, String) {
+    (
+        stopped_ts.unwrap_or(0),
+        launch_ts.unwrap_or(0),
+        name.to_owned(),
+    )
+}
+
+fn record_order(rec: &Record) -> (u64, u64, String) {
+    let launch = rec.resume().and_then(|r| r.get("launch_ts")?.as_u64());
+    stop_order(rec.u64("stopped_ts"), launch, &rec.label())
+}
+
+/// The lane's resume file: the lane-side copy of the launch record's resume handle. A copy of
+/// a later stop is never replaced by an earlier one (publication and repair both come here).
 /// Returns false when it could not be written.
 fn write_lane_resume(host: &mut dyn Host, cfg: &Config, rec: &Record, lane: &str) -> bool {
+    let path = cfg.pr_dir.join(format!("{lane}.resume.json"));
+    let on_disk: Option<Value> = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    let theirs = on_disk.as_ref().map(|v| {
+        let name = v.get("session_name").and_then(Value::as_str);
+        stop_order(
+            v.get("stopped_ts").and_then(Value::as_u64),
+            v.get("launch_ts").and_then(Value::as_u64),
+            name.unwrap_or_default(),
+        )
+    });
+    if theirs.is_some_and(|t| t >= record_order(rec)) {
+        return true;
+    }
     let body = json!({"lane": lane, "state": "stopped", "session_name": rec.label(), "agent": rec.agent().name(),
         "handle": rec.resume_str("handle"), "head": rec.resume_str("head"), "round": rec.resume_round(),
-        "stopped_ts": rec.u64("stopped_ts"), "ts": host.now()});
-    let path = cfg.pr_dir.join(format!("{lane}.resume.json"));
+        "stopped_ts": rec.u64("stopped_ts"), "launch_ts": rec.resume().and_then(|r| r.get("launch_ts")?.as_u64()),
+        "ts": host.now()});
     let tmp = path.with_extension("json.tmp");
     let done = std::fs::write(&tmp, body.to_string()).and_then(|_| std::fs::rename(&tmp, &path));
     if let Err(e) = &done {
@@ -95,8 +126,7 @@ fn write_lane_resume(host: &mut dyn Host, cfg: &Config, rec: &Record, lane: &str
     done.is_ok()
 }
 
-/// Every lane gets the copy of its latest stopped launch. A missing copy (its write failed) or
-/// one of an older stop is rewritten; the stop itself is never repeated.
+/// Every lane gets the copy of its latest stopped launch; the stop itself is never repeated.
 fn repair_lane_copies(host: &mut dyn Host, cfg: &Config) -> u32 {
     let mut latest: Vec<(String, Record)> = vec![];
     for rec in load_all(&cfg.launch_dir) {
@@ -107,22 +137,14 @@ fn repair_lane_copies(host: &mut dyn Host, cfg: &Config) -> u32 {
             continue;
         };
         match latest.iter_mut().find(|(l, _)| *l == lane) {
-            Some((_, best)) if best.u64("stopped_ts") >= rec.u64("stopped_ts") => {}
+            Some((_, best)) if record_order(best) >= record_order(&rec) => {}
             Some(entry) => entry.1 = rec,
             None => latest.push((lane, rec)),
         }
     }
     let mut failed = 0;
     for (lane, rec) in latest {
-        let path = cfg.pr_dir.join(format!("{lane}.resume.json"));
-        let on_disk: Option<Value> = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok());
-        let current = on_disk
-            .as_ref()
-            .and_then(|v| v.get("stopped_ts")?.as_u64())
-            .is_some_and(|t| Some(t) >= rec.u64("stopped_ts"));
-        if !current && !write_lane_resume(host, cfg, &rec, &lane) {
+        if !write_lane_resume(host, cfg, &rec, &lane) {
             failed += 1;
         }
     }
@@ -183,9 +205,7 @@ fn stop_target(host: &dyn Host, rec: &Record) -> Target {
     }
 }
 
-/// What a stop will publish, taken before anything is signalled and kept in the record as
-/// `stop_pending`: a stop whose publication fails is finished from this snapshot, never from a
-/// second look at a worktree that may have moved on.
+/// What a stop will publish, taken before anything is signalled.
 fn snapshot(
     host: &dyn Host,
     rec: &Record,
@@ -202,18 +222,79 @@ fn snapshot(
         "launch_ts": rec.u64("ts"), "launch_run": rec.str("run_id")})
 }
 
-/// The pending snapshot of this very launch, if the record holds one.
-fn pending(rec: &Record, handle: &str) -> Option<Value> {
-    let p = rec.value.get("stop_pending").filter(|p| p.is_object())?;
-    let same = p.get("handle").and_then(Value::as_str) == Some(handle)
-        && p.get("launch_ts").and_then(Value::as_u64) == rec.u64("ts")
-        && p.get("launch_run").and_then(Value::as_str) == rec.str("run_id");
-    same.then(|| p.clone())
+/// The sidecar of a stop that is not finished: `<record>.pending`, the snapshot taken before the
+/// session was touched. It exists from before the signal until the stop line is in the log, so
+/// a failed record write or log append is finished by a later tick from the same snapshot and
+/// never from a second look at a worktree that moved on. Not a `.json`: it is no launch record.
+fn pending_path(rec: &Record) -> PathBuf {
+    rec.path.with_extension("pending")
+}
+
+fn same_launch(snap: &Value, rec: &Record) -> bool {
+    snap.get("handle").and_then(Value::as_str) == rec.handle()
+        && snap.get("launch_ts").and_then(Value::as_u64) == rec.u64("ts")
+        && snap.get("launch_run").and_then(Value::as_str) == rec.str("run_id")
+}
+
+/// The sidecar's snapshot when it belongs to this launch.
+fn read_pending(rec: &Record) -> Option<Value> {
+    let snap: Value = serde_json::from_slice(&std::fs::read(pending_path(rec)).ok()?).ok()?;
+    same_launch(&snap, rec).then_some(snap)
+}
+
+fn write_pending(rec: &Record, snap: &Value) -> std::io::Result<()> {
+    let path = pending_path(rec);
+    let tmp = path.with_extension("pending.tmp");
+    std::fs::write(&tmp, snap.to_string())?;
+    std::fs::rename(tmp, path)
+}
+
+/// Remove the sidecar; one that stays behind is reported (the run exits non-zero), because a
+/// later independent exit would otherwise be published from an attempt that did not happen.
+fn drop_pending(host: &mut dyn Host, rec: &Record, failures: &mut u32) {
+    match std::fs::remove_file(pending_path(rec)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            *failures += 1;
+            host.log(&format!(
+                "event=stop-pending-left name={} error={e}",
+                rec.label()
+            ));
+        }
+    }
+}
+
+/// The record holds the stop: lane copy, then the log line, then the sidecar goes. A log line
+/// that cannot be appended keeps the sidecar, so the next tick writes it.
+fn complete_stop(
+    host: &mut dyn Host,
+    cfg: &Config,
+    rec: &Record,
+    snap: &Value,
+    freed: &str,
+    failures: &mut u32,
+) {
+    if let Some(l) = rec.lane() {
+        if !write_lane_resume(host, cfg, rec, &l) {
+            *failures += 1;
+        }
+    }
+    let reason = snap["reason"].as_str().unwrap_or_default();
+    let handle = snap["handle"].as_str().unwrap_or_default();
+    let line = format!(
+        "event=stop name={} age_s={} reason={reason} ram_freed_mb={freed} handle={handle}",
+        rec.label(),
+        age(host, rec)
+    );
+    if host.log(&line) {
+        drop_pending(host, rec, failures);
+    }
 }
 
 /// Publish a carried-out stop from its snapshot: state, stopped_ts and the resume object reach
-/// the record in one atomic rename (the launch identity scopes the stop, see Record::stopped),
-/// then the lane copy and the log line. A record that cannot be saved is not published.
+/// the record in one atomic rename (the launch identity scopes the stop, see Record::stopped).
+/// A record that cannot be saved is not published; its sidecar stays.
 fn publish_stop(
     host: &mut dyn Host,
     cfg: &Config,
@@ -222,39 +303,42 @@ fn publish_stop(
     freed: &str,
     failures: &mut u32,
 ) {
-    let name = rec.label();
-    let handle = snap["handle"].as_str().unwrap_or_default().to_owned();
     rec.set("state", json!("stopped"));
     rec.set("stopped_ts", snap["stopped_ts"].clone());
     rec.set("stop_refused", Value::Null);
-    rec.set("stop_pending", Value::Null);
     rec.set("resume", snap.clone());
-    if !save(host, rec) {
+    if save(host, rec) {
+        complete_stop(host, cfg, rec, snap, freed, failures);
+    } else {
         *failures += 1;
-        return; // no lane copy and no stop line for a stop the record does not hold
     }
-    if let Some(l) = rec.lane() {
-        if !write_lane_resume(host, cfg, rec, &l) {
-            *failures += 1;
-        }
-    }
-    let age_s = age(host, rec);
-    let reason = snap["reason"].as_str().unwrap_or_default();
-    host.log(&format!(
-        "event=stop name={name} age_s={age_s} reason={reason} ram_freed_mb={freed} handle={handle}"
-    ));
 }
 
-/// A stop that was signalled but not published (the record could not be saved) is finished as
-/// soon as the runtime shows the session stopped, from the snapshot taken before the signal.
+/// Finish the stops a sidecar names: a stop whose record write or log append failed, once the
+/// runtime shows the session stopped; any other sidecar (another launch's, an attempt that
+/// never finished) is removed.
 fn finish_pending(host: &mut dyn Host, cfg: &Config) -> u32 {
     let mut failures = 0;
     for mut rec in load_all(&cfg.launch_dir) {
-        let Some(snap) = rec.handle().and_then(|h| pending(&rec, h)) else {
+        if !pending_path(&rec).exists() {
+            continue;
+        }
+        let Some(snap) = read_pending(&rec) else {
+            drop_pending(host, &rec, &mut failures); // another launch's, or unreadable
             continue;
         };
-        if !rec.stopped() && matches!(stop_target(host, &rec), Target::AlreadyStopped) {
+        if rec.stopped() {
+            if rec.resume_u64("stopped_ts") == snap["stopped_ts"].as_u64() {
+                complete_stop(host, cfg, &rec, &snap, "unknown", &mut failures);
+            } else {
+                drop_pending(host, &rec, &mut failures);
+            }
+        } else if matches!(stop_target(host, &rec), Target::AlreadyStopped) {
             publish_stop(host, cfg, &mut rec, &snap, "unknown", &mut failures);
+        } else {
+            // One tick runs at a time: a sidecar of a session that still runs is an attempt that
+            // never finished, and an exit later on must not be published from it.
+            drop_pending(host, &rec, &mut failures);
         }
     }
     failures
@@ -283,36 +367,35 @@ fn stop_session(
         refuse_once(host, rec, &line, why);
         return;
     }
-    let (snap, acted) = match target {
-        Target::AlreadyStopped => (
-            pending(rec, &handle)
-                .unwrap_or_else(|| snapshot(host, rec, &handle, reason, status_head)),
-            Ok(()),
-        ),
-        target => {
-            // The snapshot reaches the record before the session is touched.
-            let snap = snapshot(host, rec, &handle, reason, status_head);
-            rec.set("stop_pending", snap.clone());
-            if !save(host, rec) {
-                *failures += 1;
-                return;
-            }
-            let acted = match target {
-                Target::Stop(argv) => host.run(None, &argv).map(drop),
-                Target::Signal(pid, start) => host.terminate(pid, start),
-                _ => Ok(()),
-            };
-            (snap, acted)
+    // A runtime that stopped by itself keeps the snapshot an earlier tick took of it.
+    let kept = read_pending(rec).filter(|_| matches!(target, Target::AlreadyStopped));
+    let snap = kept.unwrap_or_else(|| snapshot(host, rec, &handle, reason, status_head));
+    if let Err(e) = write_pending(rec, &snap) {
+        host.log(&format!(
+            "event=record-save-failed name={name} error={}",
+            one_line(&e.to_string())
+        ));
+        *failures += 1;
+        return; // nothing is stopped that cannot be remembered
+    }
+    // The snapshot took time: look at the runtime again right before the session is touched.
+    let acted = match stop_target(host, rec) {
+        Target::Keep(why) => {
+            drop_pending(host, rec, failures);
+            let line = format!("event=stop-skipped name={name} reason={reason} why={why}");
+            refuse_once(host, rec, &line, &why);
+            return;
         }
+        Target::Stop(argv) => host.run(None, &argv).map(drop),
+        Target::Signal(pid, start) => host.terminate(pid, start),
+        Target::AlreadyStopped => Ok(()),
     };
     if let Err(e) = acted {
         host.log(&format!(
             "event=stop-failed name={name} reason={reason} error={}",
             one_line(&e)
         ));
-        // The session still runs: a snapshot of this moment must not outlive the attempt.
-        rec.set("stop_pending", Value::Null);
-        save(host, rec);
+        drop_pending(host, rec, failures); // the session still runs: nothing to finish later
         return;
     }
     let freed = match (before, host.mem_available_mb()) {

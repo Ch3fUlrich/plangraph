@@ -118,6 +118,10 @@ impl Record {
         self.resume()?.get(key)?.as_str()
     }
 
+    pub fn resume_u64(&self, key: &str) -> Option<u64> {
+        self.resume()?.get(key)?.as_u64()
+    }
+
     pub fn resume_round(&self) -> u64 {
         self.resume()
             .and_then(|r| r.get("round")?.as_u64())

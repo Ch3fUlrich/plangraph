@@ -32,6 +32,12 @@ pub struct Fake {
     pub log_fails: bool,
     /// Created as a directory while a stop command runs, so the record's next save fails.
     pub block_on_run: Option<PathBuf>,
+    /// While a stop command runs this path becomes a non-empty directory (a file that can no
+    /// longer be removed).
+    pub jam_on_run: Option<PathBuf>,
+    /// The session starts a turn while its worktree is looked up.
+    pub busy_on_head: bool,
+    pub busy: std::cell::Cell<bool>,
     pub children: Option<bool>,
     pub wt_id: Option<String>,
     pub turn_ended: Option<bool>,
@@ -58,6 +64,9 @@ impl Fake {
             terminated: vec![],
             log_fails: false,
             block_on_run: None,
+            jam_on_run: None,
+            busy_on_head: false,
+            busy: Default::default(),
             children: Some(false),
             wt_id: Some("w1".into()),
             turn_ended: Some(true),
@@ -73,6 +82,11 @@ impl Host for Fake {
         self.runs.push((cwd.map(Path::to_path_buf), argv.to_vec()));
         if let Some(p) = &self.block_on_run {
             std::fs::create_dir(p).unwrap();
+        }
+        if let Some(p) = &self.jam_on_run {
+            let _ = std::fs::remove_file(p);
+            std::fs::create_dir(p).unwrap();
+            std::fs::write(p.join("x"), "x").unwrap();
         }
         if self.fail_run {
             Err("boom".into())
@@ -105,6 +119,9 @@ impl Host for Fake {
         self.wt_id.clone()
     }
     fn turn_ended(&self, _: &Record) -> Option<bool> {
+        if self.busy.get() {
+            return Some(false);
+        }
         self.turn_ended
     }
     fn mem_available_mb(&self) -> Option<u64> {
@@ -113,6 +130,7 @@ impl Host for Fake {
         self.mem.get(i).or(self.mem.last()).copied()
     }
     fn git_head(&self, _: &Path) -> Option<String> {
+        self.busy.set(self.busy_on_head);
         self.head.clone()
     }
     fn activity_ts(&self, _: &Record) -> Option<u64> {

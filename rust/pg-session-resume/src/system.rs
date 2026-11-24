@@ -80,10 +80,10 @@ impl Host for System {
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stat) => match (proc_state(&stat), proc_start_ticks(&stat)) {
                 // A zombie leader whose other threads still run is a running process: only the
-                // exit of the whole thread group (the pidfd) ends it.
-                (Some('Z' | 'X'), Some(start)) => match live_threads(pid) {
-                    Some(false) => Process::Gone,
-                    Some(true) => Process::Live(start),
+                // kernel's word on the whole thread group (the pidfd) ends it.
+                (Some('Z' | 'X'), Some(start)) => match exited(pid) {
+                    Some(true) => Process::Gone,
+                    Some(false) => Process::Live(start),
                     None => Process::Unknown,
                 },
                 (Some('Z' | 'X'), None) => Process::Unknown,
@@ -234,25 +234,26 @@ impl System {
     }
 }
 
-/// Whether any thread of the process other than a zombie is left; None when unreadable.
-fn live_threads(pid: u32) -> Option<bool> {
-    let tasks = match std::fs::read_dir(format!("/proc/{pid}/task")) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(false),
+/// Whether the whole process (every thread) has exited, as the kernel reports it through a
+/// pidfd; None when that cannot be asked. A zombie leader's state letter says nothing about its
+/// other threads, and a scan of /proc can miss one that is being replaced.
+fn exited(pid: u32) -> Option<bool> {
+    let fd = match pidfd_open(pid) {
+        Ok(fd) => fd,
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return Some(true),
         Err(_) => return None,
     };
-    for task in tasks.flatten() {
-        match std::fs::read_to_string(task.path().join("stat")) {
-            Ok(stat) => {
-                if !matches!(proc_state(&stat)?, 'Z' | 'X') {
-                    return Some(true);
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // that thread just exited
-            Err(_) => return None,
-        }
+    let mut p = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd on a descriptor this function owns; zero timeout.
+    match unsafe { libc::poll(&mut p, 1, 0) } {
+        n if n > 0 => Some(true),
+        0 => Some(false),
+        _ => None,
     }
-    Some(false)
 }
 
 fn mtime_ns(path: &Path) -> Option<u128> {
