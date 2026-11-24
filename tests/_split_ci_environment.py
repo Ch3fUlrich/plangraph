@@ -225,6 +225,10 @@ def pytest_addoption(parser):
 _START_ALARM_THREAD = _thread.start_new_thread
 _NEW_LOCK = _thread.allocate_lock
 _PTHREAD_KILL = getattr(signal, 'pthread_kill', None)
+_INTERRUPT_MAIN = _thread.interrupt_main
+# Platforms without a thread-directed signal (Windows) run the same handler through
+# interrupt_main, which fires at the next bytecode boundary of the main thread.
+_DEADLINE_SIGNAL = getattr(signal, 'SIGUSR2', signal.SIGINT)
 _SET_SIGNAL_HANDLER = signal.signal
 _DEADLINE = pytest.StashKey()
 
@@ -246,7 +250,10 @@ class _Alarm:
         try:
             # The lock is only released by cancel(); a timeout means the deadline passed.
             if not self._cancelled.acquire(timeout=self._delay):
-                _PTHREAD_KILL(self._target, self._sig)
+                if _PTHREAD_KILL is not None:
+                    _PTHREAD_KILL(self._target, self._sig)
+                else:
+                    _INTERRUPT_MAIN(self._sig)
         finally:
             self._finished.release()
 
@@ -321,14 +328,6 @@ def pytest_runtest_protocol(item):
 def _watch_test_phase(item, teardown=False):
     expires, seconds, started = item.stash[_DEADLINE]
     remaining = expires - monotonic()
-    if not hasattr(signal, 'pthread_kill'):
-        # Platforms without a thread-directed signal still get a stack dump.
-        faulthandler.dump_traceback_later(max(0.001, remaining))
-        try:
-            return (yield)
-        finally:
-            faulthandler.cancel_dump_traceback_later()
-
     armed = False
 
     def interrupt(signum, frame):
@@ -338,7 +337,7 @@ def _watch_test_phase(item, teardown=False):
             _stop_hung_test(item, started, teardown)
 
     # SIGALRM belongs to tests that install their own subprocess alarms.
-    sig = signal.SIGUSR2
+    sig = _DEADLINE_SIGNAL
     alarm = _Alarm(remaining, get_ident(), sig)
     arm_failure = None
     previous = _SET_SIGNAL_HANDLER(sig, interrupt)

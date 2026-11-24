@@ -346,6 +346,40 @@ def test_pytest_deadline_reports_hang_and_keeps_running(tmp_path, parallel, phas
             command.wait(timeout=5)
 
 
+@pytest.mark.parametrize('phase', ['call', 'teardown'])
+def test_pytest_deadline_interrupts_main_thread_without_pthread_kill(tmp_path, phase):
+    """Windows has no pthread_kill: the deadline still fails the hung test and the run goes on."""
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text(
+        'pytest_plugins = ("_split_ci_environment",)\n\n'
+        'def pytest_configure(config):\n'
+        '    import _split_ci_environment as plugin\n'
+        '    plugin._PTHREAD_KILL = None\n',
+    )
+    (tmp_path / 'test_hang.py').write_text(
+        'import time, pytest\n\n'
+        'def spin():\n'
+        '    while True:\n        time.sleep(0.01)\n\n'
+        '@pytest.fixture\ndef fixture():\n'
+        + {'call': '    return spin\n', 'teardown': '    yield\n    spin()\n'}[phase]
+        + f'def test_blocked(fixture):\n    {"fixture()" if phase == "call" else "pass"}\n\n'
+        'def test_after_hang():\n    pass\n',
+    )
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-o', 'test_deadline=2', str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert {'call': '1 failed, 1 passed', 'teardown': '2 passed, 1 error'}[phase] in output, output
+    assert 'HUNG test_hang.py::test_blocked' in output and 'in spin' in output, output
+    assert 'INTERNALERROR' not in output, output
+
+
 @pytest.mark.skipif(sys.platform != 'linux', reason='checks the thread-directed deadline signal')
 @pytest.mark.parametrize('parallel', [False, True])
 @pytest.mark.parametrize('patch', [
