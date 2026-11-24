@@ -93,6 +93,10 @@ fn every_print_shape_of_a_key_file_is_refused() {
         "grep --regexp=-l ~/.config/plangraph/client.key".to_owned(),
         "grep --regexp -c ~/.config/plangraph/client.key".to_owned(),
         "rg -ec ~/.config/plangraph/client.key".to_owned(),
+        // ripgrep's -L follows symlinks and still prints matches; --count-matches is quiet only
+        // for the names it lists, never for the lines of -n.
+        "rg -L x ~/.config/plangraph/client.key".to_owned(),
+        "rg -nL x ~/.config/plangraph/client.key".to_owned(),
     ] {
         let reason = bash(&f, &command);
         assert!(
@@ -124,6 +128,11 @@ fn listing_and_measuring_a_key_file_stay_allowed() {
         "grep --count x ~/.config/plangraph/client.key",
         "grep -rl x ~/.config/plangraph",
         "rg -l x ~/.config/plangraph",
+        "rg -c x ~/.config/plangraph/client.key",
+        "rg --count-matches x ~/.config/plangraph/client.key",
+        "rg --files-without-match x ~/.config/plangraph",
+        "grep -L x ~/.config/plangraph/client.key",
+        "ag -l x ~/.config/plangraph",
         "find ~/.config/plangraph -name '*.key'",
         "chmod 600 ~/.config/plangraph/client.key",
         "echo hello > ~/.config/plangraph/new.token",

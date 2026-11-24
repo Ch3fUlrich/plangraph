@@ -288,6 +288,19 @@ fn short_takes_value(verb: &str, flag: char) -> bool {
     set.contains(flag)
 }
 
+/// Short flags that make the executable print only names or counts. They differ: grep's `-L`
+/// lists files without a match, ripgrep's `-L` follows symlinks and still prints matches, and
+/// ripgrep has no quiet flag outside `-l`, `-c` and `-q`.
+fn quiet_short_flag(verb: &str, flag: char) -> bool {
+    if verb.ends_with("grep") {
+        matches!(flag, 'l' | 'L' | 'c' | 'q')
+    } else if verb == "ag" {
+        matches!(flag, 'l' | 'L' | 'c')
+    } else {
+        matches!(flag, 'l' | 'c' | 'q')
+    }
+}
+
 const LONG_WITH_VALUE: &[&str] = &[
     "--regexp",
     "--file",
@@ -327,6 +340,7 @@ fn grep_is_quiet(verb: &str, args: &[String]) -> bool {
                 "--files-with-matches"
                     | "--files-without-match"
                     | "--count"
+                    | "--count-matches"
                     | "--quiet"
                     | "--silent"
             ) {
@@ -343,7 +357,7 @@ fn grep_is_quiet(verb: &str, args: &[String]) -> bool {
                     }
                     break;
                 }
-                quiet |= matches!(flag, 'l' | 'L' | 'c' | 'q');
+                quiet |= quiet_short_flag(verb, flag);
             }
         }
     }

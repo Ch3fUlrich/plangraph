@@ -109,18 +109,33 @@ def codex_review_client(harness, role, tag, *, env=None):
     return executable, None if executable else f"REVIEW {tag} FAIL client_missing {searched}"
 
 
-def codex_isolation_args(env=None):
-    """``codex exec`` arguments that run a routed Codex review under the shared policy: read
-    everywhere except the secret paths of ``secret_paths.json``, and a tool environment cut to the
-    core variables without the harness API keys. The Rust native writer builds the same profile
-    from the same data file."""
+def toml_string(text):
+    """``text`` as a TOML basic string; None when it cannot be one (a lone surrogate)."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return json.dumps(text, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+def codex_isolation_args(env=None, role="review"):
+    """``codex exec`` arguments that run a routed Codex under the shared policy: read everywhere
+    except the secret paths of ``secret_paths.json``. Implement and fix runs also write to the
+    project root and the temporary directories and keep the network (like the native writer
+    profile); review runs stay read-only with a tool environment cut to the core variables. The
+    Rust native writer builds the same profile from the same data file."""
     from plangraph.routing_support.claude_seat import secret_data, secret_paths
-    name = "plangraph_review"
-    entries = ['":root"="read"'] + [f"{json.dumps(path)}=\"none\"" for path in secret_paths(env)]
-    exclude = ",".join(json.dumps(pattern) for pattern in secret_data()["tool_env_exclude"])
+    writes = role in ("implement", "fix")
+    name = "plangraph_isolated" if writes else "plangraph_review"
+    entries = ['":root"="read"']
+    if writes:
+        entries += ['":project_roots"={"."="write"}', '":tmpdir"="write"', '"/tmp"="write"']
+    entries += [f"{quoted}=\"none\"" for path in secret_paths(env) if (quoted := toml_string(path))]
+    exclude = ",".join(toml_string(pattern) for pattern in secret_data()["tool_env_exclude"])
     values = [f'default_permissions="{name}"',
               f"permissions.{name}.filesystem={{{','.join(entries)}}}",
-              'shell_environment_policy.inherit="core"',
+              f"permissions.{name}.network.enabled={'true' if writes else 'false'}",
+              f'shell_environment_policy.inherit="{"all" if writes else "core"}"',
               "shell_environment_policy.ignore_default_excludes=false",
               f"shell_environment_policy.exclude=[{exclude}]"]
     return [arg for value in values for arg in ("-c", value)]

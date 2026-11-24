@@ -214,13 +214,31 @@ def deny_secret_reads(argv, env):
     merge_settings(argv, {"permissions": {"deny": read_deny_rules(_credential_paths(env))}})
 
 
+def confine_writer_shell(argv, env, role, job_id):
+    """A routed Claude writer runs shell commands, which the Read deny rules do not reach: run
+    them in Claude's filesystem sandbox with the secret paths unreadable, or refuse the route
+    (the returned event carries ``refusal``) when this host cannot start that sandbox."""
+    tools = argv[argv.index("--tools") + 1] if "--tools" in argv else "Bash"
+    if role not in ("implement", "fix") or "Bash" not in tools.split(","):
+        return None
+    if not sandbox_available(env):
+        host = socket.gethostname()
+        return {"event": "sandbox_unavailable", "host": host, "python_job_id": job_id,
+                "refusal": f"sandbox_unavailable: claude shell commands cannot be confined on {host}; "
+                           "the secret paths would stay readable"}
+    merge_settings(argv, {"sandbox": {
+        "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+        "filesystem": {"denyRead": _credential_paths(env)}}})
+    return None
+
+
 def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
                            worktree=None, review_target=None):
     """Apply Sonnet's review profile and return the read-only fallback event, if any."""
     from plangraph.planner.legs import REVIEW_SONNET
 
     if role != "review" or leg is None or leg.id != REVIEW_SONNET or leg.tool_mode != "tools":
-        return
+        return confine_writer_shell(argv, env, role, job_id)
     argv[argv.index("--permission-mode") + 1] = "dontAsk"
     argv[argv.index("--setting-sources") + 1] = ""
     if not sandbox_available(env):

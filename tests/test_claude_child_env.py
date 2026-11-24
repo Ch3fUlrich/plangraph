@@ -64,6 +64,13 @@ def check_env(env):
     assert not stray, 'names outside the allowlist reached the claude child: ' + ', '.join(stray)
 
 
+@pytest.fixture(autouse=True)
+def sandbox_starts(monkeypatch):
+    """The host can start Claude's sandbox unless a test says otherwise (a smoke run is not hermetic)."""
+    from plangraph.routing_support import claude_seat
+    monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: True)
+
+
 def fake_binary(directory, name):
     directory.mkdir(exist_ok=True)
     path = directory / name
@@ -231,15 +238,18 @@ def test_launch_plan_skips_the_haiku_leg_on_a_host_without_claude(monkeypatch, t
     assert any(l.id == 'claude-sonnet-5-5-high' for l in spawnable_legs())
 
 
-def drive_args(monkeypatch, tmp_path, *, client, model, role):
-    """Run SpawnerRunner.spawn up to the exec boundary; return (args, env) the harness would get."""
+def drive_args(monkeypatch, tmp_path, *, client, model, role, parent_env=None, path_bin=True):
+    """Run SpawnerRunner.spawn up to the exec boundary; return (exe, args, env, job) of the harness."""
     monkeypatch.setenv('HOME', '/h')
     monkeypatch.setenv('XDG_CONFIG_HOME', '/xdg')
     monkeypatch.setenv('PG_DSN', 'fixture-parent-secret')       # a spawner secret that must not reach the run
     monkeypatch.setenv('CODEX_HOME', '/codex')
     monkeypatch.setenv('OPENAI_API_KEY', 'fixture-key')
     monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', 'fixture-gateway-key')
-    monkeypatch.setenv('PATH', os.pathsep.join([str(fake_binary(tmp_path / 'bin', client)), '/bin', '/usr/bin']))
+    for name, value in (parent_env or {}).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv('PATH', os.pathsep.join(
+        ([str(fake_binary(tmp_path / 'bin', client))] if path_bin else []) + ['/bin', '/usr/bin']))
     monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
     seen = {}
 
@@ -247,19 +257,20 @@ def drive_args(monkeypatch, tmp_path, *, client, model, role):
         pass
 
     async def factory(exe, *args, **kw):
-        seen['args'], seen['env'] = list(args), dict(kw['env'])
+        seen.update(exe=exe, args=list(args), env=dict(kw['env']))
         raise Stop
 
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    job = None
     try:
-        asyncio.run(runner.spawn('review this', model, role=role, client=client, cwd=str(tmp_path)))
+        job = asyncio.run(runner.spawn('review this', model, role=role, client=client, cwd=str(tmp_path)))
     except Stop:
         pass
-    return seen.get('args'), seen.get('env')
+    return seen.get('exe'), seen.get('args'), seen.get('env'), job
 
 
 def test_the_routed_codex_run_gets_the_deny_profile_and_no_spawner_secret(monkeypatch, tmp_path):
-    args, env = drive_args(monkeypatch, tmp_path, client='codex', model='omniroute/cx-gpt-6.2-sol-high', role='review')
+    _, args, env, _ = drive_args(monkeypatch, tmp_path, client='codex', model='omniroute/cx-gpt-6.2-sol-high', role='review')
     assert args is not None
     line = ' '.join(args)
     assert 'default_permissions="plangraph_review"' in line
@@ -276,10 +287,71 @@ def test_the_routed_codex_run_gets_the_deny_profile_and_no_spawner_secret(monkey
 @pytest.mark.parametrize('role', ['implement', 'review'])
 def test_every_claude_route_denies_the_built_in_read_tools_on_secret_paths(monkeypatch, tmp_path, role):
     import json
-    args, env = drive_args(monkeypatch, tmp_path, client='claude', model='claude-haiku-5-5', role=role)
+    _, args, env, _ = drive_args(monkeypatch, tmp_path, client='claude', model='claude-haiku-5-5', role=role)
     assert args is not None and args.count('--settings') == 1
     deny = json.loads(args[args.index('--settings') + 1])['permissions']['deny']
     for rule in ('Read(~/.ssh/**)', 'Read(~/.config/plangraph/**)', 'Read(~/.local/share/plangraph/keeper.json)',
                  'Read(//xdg/plangraph/**)'):
         assert rule in deny, rule
     assert 'PG_DSN' not in env
+
+
+CODEX_LEG = 'omniroute/cx-gpt-6.2-sol-high'
+
+
+def test_a_codex_implement_run_keeps_workspace_writes_while_a_review_stays_read_only(monkeypatch, tmp_path):
+    _, review, _, _ = drive_args(monkeypatch, tmp_path, client='codex', model=CODEX_LEG, role='review')
+    _, write, env, _ = drive_args(monkeypatch, tmp_path, client='codex', model=CODEX_LEG, role='implement')
+    review_line, write_line = ' '.join(review), ' '.join(write)
+    assert '":project_roots"' not in review_line and 'network.enabled=false' in review_line
+    assert '":project_roots"={"."="write"}' in write_line and '"/tmp"="write"' in write_line
+    assert 'network.enabled=true' in write_line and 'shell_environment_policy.inherit="all"' in write_line
+    for line in (review_line, write_line):
+        assert '"~/.ssh"="none"' in line and '"~/.local/share/plangraph/keeper.json"="none"' in line
+    assert 'PG_DSN' not in env, 'a spawner secret reached the codex implement child'
+
+
+def test_only_the_exact_codex_names_survive_the_process_filter(monkeypatch, tmp_path):
+    lookalikes = {'OMNIROUTE_API_KEY': 'v', 'OPENAI_ORG_ID': 'v', 'OPENAI_ADMIN_KEY': 'v',
+                  'OMNIROUTE_ADMIN_TOKEN': 'v', 'PG_TOKEN_FILE': 'v'}
+    _, _, env, _ = drive_args(monkeypatch, tmp_path, client='codex', model=CODEX_LEG, role='review',
+                              parent_env=lookalikes)
+    stray = sorted(name for name in lookalikes if name in env)
+    assert stray == [], 'unlisted parent names reached the codex child: ' + ', '.join(stray)
+    assert {'CODEX_HOME', 'OPENAI_API_KEY', 'AUTOOS_OMNIROUTE_KEY'} <= set(env)
+
+
+def test_the_configured_codex_executable_is_resolved_before_the_filter_drops_nothing(monkeypatch, tmp_path):
+    binary = fake_binary(tmp_path / 'elsewhere', 'codex') / 'codex'
+    exe, args, _, job = drive_args(monkeypatch, tmp_path, client='codex', model=CODEX_LEG, role='review',
+                                   parent_env={'PLANGRAPH_CODEX_BIN': str(binary)}, path_bin=False)
+    assert exe == str(binary), (exe, job.stderr if job else None)
+
+
+def test_the_codex_profile_is_valid_toml_for_a_supplementary_unicode_config_home():
+    import tomllib
+    from plangraph.routing_support.clients import codex_isolation_args
+    xdg = '/fixture/xdg-\U0001F600-\x7f-"q"\\'
+    for role in ('review', 'implement'):
+        args = codex_isolation_args({'XDG_CONFIG_HOME': xdg}, role)
+        tables = [tomllib.loads(value) for value in args[1:len(args):2]]      # every -c value parses
+        fs = tables[1]['permissions'][next(iter(tables[1]['permissions']))]['filesystem']
+        assert fs[f'{xdg}/plangraph'] == 'none'
+
+
+def test_a_claude_writer_runs_its_shell_in_the_sandbox_with_the_secret_paths_unreadable(monkeypatch, tmp_path):
+    import json
+    _, args, _, _ = drive_args(monkeypatch, tmp_path, client='claude', model='claude-haiku-5-5', role='implement')
+    settings = json.loads(args[args.index('--settings') + 1])
+    sandbox = settings['sandbox']
+    assert sandbox['enabled'] and sandbox['failIfUnavailable'] and not sandbox['allowUnsandboxedCommands']
+    deny = sandbox['filesystem']['denyRead']
+    assert {'~/.ssh', '~/.config/plangraph', '~/.local/share/plangraph/keeper.json', '/xdg/plangraph'} <= set(deny)
+
+
+def test_a_claude_writer_route_is_refused_where_the_shell_cannot_be_sandboxed(monkeypatch, tmp_path):
+    from plangraph.routing_support import claude_seat
+    monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: False)
+    exe, args, _, job = drive_args(monkeypatch, tmp_path, client='claude', model='claude-haiku-5-5', role='implement')
+    assert exe is None and args is None, 'the claude writer was launched without a shell sandbox'
+    assert job.status == 'failed' and job.stderr.startswith('sandbox_unavailable:')

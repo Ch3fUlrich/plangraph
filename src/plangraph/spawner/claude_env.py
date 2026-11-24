@@ -65,22 +65,24 @@ def with_agent_shell(env: Mapping[str, str], platform: str | None = None) -> dic
     return out
 
 
-#: Extra names and prefixes the Codex review child needs on top of the claude allowlist: its own
-#: login home, the gateway client key and URL, and the harness API settings. Every other name of the spawner's environment (database
-#: DSN, token files, forge keys) is dropped.
-CODEX_ENV_ALLOW = frozenset({'CODEX_HOME', 'AUTOOS_OMNIROUTE_KEY', 'AUTOOS_OMNIROUTE_URL'})
-CODEX_ENV_ALLOW_PREFIXES = ('OPENAI_', 'OMNIROUTE_')
+#: Extra exact names the Codex child needs on top of the claude allowlist: its own login home, the
+#: gateway client key and URL, the harness API key and base URL, and the configured executable
+#: (a path, resolved after filtering). No prefix is allowed whole: any other parent variable,
+#: including look-alike keys of other providers, is dropped.
+CODEX_ENV_ALLOW = frozenset({
+    'CODEX_HOME', 'AUTOOS_OMNIROUTE_KEY', 'AUTOOS_OMNIROUTE_URL', 'OPENAI_API_KEY', 'OPENAI_BASE_URL',
+    'PLANGRAPH_CODEX_BIN',
+})
 
 
 def codex_child_env(env: Mapping[str, str]) -> dict[str, str]:
-    """A new dict holding only the names a Codex review child may inherit."""
+    """A new dict holding only the names a Codex child may inherit."""
     def allowed(name):
-        key = name.upper() if isinstance(name, str) and name.isascii() else ''
-        return claude_env_allowed(name) or key in CODEX_ENV_ALLOW or key.startswith(CODEX_ENV_ALLOW_PREFIXES)
+        return claude_env_allowed(name) or (isinstance(name, str) and name.isascii() and name.upper() in CODEX_ENV_ALLOW)
     return {name: value for name, value in env.items() if allowed(name)}
 
 
-def isolated_child_env(cmd: list, env: Mapping[str, str]) -> Mapping[str, str]:
+def isolated_child_env(cmd: list, env: Mapping[str, str], role: str = 'review') -> Mapping[str, str]:
     """The child environment of a harness run, with its argv made to read no secret path.
 
     A claude child gets its allowlisted environment (D-3605, D-3649), the pinned agent shell and
@@ -93,6 +95,6 @@ def isolated_child_env(cmd: list, env: Mapping[str, str]) -> Mapping[str, str]:
         deny_secret_reads(cmd, env)
     elif cmd[0] == 'codex' and cmd[1:2] == ['exec']:
         from plangraph.routing_support.clients import codex_isolation_args
-        cmd[2:2] = codex_isolation_args(env)
+        cmd[2:2] = codex_isolation_args(env, role)
         env = codex_child_env(env)
     return env
