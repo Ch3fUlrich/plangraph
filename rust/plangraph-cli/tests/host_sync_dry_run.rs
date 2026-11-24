@@ -107,3 +107,31 @@ fn the_here_mode_checks_a_needs_record_from_stdin() {
         "MISSING binary ~/bin/x\n"
     );
 }
+
+#[test]
+fn the_default_registry_is_found_through_xdg_config_home_first() {
+    let (home, repo) = fixture();
+    fs::write(
+        home.path().join(".config/p/a.env"),
+        "PG_PINS=/etc/hostname\n",
+    )
+    .unwrap();
+    let xdg = tempfile::tempdir().unwrap();
+    fs::create_dir_all(xdg.path().join("plangraph")).unwrap();
+    fs::copy(REGISTRY, xdg.path().join("plangraph/hosts.json")).unwrap();
+    let run = |xdg: Option<&Path>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_host-sync"));
+        cmd.env_clear().env("HOME", home.path());
+        if let Some(xdg) = xdg {
+            cmd.env("XDG_CONFIG_HOME", xdg);
+        }
+        cmd.args(["--install-dry-run", "--repo"])
+            .arg(repo.path())
+            .args(["code", "a.service"])
+            .output()
+            .unwrap()
+    };
+    assert_eq!(run(Some(xdg.path())).status.code(), Some(0));
+    // Without it the registry under HOME is read, and there is none: a refusal, not a pass.
+    assert_eq!(run(None).status.code(), Some(2));
+}
