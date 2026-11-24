@@ -20,7 +20,7 @@ mod transition;
 mod types;
 mod verify;
 
-pub use rules::{choose, Left, Order, Pool, Rule};
+pub use rules::{choose, place, Left, Order, Pool, Rule};
 pub use types::*;
 
 use std::collections::BTreeSet;
@@ -95,6 +95,10 @@ impl Model {
     /// Red CI rounds this train has had.
     pub fn red_rounds(&self, train: TrainId) -> u8 {
         self.trains[train as usize].red_rounds
+    }
+    /// The CI run in flight or last started.
+    pub fn run(&self, train: TrainId) -> u8 {
+        self.trains[train as usize].run
     }
     /// Whether the train's binding of build, base and policy is in place.
     pub fn is_bound(&self, train: TrainId) -> bool {

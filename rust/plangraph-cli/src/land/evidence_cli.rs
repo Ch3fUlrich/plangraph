@@ -6,6 +6,7 @@ use super::evidence::{
 };
 use super::evidence_git;
 use super::main_state::State;
+use super::train::Carry;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -69,8 +70,32 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         trains,
     )?;
     if let Some(out) = flags.get("records-out") {
-        let rebased = need(flags, "head")? != &old.head;
-        append(out, &records_of(&d, need(flags, "day")?, rebased))?;
+        let head = need(flags, "head")?;
+        let records = records_of(
+            &d,
+            need(flags, "day")?,
+            need(flags, "batch")?,
+            head,
+            head != &old.head,
+        );
+        append(out, &records)?;
+    }
+    if let (Some(path), Accept::Carried { old_head, new_head }, Ci::Carried { .. }) =
+        (flags.get("carry-out"), &d.accept, &d.ci)
+    {
+        // Both the ACCEPT and the part CI carry: persist it for the builder (`build --carries`).
+        let carry = Carry {
+            old_head: old_head.clone(),
+            new_head: new_head.clone(),
+            patch_id: evidence_git::key_of(
+                Path::new(need(flags, "repo")?),
+                need(flags, "main")?,
+                need(flags, "head")?,
+            )?
+            .patch_id,
+        };
+        std::fs::write(path, serde_json::to_vec(&carry).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("{path}: {e}"))?;
     }
     Ok(lines(&d))
 }
@@ -89,20 +114,25 @@ fn append(path: &str, records: &[Record]) -> Result<(), String> {
     Ok(())
 }
 
-/// `--records-out FILE --day D --kind fix-round-after-rebase`: a fix round that a rebase caused.
+/// `--records-out FILE --day D --batch B --head H --kind fix-round-after-rebase|landed`: a fix round that
+/// a rebase caused, or a batch that landed.
 pub(super) fn record_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let kind = match need(flags, "kind")?.as_str() {
         "fix-round-after-rebase" => Kind::FixRoundAfterRebase,
+        "landed" => Kind::Landed,
         other => {
             return Err(format!(
-                "unknown --kind {other}: use fix-round-after-rebase"
+                "unknown --kind {other}: use fix-round-after-rebase or landed"
             ))
         }
     };
-    append(
-        need(flags, "records-out")?,
-        &[Record::new(need(flags, "day")?, kind)],
-    )?;
+    let record = Record::new(
+        need(flags, "day")?,
+        need(flags, "batch")?,
+        need(flags, "head")?,
+        kind,
+    );
+    append(need(flags, "records-out")?, &[record])?;
     Ok(Vec::new())
 }
 
@@ -146,9 +176,20 @@ pub(super) fn report_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         .into_iter()
         .map(|(day, r)| {
             format!(
-                "{day} rebases {} accepts_carried {} ci_carried {} re_reviews {} fix_rounds_after_rebase {}",
-                r.rebases, r.accepts_carried, r.ci_carried, r.re_reviews, r.fix_rounds_after_rebase
+                "{day} rebases {} accepts_carried {} ci_carried {} re_reviews {} fix_rounds_after_rebase {} landed {}",
+                r.rebases, r.accepts_carried, r.ci_carried, r.re_reviews, r.fix_rounds_after_rebase, r.landed
             )
         })
         .collect())
+}
+
+/// A part whose receipt names an older head takes the verified carry-over to its head, so the builder's
+/// admission accepts the receipt of the head the ACCEPT and CI were earned on.
+pub(super) fn attach_carries(parts: &mut [super::train::PartIn], carries: &[Carry]) {
+    for p in parts.iter_mut().filter(|p| p.receipt.head != p.head) {
+        p.receipt.carried = carries
+            .iter()
+            .find(|c| c.new_head == p.head && c.old_head == p.receipt.head)
+            .cloned();
+    }
 }

@@ -27,11 +27,28 @@ pub struct PartIn {
 pub struct PartReceipt {
     pub run_id: String,
     pub head: String,
+    /// The receipt's ACCEPT and part CI carried over a clean rebase to this part's head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carried: Option<Carry>,
+}
+
+/// A verified carry-over (`evidence-assess --carry-out`): both the ACCEPT and the part CI of
+/// `old_head` hold for `new_head`, whose own patch has this patch identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Carry {
+    pub old_head: String,
+    pub new_head: String,
+    pub patch_id: String,
 }
 
 impl PartIn {
     pub(super) fn check_receipt(&self) -> Result<(), String> {
-        if self.receipt.head != self.head
+        let carried = self
+            .receipt
+            .carried
+            .as_ref()
+            .is_some_and(|c| c.old_head == self.receipt.head && c.new_head == self.head);
+        if (self.receipt.head != self.head && !carried)
             || !pg_worker_core::run::record::valid_run_id(&self.receipt.run_id)
         {
             return Err(format!(

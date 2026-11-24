@@ -5,9 +5,22 @@ use pg_train_model::*;
 use std::collections::HashSet;
 use support::*;
 
-const DEPTH: usize = 8;
+const DEPTH: usize = 7;
 const PARTS: PartId = 4;
 const TRAINS: TrainId = 3;
+
+/// The run in flight and the one before it: a result of the older run arrives late.
+fn runs(m: &Model, train: TrainId) -> Vec<u8> {
+    if (train as usize) >= m.train_count() {
+        return vec![0];
+    }
+    let now = m.run(train);
+    if now > 0 {
+        vec![now, now - 1]
+    } else {
+        vec![now]
+    }
+}
 
 fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
     let mut out = vec![
@@ -25,14 +38,17 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
             Event::Readmit { part },
         ]);
         for train in 0..trains.min(2) {
+            for run in runs(m, train) {
+                out.push(Event::CiRed {
+                    train,
+                    run,
+                    culprit: part,
+                });
+            }
             out.extend([
                 Event::Join { part, train },
                 Event::Conflict { train, part },
                 Event::Adopt { train, part },
-                Event::CiRed {
-                    train,
-                    culprit: part,
-                },
                 Event::VerifyLeftOut { train, part },
                 Event::RecordLeftOut {
                     train,
@@ -43,6 +59,21 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
         }
     }
     for train in 0..trains {
+        for run in runs(m, train) {
+            out.extend([
+                Event::CiResult {
+                    train,
+                    run,
+                    green: true,
+                },
+                Event::CiResult {
+                    train,
+                    run,
+                    green: false,
+                },
+                Event::CiRedFix { train, run },
+            ]);
+        }
         let base = m.main();
         out.extend([
             Event::Bind {
@@ -58,18 +89,12 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
                 policy: POLICY,
             },
             Event::StartCi { train },
-            Event::CiResult { train, green: true },
-            Event::CiResult {
-                train,
-                green: false,
-            },
             Event::Settle { train },
             Event::SettleLegacy { train },
             Event::VerifyOutcome { train },
             Event::Rebuild { train },
             Event::Amend { train },
             Event::FixInPlace { train },
-            Event::CiRedFix { train },
             Event::Speculate { pred: train },
             Event::Promote { train },
             Event::VerifyComplete { train },
@@ -96,6 +121,7 @@ fn pipeline(policy: Policy) -> Model {
         Event::Register { part: 3 },
         Event::Tick,
         Event::Select,
+        Event::VerifyComplete { train: 0 },
         Event::Bind {
             train: 0,
             build: 0,
@@ -111,9 +137,32 @@ fn pipeline(policy: Policy) -> Model {
     m
 }
 
+/// Two parts of different stacks under test, a third waiting: where red rounds and retries start.
+fn busy(policy: Policy) -> Model {
+    let mut m = model(policy);
+    for e in [
+        Event::Register { part: 0 },
+        Event::Register { part: 3 },
+        Event::Tick,
+        Event::Select,
+        Event::VerifyComplete { train: 0 },
+        Event::Bind {
+            train: 0,
+            build: 0,
+            base: 0,
+            policy: POLICY,
+        },
+        Event::StartCi { train: 0 },
+        Event::Register { part: 1 },
+    ] {
+        m.apply(e).unwrap();
+    }
+    m
+}
+
 fn explore(policy: Policy) -> (usize, [bool; 5]) {
     let mut seen: HashSet<Model> = HashSet::new();
-    let mut frontier = vec![model(policy), pipeline(policy)];
+    let mut frontier = vec![model(policy), pipeline(policy), busy(policy)];
     frontier.iter().for_each(|m| {
         seen.insert(m.clone());
     });

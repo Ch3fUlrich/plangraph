@@ -31,13 +31,7 @@ fn a_revert_takes_the_landed_children_with_it_and_moves_main() {
     register_all(&mut m, [0, 1]);
     ok(&mut m, Event::Select);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Settle { train: 0 });
     assert_eq!(m.main(), 1);
     ok(&mut m, Event::Revert { part: 0 });
@@ -56,13 +50,7 @@ fn dropping_the_root_of_a_three_part_stack_frees_every_part_above_it_from_the_re
     register_all(&mut m, 0..3);
     ok(&mut m, Event::Select);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: false,
-        },
-    );
+    ci(&mut m, 0, false);
     assert_eq!(m.pending_groups(), [vec![0, 1], vec![2]]);
     ok(&mut m, Event::Drop { part: 0 });
     assert_eq!((m.status(1), m.status(2)), (Status::Ready, Status::Ready));
@@ -81,21 +69,9 @@ fn a_revert_frees_held_descendants_at_every_depth() {
     register_all(&mut m, 0..4);
     ok(&mut m, Event::Select);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiRed {
-            train: 0,
-            culprit: 3,
-        },
-    );
+    red(&mut m, 0, 3);
     ok(&mut m, Event::StartRetry);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 1,
-            green: true,
-        },
-    );
+    ci(&mut m, 1, true);
     ok(&mut m, Event::Settle { train: 1 });
     assert_eq!(m.landed(), 3);
     ok(&mut m, Event::Revert { part: 0 });

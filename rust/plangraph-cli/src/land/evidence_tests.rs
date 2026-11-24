@@ -1,21 +1,19 @@
-use super::build_tests::{g, Fx};
 use super::evidence::*;
-use super::evidence_git;
 use super::main_state::State;
 use std::collections::BTreeSet;
 
-fn paths(p: &[&str]) -> BTreeSet<String> {
+pub(super) fn paths(p: &[&str]) -> BTreeSet<String> {
     p.iter().map(|s| (*s).to_owned()).collect()
 }
 
-fn key(patch: &str, p: &[&str]) -> Key {
+pub(super) fn key(patch: &str, p: &[&str]) -> Key {
     Key {
         patch_id: patch.into(),
         paths: paths(p),
     }
 }
 
-fn evidence(trains_at_base: u64) -> Evidence {
+pub(super) fn evidence(trains_at_base: u64) -> Evidence {
     Evidence {
         key: key("pid1", &["a.txt", "b.txt"]),
         base: "base0".into(),
@@ -26,7 +24,7 @@ fn evidence(trains_at_base: u64) -> Evidence {
     }
 }
 
-fn facts(k: Key, main_paths: &[&str], conflict: bool, trains_now: u64) -> Facts {
+pub(super) fn facts(k: Key, main_paths: &[&str], conflict: bool, trains_now: u64) -> Facts {
     Facts {
         key_now: k,
         new_base: "base1".into(),
@@ -199,9 +197,14 @@ fn the_report_counts_per_day_and_every_carry_names_old_and_new_head() {
         &facts(key("pid1", &["a.txt", "b.txt"]), &[], false, 2),
     );
     let void = decide(&evidence(1), &facts(key("x", &[]), &[], false, 2));
-    let mut recs = records_of(&carried, "2026-11-24", true);
-    recs.extend(records_of(&void, "2026-11-24", true));
-    recs.push(Record::new("2026-11-25", Kind::FixRoundAfterRebase));
+    let mut recs = records_of(&carried, "2026-11-24", "b1", "head1", true);
+    recs.extend(records_of(&void, "2026-11-24", "b2", "head2", true));
+    recs.push(Record::new(
+        "2026-11-25",
+        "b1",
+        "head1",
+        Kind::FixRoundAfterRebase,
+    ));
     let days = daily(&recs).unwrap();
     let d24 = &days["2026-11-24"];
     assert_eq!(d24.rebases, 2);
@@ -211,6 +214,8 @@ fn the_report_counts_per_day_and_every_carry_names_old_and_new_head() {
     assert_eq!(days["2026-11-25"].fix_rounds_after_rebase, 1);
     let bad = [Record::new(
         "2026-11-24",
+        "b1",
+        "h",
         Kind::AcceptCarried {
             old_head: "".into(),
             new_head: "h".into(),
@@ -219,278 +224,18 @@ fn the_report_counts_per_day_and_every_carry_names_old_and_new_head() {
     assert!(daily(&bad).is_err());
 }
 
-// Git-backed: the facts come from the repository.
-
-fn assess(fx: &Fx, old: &Evidence, main: &str, head: &str, now: u64) -> Decision {
-    evidence_git::assess(fx.path(), old, main, head, now).unwrap()
-}
-
-fn recorded(fx: &Fx, main: &str, head: &str) -> Evidence {
-    Evidence {
-        key: evidence_git::key_of(fx.path(), main, head).unwrap(),
-        base: main.into(),
-        head: head.into(),
-        trains_at_base: 0,
-        accept: true,
-        ci_green: true,
-    }
-}
-
-/// `head` replayed on `onto` with `cherry-pick`: the same patch on a newer main.
-fn rebased(fx: &Fx, head: &str, onto: &str) -> String {
-    let p = fx.path();
-    g(p, &["checkout", "-q", "--detach", onto]);
-    g(p, &["cherry-pick", head]);
-    let new = g(p, &["rev-parse", "HEAD"]);
-    g(p, &["checkout", "-q", "main"]);
-    new
-}
-
-fn advance_main(fx: &Fx, file: &str, content: &str) -> String {
-    let new = fx.commit(&fx.base(), file, content);
-    g(fx.path(), &["update-ref", "refs/heads/main", &new]);
-    g(fx.path(), &["reset", "-q", "--hard", "main"]);
-    new
-}
-
 #[test]
-fn a_clean_rebase_over_an_unrelated_main_delta_carries() {
-    let fx = Fx::new();
-    let base = fx.base();
-    let head = fx.commit(&base, "a.txt", "a\n");
-    let old = recorded(&fx, &base, &head);
-    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
-    let new_head = rebased(&fx, &head, &main1);
-    assert_ne!(new_head, head);
-    let d = assess(&fx, &old, &main1, &new_head, 1);
-    assert_eq!(
-        d.accept,
-        Accept::Carried {
-            old_head: head,
-            new_head
-        }
-    );
-    assert!(matches!(d.ci, Ci::Carried { .. }));
-}
-
-#[test]
-fn a_main_delta_on_a_part_path_voids_through_git() {
-    let fx = Fx::new();
-    let base = fx.base();
-    let head = fx.commit(
-        &base,
-        "shared.txt",
-        "line 1\nline 2\nline 3\nline 4\nline 5\nchanged\n",
-    );
-    let old = recorded(&fx, &base, &head);
-    let main1 = advance_main(
-        &fx,
-        "shared.txt",
-        "head change\nline 2\nline 3\nline 4\nline 5\nline 6\n",
-    );
-    let new_head = rebased(&fx, &head, &main1);
-    let d = assess(&fx, &old, &main1, &new_head, 1);
-    assert_eq!(
-        d.accept,
-        Accept::Void {
-            reason: Void::MainTouched(paths(&["shared.txt"])),
-            re_review: ReReview::Full
-        }
-    );
-}
-
-#[test]
-fn main_moving_does_not_force_a_rebase_only_a_textual_conflict_does() {
-    let fx = Fx::new();
-    let base = fx.base();
-    let head = fx.commit(&base, "a.txt", "a\n");
-    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
-    assert!(!evidence_git::rebase_needed(fx.path(), &main1, &head).unwrap());
-    let other = fx.commit(
-        &base,
-        "shared.txt",
-        "mine\nline 2\nline 3\nline 4\nline 5\nline 6\n",
-    );
-    let main2 = advance_main(
-        &fx,
-        "shared.txt",
-        "theirs\nline 2\nline 3\nline 4\nline 5\nline 6\n",
-    );
-    assert!(evidence_git::rebase_needed(fx.path(), &main2, &other).unwrap());
-}
-
-#[test]
-fn the_patch_id_is_stable_across_a_clean_rebase_and_differs_for_another_patch() {
-    let fx = Fx::new();
-    let base = fx.base();
-    let head = fx.commit(&base, "a.txt", "a\n");
-    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
-    let new_head = rebased(&fx, &head, &main1);
-    let k = |m: &str, h: &str| evidence_git::key_of(fx.path(), m, h).unwrap();
-    assert_eq!(k(&base, &head), k(&main1, &new_head));
-    let other = fx.commit(&base, "a.txt", "different\n");
-    assert_ne!(k(&base, &head).patch_id, k(&base, &other).patch_id);
-    assert_eq!(k(&base, &head).paths, paths(&["a.txt"]));
-}
-
-#[test]
-fn the_cli_prints_the_verdicts_naming_both_heads_and_the_daily_report() {
-    let fx = Fx::new();
-    let base = fx.base();
-    let head = fx.commit(&base, "a.txt", "a\n");
-    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
-    let new_head = rebased(&fx, &head, &main1);
-    let dir = tempfile::tempdir().unwrap();
-    let ev = dir.path().join("ev.json");
-    std::fs::write(
-        &ev,
-        serde_json::to_vec(&recorded(&fx, &base, &head)).unwrap(),
-    )
-    .unwrap();
-    let flags: std::collections::BTreeMap<String, String> = [
-        ("repo", fx.path().to_str().unwrap()),
-        ("evidence", ev.to_str().unwrap()),
-        ("main", main1.as_str()),
-        ("head", new_head.as_str()),
-        ("trains-now", "1"),
-    ]
-    .iter()
-    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-    .collect();
-    let out = super::evidence_cli::assess_cli(&flags).unwrap();
-    assert_eq!(out[0], format!("ACCEPT carried {head} -> {new_head}"));
-    assert_eq!(out[1], format!("CI carried {head} -> {new_head}"));
-    let rec = dir.path().join("rec.jsonl");
-    let lines: Vec<String> = records_of(
-        &assess(&fx, &recorded(&fx, &base, &head), &main1, &new_head, 1),
-        "2026-11-24",
-        true,
-    )
-    .iter()
-    .map(|r| serde_json::to_string(r).unwrap())
-    .collect();
-    std::fs::write(&rec, lines.join("\n")).unwrap();
-    let rflags = [("records".to_owned(), rec.to_str().unwrap().to_owned())].into();
-    assert_eq!(
-        super::evidence_cli::report_cli(&rflags).unwrap(),
-        ["2026-11-24 rebases 1 accepts_carried 1 ci_carried 1 re_reviews 0 fix_rounds_after_rebase 0"]
-    );
-}
-
-#[test]
-fn a_void_condition_without_a_prior_accept_has_nothing_to_void_and_no_re_review_is_logged() {
-    let mut e = evidence(0);
-    e.accept = false;
-    let d = decide(&e, &facts(key("other", &["a.txt", "b.txt"]), &[], false, 0));
-    assert_eq!(d.accept, Accept::None);
-    assert_eq!(d.ci, Ci::Rerun(CiRerun::Void(Void::PatchIdChanged)));
-    let kinds = |rebased| -> Vec<Kind> {
-        records_of(&d, "2026-11-24", rebased)
-            .into_iter()
-            .map(|r| r.kind)
-            .collect()
-    };
-    // Only an actual rebase is a rebase; an assessment of an unchanged head is not.
-    assert_eq!(kinds(true), [Kind::Rebase]);
-    assert!(kinds(false).is_empty());
-}
-
-fn flags(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
-    pairs
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-        .collect()
-}
-
-#[test]
-fn assess_appends_its_records_and_the_record_command_adds_a_rebase_fix_round() {
-    let fx = Fx::new();
-    let base = fx.base();
-    let head = fx.commit(&base, "a.txt", "a\n");
-    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
-    let new_head = rebased(&fx, &head, &main1);
-    let dir = tempfile::tempdir().unwrap();
-    let ev = dir.path().join("ev.json");
-    std::fs::write(
-        &ev,
-        serde_json::to_vec(&recorded(&fx, &base, &head)).unwrap(),
-    )
-    .unwrap();
-    let log = dir.path().join("log.jsonl");
-    let assess = flags(&[
-        ("repo", fx.path().to_str().unwrap()),
-        ("evidence", ev.to_str().unwrap()),
-        ("main", &main1),
-        ("head", &new_head),
-        ("trains-now", "1"),
-        ("records-out", log.to_str().unwrap()),
-        ("day", "2026-11-24"),
-    ]);
-    super::evidence_cli::assess_cli(&assess).unwrap();
-    super::evidence_cli::assess_cli(&assess).unwrap();
-    // The same head again (main moved, nothing rebased) carries but is not a rebase.
-    let mut same = assess.clone();
-    same.insert("head".into(), head.clone());
-    super::evidence_cli::assess_cli(&same).unwrap();
-    let rec = flags(&[
-        ("records-out", log.to_str().unwrap()),
-        ("day", "2026-11-25"),
-        ("kind", "fix-round-after-rebase"),
-    ]);
-    super::evidence_cli::record_cli(&rec).unwrap();
-    assert!(super::evidence_cli::record_cli(&flags(&[
-        ("records-out", "x"),
-        ("day", "d"),
-        ("kind", "nope")
-    ]))
-    .is_err());
-    let out =
-        super::evidence_cli::report_cli(&flags(&[("records", log.to_str().unwrap())])).unwrap();
-    assert_eq!(
-        out,
-        [
-            "2026-11-24 rebases 2 accepts_carried 3 ci_carried 3 re_reviews 0 fix_rounds_after_rebase 0",
-            "2026-11-25 rebases 0 accepts_carried 0 ci_carried 0 re_reviews 0 fix_rounds_after_rebase 1",
-        ]
-    );
-}
-
-#[test]
-fn the_red_command_classifies_a_flake_and_leaves_the_merge_to_ci_and_main() {
-    let dir = tempfile::tempdir().unwrap();
-    let red = dir.path().join("red.json");
-    let write =
-        |p: &std::path::Path, v: serde_json::Value| std::fs::write(p, v.to_string()).unwrap();
-    write(
-        &red,
-        serde_json::json!({"failing": ["t1"], "failing_without_patch": ["t1"], "hung": []}),
-    );
-    let main = dir.path().join("main.json");
-    write(&main, serde_json::json!({"state": "green"}));
-    let run = |ci: &str| {
-        super::evidence_cli::red_cli(&flags(&[
-            ("red", red.to_str().unwrap()),
-            ("ci-green", ci),
-            ("main-state", main.to_str().unwrap()),
-        ]))
-        .unwrap()
-    };
-    assert_eq!(
-        run("false"),
-        [
-            "RED flake: a carried ACCEPT stays",
-            "MERGE refused required_ci_not_green"
-        ]
-    );
-    assert_eq!(
-        run("true"),
-        ["RED flake: a carried ACCEPT stays", "MERGE ok"]
-    );
-    write(
-        &red,
-        serde_json::json!({"failing": ["t2"], "failing_without_patch": [], "hung": []}),
-    );
-    assert_eq!(run("false")[0], "RED genuine: a carried ACCEPT is void");
-    write(&main, serde_json::json!({"state": "pending"}));
-    assert_eq!(run("true")[1], "MERGE refused main_pending");
+fn the_same_event_logged_twice_counts_once_and_landed_batches_are_the_denominator() {
+    let r = |kind| Record::new("2026-11-24", "b1", "h1", kind);
+    let mut recs = vec![
+        r(Kind::Rebase),
+        r(Kind::Rebase),
+        r(Kind::Landed),
+        r(Kind::Landed),
+    ];
+    recs.push(Record::new("2026-11-24", "b2", "h2", Kind::Rebase));
+    recs.push(Record::new("2026-11-24", "b2", "h2", Kind::Landed));
+    let d = &daily(&recs).unwrap()["2026-11-24"];
+    assert_eq!((d.rebases, d.landed), (2, 2));
+    assert!(daily(&[Record::new("2026-11-24", "", "h", Kind::Landed)]).is_err());
 }

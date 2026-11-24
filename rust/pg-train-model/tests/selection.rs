@@ -183,3 +183,30 @@ fn the_child_of_a_reverted_part_is_refused_at_registration_and_at_build() {
         Outcome::Accepted
     );
 }
+
+#[test]
+fn a_part_deferred_for_overlap_joins_only_once_it_is_due_and_leaves_no_stale_reason() {
+    let specs = vec![spec(1, None), spec(1, None), spec(2, None)];
+    let mut m = Model::new(policy(9, 5, 0, Order::Oldest), specs);
+    register_all(&mut m, 0..3);
+    ok(&mut m, Event::Select);
+    assert_eq!(m.train_parts(0), [0, 2]);
+    assert_eq!(
+        m.left_out(0),
+        [(1, Disposition::Overlap { with: 0, waited: 0 })]
+    );
+    assert_eq!(
+        denied(&mut m, Event::Join { part: 1, train: 0 }),
+        Denied::Phase
+    );
+    for _ in 0..5 {
+        ok(&mut m, Event::Tick);
+    }
+    ok(&mut m, Event::Join { part: 1, train: 0 });
+    // The part is in the train and no longer left out; the train needs verifying again.
+    assert_eq!((m.train_parts(0), m.left_out(0)), (&[0, 2, 1][..], &[][..]));
+    assert_eq!(
+        ok(&mut m, Event::VerifyComplete { train: 0 }),
+        Outcome::Accepted
+    );
+}

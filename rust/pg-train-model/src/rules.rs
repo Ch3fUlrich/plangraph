@@ -83,28 +83,35 @@ fn candidates(pool: &dyn Pool, ready: &[usize], rule: Rule) -> Vec<usize> {
     out
 }
 
+/// Whether `p` may ride after the parts already `riding`; `Some` names why not. Selection and a late
+/// join use this one rule.
+pub fn place(pool: &dyn Pool, riding: &[usize], rule: Rule, p: usize) -> Option<Left> {
+    let waited = pool.waited(p);
+    let missing_parent = pool
+        .parent(p)
+        .filter(|q| !riding.contains(q) && !pool.verified(*q));
+    if riding.len() >= rule.cap {
+        Some(Left::Cap)
+    } else if riding.len() >= rule.target {
+        Some(Left::Target)
+    } else if let Some(parent) = missing_parent {
+        Some(Left::ParentNotLanded { parent })
+    } else {
+        riding
+            .iter()
+            .find(|&&q| pool.overlaps(p, q))
+            .filter(|_| !forced(pool, rule, p))
+            .map(|&with| Left::Overlap { with, waited })
+    }
+}
+
 /// The parts that ride, in order, and every other ready part with its disposition.
 pub fn choose(pool: &dyn Pool, ready: &[usize], rule: Rule) -> (Vec<usize>, Vec<(usize, Left)>) {
     let (mut riding, mut left) = (Vec::new(), Vec::new());
     for p in candidates(pool, ready, rule) {
-        let waited = pool.waited(p);
-        let missing_parent = pool
-            .parent(p)
-            .filter(|q| !riding.contains(q) && !pool.verified(*q));
-        if riding.len() >= rule.cap {
-            left.push((p, Left::Cap));
-        } else if riding.len() >= rule.target {
-            left.push((p, Left::Target));
-        } else if let Some(parent) = missing_parent {
-            left.push((p, Left::ParentNotLanded { parent }));
-        } else if let Some(&with) = riding
-            .iter()
-            .find(|&&q| pool.overlaps(p, q))
-            .filter(|_| !forced(pool, rule, p))
-        {
-            left.push((p, Left::Overlap { with, waited }));
-        } else {
-            riding.push(p);
+        match place(pool, &riding, rule, p) {
+            None => riding.push(p),
+            Some(l) => left.push((p, l)),
         }
     }
     (riding, left)
