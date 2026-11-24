@@ -224,6 +224,21 @@ fn execute_with(
             report.alarm = true;
             report.error = Some(error.to_string());
         }
+        let legacy: Vec<PathBuf> = pg_worker_core::idle_targets::LEGACY_CONTAINERS
+            .iter()
+            .map(|relative| Path::new(&home).join(relative))
+            .collect();
+        if let Err(error) = pg_worker_core::idle_targets::sweep(
+            &legacy,
+            &guards,
+            SystemTime::now(),
+            apply,
+            &mut report,
+            &processes,
+        ) {
+            report.alarm = true;
+            report.error = Some(error.to_string());
+        }
         private_guards.pinned.extend(available.keys().cloned());
         private_guards.pinned.extend(configured.keys().cloned());
         for path in &scratch {
