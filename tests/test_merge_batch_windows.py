@@ -227,7 +227,7 @@ def test_push_adopts_an_existing_part_before_selecting_windows(tmp_path, monkeyp
     monkeypatch.setattr(land, "adopt_open_pr", lambda current: current.update(pr=5, url="https://example.invalid/pull/5"))
     monkeypatch.setattr(land, "gh_json", lambda *a, **k: {"state": "OPEN", "labels": [{"name": "land-part"}]})
     monkeypatch.setattr(util, "gh_json", land.gh_json)
-    monkeypatch.setattr(land, "render_body", lambda _: "")
+    monkeypatch.setattr(land, "render_body", lambda *_: "")
     monkeypatch.setattr(land, "update_pr", lambda *a: None)
     monkeypatch.setenv("PLANGRAPH_WINDOWS_HOST", "fixture")
     transport = Transport()
