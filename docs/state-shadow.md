@@ -66,7 +66,7 @@ transcript project directory, can move. Three parts keep the collector on the
 live session:
 
 - Every `fleet-launch` of a role with `state-shadow/ROLE.env` rewrites the role
-  configuration (the last `PLANGRAPH_STATE_CONFIG` of that env file, in the service's syntax: quoted or not, `\ ` escapes, spaces around `=`; else
+  configuration (the last `PLANGRAPH_STATE_CONFIG` of that env file, in the service's syntax: quoted or not, `\ ` escapes (also at the end), a backslash-continued line, spaces around `=`; else
   `state-shadow/ROLE.json`) with the new `session_id` and the transcript found
   under any `~/.claude/projects/*` directory (else the one derived from the
   launch directory). Other fields stay as the operator set them.

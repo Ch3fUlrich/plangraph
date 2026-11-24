@@ -56,13 +56,13 @@ pub fn check(launcher: &Launcher) {
     let s = Sandbox::new(launcher);
     let dir = s.path("home/.config/plangraph/state-shadow");
     fs::create_dir_all(&dir).unwrap();
-    let custom = s.path("custom dir/routing-collector.json");
-    let location = |role: &str| {
-        if role == "routing" {
-            custom.clone()
-        } else {
-            dir.join(format!("{role}.json"))
-        }
+    // The routing path has a space inside and one at its end; the plan-order path is continued
+    // across two lines. The service reads both as the configured path.
+    let custom = s.path("custom dir/routing collector.json ");
+    let continued = s.path("po-cfg/plan-order-collector.json");
+    let location = |role: &str| match role {
+        "routing" => custom.clone(),
+        _ => continued.clone(),
     };
     let stale = || {
         for role in ["routing", "plan-order"] {
@@ -73,7 +73,9 @@ pub fn check(launcher: &Launcher) {
                     custom.display().to_string().replace(' ', "\\ ")
                 )
             } else {
-                String::new()
+                let path = continued.display().to_string();
+                let (head, tail) = path.split_at(path.len() - "collector.json".len());
+                format!("PLANGRAPH_STATE_CONFIG={head}\\\n{tail}\n")
             };
             fs::write(dir.join(format!("{role}.env")), env).unwrap();
             fs::create_dir_all(location(role).parent().unwrap()).unwrap();
@@ -105,10 +107,12 @@ pub fn check(launcher: &Launcher) {
             .unwrap()
             .ends_with(&format!("/{SID}.jsonl")));
     }
-    assert!(
-        !dir.join("routing.json").exists(),
-        "the default file was written beside the configured one"
-    );
+    for role in ["routing", "plan-order"] {
+        assert!(
+            !dir.join(format!("{role}.json")).exists(),
+            "the default file of {role} was written beside the configured one"
+        );
+    }
     // A recycle in another worktree with another session id regenerates the settings and moves
     // ROLE.json to the new transcript.
     fs::create_dir(s.path("work2")).unwrap();

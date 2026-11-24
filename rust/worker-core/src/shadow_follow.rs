@@ -86,29 +86,55 @@ pub fn transcript_for(home: &Path, session_id: &str, cwd: &Path) -> PathBuf {
     })
 }
 
+/// The logical lines of an environment file: a line ending in an odd number of backslashes is
+/// continued by the next line, the backslash and the line break dropped (as systemd reads it).
+fn logical_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        let mut joined = current.take().unwrap_or_default();
+        joined.push_str(line);
+        let slashes = joined.bytes().rev().take_while(|c| *c == b'\\').count();
+        if slashes % 2 == 1 {
+            joined.pop();
+            current = Some(joined);
+        } else {
+            lines.push(joined);
+        }
+    }
+    lines.extend(current);
+    lines
+}
+
 /// The value of an environment-file assignment in systemd syntax: double-quoted or unquoted with
-/// backslash escapes (`\ ` is a space), single-quoted literally. Trailing whitespace is not part of
-/// the value.
+/// backslash escapes (`\ ` is a space that stays, also at the end), single-quoted literally. Only
+/// unescaped whitespace around the value is dropped.
 fn env_value(raw: &str) -> Option<String> {
-    let raw = raw.trim();
+    let raw = raw.trim_start();
     let unescape = |text: &str| {
-        let mut out = String::new();
+        let mut out: Vec<(char, bool)> = Vec::new();
         let mut chars = text.chars();
         while let Some(ch) = chars.next() {
-            out.push(if ch == '\\' { chars.next()? } else { ch });
+            match ch {
+                '\\' => out.push((chars.next()?, true)),
+                other => out.push((other, false)),
+            }
         }
-        Some(out)
+        while out
+            .last()
+            .is_some_and(|(c, escaped)| !escaped && c.is_whitespace())
+        {
+            out.pop();
+        }
+        Some(out.into_iter().map(|(c, _)| c).collect::<String>())
     };
     if let Some(inner) = raw.strip_prefix('"') {
-        return unescape(inner.strip_suffix('"')?);
+        return unescape(inner.trim_end().strip_suffix('"')?);
     }
     if let Some(inner) = raw.strip_prefix('\'') {
-        return inner.strip_suffix('\'').map(str::to_owned);
+        return inner.trim_end().strip_suffix('\'').map(str::to_owned);
     }
-    if raw.is_empty() {
-        return None;
-    }
-    unescape(raw)
+    unescape(raw).filter(|value| !value.is_empty())
 }
 
 /// The value of the `name` assignment on one environment-file line; whitespace around the name
@@ -126,9 +152,9 @@ pub fn config_path(home: &Path, role: &str) -> PathBuf {
     fs::read_to_string(dir.join(format!("{role}.env")))
         .ok()
         .and_then(|text| {
-            text.lines()
-                .filter_map(|line| assignment(line, "PLANGRAPH_STATE_CONFIG"))
-                .filter_map(env_value)
+            logical_lines(&text)
+                .iter()
+                .filter_map(|line| assignment(line, "PLANGRAPH_STATE_CONFIG").and_then(env_value))
                 .next_back()
         })
         .map_or_else(|| dir.join(format!("{role}.json")), PathBuf::from)
@@ -252,6 +278,18 @@ mod tests {
                 "/p/spaced.json",
             ),
             ("  PLANGRAPH_STATE_CONFIG =\"/p/q.json\"  \n", "/p/q.json"),
+            (
+                "PLANGRAPH_STATE_CONFIG=/p/cont\\\ninued.json\n",
+                "/p/continued.json",
+            ),
+            (
+                "PLANGRAPH_STATE_CONFIG=/p/ends-with-space\\ \n",
+                "/p/ends-with-space ",
+            ),
+            (
+                "PLANGRAPH_STATE_CONFIG=/p/two\\\\\nPLANGRAPH_STATE_CONFIG=/p/last.json\n",
+                "/p/last.json",
+            ),
             (
                 "PLANGRAPH_STATE_CONFIG='/p/lit$eral.json'\n",
                 "/p/lit$eral.json",
