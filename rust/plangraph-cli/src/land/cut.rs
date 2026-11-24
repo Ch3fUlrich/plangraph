@@ -3,7 +3,7 @@
 //! the commit gate of the pinned base must accept the result before the branch exists. A range that edits a
 //! gate path or carries a `Gate-Edit:` line is refused before the first pick: no grant is accepted yet.
 //! `check` is the same test for a branch cut by hand.
-use super::cut_gate::{grants_refused, pinned_gate_paths, py_lines, refuse_gate_edit};
+use super::cut_gate::{grants_refused, py_lines, refuse_gate_edit, PinnedGate};
 use super::git;
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -104,7 +104,10 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
         }
         sources.push(id);
     }
-    let patterns = pinned_gate_paths(c.gate, python)?;
+    let pinned = PinnedGate {
+        gate: c.gate,
+        python,
+    };
     for src in &sources {
         let parents = git::out(repo, &["rev-list", "--parents", "-n", "1", src])?;
         if parents.split_whitespace().count() != 2 {
@@ -112,7 +115,7 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
         }
         // Before the first pick: no gate path and no Gate-Edit line, visible or hidden.
         let message = git::out(repo, &["log", "-1", "--format=%B", src])?;
-        refuse_gate_edit(repo, src, &message, &patterns)?;
+        refuse_gate_edit(repo, src, &message, &pinned)?;
     }
     // The pick and the check run in a private clone, so the repository's own configuration and
     // `info/attributes` cannot reach the merge machinery; the clone is a temporary directory owned by this
@@ -214,7 +217,7 @@ pub fn check(
     python: &dyn Fn() -> Command,
 ) -> Result<(), String> {
     let (base, head) = (resolve(repo, base)?, resolve(repo, head)?);
-    let patterns = pinned_gate_paths(gate, python)?;
+    let pinned = PinnedGate { gate, python };
     for c in git::commits(repo, &format!("{base}..{head}"))? {
         let message = git::out(repo, &["log", "-1", "--format=%B", &c])?;
         if py_lines(&message).into_iter().any(is_picked_line) {
@@ -222,7 +225,7 @@ pub fn check(
                 "{c}: a `(cherry picked from commit ...)` line ends the trailer block; cut with `land-train cut`, not `cherry-pick -x`"
             ));
         }
-        refuse_gate_edit(repo, &c, &message, &patterns)?;
+        refuse_gate_edit(repo, &c, &message, &pinned)?;
     }
     // The gate runs in `repo` (a temporary worktree for `cut`): a path relative to the caller's directory
     // must be made absolute before the directory changes.
@@ -231,6 +234,7 @@ pub fn check(
     let mut cmd = python();
     pin_git_env(&mut cmd);
     let out = cmd
+        .arg("-I")
         .arg(&gate)
         .args(["check", "--base", &base, "--head", &head])
         .current_dir(repo)

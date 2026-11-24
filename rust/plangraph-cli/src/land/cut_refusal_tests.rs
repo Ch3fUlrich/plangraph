@@ -19,8 +19,12 @@ fn real_gate() -> Fx {
 }
 
 /// A stand-in commit gate: it lists no gate path and runs `body` when it is run as a script.
-fn stub_gate(body: &str) -> String {
-    format!("import sys\nGATE_PATHS = ()\nif __name__ == '__main__':\n    {body}\n")
+pub(super) fn stub_gate(body: &str) -> String {
+    stub_gate_paths("()", body)
+}
+
+pub(super) fn stub_gate_paths(paths: &str, body: &str) -> String {
+    format!("import sys\nGATE_PATHS = {paths}\nif __name__ == '__main__':\n    {body}\n")
 }
 
 pub(super) fn args(list: &[&str]) -> Vec<String> {
@@ -61,7 +65,12 @@ pub(super) fn run_check(fx: &Fx, head: &str) -> Result<Vec<String>, String> {
     super::cli::run_inner(fx.p(), &a, &python)
 }
 
-fn run_cut(fx: &Fx, branch: &str, commit: &str, extra: &[&str]) -> Result<Vec<String>, String> {
+pub(super) fn run_cut(
+    fx: &Fx,
+    branch: &str,
+    commit: &str,
+    extra: &[&str],
+) -> Result<Vec<String>, String> {
     let mut a = args(&[
         "cut",
         "--repo",
@@ -139,8 +148,8 @@ fn a_gate_edit_git_does_not_parse_in_the_source_is_refused_too() {
         parsed.is_empty(),
         "the fixture must hide it from git: {parsed}"
     );
-    let err = fx.cut(&[src]).unwrap_err();
-    assert!(err.contains("D-88") || err.contains("Gate-Edit"), "{err}");
+    let err = fx.cut(std::slice::from_ref(&src)).unwrap_err();
+    assert!(err.contains(&src) && err.contains("Gate-Edit"), "{err}");
     assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
 }
 
@@ -159,7 +168,10 @@ fn cut_check_refuses_a_gate_edit_line_and_a_gate_path() {
     g(fx.p(), &["branch", "-q", "-D", "hand"]);
     let bare = hand_cut(&fx, ".github/workflows/w.yml", "x\n", "");
     let err = run_check(&fx, &bare).unwrap_err();
-    assert!(err.contains("edits the gate path"), "{err}");
+    assert!(
+        err.contains(&bare) && err.contains("edits the gate path"),
+        "{err}"
+    );
     g(fx.p(), &["branch", "-q", "-D", "hand"]);
     // A plain commit still passes.
     let plain = hand_cut(&fx, "a.txt", "x\n", "");
@@ -206,8 +218,11 @@ fn a_gate_path_that_is_not_utf8_is_refused() {
     );
     let src = g(fx.p(), &["rev-parse", "HEAD"]);
     g(fx.p(), &["checkout", "-q", "main"]);
-    let err = fx.cut(&[src]).unwrap_err();
-    assert!(err.contains("edits the gate path"), "{err}");
+    let err = fx.cut(std::slice::from_ref(&src)).unwrap_err();
+    assert!(
+        err.contains(&src) && err.contains("edits the gate path"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -241,11 +256,14 @@ fn a_path_the_pinned_gate_matches_by_wildcard_is_refused_before_any_pick() {
     let fx = Fx::new();
     // GATE_PATHS has 'tools/ci_commit_gate.py*': a backup copy matches the gate but not the router's list.
     let src = fx.source("tools/ci_commit_gate.py.bak", TRAILERS);
-    let err = fx.cut(&[src]).unwrap_err();
+    let err = fx.cut(std::slice::from_ref(&src)).unwrap_err();
+    // The diagnostic names the source commit, so the refusal came before the pick (a picked commit has
+    // another id and the final check would name that one).
     assert!(
-        err.contains("tools/ci_commit_gate.py.bak") && err.contains("grants are not accepted yet"),
+        err.contains(&src) && err.contains("tools/ci_commit_gate.py.bak"),
         "{err}"
     );
+    assert!(err.contains("grants are not accepted yet"), "{err}");
     assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
     assert_eq!(fx.worktrees(), 1);
 }

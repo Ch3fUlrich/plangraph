@@ -1,10 +1,11 @@
 //! What `land-train cut` and `cut-check` refuse before any pick: a commit that edits a gate path or carries a
 //! `Gate-Edit:` line. No source of a grant is accepted yet (the producer slice is `GRANT_PRODUCER`), so there is
-//! nothing to check the provenance of; the pinned commit gate stays the backstop after the pick.
+//! nothing to check the provenance of. The gate paths are the pinned gate script's own `GATE_PATHS`; the same
+//! gate then runs on the picked range as the backstop.
 use super::git;
-use super::go_verify::OPERATOR_CLASS;
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// The slice that will produce the pre-cut grant record; named in the refusal of `--grants`.
 pub(super) const GRANT_PRODUCER: &str = "LAND-CUT-GRANT-RECORD-PRODUCER";
@@ -49,68 +50,70 @@ pub(super) fn py_lines(text: &str) -> Vec<&str> {
     lines
 }
 
-/// The paths only an operator-granted `Gate-Edit` may change, as the router's GO verifier lists them. The
-/// pinned gate has the authoritative list (with wildcard suffixes) and runs after the pick as the backstop.
-fn operator_class(path: &str) -> bool {
-    OPERATOR_CLASS.iter().any(|p| match p.strip_suffix('/') {
-        Some(_) => path.starts_with(p),
-        None => {
-            path == *p || path.starts_with(&format!("{p}/")) || path.ends_with(&format!("/{p}"))
+/// The pinned gate script and the interpreter that runs it. The gate owns the rule for its protected paths, so
+/// the preflight asks the gate's own `GATE_PATHS` and Python's own `fnmatch.fnmatchcase` (the call the gate
+/// makes), and keeps no second matcher.
+pub(super) struct PinnedGate<'a> {
+    pub gate: &'a Path,
+    pub python: &'a dyn Fn() -> Command,
+}
+
+impl PinnedGate<'_> {
+    /// The paths among `paths` (raw git bytes, decoded like the gate does) that match its `GATE_PATHS`.
+    /// Python runs isolated (`-I`): neither the caller's directory nor `PYTHON*` variables can put code in
+    /// front of the gate's, and any failure to answer is a refusal.
+    pub(super) fn matching(&self, paths: &[&[u8]]) -> Result<Vec<String>, String> {
+        const READ: &str = "import fnmatch, importlib.util, json, sys\n\
+            spec = importlib.util.spec_from_file_location('pinned_gate', sys.argv[1])\n\
+            mod = importlib.util.module_from_spec(spec)\n\
+            sys.modules['pinned_gate'] = mod\n\
+            spec.loader.exec_module(mod)\n\
+            raw = sys.stdin.buffer.read().split(b'\\0')\n\
+            paths = [p.decode('utf-8', errors='replace') for p in raw if p]\n\
+            hits = [p for p in paths if any(fnmatch.fnmatchcase(p, g) for g in mod.GATE_PATHS)]\n\
+            print(json.dumps(hits))\n";
+        let gate = std::path::absolute(self.gate)
+            .map_err(|e| format!("gate path {}: {e}", self.gate.display()))?;
+        let mut child = (self.python)()
+            .args(["-I", "-B", "-c", READ])
+            .arg(&gate)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("commit gate unavailable: {e}"))?;
+        let mut input = Vec::new();
+        for p in paths {
+            input.extend_from_slice(p);
+            input.push(0);
         }
-    })
-}
-
-/// `GATE_PATHS` of the pinned gate script, read from the script itself so that the one list stays in the gate.
-pub(super) fn pinned_gate_paths(
-    gate: &Path,
-    python: &dyn Fn() -> Command,
-) -> Result<Vec<String>, String> {
-    const READ: &str = "import importlib.util, json, sys\n\
-        spec = importlib.util.spec_from_file_location('pinned_gate', sys.argv[1])\n\
-        mod = importlib.util.module_from_spec(spec)\n\
-        sys.modules['pinned_gate'] = mod\n\
-        spec.loader.exec_module(mod)\n\
-        print(json.dumps(list(mod.GATE_PATHS)))\n";
-    let gate =
-        std::path::absolute(gate).map_err(|e| format!("gate path {}: {e}", gate.display()))?;
-    let out = python()
-        .args(["-B", "-c", READ])
-        .arg(&gate)
-        .output()
-        .map_err(|e| format!("commit gate unavailable: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "commit gate {} gives no GATE_PATHS: {}",
-            gate.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let patterns: Vec<String> = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("commit gate {} GATE_PATHS: {e}", gate.display()))?;
-    if patterns.iter().any(|p| p.contains('[')) {
-        return Err("a GATE_PATHS pattern with a character class is not understood".into());
-    }
-    Ok(patterns)
-}
-
-/// Python's `fnmatch.fnmatchcase` for the patterns the gate uses: `*` (also across `/`) and `?`.
-fn fnmatch(pattern: &[u8], text: &[u8]) -> bool {
-    match pattern.split_first() {
-        None => text.is_empty(),
-        Some((b'*', rest)) => (0..=text.len()).any(|i| fnmatch(rest, &text[i..])),
-        Some((b'?', rest)) => !text.is_empty() && fnmatch(rest, &text[1..]),
-        Some((c, rest)) => text.first() == Some(c) && fnmatch(rest, &text[1..]),
+        child
+            .stdin
+            .take()
+            .ok_or("gate loader has no stdin")?
+            .write_all(&input)
+            .map_err(|e| e.to_string())?;
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(format!(
+                "commit gate {} gives no answer for GATE_PATHS: {}",
+                gate.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        serde_json::from_slice(&out.stdout)
+            .map_err(|e| format!("commit gate {} GATE_PATHS answer: {e}", gate.display()))
     }
 }
 
 /// Refuses `commit` when its message has a `Gate-Edit:` line anywhere (also one git's trailer parser misses
-/// and one cutting would expose) or when it changes a path of the pinned gate's `GATE_PATHS` (`patterns`) or
-/// an operator-class path. Paths are read NUL-delimited and, for a merge, against every parent.
+/// and one cutting would expose) or when it changes a path of the pinned gate's `GATE_PATHS`. Paths are read
+/// NUL-delimited and, for a merge, against every parent.
 pub(super) fn refuse_gate_edit(
     repo: &Path,
     commit: &str,
     message: &str,
-    patterns: &[String],
+    pinned: &PinnedGate,
 ) -> Result<(), String> {
     for line in py_lines(message) {
         if let Some((key, _)) = line.trim().split_once(':') {
@@ -134,14 +137,12 @@ pub(super) fn refuse_gate_edit(
             commit,
         ],
     )?;
-    for path in raw.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-        // Matched as raw bytes by the gate's patterns; lossy only for the operator-class list and the message.
-        let shown = String::from_utf8_lossy(path);
-        if operator_class(&shown) || patterns.iter().any(|p| fnmatch(p.as_bytes(), path)) {
-            return Err(format!(
-                "cut: {commit} edits the gate path {shown}; grants are not accepted yet: {GRANT_PRODUCER}"
-            ));
-        }
+    let paths: Vec<&[u8]> = raw.split(|b| *b == 0).filter(|p| !p.is_empty()).collect();
+    let hit = pinned.matching(&paths)?.into_iter().next();
+    match hit {
+        Some(path) => Err(format!(
+            "cut: {commit} edits the gate path {path}; grants are not accepted yet: {GRANT_PRODUCER}"
+        )),
+        None => Ok(()),
     }
-    Ok(())
 }

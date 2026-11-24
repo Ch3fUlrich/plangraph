@@ -101,8 +101,12 @@ fn cut_commits_pass_the_gate_with_picked_from_inside_the_trailer_block() {
 fn a_gate_file_commit_is_refused_before_any_pick_and_no_branch_is_left() {
     let fx = Fx::new();
     let flow = fx.source(".github/workflows/w.yml", TRAILERS);
-    let err = fx.cut(&[flow]).unwrap_err();
-    assert!(err.contains("grants are not accepted yet"), "{err}");
+    let err = fx.cut(std::slice::from_ref(&flow)).unwrap_err();
+    // Named by the source id: refused before the pick, not by the check of the picked commit.
+    assert!(
+        err.contains("grants are not accepted yet") && err.contains(&flow),
+        "{err}"
+    );
     assert!(err.contains(".github/workflows/w.yml"), "{err}");
     assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
     assert_eq!(fx.worktrees(), 1);

@@ -7,6 +7,8 @@ pub mod cli;
 pub mod cut;
 mod cut_gate;
 #[cfg(test)]
+mod cut_preflight_tests;
+#[cfg(test)]
 mod cut_refusal_tests;
 #[cfg(test)]
 mod cut_state_tests;
