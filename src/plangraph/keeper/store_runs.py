@@ -339,6 +339,8 @@ class RunsMixin:
         for key, _ in candidates:
             commits = context_sources.indexed_work(index, key, limit=None)["commits"]
             if commits:
+                for commit in commits:   # the forge record the frozen close reads: outside the lock, once per landing
+                    self._landing_for(project, (commit.get("merge") or {}).get("sha") or commit.get("sha"))
                 context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"],
                                           head=index.get("target"), fresh=False)
                 self._snapshot_deploy(key, project, commits, previous.get((project, key)))

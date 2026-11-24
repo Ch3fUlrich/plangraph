@@ -18,6 +18,7 @@ The config maps the store and its verifiers onto real paths:
 * ``bind``          — ``"host:port"`` (or ``host``/``port`` keys)
 * ``default_lease`` — seconds a claim is held without a heartbeat
 * ``claim_preflight_s`` — seconds for claim authority checks before writing
+* ``merge_close_decision`` — the operator decision id (``D-NNN``) recorded as the standing authority of automatic merge closes
 * ``claim_index_window_s`` — seconds a claim reuses its repository's just-refreshed work index (0: refresh every claim)
 
 A config file is refused unless its mode is exactly ``0600``: it may name paths
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -126,6 +128,10 @@ class Config:
         self.default_lease = self._positive_seconds(data, "default_lease", 7200)
         self.claim_preflight_s = self._positive_seconds(
             data, "claim_preflight_s", DEFAULT_CLAIM_PREFLIGHT_S)
+        decision = data.get("merge_close_decision")
+        if decision is not None and not (isinstance(decision, str) and re.fullmatch(r"D-[0-9]+", decision)):
+            raise ConfigError("merge_close_decision must look like D-NNN")
+        self.merge_close_decision = decision
         self.claim_index_window_s = self._seconds(
             data, "claim_index_window_s", DEFAULT_CLAIM_INDEX_WINDOW_S)
         self.review_overdue_s = self._positive_seconds(data, "review_overdue_s", 4 * 3600)
