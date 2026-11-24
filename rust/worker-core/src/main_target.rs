@@ -86,9 +86,16 @@ fn sweep_owned(
         ));
         return Ok(());
     }
-    // `rust/target` itself is a plain directory (checked above); the checkout may be reached
-    // through a symlinked ancestor, so the canonical path is only compared with the pins.
+    // The checkout may be reached through a symlinked ancestor, so paths are compared canonically.
     let canonical = target.canonicalize()?;
+    // A symlink at `rust` (or any component below the checkout) would lead the removal elsewhere.
+    if canonical != repo.canonicalize()?.join("rust/target") {
+        report.skipped.push(format!(
+            "{}: target resolves outside the checkout; not touched",
+            target.display()
+        ));
+        return Ok(());
+    }
     if names_target(guards, &canonical) {
         report.skipped.push(format!(
             "{}: main checkout target pinned or live; not touched",
@@ -124,7 +131,7 @@ fn sweep_owned(
         return Ok(());
     }
     if apply {
-        fs::remove_dir_all(&target)?;
+        fs::remove_dir_all(&canonical)?;
         report.freed_bytes = report.freed_bytes.saturating_add(bytes);
     }
     report.actions.push(format!(
@@ -259,6 +266,30 @@ mod tests {
             out.push(part);
         }
         out
+    }
+
+    #[test]
+    fn a_symlink_below_the_checkout_never_leads_the_sweep_elsewhere() {
+        let (tmp, repo) = fixture(7200);
+        let outside = tmp.path().join("shared-cache");
+        fs::rename(repo.join("rust"), &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join("rust")).unwrap();
+        let blob = outside.join("target/debug/blob");
+        assert!(blob.exists());
+        for apply in [false, true] {
+            let report = run(&repo, apply, false);
+            assert_eq!(report.freed_bytes, 0);
+            assert!(report.skipped[0].contains("resolves outside the checkout"));
+            assert!(!report.actions.iter().any(|a| a.contains("would-remove")));
+            assert!(blob.exists());
+        }
+        // `rust/target` itself linked elsewhere is no plain directory either.
+        let (tmp, repo) = fixture(7200);
+        let outside = tmp.path().join("elsewhere");
+        fs::rename(repo.join("rust/target"), &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join("rust/target")).unwrap();
+        assert_eq!(run(&repo, true, false).freed_bytes, 0);
+        assert!(outside.join("debug/blob").exists());
     }
 
     #[test]

@@ -215,7 +215,7 @@ fn execute_with(
         }
         if let Err(error) = pg_worker_core::main_target::sweep_main_checkout_target(
             &repo,
-            &guards,
+            &private_guards,
             SystemTime::now(),
             apply,
             &mut report,
