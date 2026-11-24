@@ -111,6 +111,7 @@ fn run() -> Result<(), String> {
     };
     let mut host = System {
         exit_wait_ms: EXIT_WAIT_MS,
+        proc_root: "/proc".into(),
         log_file: state.join("session-lifecycle.log"),
         log_failed: false,
     };

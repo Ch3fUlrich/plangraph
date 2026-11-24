@@ -21,6 +21,8 @@ fn pidfd_open(pid: u32) -> std::io::Result<OwnedFd> {
 }
 
 pub struct System {
+    /// Where /proc is (a test points it at a made-up tree).
+    pub proc_root: PathBuf,
     /// Milliseconds `terminate` waits for the process to exit (`EXIT_WAIT_MS`).
     pub exit_wait_ms: i32,
     pub log_file: PathBuf,
@@ -77,7 +79,7 @@ impl Host for System {
     }
 
     fn process(&self, pid: u32) -> Process {
-        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        match std::fs::read_to_string(self.proc_root.join(format!("{pid}/stat"))) {
             Ok(stat) => classify(&stat, pid),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Process::Gone,
             Err(_) => Process::Unknown,
@@ -180,6 +182,11 @@ impl Host for System {
         let home = PathBuf::from(std::env::var_os("HOME")?);
         let text = std::fs::read_to_string(job_dir(&home, rec)?.join("state.json")).ok()?;
         parse_job_state(&text)
+    }
+
+    fn log_has(&self, parts: &[&str]) -> bool {
+        std::fs::read_to_string(&self.log_file)
+            .is_ok_and(|t| t.lines().any(|l| parts.iter().all(|p| l.contains(p))))
     }
 
     fn log(&mut self, line: &str) -> bool {

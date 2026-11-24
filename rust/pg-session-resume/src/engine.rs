@@ -154,12 +154,17 @@ fn complete_stop(
     if phase(snap) != LOGGED {
         let reason = snap["reason"].as_str().unwrap_or_default();
         let handle = snap["handle"].as_str().unwrap_or_default();
+        let at = snap["stopped_ts"].as_u64().unwrap_or_default();
+        // The stop's identity in the log: the handle and the moment of the stop.
+        let id = format!("handle={handle} stopped_ts={at}");
         let line = format!(
-            "event=stop name={} age_s={} reason={reason} ram_freed_mb={freed} handle={handle}",
+            "event=stop name={} age_s={} reason={reason} ram_freed_mb={freed} {id}",
             rec.label(),
             age(host, rec)
         );
-        if !host.log(&line) {
+        // A line that is out already (the `logged` phase could not be written) is not repeated.
+        let known = host.log_has(&["event=stop ", &id]);
+        if !known && !host.log(&line) {
             return; // the sidecar stays: the next tick appends it
         }
         if write_pending(rec, snap, LOGGED).is_err() {
@@ -183,6 +188,11 @@ fn publish_stop(
 ) {
     let mut resume = snap.clone();
     resume.as_object_mut().map(|o| o.remove("phase"));
+    // An attempt whose outcome was never written down: the runtime shows the session stopped,
+    // the snapshot is the best account of that moment.
+    if phase(snap) == ATTEMPT {
+        resume["unconfirmed"] = json!(true);
+    }
     rec.set("state", json!("stopped"));
     rec.set("stopped_ts", resume["stopped_ts"].clone());
     rec.set("stop_refused", Value::Null);
@@ -194,10 +204,12 @@ fn publish_stop(
     }
 }
 
-/// Finish the stops the sidecars name. Only a sidecar at `stopped` is evidence that the stop
-/// command succeeded, and it is finished whatever the runtime reports now (an unreadable state
-/// must not lose it, a later exit must not be mistaken for it). An `attempt` is one that failed,
-/// was aborted or crashed: it is removed, and the session is judged afresh like any other.
+/// Finish the stops the sidecars name. A sidecar at `stopped` is evidence that the stop command
+/// succeeded and is finished whatever the runtime reports now. An `attempt` is ambiguous: its
+/// stop may have succeeded before the write that would say so failed, or never happened. The
+/// runtime decides: stopped, it is published as `unconfirmed` (the session is resumable, the
+/// snapshot is the best account of the stop); still running, the attempt failed and is removed;
+/// unreadable, it is kept and reported until the runtime can be read.
 fn finish_pending(host: &mut dyn Host, cfg: &Config) -> u32 {
     let mut failures = 0;
     for mut rec in load_all(&cfg.launch_dir) {
@@ -216,6 +228,17 @@ fn finish_pending(host: &mut dyn Host, cfg: &Config) -> u32 {
             (STOPPED | LOGGED, true) if held => {
                 complete_stop(host, cfg, &rec, &mut snap, "unknown", &mut failures)
             }
+            (ATTEMPT, false) => match stop_target(host, &rec) {
+                Target::AlreadyStopped => {
+                    publish_stop(host, cfg, &mut rec, &mut snap, "unknown", &mut failures)
+                }
+                Target::Keep(why) if why == "no-runtime-state" || why == "no-job-state" => {
+                    let name = rec.label();
+                    let line = format!("event=stop-unconfirmed name={name} why={why}");
+                    refuse_once(host, &mut rec, &line, "stop-unconfirmed");
+                }
+                _ => drop_pending(host, &rec, &mut failures),
+            },
             _ => drop_pending(host, &rec, &mut failures),
         }
     }
@@ -268,10 +291,13 @@ fn stop_session(
     }
     // The snapshot took time: look at the runtime, and at the clock, again right before the
     // session is touched.
+    // The clock first, the runtime after it: work that began before the runtime is read shows
+    // there, and a session that was quiet by a stale reading shows in the clock.
+    let quiet_now = quiet_enough(host, rec, quiet);
     let target = stop_target(host, rec);
     let why = match &target {
         Target::Keep(why) => Some(why.as_str()),
-        _ if !quiet_enough(host, rec, quiet) => Some("activity-resumed"),
+        _ if !quiet_now => Some("activity-resumed"),
         _ => None,
     };
     if let Some(why) = why {

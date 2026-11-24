@@ -38,6 +38,14 @@ pub struct Fake {
     /// The session starts a turn while its worktree is looked up.
     pub busy_on_head: bool,
     pub busy: std::cell::Cell<bool>,
+    /// A second path that becomes a directory while a stop command runs.
+    pub also_block_on_run: Option<PathBuf>,
+    /// This path becomes a directory once a stop line was logged.
+    pub block_on_log: Option<PathBuf>,
+    /// A Claude job turns busy when the activity is read for the n-th time (1 = the first).
+    pub busy_on_activity_read: Option<usize>,
+    pub activity_reads: std::cell::Cell<usize>,
+    pub job_busy: std::cell::Cell<bool>,
     /// The session shows this activity once its worktree has been looked up.
     pub active_after_head: Option<u64>,
     pub fresh_activity: std::cell::Cell<Option<u64>>,
@@ -70,6 +78,11 @@ impl Fake {
             jam_on_run: None,
             busy_on_head: false,
             busy: Default::default(),
+            also_block_on_run: None,
+            block_on_log: None,
+            busy_on_activity_read: None,
+            activity_reads: Default::default(),
+            job_busy: Default::default(),
             active_after_head: None,
             fresh_activity: Default::default(),
             children: Some(false),
@@ -86,6 +99,9 @@ impl Host for Fake {
     fn run(&mut self, cwd: Option<&Path>, argv: &[String]) -> Result<String, String> {
         self.runs.push((cwd.map(Path::to_path_buf), argv.to_vec()));
         if let Some(p) = &self.block_on_run {
+            std::fs::create_dir(p).unwrap();
+        }
+        if let Some(p) = &self.also_block_on_run {
             std::fs::create_dir(p).unwrap();
         }
         if let Some(p) = &self.jam_on_run {
@@ -115,6 +131,12 @@ impl Host for Fake {
         Ok(())
     }
     fn job_state(&self, _: &Record) -> Option<JobState> {
+        if self.job_busy.get() {
+            return Some(JobState {
+                state: "working".into(),
+                tasks: Some(0),
+            });
+        }
         self.job.clone()
     }
     fn has_children(&self, _: u32) -> Option<bool> {
@@ -140,13 +162,26 @@ impl Host for Fake {
         self.head.clone()
     }
     fn activity_ts(&self, _: &Record) -> Option<u64> {
+        let n = self.activity_reads.get() + 1;
+        self.activity_reads.set(n);
+        if self.busy_on_activity_read == Some(n) {
+            self.job_busy.set(true);
+        }
         self.fresh_activity.get().or(self.activity)
+    }
+    fn log_has(&self, parts: &[&str]) -> bool {
+        self.lines
+            .iter()
+            .any(|l| parts.iter().all(|p| l.contains(p)))
     }
     fn log(&mut self, line: &str) -> bool {
         if self.log_fails {
             return false;
         }
         self.lines.push(line.to_owned());
+        if let (Some(p), true) = (&self.block_on_log, line.starts_with("event=stop ")) {
+            std::fs::create_dir(p).unwrap();
+        }
         true
     }
 }

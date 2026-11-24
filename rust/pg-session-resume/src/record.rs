@@ -151,10 +151,12 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
+    // A stale temp file keeps the permissions it was created with: remove it, then create a
+    // fresh one that must not exist (a directory in its place is an error, as before).
+    let _ = std::fs::remove_file(&tmp);
     let mut file = std::fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
         .open(&tmp)?;
     file.write_all(bytes)?;

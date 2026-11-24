@@ -63,9 +63,13 @@ signal (a turn or child that started, or activity that moved, keeps the session)
 carries the phase of the stop: `attempt` (nothing proven), `stopped` (the stop command
 succeeded), `logged` (the stop line is in the log). A stop whose record write or log append
 fails exits 2, and the next tick finishes a `stopped` sidecar from its snapshot whatever the
-runtime reports then, without a second stop and without a second log line; an `attempt` is
-removed, never published (the session is judged afresh), and a sidecar that cannot be removed is
-reported. Each lane keeps the copy of its latest stopped launch, ordered by stop time, then launch, then
+runtime reports then, without a second stop and without a second log line (the line carries the
+stop's identity, `handle=<id> stopped_ts=<ts>`, and one already in the log is not written again).
+An `attempt` is ambiguous (its stop may have succeeded before the write that would say so
+failed): when the runtime shows the session stopped it is published with `resume.unconfirmed:
+true`, when the session still runs it is removed, and when the runtime cannot be read it is kept
+and reported (`event=stop-unconfirmed`). A sidecar that cannot be removed is reported. Before the
+signal the quiet time is read first and the runtime after it. Each lane keeps the copy of its latest stopped launch, ordered by stop time, then launch, then
 session name: a missing or earlier copy is rewritten (publication and repair alike), a later one
 is left. A kernel lock (flock on
 `<state>/launch/pg-session-resume.lock`) keeps two ticks apart: a second one prints that the

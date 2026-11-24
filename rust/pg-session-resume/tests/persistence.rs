@@ -225,20 +225,6 @@ fn a_stop_that_happened_is_finished_even_when_the_runtime_state_cannot_be_read()
 }
 
 #[test]
-fn a_snapshot_of_an_attempt_is_never_published_however_the_session_ends() {
-    let r = rig("writer", json!({}));
-    let mut h = Fake::new(5000);
-    let snap = json!({"agent": "claude", "handle": SID, "reason": "done", "head": HEAD,
-        "worktree": "w1", "status_head": HEAD, "round": 0, "stopped_ts": 4000,
-        "launch_ts": 1000, "launch_run": null, "phase": "attempt"});
-    std::fs::write(pending(&r), snap.to_string()).unwrap();
-    h.job = stopped_job(); // the session is gone by the time of the next tick
-    reap_idle(&mut h, &r.cfg);
-    assert!(record(&r, "writer").get("resume").is_none());
-    assert!(!pending(&r).exists());
-}
-
-#[test]
 fn a_stop_line_already_in_the_log_is_not_written_again() {
     let r = rig("writer", json!({}));
     done(&r, HEAD);
@@ -300,6 +286,15 @@ fn what_a_stop_writes_is_readable_by_its_owner_only_whatever_the_umask() {
     unsafe { libc::umask(0) };
     let r = rig("writer", json!({}));
     done(&r, HEAD);
+    // stale temp files of an earlier crash, created world-readable
+    for stale in [
+        r.cfg.launch_dir.join("writer-0644.json.tmp"),
+        r.cfg.launch_dir.join("writer-0644.pending.tmp"),
+        r.cfg.pr_dir.join("lane-a.resume.json.tmp"),
+    ] {
+        std::fs::write(&stale, "old").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
     let mut h = Fake::new(5000);
     h.log_fails = true; // the sidecar stays behind to be looked at
     stop_done(&mut h, &r.cfg, 0, None);

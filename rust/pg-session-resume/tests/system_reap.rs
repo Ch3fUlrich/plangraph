@@ -53,6 +53,7 @@ fn rig(turn_end_secs: u64) -> Rig {
 fn host(r: &Rig) -> System {
     System {
         exit_wait_ms: 5000,
+        proc_root: "/proc".into(),
         log_file: r.dir.path().join("log"),
         log_failed: false,
     }
@@ -115,6 +116,7 @@ fn same_instant_turn_marker_is_no_signal() {
     let dir = tempfile::tempdir().unwrap();
     let h = System {
         exit_wait_ms: 5000,
+        proc_root: "/proc".into(),
         log_file: dir.path().join("log"),
         log_failed: false,
     };
@@ -154,6 +156,7 @@ fn terminate_signals_only_the_recorded_process_and_waits_for_its_exit() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = System {
         exit_wait_ms: 5000,
+        proc_root: "/proc".into(),
         log_file: dir.path().join("log"),
         log_failed: false,
     };
@@ -172,6 +175,7 @@ fn a_process_that_survives_sigterm_is_a_failed_stop() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = System {
         exit_wait_ms: 300,
+        proc_root: "/proc".into(),
         log_file: dir.path().join("log"),
         log_failed: false,
     };
@@ -188,6 +192,7 @@ fn process_tells_live_from_gone() {
     let dir = tempfile::tempdir().unwrap();
     let h = System {
         exit_wait_ms: 0,
+        proc_root: "/proc".into(),
         log_file: dir.path().join("log"),
         log_failed: false,
     };
@@ -281,6 +286,7 @@ fn system(exit_wait_ms: i32) -> (tempfile::TempDir, System) {
     let dir = tempfile::tempdir().unwrap();
     let host = System {
         exit_wait_ms,
+        proc_root: "/proc".into(),
         log_file: dir.path().join("log"),
         log_failed: false,
     };
@@ -343,4 +349,23 @@ fn a_zombie_leader_is_gone_only_when_the_kernel_says_every_thread_exited() {
     running.wait().unwrap();
     assert_eq!(classify(&stat_text('Z', 777), running.id()), Process::Gone);
     assert_eq!(classify("garbage", running.id()), Process::Unknown);
+}
+
+#[test]
+fn a_zombie_leader_stays_live_while_the_kernel_says_so_whatever_a_task_listing_shows() {
+    // a made-up /proc: the leader is a zombie and its task listing holds only a zombie, which a
+    // scan of the listing would call dead; the process is in fact alive
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = sh("sleep 30");
+    let pid = running.id();
+    let task = dir.path().join(format!("{pid}/task/{pid}"));
+    std::fs::create_dir_all(&task).unwrap();
+    std::fs::write(dir.path().join(format!("{pid}/stat")), stat_text('Z', 777)).unwrap();
+    std::fs::write(task.join("stat"), stat_text('Z', 777)).unwrap();
+    let (_log, mut h) = system(300);
+    h.proc_root = dir.path().to_owned();
+    assert_eq!(h.process(pid), Process::Live(777));
+    running.kill().unwrap();
+    running.wait().unwrap();
+    assert_eq!(h.process(pid), Process::Gone, "the kernel knows it exited");
 }

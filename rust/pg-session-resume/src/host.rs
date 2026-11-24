@@ -50,6 +50,8 @@ pub trait Host {
     fn activity_ts(&self, rec: &Record) -> Option<u64>;
     /// The runtime's own state of a Claude job, None when unreadable.
     fn job_state(&self, rec: &Record) -> Option<JobState>;
+    /// Whether one line of the log holds every one of `parts` (a stop line already written).
+    fn log_has(&self, parts: &[&str]) -> bool;
     /// Append one line to the log; false when it could not be persisted.
     fn log(&mut self, line: &str) -> bool;
 }
