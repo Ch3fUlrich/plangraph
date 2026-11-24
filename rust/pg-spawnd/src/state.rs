@@ -21,3 +21,14 @@ pub fn resolve_state(
         .map(|p| p.join(".local/state/plangraph"))
         .ok_or_else(|| "cannot resolve spawner state directory".into())
 }
+
+/// The fleet host registry in the user's configuration directory.
+pub fn host_registry() -> Result<pg_worker_core::hosts::HostRegistry, String> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .ok_or("cannot resolve fleet configuration directory")?;
+    pg_worker_core::hosts::HostRegistry::load(&config.join("plangraph/hosts.json"))
+        .map_err(|_| "fleet host registry unavailable or invalid".into())
+}

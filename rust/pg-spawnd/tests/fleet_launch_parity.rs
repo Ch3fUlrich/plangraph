@@ -19,6 +19,9 @@ mod records;
 #[path = "fleet_launch/refusals.rs"]
 mod refusals;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/rejoin.rs"]
+mod rejoin;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/remote.rs"]
 mod remote;
 #[cfg(target_os = "linux")]
@@ -86,7 +89,8 @@ fn check(launcher: &sandbox::Launcher) {
     remote::check(launcher);
     if matches!(launcher, sandbox::Launcher::Rust(_)) {
         restart::check(launcher);
-        remote::check_rejoining_host(launcher);
+        rejoin::check(launcher);
+        rejoin::check_alias(launcher);
         records::check_router_prompt(launcher);
         records::check_batch_prompt(launcher);
     }

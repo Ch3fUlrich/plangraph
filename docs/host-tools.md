@@ -272,18 +272,24 @@ finding with the affected run IDs. The probe combines the coordinator's
 placed run records with the last available remote inventory. Recovery clears
 the finding and records which runs to check. An outage of more than ten
 minutes leaves the host `rejoining`, which placement refuses, until
-`pg-spawnd rejoin HOST` passes on the coordinator. It runs the host's
-`plangraph-host-sync.service` (or the unit named in the host's
-`PG_REJOIN_SYNC_UNIT`), flags an installed binary that differs from
-`PG_MAIN_SHA` and `PG_MAIN_SHA256` (with the host's `PG_INSTALL_BINARY` and
-`PG_INSTALL_STAMP`), settles each unknown run (finished, live or dead), starts
-`pg-worktree-sweep.service` (report-only, nothing is removed), checks the
-work-disk floor on the registry's `PLANGRAPH_WORK_MOUNTS` and the RAM floor
-(Windows free memory through the WSL cache guard on a WSL host, guest memory on
-other Linux hosts; a floor that cannot be measured is flagged, not passed
-silently) and runs the legs in the host's `PG_REJOIN_LEG_PROBES` (JSON of leg to argv). A failed step
-keeps the host rejoining. Each attempt writes `rejoin/HOST-TIME-*.json` in the
-state directory; success sets the host ready.
+`pg-spawnd rejoin HOST` passes on the coordinator. Placement refuses the host
+under its registry id or any alias. The gate runs the host's
+`plangraph-host-sync.service` (or `PG_REJOIN_SYNC_UNIT`) and needs every
+checkout at `origin/main`; it flags an installed binary or hook that differs
+from `PG_MAIN_SHA`, `PG_MAIN_SHA256` and `PG_MAIN_HOOK_SHA256` (host `env`
+`PG_INSTALL_BINARY`, `PG_INSTALL_STAMP`, `PG_INSTALL_HOOKS`). Each unknown run
+is read from the host's own records: a recorded process that still exists is
+live, a vanished one is dead (failed, its Keeper claim released with the
+client in `PG_KEEPER_CLI` and read back), a terminal record keeps the host's
+exit code, and a run in no record blocks. It runs `pg-worktree-sweep --reap`
+(with `PG_REJOIN_REAP_APPROVAL` and `PG_REJOIN_REAP_PLAN` when routing approved
+rows) and blocks while eligible stale worktrees remain, measures the work-disk
+floors (the state disk without mounts) and the RAM floor (Windows free memory
+through the WSL cache guard on a WSL host), and runs the legs in
+`PG_REJOIN_LEG_PROBES` (JSON of leg to argv). A floor it cannot measure, or no
+leg probe, blocks. A failed step keeps the host rejoining. Each attempt writes
+`rejoin/HOST-TIME-*.json` in the state directory; success sets the host ready
+only for the outage it reconciled.
 
 An operator or router with coordinator state access can use
 `pg-spawnd worker-maintenance HOST END_UNIX_SECONDS` to block placement

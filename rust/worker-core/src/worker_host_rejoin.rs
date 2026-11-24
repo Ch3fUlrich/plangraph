@@ -45,6 +45,13 @@ pub struct FloorReport {
 }
 
 #[derive(Debug, Default, Serialize)]
+pub struct ReapReport {
+    pub removed: u64,
+    /// Eligible stale worktrees still present (awaiting approval or not removed).
+    pub remaining: u64,
+}
+
+#[derive(Debug, Default, Serialize)]
 pub struct LegReport {
     pub working: Vec<String>,
     pub failed: Vec<String>,
@@ -61,8 +68,9 @@ pub trait RejoinHost {
     fn classify_run(&mut self, run: &str) -> io::Result<RunFate>;
     /// Collect and report, re-attach, or release, as the fate says.
     fn settle_run(&mut self, run: &str, fate: RunFate) -> io::Result<()>;
-    /// Start the host's report-only worktree sweep; it removes nothing itself.
-    fn sweep_worktrees(&mut self) -> io::Result<()>;
+    /// Run the host's approved worktree reaper and report what it removed and what
+    /// stays eligible.
+    fn reap_worktrees(&mut self) -> io::Result<ReapReport>;
     fn check_floors(&mut self) -> io::Result<FloorReport>;
     fn probe_legs(&mut self) -> io::Result<LegReport>;
 }
@@ -137,12 +145,17 @@ impl Store {
             flags: Vec::new(),
         };
         let mut runs = Vec::new();
+        let episode = self.load()?.outage_episode;
         let outcome = self.gate(host, &mut log, &mut runs);
+        let settled: BTreeSet<String> = runs
+            .iter()
+            .filter_map(|row| row["run"].as_str().map(str::to_owned))
+            .collect();
         // The commit runs under the probe loop's lock: a probe that landed during the
         // gate is read here, so the receipt always agrees with the phase it commits.
         let _guard = self.lock_wait()?;
         let mut state = self.load()?;
-        let outcome = outcome.and_then(|()| Self::committable(&state, now));
+        let outcome = outcome.and_then(|()| Self::committable(&state, now, episode, &settled));
         let result = match &outcome {
             Ok(()) => json!({"outcome": "ready"}),
             Err(RejoinError::Blocked { step, reason }) => {
@@ -168,7 +181,7 @@ impl Store {
         outcome?;
         state.needs_rejoin = false;
         state.phase = Phase::Ready;
-        state.link.unknown_runs.clear();
+        state.link.unknown_runs.retain(|run| !settled.contains(run));
         state.link.maintenance_end = None;
         self.save(&state)?;
         Ok(record)
@@ -176,7 +189,28 @@ impl Store {
 
     /// The host may go ready only while it is still reachable, rejoining and outside
     /// a maintenance window. A newer healthy probe does not stop it.
-    fn committable(state: &State, now: u64) -> Result<(), RejoinError> {
+    fn committable(
+        state: &State,
+        now: u64,
+        episode: u64,
+        settled: &BTreeSet<String>,
+    ) -> Result<(), RejoinError> {
+        if state.outage_episode != episode {
+            return Err(RejoinError::NotRejoining(
+                "a new outage began during the gate",
+            ));
+        }
+        if let Some(run) = state
+            .link
+            .unknown_runs
+            .iter()
+            .find(|run| !settled.contains(*run))
+        {
+            return Err(RejoinError::Blocked {
+                step: "runs",
+                reason: format!("{run} became unknown during the gate and is not settled"),
+            });
+        }
         if state.phase != Phase::Rejoining || state.outage_since.is_some() {
             return Err(RejoinError::NotRejoining(
                 "host left the rejoining state or went unreachable during the gate",
@@ -229,9 +263,17 @@ impl Store {
             runs.push(json!({"run": run, "fate": fate}));
         }
         log.step("runs", "ok", json!({"settled": unknown.len()}));
-        host.sweep_worktrees()
-            .map_err(|error| blocked("sweep", error.to_string()))?;
-        log.step("sweep", "ok", json!({"report_only": true}));
+        let reap = host
+            .reap_worktrees()
+            .map_err(|error| blocked("reap", error.to_string()))?;
+        if reap.remaining > 0 {
+            log.step("reap", "failed", json!(reap));
+            return Err(blocked(
+                "reap",
+                format!("{} eligible stale worktrees remain", reap.remaining),
+            ));
+        }
+        log.step("reap", "ok", json!(reap));
         let floors = host
             .check_floors()
             .map_err(|error| blocked("floors", error.to_string()))?;

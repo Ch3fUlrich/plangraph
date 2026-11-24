@@ -2,28 +2,37 @@
 use crate::worker_liveness::{registry, remote, state};
 use pg_worker_core::{
     host_command,
-    hosts::{HostEntry, Os},
-    run::record::{RunRecord, Status},
-    worker_host::{FloorReport, InstallReport, LegReport, RejoinHost, RunFate, Store, SyncReport},
+    hosts::HostEntry,
+    worker_host::{
+        FloorReport, InstallReport, LegReport, ReapReport, RejoinHost, RunFate, Store, SyncReport,
+    },
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{self, Write},
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-/// The host-side code sync; a host may name another unit in `PG_REJOIN_SYNC_UNIT`.
-const SYNC_UNIT: &str = "plangraph-host-sync.service";
-const SWEEP_UNIT: &str = "pg-worktree-sweep.service";
+#[path = "worker_rejoin_checks.rs"]
+mod checks;
+#[path = "worker_rejoin_runs.rs"]
+mod runs;
 
 struct Ssh<'a> {
     host: &'a HostEntry,
     state: std::path::PathBuf,
-    /// Terminal status the host reported for runs that ended during the outage.
-    ended: BTreeMap<String, Value>,
-    live: Option<Vec<String>>,
+    /// The host's own view of its runs, read once per rejoin.
+    inventory: Option<Inventory>,
+}
+
+/// The host's run records with each session checked (see `worker-active-runs`).
+#[derive(Default)]
+struct Inventory {
+    live: BTreeSet<String>,
+    dead: BTreeSet<String>,
+    terminal: BTreeMap<String, Value>,
 }
 
 impl Ssh<'_> {
@@ -56,49 +65,6 @@ impl Ssh<'_> {
             })
             .collect()
     }
-
-    fn live_runs(&mut self) -> io::Result<&[String]> {
-        if self.live.is_none() {
-            let out = self.ok(&["pg-spawnd", "worker-active-runs", &self.host.id], 30)?;
-            let receipt: Value = serde_json::from_slice(&out).map_err(io::Error::other)?;
-            self.live = Some(
-                receipt["runs"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|id| id.as_str().map(str::to_owned))
-                    .collect(),
-            );
-        }
-        Ok(self.live.as_deref().unwrap_or_default())
-    }
-
-    fn load_ended(&mut self) -> io::Result<()> {
-        let mut cursor = 0u64;
-        loop {
-            // The same state directory the active inventory reads.
-            let assign = format!("PLANGRAPH_SPAWN_STATE={}", self.host.state_dir);
-            let cursor_arg = cursor.to_string();
-            let mut argv = vec!["pg-spawnd", "runs", "--changed-since", &cursor_arg];
-            if !self.host.state_dir.is_empty() {
-                argv.splice(0..0, ["env", assign.as_str()]);
-            }
-            let out = self.ok(&argv, 60)?;
-            let page: Value = serde_json::from_slice(&out).map_err(io::Error::other)?;
-            for row in page["rows"].as_array().into_iter().flatten() {
-                if let Some(id) = row["run_id"].as_str() {
-                    if row["phase"] == "ended" && row["status"].is_string() {
-                        self.ended.insert(id.to_owned(), row.clone());
-                    }
-                }
-            }
-            let next = page["next_cursor"].as_u64().unwrap_or(cursor);
-            if page["more"] != true || next <= cursor {
-                return Ok(());
-            }
-            cursor = next;
-        }
-    }
 }
 
 fn now() -> u64 {
@@ -109,313 +75,26 @@ fn now() -> u64 {
 
 impl RejoinHost for Ssh<'_> {
     fn sync_checkouts(&mut self) -> io::Result<SyncReport> {
-        let before = self.refs("HEAD")?;
-        let unit = self
-            .host
-            .env
-            .get("PG_REJOIN_SYNC_UNIT")
-            .map_or(SYNC_UNIT, String::as_str);
-        self.ok(&["systemctl", "--user", "start", unit], 900)?;
-        let after = self.refs("HEAD")?;
-        let main = self.refs("origin/main")?;
-        if let Some((id, head)) = after.iter().find(|(id, head)| main.get(*id) != Some(head)) {
-            return Err(io::Error::other(format!(
-                "checkout {id} is at {head}, not at origin/main after the sync"
-            )));
-        }
-        Ok(SyncReport {
-            head: after.values().next().cloned().unwrap_or_default(),
-            fast_forwarded: after
-                .iter()
-                .filter(|(id, head)| before.get(*id) != Some(head))
-                .map(|(id, _)| id.clone())
-                .collect(),
-            saved_branches: Vec::new(),
-        })
+        self.sync()
     }
-
     fn check_install(&mut self) -> io::Result<InstallReport> {
-        let env = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
-        let (Some(sha), Some(sum), Some(binary), Some(stamp)) = (
-            env("PG_MAIN_SHA"),
-            env("PG_MAIN_SHA256"),
-            self.host.env.get("PG_INSTALL_BINARY"),
-            self.host.env.get("PG_INSTALL_STAMP"),
-        ) else {
-            return Ok(InstallReport {
-                current: false,
-                detail: "main build identity or install paths not supplied".into(),
-            });
-        };
-        let output = self.run(
-            &[
-                "pg-spawnd",
-                "check-install",
-                "--host-id",
-                &self.host.id,
-                "--binary",
-                binary,
-                "--source-stamp",
-                stamp,
-                "--main-sha",
-                &sha,
-                "--main-sha256",
-                &sum,
-            ],
-            60,
-        )?;
-        // check-install exits 0 for any valid invocation and names the verdict on stdout.
-        let row: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
-        let detail = row["reason"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                String::from_utf8_lossy(&output.stderr)
-                    .lines()
-                    .next()
-                    .unwrap_or("pg-spawnd or hooks differ from main")
-                    .to_owned()
-            });
-        Ok(InstallReport {
-            current: output.status.success() && row["status"] == "current",
-            detail,
-        })
+        self.install()
     }
-
     fn classify_run(&mut self, run: &str) -> io::Result<RunFate> {
-        if self.live_runs()?.iter().any(|id| id == run) {
-            return Ok(RunFate::Live);
-        }
-        if self.ended.is_empty() {
-            self.load_ended()?;
-        }
-        Ok(if self.ended.contains_key(run) {
-            RunFate::Finished
-        } else {
-            RunFate::Dead
-        })
+        self.classify(run)
     }
-
     fn settle_run(&mut self, run: &str, fate: RunFate) -> io::Result<()> {
-        let mut record = match RunRecord::read(&self.state, run) {
-            Ok(record) => record,
-            // The run never reached this coordinator's records.
-            Err(pg_worker_core::run::record::RecordError::Unknown) => return Ok(()),
-            Err(error) => return Err(io::Error::other(error.to_string())),
-        };
-        let was_unknown = record.get("status").and_then(Value::as_str) == Some("unknown");
-        if was_unknown {
-            record.set("status", json!("running"));
-        }
-        if fate == RunFate::Live {
-            // Re-attach: the record goes back to running and the host's own reconcile
-            // loop keeps following the session.
-            if was_unknown {
-                let at = now();
-                return record
-                    .push_event(json!({"event": "REJOIN_REATTACHED", "at": at}))
-                    .and_then(|()| record.save())
-                    .map_err(|error| io::Error::other(error.to_string()));
-            }
-            return Ok(());
-        }
-        if record.status().is_none_or(Status::is_terminal) {
-            return Ok(());
-        }
-        // A queued run walks queued -> running first; only the statuses that can end a
-        // running run are kept, and refused, limited or dry-run ends count as failed.
-        if record.status() == Some(Status::Queued) {
-            record.set("status", json!("running"));
-        }
-        let to = match fate {
-            RunFate::Finished => self
-                .ended
-                .get(run)
-                .and_then(|row| Status::parse(row["status"].as_str()?))
-                .filter(|status| {
-                    !matches!(
-                        status,
-                        Status::Queued
-                            | Status::Running
-                            | Status::Refused
-                            | Status::Limited
-                            | Status::DryRun
-                    )
-                })
-                .unwrap_or(Status::Failed),
-            _ => Status::Failed,
-        };
-        let at = now();
-        // The host's own terminal result is kept on the record: when it ended and its exit code.
-        let remote = self.ended.get(run).cloned().unwrap_or(Value::Null);
-        record
-            .transition(to, at as f64)
-            .map_err(|error| io::Error::other(error.to_string()))?;
-        if fate == RunFate::Finished {
-            for key in ["ended", "exit_code"] {
-                if let Some(value) = remote.get(key).filter(|value| !value.is_null()) {
-                    record.set(key, value.clone());
-                }
-            }
-        }
-        // Claims and lanes follow the record: a status that keeps them would leave the run held.
-        if fate == RunFate::Dead && !pg_worker_core::run::record::releases_ownership(to.as_str()) {
-            return Err(io::Error::other(format!(
-                "{run} ended as {} which keeps its claim and lane",
-                to.as_str()
-            )));
-        }
-        record
-            .push_event(json!({
-                "event": "REJOIN_SETTLED", "fate": fate, "at": at,
-                "status": to.as_str(), "remote_exit_code": remote.get("exit_code"),
-            }))
-            .and_then(|()| record.save())
-            .map_err(|error| io::Error::other(error.to_string()))
+        self.settle(run, fate)
     }
-
-    /// The sweep unit reports removal candidates only; nothing is deleted here.
-    fn sweep_worktrees(&mut self) -> io::Result<()> {
-        self.ok(&["systemctl", "--user", "start", SWEEP_UNIT], 600)
-            .map(drop)
+    fn reap_worktrees(&mut self) -> io::Result<ReapReport> {
+        self.reap()
     }
-
     fn check_floors(&mut self) -> io::Result<FloorReport> {
-        let mut problems = Vec::new();
-        let mut unchecked = Vec::new();
-        // The host's registry mounts reach the command; an ssh session has no such env.
-        let disk_ok = match self.host.env.get("PLANGRAPH_WORK_MOUNTS") {
-            Some(mounts) if !mounts.is_empty() => {
-                let assign = format!("PLANGRAPH_WORKTREE_MOUNTS={mounts}");
-                let disk = self.run(&["env", &assign, "pg-spawnd", "host", "work-disk"], 60)?;
-                if !disk.status.success() {
-                    problems.push(format!(
-                        "disk: {}",
-                        String::from_utf8_lossy(&disk.stderr).trim()
-                    ));
-                }
-                disk.status.success()
-            }
-            // A host without work mounts keeps its work on the state disk: measure that.
-            _ if self.host.os == Os::Linux && !self.host.state_dir.is_empty() => {
-                let out = self.ok(&["df", "-Pk", &self.host.state_dir], 30)?;
-                match df_available_kb(&String::from_utf8_lossy(&out)) {
-                    Some(kb) if kb >= 5 << 20 => true,
-                    Some(kb) => {
-                        problems.push(format!(
-                            "disk: state disk has {} MiB free < 5 GiB",
-                            kb >> 10
-                        ));
-                        false
-                    }
-                    None => {
-                        unchecked.push("disk: unreadable df output for the state disk".into());
-                        true
-                    }
-                }
-            }
-            _ => {
-                unchecked.push("disk: no work mounts or state disk to measure".into());
-                true
-            }
-        };
-        let floor = self.host.caps.mem_floor_mb;
-        let ram_ok = if self.host.wsl_distro.is_some() {
-            // The guest's MemAvailable counts page cache as used; Windows free memory
-            // is what starves the host, so ask the WSL cache guard for it.
-            let min = floor.max(1).to_string();
-            let guard = self.run(
-                &[
-                    "pg-spawnd",
-                    "host",
-                    "wsl-cache-guard",
-                    "--min-free-mb",
-                    &min,
-                ],
-                120,
-            )?;
-            let line = String::from_utf8_lossy(&guard.stdout).into_owned();
-            let value = |key: &str| {
-                line.split_whitespace()
-                    .find_map(|word| word.strip_prefix(key)?.parse::<u64>().ok())
-            };
-            if !guard.status.success() {
-                problems.push(format!(
-                    "ram: Windows free memory is below {floor} MiB and the page cache could not be dropped"
-                ));
-                false
-            } else if line.contains("status=skipped") {
-                unchecked.push("ram: Windows free memory unavailable from the WSL guest".into());
-                true
-            } else if let Some(free) = value("after_free_mb=").or_else(|| value("before_free_mb="))
-            {
-                if free < floor {
-                    problems.push(format!("ram: Windows free {free} MiB < floor {floor} MiB"));
-                }
-                free >= floor
-            } else {
-                unchecked.push("ram: unreadable WSL cache guard output".into());
-                true
-            }
-        } else if self.host.os == Os::Linux {
-            let out = self.ok(
-                &["pg-spawnd", "probe", "--host-id", &self.host.id, "--json"],
-                60,
-            )?;
-            let probe: Value = serde_json::from_slice(&out).map_err(io::Error::other)?;
-            let free = probe["mem_available_mb"].as_u64().unwrap_or(0);
-            if free < floor {
-                problems.push(format!("ram: {free} MiB available < floor {floor} MiB"));
-            }
-            free >= floor
-        } else {
-            unchecked.push("ram: no memory source for a Windows host".into());
-            true
-        };
-        Ok(FloorReport {
-            disk_ok,
-            ram_ok,
-            detail: if problems.is_empty() {
-                "disk and RAM floors hold".into()
-            } else {
-                problems.join("; ")
-            },
-            unchecked,
-        })
+        self.floors()
     }
-
-    /// Each leg named in the host's `PG_REJOIN_LEG_PROBES` (a JSON object of leg
-    /// name to argv, run on the host) counts as working when its command exits 0.
     fn probe_legs(&mut self) -> io::Result<LegReport> {
-        let Some(raw) = self.host.env.get("PG_REJOIN_LEG_PROBES") else {
-            return Ok(LegReport::default());
-        };
-        let legs: BTreeMap<String, Vec<String>> = serde_json::from_str(raw)
-            .map_err(|_| io::Error::other("PG_REJOIN_LEG_PROBES is not a JSON object of argv"))?;
-        let mut report = LegReport::default();
-        for (leg, argv) in legs {
-            let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
-            let up = !argv.is_empty() && self.run(&argv, 180).is_ok_and(|o| o.status.success());
-            if up {
-                &mut report.working
-            } else {
-                &mut report.failed
-            }
-            .push(leg);
-        }
-        Ok(report)
+        self.legs()
     }
-}
-
-/// Available kibibytes of the last line of `df -Pk`.
-fn df_available_kb(output: &str) -> Option<u64> {
-    output
-        .lines()
-        .last()?
-        .split_whitespace()
-        .nth(3)?
-        .parse()
-        .ok()
 }
 
 pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String> {
@@ -429,24 +108,10 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
     let mut host = Ssh {
         host: entry,
         state,
-        ended: BTreeMap::new(),
-        live: None,
+        inventory: None,
     };
     let record = store
         .rejoin(&mut host, now())
         .map_err(|error| error.to_string())?;
     writeln!(out, "{record}").map_err(|error| error.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::df_available_kb;
-
-    #[test]
-    fn df_reads_the_available_column_of_the_last_line() {
-        let out =
-            "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/x 100 40 60 40% /\n";
-        assert_eq!(df_available_kb(out), Some(60));
-        assert_eq!(df_available_kb("Filesystem\n"), None);
-    }
 }

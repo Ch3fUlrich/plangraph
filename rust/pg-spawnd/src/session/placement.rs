@@ -171,10 +171,15 @@ impl Placement {
         Ok((here.clone(), notices))
     }
 
-    /// The coordinator's hold on a worker (unreachable or rejoining), read from its state.
+    /// The coordinator's hold on a worker (unreachable or rejoining), read from its state
+    /// under the policy name and under the registry id that name or alias resolves to.
     fn hold(&self, name: &str) -> Option<&'static str> {
         let state = crate::state::resolve_state(None, |key| std::env::var_os(key)).ok()?;
-        pg_worker_core::worker_host::placement_hold(&state, name)
+        let id = crate::state::host_registry()
+            .ok()
+            .and_then(|registry| registry.resolve(name).map(|entry| entry.id.clone()));
+        let hold = |host: &str| pg_worker_core::worker_host::placement_hold(&state, host);
+        hold(name).or_else(|| id.as_deref().and_then(hold))
     }
 
     pub fn local(&self, host: &Host) -> bool {

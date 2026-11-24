@@ -387,31 +387,3 @@ fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {
         .unwrap();
     child.wait_with_output().unwrap()
 }
-
-/// A worker the coordinator holds in `rejoining` is never selected, named or not.
-pub fn check_rejoining_host(launcher: &Launcher) {
-    let s = Sandbox::new(launcher);
-    placement(&s);
-    fs::write(s.path("windows-kb"), "20971520\n").unwrap();
-    let hold = s.path("xdg/plangraph/worker-hosts");
-    fs::create_dir_all(&hold).unwrap();
-    fs::write(
-        hold.join(format!("{REMOTE}.json")),
-        r#"{"phase":"rejoining","missed":0,"observed_at":0,"needs_rejoin":true}"#,
-    )
-    .unwrap();
-    let out = s.launch("writer").arg("--dry-run").output().unwrap();
-    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
-    assert_ne!(s.json("ssh.json")["payload"]["host"], REMOTE);
-    let out = s
-        .launch("writer")
-        .args(["--host", REMOTE, "--dry-run"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    let err = s.normalize(&out.stderr);
-    assert!(
-        err.contains("refused host fixture-remote: worker host rejoining"),
-        "{err}"
-    );
-}

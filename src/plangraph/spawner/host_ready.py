@@ -16,7 +16,7 @@ import time
 from .private_io import atomic_write_private
 from .host_ready_source import (
     checkout_floor, admission_shortfall, work_drive_checkouts,
-    configured_work_drives as _configured_work_drives,
+    configured_build_target, configured_work_drives as _configured_work_drives,
     select_drive,
     legacy_cache_roots as _legacy_cache_roots,
     pool_slot_roots as _pool_slot_roots,
@@ -74,7 +74,17 @@ def harness_path(env, *, native_writer=False):
     return os.pathsep.join(path)
 
 
-def shared_cargo_target():
+def shared_cargo_target(policy=None):
+    """The env target, else the `build_drives` target of the settings policy, else the cache default."""
+    if not os.environ.get('PLANGRAPH_CARGO_TARGET_DIR'):
+        if policy is None:
+            from plangraph.settings import _policy_data
+            try:
+                policy = _policy_data(None) or {}
+            except ValueError:
+                policy = {}
+        if (built := configured_build_target(policy, disk_free_gb)) is not None:
+            return built
     return Path(os.environ.get('PLANGRAPH_CARGO_TARGET_DIR',
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()
 
@@ -465,7 +475,7 @@ def local_disk_admission(worktree, service, role='implement', movable=False, *, 
         cap = cargo_target_cap_gb()
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
-        configured_target = shared_cargo_target()
+        configured_target = shared_cargo_target(policy)
         target = configured_target.resolve() if native else configured_target
         unsafe_cache_dir(target, worktree)
         building = role not in NO_BUILD_ROLES
@@ -586,7 +596,7 @@ def running_disk_refusal(worktree, role='implement'):
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
-        target = shared_cargo_target()
+        target = shared_cargo_target(policy)
         paths = [worktree, target]
         if policy.get('worktree_root'):
             paths.append(policy['worktree_root'])
