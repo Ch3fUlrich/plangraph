@@ -310,7 +310,7 @@ impl Db {
             THEN unixepoch(l.landed_at)-unixepoch(l.build_started_at) END";
         let trains = query(&format!("SELECT l.train,l.landed_sha,l.landed_at,json_array_length(l.parts) AS parts,
             {build} AS build_seconds,
-            1+COALESCE({reruns},0) AS attempts, {reruns} AS ci_reruns, {left_out} AS drops, {fix_tasks} AS fix_tasks,
+            1+{reruns} AS attempts, {reruns} AS ci_reruns, {left_out} AS drops, {fix_tasks} AS fix_tasks,
             1.0*({build})/60/NULLIF(json_array_length(l.parts),0) AS minutes_per_merged_batch,
             COUNT(a.head) AS accepted_parts, AVG(a.seconds) AS accept_to_main_seconds
             FROM landing l LEFT JOIN throughput_accept_part a ON a.repo=l.repo AND a.sha=l.landed_sha
