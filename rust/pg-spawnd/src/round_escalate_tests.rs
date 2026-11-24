@@ -325,7 +325,7 @@ fn the_report_ignores_dry_run_and_voided_attempts() {
 #[test]
 fn returns_are_not_replans_and_a_job_of_the_earlier_schema_is_still_reported() {
     let dir = tempfile::tempdir().unwrap();
-    crate::round_replan::enqueue_return(dir.path(), "p:Back", "round_cap", &[])
+    crate::round_replan::enqueue_return(dir.path(), "p:Back", "round_cap", &[], &[])
         .ok()
         .unwrap();
     // An older job file without queued_at is dated by the file.
@@ -588,4 +588,34 @@ fn one_batch_key_shares_one_ledger_across_item_keys() {
     let records = crate::records::list_runs(dir.path());
     let report = report(dir.path(), &records, 0.0, f64::MAX);
     assert_eq!(report["items"]["p:Batch"]["rounds"], 3);
+}
+
+#[test]
+fn a_running_initial_writer_blocks_a_second_initial_and_a_fix_round_of_its_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = card("initial", 0);
+    args["card"]
+        .as_object_mut()
+        .unwrap()
+        .remove("failing_checks");
+    crate::runs::create(
+        dir.path(),
+        "run-init",
+        "fixture",
+        json!({"role":"implement", "item_key":"p:I", "round_cause":"initial"}),
+        pg_worker_core::run::record::Status::Running,
+    )
+    .ok()
+    .unwrap();
+    assert!(message(run(dir.path(), &args)).starts_with("round_in_flight"));
+    assert!(message(run(dir.path(), &card("red_ci", 2))).starts_with("round_in_flight"));
+    // Another batch is not held, and the finished initial run holds nothing.
+    let mut other = card("red_ci", 2);
+    other["card"]["item_key"] = json!("p:Other");
+    assert!(run(dir.path(), &other).is_ok());
+    let path = dir.path().join("runs/run-init/record.json");
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["status"] = json!("completed");
+    std::fs::write(path, record.to_string()).unwrap();
+    assert!(run(dir.path(), &card("red_ci", 2)).is_ok());
 }

@@ -145,6 +145,9 @@ def _add_writes(sub):
     for name in ("heartbeat", "release", "submit"):
         parser = _p(sub, name)
         parser.add_argument("key")
+        if name == "release":
+            parser.add_argument("--epoch", type=int,
+                                help="release only this claim epoch (default: the current one)")
 
     incident = _p(sub, "incident", help="append an incident to a live item")
     incident.add_argument("key")

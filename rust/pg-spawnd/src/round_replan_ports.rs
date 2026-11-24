@@ -263,9 +263,21 @@ impl Ports for CommandPorts<'_> {
             .map(|_| ())
     }
 
-    fn release_claim(&self, item: &str) -> Result<(), ToolError> {
+    fn claim_epoch(&self, item: &str) -> Result<Option<u64>, ToolError> {
+        let shown = self.show(item)?;
+        Ok(if shown["state"] == "claimed" {
+            shown["epoch"].as_u64()
+        } else {
+            None
+        })
+    }
+
+    fn release_claim(&self, item: &str, epoch: u64) -> Result<(), ToolError> {
         self.exec
-            .run(Tool::Keeper, &strings(&["--json", "release", item]))
+            .run(
+                Tool::Keeper,
+                &strings(&["--json", "release", item, "--epoch", &epoch.to_string()]),
+            )
             .map(|_| ())
     }
 
