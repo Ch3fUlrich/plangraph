@@ -252,8 +252,22 @@ fn the_pinned_workflow_digest_is_the_digest_of_the_tests_workflow() {
 fn the_cli_prints_one_line_for_green_evidence_and_every_refusal_otherwise() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("e.json");
+    // The deploy part of the GO needs a fresh ledger from a host with nothing overdue.
+    let ledgers = dir.path().join("deploy-live");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let ledger = crate::deploy_manifest::ledger::Ledger {
+        written_at: now,
+        ..Default::default()
+    };
+    crate::deploy_manifest::ledger::save(&ledgers.join("h.json"), &ledger).unwrap();
     let flags = |p: &std::path::Path| {
-        std::collections::BTreeMap::from([("evidence".to_string(), p.display().to_string())])
+        std::collections::BTreeMap::from([
+            ("evidence".to_string(), p.display().to_string()),
+            ("deploy-ledgers".to_string(), ledgers.display().to_string()),
+        ])
     };
     std::fs::write(&file, serde_json::to_vec(&green()).unwrap()).unwrap();
     let line = super::go_verify::run_cli(&flags(&file)).unwrap();
