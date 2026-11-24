@@ -521,6 +521,10 @@ never echoing the value) a `title`/`note`/`done_criteria`/`description` (or any 
 characters of `credential|password|passwd|pwd|login`; there are no exemptions, so rephrase paths and URLs near credential words.
 `pg render` masks any match that is already stored as `[redacted]` and prints `render: masked N credential-shaped string(s)` on stderr.
 
+## Effective priority (PRIORITY-INHERIT-EFFECTIVE)
+
+`views.effective_priorities` gives each non-terminal item `max(own, effective of every non-terminal dependent)`, with the dependent that supplies it as `priority_via`; a dependency cycle is reported and its back edge ignored. `ready` sorts by it, `ready` rows and the snapshot carry `effective_priority` and `priority_via` (raised items only in the snapshot), and the feeder and the web page only read them. The stored priority is never written; aging and `priority` use the own value. `reap` records `priority_inherit_raised` and `priority_inherit_longest_chain` once a day.
+
 ## Signed snapshot (M2B-SIGNED-SNAPSHOT, D-789)
 
 Optional keeper config keys: `signing_key` (ed25519 private key, PEM, mode 600, on the keeper host only) and
