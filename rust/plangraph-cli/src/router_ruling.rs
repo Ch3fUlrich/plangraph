@@ -2,12 +2,28 @@
 //! or time of this system must carry a `Measured:` line with our own numbers (rule 4.02).
 //!
 //! The statement is a label (`cause:`, `size:`, `time:`) anywhere in the text. The evidence is a
-//! `Measured:` label whose text, up to the end of its line or table cell, holds a digit (a
-//! number from a keeper or telemetry query, CI runs or the ledger) and names its source in
-//! more than one word. Other companies' practice never satisfies it: only the numbers do.
+//! `Measured:` field (the label starts a line, a table cell or a sentence; `Unmeasured:` is not
+//! one) whose text, up to the end of its line or table cell, holds a number and names one of our
+//! own data sources (keeper, telemetry, ledger, CI, a query, journal or log). Other companies'
+//! practice never satisfies it: a number beside only a company name has no source of ours.
 
 const LABELS: [&str; 3] = ["cause", "size", "time"];
 const MEASURED: &str = "measured:";
+/// Words that name data of this system. Matched as whole words of the Measured text.
+const OWN_SOURCES: [&str; 12] = [
+    "keeper",
+    "telemetry",
+    "ledger",
+    "ci",
+    "query",
+    "sqlite",
+    "journal",
+    "jsonl",
+    "decisions-log",
+    "events",
+    "db",
+    "pg",
+];
 
 /// Positions of `label:` as a whole word (so `runtime:` and `timeout:` do not count).
 fn labelled(lower: &str, label: &str) -> bool {
@@ -38,9 +54,17 @@ pub fn ruling_refusal(text: &str) -> Option<&'static str> {
         return None;
     }
     let evidence = lower.match_indices(MEASURED).any(|(at, _)| {
+        // A distinct field: not the tail of a longer word such as `unmeasured:`.
+        let own_field = !lower[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-');
         let rest = &lower[at + MEASURED.len()..];
         let cell = rest.split(['\n', '|']).next().unwrap_or("");
-        cell.bytes().any(|b| b.is_ascii_digit()) && cell.split_whitespace().count() > 1
+        let words = || cell.split(|c: char| !(c.is_alphanumeric() || c == '-'));
+        own_field
+            && cell.bytes().any(|b| b.is_ascii_digit())
+            && words().any(|word| OWN_SOURCES.contains(&word))
     });
     (!evidence).then_some(
         "ruling_no_measured: a cause, size or time needs a 'Measured:' line with our own numbers and their source",
@@ -100,6 +124,9 @@ mod tests {
             "cause: slow CI\nMeasured: 41",
             "cause: slow CI | Measured: |",
             "cause: slow CI\nMeasured:\n41 runs in the ledger",
+            "cause: slow CI\nUnmeasured: 2 estimates from the keeper",
+            "cause: slow CI\nMeasured: GitHub 42 trains",
+            "size: 4 parts\nMeasured: Zuul and Chromium CQ practice, 5 trains",
         ] {
             assert!(ruling_refusal(row).is_some(), "{row}");
         }
