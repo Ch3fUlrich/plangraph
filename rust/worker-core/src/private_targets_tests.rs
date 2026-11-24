@@ -369,3 +369,28 @@ fn affected_pytest_scratch_requires_owned_marker_age_and_idle_lease() {
     assert!(recent.exists() && unrelated.exists() && public.exists());
     drop(inherited);
 }
+
+#[test]
+fn stale_fast_check_targets_go_and_the_shared_target_stays() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path();
+    for name in ["fc-g80", "fc-g81", "cargo-target"] {
+        fixture(&cache.join(name), true);
+    }
+    fixture(&cache.join("fc-recent"), false);
+    fs::create_dir_all(cache.join("fc-not-cargo")).unwrap();
+    fs::write(cache.join("fc-not-cargo/notes"), b"keep").unwrap();
+    let mut report = report();
+    let guards = Guards {
+        pinned: vec![cache.join("fc-g81").canonicalize().unwrap()],
+        live: vec![],
+    };
+    sweep_fast_check_using(cache, &guards, SystemTime::now(), true, &mut report, || {
+        Ok((vec![], false))
+    })
+    .unwrap();
+    assert!(!cache.join("fc-g80").exists(), "{:?}", report.actions);
+    for kept in ["fc-g81", "cargo-target", "fc-recent", "fc-not-cargo"] {
+        assert!(cache.join(kept).exists(), "{kept}");
+    }
+}

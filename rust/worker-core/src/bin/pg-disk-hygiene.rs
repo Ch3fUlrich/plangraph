@@ -213,6 +213,45 @@ fn execute_with(
             report.alarm = true;
             report.error = Some(error.to_string());
         }
+        // Regenerable fast-check targets and finished job worktrees outside the roots.
+        let mut stray_error = shared
+            .first()
+            .and_then(|primary| primary.parent())
+            .map(|cache| {
+                pg_worker_core::private_targets::sweep_fast_check_targets(
+                    cache,
+                    &private_guards,
+                    apply,
+                    &mut report,
+                )
+            })
+            .and_then(Result::err);
+        if stray_error.is_none() {
+            let covered: Vec<_> = available
+                .keys()
+                .cloned()
+                .chain(configured.keys().cloned())
+                .collect();
+            stray_error = disk_hygiene::sweep_stray_worktrees(
+                &repo,
+                &covered,
+                &guards,
+                SystemTime::now(),
+                apply,
+                &mut report,
+                |tree| {
+                    let (cwds, building) = processes()?;
+                    Ok(!building
+                        && !cwds.iter().any(|cwd| cwd.starts_with(tree))
+                        && !Guards::load(&pins, state)?.protects(tree))
+                },
+            )
+            .err();
+        }
+        if let Some(error) = stray_error {
+            report.alarm = true;
+            report.error = Some(error.to_string());
+        }
         private_guards.pinned.extend(available.keys().cloned());
         private_guards.pinned.extend(configured.keys().cloned());
         for path in &scratch {

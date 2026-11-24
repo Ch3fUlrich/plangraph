@@ -174,8 +174,23 @@ def _supervise():
         for run in spawn_runs(record):
             if run['run_id'] in service.tasks:
                 await service.tasks[run['run_id']]
+                # The admission snapshot says 'running'; a refusal at launch (cargo cap,
+                # disk floor) lands in the saved record afterwards and must set the exit code.
+                run.update(service.result(run['run_id']))
+                print(_status_line(run), file=sys.stderr, flush=True)
         return spawn_exit_code(record)
     return asyncio.run(run())
+
+
+def _status_line(run):
+    """One line for the launcher log: the final spawn status, an ALERT line when refused."""
+    status = str(run.get('status') or 'unknown')
+    line = f"SPAWN {run.get('run_id')} {status.upper()}"
+    if run.get('reason') or run.get('error'):
+        line += f": {run.get('reason') or run.get('error')}"
+    if status == 'refused':
+        line = f"ALERT {line}"
+    return line
 
 class _DeprecatedWriterFamily(argparse.Action):
     """``--writer-family`` still appends to the excluded families, with a warning: it reads like a reviewer choice."""

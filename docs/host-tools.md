@@ -99,7 +99,12 @@ These options take byte counts. Alarm must be positive and no larger than
 cleanup. JSON reports `free_bytes`, never a usage percentage.
 Rule 7.1 requires at least 5 GiB free to start any writer/run on every host and
 stopping at 2 GiB free. The spawner owns admission and runtime stopping;
-this timer reports pressure and reclaims idle rebuildable state.
+this timer reports pressure and reclaims idle rebuildable state: stale `fc-*` fast-check
+targets beside the shared target (Cargo markers still required, leased or pinned ones kept) and
+registered job worktrees outside every `--root` whose head is in `origin/main`, tree clean and idle a
+day (a pushed but unmerged head is reported and kept). A busy host over the cargo cap first drops
+build variants idle for an hour; `--supervise` spawns end with `ALERT SPAWN <run> REFUSED: <reason>`
+and a non-zero exit when a refusal lands after admission.
 Live deployment is separate from repository validation.
 
 The separate daily `pg-worktree-sweep.timer` invokes the report-only

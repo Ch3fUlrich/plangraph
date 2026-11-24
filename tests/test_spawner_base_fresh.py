@@ -857,3 +857,25 @@ tests/test_spawner_remote_ps.py::test_wsl_query_deadline_holds_when_the_reader_n
         f'Unexpected sub-five-second wall-clock assertions: {unexpected}\n'
         f'Stale wall-clock allowlist entries: {stale}'
     )
+
+
+def test_supervisor_reports_a_refusal_after_admission_as_refused(tmp_path, monkeypatch, capsys):
+    """A cap refusal at launch follows the 'running' admission snapshot; it is not EXIT 0."""
+    from types import SimpleNamespace
+    from plangraph.spawner import cli
+    reason = 'cargo_target_cap: measured 68.42 GB in /x, cap 64 GB; busy'
+    final = dict(run_id='run-one', status='refused', exit_code=2, reason=reason)
+
+    async def launch():
+        return None
+
+    async def admitted(service, payload):
+        service.tasks = {'run-one': asyncio.ensure_future(launch())}
+        return dict(run_id='run-one', status='running')
+    service = SimpleNamespace(state=tmp_path, result=lambda run_id: final, tasks={})
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    monkeypatch.setattr(cli, 'admitted_spawn', admitted)
+    monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps({'state': str(tmp_path)})))
+    monkeypatch.setattr(cli.sys, 'stdout', _Out())
+    assert cli.main(['--supervise']) == 2
+    assert f'ALERT SPAWN run-one REFUSED: {reason}' in capsys.readouterr().err

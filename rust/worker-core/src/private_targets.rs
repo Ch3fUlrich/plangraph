@@ -139,6 +139,51 @@ fn sweep_using(
     Ok(())
 }
 
+/// Regenerable fast-check targets (`fc-*`) directly under the plangraph cache directory.
+/// Cargo's own markers still identify them; the name only narrows where to look, so the
+/// shared target and its pool beside them are never touched.
+pub fn sweep_fast_check_targets(
+    cache: &Path,
+    guards: &Guards,
+    apply: bool,
+    report: &mut Report,
+) -> io::Result<()> {
+    sweep_fast_check_using(
+        cache,
+        guards,
+        SystemTime::now(),
+        apply,
+        report,
+        crate::disk_runtime::processes,
+    )
+}
+
+fn sweep_fast_check_using(
+    cache: &Path,
+    guards: &Guards,
+    now: SystemTime,
+    apply: bool,
+    report: &mut Report,
+    mut processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
+) -> io::Result<()> {
+    let entries = match fs::read_dir(cache) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let Some(entry) = skip_vanished(entry)? else {
+            continue;
+        };
+        let path = entry.path();
+        let named = entry.file_name().to_string_lossy().starts_with("fc-");
+        if named && skip_vanished(entry.file_type().map(|t| t.is_dir()))? == Some(true) {
+            reclaim(&path, guards, None, now, apply, report, &mut processes)?;
+        }
+    }
+    Ok(())
+}
+
 fn reclaim(
     target: &Path,
     guards: &Guards,
