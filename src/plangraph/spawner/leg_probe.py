@@ -209,7 +209,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
     repo"; the caller's repo is never auto-reset.
     """
-    from .codex_limit import codex_usage_limit
+    from .stall_probe import codex_usage_limit
     from .env_redact import harness_limit_line, redact_env_values, redact_output
     from .exit_outcome import _booking_seconds
 
