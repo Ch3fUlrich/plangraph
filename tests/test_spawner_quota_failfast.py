@@ -452,3 +452,15 @@ def test_production_reader_clears_the_snapshot_limit_after_a_probe_pass(tmp_path
         assert reader.leg_status(SOL, now=now)['state'] == 'ok'
     finally:
         flag.default_reader.cache_clear()
+
+
+def test_one_decision_reads_the_snapshot_once_even_when_it_is_never_cached():
+    """The probe comparison uses the rows that showed the exhaustion, not a second read."""
+    now = time.time()
+    far = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + 3600))
+    exhausted = dict(_row(0, far), created_at='1970-01-01T00:15:00Z')   # observed at 900
+    reads = [[exhausted], []]
+    gate = QuotaGate(lambda: reads.pop(0) if reads else [], clock=lambda: now, ttl_s=0,
+                     probe_ts=lambda model: 800.0)
+    assert gate.apply(SOL, OK, now)['state'] == 'limited'   # 800 < 900: the probe predates the snapshot
+    assert reads == [[]]                                    # exactly one read

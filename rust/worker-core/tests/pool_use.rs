@@ -1,4 +1,4 @@
-use pg_worker_core::pool_use::{record, Pool};
+use pg_worker_core::pool_use::{fill_event, record, Pool};
 use serde_json::{json, Value};
 use std::{fs, process::Command};
 
@@ -27,7 +27,7 @@ fn pool_at_20_percent_with_five_ready_cards_starts_runs_up_to_admission() {
         vec![("implement".to_string(), 2), ("review".to_string(), 2)]
     );
     assert_eq!(
-        r.start_event().unwrap()["starts"][0],
+        fill_event(std::slice::from_ref(&r)).unwrap()["starts"][0],
         json!({"leg":"implement","runs":2})
     );
 }
@@ -37,7 +37,7 @@ fn pool_at_pace_or_without_work_or_after_its_reset_raises_nothing() {
     for used in [35.0, 50.0, 90.0] {
         let r = pool(sample(used)).report().unwrap();
         assert!(
-            !r.underused && r.alert().is_none() && r.start_event().is_none(),
+            !r.underused && r.alert().is_none() && fill_event(std::slice::from_ref(&r)).is_none(),
             "{used}"
         );
     }
@@ -51,7 +51,43 @@ fn pool_at_pace_or_without_work_or_after_its_reset_raises_nothing() {
     let mut full = sample(10.0);
     full["admission_slots"] = json!(0);
     let r = pool(full).report().unwrap();
-    assert!(r.alert().unwrap().ends_with("startable=0") && r.start_event().is_none());
+    assert!(r.alert().unwrap().ends_with("startable=0") && fill_event(&[r]).is_none());
+}
+
+#[test]
+fn two_underused_windows_share_one_admission_budget_and_one_set_of_cards() {
+    let weekly = pool(sample(20.0)).report().unwrap();
+    let mut daily = sample(10.0);
+    daily["window"] = json!("daily");
+    let daily = pool(daily).report().unwrap();
+    assert!(weekly.underused && daily.underused);
+    // Each window alone could start 4; the tick starts 4 in all, not 8, and counts the same 5 cards once.
+    let event = fill_event(&[weekly, daily]).unwrap();
+    let total: u64 = event["starts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["runs"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 4, "{event}");
+    assert_eq!(event["windows"].as_array().unwrap().len(), 2);
+    let mut slim = sample(10.0);
+    slim["window"] = json!("daily");
+    slim["admission_slots"] = json!(2);
+    let tight = fill_event(&[
+        pool(sample(20.0)).report().unwrap(),
+        pool(slim).report().unwrap(),
+    ])
+    .unwrap();
+    assert_eq!(
+        tight["starts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["runs"].as_u64().unwrap())
+            .sum::<u64>(),
+        2
+    );
 }
 
 #[test]

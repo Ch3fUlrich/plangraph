@@ -513,6 +513,11 @@ def _check_manage_key(runner):
     return None
 
 
+#: Seconds between recovery probes of a leg whose booked 429 still stands (scheduled review sweep).
+#: A Codex limit is account-wide and an upgrade lifts it before its stored reset (D-6804): ten minutes.
+QUOTA_REPROBE_S = {'agy': 3600, 'codex': 600}
+
+
 async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_reviewers=False, role=None):
     """Probe selected legs and report quota skips separately from probe failures."""
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active, routed_review_legs, spawnable_legs
@@ -558,13 +563,13 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
         evidence = status.get('evidence') or {}
         limited = status.get('state') == 'limited'
         quota_reprobe = False
-        if (limited and scheduled and leg.harness == 'agy' and evidence.get('status') == 429
+        if (limited and scheduled and leg.harness in QUOTA_REPROBE_S and evidence.get('status') == 429
                 and leg_state.routing_status(status).get('state') == 'limited'):
             now = time.time()
             last_attempt = state.last_probe_attempt_ts(model, now=now)
             if evidence.get('caller') == 'review-probe':
                 last_attempt = max(last_attempt or 0, evidence['ts'])
-            quota_reprobe = last_attempt is None or now - last_attempt >= 3600
+            quota_reprobe = last_attempt is None or now - last_attempt >= QUOTA_REPROBE_S[leg.harness]
         if limited and not quota_reprobe:
             # Same row shape as a probed result (reason/seconds/infra included):
             # every probe-row reader keeps working on skipped rows.

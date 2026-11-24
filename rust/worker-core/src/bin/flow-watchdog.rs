@@ -230,10 +230,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         recipient: None,
                     });
                 }
-                // The dispatcher starts the runs; unset or failing hook leaves the alert standing.
-                if let Some(event) = report.start_event() {
-                    let _ = deliver("PLANGRAPH_POOL_START", &event.to_string());
-                }
+            }
+            // One start plan per tick across the windows (shared work, shared admission);
+            // the dispatcher starts the runs, and an unset or failing hook leaves the alert standing.
+            if let Some(event) = pg_worker_core::pool_use::fill_event(&s.pool_reports) {
+                let _ = deliver("PLANGRAPH_POOL_START", &event.to_string());
             }
             alerts.extend(s.session_activity.alerts());
             alerts.extend(s.writer_activity.iter().flat_map(writer::Activity::alerts));
