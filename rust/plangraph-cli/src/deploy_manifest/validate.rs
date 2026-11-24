@@ -76,8 +76,9 @@ impl Manifest {
             unit.enable_unit()?;
             for env in unit.env_files.iter().flat_map(|e| e.split('|')) {
                 // A file name under the config directory, or a path a unit names as written: absolute
-                // or under `%h`.
-                if env.contains(['=', ' ', '\\'])
+                // or under `%h`; spaces are fine (systemd reads the rest of the line), `=` is refused so a
+                // `KEY=value` can never be written here.
+                if env.contains(['=', '\\', '\n', '\t'])
                     || env.split('/').any(|part| part == "..")
                     || !env.ends_with(".env")
                     || env.starts_with("//")

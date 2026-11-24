@@ -127,7 +127,7 @@ fn quoted_and_prefixed_exec_programs_are_read_as_systemd_reads_them() {
             "deploy/systemd/q.service",
             "[Service]\nExecStart=:/opt/bin/pg-spawnd run\nExecStartPre=-\"/opt/my tools/pg-spawnd\" --x\n\
              ExecStartPost=@+!/opt/bin/other arg0\nExecStop='/opt/sq dir/stopper' now\n\
-             ExecReload=\"/opt/esc\\\"d/x\" y\nEnvironmentFile=-\"/srv/q dir/x.env\"\n",
+             ExecReload=\"/opt/esc\\\"d/x\" y\nEnvironmentFile=-/srv/q dir/x.env\nEnvironmentFile=\"/srv/quoted.env\"\n",
         )],
         &[],
     );
@@ -159,11 +159,98 @@ fn quoted_and_prefixed_exec_programs_are_read_as_systemd_reads_them() {
     ))
     .unwrap();
     assert_eq!(declared.consumer_problems(&found), Vec::<String>::new());
+    // systemd reads the rest of the line as the path: spaces stay, quotes are not removed, so a quoted
+    // value is reported as written and never matches a declared file.
     let env = super::scan::unit_env_files(dir.path(), &shipped).unwrap();
-    assert!(env.contains(&(
-        "systemd/q.service".to_owned(),
-        "/srv/q dir/x.env".to_owned()
-    )));
+    let q = |name: &str| ("systemd/q.service".to_owned(), name.to_owned());
+    assert!(env.contains(&q("/srv/q dir/x.env")));
+    assert!(env.contains(&q("\"/srv/quoted.env\"")));
+    let unit = "[[unit]]\nname='q'\nfiles=['q.service']\nhosts=['keeper']\nfirst_run='c'\n";
+    let undeclared = Manifest::parse(unit).unwrap().env_problems(&env);
+    assert_eq!(undeclared.len(), 2, "{undeclared:?}");
+    let declared = Manifest::parse(&format!("{unit}env_files=['/srv/q dir/x.env']\n")).unwrap();
+    let left = declared.env_problems(&env);
+    assert_eq!(left.len(), 1, "only the quoted form is left: {left:?}");
+    assert!(left[0].contains("quoted.env"));
+}
+
+#[test]
+fn systemd_escapes_and_quoted_prefixes_are_decoded_before_the_path_is_judged() {
+    let dir = repo_with(
+        &[(
+            "deploy/systemd/e.service",
+            "[Service]\nExecStart=\"\\x2fopt/bin/pg-spawnd\" run\nExecStartPre=\":/opt/bin/colon\"\n\
+             ExecStartPost=-\"/opt/my tools/dash\"\nExecStop=/opt/a\\x20b/hex\nExecReload=\"\\057opt/oct/tool\"\n\
+             ExecCondition=/opt/sp\\sace/tool\nExecStopPost=/opt/\\q/bad\n",
+        )],
+        &[],
+    );
+    let shipped = super::scan::unit_files(dir.path()).unwrap();
+    let found = super::scan::consumers(dir.path(), &shipped).unwrap();
+    let paths: BTreeSet<&str> = found.iter().map(|c| c.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        BTreeSet::from([
+            "/opt/bin/colon",
+            "/opt/my tools/dash",
+            "/opt/a b/hex",
+            "/opt/oct/tool",
+            "/opt/bin/pg-spawnd",
+            "/opt/sp ace/tool",
+            "/opt/\\q/bad"
+        ])
+    );
+    // Through the manifest: each decoded path is undeclared until the entry lists it.
+    let mut text =
+        "[[unit]]\nname='e'\nfiles=['e.service']\nhosts=['keeper']\nfirst_run='c'\n".to_owned();
+    for bin in ["colon", "dash", "hex", "tool", "pg-spawnd"] {
+        text.push_str(&format!(
+            "[[binary]]\npackage='p'\nbin='{bin}'\nhosts=['keeper']\nfirst_run='c'\n"
+        ));
+    }
+    let problems = Manifest::parse(&text).unwrap().consumer_problems(&found);
+    for path in [
+        "/opt/bin/pg-spawnd",
+        "/opt/bin/colon",
+        "/opt/my tools/dash",
+        "/opt/a b/hex",
+        "/opt/oct/tool",
+        "/opt/sp ace/tool",
+    ] {
+        assert!(
+            problems.iter().any(|p| p.contains(path)),
+            "{path}: {problems:?}"
+        );
+    }
+}
+
+#[test]
+fn an_installer_script_deleted_from_the_working_tree_does_not_satisfy_via() {
+    let dir = repo_with(
+        &[
+            ("deploy/c/c.service.in", "[Service]\n"),
+            ("deploy/bootstrap.sh", "#!/bin/sh\n"),
+        ],
+        &[],
+    );
+    let shipped = super::scan::unit_files(dir.path()).unwrap();
+    let m = Manifest::parse(
+        "[[unit]]\nname='c'\ndir='c'\nfiles=['c.service.in']\nenable='c.service.in'\nhosts=['all']\nfirst_run='x'\n\
+         [unit.installer]\nvia='deploy/bootstrap.sh'\nstep='render'\nrenders=['c.service']\nenable='c.service'\n",
+    )
+    .unwrap();
+    assert_eq!(
+        m.installer_problems(dir.path(), &shipped),
+        Vec::<String>::new()
+    );
+    // Removed from disk, still in the index (an unstaged deletion).
+    std::fs::remove_file(dir.path().join("deploy/bootstrap.sh")).unwrap();
+    let problems = m.installer_problems(dir.path(), &shipped);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("tracked but missing from the working tree"),
+        "{problems:?}"
+    );
 }
 
 #[test]
