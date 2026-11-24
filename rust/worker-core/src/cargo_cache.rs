@@ -47,6 +47,16 @@ pub fn require_writer_target(checkout: &Path, value: Option<&OsStr>) -> io::Resu
     Ok(actual)
 }
 
+/// The shared target of a host: `configured` (`PLANGRAPH_CARGO_TARGET_DIR`, `~` and relative paths
+/// expanded against `home` and `cwd`) or the default. The one resolver every launcher uses.
+pub fn shared_target_from(
+    configured: Option<&OsStr>,
+    home: &Path,
+    cwd: &Path,
+) -> io::Result<PathBuf> {
+    Ok(cache_roots(configured, home, cwd)?.remove(0))
+}
+
 fn cache_roots(configured: Option<&OsStr>, home: &Path, cwd: &Path) -> io::Result<Vec<PathBuf>> {
     let configured = Path::new(configured.unwrap_or(OsStr::new("~/.cache/plangraph/cargo-target")));
     let mut target = configured.to_path_buf();
