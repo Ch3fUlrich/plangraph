@@ -17,8 +17,9 @@ pub struct Launched {
 impl Launched {
     /// The launch starts its supervisor now: the claim then outlives this dispatcher for as
     /// long as the supervisor can still register the run. A launch without a reservation
-    /// (check only) has nothing to mark.
-    pub fn mark_started(&self) -> std::io::Result<()> {
+    /// (check only) has nothing to mark. A claim that expired while the dispatcher was paused is
+    /// refused, never revived: another admission may have taken the key.
+    pub fn mark_started(&self) -> Result<(), String> {
         match &self.reservation {
             Some(held) => crate::lane_reservation::start(&held.state, &held.keys, &held.owner),
             None => Ok(()),
@@ -36,15 +37,22 @@ struct Reservation {
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        // Under the lock, like every admission: a dispatch that read the runs before this launch
-        // registered must still find the claim when it reads the claims. A lock that stays busy
-        // leaves the claim to expire, which only ever refuses.
-        if let Ok(_lock) = crate::lane_reservation::lock(&self.state) {
-            crate::lane_reservation::release(&self.state, &self.keys, &self.owner);
-            crate::lane_reservation::prune(&self.state, &self.keys);
+        // Under the lock, like every admission, so none runs between the release and what it
+        // follows. An admission that holds the lock for longer than `RELEASE_WAIT` must not keep a
+        // finished launch's claim alive for its whole lease: the release then goes ahead without
+        // the lock, which is safe because admissions read the claims before the runs.
+        match crate::lane_reservation::lock_for(&self.state, RELEASE_WAIT) {
+            Ok(_lock) => {
+                crate::lane_reservation::release(&self.state, &self.keys, &self.owner);
+                crate::lane_reservation::prune(&self.state, &self.keys);
+            }
+            Err(_) => crate::lane_reservation::release(&self.state, &self.keys, &self.owner),
         }
     }
 }
+
+/// How long a finished launch waits for the admission lock before it releases without it.
+const RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The most keys one launch holds: the run record keeps a batch of at most this many.
 pub const MAX_KEYS: usize = 50;

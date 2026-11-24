@@ -251,9 +251,7 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
     argv.extend(["--".into(), prompt.into()]);
     // The adapter starts the supervisor that registers the run, and it can do so after this
     // call is gone: from here the claim outlives the dispatcher.
-    launched
-        .mark_started()
-        .map_err(|e| ToolError::Internal(format!("lane reservation: {e}")))?;
+    launched.mark_started().map_err(parameter)?;
     native_call(state, &argv, Duration::from_secs(200))
 }
 /// Refuse a native writer for an item key another live lane holds, naming the lane. A

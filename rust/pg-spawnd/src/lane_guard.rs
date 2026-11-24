@@ -41,15 +41,25 @@ pub struct Observed {
 
 impl LaneSource for Observed {
     fn lanes(&self, keys: &[String]) -> Vec<Lane> {
-        let mut lanes = run_lanes(&live_runs(&self.state));
-        lanes.extend(crate::lane_reservation::lanes(
+        self.lanes_between(keys, &|| {})
+    }
+}
+
+impl Observed {
+    /// The claims are read BEFORE the runs, and `between` runs in between. A launch registers its
+    /// run and only then releases its claim, so a reader that finds no claim reads the runs after
+    /// that registration and finds the run: no order of the two steps lets a key through.
+    pub fn lanes_between(&self, keys: &[String], between: &dyn Fn()) -> Vec<Lane> {
+        let mut lanes = crate::lane_reservation::lanes(
             &self.state,
             keys,
             &self.owner,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
-        ));
+        );
+        between();
+        lanes.extend(run_lanes(&live_runs(&self.state)));
         lanes.extend(branch_lanes(&self.repo, keys));
         lanes
     }
@@ -306,6 +316,9 @@ pub use crate::lane_launch::{admit_launch, LaunchRequest, Launched, MAX_KEYS};
 #[cfg(test)]
 #[path = "lane_guard_branch_tests.rs"]
 mod branch_tests;
+#[cfg(test)]
+#[path = "lane_guard_launch_tests.rs"]
+mod launch_tests;
 #[cfg(test)]
 #[path = "lane_guard_tests.rs"]
 mod tests;

@@ -56,6 +56,21 @@ fn path(state: &Path, key: &str, owner: &str) -> PathBuf {
     key_dir(state, key).join(format!("{}.json", digest(owner)))
 }
 
+fn read_claim(path: &Path) -> Option<Value> {
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
+
+/// Whether a claim still holds its key at `at`: an admitted claim for `PENDING_SECS`, a started
+/// one for `STARTED_SECS`.
+fn active(record: &Value, at: u64) -> bool {
+    let hold = if record["phase"] == STARTED {
+        STARTED_SECS
+    } else {
+        PENDING_SECS
+    };
+    record["ts"].as_u64().is_some_and(|ts| ts + hold > at)
+}
+
 /// The claims on `keys` of owners other than `owner` that are still active at `at`.
 pub fn lanes(state: &Path, keys: &[String], owner: &str, at: u64) -> Vec<Lane> {
     let mut lanes = Vec::new();
@@ -66,24 +81,13 @@ pub fn lanes(state: &Path, keys: &[String], owner: &str, at: u64) -> Vec<Lane> {
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
         {
-            let Some(record) = fs::read(entry.path())
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            else {
+            let Some(record) = read_claim(&entry.path()) else {
                 continue;
             };
-            let (Some(held), Some(ts)) = (
-                record["owner"].as_str().filter(|held| *held != owner),
-                record["ts"].as_u64(),
-            ) else {
+            let Some(held) = record["owner"].as_str().filter(|held| *held != owner) else {
                 continue;
             };
-            let hold = if record["phase"] == STARTED {
-                STARTED_SECS
-            } else {
-                PENDING_SECS
-            };
-            if record["key"] == *key && ts + hold > at {
+            if record["key"] == *key && active(&record, at) {
                 lanes.push(Lane {
                     name: format!("reservation {held}"),
                     keys: vec![key.clone()],
@@ -116,25 +120,41 @@ pub fn reserve(state: &Path, keys: &[String], owner: &str) -> std::io::Result<()
 }
 
 /// Mark the claims of `owner` on `keys` as started: the launch is about to start its supervisor,
-/// which can register the run after the dispatcher is gone.
-pub fn start(state: &Path, keys: &[String], owner: &str) -> std::io::Result<()> {
+/// which can register the run after the dispatcher is gone. Under the state's lock, and only
+/// while every claim is still this owner's and unexpired: a dispatcher that was paused past the
+/// deadline of its claim must not revive it after another admission took the key, so that launch
+/// is refused instead.
+pub fn start(state: &Path, keys: &[String], owner: &str) -> Result<(), String> {
+    let _lock = lock(state)?;
+    let at = now();
+    for key in keys {
+        let held = read_claim(&path(state, key, owner)).is_some_and(|record| {
+            record["owner"] == owner && record["key"] == *key && active(&record, at)
+        });
+        if !held {
+            return Err(format!(
+                "the claim on {key} expired before the launch started; retry the dispatch"
+            ));
+        }
+    }
     for key in keys {
         let target = path(state, key, owner);
         let tmp = target.with_extension(format!("{}.tmp", std::process::id()));
-        let record = json!({"key":key,"owner":owner,"ts":now(),"phase":STARTED});
+        let record = json!({"key":key,"owner":owner,"ts":at,"phase":STARTED});
         let published =
             fs::write(&tmp, record.to_string()).and_then(|()| fs::rename(&tmp, &target));
         if published.is_err() {
             let _ = fs::remove_file(&tmp);
         }
-        published?;
+        published.map_err(|e| format!("lane reservation: {e}"))?;
     }
     Ok(())
 }
 
-/// Remove the claims of `owner` on `keys`; the claims of other owners stay. The caller holds the
-/// state's lock (`lock`), so an admission never reads the runs before a registration and the
-/// claims after its release.
+/// Remove the claims of `owner` on `keys`; the claims of other owners stay. With the state's lock
+/// held an admission cannot interleave; without it the admission still reads the claims before
+/// the runs (`Observed::lanes`), so it sees either the claim or the run the launch registered
+/// before it released.
 pub fn release(state: &Path, keys: &[String], owner: &str) {
     for key in keys {
         let _ = fs::remove_file(path(state, key, owner));
@@ -151,9 +171,17 @@ pub fn prune(state: &Path, keys: &[String]) {
 
 /// Hold the state's admission lock until the guard drops; waits up to ten seconds.
 pub fn lock(state: &Path) -> Result<pg_worker_core::lockfile::LockGuard, String> {
+    lock_for(state, Duration::from_secs(10))
+}
+
+/// `lock`, waiting at most `wait`.
+pub fn lock_for(
+    state: &Path,
+    wait: Duration,
+) -> Result<pg_worker_core::lockfile::LockGuard, String> {
     fs::create_dir_all(dir(state)).map_err(|e| format!("lane reservation: {e}"))?;
     let anchor = dir(state).join(".lock");
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + wait;
     loop {
         match pg_worker_core::lockfile::try_lock(&anchor) {
             Ok(Some(guard)) => return Ok(guard),
@@ -284,5 +312,40 @@ mod tests {
         assert_eq!(claim_files(dir.path()), 0);
         assert!(!key_dir(dir.path(), "demo:K").exists());
         assert!(lanes(dir.path(), &keys, "launch-c", now()).is_empty());
+    }
+
+    #[test]
+    fn start_refuses_an_expired_or_missing_claim_and_never_revives_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = ["demo:K".to_owned()];
+        let at = now();
+        write_claim(dir.path(), "demo:K", "launch-a", at, "admitted");
+        start(dir.path(), &keys, "launch-a").unwrap();
+        // Started once: a second start keeps it started.
+        start(dir.path(), &keys, "launch-a").unwrap();
+        assert_eq!(
+            lanes(dir.path(), &keys, "launch-b", at + PENDING_SECS + 1).len(),
+            1
+        );
+        // A dispatcher paused past the 120 s deadline: another admission may have taken the key.
+        write_claim(
+            dir.path(),
+            "demo:K",
+            "launch-old",
+            at - PENDING_SECS - 1,
+            "admitted",
+        );
+        let error = start(dir.path(), &keys, "launch-old").unwrap_err();
+        assert!(
+            error.contains("expired before the launch started"),
+            "{error}"
+        );
+        assert!(
+            lanes(dir.path(), &keys, "launch-b", now() + PENDING_SECS + 1)
+                .iter()
+                .all(|lane| lane.name != "reservation launch-old")
+        );
+        // A claim that is gone cannot be started either.
+        assert!(start(dir.path(), &keys, "launch-gone").is_err());
     }
 }
