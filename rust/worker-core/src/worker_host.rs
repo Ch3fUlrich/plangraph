@@ -99,6 +99,12 @@ pub fn placement_refusal(root: &Path, host: &str) -> Option<&'static str> {
         .unwrap_or(Some("worker host state unavailable"))
 }
 
+/// The coordinator's placement hold on a host name, or None for a name with no worker
+/// state (the local host, or a policy name that is not a worker id).
+pub fn placement_hold(root: &Path, host: &str) -> Option<&'static str> {
+    valid_host(host).then(|| placement_refusal(root, host))?
+}
+
 impl Store {
     pub fn new(root: &Path, host: &str) -> io::Result<Self> {
         if !valid_host(host) {

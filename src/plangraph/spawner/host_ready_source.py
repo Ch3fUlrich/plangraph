@@ -165,7 +165,7 @@ def configured_work_drives(policy):
 
 
 def select_drive(drives, cleanup, free_gb, *, check=None):
-    """Pick the first drive meeting its floor and any additional filesystem checks.
+    """Pick the drive with the most free space among those meeting their floor and any extra checks.
 
     When none qualifies, clean up once and retry. Return the selected path or the
     first shortfall as a (free GiB, floor GiB) pair.
@@ -174,14 +174,17 @@ def select_drive(drives, cleanup, free_gb, *, check=None):
         raise ValueError('select_work_drive select_drive needs at least one drive')
 
     def pick():
-        first_low = None
+        best, first_low = None, None
         for path, floor in drives:
             free = free_gb(path)
             low = (free, floor) if free < floor else check(path) if check else None
             if low is None:
-                return path, None
-            if first_low is None:
+                if best is None or free > best[0]:
+                    best = (free, path)
+            elif first_low is None:
                 first_low = low
+        if best is not None:
+            return best[1], None
         return None, first_low
 
     selected, low = pick()

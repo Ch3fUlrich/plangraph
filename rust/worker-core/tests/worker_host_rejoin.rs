@@ -6,7 +6,9 @@ use std::{collections::BTreeSet, fs, io};
 use tempfile::tempdir;
 
 #[derive(Default)]
-struct Fake {
+struct Fake<'a> {
+    /// A healthy liveness probe that lands while the gate runs.
+    probe_during: Option<&'a Store>,
     calls: Vec<String>,
     stale_binary: bool,
     fail_sync: bool,
@@ -16,7 +18,7 @@ struct Fake {
     unchecked: Vec<String>,
 }
 
-impl Fake {
+impl Fake<'_> {
     fn healthy() -> Self {
         Self {
             disk_ok: true,
@@ -31,9 +33,20 @@ impl Fake {
     }
 }
 
-impl RejoinHost for Fake {
+impl RejoinHost for Fake<'_> {
     fn sync_checkouts(&mut self) -> io::Result<SyncReport> {
         self.calls.push("sync".into());
+        if let Some(store) = self.probe_during {
+            store
+                .observe_liveness(Observation {
+                    now: 1_500,
+                    ssh: true,
+                    tailscale: Some(true),
+                    remote_runs: None,
+                    placed_runs: Default::default(),
+                })
+                .unwrap();
+        }
         if self.fail_sync {
             return Err(io::Error::other("fast-forward refused"));
         }
@@ -113,7 +126,6 @@ fn rejoin_runs_every_step_settles_unknown_runs_and_sets_ready() {
     assert!(store.refusal().unwrap().is_some());
     let mut host = Fake::healthy();
     host.stale_binary = true;
-    host.unchecked = vec!["ram: no Windows free-memory source".into()];
     let record = store.rejoin(&mut host, 1000).unwrap();
     assert_eq!(
         host.calls,
@@ -131,10 +143,7 @@ fn rejoin_runs_every_step_settles_unknown_runs_and_sets_ready() {
     assert_eq!(store.phase().unwrap(), Phase::Ready);
     assert_eq!(store.refusal().unwrap(), None);
     assert!(record["flags"][0].as_str().unwrap().starts_with("binary:"));
-    assert_eq!(
-        record["flags"][1],
-        "floor unchecked: ram: no Windows free-memory source"
-    );
+    assert_eq!(record["flags"][1], "legs failing: agy");
     assert_eq!(record["runs"].as_array().unwrap().len(), 3);
     let files: Vec<_> = fs::read_dir(state.path().join("rejoin"))
         .unwrap()
@@ -155,6 +164,11 @@ fn a_failed_step_keeps_the_host_out_of_placement_and_records_the_attempt() {
         ),
         ("floors", |host: &mut Fake| host.disk_ok = false, "floors"),
         ("legs", |host: &mut Fake| host.working_legs.clear(), "legs"),
+        (
+            "unmeasured floor",
+            (|host: &mut Fake| host.unchecked = vec!["ram: no source".into()]) as fn(&mut Fake),
+            "floors",
+        ),
     ] {
         let state = tempdir().unwrap();
         let store = Store::new(state.path(), "worker-a").unwrap();
@@ -198,4 +212,40 @@ fn rejoin_refuses_a_host_that_is_ready_or_still_unreachable() {
         Err(RejoinError::NotRejoining("host is unreachable"))
     ));
     assert!(host.calls.is_empty());
+}
+
+#[test]
+fn a_healthy_probe_during_the_gate_does_not_break_the_ready_receipt() {
+    let state = tempdir().unwrap();
+    let store = Store::new(state.path(), "worker-a").unwrap();
+    outage(&store);
+    let mut host = Fake::healthy();
+    host.probe_during = Some(&store);
+    // The probe observed a later time than the rejoin's own clock.
+    let record = store.rejoin(&mut host, 1_000).unwrap();
+    assert_eq!(record["result"]["outcome"], "ready");
+    assert_eq!(store.phase().unwrap(), Phase::Ready);
+    assert_eq!(store.refusal().unwrap(), None);
+}
+
+#[test]
+fn a_host_lost_during_the_gate_stays_held_and_the_receipt_says_blocked() {
+    let state = tempdir().unwrap();
+    let store = Store::new(state.path(), "worker-a").unwrap();
+    outage(&store);
+    let mut host = Fake::healthy();
+    host.probe_during = None;
+    // A missed probe lands before the commit.
+    store
+        .observe_liveness(Observation {
+            now: 950,
+            ssh: false,
+            tailscale: None,
+            remote_runs: None,
+            placed_runs: Default::default(),
+        })
+        .unwrap();
+    let error = store.rejoin(&mut host, 1_000).unwrap_err();
+    assert!(matches!(error, RejoinError::NotRejoining(_)), "{error}");
+    assert!(store.refusal().unwrap().is_some());
 }

@@ -22,7 +22,7 @@ struct Ssh<'a> {
     host: &'a HostEntry,
     state: std::path::PathBuf,
     /// Terminal status the host reported for runs that ended during the outage.
-    ended: BTreeMap<String, String>,
+    ended: BTreeMap<String, Value>,
     live: Option<Vec<String>>,
 }
 
@@ -45,15 +45,14 @@ impl Ssh<'_> {
         Ok(output.stdout)
     }
 
-    fn heads(&self) -> BTreeMap<String, String> {
+    /// One ref of every registered checkout; a checkout that cannot be read blocks the gate.
+    fn refs(&self, rev: &str) -> io::Result<BTreeMap<String, String>> {
         self.host
             .repos
             .iter()
-            .filter_map(|(id, repo)| {
-                let out = self
-                    .ok(&["git", "-C", &repo.root, "rev-parse", "HEAD"], 30)
-                    .ok()?;
-                Some((id.clone(), String::from_utf8_lossy(&out).trim().to_owned()))
+            .map(|(id, repo)| {
+                let out = self.ok(&["git", "-C", &repo.root, "rev-parse", rev], 30)?;
+                Ok((id.clone(), String::from_utf8_lossy(&out).trim().to_owned()))
             })
             .collect()
     }
@@ -77,15 +76,19 @@ impl Ssh<'_> {
     fn load_ended(&mut self) -> io::Result<()> {
         let mut cursor = 0u64;
         loop {
-            let out = self.ok(
-                &["pg-spawnd", "runs", "--changed-since", &cursor.to_string()],
-                60,
-            )?;
+            // The same state directory the active inventory reads.
+            let assign = format!("PLANGRAPH_SPAWN_STATE={}", self.host.state_dir);
+            let cursor_arg = cursor.to_string();
+            let mut argv = vec!["pg-spawnd", "runs", "--changed-since", &cursor_arg];
+            if !self.host.state_dir.is_empty() {
+                argv.splice(0..0, ["env", assign.as_str()]);
+            }
+            let out = self.ok(&argv, 60)?;
             let page: Value = serde_json::from_slice(&out).map_err(io::Error::other)?;
             for row in page["rows"].as_array().into_iter().flatten() {
-                if let (Some(id), Some(status)) = (row["run_id"].as_str(), row["status"].as_str()) {
-                    if row["phase"] == "ended" {
-                        self.ended.insert(id.to_owned(), status.to_owned());
+                if let Some(id) = row["run_id"].as_str() {
+                    if row["phase"] == "ended" && row["status"].is_string() {
+                        self.ended.insert(id.to_owned(), row.clone());
                     }
                 }
             }
@@ -106,14 +109,20 @@ fn now() -> u64 {
 
 impl RejoinHost for Ssh<'_> {
     fn sync_checkouts(&mut self) -> io::Result<SyncReport> {
-        let before = self.heads();
+        let before = self.refs("HEAD")?;
         let unit = self
             .host
             .env
             .get("PG_REJOIN_SYNC_UNIT")
             .map_or(SYNC_UNIT, String::as_str);
         self.ok(&["systemctl", "--user", "start", unit], 900)?;
-        let after = self.heads();
+        let after = self.refs("HEAD")?;
+        let main = self.refs("origin/main")?;
+        if let Some((id, head)) = after.iter().find(|(id, head)| main.get(*id) != Some(head)) {
+            return Err(io::Error::other(format!(
+                "checkout {id} is at {head}, not at origin/main after the sync"
+            )));
+        }
         Ok(SyncReport {
             head: after.values().next().cloned().unwrap_or_default(),
             fast_forwarded: after
@@ -222,7 +231,7 @@ impl RejoinHost for Ssh<'_> {
             RunFate::Finished => self
                 .ended
                 .get(run)
-                .and_then(|status| Status::parse(status))
+                .and_then(|row| Status::parse(row["status"].as_str()?))
                 .filter(|status| {
                     !matches!(
                         status,
@@ -237,11 +246,30 @@ impl RejoinHost for Ssh<'_> {
             _ => Status::Failed,
         };
         let at = now();
+        // The host's own terminal result is kept on the record: when it ended and its exit code.
+        let remote = self.ended.get(run).cloned().unwrap_or(Value::Null);
         record
             .transition(to, at as f64)
-            .and_then(|()| {
-                record.push_event(json!({"event": "REJOIN_SETTLED", "fate": fate, "at": at}))
-            })
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        if fate == RunFate::Finished {
+            for key in ["ended", "exit_code"] {
+                if let Some(value) = remote.get(key).filter(|value| !value.is_null()) {
+                    record.set(key, value.clone());
+                }
+            }
+        }
+        // Claims and lanes follow the record: a status that keeps them would leave the run held.
+        if fate == RunFate::Dead && !pg_worker_core::run::record::releases_ownership(to.as_str()) {
+            return Err(io::Error::other(format!(
+                "{run} ended as {} which keeps its claim and lane",
+                to.as_str()
+            )));
+        }
+        record
+            .push_event(json!({
+                "event": "REJOIN_SETTLED", "fate": fate, "at": at,
+                "status": to.as_str(), "remote_exit_code": remote.get("exit_code"),
+            }))
             .and_then(|()| record.save())
             .map_err(|error| io::Error::other(error.to_string()))
     }
@@ -268,8 +296,26 @@ impl RejoinHost for Ssh<'_> {
                 }
                 disk.status.success()
             }
+            // A host without work mounts keeps its work on the state disk: measure that.
+            _ if self.host.os == Os::Linux && !self.host.state_dir.is_empty() => {
+                let out = self.ok(&["df", "-Pk", &self.host.state_dir], 30)?;
+                match df_available_kb(&String::from_utf8_lossy(&out)) {
+                    Some(kb) if kb >= 5 << 20 => true,
+                    Some(kb) => {
+                        problems.push(format!(
+                            "disk: state disk has {} MiB free < 5 GiB",
+                            kb >> 10
+                        ));
+                        false
+                    }
+                    None => {
+                        unchecked.push("disk: unreadable df output for the state disk".into());
+                        true
+                    }
+                }
+            }
             _ => {
-                unchecked.push("disk: no work mounts configured in the host registry".into());
+                unchecked.push("disk: no work mounts or state disk to measure".into());
                 true
             }
         };
@@ -361,6 +407,17 @@ impl RejoinHost for Ssh<'_> {
     }
 }
 
+/// Available kibibytes of the last line of `df -Pk`.
+fn df_available_kb(output: &str) -> Option<u64> {
+    output
+        .lines()
+        .last()?
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()
+}
+
 pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String> {
     let [name] = args else {
         return Err("usage: pg-spawnd rejoin HOST".into());
@@ -379,4 +436,17 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
         .rejoin(&mut host, now())
         .map_err(|error| error.to_string())?;
     writeln!(out, "{record}").map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::df_available_kb;
+
+    #[test]
+    fn df_reads_the_available_column_of_the_last_line() {
+        let out =
+            "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/x 100 40 60 40% /\n";
+        assert_eq!(df_available_kb(out), Some(60));
+        assert_eq!(df_available_kb("Filesystem\n"), None);
+    }
 }

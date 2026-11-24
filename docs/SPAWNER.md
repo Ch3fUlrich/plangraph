@@ -1,4 +1,4 @@
-# Plangraph Spawner & Model Routing Architecture — [disk admission](operations/spawner-disk-admission.md) · [work drives](operations/worker-disks.md) · [writer feeder](writer-feeder.md)
+# Plangraph Spawner & Model Routing Architecture — [disk admission](operations/spawner-disk-admission.md) · [work drives, most-free pick](operations/worker-disks.md) · [writer feeder](writer-feeder.md)
 
 | Config key | Values | Default / details |
 | --- | --- | --- |
