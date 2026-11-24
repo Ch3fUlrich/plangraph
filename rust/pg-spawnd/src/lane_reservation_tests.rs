@@ -1,7 +1,7 @@
 use super::*;
 
 fn write_claim(state: &Path, key: &str, owner: &str, ts: u64, phase: &str) {
-    let target = path(state, key, owner);
+    let target = claim_path(state, key, owner);
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     let record = json!({"key":key,"owner":owner,"ts":ts,"phase":phase});
     fs::write(target, record.to_string()).unwrap();
@@ -85,7 +85,7 @@ fn an_unfinished_write_is_not_a_claim_and_a_failed_publication_leaves_nothing() 
     fs::write(stray.join("0123.4567.tmp"), &record).unwrap();
     assert!(lanes(dir.path(), &keys, "launch-b", now_secs()).is_empty());
     // The rename cannot replace a directory: the temporary file must not outlive the failure.
-    fs::create_dir_all(path(dir.path(), "demo:K", "launch-b")).unwrap();
+    fs::create_dir_all(claim_path(dir.path(), "demo:K", "launch-b")).unwrap();
     assert!(reserve(dir.path(), &keys, "launch-b", now_secs()).is_err());
     let own = format!("{}.tmp", std::process::id());
     let leftovers: Vec<_> = fs::read_dir(&stray)

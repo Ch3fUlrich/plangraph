@@ -12,6 +12,10 @@
 //! longer, whether or not the dispatcher process is alive.
 
 use crate::lane_guard::Lane;
+use crate::lane_snapshot::validate_claim;
+#[cfg(test)]
+pub(crate) use crate::lane_snapshot::REMOVE_FAILS;
+pub use crate::lane_snapshot::{Snapshot, SweepError};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -36,7 +40,7 @@ pub const PENDING_SECS: u64 = 120;
 /// ever frees the key of a launch that died.
 pub const STARTED_SECS: u64 = 600;
 
-const STARTED: &str = "started";
+pub(crate) const STARTED: &str = "started";
 
 fn dir(state: &Path) -> PathBuf {
     state.join("lane-reservations")
@@ -69,7 +73,7 @@ pub fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn digest(text: &str) -> String {
+pub(crate) fn digest(text: &str) -> String {
     Sha256::digest(text.as_bytes())
         .iter()
         .take(8)
@@ -77,11 +81,11 @@ fn digest(text: &str) -> String {
         .collect()
 }
 
-fn key_dir(state: &Path, key: &str) -> PathBuf {
+pub(crate) fn key_dir(state: &Path, key: &str) -> PathBuf {
     dir(state).join(digest(key))
 }
 
-fn path(state: &Path, key: &str, owner: &str) -> PathBuf {
+pub(crate) fn claim_path(state: &Path, key: &str, owner: &str) -> PathBuf {
     key_dir(state, key).join(format!("{}.json", digest(owner)))
 }
 
@@ -91,7 +95,7 @@ fn read_claim(path: &Path) -> Option<Value> {
 
 /// Whether a claim still holds its key at `at`: an admitted claim for `PENDING_SECS`, a started
 /// one for `STARTED_SECS`.
-fn active(record: &Value, at: u64) -> bool {
+pub(crate) fn active(record: &Value, at: u64) -> bool {
     let hold = if record["phase"] == STARTED {
         STARTED_SECS
     } else {
@@ -100,175 +104,11 @@ fn active(record: &Value, at: u64) -> bool {
     record["ts"].as_u64().is_some_and(|ts| ts + hold > at)
 }
 
-/// One claim entry as a snapshot found it. A claim that cannot be read is not a free key: the
-/// owner may still start next to a replacement once it can be read again, so it counts as held.
-enum Found {
-    Claim(Value),
-    Unreadable(String),
-}
-
-struct Entry {
-    key: String,
-    name: String,
-    path: PathBuf,
-    found: Found,
-}
-
-/// What a sweep could not do. Each case is its own kind, so no caller can mistake one for another
-/// or ignore it: the admission is refused and says which.
-#[derive(Debug, PartialEq, Eq)]
-pub enum SweepError {
-    /// A claim on the key cannot be read; the key stays held.
-    Unreadable(String),
-    /// A lapsed claim cannot be removed; the replacement must not be published next to it.
-    Remove(String),
-}
-
-impl std::fmt::Display for SweepError {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unreadable(what) => write!(out, "claim unreadable, the key stays held: {what}"),
-            Self::Remove(what) => write!(out, "lapsed claim cannot be removed: {what}"),
-        }
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Makes every removal of a lapsed claim fail on this thread, so a test can fail the sweep
-    /// while the publication of a claim still works.
-    pub(crate) static REMOVE_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// The claims on some keys, read once with the one clock reading of an admission. The scan of the
-/// claims and the sweep of the lapsed ones both work from it, so they see the same entries.
-pub struct Snapshot {
-    at: u64,
-    entries: Vec<Entry>,
-}
-
-impl Snapshot {
-    /// Read every claim of `keys`. A claim or directory that cannot be read is an entry of its
-    /// own (held); one that vanishes meanwhile (a concurrent release) is not.
-    pub fn take(state: &Path, keys: &[String], at: u64) -> Self {
-        let mut entries = Vec::new();
-        for key in keys {
-            let unreadable = |name: String, path: PathBuf, error: &dyn std::fmt::Display| Entry {
-                key: key.clone(),
-                found: Found::Unreadable(format!("{name}: {error}")),
-                name,
-                path,
-            };
-            let key_path = key_dir(state, key);
-            let dir = match fs::read_dir(&key_path) {
-                Ok(dir) => dir,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    entries.push(unreadable(digest(key), key_path, &error));
-                    continue;
-                }
-            };
-            for entry in dir {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        entries.push(unreadable(digest(key), key_path.clone(), &error));
-                        continue;
-                    }
-                };
-                // Only published claims count: an unfinished write is a `.tmp` file.
-                if entry.path().extension().is_none_or(|ext| ext != "json") {
-                    continue;
-                }
-                let name = entry.file_name().to_string_lossy().into_owned();
-                match fs::read(entry.path()) {
-                    Ok(bytes) => entries.push(
-                        match serde_json::from_slice::<Value>(&bytes)
-                            .ok()
-                            .filter(|record| record["owner"].is_string() && record["ts"].is_u64())
-                        {
-                            Some(record) => Entry {
-                                key: key.clone(),
-                                name,
-                                path: entry.path(),
-                                found: Found::Claim(record),
-                            },
-                            None => unreadable(name, entry.path(), &"malformed claim"),
-                        },
-                    ),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => entries.push(unreadable(name, entry.path(), &error)),
-                }
-            }
-        }
-        Self { at, entries }
-    }
-
-    /// The claims of owners other than `owner` that hold at the snapshot's time, and every claim
-    /// that cannot be read.
-    pub fn lanes(&self, owner: &str) -> Vec<Lane> {
-        self.entries
-            .iter()
-            .filter_map(|entry| {
-                let name = match &entry.found {
-                    Found::Unreadable(_) => format!("unreadable claim {}", entry.name),
-                    Found::Claim(record) => {
-                        let held = record["owner"].as_str().filter(|held| *held != owner)?;
-                        (record["key"] == entry.key && active(record, self.at))
-                            .then(|| format!("reservation {held}"))?
-                    }
-                };
-                Some(Lane {
-                    name,
-                    keys: vec![entry.key.clone()],
-                    source: "reservation",
-                })
-            })
-            .collect()
-    }
-
-    /// Remove the claims that lapsed at the snapshot's time, whoever owns them. An admission calls
-    /// it under the lock when it grants a key over such a claim, so the replaced claim is gone for
-    /// good: a wall clock that steps back cannot make it hold again and let its launch start next
-    /// to the replacement. Nothing is removed when a claim cannot be read.
-    pub fn sweep(&self) -> Result<(), SweepError> {
-        if let Some(Entry {
-            found: Found::Unreadable(what),
-            ..
-        }) = self
-            .entries
-            .iter()
-            .find(|entry| matches!(entry.found, Found::Unreadable(_)))
-        {
-            return Err(SweepError::Unreadable(what.clone()));
-        }
-        for entry in &self.entries {
-            let Found::Claim(record) = &entry.found else {
-                continue;
-            };
-            if active(record, self.at) {
-                continue;
-            }
-            #[cfg(test)]
-            if REMOVE_FAILS.with(std::cell::Cell::get) {
-                return Err(SweepError::Remove(format!("{}: injected", entry.name)));
-            }
-            match fs::remove_file(&entry.path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(SweepError::Remove(format!("{}: {error}", entry.name)));
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-}
-
 /// Record `owner` as a holder of `keys`; a later launch of a key finds the claim.
 pub fn reserve(state: &Path, keys: &[String], owner: &str, at: u64) -> std::io::Result<()> {
     for key in keys {
         fs::create_dir_all(key_dir(state, key))?;
-        let target = path(state, key, owner);
+        let target = claim_path(state, key, owner);
         let tmp = target.with_extension(format!("{}.tmp", std::process::id()));
         let published = fs::write(&tmp, json!({"key":key,"owner":owner,"ts":at}).to_string())
             .and_then(|()| fs::rename(&tmp, &target));
@@ -290,8 +130,16 @@ pub fn start(state: &Path, keys: &[String], owner: &str) -> Result<(), String> {
     let _lock = lock(state)?;
     let at = now_secs();
     for key in keys {
-        let held = read_claim(&path(state, key, owner)).is_some_and(|record| {
-            record["owner"] == owner && record["key"] == *key && active(&record, at)
+        // The same rule as the scan applies to the claim being started: only a valid claim of
+        // this owner, still unexpired, can be marked.
+        let target = claim_path(state, key, owner);
+        let file_name = target
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let held = read_claim(&target).is_some_and(|record| {
+            validate_claim(&record, key, &file_name).is_ok()
+                && record["owner"] == owner
+                && active(&record, at)
         });
         if !held {
             return Err(format!(
@@ -300,7 +148,7 @@ pub fn start(state: &Path, keys: &[String], owner: &str) -> Result<(), String> {
         }
     }
     for key in keys {
-        let target = path(state, key, owner);
+        let target = claim_path(state, key, owner);
         let tmp = target.with_extension(format!("{}.tmp", std::process::id()));
         let record = json!({"key":key,"owner":owner,"ts":at,"phase":STARTED});
         let published =
@@ -325,7 +173,7 @@ pub fn lanes(state: &Path, keys: &[String], owner: &str, at: u64) -> Vec<Lane> {
 /// before it released.
 pub fn release(state: &Path, keys: &[String], owner: &str) {
     for key in keys {
-        let _ = fs::remove_file(path(state, key, owner));
+        let _ = fs::remove_file(claim_path(state, key, owner));
     }
 }
 

@@ -60,7 +60,7 @@ impl Observed {
         lanes.extend(runs.unreadable.iter().map(|name| Lane {
             name: format!("unreadable run record {name}"),
             keys: keys.to_vec(),
-            source: "run",
+            source: "unreadable",
         }));
         lanes.extend(branch_lanes(&self.repo, keys));
         lanes
@@ -151,8 +151,8 @@ pub fn normalize(key: &str) -> String {
 }
 
 /// The run records of a state directory: those that are queued or running, and the names of those
-/// that exist but cannot be read (an I/O error other than a record that vanished). A record that
-/// parses as nothing is skipped as everywhere else in the spawner: it names no key.
+/// that exist but cannot be read or are not a JSON object (the guard cannot tell what they hold,
+/// so they hold every key). A record that vanished meanwhile is not one of them.
 pub struct RunScan {
     pub records: Vec<Value>,
     pub unreadable: Vec<String>,
@@ -184,25 +184,29 @@ pub fn scan_runs(state: &Path) -> RunScan {
     paths.sort();
     for path in paths {
         match fs::read(&path) {
-            Ok(bytes) => {
-                let live = serde_json::from_slice::<Value>(&bytes)
-                    .ok()
-                    .filter(|record| {
-                        record["status"]
-                            .as_str()
-                            .is_some_and(|status| matches!(status, "queued" | "running"))
-                    });
-                scan.records.extend(live);
-            }
+            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(record) if record.is_object() => {
+                    if record["status"]
+                        .as_str()
+                        .is_some_and(|status| matches!(status, "queued" | "running"))
+                    {
+                        scan.records.push(record);
+                    }
+                }
+                _ => scan.unreadable.push(run_name(&path)),
+            },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => scan.unreadable.push(
-                path.parent()
-                    .and_then(Path::file_name)
-                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
-            ),
+            Err(_) => scan.unreadable.push(run_name(&path)),
         }
     }
     scan
+}
+
+fn run_name(record: &Path) -> String {
+    record
+        .parent()
+        .and_then(Path::file_name)
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }
 
 /// A live writer run holds its `item_key`, the keys of its brief and the keys a fleet
@@ -308,6 +312,21 @@ pub fn refuse_held(
     lanes: &[Lane],
     override_reason: Option<&str>,
 ) -> Result<Option<String>, String> {
+    // State the guard cannot read or validate is a refusal of its own, before any override: an
+    // override admits a second lane next to a lane it can see, never next to one it cannot.
+    let unreadable: Vec<&str> = lanes
+        .iter()
+        .filter(|lane| {
+            lane.source == "unreadable" && keys.iter().any(|key| lane.keys.contains(key))
+        })
+        .map(|lane| lane.name.as_str())
+        .collect();
+    if !unreadable.is_empty() {
+        return Err(format!(
+            "lane_unreadable: {}; the keys cannot be admitted until that state can be read, and an override does not apply",
+            unreadable.join("; ")
+        ));
+    }
     let reason = override_reason.map(str::trim);
     if reason == Some("") {
         return Err("lane_override requires a nonblank reason".into());

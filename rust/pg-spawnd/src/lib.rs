@@ -5,6 +5,7 @@ pub mod landing_journal;
 pub mod lane_guard;
 pub mod lane_launch;
 pub mod lane_reservation;
+pub mod lane_snapshot;
 pub mod pyjson;
 pub mod role_header;
 #[cfg(target_os = "linux")]
