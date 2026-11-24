@@ -47,6 +47,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/catalog_data.py",
     "src/plangraph/review/prompt.py",  # Rust checks the review output contract against Python.
     "src/plangraph/routing_errors.py",
+    ".claude/settings.json",  # pg-hook runs the SendMessage hook commands it registers.
     "deploy/feeder/**",
     "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
     "deploy/systemd/disk-hygiene.env.example",
