@@ -294,4 +294,3 @@ def test_pytest_quarantine_expires(tmp_path, now, mode, expected):
     selected, active = quarantine_items(items, ledger, mode, datetime.fromisoformat(now))
     assert [item.nodeid.removesuffix('@contract') for item in selected] == expected
     assert active == ({'test_flaky[user@example.invalid]': 'plangraph:FIX-THE-FLAKE'} if now.startswith('2026-11-24') else {})
->>>>>>> f4e7d25f7 (Look up pytest CI data by the canonical test ID)
