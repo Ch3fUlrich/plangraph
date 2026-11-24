@@ -243,3 +243,36 @@ fn a_command_is_killed_at_its_limit_counted_from_before_the_spawn() {
         started.elapsed()
     );
 }
+
+/// The budget includes the command's startup: a spawn that itself takes longer than the limit
+/// ends in the timeout even though the command, once running, would finish at once.
+#[cfg(unix)]
+#[test]
+fn startup_time_is_part_of_the_limit() {
+    use std::os::unix::process::CommandExt;
+    let mut slow_start = Command::new("true");
+    // SAFETY: the closure only sleeps in the forked child before exec.
+    unsafe {
+        slow_start.pre_exec(|| {
+            std::thread::sleep(Duration::from_millis(600));
+            Ok(())
+        });
+    }
+    let started = Instant::now();
+    let error = run_limited(&mut slow_start, Duration::from_millis(300)).unwrap_err();
+    assert_eq!(error, GH_TIMED_OUT);
+    assert!(
+        started.elapsed() >= Duration::from_millis(600),
+        "the spawn was not slow"
+    );
+    // The same command with a limit that covers the startup succeeds.
+    let mut covered = Command::new("true");
+    // SAFETY: as above.
+    unsafe {
+        covered.pre_exec(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            Ok(())
+        });
+    }
+    assert!(run_limited(&mut covered, Duration::from_secs(20)).is_ok());
+}
