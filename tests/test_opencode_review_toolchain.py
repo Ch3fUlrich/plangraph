@@ -3,6 +3,8 @@
 import asyncio
 import os
 import shutil
+import site
+import subprocess
 import sys
 
 import pytest
@@ -26,10 +28,13 @@ def test_review_seat_env_resolves_cargo_and_python_pytest(tmp_path, monkeypatch,
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
     home = tmp_path / 'home'
     _tool(home / '.cargo/bin/cargo')
+    # The interpreter may keep pytest in its user site; the seat reaches it through PYTHONUSERBASE.
+    (home / '.local').symlink_to(site.getuserbase())
     # The service's interpreter lives in a venv that has pytest; the bare PATH python does not.
     venv = tmp_path / 'service-venv'
     _tool(venv / 'bin/pytest')
-    _tool(venv / 'bin/python', '#!/bin/sh\necho "venv-python $@"\n')
+    # The venv's interpreter is the real one, so `python -m pytest --version` really imports pytest.
+    _tool(venv / 'bin/python', f'#!/bin/sh\nexec {sys.executable} "$@"\n')
     bare = tmp_path / 'bare/bin'
     _tool(bare / 'python', '#!/bin/sh\necho "No module named _pytest" >&2\nexit 1\n')
     monkeypatch.setenv('HOME', str(home))
@@ -52,6 +57,8 @@ def test_review_seat_env_resolves_cargo_and_python_pytest(tmp_path, monkeypatch,
     python = shutil.which('python', path=env['PATH'])
     assert python == str(venv / 'bin/python')
     assert shutil.which('pytest', path=env['PATH']) == str(venv / 'bin/pytest')
+    ran = subprocess.run([python, '-m', 'pytest', '--version'], env=env, capture_output=True, text=True)
+    assert ran.returncode == 0 and 'pytest' in (ran.stdout + ran.stderr).lower(), ran.stderr
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
@@ -96,3 +103,33 @@ def test_review_seat_keeps_user_installs_and_rustup_reachable_after_the_home_swa
     env = {'HOME': str(home), 'PATH': '/usr/bin', 'RUSTUP_HOME': '/custom/rustup'}
     review_seat_home(env, str(job2))
     assert env['RUSTUP_HOME'] == '/custom/rustup' and 'CARGO_HOME' not in env
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
+def test_the_harness_is_resolved_before_the_review_checkout_venv_joins_the_path(tmp_path, monkeypatch):
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
+    trusted = tmp_path / 'trusted'
+    _tool(trusted / 'opencode')
+    checkout = tmp_path / 'checkout'
+    _tool(checkout / '.venv/bin/pytest')
+    _tool(checkout / '.venv/bin/opencode')  # a harness planted next to the checkout's pytest
+    monkeypatch.setenv('PATH', f'{trusted}{os.pathsep}/usr/bin')
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    source = tmp_path / 'source.db'
+    source_store(source)
+    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
+    started = []
+
+    async def factory(exe, *args, **kwargs):
+        started.append((exe, kwargs['env']['PATH']))
+        raise RuntimeError('stop before exec')
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    with pytest.raises(RuntimeError):
+        asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
+                                 role='review', cwd=str(checkout)))
+    exe, path = started[0]
+    assert exe == str(trusted / 'opencode')
+    assert path.split(os.pathsep)[0] == str(checkout / '.venv/bin')  # pytest still comes from the venv

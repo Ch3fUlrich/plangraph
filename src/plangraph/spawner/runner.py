@@ -306,6 +306,7 @@ class SpawnerRunner:
         child_env = cargo_child_env(child_env, pin_configured=True, target=review_target)
         render_reason = None
         tools_event = None
+        exe_search_path = child_env.get("PATH")  # the harness is found here, never on a review checkout's venv path
         if cmd[0] == 'opencode':
             # Completion framing distinguishes a final answer from partial text.
             if '--format' not in cmd:
@@ -462,7 +463,7 @@ class SpawnerRunner:
                 job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
             import shutil
-            resolved_exe = codex or shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            resolved_exe = codex or shutil.which(cmd[0], path=exe_search_path) or cmd[0]
             try:
                 payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             except PromptTransportError as exc:
