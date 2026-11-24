@@ -9,7 +9,9 @@ safe, a draft without the label, a red-CI or needs-update PR batched, a hung com
 a missing gate file that still tiers PRs (with --high-path), a rename out of a HIGH path read as
 standard, a build set that breaks the plan rules read as one batch.
 """
+import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -129,31 +131,53 @@ def test_set_problems_name_what_breaks_the_plan_rules():
 
 
 
-def test_deploy_blocker_items_are_filed_with_pg_define_when_the_keeper_is_configured(monkeypatch, tmp_path, capsys):
-    """The filing path of the go-req deploy blockers: configured files, failing reports, unconfigured skips."""
-    import subprocess
+def test_deploy_blocker_items_are_filed_one_at_a_time_and_a_retry_is_idempotent(monkeypatch, tmp_path, capsys):
+    """The filing path of the go-req deploy blockers: one define per item, an existing blocker never rejects a new
+    one, a refusal names its item, an unconfigured keeper skips."""
     import types
 
     items = tmp_path / "blockers.json"
-    items.write_text('{"items": []}')
-    calls = []
+    items.write_text(json.dumps({"items": [{"key": "plangraph:OLD", "id": "OLD"}, {"key": "plangraph:NEW", "id": "NEW"}]}))
+    calls, answers = [], {}
 
-    def fake_run(argv, **kwargs):
-        calls.append((argv, kwargs.get("env", {}).get("PYTHONPATH", "")))
-        return types.SimpleNamespace(returncode=calls_rc[0], stderr="keeper refused\n", stdout="")
+    def fake_cli(*args):
+        sent = json.loads(Path(args[args.index("--file") + 1]).read_text())["items"]
+        calls.append([item["key"] for item in sent])
+        rc, err = answers.get(sent[0]["key"], (0, ""))
+        return types.SimpleNamespace(returncode=rc, stderr=err, stdout="")
 
-    calls_rc = [0]
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(merge_batch_plan, "keeper_cli", fake_cli)
     monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: True)
     merge_batch_plan.file_deploy_blockers(items)
-    argv, pythonpath = calls[0]
-    assert argv[1:] == ["-m", "plangraph.keeper.cli", "define", "--file", str(items)]
-    assert str(ROOT / "src") in pythonpath.split(":")
-    assert capsys.readouterr().err == ""
-    calls_rc[0] = 1  # a refused define is reported, never fatal
+    assert calls == [["plangraph:OLD"], ["plangraph:NEW"]] and capsys.readouterr().err == ""
+    calls.clear()
+    answers["plangraph:OLD"] = (1, "refused: conflict: plangraph:OLD already exists\n")  # the retry of a GO-REQ
     merge_batch_plan.file_deploy_blockers(items)
-    assert "deploy blocker items not filed: keeper refused" in capsys.readouterr().err
+    assert calls == [["plangraph:OLD"], ["plangraph:NEW"]] and capsys.readouterr().err == ""
+    answers["plangraph:OLD"] = (1, "refused: keeper unavailable\n")  # any other refusal is reported, not fatal
+    merge_batch_plan.file_deploy_blockers(items)
+    assert "deploy blocker item plangraph:OLD not filed: refused: keeper unavailable" in capsys.readouterr().err
+    assert calls[-1] == ["plangraph:NEW"]
     monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: False)
     calls.clear()
     merge_batch_plan.file_deploy_blockers(items)
     assert calls == [] and "keeper is not configured" in capsys.readouterr().err
+
+
+def test_declared_hosts_come_from_the_deploy_hosts_lines_of_the_active_items(monkeypatch):
+    import types
+
+    shown = {"p:A": {"description": "Why: x\nDeploy-Hosts: alpha, beta"}, "p:B": {"description": "no hosts"}}
+
+    def fake_cli(verb, key, flag):
+        assert (verb, flag) == ("show", "--json")
+        if key == "p:GONE":
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="not found")
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps(shown[key]), stderr="")
+
+    active = {"merged": [{"items": ["p:A", "p:B"]}, {"items": ["p:A", "p:GONE"]}]}
+    monkeypatch.setattr(merge_batch_plan, "keeper_cli", fake_cli)
+    monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: True)
+    assert merge_batch_plan.declared_hosts(active) == {"p:A": ["alpha", "beta"]}
+    monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: False)
+    assert merge_batch_plan.declared_hosts(active) == {}
