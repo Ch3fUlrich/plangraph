@@ -8,7 +8,7 @@
 use super::go_verify::{
     Approval, Ci, DeltaAcceptance, Evidence, GoJob, Grant, Observed, Replay, EVENT, WORKFLOW_PATH,
 };
-use super::main_gh::tier_of;
+use super::main_gh::{ci_publisher, tested_attempts, tier_of};
 use super::main_state::{Answer, Job};
 use crate::ci_watch::github::Github;
 use regex::Regex;
@@ -161,13 +161,19 @@ fn paths_between(gh: &mut impl Github, from: &str, to: &str) -> Result<Vec<Strin
         &format!("compare/{from}...{to}?per_page=100"),
         Some("files"),
     )?;
-    Ok(rows
-        .iter()
-        .filter_map(|f| f["filename"].as_str().map(str::to_owned))
-        .collect())
+    // A rename names both ends: moving a protected file away is a change of the protected path.
+    let mut paths = Vec::new();
+    for file in &rows {
+        for field in ["filename", "previous_filename"] {
+            if let Some(path) = file[field].as_str() {
+                paths.push(path.to_owned());
+            }
+        }
+    }
+    Ok(paths)
 }
 
-fn ci(gh: &mut impl Github, repo: &str, head: &str, tree: &str) -> Result<Ci, String> {
+fn ci(gh: &mut impl Github, repo: &str, pr: u64, head: &str, tree: &str) -> Result<Ci, String> {
     let runs = gh.page(
         &format!("actions/workflows/tests.yml/runs?head_sha={head}&event={EVENT}&per_page=100"),
         Some("workflow_runs"),
@@ -178,6 +184,9 @@ fn ci(gh: &mut impl Github, repo: &str, head: &str, tree: &str) -> Result<Ci, St
             && r["path"]
                 .as_str()
                 .is_some_and(|p| p.split('@').next() == Some(WORKFLOW_PATH))
+            && r["pull_requests"]
+                .as_array()
+                .is_some_and(|prs| prs.iter().any(|p| p["number"].as_u64() == Some(pr)))
     };
     let run = runs
         .iter()
@@ -186,6 +195,19 @@ fn ci(gh: &mut impl Github, repo: &str, head: &str, tree: &str) -> Result<Ci, St
         .ok_or("no tests.yml pull_request run for the train head")?;
     let id = run["id"].as_u64().ok_or("the run has no id")?;
     let attempt = run["run_attempt"].as_u64().unwrap_or(1) as u32;
+    // The run tested a merge ref of its own: only a `ci-full` receipt of the CI publisher ties this attempt to
+    // the tree of the train.
+    let statuses = gh.page(&format!("commits/{head}/statuses?per_page=100"), None)?;
+    let tested = tested_attempts(&statuses, tree, ci_publisher());
+    if !tested
+        .get(&id)
+        .and_then(|attempts| attempts.get(&attempt))
+        .is_some_and(|(_, success)| *success)
+    {
+        return Err(format!(
+            "ci_unbound: no successful ci-full receipt ties run {id} attempt {attempt} to tree {tree}"
+        ));
+    }
     let rows = gh.pages(
         &format!("actions/runs/{id}/attempts/{attempt}/jobs?per_page=100"),
         Some("jobs"),
@@ -250,7 +272,7 @@ pub fn collect(gh: &mut impl Github, i: &Inputs) -> Result<Evidence, String> {
         "tree",
     )?;
     let changed_paths = paths_between(gh, i.base, i.train_sha)?;
-    let ci = ci(gh, i.repo, i.train_sha, &tree)?;
+    let ci = ci(gh, i.repo, i.pr, i.train_sha, &tree)?;
     let (approvals, grants) = rows(i.rows, i.repo, i.pr);
     let (_, again_repo, again_head) = pull(gh, i.pr)?;
     if again_head != pr_head || again_repo != repo {

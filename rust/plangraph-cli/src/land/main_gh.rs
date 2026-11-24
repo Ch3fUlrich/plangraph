@@ -44,7 +44,41 @@ pub(super) fn tier_of(jobs: &[Job]) -> String {
 }
 
 /// run id -> attempt -> (newest status time, succeeded): the attempts a `ci-full` status ties to the tip's tree.
-type TestedTree = BTreeMap<u64, BTreeMap<u32, (String, bool)>>;
+pub(super) type TestedTree = BTreeMap<u64, BTreeMap<u32, (String, bool)>>;
+
+/// The attempts a `ci-full` status of `publisher` ties to `tree` (`run <id> attempt <n> tree <sha>`): the
+/// newest status of an attempt wins (the API lists newest first, `updated_at` decides when present), and
+/// only the publisher's statuses count.
+pub(super) fn tested_attempts(statuses: &[Value], tree: &str, publisher: u64) -> TestedTree {
+    let mut out: TestedTree = BTreeMap::new();
+    for s in statuses
+        .iter()
+        .filter(|s| s["context"] == "ci-full" && s["creator"]["id"].as_u64() == Some(publisher))
+    {
+        let text = s["description"].as_str().unwrap_or_default();
+        let w: Vec<&str> = text.split_whitespace().collect();
+        if let ["run", run, "attempt", n, "tree", sha] = w[..] {
+            if sha == tree {
+                if let (Ok(run), Ok(n)) = (run.parse::<u64>(), n.parse::<u32>()) {
+                    let ts = s["updated_at"].as_str().unwrap_or("").to_owned();
+                    let ok = s["state"] == "success";
+                    match out.entry(run).or_default().entry(n) {
+                        std::collections::btree_map::Entry::Vacant(v) => {
+                            v.insert((ts, ok));
+                        }
+                        std::collections::btree_map::Entry::Occupied(mut o) => {
+                            // Times decide only when both statuses carry one; otherwise the API's order stands.
+                            if !ts.is_empty() && !o.get().0.is_empty() && ts > o.get().0 {
+                                o.insert((ts, ok));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
 
 pub struct GhSource<G: Github> {
     pub gh: G,
@@ -112,38 +146,7 @@ impl<G: Github> GhSource<G> {
             .as_str()
             .unwrap_or_default()
             .to_owned();
-        let publisher = ci_publisher();
-        let mut out: TestedTree = BTreeMap::new();
-        // Only the CI publisher's statuses count; a later failure is kept for recovery, success is `true`.
-        for s in statuses
-            .iter()
-            .filter(|s| s["context"] == "ci-full" && s["creator"]["id"].as_u64() == Some(publisher))
-        {
-            let text = s["description"].as_str().unwrap_or_default();
-            let w: Vec<&str> = text.split_whitespace().collect();
-            if let ["run", run, "attempt", n, "tree", sha] = w[..] {
-                if sha == tree {
-                    if let (Ok(run), Ok(n)) = (run.parse::<u64>(), n.parse::<u32>()) {
-                        // The newest status of an attempt wins (the API lists newest first, `updated_at`
-                        // decides when present): an older pending status never replaces a result.
-                        let ts = s["updated_at"].as_str().unwrap_or("").to_owned();
-                        let ok = s["state"] == "success";
-                        match out.entry(run).or_default().entry(n) {
-                            std::collections::btree_map::Entry::Vacant(v) => {
-                                v.insert((ts, ok));
-                            }
-                            std::collections::btree_map::Entry::Occupied(mut o) => {
-                                // Times decide only when both statuses carry one; otherwise the API's newest-first order stands.
-                                if !ts.is_empty() && !o.get().0.is_empty() && ts > o.get().0 {
-                                    o.insert((ts, ok));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(out)
+        Ok(tested_attempts(statuses, &tree, ci_publisher()))
     }
 
     fn attempt(&mut self, run: u64, number: u32) -> Result<Attempt, String> {
