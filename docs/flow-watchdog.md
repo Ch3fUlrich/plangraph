@@ -189,15 +189,16 @@ checkout just before each tick. Readings and the derivation of each field:
   `startup_failure` fail; the last two are `infra_failed`; other conclusions are not counted.
 - `review_age_hours`, `review_rounds`: keeper snapshot items in `in_review`; rounds are the
   `changes_requested` events of the item plus one.
-- `critical_idle_hours`: keeper critical path; zero while a path item holds a live lease,
-  else hours since the newest `updated_at` among its open items.
+- `critical_idle_hours`: the critical-path stall rule: the longest keeper `last_activity`
+  silence among the claimed and in-review items on the keeper critical path (zero when none;
+  a lease or an unstarted open item does not count). A path item without activity is a gap.
 - `closes_recent`, `closes_previous`: `review_passed`, `closed_on_decision` and `answered`
   events in the last and the preceding 24 hours.
-- `hosts`, `host_drift`: the checkout's `HEAD`, `origin/main`, ancestry count and the age of
+- `hosts`, `host_drift`: the checkout's `HEAD`, `origin/main` (fetched first; a failed fetch is a gap), ancestry count and the age of
   the first missing commit, `/tmp` and `/` use; drift is also set when an installed
   user unit differs from its source in `deploy/` (templated units are skipped).
 - `coding_vm_runs`, `worker_idle`: the newest fleet-series sample per host
-  (`PLANGRAPH_FLEET_SERIES_DIR`, default `<state>/fleet-series`) for the hosts in
+  (`PLANGRAPH_FLEET_SERIES_DIR`, default `<state>/fleet`, the sampler's store) for the hosts in
   `PLANGRAPH_FLOW_CODING_HOSTS` and `PLANGRAPH_FLOW_WORKER_HOSTS`.
 - `lapsed_leases`, `ordered_items`, `ready_owners`, `idle_capacity`, `merged_reviews`: keeper
   items; ready means open, unclaimed, not waiting on the operator, every dependency done.

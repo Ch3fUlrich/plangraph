@@ -62,6 +62,9 @@ pub struct Item {
     pub lease_until: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// Keeper `last_activity.at`; read for claimed and in-review critical-path items.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
     #[serde(default)]
     pub depends_on: Value,
     #[serde(default)]
