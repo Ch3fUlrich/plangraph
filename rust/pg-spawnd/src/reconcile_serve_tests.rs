@@ -87,8 +87,8 @@ fn attach_locked_or_unreadable_row_marks_incomplete_and_continues() {
     assert_eq!(processed, ["run-next"]);
 }
 
-/// A launched review run whose process is proven gone frees its promoted reservation; the
-/// slot must carry the role of the persisted record, or startup keeps it held forever.
+/// Daemon startup, with a really reaped process and a vanished scope, frees the promoted
+/// reservation of a review run only when the slot carries the persisted role of its record.
 #[cfg(target_os = "linux")]
 #[test]
 fn startup_frees_the_reservation_of_a_proven_gone_review_run_only_under_its_own_role() {
@@ -96,57 +96,90 @@ fn startup_frees_the_reservation_of_a_proven_gone_review_run_only_under_its_own_
         hosts::Role,
         slots::{ActiveSlot, SlotClass},
     };
+    use std::sync::{atomic::AtomicBool, Arc};
     let dir = StateDir::new();
-    let group = "/sys/fs/cgroup/user.slice/pg-run-review.scope";
-    let mut record = RunRecord::create(
-        &dir.0,
-        "run-review",
-        "local",
-        json!({"role":"review"}).as_object().unwrap().clone(),
-        Status::Running,
-        1.0,
-    )
-    .unwrap();
-    record.set(
-        "attempts",
-        json!([{"status":"running", "started":1.0,
-            "proc":{"pid":4242, "start_time":77, "group":group, "pgid":4242},
-            "leg":{"leg_key":"leg", "route_key":"route"}}]),
-    );
-    record.save().unwrap();
-    let rows = crate::reconcile_store::inventory(&dir.0).unwrap();
-    assert_eq!(rows[0].role, "review");
-    let slot = |role| ActiveSlot {
-        run_id: "run-review".into(),
-        pid: 4242,
-        start_time: 77,
-        role,
-        class: SlotClass::Other,
-        repo_id: "repo".into(),
-        seat_slot: None,
-        group: Some(group.into()),
-        reservation_mb: 0,
-        created_ms: 1,
-        bound: true,
-    };
-    // A reservation tagged implement does not match the review record: it is never freed.
+    crate::reconcile_backend::native::TEST_ROOT
+        .with(|value| *value.borrow_mut() = Some(dir.0.clone()));
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            crate::reconcile_backend::native::TEST_ROOT.with(|value| *value.borrow_mut() = None);
+        }
+    }
+    let _reset = Reset;
+    // A real process that started and was reaped; its scope directory never existed.
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "read token"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stat = std::fs::read_to_string(format!("/proc/{}/stat", child.id())).unwrap();
+    let started: u64 = stat
+        .rsplit_once(')')
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(19)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let pid = child.id();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    // SAFETY: read-only query of the effective user id.
+    let euid = unsafe { libc::geteuid() };
     let mut table = slots::SlotTable::default();
-    table.active.push(slot(Role::Implement));
-    assert!(validated_slots(&rows, &table).is_empty());
-    // The promoted review reservation matches, and the startup reclaim frees exactly it.
-    table.active = vec![slot(Role::Review)];
-    let gone = validated_slots(&rows, &table);
-    assert_eq!(gone.len(), 1);
+    for (id, slot_role) in [("run-test", Role::Review), ("run-other", Role::Implement)] {
+        let group = dir
+            .0
+            .join(format!("user.slice/user-{euid}.slice/pg-{id}.scope"));
+        let mut record = RunRecord::create(
+            &dir.0,
+            id,
+            "local",
+            json!({"role":"review"}).as_object().unwrap().clone(),
+            Status::Running,
+            1.0,
+        )
+        .unwrap();
+        record.set(
+            "attempts",
+            json!([{"status":"running", "started":1.0,
+                "proc":{"pid":pid, "start_time":started, "group":group, "pgid":pid},
+                "leg":{"leg_key":"leg", "route_key":"route"}}]),
+        );
+        record.save().unwrap();
+        table.active.push(ActiveSlot {
+            run_id: id.into(),
+            pid,
+            start_time: started,
+            role: slot_role,
+            class: SlotClass::Other,
+            repo_id: "repo".into(),
+            seat_slot: None,
+            group: Some(group.to_string_lossy().into_owned()),
+            reservation_mb: 0,
+            created_ms: 1,
+            bound: true,
+        });
+    }
     slots::with_table(&dir.0, Duration::from_secs(2), |t| *t = table.clone()).unwrap();
-    reclaim_after(
-        &dir.0,
-        Reconciled {
-            root: dir.0.clone(),
-            gone,
-        },
-        1,
-    )
-    .unwrap();
+    let mut guard = Guard {
+        stop: Arc::new(AtomicBool::new(false)),
+        thread: None,
+        _owner: None,
+    };
+    start(&dir.0, &mut guard).unwrap();
+    drop(guard);
     let left = slots::with_table(&dir.0, Duration::from_secs(2), |t| t.clone()).unwrap();
-    assert!(left.active.is_empty(), "{left:?}");
+    // The review reservation under the review role is freed; the implement-tagged one for
+    // the same kind of record stays held.
+    let held: Vec<&str> = left.active.iter().map(|a| a.run_id.as_str()).collect();
+    assert_eq!(held, ["run-other"], "{left:?}");
+    for id in ["run-test", "run-other"] {
+        assert_eq!(
+            RunRecord::read(&dir.0, id).unwrap().status(),
+            Some(Status::Orphaned)
+        );
+    }
 }

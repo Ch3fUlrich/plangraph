@@ -8,3 +8,4 @@ and unverifiable rows stay held.
 Tickets and reservations carry the run's own role; the daemon refuses to start when the bind cannot be set up.
 The queued run record is written before the ticket and the ticket before the monitor starts.
 A start claims its run directory atomically before anything is written, so a refused start never touches an existing run's record; the queued record names its owning daemon, and restart settles queued records a dead daemon abandoned before their ticket.
+The daemon claims the run id (a `claim` file created with `create_new` in the run directory) before it writes the prompt or the captured config, so a refused id leaves any existing run of that id untouched.

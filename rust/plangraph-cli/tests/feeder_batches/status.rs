@@ -152,3 +152,66 @@ fn a_single_item_run_also_gets_its_own_status_file() {
         "{path}"
     );
 }
+
+/// The cards and briefs of two overlapping feeder launches, with the claim epoch of each
+/// status path normalised to `N`: the fixture the native writer host test feeds through its
+/// own record persistence (`reviews_rendered_from_saved_writer_records...`).
+const OVERLAP_LAUNCHES: &str =
+    include_str!("../../../pg-spawnd/tests/fixtures/feeder-overlap-launches.json");
+
+fn normalised(text: &str) -> String {
+    // `-e<digits>.txt` -> `-eN.txt`, wherever the status path appears.
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("-e") {
+        let digits = rest[i + 2..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .count();
+        if digits > 0 && rest[i + 2 + digits..].starts_with(".txt") {
+            out.push_str(&rest[..i]);
+            out.push_str("-eN");
+            rest = &rest[i + 2 + digits..];
+        } else {
+            out.push_str(&rest[..i + 2]);
+            rest = &rest[i + 2..];
+        }
+    }
+    out + rest
+}
+
+#[test]
+fn overlapping_feeder_launches_produce_the_cards_and_briefs_the_native_writer_test_consumes() {
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 8, &["src/a.rs"]),
+        item("BETA-1", 7, &["src/b.rs"]),
+        item("BETA-2", 6, &["src/b.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let meet = Arc::new(Barrier::new(2));
+    std::thread::scope(|scope| {
+        for (name, own) in [("dell", &items[..2]), ("coding", &items[2..])] {
+            let mut host = Host::new(&registry, &items);
+            host.meet = Some(meet.clone());
+            let doc = ready(own.to_vec());
+            scope.spawn(move || drive(&doc, &mut host, name, 2, false));
+        }
+    });
+    let mut launches: Vec<Value> = registry
+        .lock()
+        .unwrap()
+        .launches
+        .iter()
+        .map(|(card, brief)| json!({"card": card, "brief": brief}))
+        .collect();
+    launches.sort_by_key(|l| l["card"]["item_key"].as_str().unwrap().to_owned());
+    let actual: Value = serde_json::from_str(&normalised(&json!(launches).to_string())).unwrap();
+    let golden: Value = serde_json::from_str(OVERLAP_LAUNCHES).unwrap();
+    assert_eq!(
+        actual,
+        golden,
+        "{}",
+        serde_json::to_string_pretty(&actual).unwrap()
+    );
+}

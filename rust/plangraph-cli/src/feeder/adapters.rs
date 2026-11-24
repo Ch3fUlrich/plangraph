@@ -183,6 +183,23 @@ fn pin_local(cmd: &mut Command, dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Start the spawner and collect its output. `ran` turns true the moment the process exists:
+/// from then on a failure to read its output does not prove that no writer started.
+fn run_spawner(
+    cmd: &mut Command,
+    ran: &mut bool,
+    collect: impl FnOnce(std::process::Child) -> std::io::Result<std::process::Output>,
+) -> Result<std::process::Output, String> {
+    let child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "cannot execute spawner")?;
+    *ran = true;
+    collect(child).map_err(|_| "spawner output unreadable".into())
+}
+
 pub(super) struct Adapters<'a, T> {
     pub keeper: T,
     pub env: &'a Env,
@@ -318,11 +335,7 @@ impl<T: Transport> Adapters<'_, T> {
         .arg("--prompt-file")
         .arg(prompt_path)
         .args(["--wait", "0"]);
-        *spawner_ran = true;
-        let out = cmd.output().map_err(|_| {
-            *spawner_ran = false;
-            "cannot execute spawner"
-        })?;
+        let out = run_spawner(&mut cmd, spawner_ran, |child| child.wait_with_output())?;
         let mut run = receipt(&out.stdout, out.status.code())?;
         if run["host"].as_str().is_none_or(str::is_empty) {
             run["host"] = json!(self.host);
@@ -375,6 +388,21 @@ mod tests {
             state: state.into(),
             host: "h".into(),
         }
+    }
+    #[test]
+    fn a_spawner_that_started_counts_even_when_its_output_cannot_be_read() {
+        let mut ran = false;
+        let mut cmd = Command::new("true");
+        let err = run_spawner(&mut cmd, &mut ran, |mut child| {
+            let _ = child.wait();
+            Err(std::io::Error::other("wait failed"))
+        })
+        .unwrap_err();
+        assert!(ran && err.contains("unreadable"));
+        let mut ran = false;
+        let mut cmd = Command::new("/nonexistent/spawner");
+        assert!(run_spawner(&mut cmd, &mut ran, |c| c.wait_with_output()).is_err());
+        assert!(!ran);
     }
     #[test]
     fn a_status_file_is_kept_once_the_spawner_ran_and_given_back_when_it_never_did() {

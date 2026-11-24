@@ -186,7 +186,7 @@ fn a_refused_bind_makes_no_launcher_call() {
     ));
     assert_eq!(launcher.calls.load(Ordering::SeqCst), 0);
     assert!(RunRecord::read(d.path(), "run-3").is_err());
-    assert!(!d.path().join("runs/run-3").exists());
+    assert!(!d.path().join("runs/run-3/claim").exists());
     // The other owner's row is untouched and no ticket of ours is left behind.
     let t = table(d.path());
     assert_eq!(t.active.len(), 1);
@@ -559,4 +559,57 @@ fn restart_settles_a_queued_record_a_dead_daemon_abandoned_before_its_ticket() {
     for kept in ["run-other", "run-plain", "run-began"] {
         assert_eq!(state(kept), "queued", "{kept}");
     }
+}
+
+#[test]
+fn a_run_directory_that_already_holds_a_prompt_is_claimed_not_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let (s, launcher) = supervisor(d.path(), 2);
+    // The daemon claims the id, then writes the prompt into the run directory, then starts.
+    s.claim_run("run-6").unwrap();
+    std::fs::write(d.path().join("runs/run-6/prompt.txt"), "prompt").unwrap();
+    s.start(spec(d.path(), 6, "true")).unwrap();
+    until(|| status(d.path(), 6) == "completed");
+    assert_eq!(launcher.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("runs/run-6/prompt.txt")).unwrap(),
+        "prompt"
+    );
+    // A start that skipped the claim, in a directory that already holds files, also works.
+    std::fs::create_dir_all(d.path().join("runs/run-7")).unwrap();
+    std::fs::write(d.path().join("runs/run-7/prompt.txt"), "prompt").unwrap();
+    s.start(spec(d.path(), 7, "true")).unwrap();
+    until(|| status(d.path(), 7) == "completed");
+}
+
+#[test]
+fn a_claim_of_another_owner_refuses_the_start_and_keeps_its_files() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("runs/run-8");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("claim"), r#"{"pid":99,"start_time":5}"#).unwrap();
+    std::fs::write(dir.join("prompt.txt"), "theirs").unwrap();
+    let (s, launcher) = supervisor(d.path(), 2);
+    assert!(matches!(
+        s.claim_run("run-8"),
+        Err(SupervisorError::Start(StartError::Admission(
+            BindError::Exists
+        )))
+    ));
+    assert!(matches!(
+        s.start(spec(d.path(), 8, "true")),
+        Err(SupervisorError::Start(StartError::Admission(
+            BindError::Exists
+        )))
+    ));
+    assert!(RunRecord::read(d.path(), "run-8").is_err());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("prompt.txt")).unwrap(),
+        "theirs"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("claim")).unwrap(),
+        r#"{"pid":99,"start_time":5}"#
+    );
+    assert_eq!(launcher.calls.load(Ordering::SeqCst), 0);
 }

@@ -233,9 +233,13 @@ fn native_sonnet_pass_requires_reported_tests() {
     }
 }
 
-/// Two overlapping feeder launches share a review directory. Each native writer record is
-/// saved from its own card; the review rendered from that saved record quotes only the DONE
-/// lines of its own status file.
+/// The cards and briefs the feeder produced for two overlapping launches (the feeder test
+/// `overlapping_feeder_launches_produce_...` pins this fixture to the feeder's real output).
+const FEEDER_LAUNCHES: &str = include_str!("../tests/fixtures/feeder-overlap-launches.json");
+
+/// Two overlapping feeder launches share a review directory. Each feeder card and brief goes
+/// through native writer persistence; the review rendered from the saved record quotes only
+/// the DONE lines of its own status file, the file the brief told the writer to append to.
 #[cfg(unix)]
 #[test]
 fn reviews_rendered_from_saved_writer_records_quote_only_their_own_done_lines() {
@@ -243,45 +247,60 @@ fn reviews_rendered_from_saved_writer_records_quote_only_their_own_done_lines() 
     let root = dir.path();
     let review = root.join("review");
     fs::create_dir_all(&review).unwrap();
-    let launches: Vec<(String, PathBuf, PathBuf)> = ["alpha", "beta"]
+    let launches: Vec<Value> = serde_json::from_str(FEEDER_LAUNCHES).unwrap();
+    assert_eq!(launches.len(), 2);
+    let prepared: Vec<(String, PathBuf, Value)> = launches
         .iter()
-        .map(|name| {
-            let id = format!("run-{name}");
+        .enumerate()
+        .map(|(n, launch)| {
+            // Place the feeder's review directory and claim epoch in this test's directory.
+            let place = |text: String| {
+                text.replace("/reviews", review.to_str().unwrap())
+                    .replace("-eN.txt", &format!("-e{}.txt", 100 + n))
+            };
+            let card: Value = serde_json::from_str(&place(launch["card"].to_string())).unwrap();
+            let brief = place(launch["brief"].as_str().unwrap().into());
+            let payload: Value = serde_json::from_str(brief.split_once('\n').unwrap().1).unwrap();
+            // The brief quotes the very file the card hands to the record.
+            let status = card["writer_status_path"].as_str().unwrap().to_owned();
+            assert_eq!(payload["run"]["status_file"], json!(status));
+            // The writer appends one DONE line per assigned item to that file.
+            let done: String = card["item_keys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|k| format!("DONE {} abc\n", k.as_str().unwrap()))
+                .collect();
+            fs::write(&status, done).unwrap();
+            let id = format!("run-feeder{n}");
             let record_path = root.join(format!("state/runs/{id}/record.json"));
             fs::create_dir_all(record_path.parent().unwrap()).unwrap();
-            // The path the feeder reserved and handed to this launch; its writer appends here.
-            let status = review.join(format!("status-{name}-1-aaaaaaaa-e100.txt"));
-            fs::write(
-                &status,
-                format!("DONE plangraph:{}-1 {name}0000\n", name.to_uppercase()),
-            )
-            .unwrap();
-            let request = root.join(format!("{name}-request.json"));
+            let request = root.join(format!("request-{n}.json"));
             fs::write(
                 &request,
                 json!({
                     "record": {"run_id": id, "repo": root, "base_ref": "refs/heads/main",
                                "tool_path": root.join("no-tools")},
                     "record_path": record_path,
-                    "card": {"review_dir": review, "writer_status_path": status},
-                    "prompt": "fixture"
+                    "card": card,
+                    "prompt": brief
                 })
                 .to_string(),
             )
             .unwrap();
-            (request.to_string_lossy().into_owned(), record_path, status)
+            (request.to_string_lossy().into_owned(), record_path, card)
         })
         .collect();
     std::thread::scope(|scope| {
-        for (request, _, _) in &launches {
+        for (request, _, _) in &prepared {
             scope.spawn(move || execute(vec![request.clone()]).unwrap());
         }
     });
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
-    for (name, (_, record_path, status)) in ["alpha", "beta"].iter().zip(&launches) {
+    for (_, record_path, card) in &prepared {
         let record = crate::records::read_record_file(record_path)
             .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
-        assert_eq!(record["writer_status_path"], json!(status));
+        assert_eq!(record["writer_status_path"], card["writer_status_path"]);
         let out = std::process::Command::new("python3")
             .env("PYTHONPATH", &src)
             .args([
@@ -297,11 +316,13 @@ fn reviews_rendered_from_saved_writer_records_quote_only_their_own_done_lines() 
             String::from_utf8_lossy(&out.stderr)
         );
         let brief = String::from_utf8(out.stdout).unwrap();
-        let other = if *name == "alpha" { "BETA" } else { "ALPHA" };
-        assert!(
-            brief.contains(&format!("DONE plangraph:{}-1", name.to_uppercase())),
-            "{brief}"
-        );
+        let own = card["item_keys"][0].as_str().unwrap();
+        let other = if own.contains("ALPHA") {
+            "BETA"
+        } else {
+            "ALPHA"
+        };
+        assert!(brief.contains(&format!("DONE {own} abc")), "{brief}");
         assert!(!brief.contains(other), "{brief}");
     }
 }

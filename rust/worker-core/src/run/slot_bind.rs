@@ -37,6 +37,8 @@ const LOCK_WAIT: Duration = Duration::from_secs(2);
 pub const LAUNCH_STARTED: &str = "launch_started";
 /// Record field naming the daemon that created a queued record.
 pub const SLOT_OWNER: &str = "slot_owner";
+/// File in the run directory that claims the run id for one daemon.
+const CLAIM_FILE: &str = "claim";
 
 /// The daemon's own identity and the slot every run it starts asks for.
 #[derive(Debug, Clone)]
@@ -92,21 +94,42 @@ impl SlotBind {
         let (pid, start_time) = self.owner();
         serde_json::json!({"pid": pid, "start_time": start_time})
     }
-    /// Claim `run_id` exclusively before anything of it is written: the run directory is
-    /// created atomically (an existing one belongs to another run or owner and is never
-    /// touched) and no slot of another owner may hold the id. Read-only on the slot table.
+    /// Claim `run_id` exclusively before anything of the run is prepared. The claim is a
+    /// `claim` file created with `create_new` in the run directory (the daemon already writes
+    /// its prompt there, so the directory itself is not the token). A run that already has a
+    /// record, or a claim of another owner, is refused and nothing of it is touched; the
+    /// claimant's own earlier claim is re-entered, so the daemon claims at the head of its
+    /// start and the supervisor claims again when the start reaches it. No slot of another
+    /// owner may hold the id. Read-only on the slot table.
     pub(super) fn claim_run(&self, run_id: &str) -> Result<(), BindError> {
         let dir = super::record::run_dir(&self.cfg.slots_dir, run_id)
             .map_err(|e| BindError::Dir(e.to_string()))?;
-        let runs = self.cfg.slots_dir.join("runs");
-        std::fs::create_dir_all(&runs).map_err(|e| BindError::Dir(e.to_string()))?;
-        match std::fs::create_dir(&dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(BindError::Exists)
-            }
-            Err(e) => return Err(BindError::Dir(e.to_string())),
+        let dir_error = |e: std::io::Error| BindError::Dir(e.to_string());
+        std::fs::create_dir_all(&dir).map_err(dir_error)?;
+        if dir.join("record.json").exists() {
+            return Err(BindError::Exists);
         }
+        let owner = self.owner_value().to_string();
+        let claim = dir.join(CLAIM_FILE);
+        let created = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&claim)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(owner.as_bytes()).map_err(dir_error)?;
+                true
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Only this daemon's own earlier claim may be re-entered.
+                if std::fs::read_to_string(&claim).ok().as_deref() != Some(owner.as_str()) {
+                    return Err(BindError::Exists);
+                }
+                false
+            }
+            Err(e) => return Err(dir_error(e)),
+        };
         let (pid, start) = self.owner();
         let held = slots::with_table(&self.cfg.slots_dir, LOCK_WAIT, |table| {
             table.active.iter().any(|s| s.run_id == run_id)
@@ -118,8 +141,9 @@ impl SlotBind {
         match held {
             Ok(false) => Ok(()),
             other => {
-                // Only the empty directory this call created is removed.
-                let _ = std::fs::remove_dir(&dir);
+                if created {
+                    let _ = std::fs::remove_file(&claim);
+                }
                 other?;
                 Err(BindError::Held)
             }
@@ -151,9 +175,14 @@ impl SlotBind {
     /// Drop the pending entry of a run that left the queue without a bind.
     pub(super) fn withdraw(&self, run_id: &str) {
         let (pid, start) = self.owner();
-        // An empty directory is a claim that never got a record; a used one stays.
+        // A claim that never got a record goes; a run that has one keeps everything.
         if let Ok(dir) = super::record::run_dir(&self.cfg.slots_dir, run_id) {
-            let _ = std::fs::remove_dir(dir);
+            let claim = dir.join(CLAIM_FILE);
+            let ours = std::fs::read_to_string(&claim).ok().as_deref()
+                == Some(self.owner_value().to_string().as_str());
+            if ours && !dir.join("record.json").exists() {
+                let _ = std::fs::remove_file(claim);
+            }
         }
         let _ = slots::with_table(&self.cfg.slots_dir, LOCK_WAIT, |table| {
             table

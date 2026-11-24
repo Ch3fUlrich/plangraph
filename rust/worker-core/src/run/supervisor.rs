@@ -237,6 +237,15 @@ impl Supervisor {
             }
         }
     }
+    /// Claim `run_id` before any of its files (prompt, captured config) are written, so a
+    /// refused start never touches an existing run. Re-entered by `start`.
+    pub fn claim_run(&self, run_id: &str) -> Result<(), SupervisorError> {
+        self.gate
+            .bind
+            .as_ref()
+            .map_or(Ok(()), |bind| bind.claim_run(run_id))
+            .map_err(|e| SupervisorError::Start(StartError::Admission(e)))
+    }
     pub fn cancel(&self, id: &str) -> CancelOutcome {
         let runs = self.runs.lock().unwrap();
         match runs.get(id) {
