@@ -51,10 +51,15 @@ Pytest CI environment (read by `tests/conftest.py`, implemented in `tests/_split
 - `PYTEST_QUARANTINE_MODE`: `blocking` (default) deselects active quarantined tests;
   `quarantine` runs only them, and an empty selection is not a failure.
 
-Pytest supports expiry-bound quarantine selection. The part-entry replay is
-tracked by `LE-CI-FLAKE-ENTRY-REPLAY`. The nonblocking job, retry ledger and
-Keeper reporting are tracked by `LE-CI-FLAKE-RETRY-QUARANTINE-WIRING` and
-require a workflow `Gate-Edit` decision.
+Pytest supports expiry-bound quarantine selection. The part-entry replay (`tools/ci_select.py entry-set --run`,
+`docs/ci-gate.md`) is `LE-CI-FLAKE-ENTRY-REPLAY`. The helper `ci-flake` (`rust/pg-spawnd/src/bin/ci-flake/`) serves the workflow:
+`classify` compares the first and the same-SHA retry log of a red job (`fail-pass`, `fail-fail` or `fail-unclassified`; the job
+stays red), keeps both logs with the runner, run, attempt and SHA, and writes `flake-record.json` and `flake-items.json`
+(a priority-10 Keeper item definition per test that failed and then passed); `quarantine` prints the owner and expiry of every
+active ledger entry for the gate and operator summaries; `cargo-quarantine` lists the active Rust entries (`cargo:<package>:<test
+path>` keys in the same ledger); `combine-durations` merges per-shard duration maps. The workflow reads the ledger of the pull
+request's base, so a change cannot quarantine its own failing test. The Keeper side (defining the item from the artifact) is a
+follow-up slice.
 
 Selection follows transitive AST imports in src/ and tests/, plus test references
 to filenames for subprocess consumers. Changed tests select themselves.
