@@ -310,8 +310,12 @@ def test_a_principal_revoked_before_the_write_lifts_nothing(w, monkeypatch):
 
 
 def test_the_recorded_d6753_row_verbatim_lifts_through_a_router_attestation(tmp_path):
-    """The row as the router wrote it (nested qualifier, long attribution, BY router), not a simplified copy."""
-    recorded = (Path(__file__).parent / "fixtures/decisions/d6753-operator-relay-row.md").read_text(encoding="utf-8")
+    """The row as the router wrote it (nested qualifier, long attribution, BY router), not a simplified copy.
+
+    Verbatim except two scrub replacements: the pinned sha256 digest reads "elided" and one session name differs.
+    """
+    fixture = Path(__file__).parent / "fixtures" / "decisions" / "d6753-operator-relay-row.md"
+    recorded = fixture.read_text(encoding="utf-8")
     assert recorded.startswith("| D-6753 | plangraph | (06:xxZ") and "(p9, D-4743 option (a)) is lifted:" in recorded
     key = "plangraph:OG-MEM-SCHEMA-APPLY"
     world = World(tmp_path)
