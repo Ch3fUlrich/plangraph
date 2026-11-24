@@ -209,7 +209,8 @@ def _expand(path, base):
 
 
 def _cargo_workdir(rest, cwd):
-    """Directory cargo builds in: `-C DIR` (before the subcommand), then `--manifest-path`'s directory."""
+    """`(cwd, project)`: cargo's working directory after `-C DIR` (relative target settings resolve against it)
+    and the directory of `--manifest-path` (the default `target` lies in its workspace)."""
     where, it = Path(cwd), iter(rest)
     for word in it:
         if word == "-C":
@@ -222,8 +223,8 @@ def _cargo_workdir(rest, cwd):
         manifest = (rest[k + 1] if word == "--manifest-path" and k + 1 < len(rest)
                     else word.split("=", 1)[1] if word.startswith("--manifest-path=") else None)
         if manifest:
-            return _expand(manifest, where).parent
-    return where
+            return where, _expand(manifest, where).parent
+    return where, where
 
 
 def _nearest_checkout(path):
@@ -234,13 +235,14 @@ def _nearest_checkout(path):
     return None
 
 
-def _cargo_target_checkout(rest, envs, where, host_env=None):
+def _cargo_target_checkout(rest, envs, workdir, host_env=None):
     """The one target resolver: the main checkout or agent worktree a cargo build would fill, else None.
 
     The target is `--target-dir`, then `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET_DIR`, relative to the
-    directory cargo runs in (cwd, `cd`, `-C`, `--manifest-path`); with none, cargo writes
-    `<workspace>/target` inside the checkout that directory belongs to.
+    directory cargo runs in (cwd, `cd`, `-C`; never `--manifest-path`); with none, cargo writes
+    `<workspace>/target` inside the checkout the manifest's directory belongs to.
     """
+    where, project = workdir
     target = next((rest[k + 1] for k, a in enumerate(rest[:-1]) if a == "--target-dir"), None)
     target = target or next((a.split("=", 1)[1] for a in rest if a.startswith("--target-dir=")), None)
     host_env = os.environ if host_env is None else host_env
@@ -249,7 +251,7 @@ def _cargo_target_checkout(rest, envs, where, host_env=None):
         value = envs[var] if var in envs else host_env.get(var)
         target = target or value or None
     if target is None:
-        return main_checkout_root(where)
+        return main_checkout_root(project)
     try:
         return _nearest_checkout(_expand(target, where))
     except (OSError, RuntimeError, ValueError):
@@ -280,6 +282,18 @@ def _env_options(words):
     return unset, cleared
 
 
+def _assign(state, words):
+    """Shell assignments: a variable that is already exported (earlier, or by the hook's own environment) takes the new value."""
+    for word in words:
+        name, _, value = word.partition("=")
+        if name.endswith("+"):
+            name = name[:-1]
+            previous = state[name] if name in state else os.environ.get(name)
+            value = (previous or "") + value
+        if name in _TARGET_ENVS and (state[name] if name in state else os.environ.get(name)) is not None:
+            state[name] = value
+
+
 def _record_export(state, builtin, args):
     """What `export` / `declare` / `typeset` do to the variables later commands see.
 
@@ -302,6 +316,8 @@ def _record_export(state, builtin, args):
             state[name] = None
         elif exporting and has_value:
             state[name] = value
+        elif has_value:  # `declare NAME=VAL` of a variable that is exported already
+            _assign(state, [word])
 
 
 def main_checkout_cargo(command, cwd, depth=0, inherited=None):
@@ -323,6 +339,7 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
             i += 1
         envs.update(w.split("=", 1) for w in words[start:i])  # only the assignments before the command word
         if i >= len(words):
+            _assign(state, words[start:i])  # a bare `NAME=VAL` changes a variable that is already exported
             continue
         if _basename(words[i]) == "unset":
             state.update({name: None for name in words[i + 1:] if not name.startswith("-")})
@@ -345,22 +362,24 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
             else:
                 nested = []
             given = dict(w.split("=", 1) for w in words[i:j] if _ENV_ASSIGN_RE.match(w))  # `env NAME=VAL` before this word
+            unset, cleared = _env_options(words[i:j])
+            if cleared:  # `env -i`: only the assignments given to env itself survive
+                wrapped_env = {**{var: None for var in _TARGET_ENVS}, **given}
+            else:
+                wrapped_env = {**envs, **given, **{var: None for var in unset}}
             for string in nested:
-                reason = main_checkout_cargo(string, cwd, depth + 1, {**envs, **given})
+                reason = main_checkout_cargo(string, cwd, depth + 1, wrapped_env)
                 if reason:
                     return reason
             if name != "cargo":
                 continue
             rest = words[j + 1:]
+            if "--" in rest:  # what follows goes to the program cargo runs, not to cargo
+                rest = rest[:rest.index("--")]
             sub = _cargo_subcommand(rest)
             if sub not in _BUILDING:
                 continue
-            unset, cleared = _env_options(words[i:j])
-            if cleared:  # `env -i`: only the assignments given to env itself survive
-                run_env = dict(given)
-            else:
-                run_env = {**envs, **given}
-            run_env.update({name: None for name in unset})
+            run_env = dict(given) if cleared else wrapped_env
             root = _cargo_target_checkout(rest, run_env, _cargo_workdir(rest, cwd), {} if cleared else None)
             if root is not None:
                 return MAIN_TARGET_MESSAGE % (sub, root, shared_target())
