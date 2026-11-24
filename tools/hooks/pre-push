@@ -6,7 +6,8 @@ new branches scrub from origin/main and select affected test files from their ne
 Missing preflight refuses main pushes; topic and tag pushes retain the other gates.
 A push to refs/heads/lane/* runs the public scrub, the commit
 gate (with its open-PR query) and the stamp gate only (seconds, no worktree, no test): a lane head needs a green
-`plangraph fast-checks` receipt, or PG_LANE_PUSH_UNSTAMPED=1 for an intermediate item commit.
+`plangraph fast-checks` receipt of exactly that head, for every push (no bypass). The receipt note ref
+refs/notes/plangraph-fast-checks is pushed with it (same command) and is not gated itself.
 Train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
 cargo fmt) and no test; the affected tests run once, in CI. A push to refs/heads/land/train-* is a
 train: its first-parent chain must carry the merges listed in the manifest in order, with
@@ -172,6 +173,7 @@ def is_train_ref(remote_ref):
 
 
 LANE_REF_PREFIX = "refs/heads/lane/"
+RECEIPT_NOTES_REF = "refs/notes/plangraph-fast-checks"
 
 
 def is_lane_ref(remote_ref):
@@ -181,10 +183,6 @@ def is_lane_ref(remote_ref):
 
 def stamp_gate(head):
     """A lane head needs a green fast-checks receipt; the same reader serves review launch and push."""
-    if os.environ.get("PG_LANE_PUSH_UNSTAMPED") == "1":
-        print(f"pre-push: PG_LANE_PUSH_UNSTAMPED=1: {head[:12]} pushed without a fast-checks stamp",
-              file=sys.stderr)
-        return 0
     try:
         result = subprocess.run(["plangraph", "fast-checks", "--stamp-green", head],
                                 capture_output=True, text=True, timeout=30)
@@ -508,7 +506,8 @@ def push_main():
                 print(f"pre-push: PREFLIGHT_SKIP=1 is not allowed for {remote_ref}: push refused",
                       file=sys.stderr)
                 return 1
-    refs = [rec for rec in refs if not is_zero(rec[1])]
+    # The receipt note ref carries only plangraph's own `head`/`check` lines: it rides with a lane push.
+    refs = [rec for rec in refs if not is_zero(rec[1]) and rec[2] != RECEIPT_NOTES_REF]
     if not refs:
         return 0
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))

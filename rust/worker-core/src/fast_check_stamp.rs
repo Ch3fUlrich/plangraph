@@ -27,9 +27,9 @@ impl Check {
     }
 }
 
-/// The receipt text: red when any check failed (or none ran for a red verdict).
+/// The receipt text: red when any check failed or none ran.
 pub fn render(head: &str, checks: &[Check]) -> String {
-    let verdict = if checks.iter().all(|c| c.rc == 0) {
+    let verdict = if !checks.is_empty() && checks.iter().all(|c| c.rc == 0) {
         "green"
     } else {
         "red"
@@ -43,23 +43,47 @@ pub fn render(head: &str, checks: &[Check]) -> String {
 }
 
 /// Whether `text` is a green receipt for exactly `head`.
+///
+/// A structured receipt needs its own `head` line, exactly one `result green` and at least one
+/// well-formed `check <label> rc=0 wall=<s>` line; a truncated file is never green. Only the
+/// old one-word receipts (`green` or the bare sha) stay accepted without check lines.
 pub fn text_is_green(text: &str, head: &str) -> bool {
-    let mut verdict = None;
+    let (mut heads, mut verdicts, mut checks) = (Vec::new(), Vec::new(), 0usize);
     for line in text.lines() {
         if let Some(found) = line.strip_prefix("head ") {
-            if found.trim() != head {
+            heads.push(found.trim());
+        } else if let Some(found) = line.strip_prefix("result ") {
+            verdicts.push(found.trim());
+        } else if line.starts_with("check ") {
+            if !valid_check_line(line) {
                 return false;
             }
-        } else if let Some(found) = line.strip_prefix("result ") {
-            verdict = Some(found.trim());
-        } else if line.starts_with("check ") && !line.contains(" rc=0 ") {
-            return false;
+            checks += 1;
         }
     }
-    match verdict {
-        Some(verdict) => verdict == "green",
-        None => matches!(text.trim(), "green" | "") || text.trim() == head,
+    if heads.is_empty() && verdicts.is_empty() && checks == 0 {
+        return matches!(text.trim(), "green") || (!head.is_empty() && text.trim() == head);
     }
+    heads == [head] && verdicts == ["green"] && checks > 0
+}
+
+/// `check <label> rc=0 wall=<seconds>`: a green check line with every field present.
+fn valid_check_line(line: &str) -> bool {
+    let mut words = line.split_whitespace();
+    let (Some("check"), Some(label), Some(rc), Some(wall), None) = (
+        words.next(),
+        words.next(),
+        words.next(),
+        words.next(),
+        words.next(),
+    ) else {
+        return false;
+    };
+    !label.is_empty()
+        && rc == "rc=0"
+        && wall
+            .strip_prefix("wall=")
+            .is_some_and(|s| s.parse::<f64>().is_ok())
 }
 
 /// Whether the shared receipt of `head` exists and is green; a clone that fetched the receipt
@@ -119,6 +143,27 @@ mod tests {
         let head = "d".repeat(40);
         let text = format!("head {head}\nresult green\ncheck affected-tests rc=1 wall=2.000\n");
         assert!(!text_is_green(&text, &head));
+    }
+
+    #[test]
+    fn an_empty_or_check_less_receipt_is_not_green() {
+        let head = "f".repeat(40);
+        assert!(!text_is_green("", &head));
+        assert!(!text_is_green("\n", &head));
+        assert!(!text_is_green(
+            &format!("head {head}\nresult green\n"),
+            &head
+        ));
+        assert!(!text_is_green(
+            "result green\ncheck fmt rc=0 wall=1.0\n",
+            &head
+        ));
+        let twice = format!("head {head}\nresult green\nresult green\ncheck fmt rc=0 wall=1.0\n");
+        assert!(!text_is_green(&twice, &head));
+        let garbled = format!("head {head}\nresult green\ncheck fmt rc=0\n");
+        assert!(!text_is_green(&garbled, &head));
+        let ok = format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.0\n");
+        assert!(text_is_green(&ok, &head));
     }
 
     #[test]

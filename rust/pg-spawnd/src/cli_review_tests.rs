@@ -67,6 +67,16 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
         &json!({"harness":"agy"})
     )
     .is_err());
+    // A truncated receipt (empty, or a green verdict with no check line) does not pass either.
+    for truncated in [String::new(), format!("head {head}\nresult green\n")] {
+        std::fs::write(&stamp, truncated).unwrap();
+        assert!(prepare(
+            args.as_object().unwrap(),
+            &mut launch,
+            &json!({"harness":"agy"})
+        )
+        .is_err());
+    }
     std::fs::write(stamp, "green").unwrap();
     assert_eq!(
         prepare(
