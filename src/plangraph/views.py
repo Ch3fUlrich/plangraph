@@ -32,6 +32,8 @@ __all__ = [
 STATES = ("open", "ready", "claimed", "in_review", "done", "cancelled", "running",
           "needs_input", "waiting", "failed", "parked")
 TERMINAL = frozenset(("done", "cancelled"))
+#: A row without a category rank (the offline snapshot door) sorts after every ranked one.
+NO_CATEGORY_RANK = 9999
 _ACTIVE = ("open", "claimed")
 
 
@@ -284,7 +286,7 @@ def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies
            and not (agent and (it.get("operator") or it.get("kind") in OPERATOR_KINDS))
            and dependencies_ready(it)]
     eff = effective_priorities(items)[0]
-    out.sort(key=lambda it: (it.get("category_rank", 0), -eff[it["key"]]["effective"], -ub.get(it["key"], 0), _est(it), it["key"]))
+    out.sort(key=lambda it: (it.get("category_rank", NO_CATEGORY_RANK), -eff[it["key"]]["effective"], -ub.get(it["key"], 0), _est(it), it["key"]))
     return out
 
 

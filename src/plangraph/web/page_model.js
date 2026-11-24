@@ -370,7 +370,8 @@
              decisions: decisions, decisionById: decisionById, needsYou: needsYou,
              answers: questions.filter(function (q) { return q.status === "answered"; }),
              critical: cp.keys, humanize: humanize,
-             categories: snap.categories || [], uncategorised: snap.uncategorised || 0 };
+             categories: snap.categories || [], uncategorised: snap.uncategorised || 0,
+             categoryOverrides: snap.category_overrides || {} };
   }
 
   function minWave(wave, list) {

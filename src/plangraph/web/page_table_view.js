@@ -306,7 +306,9 @@
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";
     box.appendChild(bar);
     if ((vm.categories || []).length) {
-      var rk = el("p", "tt-rank", "Category order: " + vm.categories.map(function (c) { return c.name; }).join(" > ") +
+      var own = vm.categoryOverrides || {};
+      var rk = el("p", "tt-rank", "Default category order: " + vm.categories.map(function (c) { return c.name; }).join(" > ") +
+        Object.keys(own).map(function (p) { return "; " + p + ": " + own[p].join(" > "); }).join("") +
         (vm.uncategorised ? " (" + vm.uncategorised + " without category, last)" : ""));
       rk.setAttribute("aria-label", "Category rank order");
       box.appendChild(rk);
