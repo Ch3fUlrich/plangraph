@@ -4,7 +4,13 @@ use std::cell::RefCell;
 const HYDROGEN: &str = "agy-gemini-4-hydrogen-high";
 
 fn leg(id: &str) -> Value {
-    json!({"id": id, "harness": "agy", "model": id, "family": "gemini"})
+    let harness = if id.starts_with("opencode") {
+        "opencode"
+    } else {
+        "agy"
+    };
+    let model = id.strip_prefix("agy-").unwrap_or(id);
+    json!({"id": id, "harness": harness, "model": model, "family": "gemini"})
 }
 fn plan(legs: &[&str], limit: usize, wait: f64) -> Value {
     json!({
@@ -145,15 +151,59 @@ fn a_limit_hit_while_queued_stops_starts_and_takes_the_route_fallback() {
 }
 
 #[test]
-fn past_the_wait_bound_the_seat_moves_to_the_next_routed_leg_with_room() {
+fn past_the_wait_bound_the_seat_is_refused_not_moved_to_a_sibling_leg() {
     let state = tempfile::tempdir().unwrap();
     let _full = admit(state.path(), plan(&[HYDROGEN], 1, 600.0), &mut quiet())
         .okay()
         .1;
     let two = plan(&[HYDROGEN, "agy-gemini-4-argon-low"], 1, 20.0);
     let mut waiting = Fake::new(vec![two.clone()], |_| {});
-    let (p, _) = ok(admit(state.path(), two, &mut waiting));
-    assert_eq!(first(&p), "agy-gemini-4-argon-low");
+    match admit(state.path(), two, &mut waiting) {
+        Err(ToolError::Refused { message, .. }) => {
+            assert!(message.starts_with("seat_queue_timeout:"), "{message}")
+        }
+        _ => panic!("a full leg past the wait bound must refuse"),
+    }
+}
+
+#[test]
+fn a_limit_that_leaves_only_sibling_legs_of_the_harness_is_refused() {
+    let state = tempfile::tempdir().unwrap();
+    let _full = admit(state.path(), plan(&[HYDROGEN], 1, 600.0), &mut quiet())
+        .okay()
+        .1;
+    // Hydrogen booked a 429: the route now leads with a sibling agy leg, which is no fallback seat.
+    let sibling = json!({"first_leg": leg("agy-gemini-4-neon-medium"), "legs": [leg("agy-gemini-4-neon-medium")]});
+    let mut waiting = Fake::new(vec![sibling], |_| {});
+    match admit(state.path(), plan(&[HYDROGEN], 1, 600.0), &mut waiting) {
+        Err(ToolError::Refused { message, .. }) => {
+            assert!(message.starts_with("seat_leg_limited:"), "{message}")
+        }
+        _ => panic!("a sibling of the same harness must refuse"),
+    }
+}
+
+#[test]
+fn the_agy_cli_selector_keeps_secondary_agy_legs_out_of_the_queue_fallback() {
+    let state = tempfile::tempdir().unwrap();
+    let _full = admit(state.path(), plan(&[HYDROGEN], 1, 600.0), &mut quiet())
+        .okay()
+        .1;
+    // `leg: agy-cli` filters the route to the four agy legs (cli_review::select) before admission.
+    let args: crate::placement::Args = serde_json::from_value(json!({"leg": "agy-cli"})).unwrap();
+    let routed = json!({"first_leg": leg(HYDROGEN), "legs": [
+        leg(HYDROGEN), leg("agy-gemini-4-neon-medium"), leg("agy-gemini-4-argon-low"),
+        leg("opencode-go-deepseek-v4-flash")],
+        "seat_admission": {"legs": {HYDROGEN: 1}, "queue_wait_seconds": 0.0}});
+    let selected = crate::cli_review::select(&args, routed.to_string()).okay();
+    let selected: Value = serde_json::from_str(&selected).unwrap();
+    assert_eq!(selected["legs"].as_array().unwrap().len(), 3);
+    match admit(state.path(), selected, &mut quiet()) {
+        Err(ToolError::Refused { message, .. }) => {
+            assert!(message.starts_with("seat_queue_timeout:"), "{message}")
+        }
+        _ => panic!("must refuse, not start a secondary agy leg"),
+    }
 }
 
 #[test]
