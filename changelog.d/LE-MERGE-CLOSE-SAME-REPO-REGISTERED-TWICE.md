@@ -1,0 +1,1 @@
+The merged-close scan reads one directory registered under several names once, so an item whose commits live in it is no longer refused as `merge_repo_ambiguous`; two different repositories that both hold commits still refuse. `plangraph check` lists such duplicate registrations as `DUPLICATE-REPO`.
