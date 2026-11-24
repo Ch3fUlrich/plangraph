@@ -154,7 +154,9 @@ assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
         assert!(gate.contains(input), "ci-gate missing {input}");
     }
     let suite_jobs = jobs.split_once("\n  ci-gate:\n").unwrap().0;
-    assert_eq!(suite_jobs.matches("needs.select.outputs.full").count(), 4);
+    // Each pytest job branches on the full run twice for its tests and once for the same-SHA retry, which
+    // leaves the affected path to its own rerun classification.
+    assert_eq!(suite_jobs.matches("needs.select.outputs.full").count(), 6);
     assert!(gate.contains("- name: Post ci-full evidence"));
     assert!(gate.contains(
         "success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true'"
@@ -173,7 +175,7 @@ sys.path.insert(0, 'tools')
 import merge_batch_land as land
 head = 'a' * 40
 run = {'id': 7, 'head_sha': head, 'head_branch': 'batch/test', 'event': 'pull_request', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
-names = ['select', 'scrub', 'file-size', 'new-code-lang', 'changelog-docs', 'pytest (0)', 'pytest (1)', 'pytest (2)', 'pytest-postgres (0)', 'pytest-postgres (1)', 'pytest-postgres (2)', 'browser', 'rust', 'rust-windows', 'rust-worker', 'rust-spike', 'ci-gate']
+names = ['select', 'scrub', 'file-size', 'new-code-lang', 'changelog-docs', 'build-spawnd', 'pytest (0)', 'pytest (1)', 'pytest (2)', 'pytest-postgres (0)', 'pytest-postgres (1)', 'pytest-postgres (2)', 'browser', 'rust', 'rust-windows', 'rust-worker', 'rust-spike', 'ci-gate']
 jobs = [{'name': n, 'status': 'completed', 'conclusion': 'success'} for n in names]
 def api(*args):
     path = args[1]
