@@ -195,3 +195,15 @@ fn the_profile_is_valid_toml_for_unicode_and_control_paths() {
     );
     assert_eq!(map["/fixture/target-\u{1F600}"].as_str(), Some("write"));
 }
+
+/// A deny path that cannot be written into the profile stops the launch; it never drops out.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_deny_path_is_an_error_not_a_missing_entry() {
+    use std::os::unix::ffi::OsStringExt;
+    let bad = PathBuf::from(std::ffi::OsString::from_vec(
+        b"/fixture/xdg-\xff/plangraph".to_vec(),
+    ));
+    assert!(profile_args(&[], std::slice::from_ref(&bad)).is_err());
+    assert!(profile_args(&[bad], &[]).is_err());
+}

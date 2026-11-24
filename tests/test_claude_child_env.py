@@ -31,8 +31,12 @@ POLICY = (
     'RUSTC_WRAPPER', 'SCCACHE_CACHE_SIZE', 'SCCACHE_DIR', 'SHELL', 'SSL_CERT_DIR', 'SSL_CERT_FILE',
     'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'TERM', 'TMP', 'TMPDIR', 'TZ', 'USER', 'USERNAME',
     'USERPROFILE', 'UV_CACHE_DIR', 'WINDIR',
+    'LC_ADDRESS', 'LC_ALL', 'LC_COLLATE', 'LC_CTYPE', 'LC_IDENTIFICATION', 'LC_MEASUREMENT', 'LC_MESSAGES',
+    'LC_MONETARY', 'LC_NAME', 'LC_NUMERIC', 'LC_PAPER', 'LC_TELEPHONE', 'LC_TIME',
+    'XDG_CACHE_HOME', 'XDG_CONFIG_DIRS', 'XDG_CONFIG_HOME', 'XDG_DATA_DIRS', 'XDG_DATA_HOME',
+    'XDG_RUNTIME_DIR', 'XDG_STATE_HOME',
 )
-PREFIXES = ('LC_', 'XDG_')
+PREFIXES = ()
 
 #: Names that must never reach the claude child: provider switches, session and refresh tokens, cloud and
 #: forge credentials, the host's database DSN and gateway keys, plus a lower-case spelling.
@@ -50,6 +54,7 @@ UNLISTED = (
     'GH_TOKEN', 'NPM_TOKEN', 'HF_TOKEN', 'PG_DSN', 'PGPASSWORD', 'DATABASE_URL', 'AUTOOS_OMNIROUTE_KEY',
     'SSH_AUTH_SOCK', 'OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL', 'PLANGRAPH_GATEWAY_LOG_TOKEN',
     'OPENCODE_CONFIG_CONTENT', 'NODE_OPTIONS', 'LD_PRELOAD', 'PYTHONPATH', 'MY_SERVICE_SECRET', 'x_unrelated',
+    'LC_FIXTURE_PASSWORD', 'XDG_KEEPER_DSN',
 )
 
 
@@ -313,12 +318,14 @@ def test_a_codex_implement_run_keeps_workspace_writes_while_a_review_stays_read_
 
 def test_only_the_exact_codex_names_survive_the_process_filter(monkeypatch, tmp_path):
     lookalikes = {'OMNIROUTE_API_KEY': 'v', 'OPENAI_ORG_ID': 'v', 'OPENAI_ADMIN_KEY': 'v',
-                  'OMNIROUTE_ADMIN_TOKEN': 'v', 'PG_TOKEN_FILE': 'v'}
+                  'OMNIROUTE_ADMIN_TOKEN': 'v', 'PG_TOKEN_FILE': 'v',
+                  'LC_FIXTURE_PASSWORD': 'v', 'XDG_KEEPER_DSN': 'v'}
     _, _, env, _ = drive_args(monkeypatch, tmp_path, client='codex', model=CODEX_LEG, role='review',
                               parent_env=lookalikes)
     stray = sorted(name for name in lookalikes if name in env)
     assert stray == [], 'unlisted parent names reached the codex child: ' + ', '.join(stray)
     assert {'CODEX_HOME', 'OPENAI_API_KEY', 'AUTOOS_OMNIROUTE_KEY'} <= set(env)
+    assert 'XDG_CONFIG_HOME' in env      # a real base-directory name still passes
 
 
 def test_the_configured_codex_executable_is_resolved_before_the_filter_drops_nothing(monkeypatch, tmp_path):
@@ -345,6 +352,7 @@ def test_a_claude_writer_runs_its_shell_in_the_sandbox_with_the_secret_paths_unr
     settings = json.loads(args[args.index('--settings') + 1])
     sandbox = settings['sandbox']
     assert sandbox['enabled'] and sandbox['failIfUnavailable'] and not sandbox['allowUnsandboxedCommands']
+    assert args[args.index('--setting-sources') + 1] == '' and sandbox['excludedCommands'] == []
     deny = sandbox['filesystem']['denyRead']
     assert {'~/.ssh', '~/.config/plangraph', '~/.local/share/plangraph/keeper.json', '/xdg/plangraph'} <= set(deny)
 
@@ -352,6 +360,30 @@ def test_a_claude_writer_runs_its_shell_in_the_sandbox_with_the_secret_paths_unr
 def test_a_claude_writer_route_is_refused_where_the_shell_cannot_be_sandboxed(monkeypatch, tmp_path):
     from plangraph.routing_support import claude_seat
     monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: False)
+    lease = Mock()
+    monkeypatch.setattr('plangraph.spawner.host_ready.cargo_lease', lease)
     exe, args, _, job = drive_args(monkeypatch, tmp_path, client='claude', model='claude-haiku-5-5', role='implement')
     assert exe is None and args is None, 'the claude writer was launched without a shell sandbox'
+    lease.assert_not_called()          # a refused route holds no cargo lease
     assert job.status == 'failed' and job.stderr.startswith('sandbox_unavailable:')
+
+
+@pytest.mark.parametrize('role', ['review', 'implement', 'fix'])
+def test_a_secret_path_that_cannot_be_written_into_the_profile_stops_the_launch(monkeypatch, role):
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.routing_support.clients import codex_isolation_args
+    bad = os.fsdecode(b'/fixture/xdg-\xff')            # a Linux config home with a non-UTF-8 byte
+    with pytest.raises(SpawnRefused, match='^sandbox_refused: .*not valid UTF-8'):
+        codex_isolation_args({'XDG_CONFIG_HOME': bad}, role)
+
+
+def test_a_claude_writer_ignores_user_sandbox_exclusions(monkeypatch, tmp_path):
+    import json
+    from plangraph.routing_support import claude_seat
+    argv = ['claude', '-p', '--tools', 'Read,Bash', '--setting-sources', 'user',
+            '--settings', json.dumps({'sandbox': {'excludedCommands': ['cat'], 'enabled': False}})]
+    assert claude_seat.confine_writer_shell(argv, {}, 'implement', 'job') is None
+    assert argv[argv.index('--setting-sources') + 1] == ''      # no user, project or local settings
+    sandbox = json.loads(argv[argv.index('--settings') + 1])['sandbox']
+    assert sandbox['excludedCommands'] == [] and sandbox['enabled'] is True
+    assert sandbox['allowUnsandboxedCommands'] is False and sandbox['autoAllowBashIfSandboxed'] is False
