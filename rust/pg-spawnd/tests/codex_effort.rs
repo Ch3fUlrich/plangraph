@@ -23,7 +23,7 @@ writer = plan_spawn(card, role='implement', catalog_rows=[]).first_leg
 assert (writer.id, writer.effort) == ('cx-gpt-6.2-sol-medium', 'medium'), writer
 review = plan_spawn(dict(card, diff_ref=dict(repo=os.getcwd(), base='a'*40, head='b'*40)), role='review',
                     writer_families=['claude'], catalog_rows=[])
-assert review.first_leg.id == 'opencode-go-deepseek-v4-flash', review.to_dict()   # D-6652: required seats lead
+assert review.first_leg.id == 'agy-gemini-4-hydrogen-high', review.to_dict()   # rule 3.66 (f10): smart legs lead
 sol = next(leg for leg in review.legs if leg.id == 'gpt-6.2-sol-medium')
 assert (sol.id, sol.harness, sol.effort) == ('gpt-6.2-sol-medium', 'codex', 'medium'), sol
 luna = next(leg for leg in review.legs if leg.id == 'cx-gpt-6-luna')
