@@ -1,11 +1,16 @@
 //! Bounded local projection of CI selection; the selector remains authoritative.
-use crate::fast_check_packages::packages;
 #[path = "fast_check_replay.rs"]
 mod replay;
+#[path = "fast_check_plan.rs"]
+mod selection;
+#[path = "test_replay/gate.rs"]
+mod test_replay;
 use pg_worker_core::cargo_cache;
+use selection::plan;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
+pub use test_replay::{replay_committed, ReplayReceipt};
 
 pub(super) type Result<T> = std::result::Result<T, String>;
 
@@ -44,207 +49,6 @@ fn output(root: &Path, args: &[String]) -> Result<String> {
     }
     String::from_utf8(result.stdout).map_err(|e| e.to_string())
 }
-fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)> {
-    let mut selector = vec![
-        "python3".into(),
-        "tools/ci_select.py".into(),
-        "select".into(),
-        "--files".into(),
-    ];
-    selector.extend_from_slice(paths);
-    let selection = output(root, &selector)?;
-    let enabled = |job: &str| {
-        selection
-            .lines()
-            .any(|line| line.trim() == format!("{job}=true"))
-    };
-    let mut steps = vec![
-        step(
-            "scrub",
-            &[
-                "python3",
-                "tools/split/scrub_check.py",
-                ".",
-                "--rules",
-                "tools/split/manifest.toml",
-                "--rules",
-                "tools/split/scrub_ci.toml",
-            ],
-        ),
-        step("file-size", &["python3", "tools/check_file_size.py"]),
-        step(
-            "new-code-lang",
-            &["python3", "tools/check_new_code_lang.py"],
-        ),
-        step(
-            "changelog-docs",
-            &["python3", "tools/check_changelog_docs.py"],
-        ),
-        step(
-            "commit-gate",
-            &[
-                "python3",
-                "tools/ci_commit_gate.py",
-                "check",
-                "--base",
-                base,
-                "--head",
-                "HEAD",
-            ],
-        ),
-        step("diff-check", &["git", "diff", "--check", base]),
-    ];
-    let rust = ["rust", "rust-worker", "rust-spike"]
-        .iter()
-        .any(|job| enabled(job));
-    if rust {
-        // Reuse the existing guard against pytest dependencies in Rust jobs.
-        steps.insert(
-            0,
-            step(
-                "rust-test-env",
-                &[
-                    "python3",
-                    "-m",
-                    "pytest",
-                    "-q",
-                    "tests/test_spawner_import_guard.py",
-                ],
-            ),
-        );
-        let mut external_selector = selector[..4].to_vec();
-        external_selector.extend(paths.iter().filter(|p| !p.starts_with("rust/")).cloned());
-        let external_rust = external_selector.len() > 4
-            && output(root, &external_selector)?
-                .lines()
-                .any(|line| line.trim() == "rust=true");
-        let mut selected = packages(root, paths, enabled("full") || external_rust)?;
-        if enabled("rust-worker") && !selected.iter().any(|(_, n)| n == "pg-worker") {
-            selected.push(("rust/worker/Cargo.toml".into(), "pg-worker".into()));
-        }
-        if selected
-            .iter()
-            .any(|(m, _)| !m.starts_with("rust/worker/") && !m.starts_with("rust/spikes/"))
-        {
-            steps.push(step(
-                "jail-helper",
-                &[
-                    "cargo",
-                    "build",
-                    "--manifest-path",
-                    "rust/Cargo.toml",
-                    "-p",
-                    "pg-jail",
-                ],
-            ));
-        }
-        for (manifest, name) in selected {
-            if manifest.starts_with("rust/worker/") && !enabled("rust-worker")
-                || manifest.starts_with("rust/spikes/") && !enabled("rust-spike")
-            {
-                continue;
-            }
-            let workspace =
-                if manifest.starts_with("rust/worker/") || manifest.starts_with("rust/spikes/") {
-                    manifest
-                } else {
-                    "rust/Cargo.toml".into()
-                };
-            for (verb, tail) in [
-                ("fmt", vec!["--", "--check"]),
-                ("clippy", vec!["--all-targets", "--", "-D", "warnings"]),
-                ("test", vec![]),
-            ] {
-                let mut args = vec![
-                    "cargo".into(),
-                    verb.into(),
-                    "--manifest-path".into(),
-                    workspace.clone(),
-                    "-p".into(),
-                    name.clone(),
-                ];
-                args.extend(tail.into_iter().map(String::from));
-                if verb == "test" && workspace.starts_with("rust/worker/") {
-                    let mut wrapper: Vec<String> = [
-                        "cargo",
-                        "run",
-                        "--manifest-path",
-                        "rust/Cargo.toml",
-                        "-p",
-                        "pg-spawnd",
-                        "--bin",
-                        "ci-temporal",
-                        "--",
-                    ]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                    wrapper.extend(args);
-                    args = wrapper;
-                }
-                steps.push(Step {
-                    label: format!("{name}/{verb}"),
-                    args,
-                });
-            }
-        }
-    }
-    if enabled("pytest") || enabled("pytest-postgres") || enabled("browser") {
-        let mut affected = step(
-            "affected-tests",
-            &[
-                "python3",
-                "tools/affected_tests.py",
-                "--base",
-                base,
-                "--local",
-                "--files-only",
-                "--run",
-            ],
-        );
-        for path in paths {
-            affected.args.extend(["--changed".into(), path.clone()]);
-        }
-        if root.join("tests/test_fleet_snapshot.py").is_file() {
-            let mut select = affected.args.clone();
-            select.retain(|arg| arg != "--run");
-            let selected = output(root, &select)?;
-            let plan: serde_json::Value = serde_json::from_str(
-                selected
-                    .lines()
-                    .next()
-                    .ok_or("missing affected test plan")?,
-            )
-            .map_err(|error| error.to_string())?;
-            if plan["tests"]
-                .as_array()
-                .ok_or("invalid affected test plan")?
-                .iter()
-                .any(|path| path == "tests/test_fleet_snapshot.py")
-            {
-                // Cargo verifies the sources even when another checkout built the cache last.
-                steps.push(step(
-                    "fleet-spawnd",
-                    &[
-                        "cargo",
-                        "build",
-                        "--locked",
-                        "--manifest-path",
-                        "rust/Cargo.toml",
-                        "-p",
-                        "pg-spawnd",
-                        "--bin",
-                        "pg-spawnd",
-                    ],
-                ));
-                affected.args.push("--fleet-spawnd-prebuilt".into());
-            }
-        }
-        steps.push(affected);
-    }
-    Ok((selection, steps))
-}
-
 pub fn run(args: &[String]) -> i32 {
     match execute(args) {
         Ok(()) => 0,
@@ -291,8 +95,18 @@ fn execute(args: &[String]) -> Result<()> {
         if dry || files.is_some() {
             return Err("--owned-worktree checks the committed HEAD and cannot be used with --plan or --files".into());
         }
-        return owned::run(&root, args);
+        return owned::run(&root, &base);
     }
+    let head = if dry && files.is_some() {
+        String::new()
+    } else {
+        replay::resolve(&root, "HEAD")?
+    };
+    let base = if dry && files.is_some() {
+        base
+    } else {
+        replay::resolve(&root, &base)?
+    };
     let paths = match files {
         Some(files) if dry => files,
         Some(_) => {
@@ -301,7 +115,7 @@ fn execute(args: &[String]) -> Result<()> {
                     .into(),
             )
         }
-        None => owned::diff_paths(&root, &base)?,
+        None => owned::diff_paths(&root, &base, &head)?,
     };
     let (selection, steps) = plan(&root, &base, &paths)?;
     print!("{selection}");
@@ -311,7 +125,6 @@ fn execute(args: &[String]) -> Result<()> {
         }
         return Ok(());
     }
-    replay::verify(&root, &base)?;
     // Git's diff guard does not report CRLF consistently across core.whitespace settings.
     for path in &paths {
         if path.ends_with(".rs") {
@@ -324,6 +137,8 @@ fn execute(args: &[String]) -> Result<()> {
             }
         }
     }
+    let receipt = replay_committed(&root, &base, &head, None)?;
+    print!("{}", receipt.evidence());
     let primary = cargo_cache::shared_cache_roots().map_err(|e| e.to_string())?;
     let target = resolve_cargo_target(&root, &primary[0], "fast-checks")?;
     let mut failures = Vec::new();
@@ -374,6 +189,9 @@ fn execute(args: &[String]) -> Result<()> {
         failures.push("budget".into());
     }
     if failures.is_empty() {
+        if let Some(path) = std::env::var_os("PLANGRAPH_FAST_CHECK_RECEIPT") {
+            receipt.write(Path::new(&path))?;
+        }
         Ok(())
     } else {
         Err(format!("failed: {}", failures.join(", ")))

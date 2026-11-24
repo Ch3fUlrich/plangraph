@@ -70,6 +70,9 @@ impl Driver for MovingMain {
         }
         Ok(())
     }
+    fn check_receipt(&self, head: &str) -> Result<Option<Value>, String> {
+        self.host.check_receipt(head)
+    }
     fn stamped(&mut self, head: &str) -> bool {
         self.host.stamped(head)
     }

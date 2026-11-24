@@ -717,3 +717,6 @@ fn check_late_verdict(status: &str, code: i32, answer: &str, expected: &str) {
 
 #[path = "review_cmd/late.rs"]
 mod late;
+
+#[path = "review_cmd/replay.rs"]
+mod replay;

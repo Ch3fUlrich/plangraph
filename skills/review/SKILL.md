@@ -28,9 +28,17 @@ Use grep for text that is not a symbol.
    fails without the change; a test that cannot fail (asserts nothing, mocks the thing
    under test, takes the fallback path) is a finding. Check the test exercises the path
    production takes.
-   For each fails-at-base note, replay the quoted pytest node IDs at the pinned
-   base in the same scrubbed environment and compare the fresh output to the claim
-   (the claim side is `skills/batch-writer/SKILL.md` step 4).
+   A writer-host replay receipt satisfies a fails-at-base replay when its base and
+   head match the assigned package and it records the exact committed-base claim.
+   Otherwise replay the quoted pytest node IDs at the pinned base in the same
+   scrubbed environment. Use `TESTS:` only for commands you ran yourself.
+
+   Native writer reviews require the bound writer-host receipt. Standalone reviews
+   can use a matching owned fast-check receipt when available. An inactive pytest
+   backend needs a conclusive pair on an applicable backend. A base pass or a
+   base-side error needs a revision-bound exception and a head body pass. For a
+   deferred native part, pass `--native-part <writer-run-id>` to `plangraph review` with the
+   writer's spawner state. The batch review prompt must show the part's receipt.
 3. **Codebase fit.** Duplication of an existing helper, a fact stated in two places
    instead of one source of truth, a file over the 400-line limit, a unit doing two
    jobs, style unlike its neighbours, a CHANGELOG or doc update missing.

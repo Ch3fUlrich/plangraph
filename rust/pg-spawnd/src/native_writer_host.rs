@@ -323,24 +323,15 @@ impl Driver for Host {
         .map(|commits| !commits.is_empty())
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
-        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
-        if self.git(&["rev-parse", "HEAD"])? != head {
-            return Err(format!("worktree is not at {head}"));
-        }
-        let stamp = self.stamp(head)?;
-        fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
-            .map_err(|e| e.to_string())?;
-        // The turns up to this head are bound to it before the gates run, so a head whose gate
-        // fails keeps its own output and the next head starts after it.
-        self.session_excerpt(&stamp)?;
-        let log = self.checks()?;
-        // The exact-head gate output, named in the review brief next to the stamp.
-        fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
-        fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
-            .map_err(|e| e.to_string())
+        self.run_fast_checks(head)
+    }
+    fn check_receipt(&self, head: &str) -> Result<Option<Value>, String> {
+        serde_json::to_value(self.replay_receipt(head)?)
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
     fn stamped(&mut self, head: &str) -> bool {
-        self.stamp(head).is_ok_and(|stamp| stamp.is_file())
+        self.admitted_replay(head).is_ok()
     }
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
         self.review_run(head, previous)
@@ -428,6 +419,8 @@ pub(crate) use commands::{execute, resume, resume_saved};
 mod base;
 #[path = "native_writer_context.rs"]
 mod context;
+#[path = "native_writer_replay.rs"]
+mod replay;
 #[path = "native_writer_review.rs"]
 mod review;
 #[path = "native_writer_review_route.rs"]

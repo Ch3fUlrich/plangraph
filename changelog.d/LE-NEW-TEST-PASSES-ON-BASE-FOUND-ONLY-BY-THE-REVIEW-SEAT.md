@@ -1,0 +1,1 @@
+- Replay added and changed tests against committed base code before native review and include the exact writer-host outcomes in the review prompt.

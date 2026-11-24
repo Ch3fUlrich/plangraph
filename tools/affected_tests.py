@@ -16,7 +16,8 @@ import time
 import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pgtest import affected_pytest, keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
+from pgtest import (OUTCOME_PLUGIN, affected_pytest, build_fleet, keeper_postgres_files,
+                    postgres_bin, run_keeper_postgres, stage_fleet, test_environment)
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
@@ -25,39 +26,6 @@ QUIET_FLAGS = ["-q", "--tb=short", "--no-header"]
 QUIET_DURATIONS = ["--durations-min=1.0"]
 # A failed run with at most this many failed ids is rerun to name flakes.
 MAX_RERUN_FAILURES = 50
-# Controller-only outcome recorder (xdist workers carry workerinput and stay silent),
-# written to a temp dir and loaded with -p; .pytest_cache is never read.
-OUTCOME_PLUGIN = """import json, os
-_outcomes = {}
-_config = None
-
-
-def pytest_configure(config):
-    global _config
-    _config = config
-
-
-def pytest_runtest_logreport(report):
-    if hasattr(_config, "workerinput"):
-        return
-    if report.failed:
-        _outcomes[report.nodeid] = "failed"
-    elif _outcomes.get(report.nodeid) != "failed":
-        if report.when == "call" and report.passed:
-            _outcomes[report.nodeid] = "passed"
-        elif report.skipped:
-            _outcomes[report.nodeid] = "skipped"
-
-
-def pytest_sessionfinish(session):
-    if not hasattr(session.config, "workerinput"):
-        # xdist's scheduler exists only when workers were really started.
-        workers = session.config.pluginmanager.get_plugin("dsession") is not None
-        with open(os.environ["AFFECTED_OUTCOMES"], "w") as out:
-            json.dump({"outcomes": _outcomes, "workers": workers}, out)
-"""
-
-
 def read_record(text):
     """(outcomes, workers started) from a recorder file; anything malformed is ({}, False)."""
     try:
@@ -731,9 +699,7 @@ def main(root=None):
             # already built pg-spawnd in the worktree that launched the hook.
             print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
             try:
-                build = subprocess.run(
-                    ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'pg-spawnd'],
-                    cwd=root, env=env)
+                build = build_fleet(root, env)
                 if build.returncode:
                     return build.returncode
             except OSError as error:
@@ -745,12 +711,8 @@ def main(root=None):
                     if not args.collect_only and importlib.util.find_spec("xdist") is not None else [])
         quiet = [] if args.loud else QUIET_FLAGS
         with affected_pytest() as (scratch, run_pytest):
-            if fleet:
-                staged = str(Path(scratch) / ('pg-spawnd.exe' if os.name == 'nt' else 'pg-spawnd'))
-                verify = subprocess.run([sys.executable, 'tests/_spawnd.py', staged], cwd=root, env=env)
-                if verify.returncode:
-                    return verify.returncode
-                env["PLANGRAPH_TEST_FLEET_SPAWND"] = staged
+            if fleet and (code := stage_fleet(root, scratch, env)):
+                return code
             if args.collect_only:
                 result = run_pytest([sys.executable, "-m", "pytest", *parallel, "--durations=30",
                                      "--collect-only",

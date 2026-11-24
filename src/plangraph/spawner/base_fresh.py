@@ -142,21 +142,34 @@ def _native_review_base(service, record, card):
         writer = service.result(run_id)
     except (AttributeError, OSError, ValueError):
         return None
-    if (writer.get('run_id') != run_id or writer.get('run_kind') != 'native-codex'
+    if (not isinstance(writer, dict) or writer.get('run_id') != run_id or writer.get('run_kind') != 'native-codex'
             or writer.get('role') != 'implement' or writer.get('status') != 'running'
             or writer.get('base_admitted') is not True or writer.get('overflow_remote')
             or writer.get('origin_receipt')):
         return None
     review = writer.get('review_base') or {}
     checks = writer.get('fast_checks') or {}
+    if not isinstance(review, dict) or not isinstance(checks, dict):
+        return None
+    replay = checks.get('replay')
+    if (not isinstance(replay, dict) or not isinstance(replay.get('id'), str)
+            or not re.fullmatch(r'[0-9a-f]{32}', replay['id'])
+            or not isinstance(replay.get('tests'), list)
+            or not isinstance(replay.get('committed_base_claims'), list)
+            or replay != card.get('test_replay')):
+        return None
     previous = writer.get('review') or {}
+    if not isinstance(previous, dict):
+        return None
     head, base = diff.get('head'), review.get('base')
     if not all(isinstance(sha, str) and re.fullmatch(r'[0-9a-f]{40}', sha)
                for sha in (head, base, review.get('main'), review.get('observed_main'))):
         return None
     delta = previous.get('head') if previous.get('verdict') == 'REQUEST_CHANGES' else None
     if (head != writer.get('final_head') or head != review.get('head')
-            or checks != {'head': head, 'status': 'passed'}
+            or checks.get('head') != head or checks.get('base') != base
+            or checks.get('status') != 'passed'
+            or replay.get('head') != head or replay.get('base') != base
             or base != writer.get('base_sha')
             or diff.get('base') not in (base, delta) or not diff.get('base')
             or review.get('mode') not in ('current', 'rebased', 'conflict')):
@@ -173,7 +186,9 @@ async def admit_base(service, record, card, *, launch=False):
     card = card or {}
     repo = record.get('review_source') or record.get('cwd') or getattr(service.runner, 'default_cwd', None) or os.getcwd()
     native = await asyncio.to_thread(_native_review_base, service, record, card)
-    if native is not None:
+    if record.get('role') == 'review' and card.get('native_writer_run') is not None and native is None:
+        result = dict(ok=False, reason='native_review_replay_refused', behind=None)
+    elif native is not None:
         conflict = (native['main'], native['observed_main']) if native['mode'] == 'conflict' else None
         result = await asyncio.to_thread(_check, card['diff_ref']['repo'], default='main',
                                          ref=native['head'], conflict_base=conflict)

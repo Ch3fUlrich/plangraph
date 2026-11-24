@@ -104,3 +104,26 @@ pub(super) fn check_review_replaces_unreadable_run(host: &mut Host, head: &str, 
         assert!(!pending.exists());
     }
 }
+
+#[test]
+fn late_review_rejects_pending_and_ready_receipts_for_a_different_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let pending = dir.path().join("late-review-h.json");
+    let old = json!({"base":"b1","head":"h","id":"first"});
+    for active in [
+        json!({"base":"b2","head":"h","id":"first"}),
+        json!({"base":"b1","head":"h","id":"second"}),
+    ] {
+        let old_request = json!({"head":"h","run_id":"run-old","test_replay_binding":old});
+        let ready = pending.with_extension("ready.json");
+        crate::late_review::save_pending(&pending, &old_request).unwrap();
+        crate::late_review::save_pending(&ready, &old_request).unwrap();
+        assert!(
+            crate::late_review::recover(dir.path(), &pending, "h", &active)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!pending.exists());
+        assert!(!ready.exists());
+    }
+}

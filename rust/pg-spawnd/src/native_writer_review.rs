@@ -5,11 +5,7 @@ use crate::{late_review, native_writer::Driver};
 use pg_worker_core::review_split::REVIEW_OUTPUT_SECTION;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 /// The diff base of a review card: the previous review's head when the head moved on, else
 /// the batch base. A re-review of the same head (after a refuted finding) would otherwise
@@ -73,14 +69,6 @@ impl Host {
                     .is_ok()
             }),
         )
-    }
-    /// Fast-checks stamp of `head`, in the worktree's own git directory.
-    pub(super) fn stamp(&self, head: &str) -> Result<PathBuf, String> {
-        if head.len() != 40 || !head.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err("invalid head".into());
-        }
-        let gitdir = self.git(&["rev-parse", "--absolute-git-dir"])?;
-        Ok(Path::new(&gitdir).join("fast-checks").join(head))
     }
     /// The repository's seconds-fast gates present in the checkout: file size, new-code
     /// language, changelog/docs, commit trailers and, with a words file, the private scrub;
@@ -308,15 +296,17 @@ impl Host {
         head: &str,
         previous: Option<&Value>,
     ) -> Result<Value, String> {
-        let base = self.git(&["rev-parse", &format!("{}^{{commit}}", self.base_pin())])?;
+        let receipt = self.admitted_replay(head)?;
+        let base = receipt.base.as_str();
+        let binding = json!({"id":receipt.id, "base":base, "head":head});
+        let evidence = receipt.evidence();
         let pending = self.reviews.join(format!("late-review-{head}.json"));
-        if let Some(result) = late_review::recover(&self.state, &pending, head)? {
+        if let Some(result) = late_review::recover(&self.state, &pending, head, &binding)? {
             return Ok(result);
         }
         self.reviews_started += 1;
         let tag = format!("{}-{}", &head[..8.min(head.len())], self.reviews_started);
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
-        let base = base.as_str();
         let prev =
             previous.and_then(|review| Some((review["head"].as_str()?, review["text"].as_str()?)));
         let skill = self.skill("review").unwrap_or_default();
@@ -343,13 +333,14 @@ impl Host {
         });
         let mut card = json!({"estimate_tokens":300000, "max_min":max_min, "stall_min":20,
             "repository_review_required":true, "review_workspace":true,
-            "native_writer_run":self.run_id,
+            "native_writer_run":self.run_id, "test_replay":receipt,
             "diff_ref":{"repo":self.repo, "base":self.review_delta_base(base, head, prev), "head":head}});
         if let Some(item) = item {
             card["item_key"] = json!(item);
         }
         if self.review_override.is_none() {
-            if let Some(deferred) = self.review_preflight(&self.repo, &card, &families, head)? {
+            if let Some(mut deferred) = self.review_preflight(&self.repo, &card, &families, head)? {
+                deferred["test_replay"] = card["test_replay"].clone();
                 return Ok(deferred);
             }
         }
@@ -364,6 +355,7 @@ impl Host {
         let versioned =
             pg_worker_core::writer_families::render_review_brief(&context, "", &trusted_python)?;
         let prompt = self.review_prompt(base, head, prev, &families, &versioned, &skill)?;
+        let prompt = format!("{prompt}\n{evidence}");
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         let serialized_card = card.to_string();
@@ -430,7 +422,7 @@ impl Host {
             let started = record["started"]
                 .as_f64()
                 .unwrap_or_else(pg_worker_core::run::finalize::now);
-            let request = json!({"head":head,"run_id":record["run_id"],"expected_leg":self.review_override.as_ref().map(|(leg, _)| leg),
+            let request = json!({"head":head,"test_replay_binding":binding,"run_id":record["run_id"],"expected_leg":self.review_override.as_ref().map(|(leg, _)| leg),
                 "expected_end":started + f64::from(max_min * 60),"changed_paths":paths});
             let pending = self.reviews.join(format!("late-review-{head}.json"));
             late_review::save_pending(&pending, &request)?;
@@ -464,6 +456,7 @@ impl Host {
         let text = verdict["text"].as_str().unwrap_or_default();
         atomic_write_private(&path, text.as_bytes()).map_err(|e| e.to_string())?;
         verdict["path"] = json!(path);
+        verdict["test_replay_binding"] = binding;
         Ok(verdict)
     }
 }

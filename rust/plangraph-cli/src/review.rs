@@ -19,6 +19,8 @@ mod completion;
 #[path = "review_outcome.rs"]
 mod outcome;
 use outcome::evaluate_seat_record;
+#[path = "review_replay.rs"]
+mod replay;
 
 #[derive(Debug, Clone)]
 pub struct ReviewArgs {
@@ -33,6 +35,7 @@ pub struct ReviewArgs {
     pub no_fetch: bool,
     pub dry_run: bool,
     pub seats: bool,
+    pub native_parts: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,7 +56,7 @@ pub struct SeatOutcome {
 }
 
 pub fn usage() -> &'static str {
-    "usage: plangraph review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] [--approval <path>] [--state <path>] [--wait <secs>] [--no-fetch] [--dry-run] [--seats]"
+    "usage: plangraph review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] [--approval <path>] [--state <path>] [--wait <secs>] [--no-fetch] [--dry-run] [--seats] [--native-part <run-id> ...]"
 }
 
 pub fn parse_args(args: &[String]) -> Result<Option<ReviewArgs>, String> {
@@ -71,6 +74,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<ReviewArgs>, String> {
     let mut no_fetch = false;
     let mut dry_run = false;
     let mut seats = false;
+    let mut native_parts = Vec::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -98,6 +102,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<ReviewArgs>, String> {
             "--no-fetch" => no_fetch = true,
             "--dry-run" => dry_run = true,
             "--seats" => seats = true,
+            "--native-part" => native_parts.push(next_val(&mut i, flag)?),
             other => return Err(format!("unknown argument: {other}\n{}", usage())),
         }
         i += 1;
@@ -117,6 +122,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<ReviewArgs>, String> {
         no_fetch,
         dry_run,
         seats,
+        native_parts,
     }))
 }
 
@@ -420,13 +426,22 @@ fn review_group(
     families: &[String],
     group: Option<&WriterGroup>,
 ) -> Result<Vec<SeatOutcome>, String> {
-    let base_card = make_card(
+    let mut base_card = make_card(
         &resolved.repo_root,
         &resolved.base_sha,
         &resolved.head_sha,
         args.item.as_deref(),
         None,
     );
+    let evidence = replay::Evidence::load(resolved, state_dir, &args.native_parts)?;
+    let mut base_prompt = build_base_prompt(
+        &resolved.base_sha,
+        &resolved.head_sha,
+        args.item.as_deref(),
+        focus_text,
+        group,
+    );
+    evidence.add(&mut base_card, &mut base_prompt);
     let route_card_path = work.join("route-card.json");
     fs::write(
         &route_card_path,
@@ -447,13 +462,6 @@ fn review_group(
         .cloned()
         .ok_or_else(|| "refused: spawner route returned no eligible review legs".to_owned())?;
 
-    let base_prompt = build_base_prompt(
-        &resolved.base_sha,
-        &resolved.head_sha,
-        args.item.as_deref(),
-        focus_text,
-        group,
-    );
     let measured = measure_diff_files(&resolved.repo_root, &resolved.base_sha, &resolved.head_sha)?;
     let tool_mode = first_leg["tool_mode"].as_str();
     let harness = first_leg["harness"].as_str();
@@ -486,6 +494,9 @@ fn review_group(
             } else {
                 (base_card.clone(), base_prompt.clone())
             };
+            if total > 1 && !base_card["writer_test_replays"].is_null() {
+                card["writer_test_replays"] = base_card["writer_test_replays"].clone();
+            }
             if !mandatory_inline {
                 place_on_worker_host(&mut card);
             }

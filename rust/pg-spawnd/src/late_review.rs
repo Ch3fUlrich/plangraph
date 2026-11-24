@@ -51,22 +51,27 @@ fn remove(path: &Path) -> Result<(), String> {
     }
 }
 
-pub(crate) fn recover(state: &Path, pending: &Path, head: &str) -> Result<Option<Value>, String> {
+pub(crate) fn recover(
+    state: &Path,
+    pending: &Path,
+    head: &str,
+    binding: &Value,
+) -> Result<Option<Value>, String> {
     let _lock = receipt_lock(pending)?;
     let ready = pending.with_extension("ready.json");
     if let Some(result) = read_pending(&ready)? {
-        if result["head"] != head {
-            return Err("late review head mismatch".into());
-        }
-        remove(pending)?;
         remove(&ready)?;
-        return Ok(Some(result));
+        if result["head"] == head && result["test_replay_binding"] == *binding {
+            remove(pending)?;
+            return Ok(Some(result));
+        }
     }
     let Some(request) = read_pending(pending)? else {
         return Ok(None);
     };
-    if request["head"] != head {
-        return Err("late review head mismatch".into());
+    if request["head"] != head || request["test_replay_binding"] != *binding {
+        discard(pending, &request)?;
+        return Ok(None);
     }
     let record = match read_run(state, &request) {
         Ok(record) => record,
@@ -93,7 +98,7 @@ fn read_run(state: &Path, request: &Value) -> Result<Value, String> {
 pub(crate) fn pending_result(request: &Value) -> Value {
     json!({
         "status":"review_running","head":request["head"],"run_id":request["run_id"],
-        "expected_end":request["expected_end"],
+        "expected_end":request["expected_end"], "test_replay_binding":request["test_replay_binding"],
         "reason":format!("review_running: {} expected end {} (Unix time)",
             request["run_id"], request["expected_end"])
     })
@@ -130,6 +135,7 @@ fn publish(
     };
     atomic_write_private(&file, artifact.as_bytes()).map_err(|e| e.to_string())?;
     result["path"] = json!(file);
+    result["test_replay_binding"] = request["test_replay_binding"].clone();
     Ok(Some(result))
 }
 
@@ -268,10 +274,14 @@ mod tests {
         assert!(pending.with_extension("txt").is_file());
         assert!(!pending.exists());
         fs::remove_file(run).unwrap();
-        let result = recover(dir.path(), &pending, "abc").unwrap().unwrap();
+        let result = recover(dir.path(), &pending, "abc", &Value::Null)
+            .unwrap()
+            .unwrap();
         assert_eq!(result["run_id"], "run-fixture");
         assert_eq!(result["verdict"], "ACCEPT");
-        assert!(recover(dir.path(), &pending, "abc").unwrap().is_none());
+        assert!(recover(dir.path(), &pending, "abc", &Value::Null)
+            .unwrap()
+            .is_none());
     }
     #[test]
     fn failed_run_with_accept_text_retires_without_a_verdict() {
@@ -308,13 +318,17 @@ mod tests {
                 ])
                 .unwrap();
             } else {
-                assert!(recover(dir.path(), &pending, "abc").unwrap().is_none());
+                assert!(recover(dir.path(), &pending, "abc", &Value::Null)
+                    .unwrap()
+                    .is_none());
             }
             assert!(!pending.exists());
             assert!(!checkout.exists());
             assert!(!pending.with_extension("txt").exists());
             assert!(!pending.with_extension("ready.json").exists());
-            assert!(recover(dir.path(), &pending, "abc").unwrap().is_none());
+            assert!(recover(dir.path(), &pending, "abc", &Value::Null)
+                .unwrap()
+                .is_none());
         }
     }
 

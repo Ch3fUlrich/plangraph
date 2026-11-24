@@ -121,7 +121,12 @@ card = json.loads(Path(opts["card"][1:]).read_text()) if opts.get("card", "").st
 ORDER = ("google", "openai", "deepseek", "xiaomi") if MODE in ("family_order", "fenced_pass") else ("xiaomi",)
 SEAT_FAMILY = next(f for f in ORDER if f not in opts["writer_family"])
 with LOG.open("a", encoding="utf-8") as fh:
-    fh.write(json.dumps({{"verb": verb, "writer_families": opts["writer_family"], "seat_family": SEAT_FAMILY, "diff_ref": card.get("diff_ref"), "cwd": opts.get("cwd"), "review_workspace": card.get("review_workspace"), "repository_review_required": card.get("repository_review_required")}}) + "\n")
+    row = {{"verb": verb, "writer_families": opts["writer_family"], "seat_family": SEAT_FAMILY, "diff_ref": card.get("diff_ref"), "cwd": opts.get("cwd"), "review_workspace": card.get("review_workspace"), "repository_review_required": card.get("repository_review_required")}}
+    if card.get("writer_test_replays"):
+        row["writer_test_replays"] = card["writer_test_replays"]
+        if "prompt_file" in opts:
+            row["prompt"] = Path(opts["prompt_file"]).read_text()
+    fh.write(json.dumps(row) + "\n")
 
 if verb == "route":
     # Budget for the review contract and one small patch while still forcing multiple patches to split.

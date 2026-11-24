@@ -21,6 +21,10 @@ pub(crate) trait Driver {
     fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String>;
     /// Run the fast checks on `head`; success writes that head's stamp.
     fn fast_checks(&mut self, head: &str) -> Result<(), String>;
+    /// Evidence from the fast checks, when the driver owns a replay gate.
+    fn check_receipt(&self, _head: &str) -> Result<Option<Value>, String> {
+        Ok(None)
+    }
     /// Whether the fast-checks stamp for exactly `head` exists.
     fn stamped(&mut self, head: &str) -> bool;
     /// Start one review run on `head` and return its structured verdict, read from the
@@ -482,7 +486,7 @@ fn writer_attempt(
         }
         idle = 0;
         checked_head = Some(head.clone());
-        record["fast_checks"] = json!({"head":head,"status":"running"});
+        record["fast_checks"] = json!({"base":base,"head":head,"status":"running"});
         driver.save(record).map_err(|e| (6, e))?;
         let started = stage::now();
         let checked = driver.fast_checks(&head);
@@ -501,7 +505,10 @@ fn writer_attempt(
             continue;
         }
         fixes = 0;
-        record["fast_checks"] = json!({"head":head, "status":"passed"});
+        record["fast_checks"] = json!({"base":base, "head":head, "status":"passed"});
+        if let Some(receipt) = driver.check_receipt(&head).map_err(|e| (7, e))? {
+            record["fast_checks"]["replay"] = receipt;
+        }
         driver.save(record).map_err(|e| (6, e))?;
         let previous =
             (record["review"]["verdict"] == "REQUEST_CHANGES").then(|| record["review"].clone());
@@ -528,6 +535,7 @@ fn writer_attempt(
             final_gates(driver, &head)?;
             record["review_status"] = json!(REVIEW_DEFERRED);
             record["review_causes"] = review["causes"].clone();
+            record["deferred_review"] = review;
             record["status_line"] = json!("DEFERRED");
             return Ok(0);
         }

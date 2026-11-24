@@ -27,7 +27,7 @@ pub(super) fn scrub_test_env(command: &mut Command) {
     }
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<String> {
+pub(super) fn git(root: &Path, args: &[&str]) -> Result<String> {
     let result = git_command(root)
         .args(args)
         .output()
@@ -55,23 +55,26 @@ fn valid_node(node: &str) -> bool {
         && !node.chars().any(char::is_control)
 }
 
-pub(super) fn verify(root: &Path, base: &str) -> Result<()> {
-    let sha = git(
+pub(super) fn resolve(root: &Path, revision: &str) -> Result<String> {
+    git(
         root,
         &[
             "rev-parse",
             "--verify",
             "--end-of-options",
-            &format!("{base}^{{commit}}"),
+            &format!("{revision}^{{commit}}"),
         ],
-    )?;
-    let sha = sha.trim();
+    )
+    .map(|sha| sha.trim().to_owned())
+}
+
+pub(super) fn verify(root: &Path, sha: &str, head: &str) -> Result<Vec<(String, String)>> {
     let claims = git(
         root,
         &[
             "log",
             "--format=%(trailers:key=Fails-at-Base,valueonly,unfold)",
-            &format!("{sha}..HEAD"),
+            &format!("{sha}..{head}"),
         ],
     )?;
     let nodes = claims
@@ -85,8 +88,16 @@ pub(super) fn verify(root: &Path, base: &str) -> Result<()> {
         })
         .collect::<Result<std::collections::BTreeSet<_>>>()?;
     if nodes.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
+    let checkout = checkout(root, sha)?;
+    nodes
+        .into_iter()
+        .map(|node| replay(checkout.path(), sha, node).map(|summary| (node.to_owned(), summary)))
+        .collect()
+}
+
+pub(super) fn checkout(root: &Path, sha: &str) -> Result<tempfile::TempDir> {
     let checkout = tempfile::tempdir().map_err(|e| e.to_string())?;
     let path = checkout
         .path()
@@ -105,13 +116,10 @@ pub(super) fn verify(root: &Path, base: &str) -> Result<()> {
         ],
     )?;
     git(checkout.path(), &["checkout", "--quiet", "--detach", sha])?;
-    for node in nodes {
-        replay(checkout.path(), sha, node)?;
-    }
-    Ok(())
+    Ok(checkout)
 }
 
-fn replay(checkout: &Path, sha: &str, node: &str) -> Result<()> {
+fn replay(checkout: &Path, sha: &str, node: &str) -> Result<String> {
     let mut command = Command::new("python3");
     command
         .args(["-m", "pytest", "-q", "--color=no", "--", node])
@@ -134,7 +142,12 @@ fn replay(checkout: &Path, sha: &str, node: &str) -> Result<()> {
                 })
             }) =>
         {
-            Ok(())
+            Ok(stdout
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("pytest test-body failure")
+                .to_owned())
         }
         _ => Err(format!(
             "could not reproduce failure of {node} at base {sha}"

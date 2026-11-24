@@ -235,12 +235,13 @@ from types import SimpleNamespace
 from plangraph.spawner.base_fresh import admit_base
 
 repo, base, head, main = sys.argv[1:]
+replay = dict(id='a' * 32, base=base, head=head, tests=[], committed_base_claims=[])
 writer = dict(run_id='run-fixture', run_kind='native-codex', role='implement', status='running',
               base_admitted=True, repo=repo, base_sha=base, final_head=head,
-              fast_checks=dict(head=head, status='passed'),
+              fast_checks=dict(base=base, head=head, status='passed', replay=replay),
               review_base=dict(head=head, base=base, main=base, observed_main=main, mode='conflict'))
 service = SimpleNamespace(result=lambda _: writer, _save=lambda _: None)
-card = dict(review_workspace=True, native_writer_run='run-fixture',
+card = dict(review_workspace=True, native_writer_run='run-fixture', test_replay=replay,
             diff_ref=dict(repo=repo, base=base, head=head))
 def check(card, launch=False):
     record = dict(role='review', cwd=repo)
@@ -257,6 +258,11 @@ for launch in (False, True):
     writer['fast_checks']['status'] = 'failed'
     assert check(card, launch)[0] is False
     writer['fast_checks']['status'] = 'passed'
+    assert check(dict(card, test_replay=None), launch)[1]['reason'] == 'native_review_replay_refused'
+    assert check(dict(card, test_replay=dict(replay, id='b' * 32)), launch)[1]['reason'] == 'native_review_replay_refused'
+    writer['fast_checks']['base'] = main
+    assert check(card, launch)[1]['reason'] == 'native_review_replay_refused'
+    writer['fast_checks']['base'] = base
 "#])
         .arg(&host.repo)
         .args([&base, &head, &main])
