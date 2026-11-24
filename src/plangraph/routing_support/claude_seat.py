@@ -151,8 +151,11 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
 
 
 def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
-                           worktree=None, review_target=None, leases=None):
-    """Apply Sonnet's review profile and return the read-only fallback event, if any."""
+                           worktree=None, review_target=None, leases=None, allocate_slot=None):
+    """Apply Sonnet's review profile and return the read-only fallback event, if any.
+
+    Without a worker target the build goes into the slot ``allocate_slot(job_id, leases)`` returns
+    (the spawner passes its allocator; this module never imports the spawner)."""
     from plangraph.planner.legs import REVIEW_SONNET
 
     if role != "review" or leg is None or leg.id != REVIEW_SONNET or leg.tool_mode != "tools":
@@ -173,8 +176,9 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     target = Path(review_target).resolve() if review_target else None
     slot = None
     if target is None:
-        from plangraph.spawner.host_ready_source import review_cargo_slot
-        slot = review_cargo_slot(job_id, leases).resolve()
+        if allocate_slot is None:
+            raise ValueError("a review seat needs a worker target or a slot allocator")
+        slot = allocate_slot(job_id, leases).resolve()
     scratch = Path(mkdtemp(prefix="plangraph-claude-review-",
                            dir=target.parent if target else slot)).resolve()
     # Removing the run directory removes the seat's slot and its build with it.

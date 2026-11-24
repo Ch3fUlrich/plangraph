@@ -225,7 +225,9 @@ def _configure_seat(tmp_path, monkeypatch, configured, outside_temp):
     monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
     leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
     argv, env, run_dirs, leases = claude_access_args("review"), {}, {}, {}
-    claude_seat.configure_review_tests(argv, env, leg, "review", run_dirs, "job1", leases=leases)
+    from plangraph.spawner.host_ready_source import review_cargo_slot
+    claude_seat.configure_review_tests(argv, env, leg, "review", run_dirs, "job1", leases=leases,
+                                       allocate_slot=review_cargo_slot)
     return home, argv, env, run_dirs, leases
 
 
@@ -351,3 +353,15 @@ def test_the_runners_cleanup_takes_a_review_slots_lock_file_and_leaves_other_dir
     remove_run_dir(str(other))
     assert not slot.exists() and not Path(str(slot) + ".plangraph-lock").exists()
     assert not other.exists()
+
+
+def test_a_review_seat_with_neither_target_nor_allocator_is_refused_not_built_under_tmp():
+    from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
+    from plangraph.routing_support import claude_seat
+
+    leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
+    argv = claude_access_args("review")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
+        with pytest.raises(ValueError, match="slot allocator"):
+            claude_seat.configure_review_tests(argv, {}, leg, "review", {}, "job1")
