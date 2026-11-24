@@ -96,6 +96,9 @@ fn batch_card(items: &[Task], repo: &str, reviews: &str, policy: &Policy) -> Val
     }
     c
 }
+/// The native-codex identity every commit of a feeder run carries (deploy/feeder/house-rules.md);
+/// the commit gate refuses a commit without a Writer trailer.
+const WRITER_TRAILER: &str = "Writer: codex/gpt-6.2-sol-medium (native-codex spawner run)";
 /// The shared batch writer input (`PLANGRAPH-BATCH-INPUT-V1`) that pg-spawnd renders into the
 /// `# Items` and `# Run values` sections, so a batch gets the batch-writer skill. The native
 /// worker enforces its own fast-check and review policy; the values here are the brief's text.
@@ -115,6 +118,7 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
         .iter()
         .map(|t| format!("Plan-Item: {}", t.key))
         .collect();
+    trailers.push(WRITER_TRAILER.into());
     trailers.push("Changelog: a changelog.d/<ITEM>.md fragment, or a Changelog: skip (<reason>) trailer on every commit without one".into());
     let slug = items[0]
         .key
