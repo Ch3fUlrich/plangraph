@@ -1,12 +1,13 @@
 # Session cutover model
 
-`Model::apply` is the transition table for one orchestrator role moving from today's waits to
-the digest wait: waiter, pending wake, receipt, supervised recycle and per-message handling
-records. Each event is one atomic transition; a refused event changes nothing. The model owns no
-processes, files or clocks, and switches nothing live.
+`Model::apply` is the transition table for the urgent-event timing of one orchestrator role on
+the digest wait: sources and scans, the wait, the wake, the supervisor's takeover and operator
+alarm, and the role switch with its activation gate. Each event is one atomic transition; a
+refused event changes nothing. The model owns no processes, files or clocks, and switches
+nothing live.
 
-The invariant list, the transition table, the bounds of the exhaustive search and the map from
-every review finding to its scenario test are in
+The invariant list, the budgets, the bounds of the exhaustive search and the map from every
+review finding to its scenario test are in
 [docs/session-cutover-model.md](../../docs/session-cutover-model.md). Sibling models:
 [launch recovery](../pg-launch-recovery-model/README.md) and
 [session admission](../pg-session-admission-model/README.md).

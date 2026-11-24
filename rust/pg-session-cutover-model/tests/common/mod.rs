@@ -3,34 +3,17 @@
 use pg_session_cutover_model::*;
 use std::collections::{HashMap, VecDeque};
 
-/// Size of one event line in a test digest.
-pub const EVENT_BYTES: u16 = 100;
-
-pub const URGENT: fn(u8) -> EventSpec = |source| EventSpec {
-    class: Class::Urgent,
-    source,
-    bytes: EVENT_BYTES,
-};
-pub const ORDINARY: fn(u8) -> EventSpec = |source| EventSpec {
-    class: Class::Ordinary,
-    source,
-    bytes: EVENT_BYTES,
-};
-pub fn of_class(class: Class, source: u8) -> EventSpec {
-    EventSpec {
-        class,
-        source,
-        bytes: EVENT_BYTES,
-    }
+pub fn event(class: UrgentClass, source: u8) -> EventSpec {
+    EventSpec { class, source }
 }
 
-/// A digest that holds the header and `n` event lines of a test.
-pub fn digest_of(p: &mut Params, n: u16) {
-    p.digest_bytes = HEADER_BYTES + n * EVENT_BYTES;
+/// One go-row event on `source`.
+pub fn go(source: u8) -> EventSpec {
+    event(UrgentClass::GoRow, source)
 }
 
-pub fn params(events: Vec<EventSpec>, messages: u8) -> Params {
-    Params::production(events, messages)
+pub fn params(events: Vec<EventSpec>) -> Params {
+    Params::production(events)
 }
 
 pub fn model(p: Params) -> Model {
@@ -60,7 +43,7 @@ pub fn activate(m: &mut Model) {
         &[
             Event::StartShadow,
             Event::SignOffShadow,
-            Event::DeployFence(Fence::Deployed),
+            Event::DeployFence,
             Event::DeployRecovery,
             Event::GrantGo,
             Event::Activate,
@@ -68,34 +51,15 @@ pub fn activate(m: &mut Model) {
     );
 }
 
-/// A session that is working and has armed its own wait.
-pub fn arm_first(m: &mut Model) {
-    run(
-        m,
-        &[
-            Event::Nudge,
-            Event::BeginTurn(0),
-            Event::Arm(0),
-            Event::EndTurn(0),
-        ],
-    );
-}
-
-/// Activated role; session 0 has armed its own wait, written handoff and card, and is idle.
-pub fn armed_ready(p: Params) -> Model {
+/// Activated role whose session has armed its own wait and is idle.
+pub fn armed_idle(p: Params) -> Model {
     let mut m = model(p);
     activate(&mut m);
     run(
         &mut m,
-        &[
-            Event::Nudge,
-            Event::BeginTurn(0),
-            Event::Arm(0),
-            Event::MarkReady(0),
-            Event::EndTurn(0),
-        ],
+        &[Event::Nudge, Event::BeginTurn, Event::Arm, Event::EndTurn],
     );
-    assert_eq!((m.life(0), m.waiter(0)), (Life::Idle, Waiter::Armed));
+    assert_eq!((m.life(), m.waiter()), (Life::Idle, Waiter::Armed));
     m
 }
 
@@ -103,28 +67,25 @@ pub fn scan_all(m: &mut Model) {
     run(m, &[Event::Scan(0), Event::Scan(1)]);
 }
 
-/// The supervised recycle up to adoption: ready marker and card, launch, confirm, adopt.
-pub fn recycle_to_adoption(m: &mut Model) {
-    run(m, &[Event::BeginRecycle, Event::Confirm, Event::Adopt]);
-}
-
-/// The same steps without the invariant check, for a model with a defect.
-pub fn recycle_to_adoption_unchecked(m: &mut Model) {
-    for e in [Event::BeginRecycle, Event::Confirm, Event::Adopt] {
-        m.apply(e).expect("allowed");
+/// Let `secs` pass, reading every source whenever a scan comes due.
+pub fn pass(m: &mut Model, secs: u16) {
+    for _ in 0..secs / TICK_SECS {
+        if m.apply(Event::Tick) == Err(Denied::Deadline) {
+            scan_all(m);
+            m.apply(Event::Tick).expect("time may pass after the scans");
+        }
     }
 }
 
 pub struct Report {
     pub states: usize,
-    pub transitions: usize,
     pub max_depth: usize,
     pub violation: Option<(Vec<Event>, Vec<Invariant>)>,
 }
 
-/// Visit every model reachable in at most `depth` events. Checks, on each transition:
-/// a refusal leaves the model unchanged; an applied event keeps every invariant; event
-/// stages and handling records never go backwards; time is never blocked with no way out.
+/// Visit every model reachable in at most `depth` events. Checks, on each transition: a refusal
+/// leaves the model unchanged; an applied event keeps every invariant; event stages never go
+/// back; time is never blocked with no way out.
 pub fn explore(
     seed: Model,
     alphabet: Vec<Event>,
@@ -134,18 +95,16 @@ pub fn explore(
     let mut index: HashMap<Model, usize> = HashMap::from([(seed.clone(), 0)]);
     let mut parents: Vec<Option<(usize, Event)>> = vec![None];
     let mut queue = VecDeque::from([(seed, 0usize, 0usize)]);
-    let (mut transitions, mut max_depth) = (0, 0);
+    let mut max_depth = 0;
     while let Some((state, id, d)) = queue.pop_front() {
         max_depth = max_depth.max(d);
         if d == depth {
             continue;
         }
-        let mut progress = false;
-        let mut tick_denied = false;
+        let (mut progress, mut tick_denied) = (false, false);
         for event in &alphabet {
             let mut next = state.clone();
             let result = next.apply(*event);
-            transitions += 1;
             visit(&state, *event, &result, &next);
             let bad = match result {
                 Err(denied) => {
@@ -155,7 +114,12 @@ pub fn explore(
                 }
                 Ok(_) => {
                     progress |= *event != Event::Tick && next != state;
-                    monotone(&state, &next, *event);
+                    for e in 0..state.event_count() {
+                        assert!(
+                            next.stage(e) >= state.stage(e),
+                            "event {e} went back on {event:?}"
+                        );
+                    }
                     next.violations()
                 }
             };
@@ -169,12 +133,11 @@ pub fn explore(
                 trace.reverse();
                 return Report {
                     states: index.len(),
-                    transitions,
                     max_depth,
                     violation: Some((trace, bad)),
                 };
             }
-            if result.is_ok() && !index.contains_key(&next) {
+            if !index.contains_key(&next) {
                 parents.push(Some((id, *event)));
                 index.insert(next.clone(), parents.len() - 1);
                 queue.push_back((next, parents.len() - 1, d + 1));
@@ -187,24 +150,8 @@ pub fn explore(
     }
     Report {
         states: index.len(),
-        transitions,
         max_depth,
         violation: None,
-    }
-}
-
-fn monotone(before: &Model, after: &Model, event: Event) {
-    for e in 0..before.event_count() {
-        assert!(
-            after.stage(e) >= before.stage(e),
-            "event {e} went back on {event:?}"
-        );
-    }
-    for m in 0..before.message_count() {
-        assert!(
-            after.handled(m) || !before.handled(m),
-            "message {m} lost its record on {event:?}"
-        );
     }
 }
 
@@ -213,31 +160,12 @@ pub fn is_gate(e: &Event) -> bool {
         e,
         Event::StartShadow
             | Event::SignOffShadow
-            | Event::DeployFence(_)
+            | Event::DeployFence
             | Event::DeployRecovery
             | Event::GrantGo
             | Event::RevokeGo
             | Event::Activate
             | Event::Rollback
-    )
-}
-
-pub fn is_recycle(e: &Event) -> bool {
-    matches!(
-        e,
-        Event::BeginRecycle
-            | Event::Confirm
-            | Event::AbortRecycle
-            | Event::Adopt
-            | Event::StopOk
-            | Event::StopFail
-    )
-}
-
-pub fn is_message(e: &Event) -> bool {
-    matches!(
-        e,
-        Event::SendMsg(_) | Event::ReadMsg { .. } | Event::HandleMsg { .. }
     )
 }
 

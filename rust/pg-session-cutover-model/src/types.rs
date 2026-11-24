@@ -1,3 +1,5 @@
+use crate::UrgentClass;
+
 /// Rollback switch of the role. `Off` is today's behaviour; `Shadow` writes digests only.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Mode {
@@ -6,26 +8,19 @@ pub enum Mode {
     Active,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Fence {
-    Absent,
-    /// Keeper-issued generation with one compare-and-set adoption before every stop.
-    Deployed,
-    /// A verified quiescent handoff stands in for the fence: no automatic recycle.
-    QuiescentHandoff,
-}
-
+/// What must be in place before a role is switched (A3 requirement 7a).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Gates {
-    pub fence: Fence,
+    /// The generation fence, or a verified quiescent handoff in its place.
+    pub fence: bool,
     pub recovery: bool,
+    /// A live GO for this role (rule 5.9).
     pub go: bool,
     pub shadow_ok: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Life {
-    Unlaunched,
     Idle,
     Active,
     Stopped,
@@ -43,31 +38,13 @@ pub enum Waiter {
 pub(crate) struct Session {
     pub life: Life,
     pub waiter: Waiter,
-    /// A queued task notification or direct message that re-invokes an idle session.
+    /// A queued task notification that re-invokes an idle session.
     pub notify: bool,
-    /// Not the keeper's current generation: its receipts, handling and waiter are refused.
-    pub fenced: bool,
-    /// Handoff and card written; cleared when a new turn starts, which makes them stale.
-    pub ready: bool,
-    pub cron: bool,
-    pub blocks: u8,
 }
 
 impl Session {
-    pub fn new(life: Life, fenced: bool) -> Self {
-        Self {
-            life,
-            waiter: Waiter::None,
-            notify: false,
-            fenced,
-            ready: false,
-            cron: false,
-            blocks: 0,
-        }
-    }
-
     pub fn live(&self) -> bool {
-        matches!(self.life, Life::Idle | Life::Active)
+        self.life != Life::Stopped
     }
 }
 
@@ -77,61 +54,28 @@ pub enum Stage {
     Occurred,
     /// Read by the collector into a digest (the scan cursor); a pending wake until a receipt.
     Detected,
-    /// Acknowledged by a session's receipt (the ack cursor).
+    /// Held by a reader: the session by its receipt, or the operator by the alarm.
     Received,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Evt {
-    pub class: crate::Class,
+    pub class: UrgentClass,
     pub source: u8,
     pub stage: Stage,
     pub age: u8,
-    /// Occurrence order, from 1; receipts follow it, not the event's index.
-    pub order: u8,
-    pub bytes: u16,
     /// Also handed to today's wake path (takeover, rollback, or a role not yet switched).
     pub escalated: bool,
-    /// A session's receipt covered it; only a receipt sets this.
+    /// The operator was told; the event is closed for the model.
+    pub alarmed: bool,
+    /// A session's receipt covered it.
     pub seen: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Home {
-    Future,
-    /// The role's durable inbox, read by the next session that is adopted.
-    Inbox,
-    Session(u8),
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct Msg {
-    pub home: Home,
-    pub read: bool,
-    /// The effect was done. The record is the stable-id handling record in the keeper.
-    pub acted: bool,
-    pub record: bool,
-    /// Present at the forward snapshot taken when the recycle began.
-    pub snap: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Recycle {
-    Idle,
-    /// Ready marker and handoff/card pair accepted, replacement launched, not yet confirmed.
-    Launching {
-        pred: u8,
-        succ: u8,
-    },
-    Confirmed {
-        pred: u8,
-        succ: u8,
-    },
-    /// The replacement is adopted; the predecessor is fenced and its stop is pending.
-    StopPending {
-        pred: u8,
-        succ: u8,
-    },
+impl Evt {
+    pub fn open(&self) -> bool {
+        matches!(self.stage, Stage::Occurred | Stage::Detected)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -141,32 +85,19 @@ pub enum Event {
     Scan(u8),
     Hang(u8),
     Heal(u8),
-    WaiterFire(u8),
-    WindowEnd(u8),
-    WaiterDie(u8),
-    BeginTurn(u8),
-    Arm(u8),
-    Receive(u8),
-    EndTurn(u8),
-    ToolUse(u8),
-    ArmCron(u8),
-    ClearCron(u8),
-    Crash(u8),
-    MarkReady(u8),
-    SendMsg(u8),
-    ReadMsg { msg: u8, session: u8 },
-    HandleMsg { msg: u8, session: u8 },
+    WaiterFire,
+    WaiterDie,
+    BeginTurn,
+    EndTurn,
+    Arm,
+    Receive,
+    Crash,
     Escalate(u8),
+    Alarm(u8),
     Nudge,
-    BeginRecycle,
-    Confirm,
-    AbortRecycle,
-    Adopt,
-    StopOk,
-    StopFail,
     StartShadow,
     SignOffShadow,
-    DeployFence(Fence),
+    DeployFence,
     DeployRecovery,
     GrantGo,
     RevokeGo,
@@ -177,9 +108,6 @@ pub enum Event {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outcome {
     Applied,
-    /// The Stop hook kept the turn open.
-    Blocked,
-    StopFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,11 +116,8 @@ pub enum Denied {
     Mode,
     Gate,
     Guard,
-    Fence,
-    /// The session is working, or its handoff is stale.
-    Active,
-    Cron,
-    Bound,
+    /// An urgent event is already past its alarm age.
+    Overdue,
     /// An obligation is due, so time may not pass.
     Deadline,
 }
@@ -201,30 +126,11 @@ pub enum Denied {
 pub enum Invariant {
     /// Req 7a: an active role has fence, recovery, a live GO and a passed shadow.
     ActivationGate,
-    /// Req 2: at most one live session is the current generation.
-    SingleCurrent,
-    /// Req 2: at most one live session holds an armed wait.
-    TwoArmed,
-    /// Req 2, 7: a recycle in flight has valid, distinct sessions and only an active role launches.
-    RecycleShape,
-    /// Req 3: no unhandled direct message sits on a stopped, fenced session.
-    MessageStranded,
-    /// Req 3: a handling record always follows the effect.
-    HandledWithoutAction,
-    /// Req 1: with a live current session, no urgent event stays unreceived past the bound.
+    /// Req 1: no urgent event is unread past its class bound; the fallback, the alarm and
+    /// a dead role are not exempt.
     UrgentBound,
-    /// Req 6: a digest, range header included, never exceeds its byte limit.
-    DigestOverBudget,
-    /// Req 6: a digest starts with its range header, so a cut output keeps it.
-    RangeNotFirst,
-    /// Req 6: an event is received only by a session's receipt, never by a scan.
+    /// An event is received only by a session's receipt or by the alarm, never by a scan.
     ReceivedUnread,
     /// Req 4: no active role stays asleep with nothing armed or woken beyond one supervisor pass.
     Unattended,
-    /// Req 2: no recycle took over a working session.
-    AdoptedOverActive,
-    /// Req 5: no session cron in an active role.
-    CronInActive,
-    /// Req 4: the Stop hook never exceeds its continuation cap.
-    StopCap,
 }

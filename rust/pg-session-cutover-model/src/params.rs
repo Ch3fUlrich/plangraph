@@ -1,60 +1,75 @@
 /// Seconds per `Tick`.
 pub const TICK_SECS: u16 = 10;
-/// "At once" for an urgent event, event to session receipt (rule 3.48, D-6578).
+/// "At once" for an urgent event, event to a reader (rule 3.48, D-6578): no class may exceed it.
 pub const URGENT_BOUND_SECS: u16 = 90;
-/// Age at which the supervisor hands an unreceived urgent event to today's wake path.
-pub const TAKEOVER_SECS: u16 = 70;
 /// Longest gap between two supervisor passes (the five-minute watchdog is too slow).
 pub const SUPERVISOR_SECS: u16 = 20;
 /// Longest gap between two reads of one source.
 pub const SCAN_SECS: u16 = 60;
-/// Consecutive Stop-hook blocks Claude Code 2.1.329 honours before it ends the turn.
-pub const STOP_BLOCK_CAP: u8 = 9;
-/// Longest digest: the fleet's Bash output limit. The range header counts against it.
-pub const DIGEST_BYTES: u16 = 8192;
-/// The range header every digest starts with (digest id, first and last event).
-pub const HEADER_BYTES: u16 = 64;
-/// Longest wait for a launched replacement to be confirmed and adopted, or aborted.
-pub const RECYCLE_SECS: u16 = 30;
-pub const MAX_SESSIONS: u8 = 3;
 pub const MAX_SOURCES: usize = 2;
-/// Most events one exploration may define: the occurrence counter is a byte.
+/// Most events one exploration may define.
 pub const MAX_EVENTS: usize = 64;
 /// Longest timer, in ticks, that the counters hold without overflow.
 pub const MAX_TICKS: u16 = 200;
 
+/// The urgent classes of A3 requirement 1, each with its own time budget.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Class {
-    Urgent,
-    Ordinary,
-    /// Router heartbeat and build-L1 beat: explicit classes that follow-ups do not replace.
-    Beat,
-    FollowUp,
+pub enum UrgentClass {
+    GoRow,
+    GrantAnswer,
+    MainRed,
+    RunFailed,
+    LeaseMargin,
+    RoleBlocked,
+}
+
+impl UrgentClass {
+    pub const ALL: [UrgentClass; 6] = [
+        UrgentClass::GoRow,
+        UrgentClass::GrantAnswer,
+        UrgentClass::MainRed,
+        UrgentClass::RunFailed,
+        UrgentClass::LeaseMargin,
+        UrgentClass::RoleBlocked,
+    ];
+
+    pub(crate) fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Ages, in seconds from occurrence, at which each hand-over must have happened: the wake
+/// path of today takes over (`takeover`), the operator is told (`alarm`), and the event is
+/// held by a reader (`bound`). Each step has one supervisor pass to run.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Budget {
+    pub takeover_secs: u16,
+    pub alarm_secs: u16,
+    pub bound_secs: u16,
+}
+
+impl Budget {
+    /// 90 s for every class until the A2 shadow latencies and the operator say otherwise.
+    pub const DEFAULT: Budget = Budget {
+        takeover_secs: 40,
+        alarm_secs: 60,
+        bound_secs: 90,
+    };
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct EventSpec {
-    pub class: Class,
+    pub class: UrgentClass,
     pub source: u8,
-    /// Size of the event's line in a digest.
-    pub bytes: u16,
 }
 
-/// The bounds of one exploration: sessions, sources, events and direct messages.
+/// The bounds of one exploration: the events, their budgets and the supervisor and scan periods.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Params {
-    /// Sessions the role may use; `sessions - 1` recycles fit.
-    pub sessions: u8,
-    pub stop_cap: u8,
-    /// Bytes of one digest, header included; a receipt covers what fits, urgent first.
-    pub digest_bytes: u16,
-    pub bound_secs: u16,
-    pub takeover_secs: u16,
+    pub budgets: [Budget; 6],
     pub supervisor_secs: u16,
     pub scan_secs: u16,
-    pub recycle_secs: u16,
     pub events: Vec<EventSpec>,
-    pub messages: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,46 +78,37 @@ pub enum ParamError {
     Tick,
     /// A time beyond what the counters hold, or a count outside the bounds.
     Range,
+    /// A class budget beyond the 90 s ruling.
+    OverRuling,
+    /// A step does not leave the supervisor a pass before the next deadline.
     SupervisorTooSlow,
 }
 
 impl Params {
-    pub fn production(events: Vec<EventSpec>, messages: u8) -> Self {
+    pub fn production(events: Vec<EventSpec>) -> Self {
         Self {
-            sessions: 2,
-            stop_cap: STOP_BLOCK_CAP,
-            digest_bytes: DIGEST_BYTES,
-            bound_secs: URGENT_BOUND_SECS,
-            takeover_secs: TAKEOVER_SECS,
+            budgets: [Budget::DEFAULT; 6],
             supervisor_secs: SUPERVISOR_SECS,
             scan_secs: SCAN_SECS,
-            recycle_secs: RECYCLE_SECS,
             events,
-            messages,
         }
     }
 
-    /// The takeover happens at most one supervisor pass after the takeover age, so that sum
-    /// must fit the bound.
+    /// Budget of one class.
+    pub fn budget(&self, class: UrgentClass) -> Budget {
+        self.budgets[class.index()]
+    }
+
     pub fn check(&self) -> Result<(), ParamError> {
-        let secs = [
-            self.bound_secs,
-            self.takeover_secs,
-            self.supervisor_secs,
-            self.scan_secs,
-            self.recycle_secs,
-        ];
+        let mut secs = vec![self.supervisor_secs, self.scan_secs];
+        for b in &self.budgets {
+            secs.extend([b.takeover_secs, b.alarm_secs, b.bound_secs]);
+        }
         if secs.iter().any(|s| *s == 0 || s % TICK_SECS != 0) {
             return Err(ParamError::Tick);
         }
         if secs.iter().any(|s| s / TICK_SECS > MAX_TICKS)
-            || self.sessions == 0
-            || self.sessions > MAX_SESSIONS
             || self.events.len() > MAX_EVENTS
-            || self
-                .events
-                .iter()
-                .any(|e| e.bytes == 0 || e.bytes > self.digest_bytes.saturating_sub(HEADER_BYTES))
             || self
                 .events
                 .iter()
@@ -110,7 +116,18 @@ impl Params {
         {
             return Err(ParamError::Range);
         }
-        if self.takeover_secs + self.supervisor_secs > self.bound_secs {
+        if self
+            .budgets
+            .iter()
+            .any(|b| b.bound_secs > URGENT_BOUND_SECS)
+        {
+            return Err(ParamError::OverRuling);
+        }
+        let sup = self.supervisor_secs;
+        let paced = |b: &Budget| {
+            b.takeover_secs + sup <= b.alarm_secs && b.alarm_secs + sup <= b.bound_secs
+        };
+        if !self.budgets.iter().all(paced) {
             return Err(ParamError::SupervisorTooSlow);
         }
         Ok(())
@@ -125,36 +142,20 @@ impl Params {
 /// so a test can show that the invariant list catches it.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Defect {
-    NoTakeover,
-    RecycleWhileActive,
-    NoFence,
-    LaterToolCallHandles,
-    CarrySnapshotOnly,
-    ActivateWithoutGates,
+    /// No operator alarm: an unread event can pass its bound.
+    NoAlarm,
     NoSupervisor,
-    /// The fallback is queued but the session is not held to read it inside the bound.
-    FallbackNotAwaited,
-    /// A scan counts as the session's receipt.
-    ScanIsReceipt,
-    /// A digest carries every pending event, whatever its size.
-    DigestUnbounded,
-    /// The range is written after the event lines, where an output cut drops it.
-    FooterRange,
+    ActivateWithoutGates,
+    /// Activation does not look at an urgent event that is already overdue.
+    ActivateOverdue,
 }
 
 impl Defect {
-    pub const ALL: [Defect; 11] = [
-        Defect::NoTakeover,
-        Defect::RecycleWhileActive,
-        Defect::NoFence,
-        Defect::LaterToolCallHandles,
-        Defect::CarrySnapshotOnly,
-        Defect::ActivateWithoutGates,
+    pub const ALL: [Defect; 4] = [
+        Defect::NoAlarm,
         Defect::NoSupervisor,
-        Defect::FallbackNotAwaited,
-        Defect::ScanIsReceipt,
-        Defect::DigestUnbounded,
-        Defect::FooterRange,
+        Defect::ActivateWithoutGates,
+        Defect::ActivateOverdue,
     ];
 
     pub(crate) fn bit(self) -> u16 {

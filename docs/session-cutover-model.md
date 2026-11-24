@@ -1,144 +1,78 @@
 # Session cutover model
 
-`rust/pg-session-cutover-model` is the executable design of step A3 of the always-on plan
-(SESSION-STATE-CUTOVER-DESIGN): one orchestrator role moving from today's waits to the digest
-wait of `plangraph state wait` ([state-shadow.md](state-shadow.md)). It is a pure Rust model
-beside [pg-launch-recovery-model](../rust/pg-launch-recovery-model/README.md) and
+`rust/pg-session-cutover-model` is the executable design of the urgent-event timing of step A3 of
+the always-on plan: one orchestrator role on the digest wait of `plangraph state wait`
+([state-shadow.md](state-shadow.md)). It is a pure Rust model beside
+[pg-launch-recovery-model](../rust/pg-launch-recovery-model/README.md) and
 [pg-session-admission-model](../rust/pg-session-admission-model/README.md): no I/O, no async, no
 clock, no new dependency. **It switches nothing live**: no hook, unit, watchdog or launcher
-changes, and no wait or wake path is removed until a reviewed design is accepted and a role has
-its GO (rule 5.9). One instance models one role; the two orchestrator roles are two instances.
+changes, and no wait or wake path is removed until a reviewed design is accepted and a role has its
+GO (rule 5.9). This slice (CUTOVER-MODEL-S1-URGENT-TIMING) holds the state, time, parameters and
+invariants. Recycle, adoption, session slots, direct messages and the digest window are slice 2.
 
 ## Actors and state
 
-Session (0 to 2; idle or in a turn; fenced or current; ready marker; cron), waiter (none,
-armed, fired, dead; bound to its session), queued wake (`notify`), event (future, occurred,
-detected in a digest, received; age; escalated), source (hung or not; last read), supervisor,
-recycle (idle, launching, confirmed, stop pending), direct message (home, read, effect done,
-handling record), role switch (off, shadow, active) with its gates. `Model::apply` is one atomic
-transition; a refused event leaves the model unchanged. `Tick` is 10 s and is refused while an
-obligation is due, so a scan, wake, takeover or supervisor pass cannot be skipped by waiting.
+One session (idle, in a turn, or stopped) with its wait (none, armed, fired, dead) and a queued
+wake; sources (hung or not, last read); urgent events of six classes (future, occurred, detected
+in a digest, received; age; escalated; alarmed); the supervisor; the role switch (off, shadow,
+active) with its gates. `Model::apply` is one atomic transition; a refused event changes nothing.
+`Tick` is 10 s and is refused while an obligation is due, so a scan, wake, takeover, alarm or
+supervisor pass cannot be skipped by letting time pass. Time passes while a session works: only
+the zero-time steps of a wake (fire the wait, begin the turn) are due at once.
 
-| Parameter | Value | Source |
+## Time budgets (`Params`, `Budget`)
+
+Each class (go row, grant answer, main red, failed or unknown run, lease margin, blocked or failed
+to the role) has its own budget: `takeover`, `alarm` and `bound`, in seconds from occurrence. The
+default is 40, 60 and 90 for every class until the A2 shadow latencies and the operator say
+otherwise. `Params::check` refuses a bound above 90 s (rule 3.48, D-6578), a step that leaves the
+supervisor less than one pass (20 s) before the next, times that are not whole ticks, and times
+beyond 2000 s, which the counters would not hold. At most 64 events, two sources.
+
+| Step | At the earliest | The supervisor must have done it by |
 | --- | --- | --- |
-| urgent bound | 90 s | rule 3.48, D-6578 |
-| takeover of today's wake path | 70 s | parameter, from shadow latencies |
-| supervisor pass | at most 20 s | parameter; `takeover + pass <= bound` is checked |
-| one read per source | at most 60 s | A2 scan period; a hung read is visible at once |
-| Stop-hook cap | 9 | canary-a1, Claude Code 2.1.329 |
-| digest | 8192 bytes, header 64 | A3 req 6; the fleet's Bash output limit; the range header comes first and is counted |
-| launch budget | 30 s | confirm and adopt, or abort; parameter |
-| longest timer | 2000 s (200 ticks) | `Params::check` refuses more: the counters would overflow |
-| events | at most 64 | the occurrence counter is a byte; more are refused |
+| `Escalate`: today's wake path takes over, the session is woken | takeover age | takeover + 20 s |
+| `Alarm`: the operator is told and holds the event | alarm age | alarm + 20 s, never after the bound |
+| a source is read (`Scan`) | | every 60 s, a hung read is visible at once |
 
 ## Invariants (`Model::violations`)
 
 | Invariant | Requirement of plan section 4 A3 |
 | --- | --- |
-| `UrgentBound`: with a live current session, no urgent event is unreceived after 90 s, on the fallback path too; a working session must read the fallback, so the bound ends at the receipt | 1, 4 |
+| `UrgentBound`: no urgent event is unread past its class bound. A woken session that keeps working, a hung source, an escalated event and a dead role are not exempt: the alarm hands the event to the operator, which is a reader | 1, 4 |
 | `Unattended`: an active role is never idle with nothing armed or woken for more than one supervisor pass | 4 |
-| `SingleCurrent`: at most one live session is current; the adopted one is never fenced | 2 |
-| `TwoArmed`: at most one live session holds an armed wait; adoption revokes the predecessor's | 2 |
-| `ReceivedUnread`: an event is received only by a session's receipt; a scan never acknowledges | 6 |
-| `AdoptedOverActive`: no recycle takes over a session that is working or whose card is stale | 2 |
-| `RecycleShape`: one recycle at a time; only an active role launches or confirms; the successor waits fenced until adoption | 2, 7 |
-| `MessageStranded`: no unhandled message sits on a stopped, fenced session | 3 |
-| `HandledWithoutAction`: a handling record exists only after the effect | 3 |
-| `CronInActive`: no session cron in an active role | 5 |
+| `ReceivedUnread`: an event is received only by a session's receipt or the alarm; a scan never acknowledges | 6 |
 | `ActivationGate`: active needs shadow sign-off, a fence, deployed recovery and a live GO | 7, 7a |
-| `StopCap`: the Stop hook never holds a turn past its cap | 4 |
 
-Requirement 6: a scan moves events into the digest (scan cursor) and never acknowledges. A digest
-receipt starts with its range header and covers the events that fit `digest_bytes`, urgent first,
-then by occurrence order (not event id); the rest stay pending and are replayed to a successor
-(`DigestOverBudget`, `RangeNotFirst`: the digest is a list of sections, the range first). Events on today's path (escalated, or after a rollback) are delivered one
-by one and are not capped. The header text is a build slice.
-Requirement 7 is `Rollback` and `RevokeGo`: both abort a launch not yet adopted, hand every
-unreceived event to today's path and end the Stop hook; an adopted recycle is only cleaned up.
-The bound runs on elapsed time from occurrence, through recovery. With a live current session
-the event must be read by 90 s. With none nothing can read it, so by the bound it must be handed
-to today's path, which then is the operator alarm (`Escalate`); the supervisor owes a launch
-within 20 s and a launch is confirmed and adopted, or aborted, within 30 s. A recovery that
-needs two launches can therefore deliver after 90 s, never silently: adoption delivers the
-waiting urgent events to the successor with its card.
+`Activate` is refused (`Overdue`) while an urgent event is already past its alarm age, so a role
+never starts, or restarts after a rollback, with its bound already broken. `Rollback` and
+`RevokeGo` hand every unread event to today's wake path. A role that is not switched keeps today's
+path: its events are escalated and the session woken at once.
 
-## Transitions
-
-| Event | Guard | Effect |
-| --- | --- | --- |
-| `Occur` | event not yet occurred | occurred; handed to today's wake path at once unless the role is active |
-| `Scan(s)` | role shadow or active | healthy: occurred events of `s` become detected; hung: `blind(s)` at once; never reads another source |
-| `WaiterFire` | current session, wait armed, an urgent event detected | wait fired, session woken |
-| `WindowEnd` | current session, wait armed | wait fired for ordinary, beat and follow-up events; also when quiet |
-| `WaiterDie` | wait armed | wait dead, no wake |
-| `Arm` | in a turn, current generation, role active | own wait armed |
-| `Receive` | in a turn, current generation | every escalated event, and the detected ones that fit one digest, urgent first |
-| `EndTurn` | in a turn | current session in an active role: blocked up to the cap until armed and received; fenced session never blocked |
-| `Escalate` | active, urgent, unreceived, age at least 70 s | handed to today's wake path, current session woken; time stops until a working session has read it |
-| `Nudge` | active, current session idle and unarmed | session woken so it can re-arm |
-| `BeginRecycle` | active, fence deployed, recovery deployed, current session idle with a fresh card or stopped | successor launched, fenced; forward snapshot taken; 30 s to confirm and adopt, or abort |
-| `Confirm`, `AbortRecycle` | launch live, role active; abort any time | confirmed; or successor stopped and recycle idle |
-| `Adopt` | role active, confirmed, predecessor quiescent | one compare-and-set: successor current, predecessor fenced and its wait revoked, every message without a record carried and unread |
-| `StopOk`, `StopFail` | stop pending | predecessor stopped; or retried (the supervisor always has this move) |
-| `SendMsg`, `ReadMsg`, `HandleMsg` | current session in a turn for the last two | message to the current session or the durable inbox; read; effect and record in one step |
-| `ArmCron` | session live, role not active | session cron (refused when active) |
-| `StartShadow`, `SignOffShadow`, `DeployFence`, `DeployRecovery`, `GrantGo`, `Activate`, `Rollback`, `RevokeGo` | `Activate` needs shadow, sign-off, a fence, recovery, GO, no cron | role switch; `Rollback` and `RevokeGo` return to today's behaviour |
-
-A quiescent handoff stands in for the fence for activation only: automatic recycle needs the
-deployed fence. Events that have occurred stay pending through a recycle; the successor arms
-its own wait (see below) and its first read finds them.
-
-## The recycle fact built in
-
-ctx-watchdog confirms the replacement live, then `claude stop`s the predecessor. It does not
-wait for, carry or re-arm the predecessor's background wait, and `role_relaunch.forward`
-carries only unread messages (canary-a1 section 4). So: the successor arms its own wait after
-adoption (`Arm` is refused before); adoption revokes the predecessor's wait; a message that reaches the
-predecessor after the forward snapshot is carried by `Adopt`, which follows records, not a time.
-
-## Findings as scenarios (`tests/scenarios_*.rs`)
+## Findings as scenarios (`tests/scenarios_timing.rs`, `scenarios_switch.rs`)
 
 | Finding | Scenario test |
 | --- | --- |
-| state r2 C3/R1, alwayson r2: no end-to-end bound, hung adapter, failed wake | `urgent_event_beside_a_hung_adapter_...`, `urgent_event_with_a_failed_wake_...`, `a_hung_adapter_does_not_delay_another_source`, `five_minute_supervisor_cannot_meet_the_bound` |
-| alwayson r2: a pending wake recycles a working session; missing receipt | `a_pending_wake_never_recycles_a_working_session`, `a_missing_receipt_during_an_active_turn_...` |
-| state r1 S7, alwayson r2, r3: two armed sessions after a failed stop | `a_failed_predecessor_stop_leaves_one_current_session_...` |
-| alwayson r2: a later tool call counted as handling | `a_delivered_go_followed_by_unrelated_tool_use_...` |
-| alwayson r1: unread message before the card stamp or after the forward snapshot | `an_unread_go_from_before_the_card_stamp_...`, `a_message_that_reaches_the_predecessor_after_...` |
-| alwayson r1: waiter dies after Stop accepted, successor fails to arm, cap | `a_wait_that_dies_after_the_stop_hook_...`, `a_successor_that_fails_to_arm_...`, `the_stop_hook_is_a_help_not_a_proof` |
-| state r2 H3-H4: superseded session cannot end; live unarmed session; dead session | the fenced-session checks of the failed-stop test, `a_session_without_a_fresh_card_...`, `a_crashed_current_session_...` |
-| state r2 W1-W2: ordinary event spins the wait; quiet start | `ordinary_events_wait_for_the_window_...` |
-| review round 1 HIGH: the bound ended at a queue, not at the receipt | `an_escalated_event_is_read_inside_the_bound_even_in_an_active_turn` |
-| review round 1 HIGH: a launch adopted after the GO was lost | `a_lost_go_or_a_rollback_aborts_a_launch_that_is_not_adopted` |
-| review round 1 HIGH: two waits armed after a failed stop | `adoption_revokes_the_predecessors_wait_so_a_failed_stop_...` |
-| review round 1 MED: digest bound, scan cursor apart from the receipt | `a_scan_is_not_a_receipt_and_a_digest_is_bounded_...` |
-| review round 2 HIGH: a stalled launch counted as attendance, slow recovery past the bound | `a_stalled_launch_is_bounded_and_a_slow_recovery_still_reads_...` |
-| review round 2 HIGH: the digest cap throttled legacy receipts after a rollback | `legacy_receipts_after_a_rollback_are_not_capped_by_the_digest` |
-| review round 2 MED: receipts sorted by event id | `receipts_follow_occurrence_order_not_event_ids` |
-| review round 2 MED: byte limit and range first | `a_digest_starts_with_its_range_and_never_exceeds_its_byte_limit` |
-| review round 3 HIGH: a paused clock let a receipt pass 90 s unrecorded | `a_stalled_launch_and_a_retry_hand_the_event_over_by_the_bound_...` |
-| review round 3 MED: byte arithmetic overflowed; the occurrence counter wrapped | `the_largest_digest_budget_does_not_overflow_...`, `the_occurrence_counter_cannot_wrap_...` |
-| review round 3 MED: range after the events could not be detected | `a_range_written_after_the_events_is_caught` |
-| review round 1 MED: a timer beyond the counters panicked | `timers_beyond_the_counters_are_refused_...` |
-| alwayson r3: activation, rollback, per-role GO; req 5 crons and beats | `activation_needs_shadow_fence_...`, `losing_the_go_...`; beats and follow-ups in the window test |
+| round 3 HIGH invariants.rs:50: a dead role's event received at 100 s | `a_dead_role_hands_the_event_to_the_operator_by_the_bound_not_at_recovery` |
+| round 3 HIGH time.rs:155: a fired wake freezes time while the session works | `a_woken_session_that_keeps_working_does_not_freeze_time_...` |
+| round 3 HIGH transition.rs:177: reactivation with an overdue event | `activation_is_refused_with_an_urgent_event_...`, `reactivation_after_a_rollback_...` |
+| round 3 MED params.rs:26: one budget for all classes | `each_urgent_class_has_its_own_budget_...` |
+| state r2 C3/R1, alwayson r2: hung adapter, failed wake, five-minute supervisor | `an_unread_event_on_a_hung_source_...`, `a_failed_wake_is_recovered_...`, `a_hung_adapter_does_not_delay_...`, `a_five_minute_supervisor_...` |
+| alwayson r3: activation, rollback, per-role GO | `activation_needs_shadow_fence_...`, `rollback_and_a_lost_go_...` |
 
-Scenario files: `scenarios_wake.rs`, `scenarios_digest.rs`, `scenarios_recycle.rs`, `scenarios_recovery.rs`, `scenarios_switch.rs`. Each guard a finding named is a `Defect`; `each_defect_is_caught_by_its_invariant` shows the
-unsafe model breaks the listed invariant while the same search on the safe model finds nothing.
+Each guard a finding named is a `Defect` (`NoAlarm`, `NoSupervisor`, `ActivateWithoutGates`,
+`ActivateOverdue`); `each_defect_is_caught_by_its_invariant` shows the unsafe model breaks the
+listed invariant while the same search on the safe model finds nothing.
 
 ## Exhaustive bounds (`tests/exhaustive.rs`)
 
-Production times; Stop-hook cap 2 (1 in the two-recycle search, 9 in the named scenario); digest cap 1 in the wake search. Every ordering up to: wake, 1
-session, 2 urgent events on 2 sources, 13 events; recycle, 2 sessions, 1 urgent
-event, 2 messages, 11 events; recycles, 3 sessions (two recycles), 1 message, crashes, 16
-events; gates, all mode and gate events with 2 sessions and 1 event, 15 events. Each checks that
-refusals change nothing, invariants hold, event stages and handling records never go back, and
-time is never blocked with no way out. Exploration found a real gap: a crash of the successor
-while the predecessor's stop is pending left the supervisor no move; retrying the stop is one.
+Production times. Every ordering up to: wake, 2 events of two classes on two sources, activated
+role, 14 events; classes, a go row with a 60 s budget and a lease margin, 12 events; gates, all
+gate and mode events with 1 event, 15 events. Each checks that refusals change nothing,
+invariants hold, event stages never go back, and time is never blocked with no way out.
 
-## Not modelled (owned elsewhere, see the slices)
+## Not modelled (later slices and other items)
 
-Source adapters and event retention (A2), the shared journal and its authorization (B), keeper
-generation issue (stage C), external effect receipts (D), the digest header text. The model assumes the
-handling effect and its record are one step, effects are idempotent on replay, and a stop that
-keeps failing, or all slots used, is an operator alarm. The time budget per urgent class is a
-parameter set from the A2 shadow latencies; 90 s is the ruling of rule 3.48 for all classes.
+Recycle, adoption, session slots, direct-message carry, the digest window and its byte limit,
+source adapters and event retention (A2), the journal (B), keeper generation issue (stage C),
+external effect receipts (D). The alarm stands for the operator path; its delivery is a build item.

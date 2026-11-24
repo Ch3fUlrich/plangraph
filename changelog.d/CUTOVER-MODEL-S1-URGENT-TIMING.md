@@ -1,0 +1,1 @@
+Add `pg-session-cutover-model`, an executable model of the urgent-event timing of an orchestrator role on the digest wait (per-class time budgets, takeover, operator alarm, activation gate) with named scenarios for the review findings and a bounded exhaustive search; it switches nothing live.
