@@ -64,6 +64,13 @@ fn attempt(
             let admission = admission.unwrap_or_else(|p| std::panic::resume_unwind(p));
             match admission {
                 Admit::Cancelled => return (1, true, StopOutcome::Empty),
+                Admit::Refused(reason) => {
+                    let _ =
+                        record.push_event(json!({"event":"admission_refused", "detail":reason}));
+                    record.set("error", json!("admission refused"));
+                    record.set("reason", json!("admission refused"));
+                    return (1, false, StopOutcome::Empty);
+                }
                 Admit::Granted(p) => *permit = Some(p),
             }
         }
@@ -91,6 +98,7 @@ fn attempt(
         };
         let g = grouped.as_mut().unwrap();
         let identity = g.group.identity();
+        rt.admission.launched(&spec.run_id, identity);
         #[cfg(windows)]
         record.set("holder_deadline_ms", json!(g.group.holder_deadline_ms()));
         #[cfg(windows)]

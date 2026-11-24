@@ -1,0 +1,258 @@
+//! Binds one daemon run to a durable slot of `<state>/slots.json` before its launcher call.
+//!
+//! The local supervisor gate stays the one admission queue; this seam mirrors it into the
+//! shared slot table so a restart (and every other reader of the table) sees what the daemon
+//! holds:
+//!
+//! - **pending**: the run waits in the local queue; a [`Ticket`] owned by this daemon's
+//!   `(pid, start_time)` is in `queued`. Nothing is launched.
+//! - **bound**: the run was admitted; its ticket became an [`ActiveSlot`] with `bound = true`,
+//!   still owned by the daemon identity and naming the confinement unit it is about to create.
+//!   [`SlotBind::reserve`] must succeed before the launcher is called; a refusal ends the run
+//!   without a launcher call.
+//! - **launched**: [`SlotBind::launched`] re-keys the row to the process identity of the run,
+//!   the key the restart reconciliation matches a run record against.
+//!
+//! A daemon that dies between the bind and the launcher's result leaves a row owned by a dead
+//! daemon with no process behind it. [`release_pre_exec`] frees such a row only on proof (dead
+//! owner, a run record that never recorded a process, and a [`StartProof`] that no process or
+//! scope exists); a live owner, a started run or an answer of "unknown" keeps it.
+use super::{group::unit_name, record::RunRecord};
+use crate::{
+    hosts::Role,
+    slots::{self, ActiveSlot, GroupLiveness, SlotClass, SlotError, Ticket},
+};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+const LOCK_WAIT: Duration = Duration::from_secs(2);
+
+/// The daemon's own identity and the slot every run it starts asks for.
+#[derive(Debug, Clone)]
+pub struct SlotBindCfg {
+    /// Directory holding `slots.json`.
+    pub slots_dir: PathBuf,
+    pub daemon_pid: u32,
+    /// Opaque start time of the daemon process (see [`ActiveSlot::start_time`]).
+    pub daemon_start_time: u64,
+    pub role: Role,
+    pub class: SlotClass,
+    pub repo_id: String,
+    pub reservation_mb: u64,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BindError {
+    #[error("slot table: {0}")]
+    Table(#[from] SlotError),
+    #[error("run id already holds a slot")]
+    Held,
+}
+
+pub(super) struct SlotBind {
+    cfg: SlotBindCfg,
+    /// The `(pid, start_time)` each bound run's row is currently keyed by.
+    keys: Mutex<HashMap<String, (u32, u64)>>,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+impl SlotBind {
+    pub(super) fn new(cfg: SlotBindCfg) -> Arc<Self> {
+        Arc::new(Self {
+            cfg,
+            keys: Mutex::new(HashMap::new()),
+        })
+    }
+    fn owner(&self) -> (u32, u64) {
+        (self.cfg.daemon_pid, self.cfg.daemon_start_time)
+    }
+    /// Persist the pending entry of a run that waits in the local queue.
+    pub(super) fn pending(&self, run_id: &str) -> Result<(), BindError> {
+        let ticket = Ticket {
+            run_id: run_id.into(),
+            pid: self.cfg.daemon_pid,
+            start_time: self.cfg.daemon_start_time,
+            enqueued_ms: now_ms(),
+            role: self.cfg.role,
+            class: self.cfg.class,
+            repo_id: self.cfg.repo_id.clone(),
+            reservation_mb: self.cfg.reservation_mb,
+        };
+        slots::with_table(&self.cfg.slots_dir, LOCK_WAIT, |table| {
+            if table.active.iter().any(|s| s.run_id == run_id) {
+                return Err(BindError::Held);
+            }
+            if !table.queued.iter().any(|t| t.run_id == run_id) {
+                table.queued.push(ticket);
+            }
+            Ok(())
+        })?
+    }
+    /// Drop the pending entry of a run that left the queue without a bind.
+    pub(super) fn withdraw(&self, run_id: &str) {
+        let (pid, start) = self.owner();
+        let _ = slots::with_table(&self.cfg.slots_dir, LOCK_WAIT, |table| {
+            table
+                .queued
+                .retain(|t| !(t.run_id == run_id && t.pid == pid && t.start_time == start));
+        });
+    }
+    /// Turn the pending entry into the bound reservation. Refused when another owner holds a
+    /// slot of this run id or the table cannot be written: the caller must not launch.
+    pub(super) fn reserve(self: &Arc<Self>, run_id: &str) -> Result<Reservation, BindError> {
+        let (pid, start) = self.owner();
+        let created_ms = now_ms();
+        slots::with_table(&self.cfg.slots_dir, LOCK_WAIT, |table| {
+            if table.active.iter().any(|s| s.run_id == run_id) {
+                return Err(BindError::Held);
+            }
+            let own = |t: &Ticket| t.run_id == run_id && t.pid == pid && t.start_time == start;
+            let ticket = table.queued.iter().find(|t| own(t)).cloned();
+            table.queued.retain(|t| !own(t));
+            table.active.push(ActiveSlot {
+                run_id: run_id.into(),
+                pid,
+                start_time: start,
+                role: self.cfg.role,
+                class: self.cfg.class,
+                repo_id: self.cfg.repo_id.clone(),
+                seat_slot: None,
+                group: Some(unit_name(run_id)),
+                reservation_mb: ticket.map_or(self.cfg.reservation_mb, |t| t.reservation_mb),
+                created_ms,
+                bound: true,
+            });
+            Ok(())
+        })??;
+        self.keys
+            .lock()
+            .unwrap()
+            .insert(run_id.into(), (pid, start));
+        Ok(Reservation {
+            bind: self.clone(),
+            run_id: run_id.into(),
+        })
+    }
+    /// Re-key the row of `run_id` to the process the launcher started.
+    pub(super) fn launched(&self, run_id: &str, pid: u32, start_time: u64, group: Option<&str>) {
+        let Some(old) = self.keys.lock().unwrap().get(run_id).copied() else {
+            return;
+        };
+        let changed = slots::with_table(&self.cfg.slots_dir, LOCK_WAIT, |table| {
+            let row = table
+                .active
+                .iter_mut()
+                .find(|s| s.run_id == run_id && (s.pid, s.start_time) == old);
+            row.is_some_and(|row| {
+                row.pid = pid;
+                row.start_time = start_time;
+                if let Some(group) = group {
+                    row.group = Some(group.into());
+                }
+                true
+            })
+        });
+        if changed.unwrap_or(false) {
+            self.keys
+                .lock()
+                .unwrap()
+                .insert(run_id.into(), (pid, start_time));
+        }
+    }
+}
+
+/// The bound row of one run; dropping it frees the slot and wakes the waiters.
+pub(super) struct Reservation {
+    bind: Arc<SlotBind>,
+    run_id: String,
+}
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let key = self.bind.keys.lock().unwrap().remove(&self.run_id);
+        let Some((pid, start)) = key else { return };
+        let freed = slots::with_table(&self.bind.cfg.slots_dir, LOCK_WAIT, |table| {
+            slots::release(table, &self.run_id, pid, start)
+        });
+        if freed.unwrap_or(false) {
+            let _ = slots::touch_wake(&self.bind.cfg.slots_dir);
+        }
+    }
+}
+
+/// Whether a run's process (or its confinement scope) was ever started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Started {
+    /// A process or a scope of the run exists or existed.
+    Yes,
+    /// Proven: nothing of this run was ever started.
+    No,
+    /// The probe could not tell; the row stays.
+    Unknown,
+}
+
+/// Evidence about processes started for one run, beyond its record.
+pub trait StartProof {
+    /// Does any confinement scope or process of `run_id` exist?
+    fn scope_started(&self, run_id: &str) -> Started;
+}
+
+/// Free the pre-exec rows (pending tickets and bound reservations) that a dead daemon left,
+/// each only on proof that no process of it was started. Returns the freed run ids.
+/// `live` answers whether the owning daemon is still alive; `proof` whether a scope exists.
+pub fn release_pre_exec(
+    slots_dir: &Path,
+    live: &impl GroupLiveness,
+    proof: &impl StartProof,
+) -> Result<Vec<String>, SlotError> {
+    let never_started = |run_id: &str, pid: u32, start: u64| -> bool {
+        if live.process_alive(pid, start) {
+            return false;
+        }
+        match RunRecord::read(slots_dir, run_id) {
+            Ok(record) => {
+                if ["pid", "proc", "pid_start"]
+                    .iter()
+                    .any(|key| record.get(key).is_some_and(|v| !v.is_null()))
+                {
+                    return false;
+                }
+            }
+            // A missing or unreadable record is no proof.
+            Err(_) => return false,
+        }
+        proof.scope_started(run_id) == Started::No
+    };
+    let freed = slots::with_table(slots_dir, LOCK_WAIT, |table| {
+        let mut freed = Vec::new();
+        table.active.retain(|s| {
+            // Only a bound row still keyed by an owner without a launched process.
+            let pre_exec = s.bound && s.group.as_deref() == Some(unit_name(&s.run_id).as_str());
+            let keep = !(pre_exec && never_started(&s.run_id, s.pid, s.start_time));
+            if !keep {
+                freed.push(s.run_id.clone());
+            }
+            keep
+        });
+        table.queued.retain(|t| {
+            let keep = !never_started(&t.run_id, t.pid, t.start_time);
+            if !keep {
+                freed.push(t.run_id.clone());
+            }
+            keep
+        });
+        freed
+    })?;
+    if !freed.is_empty() {
+        slots::touch_wake(slots_dir)?;
+    }
+    Ok(freed)
+}

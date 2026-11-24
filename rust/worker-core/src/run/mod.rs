@@ -24,6 +24,9 @@ pub mod record;
 pub mod record_io;
 pub mod review_quota;
 pub mod scrub;
+pub mod slot_bind;
+#[cfg(all(test, unix))]
+mod slot_bind_tests;
 pub mod supervise;
 #[cfg(test)]
 mod supervise_tests;

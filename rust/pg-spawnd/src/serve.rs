@@ -57,6 +57,34 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
         .map_err(|e| e.to_string())
 }
 
+/// With reconciliation on, every run is bound to a durable slot before its launcher call, so
+/// the restart that reconciles the slot table sees what this daemon holds. The daemon cannot
+/// size a run, so a row counts against `max_runs` only and reserves no memory.
+#[cfg(target_os = "linux")]
+fn bind_slots(cfg: &mut SupervisorCfg, state: &std::path::Path) {
+    use pg_worker_core::{hosts::Role, run::slot_bind::SlotBindCfg, slots::SlotClass};
+    if std::env::var("PLANGRAPH_RELIABILITY_RECONCILE").as_deref() != Ok("on") {
+        return;
+    }
+    let pid = std::process::id();
+    let Some(start) =
+        pg_worker_core::run::group_unix::proc_start_time(std::path::Path::new("/proc"), pid)
+    else {
+        return;
+    };
+    cfg.slot_bind = Some(SlotBindCfg {
+        slots_dir: state.into(),
+        daemon_pid: pid,
+        daemon_start_time: start,
+        role: Role::Implement,
+        class: SlotClass::Other,
+        repo_id: "pg-spawnd".into(),
+        reservation_mb: 0,
+    });
+}
+#[cfg(all(unix, not(target_os = "linux")))]
+fn bind_slots(_: &mut SupervisorCfg, _: &std::path::Path) {}
+
 /// Serve MCP connections until the process is killed.
 #[cfg(unix)]
 pub(crate) fn run(
@@ -67,6 +95,7 @@ pub(crate) fn run(
     pg_worker_core::run::lifecycle::recover(&state).map_err(|error| error.to_string())?;
     cfg.run.state_dir = state.clone();
     let _recovery = crate::reconcile_serve::configured(&state)?;
+    bind_slots(&mut cfg, &state);
     crate::round_replan_ports::start(state.clone());
     let host = cfg.run.host.clone();
     let supervisor = Arc::new(Supervisor::new(cfg).map_err(|e| e.to_string())?);

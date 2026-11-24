@@ -1,6 +1,7 @@
 //! Replaceable local FIFO admission and ownership of this daemon's runs.
 use super::{
-    group::{Launcher, SystemLauncher},
+    group::{Identity, Launcher, SystemLauncher},
+    slot_bind::{SlotBind, SlotBindCfg},
     supervise::{self, *},
 };
 use std::{
@@ -21,6 +22,9 @@ pub struct SupervisorCfg {
     pub run: Config,
     pub max_runs: usize,
     pub max_queued: usize,
+    /// Mirror admission into the shared slot table and require the bound reservation before
+    /// every launcher call. `None` keeps the process-local queue alone.
+    pub slot_bind: Option<SlotBindCfg>,
 }
 impl SupervisorCfg {
     pub fn new(run: Config) -> Self {
@@ -28,6 +32,7 @@ impl SupervisorCfg {
             run,
             max_runs: DEFAULT_MAX_RUNS,
             max_queued: DEFAULT_MAX_QUEUED,
+            slot_bind: None,
         }
     }
 }
@@ -64,6 +69,7 @@ struct State {
 struct Gate {
     state: Arc<(Mutex<State>, Condvar)>,
     max_runs: usize,
+    bind: Option<Arc<SlotBind>>,
 }
 struct Release(Arc<(Mutex<State>, Condvar)>);
 impl Drop for Release {
@@ -76,6 +82,15 @@ impl Drop for Release {
 impl Admission for Gate {
     fn acquire(&self, id: &str, cancelled: &AtomicBool) -> Admit {
         let (lock, changed) = &*self.state;
+        if let Some(bind) = &self.bind {
+            // The pending entry is durable before the run waits; a table that cannot hold it
+            // refuses the run here, ahead of any launcher call.
+            if let Err(e) = bind.pending(id) {
+                lock.lock().unwrap().queue.retain(|key| key != id);
+                changed.notify_all();
+                return Admit::Refused(e.to_string());
+            }
+        }
         let mut s = lock.lock().unwrap();
         if !s.queue.iter().any(|key| key == id) {
             s.queue.push_back(id.into());
@@ -84,6 +99,10 @@ impl Admission for Gate {
             if cancelled.load(Ordering::SeqCst) {
                 s.queue.retain(|key| key != id);
                 changed.notify_all();
+                drop(s);
+                if let Some(bind) = &self.bind {
+                    bind.withdraw(id);
+                }
                 return Admit::Cancelled;
             }
             if s.queue.front().is_some_and(|key| key == id) && s.held < self.max_runs {
@@ -91,12 +110,30 @@ impl Admission for Gate {
                 s.held += 1;
                 s.max_held_seen = s.max_held_seen.max(s.held);
                 changed.notify_all();
-                return Admit::Granted(Permit::new(Release(self.state.clone())));
+                drop(s);
+                let local = Release(self.state.clone());
+                let Some(bind) = &self.bind else {
+                    return Admit::Granted(Permit::new(local));
+                };
+                // The reservation is bound before the permit exists, so a launcher call can
+                // never happen without it; on refusal `local` frees the local place again.
+                return match bind.reserve(id) {
+                    Ok(reservation) => Admit::Granted(Permit::new((reservation, local))),
+                    Err(e) => {
+                        bind.withdraw(id);
+                        Admit::Refused(e.to_string())
+                    }
+                };
             }
             s = changed
                 .wait_timeout(s, Duration::from_millis(50))
                 .unwrap()
                 .0;
+        }
+    }
+    fn launched(&self, run_id: &str, identity: &Identity) {
+        if let (Some(bind), Some(start)) = (&self.bind, identity.start_time) {
+            bind.launched(run_id, identity.pid, start, identity.group.as_deref());
         }
     }
 }
@@ -127,6 +164,7 @@ impl Supervisor {
         let gate = Arc::new(Gate {
             state: Arc::new((Mutex::new(State::default()), Condvar::new())),
             max_runs: cfg.max_runs,
+            bind: cfg.slot_bind.map(SlotBind::new),
         });
         Ok(Self {
             runtime: Runtime::with(cfg.run, gate.clone(), launcher),

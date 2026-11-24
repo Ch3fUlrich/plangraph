@@ -59,10 +59,14 @@ impl Default for Config {
 }
 pub trait Admission: Send + Sync {
     fn acquire(&self, run_id: &str, cancelled: &AtomicBool) -> Admit;
+    /// The launcher started `identity` for a run this admission granted.
+    fn launched(&self, _run_id: &str, _identity: &Identity) {}
 }
 pub enum Admit {
     Granted(Permit),
     Cancelled,
+    /// The grant could not be made durable; the run must not be launched.
+    Refused(String),
 }
 pub struct Permit {
     _guard: Box<dyn Send>,

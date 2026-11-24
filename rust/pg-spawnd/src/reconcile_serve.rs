@@ -62,6 +62,15 @@ fn reclaim_after(root: &Path, proof: Reconciled, now: u64) -> Result<(), Reconci
     if proof.root != root {
         return Err(ReconcileError::Invalid);
     }
+    // A daemon that died between its slot bind and the launcher's result left a row with no
+    // process behind it; it is freed only on proof, before the reconciled rows are reclaimed.
+    #[cfg(target_os = "linux")]
+    pg_worker_core::run::slot_bind::release_pre_exec(
+        root,
+        &slots::LinuxLiveness::host(),
+        &crate::reconcile_scope_proof::CgroupScopes::host(),
+    )
+    .map_err(|_| ReconcileError::Io)?;
     let report = slots::with_table(root, Duration::from_secs(2), |table| {
         // Exclude pending, queued, live and unrecognized bindings entirely;
         // in particular the core's groupless dead-pid shortcut cannot run on them.
