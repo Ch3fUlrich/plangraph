@@ -566,7 +566,7 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=store, catalog_rows=())
     assert not {'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium'} & {leg.id for leg in plan.legs}
     assert [leg.id for leg in plan.legs[:3]] == [
-        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-hydrogen-high']
+        'agy-gemini-4-hydrogen-high', 'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash']
     assert any(s['leg'] == 'agy-gemini-4-argon-low' and s['reason'] == 'down' for s in plan.skipped)
 
     # Shared LegAdapter must honor the stored down probe even when the gateway snapshot is healthy.
@@ -583,14 +583,14 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     svc = SpawnService(runner=runner, state=tmp_path, leg_reader=adapter)
     routed = svc.route(card, role='review', writer_families=('openai',), benchmark={})
     assert not {'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium'} & {leg.id for leg in routed.legs}
-    assert [leg.id for leg in routed.legs[:3]] == ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-hydrogen-high']
+    assert [leg.id for leg in routed.legs[:3]] == ['agy-gemini-4-hydrogen-high', 'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash']
 
     failing.clear()
     recovered = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
     assert recovered['ok'] is True
     assert store.leg_status('agy/gemini-4-argon-low')['state'] == 'ok'
     after = svc.route(card, role='review', writer_families=('openai',), benchmark={})
-    assert after.legs[2].id == 'agy-gemini-4-hydrogen-high'
+    assert [leg.id for leg in after.legs[:3]] == ['agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium']
     assert 'agy-gemini-4-argon-low' in [leg.id for leg in after.legs]
 
 

@@ -379,7 +379,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, REVIEW_REQUIRED, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT
+    from .legs import (REVIEW_ORDER, REVIEW_REQUIRED, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN,
+                       REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT, REVIEW_GEMINI_SMART, REVIEW_SMART)
     if native_review:
         legs = review_route_pool(legs)
     if role == "research":
@@ -530,9 +531,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         claude_quota_fallback = any(
             quota_limited(read_status(key, harness="codex"))
             for key in (writer_model, LEAD_WRITER, REVIEW_GPT))
-    # D-6652: the Claude review seat only when both required OpenCode seats are out of the route.
+    # Rule 3.66 (f10): the Claude seat serves once no Gemini smart leg (hydrogen, argon) is left in the route.
     required_seats_out = native_review and not any(
-        leg.id in REVIEW_REQUIRED and leg.id not in blocked and leg.family not in excluded
+        leg.id in REVIEW_GEMINI_SMART and leg.id not in blocked and leg.family not in excluded
         and not policy.skip_reason(leg, role) for leg in candidates)
 
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
@@ -657,9 +658,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     if native_review:
-        # Argon is last of the whole route (rule 3.61), behind the non-order extras too.
-        ordered.sort(key=lambda leg: len(REVIEW_ORDER) + 2 + REVIEW_ORDER.index(leg.id) if leg.id in (REVIEW_ARGON_LOW, REVIEW_ARGON)
-                     else REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
+        # Rule 3.66 (f10): REVIEW_ORDER leads (smart legs, then the weak pair), the non-order extras follow.
+        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
                      else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
         if sensitive_review:
             ordered.sort(key=lambda leg: leg.id != REVIEW_SONNET)
@@ -674,17 +674,26 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         seat_order = {leg.id: i for i, leg in enumerate(route.legs)}
         seats, coverage, open_parts = pick_seats(
             sorted(ordered, key=lambda leg: seat_order.get(leg.id, len(seat_order))), writer_set, high=high)
+    smart_seat = False
     if native_review:
-        seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
-        # D-6652: both required OpenCode seats stay in the seat set; a credential diff's Sonnet seat is an extra.
-        missing = [leg for leg in ordered if leg.id in REVIEW_REQUIRED and leg not in seats
-                   and seat_family(leg.family) not in {seat_family(s.family) for s in seats}]
+        smart = next((leg for leg in ordered if leg.id in REVIEW_SMART), None)
+        if smart is not None:
+            # Rule 3.66 (f10): one counted seat on the first smart leg; the weak pair seats only when none serves.
+            smart_seat = True
+            writers = sorted({seat_family(w) for w in writer_set if w} - {seat_family(smart.family)})
+            seats, coverage, open_parts = [smart], ({"leg": smart.id, "covers": writers},), []
+        else:
+            seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
+        # D-6652: both required OpenCode seats stay in the seat set when no smart leg serves.
+        missing = [] if smart_seat else [
+            leg for leg in ordered if leg.id in REVIEW_REQUIRED and leg not in seats
+            and seat_family(leg.family) not in {seat_family(s.family) for s in seats}]
         if missing:
             seats = [*seats, *missing]
             coverage = (*coverage, *({"leg": leg.id, "covers": [w for w in sorted({seat_family(w) for w in writer_set if w})
                                                                 if w != seat_family(leg.family)]} for leg in missing))
     error = None
-    if role == "review" and len(seats) < 2:   # rule 3.66 (f): two seats on every head
+    if role == "review" and len(seats) < (1 if smart_seat else 2):   # rule 3.66 (f10): one smart seat, else two weak seats
         error = "two distinct review families unavailable"
     elif open_parts:
         error = "seat coverage unmet for writer parts: " + ", ".join(open_parts)

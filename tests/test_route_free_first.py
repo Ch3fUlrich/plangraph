@@ -104,7 +104,7 @@ def test_default_qwen_disabled_and_gpt_review_families():
     assert leg.roles == ("review",)
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",))
     assert leg.id not in {candidate.id for candidate in plan.legs}
-    assert len({seat.family for seat in plan.review_seats} - {"gpt"}) >= 2
+    assert [seat.id for seat in plan.review_seats] == [REVIEW_HYDROGEN]   # rule 3.66 (f10): one counted smart seat
     assert all(seat.family != "gpt" for seat in plan.review_seats)
 
 
@@ -168,17 +168,17 @@ def test_route_and_refusal(tmp_path, capsys):
 
 def test_review_order_rule_350_mimo_pro_then_flash_then_326():
     assert REVIEW_ORDER == (
-        "opencode-go-deepseek-v4-flash",   # D-6652 required seats lead
+        REVIEW_HYDROGEN,   # rule 3.66 (f10): the smart legs lead, then the weak pair
+        "agy-gemini-4-argon-low",
+        "agy-gemini-4-argon-medium",
+        "claude-sonnet-5-5-high",
+        "opencode-go-deepseek-v4-flash",
         "opencode-go-glm-5.3-flash",
-        REVIEW_HYDROGEN,
         "gpt-6.2-sol-medium",
         "mimo-v2.6-pro",
         "opencode-deepseek-v4.1-flash-free",
         "agy-gemini-4-neon-medium",
-        "claude-sonnet-5-5-high",
         "mimo-v2.6-flash",
-        "agy-gemini-4-argon-low",
-        "agy-gemini-4-argon-medium",
     )
     plan = plan_spawn(CARD, role="review", writer_families=("openai",),
                       leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
@@ -191,6 +191,7 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
     gem_plan = plan_spawn(CARD, role="review", writer_families=("gemini",),
                           leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
     assert [leg.id for leg in gem_plan.legs] == [
+        "claude-sonnet-5-5-high",   # rule 3.66 (f10): the one smart seat of a Gemini head
         "opencode-go-deepseek-v4-flash",
         "opencode-go-glm-5.3-flash",
         "gpt-6.2-sol-medium",
@@ -205,9 +206,8 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
-    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high" and id not in argon],
-                   "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
+    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high"],
+                   "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
 
@@ -225,8 +225,8 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons[FREE[1]].startswith("disabled: D-6310")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
     assert [leg.id for leg in rev.legs] == [
-        REVIEW_HYDROGEN, "gpt-6.2-sol-medium", REVIEW_MIMO_PRO, REVIEW_NEON, REVIEW_MIMO_FLASH,
-        "cx-gpt-6-luna", "agy-gpt-oss-120b", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
+        REVIEW_HYDROGEN, "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium", "gpt-6.2-sol-medium", REVIEW_MIMO_PRO,
+        REVIEW_NEON, REVIEW_MIMO_FLASH, "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert reasons[FREE[0]] == "banned_family"
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
     assert reasons["opencode-go-glm-5.3-flash"] == "off_family"
@@ -256,11 +256,10 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(card),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
-    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high" and id not in argon],
-                   "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
+    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high"],
+                   "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
-    assert ids[:3] == [*REVIEW_REQUIRED, REVIEW_HYDROGEN]
+    assert ids[:5] == [REVIEW_HYDROGEN, "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium", *REVIEW_REQUIRED]
 
 
 def test_route_sol_unavailable_keeps_tier_writer_order():
@@ -494,18 +493,19 @@ def test_d6310_route_orders_low_risk_and_families():
 
     rev = plan_spawn(CARD, role='review', writer_families=('gpt',))
     assert [(l.id, l.effort) for l in rev.legs] == [
-        ('opencode-go-deepseek-v4-flash', None),   # D-6652 required seats lead
+        (REVIEW_HYDROGEN, 'high'),   # rule 3.66 (f10): smart legs lead, then the weak pair
+        ('agy-gemini-4-argon-low', 'low'),
+        ('agy-gemini-4-argon-medium', 'medium'),
+        ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None),
-        (REVIEW_HYDROGEN, 'high'),
         ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('mimo-v2.6-flash', None),
-        ('agy-gemini-4-argon-low', 'low'),
-        ('agy-gemini-4-argon-medium', 'medium'),
     ]
     rev_diff = plan_spawn(CARD, role='review', writer_families=('gemini',))
     assert [(l.id, l.effort) for l in rev_diff.legs] == [
+        ('claude-sonnet-5-5-high', 'high'),
         ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None),
         ('gpt-6.2-sol-medium', 'medium'),

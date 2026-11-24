@@ -106,9 +106,8 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     from plangraph.planner.legs import REVIEW_ORDER
     assert [leg["id"] for leg in bare["legs"]] == [
-        *[id for id in REVIEW_ORDER if id not in ("claude-sonnet-5-5-high", "mimo-v2.6-pro", "mimo-v2.6-flash",
-                                                  "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium")],
-        "agy-gpt-oss-120b", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",   # argon is last
+        *[id for id in REVIEW_ORDER if id not in ("claude-sonnet-5-5-high", "mimo-v2.6-pro", "mimo-v2.6-flash")],
+        "agy-gpt-oss-120b",
     ]
 
 
@@ -125,7 +124,7 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     ambient = route_json(tmp_path, capsys)
     assert reads == [1]
     assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-4-neon-medium')['tier'] == 'paid'
-    assert ambient['first_leg']['id'] == 'opencode-go-deepseek-v4-flash'   # D-6652 required seat
+    assert ambient['first_leg']['id'] == 'agy-gemini-4-hydrogen-high'   # rule 3.66 (f10) smart seat
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
     assert reads == [1]  # The exact-order probe must inject its own catalog input.
 
