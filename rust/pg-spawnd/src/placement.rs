@@ -206,6 +206,7 @@ pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
 /// Native cards share Python's existing RAM/SSH admission, then one Rust lifecycle.
 pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError> {
     crate::spawn::validate(args)?;
+    let args = &admit_lane(state, args)?;
     if !args["card"]
         .get("repo")
         .and_then(Value::as_str)
@@ -240,6 +241,45 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
         // The adapter only waits for base admission; callers poll the durable record.
     }
     native_call(state, &argv, Duration::from_secs(200))
+}
+/// Refuse a native writer for an item key another live lane holds, naming the lane. A
+/// deliberate second lane names `card.lane_override_reason`; the reason and the admitted
+/// keys are carried on the card into the run record.
+pub(crate) fn admit_lane(state: &Path, args: &Args) -> Result<Args, ToolError> {
+    let (Some(prompt), Some(repo)) = (args["prompt"].as_str(), args["card"]["repo"].as_str())
+    else {
+        return Ok(args.clone());
+    };
+    let brief = pg_spawnd::batch_writer_brief::render(prompt).map_err(parameter)?;
+    let card = &args["card"];
+    let explicit = match card.get("lane_override_reason") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(reason)) => Some(reason.as_str()),
+        Some(_) => return Err(parameter("lane_override_reason must be a string")),
+    };
+    let item: Vec<String> = [&card["item_key"], &card["item"]]
+        .into_iter()
+        .filter_map(Value::as_str)
+        .filter(|item| crate::records::valid_item(item))
+        .map(str::to_owned)
+        .collect();
+    let observed = pg_spawnd::lane_guard::Observed {
+        state: state.to_owned(),
+        repo: repo.into(),
+    };
+    let (reason, keys) =
+        pg_spawnd::lane_guard::admit(&brief, &item, &observed, explicit).map_err(parameter)?;
+    let mut admitted = args.clone();
+    // Only this guard may record an override; a caller-supplied one is dropped.
+    admitted["card"]
+        .as_object_mut()
+        .unwrap()
+        .remove("lane_override");
+    admitted["card"]["brief_items"] = serde_json::json!(keys);
+    if let Some(reason) = reason {
+        admitted["card"]["lane_override"] = Value::String(reason);
+    }
+    Ok(admitted)
 }
 fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value, ToolError> {
     let (code, bytes, line) = Adapter(state).run(argv, timeout)?;
