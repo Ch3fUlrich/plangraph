@@ -26,6 +26,12 @@ mod registrar_tests;
 pub mod resolve;
 #[cfg(test)]
 mod resolve_tests;
+pub mod settle;
+mod settle_cli;
+#[cfg(test)]
+mod settle_cli_tests;
+#[cfg(test)]
+mod settle_tests;
 pub mod split;
 #[cfg(test)]
 mod split_tests;

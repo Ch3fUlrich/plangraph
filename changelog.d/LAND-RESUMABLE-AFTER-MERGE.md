@@ -1,0 +1,1 @@
+`plangraph land-train settle` runs the steps after a train merge (close items, verify the host sync, close folded pull requests, stop writers) from a persisted state file; it resumes after a crash, finishes each step once, keeps an item open when its pull request moved or its writer has unmerged work, and gives a folded pull request back when a push arrives during the close.
