@@ -150,6 +150,8 @@ class Session:
                     check_write_key(idempotency_key)
                 except Refused as exc:
                     raise RefusedCli(exc.code, exc.msg) from None
+        if timeout is None and method == "POST" and verb in CLAIM_VERBS:
+            timeout = self.claim_timeout()
         query = dict(params or {})
         query.setdefault("fmt", "json")
         query = {k: v for k, v in query.items() if v is not None}
@@ -256,8 +258,7 @@ def write(session, verb, body, renderer=None) -> int:
             if code:
                 return code
         else:
-            result = session.call("POST", verb, body=body,
-                                  timeout=session.claim_timeout() if verb in CLAIM_VERBS else None)
+            result = session.call("POST", verb, body=body)
         status = _emit(session, result, renderer or (lambda r: fmt.result_text(verb, r)))
         if isinstance(result, dict) and (result.get("refused") or (
                 verb in ("claim_batch", "heartbeat_batch")

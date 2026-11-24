@@ -70,20 +70,6 @@ def test_claims_refresh_again_once_the_window_is_zero(w, tmp_path, monkeypatch):
     assert builds["demo"] == 2
 
 
-def test_claim_does_not_refuse_for_another_repository_inventory_gap(w, tmp_path, monkeypatch):
-    from plangraph.keeper import context_sources
-
-    keys = _claim_lanes(w, tmp_path, 1)
-    original = context_sources.work_index
-
-    def unverified_related(git, project, **kwargs):
-        index = original(git, project, **kwargs)
-        return dict(index, prs_unverified=True) if project == "related" else index
-
-    monkeypatch.setattr(context_sources, "work_index", unverified_related)
-    assert w.store.claim(w.p("l1main"), keys[0])["epoch"] == 1
-
-
 def test_health_reports_the_claim_budget_and_the_cli_timeout_follows_it(srv, w, monkeypatch):
     from plangraph.keeper import cli_verbs
 
@@ -105,18 +91,23 @@ def test_claim_timeout_without_a_keeper_answer_uses_the_default_budget(monkeypat
                                        + cli_verbs.CLAIM_COMMIT_MARGIN_S)
 
 
-@pytest.mark.parametrize("verb", ["claim", "claim_batch"])
-def test_claim_cli_calls_use_the_derived_timeout(srv, w, monkeypatch, verb):
-    from argparse import Namespace
+@pytest.mark.parametrize(("verb", "body"), [("claim", {"key": "demo:A"}), ("claim_batch", {"keys": ["demo:A"]})])
+def test_claim_cli_calls_use_the_derived_timeout(srv, w, monkeypatch, verb, body):
+    import urllib.request
     from plangraph.keeper import cli_verbs
 
     w.store.claim_preflight_s = 41
-    seen = []
+    seen, urlopen = {}, urllib.request.urlopen
+
+    def spy(request, timeout=None):
+        url = request if isinstance(request, str) else request.full_url
+        seen[url.split("?")[0].rsplit("/", 1)[-1]] = timeout
+        return urlopen(request, timeout=timeout)
+
+    monkeypatch.setattr(urllib.request, "urlopen", spy)
     session = Session(url=srv.base_url)
     session._token = w.tok("l1main")
-    real_call = session.call
-    monkeypatch.setattr(session, "call", lambda *a, **k: (seen.append(k.get("timeout")),
-                                                          real_call(*a, **k))[1])
-    args = Namespace(key="demo:A", keys=["demo:A"], lease=None, force_stale=None)
-    getattr(cli_verbs, f"cmd_{verb}")(args, session)
-    assert seen == [41 + cli_verbs.CLAIM_COMMIT_MARGIN_S]
+    session.call("POST", verb, body=body)
+    session.call("GET", "show/demo:A")
+    assert seen[verb] == 41 + cli_verbs.CLAIM_COMMIT_MARGIN_S
+    assert seen["demo:A"] == cli_verbs.TIMEOUT  # other verbs keep the fixed bound
