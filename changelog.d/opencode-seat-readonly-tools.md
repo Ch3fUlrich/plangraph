@@ -1,0 +1,1 @@
+The pg-worker crate renders the read-only OpenCode review seat policy (`seat_tools`): checkout commands allowed, writes and `external_directory` denied, sharing off for a private repository. It refuses a config with any extra allow, `mcp` or `plugin`, and records `permission_denied` from a run stream.
