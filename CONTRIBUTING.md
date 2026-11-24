@@ -141,7 +141,6 @@ stand in for the batch's PLAN key. The PR body, GO request, Keeper preparation, 
 standalone `MIGRATION <version>` field into the GO statement for the exact PR
 head and pass that row with `land --go-row PATH`. See [keeper migrations](docs/keeper-postgres.md#schema-and-migrations).
 
-
 After land reports included parts as merged, cleanup
 invokes `pg-worktree-sweep --apply --delete-remote --include-merged` with exact
 saved SHAs, worktree paths and branches for landed parts. The same pass checks

@@ -1,0 +1,1 @@
+- Add the plangraph-oversight skill: the attended planning session stays on as the overseer after a plan is accepted and checks every beat that the change reaches code, production, the keeper and the agents; AGENTS.md and the planning skill point to it.
