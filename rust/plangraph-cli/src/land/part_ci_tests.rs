@@ -120,7 +120,7 @@ fn the_build_command_refuses_without_part_runs_before_it_reads_main() {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let python = || std::process::Command::new("python3");
+    let python = || crate::base_fresh::python_command(None);
     let err = super::cli::run_inner(dir.path(), &args, &python).unwrap_err();
     assert!(err.contains("missing --part-ci"), "{err}");
 }
