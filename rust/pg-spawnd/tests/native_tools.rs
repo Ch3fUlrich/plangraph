@@ -147,3 +147,52 @@ asyncio.run(check())
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// Admission probes pg-spawnd itself as the sandbox child: `native-tools --check-sandbox` must
+/// get a real `denied` from the child's own `--child-open` handler for the fixture file. The
+/// fixture codex starts the child like a sandbox would and takes away read access to the fixture
+/// first, so the verdict comes from the child, not from the stub.
+#[test]
+fn native_tools_check_sandbox_gets_the_denied_verdict_from_the_pg_spawnd_child() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tmp.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    for tool in ["cargo", "git"] {
+        pg_worker_core::executable_test_support::write_executable(
+            bin.join(tool),
+            "#!/bin/sh\nexit 0\n",
+        );
+    }
+    let sandbox = |chmod: &str| {
+        format!(
+            "#!/bin/sh\n[ \"$1\" = sandbox ] || exit 7\nwhile [ \"$1\" != -- ]; do shift; done\nshift\n{chmod}exec \"$@\"\n"
+        )
+    };
+    let probe = |codex: String| {
+        pg_worker_core::executable_test_support::write_executable(bin.join("codex"), codex);
+        let out = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+            .args(["native-tools", "--check-sandbox"])
+            .current_dir(tmp.path())
+            .env("HOME", tmp.path())
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    // The stand-in sandbox denies the fixture by removing its permissions before the child runs.
+    let enforced = probe(sandbox(
+        "case \"$*\" in *credential-fixture*) for last; do :; done; /bin/chmod 000 \"$last\";; esac\n",
+    ));
+    assert_eq!(enforced["sandbox_ok"], true, "{enforced}");
+    // A sandbox that starts the child but denies nothing is refused with the named reason.
+    let open = probe(sandbox(""));
+    assert_eq!(open["sandbox_ok"], false, "{open}");
+    assert!(
+        open["sandbox_error"]
+            .as_str()
+            .unwrap()
+            .contains("credential isolation is not enforced"),
+        "{open}"
+    );
+}

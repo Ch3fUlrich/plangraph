@@ -223,7 +223,7 @@ fn failed_bwrap_probe_is_persisted_and_refuses_placement() {
 
 /// Starting the sandbox is not enough for placement: the writer policy must also deny a fixture
 /// read. A fixture `codex` that starts the child but denies nothing is refused; one that denies
-/// the fixture file is accepted.
+/// the fixture file, through the real child, is accepted.
 #[cfg(unix)]
 #[test]
 fn writer_readiness_requires_a_denied_fixture_read() {
@@ -248,8 +248,10 @@ fn writer_readiness_requires_a_denied_fixture_read() {
         open.contains("credential isolation is not enforced") && open.contains("readable"),
         "{open}"
     );
+    // A stand-in sandbox that denies the fixture by removing its permissions; the real child
+    // binary reports what its own open returned.
     run(&format!(
-        "#!/bin/sh\n{skip}case \"$*\" in *credential-fixture*) echo denied;; *) exec \"$@\";; esac\n"
+        "#!/bin/sh\n{skip}case \"$*\" in *credential-fixture*) for last; do :; done; /bin/chmod 000 \"$last\";; esac\nexec \"$@\"\n"
     ))
     .unwrap();
 }

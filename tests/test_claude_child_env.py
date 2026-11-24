@@ -229,3 +229,57 @@ def test_launch_plan_skips_the_haiku_leg_on_a_host_without_claude(monkeypatch, t
     assert [l.id for l in resolver.plan_for_launch(only).legs] == ['claude-sonnet-5-5-high']
     from plangraph.planner.legs import spawnable_legs
     assert any(l.id == 'claude-sonnet-5-5-high' for l in spawnable_legs())
+
+
+def drive_args(monkeypatch, tmp_path, *, client, model, role):
+    """Run SpawnerRunner.spawn up to the exec boundary; return (args, env) the harness would get."""
+    monkeypatch.setenv('HOME', '/h')
+    monkeypatch.setenv('XDG_CONFIG_HOME', '/xdg')
+    monkeypatch.setenv('PG_DSN', 'fixture-parent-secret')       # a spawner secret that must not reach the run
+    monkeypatch.setenv('CODEX_HOME', '/codex')
+    monkeypatch.setenv('OPENAI_API_KEY', 'fixture-key')
+    monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', 'fixture-gateway-key')
+    monkeypatch.setenv('PATH', os.pathsep.join([str(fake_binary(tmp_path / 'bin', client)), '/bin', '/usr/bin']))
+    monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    async def factory(exe, *args, **kw):
+        seen['args'], seen['env'] = list(args), dict(kw['env'])
+        raise Stop
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    try:
+        asyncio.run(runner.spawn('review this', model, role=role, client=client, cwd=str(tmp_path)))
+    except Stop:
+        pass
+    return seen.get('args'), seen.get('env')
+
+
+def test_the_routed_codex_run_gets_the_deny_profile_and_no_spawner_secret(monkeypatch, tmp_path):
+    args, env = drive_args(monkeypatch, tmp_path, client='codex', model='omniroute/cx-gpt-6.2-sol-high', role='review')
+    assert args is not None
+    line = ' '.join(args)
+    assert 'default_permissions="plangraph_review"' in line
+    for path in ('~/.ssh', '~/.config/plangraph', '~/.local/share/plangraph/keeper.json', '/xdg/plangraph'):
+        assert f'"{path}"="none"' in line, path
+    assert 'shell_environment_policy.inherit="core"' in line and '"OPENAI_*"' in line
+    assert args[0] == 'exec'
+    names_only = sorted(name for name in env if name in ('PG_DSN',))
+    assert names_only == [], 'a spawner secret reached the codex child: ' + ', '.join(names_only)
+    assert 'CODEX_HOME' in env and 'OPENAI_API_KEY' in env and 'PATH' in env
+    assert 'AUTOOS_OMNIROUTE_KEY' in env      # the gateway client key the Codex process itself needs
+
+
+@pytest.mark.parametrize('role', ['implement', 'review'])
+def test_every_claude_route_denies_the_built_in_read_tools_on_secret_paths(monkeypatch, tmp_path, role):
+    import json
+    args, env = drive_args(monkeypatch, tmp_path, client='claude', model='claude-haiku-5-5', role=role)
+    assert args is not None and args.count('--settings') == 1
+    deny = json.loads(args[args.index('--settings') + 1])['permissions']['deny']
+    for rule in ('Read(~/.ssh/**)', 'Read(~/.config/plangraph/**)', 'Read(~/.local/share/plangraph/keeper.json)',
+                 'Read(//xdg/plangraph/**)'):
+        assert rule in deny, rule
+    assert 'PG_DSN' not in env
