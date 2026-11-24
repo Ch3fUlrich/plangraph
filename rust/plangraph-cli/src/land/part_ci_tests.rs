@@ -124,3 +124,31 @@ fn the_build_command_refuses_without_part_runs_before_it_reads_main() {
     let err = super::cli::run_inner(dir.path(), &args, &python).unwrap_err();
     assert!(err.contains("missing --part-ci"), "{err}");
 }
+
+#[test]
+fn the_accepted_part_runs_are_written_next_to_the_manifest() {
+    let w = world();
+    let head = w.fx.commit(&w.train, "a.txt", "a\n");
+    let dir = tempfile::tempdir().unwrap();
+    let runs = dir.path().join("runs.json");
+    let spare = run(9, &head, &w.train, "success");
+    let mine = run(1, &head, &w.train, "success");
+    std::fs::write(
+        &runs,
+        serde_json::to_vec(&vec![spare, mine.clone()]).unwrap(),
+    )
+    .unwrap();
+    let flags: std::collections::BTreeMap<String, String> = [
+        ("part-ci", runs.to_str().unwrap()),
+        ("previous-train", w.train.as_str()),
+        ("out", dir.path().join("out").to_str().unwrap()),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    gate_cli(&flags, w.fx.path(), &[part(1, &head, None)], "t1").unwrap();
+    let written: Vec<PartCi> =
+        serde_json::from_slice(&std::fs::read(dir.path().join("out/t1.part-ci.json")).unwrap())
+            .unwrap();
+    assert_eq!(written, vec![mine]);
+}

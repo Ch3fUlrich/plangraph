@@ -26,8 +26,11 @@ impl GoRow {
     /// The row as the decisions log holds it: `| D-N | project | GO #PR GO-HEAD head | by | why |`.
     pub fn line(&self, d_id: &str) -> String {
         format!(
-            "| {d_id} | {} | GO #{} GO-HEAD {} | {} | {} |",
-            self.project, self.pr, self.head, self.by, self.why
+            "| {d_id} | {} | {} | {} | {} |",
+            self.project,
+            crate::router_batch::go_decision_cell(self.pr, &self.head),
+            self.by,
+            self.why
         )
     }
 }
@@ -61,10 +64,10 @@ pub struct Published {
     pub attempts: usize,
 }
 
-/// The next free D-id of `text`: one above the highest `| D-N |` row outside fenced code.
-pub fn next_id(text: &str) -> String {
+/// The `(number, line)` of every `| D-N |` row outside fenced code, as the canonical reader sees rows.
+fn rows(text: &str) -> Vec<(u64, &str)> {
     let mut fenced = false;
-    let mut top = 0u64;
+    let mut out = Vec::new();
     for line in text.lines() {
         let t = line.trim_start();
         if t.starts_with("```") || t.starts_with("~~~") {
@@ -77,9 +80,15 @@ pub fn next_id(text: &str) -> String {
                     (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(n)
                 })
                 .and_then(|n| n.parse::<u64>().ok());
-            top = top.max(id.unwrap_or(0));
+            out.extend(id.map(|n| (n, line)));
         }
     }
+    out
+}
+
+/// The next free D-id of `text`: one above the highest `| D-N |` row outside fenced code.
+pub fn next_id(text: &str) -> String {
+    let top = rows(text).iter().map(|(n, _)| *n).max().unwrap_or(0);
     format!("D-{}", top + 1)
 }
 
@@ -102,8 +111,13 @@ fn check_read_back(
     go: &GoRow,
     reader: &dyn Reader,
 ) -> Result<(), String> {
-    let marker = format!("| {d_id} |");
-    let own: Vec<&str> = after.lines().filter(|l| l.starts_with(&marker)).collect();
+    // Fenced examples are no rows: the reader and the allocation skip them too.
+    let number: u64 = d_id.trim_start_matches("D-").parse().unwrap_or(0);
+    let own: Vec<&str> = rows(after)
+        .into_iter()
+        .filter(|(n, _)| *n == number)
+        .map(|(_, line)| line)
+        .collect();
     match own.as_slice() {
         [] => return Err(format!("read-back: {d_id} is not on the protected branch")),
         [one] if *one == row => {}
@@ -140,6 +154,14 @@ pub fn publish(
     fresh: &dyn Fn(&str) -> Result<(), String>,
     max_attempts: usize,
 ) -> Result<Published, String> {
+    // The reader lowercases a head; the row is written the way it is read back.
+    if go.head.len() != 40 || !go.head.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("the GO head must be 40 hex digits".into());
+    }
+    let go = &GoRow {
+        head: go.head.to_ascii_lowercase(),
+        ..go.clone()
+    };
     for attempt in 1..=max_attempts {
         let (tip, text) = branch.read()?;
         fresh(&tip).map_err(|e| format!("stale: {e}"))?;
