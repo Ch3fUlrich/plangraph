@@ -329,7 +329,8 @@ fn evidence_without_the_schema_versions_does_not_parse() {
 }
 
 /// The production path of the two fields: the versions come from the pinned revisions of a git fixture and
-/// the `migration` from the exact GO statement, both through `land-train keeper-schema`.
+/// the `migration` from the GO statement of this exact pull request and head, both through
+/// `land-train keeper-schema`, and the evidence is then judged by `verify` for that same head.
 #[test]
 fn collected_schema_evidence_accepts_or_refuses_the_exact_go_row_by_its_migration_field() {
     use super::build_tests::{g, Fx};
@@ -351,22 +352,56 @@ fn collected_schema_evidence_accepts_or_refuses_the_exact_go_row_by_its_migratio
         sha
     };
     let (base, head) = (at(2, "two"), at(3, "three"));
+    // The evidence of a green train whose head is the fixture head, in every place that binds it.
+    let bound = |fields: &serde_json::Value| {
+        let mut e = green();
+        e.base = base.clone();
+        e.head = head.clone();
+        e.observed.pr_head = head.clone();
+        e.observed.pr_base = base.clone();
+        e.observed.main_tip = base.clone();
+        e.replay.base = base.clone();
+        e.replay.train_sha = head.clone();
+        e.ci.head = head.clone();
+        e.delta.as_mut().unwrap().head = head.clone();
+        e.approvals[0].head = head.clone();
+        e.keeper_schema = serde_json::from_value(fields["keeper_schema"].clone()).unwrap();
+        e.approvals[0].migration = serde_json::from_value(fields["migration"].clone()).unwrap();
+        e
+    };
     let collect = |statement: &str| {
         let flags = std::collections::BTreeMap::from([
             ("repo".to_string(), fx.path().display().to_string()),
             ("base".to_string(), base.clone()),
             ("head".to_string(), head.clone()),
             ("go-statement".to_string(), statement.to_string()),
+            ("pr".to_string(), "9".to_string()),
+            ("slug".to_string(), "owner/name".to_string()),
         ]);
-        let line = super::keeper_schema::run_cli(&flags).unwrap().remove(0);
-        let fields: serde_json::Value = serde_json::from_str(&line).unwrap();
-        let mut e = green();
-        e.keeper_schema = serde_json::from_value(fields["keeper_schema"].clone()).unwrap();
-        e.approvals[0].migration = serde_json::from_value(fields["migration"].clone()).unwrap();
-        codes(&e)
+        super::keeper_schema::run_cli(&flags)
     };
-    let row = |tail: &str| format!("GO owner/name PR #9 GO-HEAD {HEAD}{tail}");
-    assert_eq!(collect(&row("; MIGRATION 3; PLAN x")), Vec::<&str>::new());
-    assert_eq!(collect(&row("; MIGRATION 2")), ["migration_missing"]);
-    assert_eq!(collect(&row("")), ["migration_missing"]);
+    let verdict = |statement: &str| {
+        let line = collect(statement)?.remove(0);
+        let fields: serde_json::Value = serde_json::from_str(&line).unwrap();
+        Ok::<_, String>(codes(&bound(&fields)))
+    };
+    let row = |tail: &str| format!("GO owner/name PR #9 GO-HEAD {head}{tail}");
+    assert_eq!(verdict(&row("; MIGRATION 3; PLAN x")), Ok(vec![]));
+    assert_eq!(
+        verdict(&row("; MIGRATION 2")),
+        Ok(vec!["migration_missing"])
+    );
+    assert_eq!(verdict(&row("")), Ok(vec!["migration_missing"]));
+    assert_eq!(
+        verdict(&row("; MIGRATION +3")).map_err(|e| e.contains("malformed")),
+        Err(true)
+    );
+    // A GO row for another head or pull request supplies no evidence at all.
+    let other = format!(
+        "GO owner/name PR #9 GO-HEAD {}; MIGRATION 3",
+        "c".repeat(40)
+    );
+    assert!(collect(&other).unwrap_err().contains("not #9 at"));
+    let wrong_pr = format!("GO owner/name PR #10 GO-HEAD {head}; MIGRATION 3");
+    assert!(collect(&wrong_pr).is_err());
 }

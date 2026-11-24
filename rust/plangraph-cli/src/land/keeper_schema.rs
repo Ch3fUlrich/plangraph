@@ -9,19 +9,22 @@ use std::path::Path;
 /// The file whose `MIGRATIONS` registry defines the version.
 pub const SCHEMA_PATH: &str = "src/plangraph/keeper/schema_pg.py";
 
-/// The offset of the `(` of the one top-level `MIGRATIONS = (` assignment. Strings and comments are skipped
-/// from the start of the file, so an example in a docstring or a comment is not the registry; a second
-/// top-level assignment, or none, is an error, as in the AST reader of the batch land gate.
+/// The offset of the opening bracket of the one top-level `MIGRATIONS = (...)` assignment, whatever its
+/// spacing (`MIGRATIONS=(` too). Strings and comments are skipped from the start of the file, so an example in
+/// a docstring or a comment is not the registry. Like the AST reader of the batch land gate, a second
+/// top-level assignment, none, or a value that is not a tuple or list is an error.
 fn find_registry(text: &str) -> Result<usize, String> {
     let (mut found, mut depth, mut i) = (None, 0u32, 0);
     while i < text.len() {
         let rest = &text[i..];
         let at_line_start = i == 0 || text[..i].ends_with('\n');
-        if depth == 0 && at_line_start && rest.starts_with("MIGRATIONS = (") {
-            if found.is_some() {
-                return Err("more than one MIGRATIONS registry".into());
+        if depth == 0 && at_line_start {
+            if let Some(open) = registry_assignment(rest)? {
+                if found.is_some() {
+                    return Err("more than one MIGRATIONS registry".into());
+                }
+                found = Some(i + open);
             }
-            found = Some(i + "MIGRATIONS = ".len());
         }
         i += match rest.as_bytes()[0] {
             b'#' | b'"' | b'\'' => literal_len(rest),
@@ -37,6 +40,25 @@ fn find_registry(text: &str) -> Result<usize, String> {
         };
     }
     found.ok_or_else(|| "no MIGRATIONS registry".into())
+}
+
+/// For a line start that reads `MIGRATIONS <spaces> = <spaces> VALUE`: the offset of the first byte of
+/// VALUE, an error unless it opens a tuple or a list. `None` for any other line (`==`, `MIGRATIONS_X`).
+fn registry_assignment(line: &str) -> Result<Option<usize>, String> {
+    let Some(rest) = line.strip_prefix("MIGRATIONS") else {
+        return Ok(None);
+    };
+    let blank = |c: char| c == ' ' || c == '\t';
+    let after_name = rest.trim_start_matches(blank);
+    let Some(value) = after_name.strip_prefix('=').filter(|v| !v.starts_with('=')) else {
+        return Ok(None);
+    };
+    let value = value.trim_start_matches(blank);
+    if value.starts_with(['(', '[']) {
+        Ok(Some(line.len() - value.len()))
+    } else {
+        Err("the MIGRATIONS registry is not a tuple or list of Migration(...) calls".into())
+    }
 }
 
 /// The version of the top-level `MIGRATIONS = (...)` registry: the numbers of its direct `Migration(N, ...)`
@@ -62,12 +84,14 @@ pub fn parse_latest(text: &str) -> Result<u32, String> {
                 depth += 1;
                 1
             }
-            b'(' if depth == 1 => return Err("a registry entry is not Migration(N, ...)".into()),
-            b'(' => {
+            b'(' | b'[' | b'{' if depth == 1 => {
+                return Err("a registry entry is not Migration(N, ...)".into())
+            }
+            b'(' | b'[' | b'{' => {
                 depth += 1;
                 1
             }
-            b')' => {
+            b')' | b']' | b'}' => {
                 depth -= 1;
                 if depth == 0 {
                     if versions.iter().zip(1u32..).any(|(v, n)| *v != n) {
@@ -152,38 +176,25 @@ pub fn rise(repo: &Path, base: &str, head: &str) -> Result<Option<u32>, String> 
     Ok((after > before).then_some(after))
 }
 
-/// The standalone `MIGRATION <version>` field of a GO statement (`GO ... GO-HEAD SHA; MIGRATION 3; ...`),
-/// as the batch land gate reads it: `;`-separated fields after the first, exactly one starting `MIGRATION `.
-/// `None` when the statement has none; more than one, or a value that is not a number, is an error.
-pub fn migration_field(statement: &str) -> Result<Option<u32>, String> {
-    let fields: Vec<&str> = statement
-        .split(';')
-        .skip(1)
-        .map(str::trim)
-        .filter(|f| f.starts_with("MIGRATION "))
-        .collect();
-    match fields.as_slice() {
-        [] => Ok(None),
-        [one] => one["MIGRATION ".len()..]
-            .trim()
-            .parse::<u32>()
-            .map(Some)
-            .map_err(|_| format!("malformed field {one:?}")),
-        _ => Err("the GO statement has more than one MIGRATION field".into()),
-    }
-}
-
-/// `land-train keeper-schema --repo DIR --base SHA --head SHA [--go-statement TEXT]`: the two evidence fields
-/// of a train as one JSON line, `{"keeper_schema": {"base": N, "head": M}, "migration": K|null}`. The
-/// versions come from the pinned revisions; `migration` is the field of the exact GO row's statement.
+/// `land-train keeper-schema --repo DIR --base SHA --head SHA [--go-statement TEXT --pr N --slug OWNER/NAME]`:
+/// the two evidence fields of a train as one JSON line, `{"keeper_schema": {"base": N, "head": M},
+/// "migration": K|null}`. The versions come from the pinned revisions; `migration` is the field of the GO
+/// statement, which must name this exact pull request and head or the command refuses.
 pub(super) fn run_cli(
     flags: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<String>, String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
     let repo = Path::new(need("repo")?);
-    let (base, head) = (at(repo, need("base")?)?, at(repo, need("head")?)?);
+    let head_rev = need("head")?;
+    let (base, head) = (at(repo, need("base")?)?, at(repo, head_rev)?);
     let migration = match flags.get("go-statement") {
-        Some(text) => migration_field(text)?,
+        Some(text) => {
+            let pr = need("pr")?
+                .parse::<u64>()
+                .map_err(|e| format!("--pr: {e}"))?;
+            let full = git::out(repo, &["rev-parse", &format!("{head_rev}^{{commit}}")])?;
+            super::go_statement::migration_for(text, need("slug")?, pr, &full)?
+        }
         None => None,
     };
     Ok(vec![serde_json::json!({
