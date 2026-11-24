@@ -230,6 +230,12 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
         .get("prompt")
         .and_then(Value::as_str)
         .ok_or_else(|| parameter("prompt must be a string"))?;
+    guard_lanes(
+        state,
+        &pg_spawnd::lane_admission::claude_sessions_dir(),
+        args,
+        prompt,
+    )?;
     let mut argv = route_args(args)?;
     argv[0] = "spawn".into();
     argv.extend(["--".into(), prompt.into()]);
@@ -240,6 +246,25 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
         // The adapter only waits for base admission; callers poll the durable record.
     }
     native_call(state, &argv, Duration::from_secs(200))
+}
+/// Refuse an item another live lane holds; `lane_override` (a reason) admits a second lane.
+fn guard_lanes(state: &Path, sessions: &Path, args: &Args, prompt: &str) -> Result<(), ToolError> {
+    let reason = match args.get("lane_override") {
+        None | Some(Value::Null) => pg_spawnd::batch_writer_brief::lane_override(prompt),
+        Some(value) => Some(value.as_str().unwrap_or("").to_owned()),
+    };
+    let keys = pg_spawnd::lane_admission::submission_keys(prompt, &args["card"]);
+    pg_spawnd::lane_admission::check(
+        (state, &sessions),
+        "native-submit",
+        &keys,
+        reason.as_deref(),
+    )
+    .map_err(|message| ToolError::Refused {
+        kind: RefusalKind::Spawn,
+        message,
+        legs: vec![],
+    })
 }
 fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value, ToolError> {
     let (code, bytes, line) = Adapter(state).run(argv, timeout)?;
@@ -281,3 +306,7 @@ pub(crate) fn native_control(state: &Path, record: &Value, verb: &str) -> Result
     }
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "placement_lane_tests.rs"]
+mod lane_tests;
