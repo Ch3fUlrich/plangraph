@@ -454,3 +454,45 @@ exit 0"#,
     let blocked = super::deploy_post::run_cli(&flags).unwrap_err();
     assert!(blocked.contains("earlier first run failed"), "{blocked}");
 }
+
+#[test]
+fn a_timer_shipped_for_other_items_still_gets_a_row_for_every_service_item() {
+    let mut host = Host::default();
+    host.runs.insert("a.service".into(), oneshot_ok());
+    host.runs.insert("a.timer".into(), active());
+    let rows = Rows::default();
+    let mut state = PostState::default();
+    // Part 1 ships the service (item A), part 2 ships its timer (item B).
+    let targets = [
+        target("a.service", "alpha", &["demo:A"]),
+        target("a.timer", "alpha", &["demo:B"]),
+    ];
+    run(&targets, &host, &rows, &mut state).unwrap();
+    let mut got: Vec<_> = rows
+        .0
+        .borrow()
+        .iter()
+        .map(|r| (r.key.clone(), r.unit.clone()))
+        .collect();
+    got.sort();
+    let want = [
+        ("demo:A", "a.service"),
+        ("demo:A", "a.timer"),
+        ("demo:B", "a.timer"),
+    ];
+    assert_eq!(got, want.map(|(k, u)| (k.to_string(), u.to_string())));
+}
+
+/// The JSON the landing-train doc tells a read command to print.
+#[test]
+fn the_documented_read_json_is_judged_good() {
+    let oneshot: RunRead = serde_json::from_str(
+        r#"{"is_active":"inactive","oneshot":true,"result":"success","exec_main_exit_timestamp":"2026-11-24T01:00:00Z"}"#,
+    )
+    .unwrap();
+    assert!(oneshot.good("a.service"));
+    let bin: RunRead = serde_json::from_str(r#"{"is_active":"installed"}"#).unwrap();
+    assert!(bin.good("bin:tool"));
+    let svc: RunRead = serde_json::from_str(r#"{"is_active":"active"}"#).unwrap();
+    assert!(svc.good("a.service") && svc.good("a.timer"));
+}
