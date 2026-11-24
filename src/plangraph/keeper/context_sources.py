@@ -175,8 +175,12 @@ def _work_log(git, repo, refs, target, previous):
 _WORK_INDEX_CACHE_LOCK = threading.Lock()
 
 
-def work_index(git, project, *, fresh=False, incremental=False):
+def work_index(git, project, *, fresh=False, incremental=False, window=0):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
+
+    A fresh read still serves an index that finished refreshing, without a problem,
+    less than *window* seconds ago, so concurrent and back-to-back claims on one
+    repository share one origin fetch.
 
     Read all commit trailers and topology together, including hosted open PR
     heads. Fresh reads revalidate the complete log. The merge-close scan may
@@ -189,6 +193,8 @@ def work_index(git, project, *, fresh=False, incremental=False):
     cache_key = (repo, ref)
     hit = cache.get(cache_key)
     if not fresh and hit and time.monotonic() - hit[0] < _REFS_TTL:
+        return hit[1]
+    if fresh and window > 0 and hit and not hit[1]["stale"] and time.monotonic() - hit[0] < window:
         return hit[1]
     step = f"work index for {project}"
     timing.check_io_deadline(step)
