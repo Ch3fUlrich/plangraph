@@ -10,10 +10,13 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+pub mod apply;
+pub mod fleet;
 pub mod guard;
 pub mod install;
 pub mod ledger;
 pub mod live;
+pub mod plan;
 pub mod report;
 pub mod scan;
 pub mod systemd;
@@ -46,9 +49,13 @@ pub struct UnitEntry {
     pub scope: Scope,
     #[serde(default)]
     pub hosts: Vec<String>,
-    /// Names of the files under the config directory the unit reads; never their values.
+    /// Names of the files under the config directory the unit reads; never their values. `a|b` means
+    /// either file serves.
     #[serde(default)]
     pub env_files: Vec<String>,
+    /// The `host-sync --install-env` family that creates the env files from documented defaults; an env
+    /// file without one is reported by name for the operator (a secret is never created).
+    pub env_family: Option<String>,
     /// What proves the unit works after the first start; the status also reads the last run result.
     pub first_run: Option<String>,
     pub not_deployed: Option<String>,
@@ -193,7 +200,7 @@ impl Manifest {
                 }
             }
             unit.enable_unit()?;
-            for env in &unit.env_files {
+            for env in unit.env_files.iter().flat_map(|e| e.split('|')) {
                 if env.starts_with('/')
                     || env.contains(['=', ' ', '\\'])
                     || env.contains("..")
@@ -321,6 +328,10 @@ pub fn this_host_roles(config_dir: &Path) -> Result<BTreeSet<String>, String> {
     )
 }
 
+#[cfg(test)]
+mod apply_tests;
+#[cfg(test)]
+mod fleet_tests;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]

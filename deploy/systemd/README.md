@@ -146,6 +146,33 @@ time when the monitor has one. Use `ssh-status` to guard steps with side effects
 the selected SSH route has a confirmed outage.
 
 
+## Install everything: `host-sync --install`
+
+One command makes a host complete: `host-sync --install [--repo PATH]` reads `deploy/manifest.toml`, computes what
+the host's roles need and prints the plan before it changes anything (`plan<TAB>kind<TAB>name<TAB>before<TAB>action`:
+a binary not installed or older than the checkout's Rust tree, a unit file missing or different from the
+checkout, a timer not enabled or not active, an env file missing). It then builds and installs the release
+binaries, creates the env files of a manifest `env_family` from the documented defaults, copies and enables the
+user units, re-reads the state and prints `result<TAB>...<TAB>ok|still: ...` per row. A second run prints
+`nothing to do`. `--check` stops after the plan and exits 1 while anything is missing. An env file without a
+family (a secret, or `disk-hygiene.env` of the sweep, provisioned by `deploy/bootstrap.sh`) is named as
+`OPERATOR: provide <file>` and its unit is not enabled; a root (system scope) unit is listed as
+`OPERATOR: install as root` and never installed. Each run writes the deploy ledger. The first-run check of an
+entry is the live state read after the install (loaded, enabled, active, last run not failed); the `first_run`
+text of the manifest says what an operator verifies beyond that. `plangraph-host-sync.timer` runs the command
+every 30 minutes after a `git pull --ff-only` of the checkout, so a host repairs itself after every main change.
+Run `systemctl --user enable --now plangraph-host-sync.timer` once by hand on a host that has none (the manifest
+lists it like every other unit, so `--install` enables it everywhere after that).
+
+`host-sync --install --fleet` (and `--check --fleet`) does the same on every host of
+`~/.config/plangraph/hosts.json` from the center, in parallel: the local host runs the command itself, an `ssh`
+host through `ssh` (with `wsl.exe --distribution D --exec sh -lc` when the registry gives a `wsl_distro`), each
+running the same `host-sync --install --machine` (built with `cargo run` from the host's checkout when
+`host-sync` is not installed yet). The result is one table (`<host><TAB>plan|result|OK|PENDING|FAIL<TAB>...`) and
+the ledger of every host that answered is written to the center's `deploy-live/` directory, where the GO check
+reads it. A host that cannot be reached, answers no result or has a transport without an install path (`keeper`)
+is a `FAIL` row, and the exit status is 1 while any host or entry is missing.
+
 ## Host units
 
 `host-sync --install-units REPO [--scope user|system]` copies the unit files of every deployed family the

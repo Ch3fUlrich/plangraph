@@ -1,0 +1,12 @@
+[Unit]
+Description=Repair this host against the deploy manifest every thirty minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=30s
+Persistent=true
+Unit=plangraph-host-sync.service
+
+[Install]
+WantedBy=timers.target

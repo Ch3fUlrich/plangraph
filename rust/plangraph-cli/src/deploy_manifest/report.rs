@@ -108,6 +108,17 @@ pub fn status(
     facts: &dyn HostFacts,
     ledger_path: Option<&Path>,
 ) -> Result<Vec<String>, String> {
+    status_full(repo, roles, sysctl, facts, ledger_path).map(|(lines, _)| lines)
+}
+
+/// [`status`] that also returns the ledger it wrote.
+pub fn status_full(
+    repo: &Path,
+    roles: &BTreeSet<String>,
+    sysctl: &dyn Systemctl,
+    facts: &dyn HostFacts,
+    ledger_path: Option<&Path>,
+) -> Result<(Vec<String>, Ledger), String> {
     let manifest = Manifest::load_from_repo(repo)?;
     let entries = read_live(&manifest, roles, sysctl, facts);
     let now = facts.now();
@@ -119,7 +130,7 @@ pub fn status(
     if let Some(path) = ledger_path {
         ledger::save(path, &next)?;
     }
-    Ok(lines(&entries, &next, now))
+    Ok((lines(&entries, &next, now), next))
 }
 
 fn xdg(home: &Path, key: &str, rel: &str) -> PathBuf {
@@ -181,7 +192,7 @@ pub fn ledger_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("deploy-live")
 }
 
-fn host_id() -> String {
+pub fn host_id() -> String {
     std::env::var("PLANGRAPH_HOST_NAME")
         .ok()
         .filter(|v| !v.trim().is_empty())

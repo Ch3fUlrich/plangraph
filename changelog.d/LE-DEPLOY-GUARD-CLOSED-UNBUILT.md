@@ -17,3 +17,6 @@ is refused with `evidence_unverified: live_evidence_missing`.
 `plangraph deploy-status --summary` prints it alone for the operator's daily line.
 Every item, not only one with a `Live:` clause, now needs a verified deploy evidence row or a
 `no deploy needed: <reason>` line to close (D-6790); an empty reason is refused as `no_deploy_reason_empty`.
+`host-sync --install` is the one command that makes a host complete from the manifest (plan, `--check`, install
+binaries, units, timers and env defaults, ledger, idempotent), `plangraph-host-sync.timer` runs it, and
+`host-sync --install --fleet` runs it on every host of the hosts registry over ssh from the center.

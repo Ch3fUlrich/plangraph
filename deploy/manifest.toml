@@ -3,6 +3,8 @@
 #
 # Roles, not host names: `keeper` (the keeper host), `worker` (a spawn worker host), `wsl` (a WSL
 # worker host) and `all`. A host lists its roles in PG_HOST_ROLES or in ~/.config/plangraph/host-roles.
+# env_family names the `host-sync --install-env` family that creates the env files from documented defaults;
+# without it a missing env file is reported by name for the operator (secrets are never created).
 # env_files are file names under ~/.config/plangraph (or /etc/plangraph for system units), never values.
 # first_run is what an operator checks after the first start; `plangraph deploy-status` also reads the
 # unit's active state, enabled state and last run result.
@@ -19,6 +21,12 @@ hosts = ["all"]
 first_run = "systemctl --user start pg-deploy-status.service lists every entry and writes ~/.local/state/plangraph/deploy-live/<host>.json"
 
 [[unit]]
+name = "plangraph-host-sync"
+files = ["plangraph-host-sync.service", "plangraph-host-sync.timer"]
+hosts = ["all"]
+first_run = "systemctl --user start plangraph-host-sync.service journals 'nothing to do' on a complete host"
+
+[[unit]]
 name = "pg-feeder"
 files = ["pg-feeder.service", "pg-feeder.timer"]
 hosts = ["keeper"]
@@ -30,13 +38,15 @@ name = "pg-throughput"
 files = ["pg-throughput.service", "pg-throughput.timer"]
 hosts = ["keeper"]
 env_files = ["throughput.env"]
+env_family = "throughput"
 first_run = "systemctl --user start pg-throughput.service exits 0; the throughput snapshot file is written"
 
 [[unit]]
 name = "pg-disk-hygiene"
 files = ["pg-disk-hygiene.service", "pg-disk-hygiene.timer"]
 hosts = ["all"]
-env_files = ["disk-hygiene.env", "disk-hygiene-service.env"]
+env_files = ["disk-hygiene-service.env|disk-hygiene.env"]
+env_family = "disk-hygiene"
 first_run = "pg-disk-hygiene --repo REPO --root WORKTREES --pins PINS (dry run) lists candidates, then the service exits 0"
 
 [[unit]]
@@ -145,6 +155,7 @@ name = "plangraph-quota-alarms"
 files = ["plangraph-quota-alarms.service", "plangraph-quota-alarms.timer"]
 hosts = ["keeper"]
 env_files = ["quota-alarms.env"]
+env_family = "quota-alarms"
 first_run = "systemctl --user start plangraph-quota-alarms.service exits 0 (QUOTA_SNAPSHOT_DB is set in the env file)"
 
 [[unit]]
