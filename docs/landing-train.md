@@ -86,7 +86,7 @@ evidence base the ACCEPT still carries and the part CI runs again. A rebase happ
 conflict. A flake verdict (a red that also fails without the patch, or a hung test) decides only what
 voids an ACCEPT; it never lets a red required CI merge. `evidence-red --red FILE --ci-green BOOL --main-state FILE` prints whether a red is a flake and, separately,
 whether the merge gate lets the batch in. `evidence-assess --records-out FILE --day D` and `evidence-record`
-append the log lines; `evidence-report --records FILE` prints per day the rebases, carried ACCEPTs and CI
+append the log lines; `evidence-report --records FILE` prints per day the rebases (assessments where the head changed), carried ACCEPTs and CI
 runs, re-reviews and fix rounds caused by a rebase.
 
 ## Push a built train

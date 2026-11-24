@@ -20,12 +20,12 @@ train whose CI has started" is (`Denied::CiStarted`).
 | CI | `CiResult`, `CiRed`, `CiRedFix` and `FixInPlace` (the first red round only) |
 | Retry groups | `StartRetry`; groups run before any ordinary selection |
 | Speculative next train | `Speculate`, `Promote` (tested fast-forward only) |
-| Conflict, drop, revert | `Conflict`, `Drop`, `Revert` |
+| Conflict, drop, revert | `Conflict`, `Adopt` (a resolution, refused once CI has started), `Drop`, `Revert` |
 | Settlement | `Settle`, `SettleLegacy` (no included list), `VerifyOutcome` |
 | Main | `MainMove` |
 
 Dispositions of a ready part that does not ride: `Overlap` (names the part; deferred while its wait is
-under the bound), `ParentNotLanded`, `Target`, `Cap`, `Conflict`, `Descendant`, and retry (a held part).
+under the bound), `ParentNotLanded`, `Target`, `Cap`, `Conflict`, `Dropped`, `Descendant`, and retry (a held part).
 Each has a verifier rule that accepts it only when its facts hold; `VerifyComplete` refuses a ready part
 with neither a place nor a reason. A legacy settled train (no included list) verifies nothing: its child
 waits for `VerifyOutcome`. After two red rounds the builder stops fixing in place; a landing whose tree is
@@ -41,7 +41,7 @@ predecessor.
   retry group of seven runs although no ordinary part is due, a legacy settled train whose child waits for
   the verified outcome, the child of a reverted part refused at registration and at build, a stack of three
   or more dropped or reverted while held, a restart that keeps deferral age and red rounds.
-- `tests/exhaustive.rs`: every ordering of the alphabet to depth 12 over four parts (a stack of three with
+- `tests/exhaustive.rs`: every ordering of the alphabet to depth 8 over four parts (a stack of three with
   an overlap, and an independent part), under policy (a), policy (b) and the default.
 - `tests/replay.rs`: replay of trains 9 to 16 (`fixtures/trains_9_16.json`, 52 batches from git history;
   ready = committer time of the batch head, paths = indices of the files of its own diff). The ignored test

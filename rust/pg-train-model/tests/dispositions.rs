@@ -176,3 +176,29 @@ fn conflict_and_descendant_are_accepted_for_a_real_conflict_and_refused_otherwis
     record(&mut m, 1, Disposition::Descendant { of: 2 });
     assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
 }
+
+#[test]
+fn a_drop_from_an_open_train_leaves_a_reason_the_verifier_accepts() {
+    let specs = vec![spec(1, None), spec(2, Some(0)), spec(4, None)];
+    let mut m = Model::new(policy(4, 2, 1, Order::Oldest), specs);
+    register_all(&mut m, [0, 1, 2]);
+    ok(&mut m, Event::Tick);
+    ok(&mut m, Event::Select);
+    ok(&mut m, Event::Drop { part: 0 });
+    assert_eq!(
+        m.left_out(0),
+        [
+            (0, Disposition::Dropped),
+            (1, Disposition::Descendant { of: 0 })
+        ]
+    );
+    assert_eq!(verify(&mut m, 0), Ok(Outcome::Accepted));
+    assert_eq!(verify(&mut m, 1), Ok(Outcome::Accepted));
+    // Refused: a drop recorded for a part that is still ready.
+    record(&mut m, 1, Disposition::Dropped);
+    assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
+    assert_eq!(
+        ok(&mut m, Event::VerifyComplete { train: 0 }),
+        Outcome::Accepted
+    );
+}
