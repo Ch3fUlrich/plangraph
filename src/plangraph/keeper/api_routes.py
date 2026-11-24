@@ -388,10 +388,12 @@ class MergeRefresh:
                 candidates = scan.merge_candidates()
             scan.warm_merge_scan(candidates)
             published = {field: scan.__dict__[field] for field in
-                         ("_warmed", "_lanes", "_deploy_warm", "_merge_scan_errors")}
+                         ("_warmed", "_lanes", "_deploy_warm", "_merge_scan_errors", "_landings",
+                          "_landing_decisions")}
         except Exception as exc:
             published = dict(_warmed={}, _lanes={}, _deploy_warm={},
-                             _merge_scan_errors={"*": f"merge_scan_failed: {type(exc).__name__}"})
+                             _merge_scan_errors={"*": f"merge_scan_failed: {type(exc).__name__}"},
+                             _landing_decisions=None)
         with server.lock:
             server.store.__dict__.update(published)
             self.state = "ready"
