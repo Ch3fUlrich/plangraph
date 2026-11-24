@@ -1,5 +1,5 @@
 """Optional, bounded SSH fan-out for ps; transport diagnostics stay private."""
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 import json
 import os
 from pathlib import Path
@@ -15,6 +15,8 @@ MAX_OUTPUT = 1024 * 1024
 MAX_WORKERS = 16
 
 TIMEOUT = 3
+# A WSL guest or Windows host answers through wsl.exe or cmd.exe, which starts slower.
+SLOW_HOST_FACTOR = 3
 FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code', 'item_key')
 FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
                    started=(int, float), ended=(int, float, type(None)),
@@ -200,6 +202,34 @@ def query_host(host, timeout):
             process.wait()
 
 
+def host_timeout(host):
+    """The query budget of one host; a WSL or Windows hop gets a longer one."""
+    slow = 'wsl_distro' in host or 'win_src' in host
+    return TIMEOUT * SLOW_HOST_FACTOR if slow else TIMEOUT
+
+
+def registry_sources(directory):
+    """Checkout paths from the host registry, by host id, alias and SSH target.
+
+    The registry is the one source of a host's checkout path: a stale `ps-hosts.json`
+    must not make a healthy host report `host src missing`. No readable, valid registry
+    gives an empty map and the configured paths stand.
+    """
+    from plangraph.fleet_sync import genconfig
+    try:
+        registry = json.loads((directory / 'hosts.json').read_text())
+        derived = genconfig.generate(registry)['ps-hosts.json']['hosts']
+        by_id = {entry['name']: entry for entry in derived}
+        names = {}
+        for entry in registry['hosts']:
+            if entry['id'] in by_id:
+                for key in (entry['id'], entry.get('ssh_target'), *entry.get('aliases', [])):
+                    names.setdefault(key, by_id[entry['id']])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+    return names
+
+
 def configured_hosts():
     path = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
     try:
@@ -234,6 +264,13 @@ def configured_hosts():
             validated.append(dict(name='invalid-config', invalid=True))
         else:
             validated.append(host)
+    sources = registry_sources(path / 'plangraph')
+    for index, host in enumerate(validated):
+        entry = sources.get(host.get('name')) or sources.get(host.get('target'))
+        if entry and not host.get('invalid'):
+            keep = {k: v for k, v in host.items() if k not in ('src', 'win_src', 'wsl_distro')}
+            validated[index] = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro')
+                                          if k in entry}}
     return validated
 
 
@@ -242,7 +279,7 @@ def _fetch(host, transport):
         if host.get('invalid'):
             return [dict(host=host['name'], status='unknown', reason='host query failed')]
         try:
-            payload = transport(host, TIMEOUT)
+            payload = transport(host, host_timeout(host))
         except Exception as exc:
             error = type(exc).__name__
             if isinstance(exc, HostQueryError) and type(exc.code) is int and 0 <= exc.code <= 255:
@@ -282,13 +319,23 @@ def list_runs(local, *, transport=query_host):
                                    reason='host query failed')]
     if not hosts:
         return local
+    pool = None
     try:
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(hosts))) as pool:
-            results = pool.map(lambda host: _fetch(host, transport), hosts)
-            return list(local) + [row for rows in results for row in rows]
+        pool = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(hosts)))
+        futures = [pool.submit(_fetch, host, transport) for host in hosts]
+        # One hung host must not hold the others: past the longest budget it is listed as failed.
+        wait(futures, timeout=max(host_timeout(host) for host in hosts) + 1)
+        rows = [row for host, future in zip(hosts, futures)
+                for row in (future.result() if future.done() else [dict(
+                    host=host['name'], status='unknown', reason='host query failed',
+                    error='TimeoutError')])]
+        return list(local) + rows
     except RuntimeError:
         return list(local) + [dict(host=h['name'], status='unknown',
                                   reason='host query failed') for h in hosts]
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
 
 _LIFECYCLE_PUBLISHER = 'PLANGRAPH_LIFECYCLE_PUBLISHER'
