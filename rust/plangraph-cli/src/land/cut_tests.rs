@@ -5,34 +5,34 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const TRAILERS: &str = "Plan-Item: plangraph:X\nWriter: claude-sonnet-5-5 session_abc\nHarness: claude\nChangelog: skip (test)";
+pub(super) const TRAILERS: &str = "Plan-Item: plangraph:X\nWriter: claude-sonnet-5-5 session_abc\nHarness: claude\nChangelog: skip (test)";
 
-fn gate() -> PathBuf {
+pub(super) fn gate() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/ci_commit_gate.py")
 }
 
-fn python() -> Command {
+pub(super) fn python() -> Command {
     crate::base_fresh::python_command(None)
 }
 
-struct Fx {
-    dir: tempfile::TempDir,
-    base: String,
+pub(super) struct Fx {
+    pub(super) dir: tempfile::TempDir,
+    pub(super) base: String,
 }
 
 impl Fx {
-    fn new() -> Fx {
+    pub(super) fn new() -> Fx {
         let dir = tempfile::tempdir().unwrap();
         g(dir.path(), &["init", "-q", "-b", "main"]);
         g(dir.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
         let base = g(dir.path(), &["rev-parse", "HEAD"]);
         Fx { dir, base }
     }
-    fn p(&self) -> &Path {
+    pub(super) fn p(&self) -> &Path {
         self.dir.path()
     }
     /// A source commit with the writer trailer block; `file` may be a gate file.
-    fn source(&self, file: &str, trailers: &str) -> String {
+    pub(super) fn source(&self, file: &str, trailers: &str) -> String {
         g(self.p(), &["checkout", "-q", "--detach", &self.base]);
         let path = self.p().join(file);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -46,11 +46,15 @@ impl Fx {
         g(self.p(), &["checkout", "-q", "main"]);
         sha
     }
-    fn cut(&self, commits: &[String], edits: &[(&str, &str)]) -> Result<Vec<String>, String> {
+    pub(super) fn cut(
+        &self,
+        commits: &[String],
+        edits: &[(&str, &str)],
+    ) -> Result<Vec<String>, String> {
         let granted: Vec<String> = edits.iter().map(|(_, d)| d.to_string()).collect();
         self.cut_granted(commits, edits, &granted)
     }
-    fn cut_granted(
+    pub(super) fn cut_granted(
         &self,
         commits: &[String],
         edits: &[(&str, &str)],
@@ -84,7 +88,7 @@ impl Fx {
             &python,
         )
     }
-    fn message(&self, rev: &str) -> String {
+    pub(super) fn message(&self, rev: &str) -> String {
         g(self.p(), &["log", "-1", "--format=%B", rev])
     }
 }
@@ -318,169 +322,4 @@ fn a_gate_edit_git_does_not_parse_in_the_source_but_the_gate_sees_after_cutting_
     );
     assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
     fx.cut_granted(&[src], &[], &["D-88".to_string()]).unwrap();
-}
-
-/// A repository whose base commit holds `gate_text` as `tools/ci_commit_gate.py`.
-fn fx_with_base_gate(gate_text: &str) -> Fx {
-    let fx = Fx::new();
-    std::fs::create_dir_all(fx.p().join("tools")).unwrap();
-    std::fs::write(fx.p().join("tools/ci_commit_gate.py"), gate_text).unwrap();
-    g(fx.p(), &["add", "-A"]);
-    g(fx.p(), &["commit", "-q", "-m", "base with gate"]);
-    let base = g(fx.p(), &["rev-parse", "HEAD"]);
-    Fx { base, ..fx }
-}
-
-fn args(list: &[&str]) -> Vec<String> {
-    list.iter().map(|a| a.to_string()).collect()
-}
-
-#[test]
-fn cut_uses_the_base_gate() {
-    let fx = fx_with_base_gate("import sys\nprint('BASE-GATE', *sys.argv[1:])\nsys.exit(1)\n");
-    let src = fx.source("a.txt", TRAILERS);
-    let base = fx.base.clone();
-    // The working copy holds a passing gate.
-    std::fs::write(
-        fx.p().join("tools/ci_commit_gate.py"),
-        "import sys\nsys.exit(0)\n",
-    )
-    .unwrap();
-    let go = |extra: &[&str]| {
-        let mut a = vec![
-            "cut",
-            "--repo",
-            fx.p().to_str().unwrap(),
-            "--base",
-            "HEAD",
-            "--branch",
-            "slice/a",
-            "--commits",
-            &src[..12],
-        ];
-        a.extend_from_slice(extra);
-        super::cli::run_inner(fx.p(), &args(&a), &python)
-    };
-    // The gate of the base commit refuses.
-    let err = go(&[]).unwrap_err();
-    assert!(err.contains("BASE-GATE"), "{err}");
-    // It is called with full commit ids, resolved once.
-    assert!(err.contains(&base), "{err}");
-    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
-    // No flag names another gate.
-    let err = go(&["--gate", "tools/ci_commit_gate.py"]).unwrap_err();
-    assert!(err.contains("--gate is not accepted"), "{err}");
-    // An abbreviated input is recorded as the full id.
-    let ok = fx_with_base_gate("import sys\nsys.exit(0)\n");
-    let src = ok.source("a.txt", TRAILERS);
-    let a = args(&[
-        "cut",
-        "--repo",
-        ok.p().to_str().unwrap(),
-        "--base",
-        "HEAD",
-        "--branch",
-        "slice/a",
-        "--commits",
-        &src[..12],
-    ]);
-    super::cli::run_inner(ok.p(), &a, &python).unwrap();
-    assert!(ok
-        .message("slice/a")
-        .contains(&format!("Picked-From: {src}")));
-}
-
-#[test]
-fn cut_check_refuses_an_ungranted_gate_edit() {
-    let fx = fx_with_base_gate(&std::fs::read_to_string(gate()).unwrap());
-    let flow = fx.source(
-        ".github/workflows/w.yml",
-        &format!("{TRAILERS}\nGate-Edit: D-5"),
-    );
-    // A hand-cut branch: a well-formed Gate-Edit, so the gate accepts it, but the record grants nothing for it.
-    g(fx.p(), &["checkout", "-q", "-b", "hand", &fx.base]);
-    g(fx.p(), &["cherry-pick", &flow]);
-    let msg = format!("{}\n\nPicked-From: {flow}", fx.message("HEAD"));
-    g(fx.p(), &["commit", "-q", "--amend", "-m", &msg]);
-    g(fx.p(), &["checkout", "-q", "main"]);
-    let write = |name: &str, rows: &[(&str, &str)]| {
-        let path = fx.p().join(name);
-        let grants: Vec<Grant> = rows
-            .iter()
-            .map(|(d, head)| Grant {
-                d_id: d.to_string(),
-                prefix: ".github/workflows/".into(),
-                head: head.to_string(),
-            })
-            .collect();
-        std::fs::write(&path, serde_json::to_vec(&grants).unwrap()).unwrap();
-        path
-    };
-    let other = write("other.json", &[("D-6", &flow)]);
-    let wrong_head = write("head.json", &[("D-5", &fx.base)]);
-    let right = write("right.json", &[("D-5", &flow)]);
-    let run = |grants: Option<&std::path::Path>| {
-        let mut a = vec![
-            "cut-check",
-            "--repo",
-            fx.p().to_str().unwrap(),
-            "--base",
-            &fx.base,
-            "--head",
-            "hand",
-        ];
-        if let Some(f) = grants {
-            a.extend(["--grants", f.to_str().unwrap()]);
-        }
-        super::cli::run_inner(fx.p(), &args(&a), &python)
-    };
-    for bad in [None, Some(other.as_path()), Some(wrong_head.as_path())] {
-        let err = run(bad).unwrap_err();
-        assert!(
-            err.contains("D-5") && err.contains("does not grant"),
-            "{err}"
-        );
-    }
-    run(Some(&right)).unwrap();
-}
-
-#[test]
-fn a_grant_for_another_path_does_not_cover_the_gate_file() {
-    let fx = Fx::new();
-    let flow = fx.source(".github/workflows/w.yml", TRAILERS);
-    let grants = [Grant {
-        d_id: "D-3".into(),
-        prefix: "docs/".into(),
-        head: flow.clone(),
-    }];
-    let edits = BTreeMap::from([(flow.clone(), "D-3".to_string())]);
-    let err = cut(
-        &Cut {
-            repo: fx.p(),
-            base: &fx.base,
-            branch: "slice/a",
-            commits: std::slice::from_ref(&flow),
-            gate_edits: &edits,
-            grants: &grants,
-            gate: &gate(),
-        },
-        &python,
-    )
-    .unwrap_err();
-    assert!(
-        err.contains(".github/workflows/w.yml") && err.contains("no grant covers"),
-        "{err}"
-    );
-    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
-}
-
-#[test]
-fn a_finished_cut_leaves_no_scratch_worktree() {
-    let fx = Fx::new();
-    let src = fx.source("a.txt", TRAILERS);
-    let lines = fx.cut(&[src], &[]).unwrap();
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    // The scratch worktree is gone from the registry and the disk.
-    let list = g(fx.p(), &["worktree", "list", "--porcelain"]);
-    assert_eq!(list.matches("worktree ").count(), 1, "{list}");
 }

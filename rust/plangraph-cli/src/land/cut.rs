@@ -2,8 +2,9 @@
 //! Commits are picked without `-x`; the full source id goes into a `Picked-From:` trailer inside the block, a
 //! granted `Gate-Edit:` is added inside the same block, and the commit gate of the pinned base must accept the
 //! result before the branch exists. `check` is the same test, with the same grants, for a branch cut by hand.
+use super::cut_grants::{authorize, load_grants, prefixes};
 use super::git;
-use super::go_verify::{Grant, OPERATOR_CLASS};
+use super::go_verify::Grant;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -22,88 +23,6 @@ pub struct Cut<'a> {
     pub grants: &'a [Grant],
     /// The commit gate script. The CLI writes the one of the pinned base here; tests wire their own.
     pub gate: &'a Path,
-}
-
-/// The path prefixes a grant record gives `d_id` for exactly the source head `head`.
-fn prefixes<'a>(grants: &'a [Grant], d_id: &str, head: &str) -> Vec<&'a str> {
-    grants
-        .iter()
-        .filter(|g| g.d_id == d_id && g.head == head)
-        .map(|g| g.prefix.as_str())
-        .collect()
-}
-
-fn operator_class(path: &str) -> bool {
-    OPERATOR_CLASS.iter().any(|p| match p.strip_suffix('/') {
-        Some(_) => path.starts_with(p),
-        None => {
-            path == *p || path.starts_with(&format!("{p}/")) || path.ends_with(&format!("/{p}"))
-        }
-    })
-}
-
-/// The last `Picked-From:` value of `message`: the source this cut commit was made from.
-fn picked_from(message: &str) -> Option<&str> {
-    message
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("Picked-From:"))
-        .map(str::trim)
-        .next_back()
-}
-
-/// The one authorization of a message, for the cutter before and after the pick and for `check`: every
-/// `Gate-Edit:` line, wherever it stands (a trailer parse can miss one that cutting then exposes), needs a
-/// grant for its D-id and the commit's source head, and the grant's prefixes must cover every operator-class
-/// path `commit` changes. `head` is the source head; the message's `Picked-From:` stands in when it is `None`.
-fn authorize(
-    repo: &Path,
-    commit: &str,
-    message: &str,
-    head: Option<&str>,
-    grants: &[Grant],
-) -> Result<(), String> {
-    let head = head.or_else(|| picked_from(message));
-    let mut paths: Option<Vec<String>> = None;
-    for line in message.lines() {
-        let Some((key, value)) = line.trim().split_once(':') else {
-            continue;
-        };
-        if !key.eq_ignore_ascii_case("gate-edit") {
-            continue;
-        }
-        let d = value.trim();
-        let denied = |why: &str| {
-            format!("cut: {commit} carries Gate-Edit {d}, which the GO row does not grant ({why})")
-        };
-        let head = head.ok_or_else(|| denied("no Picked-From names its source"))?;
-        let prefixes = prefixes(grants, d, head);
-        if prefixes.is_empty() {
-            return Err(denied(&format!("no grant for source {head}")));
-        }
-        if paths.is_none() {
-            let raw = git::out(
-                repo,
-                &[
-                    "diff-tree",
-                    "--no-commit-id",
-                    "--name-only",
-                    "-r",
-                    "--root",
-                    commit,
-                ],
-            )?;
-            paths = Some(raw.lines().map(str::to_owned).collect());
-        }
-        for path in paths.iter().flatten().filter(|p| operator_class(p)) {
-            if !prefixes
-                .iter()
-                .any(|p| path == p || (p.ends_with('/') && path.starts_with(p)))
-            {
-                return Err(denied(&format!("no grant covers {path}")));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// A `(cherry picked from commit ...)` line is what `cherry-pick -x` leaves; inside the trailer paragraph
@@ -276,7 +195,16 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
         Ok(head)
     });
     let removed = scratch.remove();
-    let head = result?;
+    let head = match (result, &removed) {
+        (Ok(head), _) => head,
+        (Err(e), Err(r)) => {
+            return Err(format!(
+                "{e}\nthe scratch worktree {} was not removed ({r}); `git worktree prune` after deleting the directory",
+                wt.display()
+            ))
+        }
+        (Err(e), Ok(())) => return Err(e),
+    };
     let mut lines = vec![format!(
         "cut {} {} commits, head {head}",
         c.branch,
@@ -415,11 +343,8 @@ pub fn run_cli(
     }
     let repo = PathBuf::from(need("repo")?);
     let base = resolve(&repo, &need("base")?)?;
-    let grants: Vec<Grant> = match flags.get("grants") {
-        Some(f) => serde_json::from_slice(
-            &std::fs::read(f).map_err(|e| format!("{cmd}: grants {f}: {e}"))?,
-        )
-        .map_err(|e| format!("{cmd}: grants {f}: {e}"))?,
+    let grants = match flags.get("grants") {
+        Some(f) => load_grants(Path::new(f)).map_err(|e| format!("{cmd}: {e}"))?,
         None => Vec::new(),
     };
     let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;
