@@ -372,3 +372,51 @@ fn an_active_batch_run_excludes_open_items_of_every_family_it_holds() {
     let picked = pick(&ready(items), &[run], &Policy::default()).unwrap();
     assert_eq!(picked.key, "plangraph:GAMMA-1");
 }
+
+#[test]
+fn a_refused_seed_sends_the_tick_back_to_the_next_priority_not_the_batch_tail() {
+    // ALPHA-1 (p9) is held elsewhere; ALPHA-2 (p5) is its family, GAMMA-1 (p8) is unrelated.
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 5, &["src/b.rs"]),
+        item("GAMMA-1", 8, &["src/z.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    registry
+        .lock()
+        .unwrap()
+        .claimed
+        .insert("plangraph:ALPHA-1".into(), vec!["src/a.rs".into()]);
+    let mut host = Host::new(&registry, &items);
+    let row = drive(&ready(items), &mut host, "dell", 2, false);
+    assert_eq!(row["item_key"], "plangraph:GAMMA-1", "{row}");
+    let registry = registry.lock().unwrap();
+    assert_eq!(registry.started, [vec!["plangraph:GAMMA-1"]]);
+    assert!(!registry.claimed.contains_key("plangraph:ALPHA-2"));
+}
+
+#[test]
+fn a_yielding_seed_releases_its_batch_and_the_tick_picks_again() {
+    // Another host holds src/a.rs under a different item: the seed ALPHA-1 yields.
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 5, &["src/b.rs"]),
+        item("GAMMA-1", 8, &["src/z.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    registry
+        .lock()
+        .unwrap()
+        .claimed
+        .insert("plangraph:OTHER".into(), vec!["src/a.rs".into()]);
+    let mut host = Host::new(&registry, &items);
+    let row = drive(&ready(items), &mut host, "dell", 2, false);
+    assert_eq!(row["item_key"], "plangraph:GAMMA-1", "{row}");
+    let registry = registry.lock().unwrap();
+    assert_eq!(registry.started, [vec!["plangraph:GAMMA-1"]]);
+    assert_eq!(
+        registry.released[..2],
+        ["plangraph:ALPHA-1", "plangraph:ALPHA-2"]
+    );
+    assert!(!registry.claimed.contains_key("plangraph:ALPHA-2"));
+}

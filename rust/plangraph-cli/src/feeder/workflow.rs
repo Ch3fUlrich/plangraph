@@ -41,6 +41,10 @@ fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, Spaw
             Ok(epoch) => claimed.push((item.clone(), epoch)),
             Err(ClaimError::Refused(reason)) => {
                 dropped.push(json!({"item_key":item.key,"reason":reason}));
+                // The highest-priority item is out: the caller picks again from the rest.
+                if claimed.is_empty() && item.key == batch[0].key {
+                    return Ok((Vec::new(), dropped));
+                }
             }
             Err(e) => {
                 release_held(&claimed, launch);
@@ -65,6 +69,12 @@ fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, Spaw
                 return Err(SpawnError::Start(format!("reservation check failed: {e}")));
             }
         }
+    }
+    // A batch without its seed is not the next work in priority order: release it whole and
+    // let the caller pick again, so lower-priority items never overtake the seed's slot.
+    if held.first().is_none_or(|(t, _)| t.key != batch[0].key) {
+        release_held(&held, launch);
+        return Ok((Vec::new(), dropped));
     }
     Ok((held, dropped))
 }
