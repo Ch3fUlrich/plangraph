@@ -102,7 +102,9 @@ fn overlap(a: &Task, b: &Run) -> bool {
     if a.key.split_once(':').map(|x| x.0) != b.item_key.split_once(':').map(|x| x.0) {
         return false;
     }
-    family(&a.key) == family(&b.item_key)
+    let mine = family(&a.key);
+    mine == family(&b.item_key)
+        || b.item_keys.iter().any(|k| mine == family(k))
         || a.files
             .iter()
             .any(|a| b.files.iter().any(|b| crate::paths::paths_overlap(a, b)))
