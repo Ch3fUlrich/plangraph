@@ -71,3 +71,12 @@ record shows the same run id, the old head as its commit, this workflow on a pul
 `tested=true` and `evidence=run R attempt A tree T reused from <old> for <new>`; the gate accepts `tested=true` like a landing record and the
 new head gets its own `ci-full` status with the same run and tree, so a second reword chains. A different tree, a missing or unverified run, or
 a newer or red attempt runs the suite again. Branch protection and the required-check list are unchanged.
+
+## Entry replay of changed tests (LE-CI-FLAKE-ENTRY-REPLAY)
+
+`tools/ci_select.py entry-set --run` also replays the tests a part changed: every `tests/**/test_*.py` it added or changed (not `tests/browser`) and
+every Rust `#[test]` fn it added or touched, five runs each on the part's own head. The Python files run four times serially and once with
+`-n auto` (the full-worker run); each Rust test runs four times with `--test-threads=1` and once with the default threads. Every log is kept under
+`--replay-dir` (`python-run-N.log`, `cargo-run-N.log`) with `replay.json`. A test that passed and failed among the runs is printed as
+`entry-set: FLAKY: <test id> (logs <failing log> and <passing log>)`; a test that fails every run, or a run with no test outcome, is `FAIL`.
+Either one makes the entry run fail, so the part is not READY. A stable test clears the entry.

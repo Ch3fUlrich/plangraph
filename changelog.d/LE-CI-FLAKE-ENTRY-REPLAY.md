@@ -1,0 +1,1 @@
+Part entry (`tools/ci_select.py entry-set --run`) replays the Python test files and Rust `#[test]` fns a part changed five times on its head, one run with every worker, keeps the logs and fails the entry with `FLAKY: <test id>` and both logs when a result differs between runs. See `docs/ci-gate.md`.
