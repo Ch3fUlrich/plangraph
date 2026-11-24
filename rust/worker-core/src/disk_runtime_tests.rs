@@ -394,8 +394,9 @@ fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_on
         }
         path
     };
+    // 61..110 minutes old: stale only under the one-hour cutoff, not under the old six-hour one.
     let stale: Vec<_> = (0..50)
-        .map(|n| unit(&format!("pg-worker-core-{n:016x}"), 361 + n))
+        .map(|n| unit(&format!("pg-worker-core-{n:016x}"), 61 + n))
         .collect();
     // Held by a running build: touched minutes ago, and the crate's newest variant.
     let live = unit("pg-worker-core-ffffffffffffffff", 5);
