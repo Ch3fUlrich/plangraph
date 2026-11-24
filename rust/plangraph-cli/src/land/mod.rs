@@ -9,6 +9,9 @@ pub mod deploy;
 mod deploy_probe;
 #[cfg(test)]
 mod deploy_tests;
+pub mod docs_fold;
+#[cfg(test)]
+mod docs_fold_tests;
 pub mod git;
 pub mod go_verify;
 #[cfg(test)]

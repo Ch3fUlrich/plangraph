@@ -1,0 +1,1 @@
+`plangraph land-train fold-docs` folds the per-item documentation fragments (`docs/contributing|keeper|spawner/<ITEM>.md`) into their shared reference once per train, in name order, without rewriting existing text or passing the reference's line cap, and `--measure` counts direct edits of the shared references in a range.
