@@ -458,7 +458,7 @@ class ContextMixin:
             raise Refused("bad_state", f"{item['key']} carried by "
                           + ", ".join(f"#{number}" for number in prs))
         unknown = [name for name, entry in indexes.items()
-                   if name == project and entry and entry.get("prs_unverified")]
+                   if entry and entry.get("prs_unverified")]
         if not stale_checks:
             adapter = self._adapter("decisions")
             with timing.outside_request_lock():
