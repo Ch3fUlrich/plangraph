@@ -331,9 +331,47 @@ assert len(calls) == 1, calls
     );
 }
 
+/// Collect a Python input only when it lies inside the checkout. A path such as
+/// `../../../tools/x.py` (an include_str! of a sibling file) is a real file only in a
+/// worktree nested under another checkout, so it must not change the result by location.
+const MAKE_ADD: &str = r####"
+import os, pathlib
+def make_add(root, inputs):
+    def add(path):
+        try: rel = pathlib.Path(os.path.normpath(path)).relative_to(os.path.normpath(root))
+        except ValueError: return
+        if path.is_file(): inputs.add(rel.as_posix())
+    return add
+"####;
+
+#[test]
+fn python_input_scan_ignores_paths_outside_the_checkout() {
+    python(&format!(
+        "{MAKE_ADD}{}",
+        r####"
+import tempfile
+with tempfile.TemporaryDirectory() as tmp:
+    base = pathlib.Path(tmp)
+    (base / 'checkout/tools').mkdir(parents=True)
+    (base / 'checkout/tools/in.py').write_text('')
+    (base / 'tools').mkdir()
+    (base / 'tools/out.py').write_text('')
+    root = base / 'checkout'
+    inputs = set()
+    add = make_add(root, inputs)
+    add(root / '../tools/out.py')
+    add(root / 'tools/in.py')
+    add(root / 'tools/../tools/in.py')
+    add(root / 'tools/missing.py')
+    assert inputs == {'tools/in.py'}, inputs
+"####
+    ));
+}
+
 #[test]
 fn python_inputs_executed_by_spawnd_tests_select_rust_ci() {
-    python(
+    python(&format!(
+        "{MAKE_ADD}{}",
         r####"
 import ast, pathlib, re, sys
 from fnmatch import fnmatchcase
@@ -341,8 +379,7 @@ sys.path.insert(0, 'tools')
 import ci_select as ci
 root = pathlib.Path.cwd()
 inputs = set()
-def add(path):
-    if path.is_file(): inputs.add(path.relative_to(root).as_posix())
+add = make_add(root, inputs)
 def module(name):
     for base in (root / 'src', root / 'tools'):
         path = base.joinpath(*name.split('.'))
@@ -378,6 +415,6 @@ assert required <= inputs, required - inputs
 missing = sorted(p for p in inputs if not any(fnmatchcase(p, g) for g in ci.RUST_INPUTS))
 assert not missing, 'Unlisted Rust Python inputs: ' + repr(missing)
 assert all(ci.select([p])['rust'] for p in inputs)
-"####,
-    );
+"####
+    ));
 }
