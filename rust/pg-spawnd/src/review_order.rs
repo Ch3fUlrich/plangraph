@@ -51,11 +51,19 @@ fn live_log(state: &Path, record: &Value) -> Option<String> {
     (text.len() as u64 <= MAX_LOG).then_some(text)
 }
 
+/// Attempts that launched a leg (a skipped attempt never wrote to the log).
+fn launched_attempts(record: &Value) -> usize {
+    record["attempts"]
+        .as_array()
+        .map_or(0, |a| a.iter().filter(|x| x["status"] != "skipped").count())
+}
+
 #[derive(Default)]
 struct Tally {
     reviews: u64,
     no_verdict: u64,
     usage_runs: u64,
+    mixed: u64,
     input: u64,
     cached: u64,
 }
@@ -72,7 +80,7 @@ impl Tally {
     fn view(&self, label: &str, (since, until): (i64, i64)) -> Value {
         json!({"label":label, "since":since, "until":until, "reviews":self.reviews,
             "no_verdict":self.no_verdict, "no_verdict_share":share(self.no_verdict, self.reviews),
-            "usage_runs":self.usage_runs, "missing_usage":self.reviews - self.usage_runs,
+            "usage_runs":self.usage_runs, "mixed_leg_excluded":self.mixed, "missing_usage":self.reviews - self.usage_runs,
             "input_tokens":self.input, "cached_input_tokens":self.cached,
             "cached_input_share":share(self.cached, self.input)})
     }
@@ -80,6 +88,7 @@ impl Tally {
         self.reviews += other.reviews;
         self.no_verdict += other.no_verdict;
         self.usage_runs += other.usage_runs;
+        self.mixed += other.mixed;
         self.input += other.input;
         self.cached += other.cached;
     }
@@ -109,7 +118,9 @@ pub(crate) fn compare(
         let tally = &mut tallies.entry(leg).or_default()[window];
         tally.reviews += 1;
         tally.no_verdict += u64::from(class != "verdict");
-        if let Some((input, cached)) = live_log(state, record).as_deref().and_then(usage) {
+        if launched_attempts(record) > 1 {
+            tally.mixed += 1; // fallthrough legs share one live.log: usage is not per leg
+        } else if let Some((input, cached)) = live_log(state, record).as_deref().and_then(usage) {
             tally.usage_runs += 1;
             tally.input += input;
             tally.cached += cached;
@@ -134,7 +145,8 @@ pub(crate) fn compare(
         completed|succeeded|terminated_after_answer|failed|timeout|timed_out|stalled|limited|killed) \
         by ended in [since, until), grouped by last attempt leg; no_verdict = review result other \
         than verdict; cached share = cached / total input tokens summed over live.log usage \
-        frames; runs without usage frames count as missing_usage and stay out of the token share",
+        frames; runs with more than one launched attempt share one live.log and are excluded from usage \
+        (mixed_leg_excluded, also in missing_usage); runs without usage frames count as missing_usage and stay out of the token share",
         "strata":strata, "unmatched":unmatched,
         "matched_total":{"before":sum_before.view("before", before), "after":sum_after.view("after", after)}})
 }

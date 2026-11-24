@@ -91,7 +91,21 @@ Recovery metrics retain full corrected history, and leg metadata is chronologica
 recorded review runs. Per leg (a stratum counts as matched only with reviews in both
 windows) it prints reviews, no-verdict share, cached-input-token share, the number of
 runs with no usage frame in their live log (`missing_usage`, left out of the token
-share), the matched totals and the query text. Read-only; windows must not overlap.
+share), the matched totals and the query text. Runs with more than one launched attempt
+share one `live.log` across fallback legs; they stay in the review counts but their usage is
+excluded and counted in `mixed_leg_excluded`. Read-only; windows must not overlap.
+
+Measured 2026-11-24 on one workstation state (592 run records, 376 review records), exact
+command `pg-spawnd health review-order --state <state> --before-since 2026-11-11T00:00:00Z
+--before-until 2026-11-23T19:07:00Z --after-since 2026-11-23T19:07:00Z --after-until
+2026-11-24T12:00:00Z` (cut at the train-21 merge that placed the review contract last; the
+deploy time of that build on this host is not recorded). Only one leg has reviews in both
+windows, `agy-gemini-4-argon-medium`: before 67 reviews, 18 no-verdict (0.269), 32 with
+usage (3 mixed-leg excluded, 35 missing usage), cached-input share 0.838; after 43 reviews,
+24 no-verdict (0.558), 19 with usage (24 missing usage), cached-input share 0.977. The
+after window is about 17 hours of one seat, so this shows no verdict gain: no-verdict share
+rose, cached share rose, and no matched coding-worker stratum exists yet. Repeat the command
+with a longer after window before a decision.
 
 The immutable operator baseline lives in a dated research directory in the private data repo.
 Before RL14 on, compare the pinned window

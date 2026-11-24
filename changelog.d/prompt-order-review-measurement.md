@@ -1,1 +1,1 @@
-`pg-spawnd health review-order` compares the no-verdict share and cached-input-token share of recorded review runs per leg before and after the prompt order change.
+`pg-spawnd health review-order` compares the no-verdict share and cached-input-token share of recorded review runs per leg before and after the prompt order change, excluding fallback runs that share one log and reporting them.

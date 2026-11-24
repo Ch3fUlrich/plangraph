@@ -83,3 +83,27 @@ fn execute_refuses_overlapping_or_missing_windows() {
     execute(args(&["--help"]), &mut out).unwrap();
     assert!(String::from_utf8(out).unwrap().contains("--before-since"));
 }
+
+#[test]
+fn fallthrough_runs_share_one_log_so_their_usage_is_excluded_and_counted() {
+    let state = tempfile::tempdir().unwrap();
+    let s = state.path();
+    let mut mixed = run(s, "run-mix", 10, "w", true, &step(100, 100));
+    mixed["attempts"] = json!([
+        {"leg":{"id":"first"}, "status":"limited"},
+        {"leg":{"id":"skip"}, "status":"skipped"},
+        {"leg":{"id":"w"}, "status":"completed"}
+    ]);
+    let mut single = run(s, "run-one", 11, "w", true, &step(10, 90));
+    single["attempts"] = json!([{"leg":{"id":"skip"}, "status":"skipped"},
+        {"leg":{"id":"w"}, "status":"completed"}]);
+    let after = run(s, "run-after", 30, "w", true, &step(1, 1));
+    let report = compare(s, &[mixed, single, after], (0, 20), (20, 40), &[]);
+    let before = &report["strata"]["w"]["before"];
+    assert_eq!(before["reviews"], 2);
+    assert_eq!(before["mixed_leg_excluded"], 1);
+    assert_eq!(before["missing_usage"], 1);
+    assert_eq!(before["usage_runs"], 1);
+    assert_eq!(before["input_tokens"], 100);
+    assert_eq!(before["cached_input_tokens"], 90);
+}
