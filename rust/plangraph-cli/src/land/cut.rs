@@ -2,7 +2,7 @@
 //! Commits are picked without `-x`; the full source id goes into a `Picked-From:` trailer inside the block, a
 //! granted `Gate-Edit:` is added inside the same block, and the commit gate of the pinned base must accept the
 //! result before the branch exists. `check` is the same test, with the same grants, for a branch cut by hand.
-use super::cut_grants::{authorize, load_grants, prefixes};
+use super::cut_grants::{authorize, load_grants, prefixes, py_lines};
 use super::git;
 use super::go_verify::Grant;
 use std::collections::BTreeMap;
@@ -33,7 +33,10 @@ fn is_picked_line(line: &str) -> bool {
 
 /// The message with the `-x` line removed and the trailers added inside its trailer block.
 fn with_trailers(message: &str, trailers: &[String]) -> Result<String, String> {
-    let kept: Vec<&str> = message.lines().filter(|l| !is_picked_line(l)).collect();
+    let kept: Vec<&str> = py_lines(message)
+        .into_iter()
+        .filter(|l| !is_picked_line(l))
+        .collect();
     let mut text = kept.join("\n");
     text.truncate(text.trim_end().len());
     text.push('\n');
@@ -70,46 +73,6 @@ fn with_trailers(message: &str, trailers: &[String]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The cutter's scratch worktree. It is owned by the cut that made it: `remove` or the drop deletes it. A
-/// cut killed by a signal leaves it behind; the next cut prunes the registrations whose directory is gone,
-/// and the recovery for a left directory is `rm -rf <git-common-dir>/plangraph/cut-worktrees/cut-*`.
-struct Scratch<'a> {
-    repo: &'a Path,
-    dir: Option<tempfile::TempDir>,
-}
-
-impl Scratch<'_> {
-    fn path(&self) -> PathBuf {
-        self.dir
-            .as_ref()
-            .map(|d| d.path().to_owned())
-            .unwrap_or_default()
-    }
-
-    fn remove(&mut self) -> Result<(), String> {
-        let Some(dir) = self.dir.take() else {
-            return Ok(());
-        };
-        let removed = git::out(
-            self.repo,
-            &[
-                "worktree",
-                "remove",
-                "--force",
-                &dir.path().to_string_lossy(),
-            ],
-        );
-        drop(dir);
-        removed.map(|_| ())
-    }
-}
-
-impl Drop for Scratch<'_> {
-    fn drop(&mut self) {
-        let _ = self.remove();
-    }
-}
-
 /// The full id of the commit `rev` names; a revision that starts with `-` is never passed to git.
 fn resolve(repo: &Path, rev: &str) -> Result<String, String> {
     if rev.is_empty() || rev.starts_with('-') {
@@ -123,8 +86,8 @@ fn resolve(repo: &Path, rev: &str) -> Result<String, String> {
 }
 
 /// Cuts the branch; nothing is left behind when a pick or the gate check fails. The atomic creation of the
-/// branch ref is the success boundary: a scratch worktree that cannot be removed afterwards is reported on
-/// the result line, never as a failed cut.
+/// branch ref is the success boundary: scratch state that cannot be removed afterwards is reported on the
+/// result lines, never as a failed cut.
 pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String> {
     let repo = c.repo;
     let ref_name = format!("refs/heads/{}", c.branch);
@@ -165,57 +128,48 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
         let message = git::out(repo, &["log", "-1", "--format=%B", src])?;
         authorize(repo, src, &message, Some(src), c.grants)?;
     }
-    let common = git::out(
-        repo,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    let parent = Path::new(&common).join("plangraph/cut-worktrees");
-    std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    // Registrations of scratch worktrees whose directory is gone (a killed cut) are dropped here.
-    git::out(repo, &["worktree", "prune"])?;
-    let mut scratch = Scratch {
-        repo,
-        dir: Some(
-            tempfile::Builder::new()
-                .prefix("cut-")
-                .tempdir_in(&parent)
-                .map_err(|e| e.to_string())?,
-        ),
-    };
-    let wt = scratch.path();
-    git::out(
-        repo,
-        &["worktree", "add", "--detach", &wt.to_string_lossy(), &base],
-    )?;
-    let result = pick_all(&sources, &edits, wt.as_path()).and_then(|head| {
+    // The pick and the check run in a private clone, so the repository's own configuration and
+    // `info/attributes` cannot reach the merge machinery; the clone is a temporary directory owned by this
+    // call and registered nowhere in the repository.
+    let checkout = git::Checkout::new(repo, &base)?;
+    let wt = checkout.path().to_owned();
+    let hold = format!("refs/plangraph/cut-hold/{}", std::process::id());
+    let picked = pick_all(&sources, &edits, &wt).and_then(|head| {
         check(&wt, &base, &head, c.gate, c.grants, python)?;
+        checkout.adopt(&head, &hold)?;
+        Ok(head)
+    });
+    let created = picked.and_then(|head| {
         // An empty old value makes the update fail when the branch was created since the check above.
         git::out(repo, &["update-ref", &ref_name, &head, ""])
             .map_err(|e| format!("cut: branch {} already exists: {e}", c.branch))?;
         Ok(head)
     });
-    let removed = scratch.remove();
-    let head = match (result, &removed) {
-        (Ok(head), _) => head,
-        (Err(e), Err(r)) => {
-            return Err(format!(
-                "{e}\nthe scratch worktree {} was not removed ({r}); `git worktree prune` after deleting the directory",
-                wt.display()
-            ))
-        }
-        (Err(e), Ok(())) => return Err(e),
+    // The hold ref only kept the objects reachable until the branch ref took them over.
+    let released = git::out(repo, &["update-ref", "-d", &hold]);
+    let removed = checkout.dir.close().map_err(|e| e.to_string());
+    let leftovers: Vec<String> = [
+        released
+            .err()
+            .map(|e| format!("hold ref {hold} not removed ({e})")),
+        removed
+            .err()
+            .map(|e| format!("the scratch clone {} not removed ({e})", wt.display())),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let head = match created {
+        Ok(head) => head,
+        Err(e) if leftovers.is_empty() => return Err(e),
+        Err(e) => return Err(format!("{e}\n{}", leftovers.join("; "))),
     };
     let mut lines = vec![format!(
         "cut {} {} commits, head {head}",
         c.branch,
         sources.len()
     )];
-    if let Err(e) = removed {
-        lines.push(format!(
-            "warning: the scratch worktree {} was not removed ({e}); `git worktree prune` after deleting the directory",
-            wt.display()
-        ));
-    }
+    lines.extend(leftovers.into_iter().map(|l| format!("warning: {l}")));
     Ok(lines)
 }
 
@@ -291,7 +245,7 @@ pub fn check(
     let (base, head) = (resolve(repo, base)?, resolve(repo, head)?);
     for c in git::commits(repo, &format!("{base}..{head}"))? {
         let message = git::out(repo, &["log", "-1", "--format=%B", &c])?;
-        if message.lines().any(is_picked_line) {
+        if py_lines(&message).into_iter().any(is_picked_line) {
             return Err(format!(
                 "{c}: a `(cherry picked from commit ...)` line ends the trailer block; cut with `land-train cut`, not `cherry-pick -x`"
             ));

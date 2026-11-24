@@ -135,8 +135,11 @@ them into a keeper table needs a keeper schema step that is not part of this cha
 in `--gate-edits`, `Gate-Edit: <D-id>` inside the existing trailer block. Then it runs `tools/ci_commit_gate.py check` on the
 range with full ids. The gate is the one of the base commit, as CI reads it, and runs under the cutter's git environment (no
 `GIT_*` override, no replacement refs); no flag names another gate. The branch is created by one atomic ref update that fails
-when the branch exists, and that update is the success boundary: a scratch worktree that cannot be removed afterwards is a
-warning line (`git worktree prune` after deleting its directory under `<git-common-dir>/plangraph/cut-worktrees/`), never a failed cut.
+when the branch exists, and that update is the success boundary. The picks, the gate and the exact-replay check run in a
+private shared clone (`git::Checkout`), so the repository's own configuration and `info/attributes` cannot reach them; the clone is a
+temporary directory owned by the call and a hold ref only keeps the objects until the branch ref exists. Scratch that cannot be
+removed afterwards is a warning line, never a failed cut. The `Gate-Edit:` lines of a message are found with the line breaks of the
+gate's Python `splitlines()` (also CR, FF, U+2028 and others), not only LF.
 A merge commit as a source is refused.
 
 `--grants FILE` is the pre-cut grant record, a JSON array of `{d_id, prefix, head}` (the `go_verify` grant). It is operator
