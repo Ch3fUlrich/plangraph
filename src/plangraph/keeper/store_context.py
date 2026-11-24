@@ -534,17 +534,42 @@ class ContextMixin:
         cache[(project, sha)] = (record, now)
         return record
 
+    def _warm_landings(self, project, commits):
+        """Ask the forge for each landing of *commits*, outside the keeper lock."""
+        for commit in commits:
+            self._landing_for(project, (commit.get("merge") or {}).get("sha") or commit.get("sha"))
+
+    def _decision_snapshot(self, keys):
+        """The decisions the landing evidence reads, captured once: ``None`` when unreadable.
+
+        ``{"book", "texts", "standing"}``: the decision book, the text of every row naming one of
+        *keys*, and whether the standing decision exists. The scan takes it outside the keeper lock
+        (the document may be read from origin); a frozen close reads this copy and never the file.
+        """
+        decisions = self._adapter("decisions")
+        try:
+            book = decision_book(decisions)
+            texts = {did: decisions.text(did) for key in keys for did in decisions_naming(book, key)}
+            standing = bool(decisions.has(self.merge_close_decision)) if self.merge_close_decision else None
+        except Exception:  # noqa: BLE001 - an unreadable document proves and names nothing
+            return None
+        return {"book": book, "texts": texts, "standing": standing}
+
+    def _snapshot_landing_decisions(self, candidates):
+        self.__dict__["_landing_decisions"] = self._decision_snapshot([key for key, _ in candidates])
+
     def _landing_evidence(self, item, proofs, now):
         """Standing authority, pre-merge required checks and GO rows of an automatic close.
 
         A gap is a flag, never a refusal: the merge itself is the proved landing.
         """
         flags, landings, project = {}, [], self._merge_project(item)
-        decisions = self._adapter("decisions")
+        snapshot = (self.__dict__.get("_landing_decisions") if self.__dict__.get("_frozen_lanes")
+                    else self._decision_snapshot([item["key"]]))
         decision = self.merge_close_decision
         authority = None
         if decision:
-            known = bool(getattr(decisions, "has", lambda _: False)(decision))
+            known = bool(snapshot and snapshot["standing"])
             authority = {"decision": decision, "verified": known}
             if not known:
                 flags["standing_authority_unverified"] = decision
@@ -563,28 +588,24 @@ class ContextMixin:
                 unverified.append({"pr": proof["pr"], "detail": checks["detail"]})
         if unverified:
             flags["required_checks_unverified"] = unverified
-        go_rows = self._landing_go_rows(item, proofs, decisions)
+        go_rows = self._landing_go_rows(item, proofs, snapshot)
         if missing := [p["pr"] for p in proofs if p["pr"] not in {row["pr"] for row in go_rows}]:
             flags["go_row_missing"] = {"prs": missing}
         return {"authority": authority, "landings": landings, "go_rows": go_rows, "flags": flags}
 
-    def _landing_go_rows(self, item, proofs, decisions):
+    def _landing_go_rows(self, item, proofs, snapshot):
         """``[{decision_id, pr}]``: the GO rows that name this item and bind a landed PR or head."""
         from .store_waiver import _go_binding as go_binding, _go_statement as go_statement, _names_item as names_item
 
         project, rows = self._merge_project(item), []
-        try:
-            book = decision_book(decisions)
-            for did in decisions_naming(book, item["key"]):
-                statement = go_statement(decisions.text(did))
-                if statement is None or not names_item(statement, item["key"]):
-                    continue
-                pr, _ = go_binding(statement, project)
-                bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", statement)
-                rows += [{"decision_id": did, "pr": p["pr"]} for p in proofs
-                         if p["pr"] == pr or (pr is None and bound and p["head"].startswith(bound[1].lower()))]
-        except Exception:  # noqa: BLE001 - an unreadable decisions file names no GO row
-            return []
+        for did in decisions_naming(snapshot["book"], item["key"]) if snapshot else ():
+            statement = go_statement(snapshot["texts"].get(did))
+            if statement is None or not names_item(statement, item["key"]):
+                continue
+            pr, _ = go_binding(statement, project)
+            bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", statement)
+            rows += [{"decision_id": did, "pr": p["pr"]} for p in proofs
+                     if p["pr"] == pr or (pr is None and bound and p["head"].startswith(bound[1].lower()))]
         return rows
 
     @staticmethod

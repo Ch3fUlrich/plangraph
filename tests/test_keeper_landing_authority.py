@@ -188,3 +188,74 @@ def test_the_config_names_the_standing_decision(tmp_path):
     assert load("D-9001").merge_close_decision == "D-9001"
     with pytest.raises(config.ConfigError):
         load("standing")
+
+
+def _refresh_over_http(doors, path):
+    import threading
+
+    assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
+    for thread in [t for t in threading.enumerate() if t.name == "keeper-merge-index"]:
+        thread.join(10)
+    assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "ready"})
+
+
+def test_over_http_the_refresh_publishes_the_forge_records_to_the_frozen_close(env, tmp_path):
+    from door_util import Doors
+
+    ci, path = forge(env, tmp_path)
+    env.store.merge_close_decision = STANDING
+    path.write_text(ROWS.split("\n")[0] + "\n", encoding="utf-8")
+    head, merge = land_merge(env, ci, "A", 31, "a")
+    squash_head, squash = land_squash(env, ci, "B", 14, "s")
+    doors = Doors(env, tmp_path)
+    url = "/v1/close_merged_auto"
+    try:
+        _refresh_over_http(doors, url)
+        asked = list(ci.lookups)
+        assert {merge, squash} <= set(asked)
+        status, body = doors.http("system", "POST", url, {"require_seats": False})
+    finally:
+        doors.close()
+    assert status == 200 and sorted(c["key"] for c in body["closed"]) == ["demo:A", "demo:B"], body["listed"]
+    assert ci.lookups == asked   # the frozen close asks the forge nothing
+    merged, squashed = (evidence(env, "demo:A")["landing"], evidence(env, "demo:B")["landing"])
+    assert merged["landings"][0]["checks"] == {
+        "head": head, "verified": True, "detail": "CI green", "names": ["lint", "tests"]}
+    assert squashed["landings"][0]["head"] == squash_head
+    assert "required_checks_unverified" not in merged["flags"] | squashed["flags"]
+    assert merged["authority"] == {"decision": STANDING, "verified": True}
+
+
+class _FetchFails(DecisionsAdapter):
+    """A decisions adapter whose origin read fails, as ``from_origin`` does when the fetch fails."""
+
+    def _rows(self, *a, **k):
+        raise RuntimeError("origin fetch failed")
+
+    def has(self, decision_id):
+        raise RuntimeError("origin fetch failed")
+
+
+def test_a_decisions_read_that_fails_flags_the_standing_authority_and_still_closes(env, tmp_path):
+    ci, path = forge(env, tmp_path)
+    env.store.ctx["decisions"] = _FetchFails(path)
+    env.store.merge_close_decision = STANDING
+    land_merge(env, ci, "A", 31, "a")
+    result = env.store.close_merged_auto(env.p("system"))
+    assert [c["key"] for c in result["closed"]] == ["demo:A"]
+    landing = evidence(env, "demo:A")["landing"]
+    assert landing["authority"] == {"decision": STANDING, "verified": False}
+    assert landing["flags"]["standing_authority_unverified"] == STANDING
+
+
+def test_a_frozen_close_reads_the_decisions_the_warm_scan_captured(env, tmp_path):
+    ci, path = forge(env, tmp_path)
+    env.store.merge_close_decision = STANDING
+    head, _ = land_merge(env, ci, "A", 31, "a")
+    path.write_text(ROWS.format(head=head, key="A"), encoding="utf-8")
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    path.write_text("", encoding="utf-8")   # a later read of the document would find nothing
+    env.store.close_merged_auto(env.p("system"), frozen=True)
+    landing = evidence(env, "demo:A")["landing"]
+    assert landing["authority"] == {"decision": STANDING, "verified": True}
+    assert landing["go_rows"] == [{"decision_id": "D-9002", "pr": 31}]
