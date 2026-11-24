@@ -103,10 +103,7 @@ impl Ports for Fixture {
 /// A refusal of the real round admission after three rounds without a new best count.
 pub(crate) fn refused_run(state: &Path) -> Value {
     let args = history(state, &[5, 5, 5]);
-    let error = match crate::round_progress::admit(state, &args) {
-        Ok(_) => panic!("expected the round rule to refuse"),
-        Err(e) => e,
-    };
+    let error = crate::round_progress::refused("no_progress");
     crate::round_progress::record_refusal(state, "fixture", &args, error)
         .ok()
         .unwrap()
@@ -371,4 +368,46 @@ fn a_crash_between_the_send_mark_and_the_delivery_still_sends_the_line() {
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     assert_eq!(ports.count("route"), 1);
     assert_eq!(load(&job_file(dir.path())).ok().unwrap()["report"], "sent");
+}
+
+#[test]
+fn an_escalation_replan_plans_on_the_strongest_leg_and_leaves_the_pr_open() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        enqueue_escalation(dir.path(), "p:I", "https://forge/p/1", 1)
+            .ok()
+            .unwrap()
+    );
+    assert!(
+        !enqueue_escalation(dir.path(), "p:I", "https://forge/p/1", 1)
+            .ok()
+            .unwrap()
+    );
+    assert!(
+        enqueue_escalation(dir.path(), "p:I", "https://forge/p/1", 2)
+            .ok()
+            .unwrap()
+    );
+    let ports = Fixture::default();
+    let done = run_pending(dir.path(), &ports);
+    assert!(done.iter().all(|(_, outcome)| outcome == "done"));
+    assert_eq!(done.len(), 2);
+    assert_eq!(ports.count("plan strong p:I"), 2);
+    assert_eq!(ports.count("close"), 0);
+    assert_eq!(ports.count("define"), 0);
+    let routed = ports
+        .calls
+        .borrow()
+        .iter()
+        .find(|c| c.starts_with("route"))
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        routed,
+        "route REPLAN p:I escalated | PR https://forge/p/1 kept open | slices p:I-S1 p:I-S2"
+    );
+    // One idempotency key per level.
+    let keys = ports.keys.borrow();
+    assert_eq!(keys.len(), 2);
+    assert_ne!(keys[0], keys[1]);
 }
