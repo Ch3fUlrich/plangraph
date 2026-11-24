@@ -21,6 +21,13 @@ pub struct Gate<'a> {
     pub brief: &'a str,
     /// The private scrub words file; the scrub is skipped when absent.
     pub words: Option<PathBuf>,
+    /// How a tool process is built (the native Codex host pins PATH and umask); plain by default.
+    pub command: &'a dyn Fn(&str) -> Command,
+}
+
+/// A tool process without any pinned environment.
+pub fn plain_command(program: &str) -> Command {
+    Command::new(program)
 }
 
 /// The default private scrub words file of the user, when it exists.
@@ -50,16 +57,23 @@ fn git(worktree: &Path, args: &[&str]) -> Result<String, String> {
 fn check_item_trailers(gate: &Gate) -> Result<(), String> {
     let assigned = item_keys(gate.brief);
     let range = format!("{}..{}", gate.base, gate.head);
-    let log = git(
+    let mut args = vec![
+        "log",
+        "-z",
+        "--format=%H%x00%(trailers:key=Plan-Item,valueonly,unfold)",
+        &range,
+    ];
+    // A base refresh can import upstream commits after the original pin: they are not the
+    // writer's commits.
+    let upstream = git(
         gate.worktree,
-        &[
-            "log",
-            "-z",
-            "--format=%H%x00%(trailers:key=Plan-Item,valueonly,unfold)",
-            &range,
-            "--",
-        ],
-    )?;
+        &["rev-parse", "--verify", "refs/remotes/origin/main"],
+    )
+    .ok()
+    .map(|sha| format!("^{sha}"));
+    args.extend(upstream.as_deref());
+    args.push("--");
+    let log = git(gate.worktree, &args)?;
     let mut records = log.split_terminator('\0');
     while let (Some(commit), Some(trailers)) = (records.next(), records.next()) {
         for item in trailers.lines().map(str::trim).filter(|i| !i.is_empty()) {
@@ -110,11 +124,27 @@ pub fn run(gate: &Gate) -> Result<String, String> {
         if !path.is_file() {
             continue;
         }
-        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+        let mut command = (gate.command)(if cfg!(windows) { "python" } else { "python3" });
         command.arg(path).args(args).current_dir(gate.worktree);
-        if name == "check_new_code_lang.py" {
+        let policy_gate = name == "check_new_code_lang.py";
+        if policy_gate {
             command.env("CLASS_SEARCH_BASE", gate.base);
         }
+        // The policy gate builds pg-policy in the shared cache under its writer lease.
+        #[cfg(target_os = "linux")]
+        let _policy_lease =
+            if policy_gate && gate.worktree.join("rust/pg-policy/Cargo.toml").is_file() {
+                let target = pg_worker_core::cargo_cache::shared_cache_roots()
+                    .map_err(|e| e.to_string())?
+                    .remove(0);
+                command.env("CARGO_TARGET_DIR", &target);
+                Some(
+                    pg_worker_core::cargo_cache::writer_lease(&target)
+                        .map_err(|e| format!("{name}: {e}"))?,
+                )
+            } else {
+                None
+            };
         let result = command.output().map_err(|e| format!("{name}: {e}"))?;
         let (stdout, stderr) = (
             String::from_utf8_lossy(&result.stdout),
@@ -187,6 +217,7 @@ pub fn execute(args: Vec<String>, out: &mut dyn std::io::Write) -> i32 {
         head,
         brief: &brief,
         words: values.get("words").map(PathBuf::from).or_else(scrub_words),
+        command: &plain_command,
     };
     let result = run(&gate);
     let record = diagnostic(&gate, &result);

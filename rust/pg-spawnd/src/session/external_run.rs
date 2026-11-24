@@ -26,10 +26,21 @@ pub(super) fn register(
             "harness":"claude", "requested_model":args.model, "effort":args.effort,
             "item_key":admission.fields["card"],
             "item_keys":brief.items, "lane_override":brief.lane_override,
+            // The session that launched this one: completion events reach it by name.
+            "parent_session":args.option("parent").filter(|parent| valid_parent(parent)),
             // `pg-spawnd head-gate --base <admitted_base> --brief <brief_path>` gates the completed head.
-            "admitted_base":brief.base, "brief_path":args.prompt,
+            "admitted_base":brief.base, "brief_path":args.prompt, "cwd":args.cwd,
         }),
     )
+}
+
+/// A session name the native run records already accept as a parent.
+fn valid_parent(name: &str) -> bool {
+    name.len() <= 128
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 pub(crate) fn agent_roster() -> io::Result<Vec<Value>> {

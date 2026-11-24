@@ -51,6 +51,7 @@ impl Fixture {
             head,
             brief,
             words: Some(self.words.clone()),
+            command: &plain_command,
         }
     }
 }
@@ -131,4 +132,39 @@ fn the_cli_writes_the_diagnostic_record_and_exits_nonzero_on_a_scrub_hit() {
     assert_eq!(saved["ok"], false);
     assert!(saved["diagnostic"].as_str().unwrap().contains("scrub hit"));
     assert_eq!(execute(vec!["--worktree".into()], &mut out), 2);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_completed_claude_session_with_a_scrub_hit_becomes_a_failed_run_with_the_diagnostic() {
+    let f = Fixture::new();
+    let head = f.commit("work\n\nPlan-Item: demo:ASSIGNED");
+    let record = json!({"admitted_base":f.base,"cwd":f.dir.path(),"item_keys":["demo:ASSIGNED"]});
+    let completed = json!({"status":"completed","exit_code":0});
+    let words = Some(f.words.clone());
+    let finished = crate::external_run::gate_completed_with(&record, completed.clone(), words);
+    assert_eq!(finished["status"], "failed", "{finished}");
+    assert_eq!(finished["reason"], "head_gate_rejected");
+    assert_eq!(finished["head_gate"]["ok"], false);
+    assert_eq!(finished["head_gate"]["head"], json!(head));
+    assert!(finished["head_gate"]["diagnostic"]
+        .as_str()
+        .unwrap()
+        .contains("scrub hit"));
+    // A clean head, a plain brief (no admitted base) and a failed session pass through unchanged.
+    fs::write(&f.words, "nothing\n").unwrap();
+    let words = Some(f.words.clone());
+    let clean = crate::external_run::gate_completed_with(&record, completed.clone(), words.clone());
+    assert_eq!(clean["status"], "completed");
+    assert_eq!(clean["head_gate"]["ok"], true);
+    let plain = json!({"cwd":f.dir.path()});
+    assert_eq!(
+        crate::external_run::gate_completed_with(&plain, completed.clone(), words.clone()),
+        completed
+    );
+    let failed = json!({"status":"failed","exit_code":1});
+    assert_eq!(
+        crate::external_run::gate_completed_with(&record, failed.clone(), words),
+        failed
+    );
 }

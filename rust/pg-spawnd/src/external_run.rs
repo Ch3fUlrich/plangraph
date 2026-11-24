@@ -90,6 +90,65 @@ fn terminal(record: &Value, status: &str, code: i32, reason: Option<&str>, ended
     finished
 }
 
+/// A completed Claude batch session is reported only when its head passes the same gate the
+/// native Codex driver runs (`head_gate::run`) on the admitted base. A rejected head becomes a
+/// failed run with the gate diagnostic on the record. Briefs without an admitted base (plain
+/// briefs, restarts) and sessions that did not complete are returned unchanged.
+pub fn gate_completed(record: &Value, finished: Value) -> Value {
+    gate_completed_with(record, finished, crate::head_gate::scrub_words())
+}
+
+/// `gate_completed` with an explicit private scrub words file.
+pub fn gate_completed_with(record: &Value, mut finished: Value, words: Option<PathBuf>) -> Value {
+    let (Some(base), Some(cwd)) = (
+        record["admitted_base"].as_str(),
+        record["cwd"].as_str().map(Path::new),
+    ) else {
+        return finished;
+    };
+    if finished["status"] != "completed" {
+        return finished;
+    }
+    // The brief's item keys bound the Plan-Item trailers of the head.
+    let brief: String = record["item_keys"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|key| format!("Item key: {key}\n"))
+        .collect();
+    let head = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned());
+    let Some(head) = head else {
+        finished["status"] = json!("failed");
+        finished["exit_code"] = json!(1);
+        finished["reason"] = json!("head_gate_unreadable_head");
+        return finished;
+    };
+    let gate = crate::head_gate::Gate {
+        worktree: cwd,
+        base,
+        head: &head,
+        brief: &brief,
+        words,
+        command: &crate::head_gate::plain_command,
+    };
+    let result = crate::head_gate::run(&gate);
+    finished["head_gate"] = crate::head_gate::diagnostic(&gate, &result);
+    if result.is_err() {
+        finished["status"] = json!("failed");
+        finished["exit_code"] = json!(1);
+        finished["reason"] = json!("head_gate_rejected");
+    }
+    finished
+}
+
 /// Recover only active registrations. A failed roster probe cannot prove a fleet exit.
 pub fn recover(state: &Path) -> io::Result<()> {
     let markers = match fs::read_dir(state.join("run-lifecycle/external")) {
@@ -164,7 +223,9 @@ pub fn recover(state: &Path) -> io::Result<()> {
         for (path, record, witness) in fleet {
             // Keep the first daemon observation, including across a crash
             // before the corresponding lifecycle publication.
-            if let Some(finished) = fleet_outcome(&record, &agents, now()) {
+            if let Some(finished) = fleet_outcome(&record, &agents, now())
+                .map(|finished| gate_completed(&record, finished))
+            {
                 atomic_write_private(&witness, &serde_json::to_vec(&finished)?)?;
                 lifecycle::publish_recovered(state, &path, &record, &finished)?;
             }

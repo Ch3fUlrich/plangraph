@@ -1,0 +1,1 @@
+The fleet session run record keeps the launching session as `parent_session` (the `--parent` name of `fleet-launch`), so completion events can reach the parent by name. The launch-status receipt consumer of the plan-order launcher is not in this repository and stays a follow-up slice.

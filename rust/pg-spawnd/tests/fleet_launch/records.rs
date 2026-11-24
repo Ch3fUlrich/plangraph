@@ -334,7 +334,11 @@ pub fn check_batch_prompt(launcher: &Launcher) {
         include_str!("../fixtures/batch-writer-input.txt"),
     )
     .unwrap();
-    let out = s.launch("writer").output().unwrap();
+    let out = s
+        .launch("writer")
+        .args(["--parent", "plan-order-0706"])
+        .output()
+        .unwrap();
     s.expect(
         &out,
         0,
@@ -376,6 +380,7 @@ fn check_batch_lane_record(s: &Sandbox) {
         "1111111111111111111111111111111111111111"
     );
     assert_eq!(record["lane_override"], serde_json::Value::Null);
+    assert_eq!(record["parent_session"], "plan-order-0706");
     let out = s.launch("writer").output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);

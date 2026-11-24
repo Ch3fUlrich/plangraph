@@ -82,105 +82,19 @@ impl Host {
         let gitdir = self.git(&["rev-parse", "--absolute-git-dir"])?;
         Ok(Path::new(&gitdir).join("fast-checks").join(head))
     }
-    /// The repository's seconds-fast gates present in the checkout: file size, new-code
-    /// language, changelog/docs, commit trailers and, with a words file, the private scrub;
-    /// the result is their combined output.
+    /// The repository's seconds-fast gates on the completed head: `head_gate::run`, the one
+    /// implementation shared with the Claude completion; the result is their combined output.
     pub(super) fn checks(&self) -> Result<String, String> {
-        let mut log = String::new();
         let pin = self.base_pin();
-        self.check_item_trailers(&pin)?;
-        let range = |extra: &[&str]| {
-            let mut args: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
-            args.extend(["--base".into(), pin.clone(), "--head".into(), "HEAD".into()]);
-            args
-        };
-        let mut gates: Vec<(&str, Vec<String>)> = vec![
-            ("check_file_size.py", vec![]),
-            ("check_new_code_lang.py", vec![]),
-            ("check_changelog_docs.py", vec![]),
-            ("ci_commit_gate.py", range(&["check"])),
-        ];
-        let words = std::env::var_os("HOME")
-            .map(|home| Path::new(&home).join(".config/plangraph/scrub-words.txt"))
-            .filter(|path| path.is_file());
-        if let Some(words) = words {
-            let mut args = range(&[]);
-            args.extend(["--words".into(), words.to_string_lossy().into_owned()]);
-            gates.push(("preflight_private_scrub.py", args));
-        }
-        for (gate, args) in gates {
-            let path = self.cwd.join("tools").join(gate);
-            if !path.is_file() {
-                continue;
-            }
-            let mut command = self.command(if cfg!(windows) { "python" } else { "python3" });
-            command.arg(path).args(args).current_dir(&self.cwd);
-            let policy_gate = gate == "check_new_code_lang.py";
-            if policy_gate {
-                command.env("CLASS_SEARCH_BASE", &pin);
-            }
-            #[cfg(target_os = "linux")]
-            let _policy_lease =
-                if policy_gate && self.cwd.join("rust/pg-policy/Cargo.toml").is_file() {
-                    let target = pg_worker_core::cargo_cache::shared_cache_roots()
-                        .map_err(|e| e.to_string())?
-                        .remove(0);
-                    command.env("CARGO_TARGET_DIR", &target);
-                    Some(
-                        pg_worker_core::cargo_cache::writer_lease(&target)
-                            .map_err(|e| format!("{gate}: {e}"))?,
-                    )
-                } else {
-                    None
-                };
-            // Both streams of a passing gate are evidence too (a skipped check is reported
-            // on stderr).
-            let result = command.output().map_err(|e| format!("{gate}: {e}"))?;
-            let both = format!(
-                "{}{}",
-                String::from_utf8_lossy(&result.stdout),
-                String::from_utf8_lossy(&result.stderr)
-            );
-            if !result.status.success() {
-                return Err(format!(
-                    "{gate}: command failed ({}):\nstdout: {}\nstderr: {}",
-                    result.status,
-                    String::from_utf8_lossy(&result.stdout).trim(),
-                    String::from_utf8_lossy(&result.stderr).trim()
-                ));
-            }
-            log.push_str(&format!("== {gate} ({})\n{both}\n", result.status));
-        }
-        Ok(log)
-    }
-    fn check_item_trailers(&self, pin: &str) -> Result<(), String> {
-        let assigned = context::item_keys(&self.brief);
-        let range = format!("{pin}..HEAD");
-        let mut args = vec![
-            "log",
-            "-z",
-            "--format=%H%x00%(trailers:key=Plan-Item,valueonly,unfold)",
-            &range,
-        ];
-        // A base refresh can import upstream commits after the original pin.
-        let upstream = self
-            .git(&["rev-parse", "--verify", "refs/remotes/origin/main"])
-            .ok()
-            .map(|sha| format!("^{sha}"));
-        args.extend(upstream.as_deref());
-        args.push("--");
-        let log = self.git(&args)?;
-        let mut records = log.split_terminator('\0');
-        while let (Some(commit), Some(trailers)) = (records.next(), records.next()) {
-            for item in trailers.lines().map(str::trim) {
-                if !assigned.iter().any(|key| key == item) && !item.is_empty() {
-                    return Err(format!(
-                        "commit {commit}: Plan-Item outside writer brief: {item}"
-                    ));
-                }
-            }
-        }
-        Ok(())
+        let head = self.git(&["rev-parse", "HEAD"])?;
+        pg_spawnd::head_gate::run(&pg_spawnd::head_gate::Gate {
+            worktree: &self.cwd,
+            base: &pin,
+            head: &head,
+            brief: &self.brief,
+            words: pg_spawnd::head_gate::scrub_words(),
+            command: &|program| self.command(program),
+        })
     }
     /// Item-context evidence of the versioned review brief, from the writer brief and the
     /// exact diff: item keys, whole done criteria, invariants, both SHAs, the public symbols
