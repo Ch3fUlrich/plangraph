@@ -115,6 +115,20 @@ def test_deployment_inputs_read_by_rust_are_explicitly_selected(name):
     assert ci_select.select([path])["rust"]
 
 
+@pytest.mark.parametrize("path", [
+    "deploy/manifest.toml",
+    "deploy/systemd/pg-feeder.timer",
+    "deploy/pganchor/pganchor.socket",
+    "deploy/liveness/liveness-watchdog@.service",
+    "deploy/systemd/new.target",
+    "deploy/systemd/new.mount",
+    "deploy/watchdog/nested/new.path",
+])
+def test_deploy_manifest_and_unit_files_select_rust(path):
+    # The plangraph-cli deploy_manifest test checks every unit file under deploy/ against the manifest.
+    assert ci_select.select([path])["rust"], path
+
+
 def test_schema_change_cli_outputs(tmp_path, monkeypatch, capsys):
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))

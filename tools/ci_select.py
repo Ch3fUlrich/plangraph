@@ -49,6 +49,13 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_errors.py",
     "deploy/feeder/**",
     "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
+    "deploy/manifest.toml",  # the plangraph-cli deploy_manifest test checks every unit and binary against it.
+    "deploy/*.service",  # the same test scans every unit file under deploy/ (fnmatch: * crosses directories).
+    "deploy/*.timer",
+    "deploy/*.socket",
+    "deploy/*.target",
+    "deploy/*.mount",
+    "deploy/*.path",
     "deploy/systemd/disk-hygiene.env.example",
     "deploy/systemd/keeper-backup.env.example",
     "deploy/systemd/pg-ci-watch.service",  # a ci_watch test pins its flags.
