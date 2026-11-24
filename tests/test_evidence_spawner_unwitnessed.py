@@ -47,6 +47,9 @@ def test_an_agy_seat_with_a_recorded_harness_counts(tmp_path):
     {"pinned": True},
     {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}", f"HEAD: {'0' * 40}").replace("src/lib.rs:3", f"src/lib.rs:3 at {HEAD}")},   # the HEAD line names another head
     {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}\n", "").replace("src/lib.rs:3", f"src/lib.rs:3 at {HEAD}")},                     # the sha only appears in prose
+    {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}\n", f"```\nHEAD: {HEAD}\n```\n")},                  # only a fenced HEAD line
+    {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}\n", f"HEAD: {HEAD}\nHEAD: unknown\n")},            # a malformed second declaration
+    {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}\n", f"HEAD: {HEAD}\nHEAD: {'0' * 40}\n")},         # a conflicting second declaration
     {"completion": {}},                                 # no head_sha: a refusal, never a TypeError
     {"completion": {"head_sha": None}},
 ])
@@ -82,6 +85,9 @@ def test_an_unwitnessed_seat_is_refused_unless_the_caller_allows_it(tmp_path):
     ("TESTS: pytest --collect-only: 3 tests collected", False),   # collecting is not running
     ("TESTS: cargo test --no-run: 3 tests", False),
     ("TESTS: pytest -q: 3 selected", False),
+    ("TESTS: pytest -q: 0 tests passed, 4 skipped", False),    # nothing executed
+    ("TESTS: pytest -q: 0 passed, 4 skipped", False),
+    ("TESTS: pytest -q: 12 tests passed", True),
     ("", False),
 ])
 def test_an_opencode_seat_counts_only_when_tests_ran(tmp_path, tests, accepted):
