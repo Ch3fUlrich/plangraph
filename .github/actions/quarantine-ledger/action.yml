@@ -32,7 +32,16 @@ runs:
         set -euo pipefail
         ledger="$RUNNER_TEMP/pytest-quarantine.json"
         if [ -n "$BASE_SHA" ]; then
-          git show "$BASE_SHA:.github/pytest-quarantine.json" > "$ledger" 2>/dev/null || echo '{}' > "$ledger"
+          # A shallow checkout may lack the base: fetch it, and fail when it still cannot be read. Only a base
+          # that has no ledger file at all means "no quarantine"; a failed lookup never falls back to an empty ledger.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+          if git cat-file -e "$BASE_SHA:.github/pytest-quarantine.json" 2>/dev/null; then
+            git show "$BASE_SHA:.github/pytest-quarantine.json" > "$ledger"
+          else
+            echo '{}' > "$ledger"
+          fi
         else
           cp .github/pytest-quarantine.json "$ledger"
         fi
