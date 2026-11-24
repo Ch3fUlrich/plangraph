@@ -81,9 +81,10 @@ def scan(command):
 
 def scan_flow(command):
     """Like `scan`, plus how each command is joined to its neighbours: returns (commands, flow) where
-    ``flow[k] = (before, after, depth)``: the operator before and after command k (``""`` at the start or
-    end, ``"\\n"``, ``";"``, ``"&&"``, ``"||"``, ``"|"``, ``"&"``, ``"("``, ``")"``) and how many ( ), $( )
-    or backtick scopes enclose it. Raises ParseError like `scan`."""
+    ``flow[k] = (before, after, depth, entry)``: the operator before and after command k (``""`` at the start
+    or end, ``"\\n"``, ``";"``, ``"&&"``, ``"||"``, ``"|"``, ``"&"``, ``"("``, ``")"``; a newline after
+    `&&`, `||` or `|` does not replace that operator), how many ( ), $( ) or backtick scopes enclose it, and
+    whether it is the first command of the innermost one. Raises ParseError like `scan`."""
     commands, flow = [], []
     _Scanner(command, commands, [], flow=flow).parse()
     return commands, flow
@@ -112,14 +113,18 @@ class _Scanner:
         s, n = self.s, self.n
         cmd, cases = [], []  # words of the current command; one state per open `case`
         before = [""]  # the operator that ended the previous command of this list
+        entry = [self.nest > 0]  # the next command is the first of a subshell, substitution or backtick scope
 
         def flush(after=""):
             if cmd:
                 self.commands.append(cmd[:])
                 if self.flow is not None:
-                    self.flow.append((before[0], after, self.nest))
-                del cmd[:]
-            before[0] = after
+                    self.flow.append((before[0], after, self.nest, entry[0]))
+                entry[0] = False
+            # A newline after `&&`, `||` or `|` continues the list: the operator still joins the next command.
+            if cmd or after != "\n" or before[0] not in ("&&", "||", "|", "|&"):
+                before[0] = after
+            del cmd[:]
 
         while True:
             self.blanks()

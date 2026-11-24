@@ -236,6 +236,18 @@ def _nearest_checkout(path):
     return None
 
 
+def _is_toml(text):
+    """True when `text` is valid TOML (a `--config KEY=VALUE`), False for a path."""
+    try:
+        import tomllib
+        tomllib.loads(text)
+    except ImportError:
+        return "=" in text
+    except ValueError:
+        return False
+    return True
+
+
 def _toml_target(text):
     """`build.target-dir` of TOML text (a file, or the `build.target-dir=VALUE` of `--config`), else None."""
     try:
@@ -260,15 +272,16 @@ def _configured_target(rest, cwd, envs, host_env):
                  else word.split("=", 1)[1] if word.startswith("--config=") else None)
         if given is None:
             continue
-        if given.startswith("build.target-dir") and (value := _toml_target(given)) is not None:
-            found = (value, cwd)
-        elif "=" not in given or Path(_expand(given, cwd)).is_file():
-            try:
-                file = _expand(given, cwd)
-                if (value := _toml_target(file.read_text())) is not None:
-                    found = (value, file.parent.parent)
-            except OSError:
-                pass
+        if _is_toml(given):  # `KEY=VALUE`, in any spelling of the key (`build . target-dir`, `"build"."target-dir"`)
+            if (value := _toml_target(given)) is not None:
+                found = (value, cwd)
+            continue
+        try:  # otherwise a config file, relative to its directory's parent
+            file = _expand(given, cwd)
+            if (value := _toml_target(file.read_text())) is not None:
+                found = (value, file.parent.parent)
+        except OSError:
+            pass
     if found[0] is not None:
         return found
     value = envs["CARGO_BUILD_TARGET_DIR"] if "CARGO_BUILD_TARGET_DIR" in envs else host_env.get("CARGO_BUILD_TARGET_DIR")
@@ -322,44 +335,56 @@ def _cargo_subcommand(rest):
     return None
 
 
-def _env_apply(words, base):
-    """What the `env` among `words` (the words before the command) does to the environment `base`.
+def _env_apply(words, base, cwd):
+    """What the `env` wrappers among `words` (the words before the command) do, in order, to the environment `base`
+    and the directory `cwd`.
 
-    Returns (environment, cleared, reached): names mapped to None are unset; `-i` clears everything before it;
-    `reached` is False when `env` would run something else than the next word (an option after an assignment:
-    GNU env parses options first, then NAME=VALUE operands, then the command).
+    Returns (environment, cleared, reached, cwd): names mapped to None are unset; `-i` clears everything before
+    it; `-C DIR` moves the command; `reached` is False when an `env` would run something else than the next
+    word (an option after an assignment: GNU env parses options, then NAME=VALUE operands, then the command).
     """
     from bash_guard_rules import _ENV_ASSIGN_RE, _basename
-    k = next((n for n, w in enumerate(words) if _basename(w) == "env"), None)
-    if k is None:
-        return dict(base), False, True
-    env, cleared, rest, n = dict(base), False, words[k + 1:], 0
-    while n < len(rest) and rest[n].startswith("-") and rest[n] != "--":
-        word, n = rest[n], n + 1
-        if word == "-" or word == "--ignore-environment":
-            env, cleared = {}, True
-        elif word == "--unset" or word == "--chdir" or word == "--split-string":
-            arg, n = (rest[n] if n < len(rest) else ""), n + 1
-            if word == "--unset":
-                env[arg] = None
-        elif word.startswith("--unset="):
-            env[word.split("=", 1)[1]] = None
-        elif not word.startswith("--"):
-            for pos, letter in enumerate(word[1:], 1):
-                if letter == "i":
-                    env, cleared = {}, True
-                elif letter in "uCS":  # takes the rest of the word, else the next word
-                    arg = word[pos + 1:]
-                    if not arg:
-                        arg, n = (rest[n] if n < len(rest) else ""), n + 1
-                    if letter == "u":
-                        env[arg] = None
-                    break
-    n += n < len(rest) and rest[n] == "--"
-    while n < len(rest) and _ENV_ASSIGN_RE.match(rest[n]):
-        name, value = rest[n].split("=", 1)
-        env[name], n = value, n + 1
-    return env, cleared, not (n < len(rest) and rest[n].startswith("-"))
+    env, cleared, n = dict(base), False, 0
+    while n < len(words):
+        n += 1
+        if _basename(words[n - 1]) != "env":
+            continue
+        while n < len(words) and words[n].startswith("-") and words[n] != "--":
+            word, n = words[n], n + 1
+            if word == "-" or word == "--ignore-environment":
+                env, cleared = {}, True
+            elif word in ("--unset", "--chdir", "--split-string"):
+                arg, n = (words[n] if n < len(words) else ""), n + 1
+                if word == "--unset":
+                    env[arg] = None
+                elif word == "--chdir":
+                    cwd = _expand(arg, cwd)
+            elif word.startswith(("--unset=", "--chdir=")):
+                name, arg = word.split("=", 1)
+                if name == "--unset":
+                    env[arg] = None
+                else:
+                    cwd = _expand(arg, cwd)
+            elif not word.startswith("--"):
+                for pos, letter in enumerate(word[1:], 1):
+                    if letter == "i":
+                        env, cleared = {}, True
+                    elif letter in "uCS":  # takes the rest of the word, else the next word
+                        arg = word[pos + 1:]
+                        if not arg:
+                            arg, n = (words[n] if n < len(words) else ""), n + 1
+                        if letter == "u":
+                            env[arg] = None
+                        elif letter == "C":
+                            cwd = _expand(arg, cwd)
+                        break
+        n += n < len(words) and words[n] == "--"
+        while n < len(words) and _ENV_ASSIGN_RE.match(words[n]):
+            name, value = words[n].split("=", 1)
+            env[name], n = value, n + 1
+        if n < len(words) and words[n].startswith("-"):
+            return env, cleared, False, cwd
+    return env, cleared, True, cwd
 
 
 class _ShellVars:
@@ -413,19 +438,22 @@ class _ShellVars:
 class _Shell:
     """One possible state of the shell running a command list: its directory and variables."""
 
-    def __init__(self, cwd, variables):
-        self.cwd, self.variables = cwd, variables
+    def __init__(self, cwd, variables, unknown=False):
+        self.cwd, self.variables, self.unknown = cwd, variables, unknown  # unknown: more states than are kept
 
     def copy(self):
         clone = _ShellVars()
         clone.value, clone.exported = dict(self.variables.value), dict(self.variables.exported)
-        return _Shell(self.cwd, clone)
+        return _Shell(self.cwd, clone, self.unknown)
 
     def key(self):
-        return (str(self.cwd), tuple(sorted(self.variables.value.items())), tuple(sorted(self.variables.exported.items())))
+        return (str(self.cwd), tuple(sorted(self.variables.value.items())), tuple(sorted(self.variables.exported.items())),
+                self.unknown)
 
 
-_MAX_SHELLS = 16  # possible states kept when conditional commands branch; beyond it the oldest are kept
+_MAX_SHELLS = 16  # possible states kept when conditional commands branch; beyond it one `unknown` state stands for the rest
+UNKNOWN_MESSAGE = ("bash-guard: DENIED - cargo %s after more conditional cd/export/unset commands than the guard can follow; "
+                   "run the build in a separate Bash command with CARGO_TARGET_DIR set to the shared target (%s)")
 _OPENERS = frozenset(("if", "while", "until", "for", "select", "case", "{", "function", "coproc"))
 _CLOSERS = frozenset(("fi", "done", "}", "esac"))
 
@@ -445,10 +473,11 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
     commands, flow = scan_flow(command)
     levels = [[_Shell(Path(cwd or Path.cwd()), _ShellVars(inherited))]]  # the possible states at each scope depth
     compound = [0]  # open `if` / loop / group constructs at each scope depth
-    for cmd, (before, after, level) in zip(commands, flow):
-        if level and before == "":  # the first command of a subshell or substitution: a copy of the enclosing state
+    for cmd, (before, after, level, entry) in zip(commands, flow):
+        if entry:  # the first command of a subshell or substitution starts from a copy of the enclosing state
             del levels[level:], compound[level:]
-            levels.append([shell.copy() for shell in levels[level - 1]])
+        while len(levels) <= level:
+            levels.append([shell.copy() for shell in levels[-1]])
             compound.append(0)
         del levels[level + 1:], compound[level + 1:]
         shells = levels[level]
@@ -481,21 +510,24 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
                     after_run.cwd = _expand(words[i + 1], shell.cwd)  # later commands run there
                 changed.append(after_run)
                 continue
-            reason = _check_run(words, pos, i, envs, shell.cwd, depth)
+            reason = _check_run(words, pos, i, envs, shell, depth)
             if reason:
                 return reason
             changed.append(shell)
         if not pipelined and changed != shells:
             kept = changed if not conditional else [*shells, *changed]
-            unique = {shell.key(): shell for shell in kept}
-            levels[level] = list(unique.values())[:_MAX_SHELLS]
+            unique = list({shell.key(): shell for shell in kept}.values())
+            if len(unique) > _MAX_SHELLS:
+                unique = [*unique[:_MAX_SHELLS - 1], _Shell(unique[0].cwd, _ShellVars(), unknown=True)]
+            levels[level] = unique
         compound[level] = max(0, compound[level] - (first in _CLOSERS))
     return None
 
 
-def _check_run(words, pos, i, envs, cwd, depth):
+def _check_run(words, pos, i, envs, shell, depth):
     """Deny message when the command at words[i] (a wrapper, a shell or cargo itself) runs a cargo build into a checkout."""
     from bash_guard_rules import _SHELLS, _WRAPPERS, _basename, _shell_strings
+    cwd = shell.cwd
     # Wrapper options are not modelled: every later word may be the command, as check_command reads it.
     wrapped = _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS or any(_basename(w) in _PGTEST for w in words[i:i + 3])
     evaled = False
@@ -507,12 +539,12 @@ def _check_run(words, pos, i, envs, cwd, depth):
             evaled, nested = True, [" ".join(words[j + 1:])]
         else:
             nested = []
-        env, cleared, reached = _env_apply(words[i:j], envs)  # `env -u` / `env NAME=VAL` before this word
+        env, cleared, reached, where = _env_apply(words[i:j], envs, cwd)  # `env -u`, `-C`, `NAME=VAL` before this word
         if not reached:
             continue
         wrapped_env = {**{var: None for var in _TRACKED}, **env} if cleared else env
         for string in nested:
-            reason = main_checkout_cargo(string, cwd, depth + 1, wrapped_env)
+            reason = main_checkout_cargo(string, where, depth + 1, wrapped_env)
             if reason:
                 return reason
         if name != "cargo":
@@ -523,7 +555,9 @@ def _check_run(words, pos, i, envs, cwd, depth):
         sub = _cargo_subcommand(rest)
         if sub not in _BUILDING:
             continue
-        root = _cargo_target_checkout(rest, env, _cargo_workdir(rest, cwd), {} if cleared else None)
+        if shell.unknown:
+            return UNKNOWN_MESSAGE % (sub, shared_target())
+        root = _cargo_target_checkout(rest, env, _cargo_workdir(rest, where), {} if cleared else None)
         if root is not None:
             return MAIN_TARGET_MESSAGE % (sub, root, shared_target())
     return None
