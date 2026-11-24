@@ -31,12 +31,18 @@ struct Registry {
     claimed: BTreeMap<String, Vec<String>>,
     started: Vec<Vec<String>>,
     released: Vec<String>,
+    /// The epoch the keeper issued for each claim, and each release as (key, epoch).
+    epochs: BTreeMap<String, u64>,
+    releases: Vec<(String, u64)>,
 }
 struct Host {
     registry: Arc<Mutex<Registry>>,
     files: BTreeMap<String, Vec<String>>,
     fail_start: bool,
     fail_release: bool,
+    /// The claim of this key fails as unavailable; the rival check of this key errors.
+    unavailable_at: Option<String>,
+    rival_error_at: Option<String>,
     queued: bool,
     /// Held after the first claim until the other host has claimed as well.
     meet: Option<Arc<Barrier>>,
@@ -57,6 +63,8 @@ impl Host {
             files,
             fail_start: false,
             fail_release: false,
+            unavailable_at: None,
+            rival_error_at: None,
             queued: false,
             meet: None,
         }
@@ -65,13 +73,18 @@ impl Host {
 impl Launch for Host {
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError> {
         let mut registry = self.registry.lock().unwrap();
-        let result = if registry.claimed.contains_key(key) {
+        let result = if self.unavailable_at.as_deref() == Some(key) {
+            Err(ClaimError::Unavailable("keeper offline".into()))
+        } else if registry.claimed.contains_key(key) {
             Err(ClaimError::Refused("conflict".into()))
         } else {
             registry
                 .claimed
                 .insert(key.to_owned(), self.files[key].clone());
-            Ok(1)
+            // A distinct epoch per claim, so a release with another key's epoch is visible.
+            let epoch = 100 + registry.epochs.len() as u64;
+            registry.epochs.insert(key.to_owned(), epoch);
+            Ok(epoch)
         };
         drop(registry);
         if let Some(barrier) = self.meet.take() {
@@ -85,6 +98,9 @@ impl Launch for Host {
         files: &[String],
         batch: &[String],
     ) -> Result<Option<String>, String> {
+        if self.rival_error_at.as_deref() == Some(key) {
+            return Err("snapshot unreachable".into());
+        }
         let registry = self.registry.lock().unwrap();
         Ok(registry
             .claimed
@@ -111,11 +127,16 @@ impl Launch for Host {
         self.registry.lock().unwrap().started.push(keys);
         Ok(json!({"run_id":"run-1","status":if self.queued {"queued"} else {"running"}}))
     }
-    fn release(&mut self, key: &str, _: u64) -> Result<(), String> {
+    fn release(&mut self, key: &str, epoch: u64) -> Result<(), String> {
         if self.fail_release {
             return Err("release denied".into());
         }
         let mut registry = self.registry.lock().unwrap();
+        registry.releases.push((key.to_owned(), epoch));
+        // The keeper refuses a release that does not carry the claim's own epoch.
+        if registry.epochs.get(key) != Some(&epoch) {
+            return Err(format!("epoch_stale: {key} {epoch}"));
+        }
         registry.claimed.remove(key);
         registry.released.push(key.to_owned());
         Ok(())
@@ -487,4 +508,97 @@ fn a_batch_larger_than_the_record_can_hold_is_an_invalid_policy() {
             assert_eq!(row["reason"], "invalid_policy");
         }
     }
+}
+
+/// Every release carried the epoch of its own claim.
+fn assert_released_with_own_epochs(registry: &Registry, expected: &[&str]) {
+    let mut keys: Vec<&str> = registry.releases.iter().map(|(k, _)| k.as_str()).collect();
+    keys.sort_unstable();
+    let mut want = expected.to_vec();
+    want.sort_unstable();
+    assert_eq!(keys, want, "{:?}", registry.releases);
+    for (key, epoch) in &registry.releases {
+        assert_eq!(registry.epochs.get(key), Some(epoch), "{key}");
+    }
+    assert!(
+        expected.iter().all(|k| !registry.claimed.contains_key(*k)),
+        "{:?}",
+        registry.claimed
+    );
+}
+
+#[test]
+fn an_unavailable_claim_mid_batch_releases_the_claimed_members_by_their_own_epochs() {
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 8, &["src/b.rs"]),
+        item("ALPHA-3", 7, &["src/c.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    host.unavailable_at = Some("plangraph:ALPHA-3".into());
+    let row = drive(&ready(items), &mut host, "dell", 3, false);
+    assert_eq!(row["decision"], "refused", "{row}");
+    assert_eq!(row["error"], true);
+    assert!(row["reason"].as_str().unwrap().contains("keeper offline"));
+    let registry = registry.lock().unwrap();
+    assert!(registry.started.is_empty());
+    assert_ne!(
+        registry.epochs["plangraph:ALPHA-1"],
+        registry.epochs["plangraph:ALPHA-2"]
+    );
+    assert_released_with_own_epochs(&registry, &["plangraph:ALPHA-1", "plangraph:ALPHA-2"]);
+}
+
+#[test]
+fn a_rival_check_error_releases_every_claimed_member_by_its_own_epoch() {
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 8, &["src/b.rs"]),
+        item("ALPHA-3", 7, &["src/c.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    host.rival_error_at = Some("plangraph:ALPHA-2".into());
+    let row = drive(&ready(items), &mut host, "dell", 3, false);
+    assert_eq!(row["decision"], "refused", "{row}");
+    assert!(row["reason"]
+        .as_str()
+        .unwrap()
+        .contains("reservation check failed: snapshot unreachable"));
+    let registry = registry.lock().unwrap();
+    assert!(registry.started.is_empty());
+    assert_released_with_own_epochs(
+        &registry,
+        &[
+            "plangraph:ALPHA-1",
+            "plangraph:ALPHA-2",
+            "plangraph:ALPHA-3",
+        ],
+    );
+}
+
+#[test]
+fn a_failed_launch_and_a_yielded_member_release_by_their_own_epochs() {
+    // ALPHA-2 (not the seed) yields to another host's claim on its file; the launch then fails.
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 8, &["src/b.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    registry
+        .lock()
+        .unwrap()
+        .claimed
+        .insert("plangraph:OTHER".into(), vec!["src/b.rs".into()]);
+    let mut host = Host::new(&registry, &items);
+    host.fail_start = true;
+    let row = drive(&ready(items), &mut host, "dell", 2, false);
+    assert!(
+        row["reason"].as_str().unwrap().contains("claim released"),
+        "{row}"
+    );
+    let registry = registry.lock().unwrap();
+    assert_released_with_own_epochs(&registry, &["plangraph:ALPHA-1", "plangraph:ALPHA-2"]);
+    assert!(registry.claimed.contains_key("plangraph:OTHER"));
 }
