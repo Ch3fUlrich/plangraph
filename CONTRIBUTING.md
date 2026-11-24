@@ -231,7 +231,7 @@ Add an explicit test case in
 `tests/test_ci_select_rust_inputs.py` for inputs the scan misses, such as unit
 filenames joined to a deployment directory by a helper. `rust/pg-spawnd/` and
 `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
-Files read or executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`, and `.claude/settings.json` run through `rust/pg-hook/tests/settings_registration.rs`) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
+Files read or executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`, and `.claude/settings.json`, whose SendMessage hook entry `rust/pg-hook/tests/settings_registration.rs` runs) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
 The scheduled review probe test imports `src/plangraph/planner/__init__.py` and embeds
 `deploy/systemd/plangraph-review-probe.service` to exercise its `ExecStart` command.
 Both paths select Rust CI through `RUST_INPUTS`.

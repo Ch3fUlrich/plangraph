@@ -124,8 +124,8 @@ The hook reads files only (under 50 ms) and fails open on any error.
 Refusing a message to an old counter name and forwarding it to the live session needs the
 confirmed live name that `fleet-name` reads (`claude agents --json`, seconds); it is not
 done in a hook and stays open as `plangraph:LE-PEER-MESSAGES-ADDRESSED-BY-STALE-SESSION-NAME`
-(slice `LE-PEER-MESSAGES-ROLE-ADDRESS-AND-FORWARD`). The routing wake by the state-shadow
-digest waits on `plangraph:SSA-A2-SHADOW-DIGEST` (slice `LE-ROUTINE-MESSAGES-DIGEST-WAKE`).
+(slice `plangraph:LE-PEER-MESSAGES-ROLE-ADDRESS-AND-FORWARD`). The routing wake by the state-shadow
+digest waits on `plangraph:SSA-A2-SHADOW-DIGEST` (slice `plangraph:LE-ROUTINE-MESSAGES-DIGEST-WAKE`).
 
 ### Agent message timestamps
 
@@ -150,7 +150,7 @@ _ "$HOME/.local/share/plangraph/hooks/pg-hook"`, so a host without the installed
 `pg-hook` sends as before (exit 1 is not a block). The registration covers sessions whose
 working directory is in this repository; a session elsewhere (plan-order, plan-roadmap) needs
 the same entries in the fleet launch settings of the data repository
-(slice `LE-SENDMESSAGE-HOOKS-REGISTERED-ON-FLEET-HOSTS`). `rust/pg-hook/tests/settings_registration.rs` runs the registered commands. The
+(slice `plangraph:LE-SENDMESSAGE-HOOKS-REGISTERED-ON-FLEET-HOSTS`). `rust/pg-hook/tests/settings_registration.rs` runs the registered commands. The
 fleet client and `fleet_msg_send` check the text themselves.
 
 Read git times as UTC: `git log --date=iso-strict` or `TZ=UTC git log --date=format-local:%H:%MZ`.
