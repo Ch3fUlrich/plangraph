@@ -144,7 +144,7 @@ authority, so only a protected file is read: a regular file (no link) owned by t
 (mode 0600). A `Gate-Edit` D-id, whether named in `--gate-edits` or already carried by a source anywhere in its message (also
 where git's trailer parser misses it), needs a row for that D-id and the source head, with prefixes covering every path the
 commit changes (read NUL-delimited; the pinned gate decides which paths are gate files). The commit must be single-parent. A hand-cut commit must also
-reproduce its source: the `Picked-From:` commit has to be in the repository with the same patch id. The record is written by the
+reproduce its source: the `Picked-From:` commit has to be in the repository and the commit must be its exact replay on its parent (a three-way merge of the source onto the parent gives the commit's own tree, whitespace included). The record is written by the
 router before the cut, because the GO row binds a head that exists only after the cut; its producer is a follow-up item, so
 until it lands the file is written by hand. `land-train cut-check --repo DIR --base REV --head REV [--grants FILE]` runs the same message check and the same gate on a
 branch cut by hand (the source head is its last `Picked-From:`) and refuses a `cherry-pick -x` line.

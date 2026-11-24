@@ -9,6 +9,8 @@ pub mod cut;
 mod cut_grant_tests;
 mod cut_grants;
 #[cfg(test)]
+mod cut_replay_tests;
+#[cfg(test)]
 mod cut_tests;
 pub mod delta;
 pub mod deploy;

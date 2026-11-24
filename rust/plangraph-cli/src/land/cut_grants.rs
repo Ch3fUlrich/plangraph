@@ -3,9 +3,7 @@
 //! D-id, bound to the full id of the source commit and a path prefix.
 use super::git;
 use super::go_verify::Grant;
-use std::io::Write;
 use std::path::Path;
-use std::process::Stdio;
 
 /// The path prefixes the record gives `d_id` for exactly the source head `head`.
 pub(super) fn prefixes<'a>(grants: &'a [Grant], d_id: &str, head: &str) -> Vec<&'a str> {
@@ -56,53 +54,57 @@ fn picked_from(message: &str) -> Option<&str> {
         .next_back()
 }
 
-/// The stable patch id of `commit`'s change; `None` for an empty change.
-fn patch_id(repo: &Path, commit: &str) -> Result<Option<String>, String> {
-    let diff = git::bytes(
+/// Whether `commit` is exactly the change of `source` replayed onto `commit`'s parent: the three-way merge of
+/// `source` onto `commit^` with `source^` as base gives `commit`'s own tree, whitespace included.
+fn replays(repo: &Path, commit: &str, source: &str) -> Result<bool, String> {
+    let single = |rev: &str| -> Result<(), String> {
+        let parents = git::out(repo, &["rev-list", "--parents", "-n", "1", rev])?;
+        if parents.split_whitespace().count() == 2 {
+            Ok(())
+        } else {
+            Err(format!("{rev} is not a single-parent commit"))
+        }
+    };
+    single(commit)?;
+    single(source)?;
+    let out = git::run(
         repo,
+        None,
         &[
-            "diff-tree",
-            "-p",
-            "--root",
-            "--no-commit-id",
-            "--binary",
-            commit,
+            "merge-tree",
+            "--write-tree",
+            "--merge-base",
+            &format!("{source}^"),
+            &format!("{commit}^"),
+            source,
         ],
     )?;
-    let mut child = git::command(repo, None)
-        .args(["patch-id", "--stable"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    child
-        .stdin
-        .take()
-        .ok_or("patch-id has no stdin")?
-        .write_all(&diff)
-        .map_err(|e| e.to_string())?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err(format!(
-            "git patch-id failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        // Exit 1 is a conflict: the source does not apply to the parent, so the commit is not its replay.
+        return match out.status.code() {
+            Some(1) => Ok(false),
+            _ => Err(format!(
+                "git merge-tree failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+        };
     }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
+    let replayed = String::from_utf8_lossy(&out.stdout)
+        .lines()
         .next()
-        .map(str::to_owned))
+        .unwrap_or_default()
+        .to_owned();
+    Ok(replayed == git::out(repo, &["rev-parse", &format!("{commit}^{{tree}}")])?)
 }
 
 /// The one authorization of a message, for the cutter before and after the pick and for `check`. Every
 /// `Gate-Edit:` line, wherever it stands (a trailer parse can miss one that cutting then exposes), needs:
 /// - a single-parent commit (a merge's edits cannot be told from its parents');
-/// - a grant row for its D-id and the source head (`head`, or the message's last `Picked-From:`);
-/// - rows whose prefixes cover every path the commit changes (read NUL-delimited, so no path is skipped);
-///   the pinned gate decides which paths are gate files, a second copy of its list is not kept here;
-/// - when the commit is not the source itself, the source commit in the repository and the same patch id,
-///   so a `Picked-From:` line cannot borrow a grant for another edit.
+/// - for each of its D-ids, grant rows for that D-id and the source head (`head`, or the message's last
+///   `Picked-From:`) whose prefixes cover every path the commit changes (raw NUL-delimited bytes, so no path
+///   is skipped or merged with another); the pinned gate decides which paths are gate files;
+/// - when the commit is not the source itself, the source commit in the repository and the commit being its
+///   exact replay on the commit's parent, so a `Picked-From:` line cannot borrow a grant for another edit.
 pub(super) fn authorize(
     repo: &Path,
     commit: &str,
@@ -111,64 +113,70 @@ pub(super) fn authorize(
     grants: &[Grant],
 ) -> Result<(), String> {
     let head = head.or_else(|| picked_from(message));
-    let mut verified = false;
+    let mut ids: Vec<&str> = Vec::new();
     for line in message.lines() {
-        let Some((key, value)) = line.trim().split_once(':') else {
-            continue;
-        };
-        if !key.eq_ignore_ascii_case("gate-edit") {
-            continue;
+        if let Some((key, value)) = line.trim().split_once(':') {
+            if key.eq_ignore_ascii_case("gate-edit") && !ids.contains(&value.trim()) {
+                ids.push(value.trim());
+            }
         }
-        let d = value.trim();
-        let denied = |why: &str| {
-            format!("cut: {commit} carries Gate-Edit {d}, which the GO row does not grant ({why})")
-        };
-        let head = head.ok_or_else(|| denied("no Picked-From names its source"))?;
-        let prefixes = prefixes(grants, d, head);
-        if prefixes.is_empty() {
-            return Err(denied(&format!("no grant for source {head}")));
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let denied = |d: &str, why: &str| {
+        format!("cut: {commit} carries Gate-Edit {d}, which the GO row does not grant ({why})")
+    };
+    let head = head.ok_or_else(|| denied(ids[0], "no Picked-From names its source"))?;
+    let raw = git::bytes(
+        repo,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            "-z",
+            commit,
+        ],
+    )?;
+    let paths: Vec<&[u8]> = raw.split(|b| *b == 0).filter(|p| !p.is_empty()).collect();
+    for d in &ids {
+        let rows = prefixes(grants, d, head);
+        if rows.is_empty() {
+            return Err(denied(d, &format!("no grant for source {head}")));
         }
-        if verified {
-            continue;
+        for path in &paths {
+            if !rows.iter().any(|p| {
+                let p = p.as_bytes();
+                *path == p || (p.ends_with(b"/") && path.starts_with(p))
+            }) {
+                let shown = String::from_utf8_lossy(path);
+                return Err(denied(d, &format!("no grant covers {shown}")));
+            }
         }
-        let parents = git::out(repo, &["rev-list", "--parents", "-n", "1", commit])?;
-        if parents.split_whitespace().count() != 2 {
-            return Err(denied("not a single-parent commit"));
-        }
-        let raw = git::bytes(
+    }
+    let parents = git::out(repo, &["rev-list", "--parents", "-n", "1", commit])?;
+    if parents.split_whitespace().count() != 2 {
+        return Err(denied(ids[0], "not a single-parent commit"));
+    }
+    if commit != head {
+        let known = git::run(
             repo,
-            &[
-                "diff-tree",
-                "--no-commit-id",
-                "--name-only",
-                "-r",
-                "-z",
-                commit,
-            ],
+            None,
+            &["cat-file", "-e", &format!("{head}^{{commit}}")],
         )?;
-        for path in raw.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-            let path = String::from_utf8_lossy(path);
-            if !prefixes
-                .iter()
-                .any(|p| *p == path || (p.ends_with('/') && path.starts_with(p)))
-            {
-                return Err(denied(&format!("no grant covers {path}")));
-            }
+        if !known.status.success() {
+            return Err(denied(
+                ids[0],
+                &format!("source {head} is not in this repository"),
+            ));
         }
-        if commit != head {
-            let known = git::run(
-                repo,
-                None,
-                &["cat-file", "-e", &format!("{head}^{{commit}}")],
-            )?;
-            if !known.status.success() {
-                return Err(denied(&format!("source {head} is not in this repository")));
-            }
-            if patch_id(repo, commit)? != patch_id(repo, head)? {
-                return Err(denied(&format!("the change differs from source {head}")));
-            }
+        if !replays(repo, commit, head).map_err(|e| denied(ids[0], &e))? {
+            return Err(denied(
+                ids[0],
+                &format!("the change is not the exact replay of source {head}"),
+            ));
         }
-        verified = true;
     }
     Ok(())
 }

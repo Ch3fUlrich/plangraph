@@ -5,7 +5,7 @@ use super::go_verify::Grant;
 use std::collections::BTreeMap;
 
 /// A repository whose base commit holds `gate_text` as `tools/ci_commit_gate.py`.
-fn fx_with_base_gate(gate_text: &str) -> Fx {
+pub(super) fn fx_with_base_gate(gate_text: &str) -> Fx {
     let fx = Fx::new();
     std::fs::create_dir_all(fx.p().join("tools")).unwrap();
     std::fs::write(fx.p().join("tools/ci_commit_gate.py"), gate_text).unwrap();
@@ -15,7 +15,7 @@ fn fx_with_base_gate(gate_text: &str) -> Fx {
     Fx { base, ..fx }
 }
 
-fn args(list: &[&str]) -> Vec<String> {
+pub(super) fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|a| a.to_string()).collect()
 }
 
@@ -179,8 +179,9 @@ fn protected_write(path: &std::path::Path, grants: &[Grant]) {
     }
 }
 
-fn write_grants(fx: &Fx, name: &str, rows: &[(&str, &str, &str)]) -> std::path::PathBuf {
-    let path = fx.p().join(name);
+pub(super) fn write_grants(fx: &Fx, name: &str, rows: &[(&str, &str, &str)]) -> std::path::PathBuf {
+    // Inside .git: not part of any commit, and gone with the fixture.
+    let path = fx.p().join(".git").join(name);
     let grants: Vec<Grant> = rows
         .iter()
         .map(|(d, prefix, head)| Grant {
@@ -193,21 +194,36 @@ fn write_grants(fx: &Fx, name: &str, rows: &[(&str, &str, &str)]) -> std::path::
     path
 }
 
-/// A hand-cut branch `hand` of one commit that carries `Gate-Edit: D-5` and `Picked-From: claimed`.
-fn hand_cut(fx: &Fx, file: &str, claimed: &str) -> String {
+/// A hand-cut branch `hand` of one commit that changes `file` to `content`, carries `gate_edits` (Gate-Edit
+/// lines) and `Picked-From: claimed`.
+pub(super) fn hand_cut_with(
+    fx: &Fx,
+    file: &str,
+    content: &str,
+    gate_edits: &str,
+    claimed: &str,
+) -> String {
     g(fx.p(), &["checkout", "-q", "-b", "hand", &fx.base]);
     let path = fx.p().join(file);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, "other\n").unwrap();
+    std::fs::write(path, content).unwrap();
     g(fx.p(), &["add", "-A"]);
-    let msg = format!("edit\n\n{TRAILERS}\nGate-Edit: D-5\nPicked-From: {claimed}");
+    let msg = format!("edit\n\n{TRAILERS}\n{gate_edits}\nPicked-From: {claimed}");
     g(fx.p(), &["commit", "-q", "-m", &msg]);
     let head = g(fx.p(), &["rev-parse", "HEAD"]);
     g(fx.p(), &["checkout", "-q", "main"]);
     head
 }
 
-fn run_check(fx: &Fx, head: &str, grants: &std::path::Path) -> Result<Vec<String>, String> {
+fn hand_cut(fx: &Fx, file: &str, claimed: &str) -> String {
+    hand_cut_with(fx, file, "other\n", "Gate-Edit: D-5", claimed)
+}
+
+pub(super) fn run_check(
+    fx: &Fx,
+    head: &str,
+    grants: &std::path::Path,
+) -> Result<Vec<String>, String> {
     let a = args(&[
         "cut-check",
         "--repo",
@@ -230,7 +246,7 @@ fn a_picked_from_that_names_another_edit_does_not_borrow_its_grant() {
     let head = hand_cut(&fx, ".github/workflows/w.yml", &real);
     let grants = write_grants(&fx, "g.json", &[("D-5", ".github/workflows/", &real)]);
     let err = run_check(&fx, &head, &grants).unwrap_err();
-    assert!(err.contains("differs from source"), "{err}");
+    assert!(err.contains("not the exact replay of source"), "{err}");
 }
 
 #[test]
