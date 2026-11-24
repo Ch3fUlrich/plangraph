@@ -39,6 +39,7 @@ HANDLERS = {
     "release": cli_verbs.cmd_release,
     "evidence": cli_verbs.cmd_evidence,
     "incident": cli_verbs.cmd_incident,
+    "reconfirm": cli_verbs.cmd_reconfirm,
     "submit": cli_verbs.cmd_submit,
     "verdict": cli_verbs.cmd_verdict,
     "cancel": cli_verbs.cmd_cancel,
@@ -150,6 +151,9 @@ def _add_writes(sub):
     incident.add_argument("key")
     incident.add_argument("--text", required=True)
     incident.add_argument("--evidence")
+    reconfirm = _p(sub, "reconfirm", help="record that an item's premise was read against a decision")
+    reconfirm.add_argument("key")
+    reconfirm.add_argument("decision", metavar="D-NNN")
     evidence = _p(sub, "evidence", help="attach evidence")
     evidence.add_argument("key")
     evidence.add_argument("--kind", required=True)
