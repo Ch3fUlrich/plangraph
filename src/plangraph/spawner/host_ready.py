@@ -212,7 +212,8 @@ def cargo_lease_holders(target):
     """Pids that hold a flock on ``<target>.plangraph-lock`` now, from the kernel lock table (Linux).
 
     A dead or cancelled holder is absent. Empty when the table or the lock file is unreadable."""
-    target = Path(target)
+    # The native shim leases the resolved target, so a symlinked shared target is looked up there.
+    target = Path(target).resolve()
     try:
         stat = target.with_name(target.name + '.plangraph-lock').stat()
         rows = Path('/proc/locks').read_text().splitlines()

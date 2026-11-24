@@ -124,7 +124,7 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     }
     fs::write(tools.join("ci_select.py"), "print('pytest=true')\n").unwrap();
     fs::write(tools.join("affected_tests.py"),
-        "import os\nassert 'AUTOOS_CTX_HARD' not in os.environ\nassert 'CLAUDE_JOB_DIR' not in os.environ\nassert 'CLASS_SEARCH_BASE' not in os.environ\nprint('affected environment verified')\n").unwrap();
+        "import os\nassert 'AUTOOS_CTX_HARD' not in os.environ\nassert 'CLAUDE_JOB_DIR' not in os.environ\nassert 'CLASS_SEARCH_BASE' not in os.environ\nassert os.environ['PLANGRAPH_CARGO_LEASE_HELD'] == os.environ['CARGO_TARGET_DIR']\nprint('affected environment verified')\n").unwrap();
     fs::write(root.join("test_example.py"), "result = 'pass'\n").unwrap();
     fs::write(
         root.join("pytest.py"),
