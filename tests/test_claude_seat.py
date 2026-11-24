@@ -273,18 +273,35 @@ def test_the_real_host_sandbox_hides_a_masked_fixture_file(monkeypatch):
 
 
 def test_an_unwritable_temporary_directory_refuses_writer_admission_with_sandbox_unavailable(tmp_path, monkeypatch):
-    """The probe fixture cannot be created: admission answers sandbox_unavailable instead of raising OSError."""
+    """The probe fixture cannot be created: admission answers sandbox_unavailable instead of raising OSError.
+    bwrap discovery is stubbed, so the run does reach the fixture creation (asserted), on every host."""
     import tempfile
 
     unwritable = tmp_path / "ro"
     unwritable.mkdir()
     unwritable.chmod(0o500)
-    monkeypatch.setattr(tempfile, "tempdir", str(unwritable))
-    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
     if os.access(unwritable, os.W_OK):
         pytest.skip("this user can write to a mode 0500 directory")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "bwrap").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "bwrap").chmod(0o700)
+    attempts = []
+    real_mkdtemp = claude_seat.mkdtemp
+
+    def spy(*args, **kwargs):
+        attempts.append(kwargs.get("prefix"))
+        return real_mkdtemp(*args, **kwargs)
+
+    monkeypatch.setattr(claude_seat.sys, "platform", "linux")
+    monkeypatch.setattr(tempfile, "tempdir", str(unwritable))
+    monkeypatch.setattr(claude_seat, "mkdtemp", spy)
+    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
+    env = {"PATH": str(bin_dir)}
     argv = ["claude", "-p", "--tools", "Read,Bash"]
-    event = claude_seat.confine_writer_shell(argv, {"PATH": os.defpath}, "implement", "job")
+    event = claude_seat.confine_writer_shell(argv, env, "implement", "job")
+    assert attempts == ["plangraph-deny-smoke-"], "the fixture directory was never attempted"
     assert event["refusal"].startswith("sandbox_unavailable:")
     assert "--settings" not in argv      # nothing was configured for a route that is refused
-    assert claude_seat.sandbox_denies_reads({"PATH": os.defpath}) is False
+    assert claude_seat.sandbox_denies_reads(env) is False
+    assert len(attempts) == 2
