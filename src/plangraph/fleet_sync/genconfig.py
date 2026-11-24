@@ -80,3 +80,16 @@ def sync(registry, write=False, directory=None):
                 atomic_write_private(path, text)
     print(f'{len(changed)} files differ' + (': ' + ', '.join(changed) if changed else ''))
     return 0 if write or not changed else 1
+
+
+def host_config(registry, name):
+    for host in registry.get('hosts', []):
+        if not isinstance(host, dict):
+            continue
+        aliases = host.get('aliases')
+        names = [host.get('id'), *(aliases if isinstance(aliases, list) else [])]
+        if not isinstance(name, str) or not any(
+                isinstance(alias, str) and alias.lower() == name.lower() for alias in names):
+            continue
+        return host
+    return {}
