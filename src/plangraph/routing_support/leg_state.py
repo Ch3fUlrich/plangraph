@@ -231,6 +231,23 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
+    def record_quota_recovery(self, leg, caller, now=None, account=None, combo=None):
+        """End a booked limit on a leg that shares its account with a probed leg that passed.
+
+        Only quota evidence ends: the row is no liveness evidence (``last_probe_ts`` and the
+        single-flight attempt time never see it) and a leg that is not limited is left alone,
+        so a sibling's own probe failure keeps its down state.
+        """
+        leg = quota_key(leg)
+        if not caller:
+            raise LegStateError("requires successful provider response caller")
+        now = time.time() if now is None else now
+        if self.leg_status(leg, now=now, account=account, combo=combo)["state"] != "limited":
+            return False
+        with self._connect() as db:
+            db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, now, caller, "quota-recovery"))
+        return True
+
     def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
@@ -419,6 +436,10 @@ def record_provider_response(leg, status, body, headers, caller, now=None, accou
 
 def record_probe_pass(leg, caller, now=None, account=None, combo=None):
     return _default_store().record_probe_pass(leg, caller, now, account, combo)
+
+
+def record_quota_recovery(leg, caller, now=None, account=None, combo=None):
+    return _default_store().record_quota_recovery(leg, caller, now, account, combo)
 
 
 def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, down_s=None, *, harness=None):

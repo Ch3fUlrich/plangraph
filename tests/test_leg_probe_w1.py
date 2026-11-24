@@ -710,3 +710,6 @@ def test_scheduled_codex_probe_clears_a_booked_usage_limit_before_its_reset(tmp_
     assert calls == [leg.model] and result['probes'][0]['ok'] and result['limited_legs'] == []
     for key_ in booked:   # the writer legs of the same account serve again too, long before the 72 h reset
         assert store.leg_status(key_, now=clock[0], harness='codex')['state'] == 'ok', key_
+        if key_ != model:   # ...without liveness evidence: only the probed leg was actually called
+            assert store.last_probe_ts(key_) is None and store.last_probe_attempt_ts(key_, now=clock[0]) is None, key_
+    assert store.last_probe_ts(model) == clock[0]

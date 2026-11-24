@@ -336,10 +336,12 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
         if not infra:
             caller = 'review-probe' if review_mode else 'leg-probe'
             if ok:
-                # A booked limit spans quota_models (a Codex limit is account-wide), so the pass that
-                # proves the account serves again must reach every key the booking limited.
+                state.record_probe_pass(key(leg), caller=caller)
+                # A booked limit spans quota_models (a Codex limit is account-wide): the pass proves the
+                # account serves again, so the limit ends on every sibling key, without liveness evidence.
                 for model in quota_models(key(leg), leg.harness):
-                    state.record_probe_pass(model, caller=caller)
+                    if model != key(leg):
+                        state.record_quota_recovery(model, caller)
             elif quota:
                 for model in quota_models(key(leg), leg.harness):
                     state.record_harness_limit(model, quota, caller, harness=leg.harness,
