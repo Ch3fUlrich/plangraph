@@ -282,3 +282,13 @@ fn an_upstream_patch_is_still_dropped_under_a_user_log_setting() {
         );
     }
 }
+
+#[test]
+fn fixture_repositories_do_not_convert_line_endings() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = local_base_fixture(dir.path());
+    assert_eq!(
+        git_in(&host.repo, &["config", "--local", "core.autocrlf"]),
+        "false"
+    );
+}

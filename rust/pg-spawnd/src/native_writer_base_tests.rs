@@ -34,6 +34,8 @@ fn local_base_fixture(dir: &Path) -> Host {
             "repo",
         ],
     );
+    // The fixture's file content is compared byte for byte: no host setting may change line endings.
+    git_in(&repo, &["config", "core.autocrlf", "false"]);
     git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
     git_in(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     git_in(&repo, &["checkout", "-q", "-b", "lane/local"]);
