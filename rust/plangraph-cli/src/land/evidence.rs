@@ -113,11 +113,17 @@ pub fn decide(e: &Evidence, f: &Facts) -> Decision {
             Void::Conflict | Void::PatchIdChanged => ReReview::RangeDiff { old_head, new_head },
             Void::PathsChanged | Void::MainTouched(_) => ReReview::Full,
         };
-        return Decision {
-            accept: Accept::Void {
+        // With no ACCEPT there is nothing to void and nothing to re-review.
+        let accept = if e.accept {
+            Accept::Void {
                 reason: reason.clone(),
                 re_review,
-            },
+            }
+        } else {
+            Accept::None
+        };
+        return Decision {
+            accept,
             ci: Ci::Rerun(CiRerun::Void(reason)),
         };
     }
@@ -144,7 +150,7 @@ pub fn decide(e: &Evidence, f: &Facts) -> Decision {
 }
 
 /// A red CI run: the failing tests, those that also fail without the batch's patch, and hung ones.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Red {
     pub failing: BTreeSet<String>,
     pub failing_without_patch: BTreeSet<String>,
