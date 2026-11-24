@@ -126,3 +126,14 @@ subject, head, host, start, end, result. `report --last N` prints, per train, th
 critical path (parallel jobs count once), idle time between stages and the bottleneck stage, then the stage with the most
 critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
 them into a keeper table needs a keeper schema step that is not part of this change.
+
+## Relane after a train merge
+
+`plangraph land-train relane --repo DIR --remote NAME --onto SHA --lanes A,B [--expect A=SHA] [--writer TEXT] [--push true]`
+(rust/plangraph-cli/src/land/relane.rs) runs once after a train merge, one lane after the other. Each lane is fetched into
+its own ref `refs/po/<lane>` (never FETCH_HEAD) and rebased onto the new main in a worktree of its own with `--empty=drop`:
+a patch already on main is dropped, not a conflict. The lane's new head is pushed as the next `-rN` branch under a per-clone
+push lock. Result lines: `REBASED` (old head, new head, `patch_ids_equal`, own commit counts, for the seat evidence rule),
+`CURRENT`, `CONFLICT <lane> <files>` (at least one unmerged path; the lane is untouched) and `REFUSED` (fetched head is not
+`--expect`, no own commit left, a commit without the `--writer` trailer). The probe PR move and the seat re-run follow from
+these lines; the verb exits 3 when any lane is not relaned.
