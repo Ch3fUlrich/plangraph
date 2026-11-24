@@ -144,6 +144,8 @@ impl Params {
 pub enum Defect {
     /// No operator alarm: an unread event can pass its bound.
     NoAlarm,
+    /// The supervisor cannot end a session that ignores a pending event: it can read it late.
+    NoKill,
     NoSupervisor,
     ActivateWithoutGates,
     /// Activation does not look at an urgent event that is already overdue.
@@ -151,8 +153,9 @@ pub enum Defect {
 }
 
 impl Defect {
-    pub const ALL: [Defect; 4] = [
+    pub const ALL: [Defect; 5] = [
         Defect::NoAlarm,
+        Defect::NoKill,
         Defect::NoSupervisor,
         Defect::ActivateWithoutGates,
         Defect::ActivateOverdue,

@@ -31,7 +31,8 @@ impl Model {
                 alarmed: false,
                 seen: false,
                 binding: false,
-                reader: None,
+                session_at: None,
+                operator_at: None,
             })
             .collect();
         Ok(Self {
@@ -99,10 +100,17 @@ impl Model {
         self.events[usize::from(event)].alarmed
     }
 
-    /// Age in seconds at which the first reader held the event, if one has.
-    pub fn reader_secs(&self, event: u8) -> Option<u16> {
+    /// Age in seconds at which a session received the event, if one has.
+    pub fn session_secs(&self, event: u8) -> Option<u16> {
         self.events[usize::from(event)]
-            .reader
+            .session_at
+            .map(|a| u16::from(a) * TICK_SECS)
+    }
+
+    /// Age in seconds at which the operator was told, if they have been.
+    pub fn operator_secs(&self, event: u8) -> Option<u16> {
+        self.events[usize::from(event)]
+            .operator_at
             .map(|a| u16::from(a) * TICK_SECS)
     }
 
@@ -142,6 +150,7 @@ impl Model {
             Event::Receive,
             Event::Crash,
             Event::Nudge,
+            Event::Kill,
             Event::StartShadow,
             Event::SignOffShadow,
             Event::DeployFence,

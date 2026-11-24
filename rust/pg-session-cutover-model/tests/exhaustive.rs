@@ -23,7 +23,7 @@ fn wake_orderings_keep_every_invariant() {
     let mut m = model(params(vec![go(0), event(UrgentClass::MainRed, 1)]));
     activate(&mut m);
     let alpha = alphabet_without(&m, |e| is_gate(e) && *e != Event::Rollback);
-    let mut seen = [false; 8];
+    let mut seen = [false; 10];
     search(m, alpha, 14, &mut |a, e, r, b| {
         let ok = r.is_ok();
         seen[0] |= ok && e == Event::WaiterFire;
@@ -36,8 +36,11 @@ fn wake_orderings_keep_every_invariant() {
         seen[6] |= ok && e == Event::Receive && a.hung(0) && b.stage(1) == Stage::Received;
         // A woken session that keeps working lets the alarm hold the bound: time passed.
         seen[7] |= ok && matches!(e, Event::Alarm(_)) && a.life() == Life::Active;
+        // A session that ignores a pending event to the bound is ended; a wake can be lost.
+        seen[8] |= ok && e == Event::Kill && a.life() == Life::Active;
+        seen[9] |= ok && e == Event::WakeLost;
     });
-    assert_eq!(seen, [true; 8]);
+    assert_eq!(seen, [true; 10]);
 }
 
 #[test]
@@ -105,6 +108,7 @@ fn finds(
                 | Event::Escalate(_)
                 | Event::Alarm(_)
                 | Event::Nudge
+                | Event::Kill
         )
     };
     let alpha: Vec<Event> = seed
@@ -131,6 +135,8 @@ fn each_defect_is_caught_by_its_invariant() {
     let read = |e: &Event| turn(e) || matches!(e, Event::Tick | Event::Occur(_) | Event::Hang(_));
     assert!(finds(Defect::NoAlarm, params(vec![go(0)]), true, read, 18)
         .contains(&Invariant::UrgentBound));
+    assert!(finds(Defect::NoKill, params(vec![go(0)]), true, read, 20)
+        .contains(&Invariant::SessionUnread));
     let idle = |e: &Event| matches!(e, Event::Tick) || turn(e);
     assert!(
         finds(Defect::NoSupervisor, params(vec![]), true, idle, 8).contains(&Invariant::Unattended)

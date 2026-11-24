@@ -73,6 +73,7 @@ impl Model {
             }
             Event::Escalate(e) => self.escalate(e)?,
             Event::Alarm(e) => self.alarm(e)?,
+            Event::Kill => self.kill()?,
             Event::Nudge => {
                 if self.mode != Mode::Active
                     || self.has(Defect::NoSupervisor)

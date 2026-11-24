@@ -61,7 +61,7 @@ impl Model {
         for e in &mut self.events {
             if e.open() && (e.escalated || (active && e.stage == Stage::Detected)) {
                 (e.stage, e.seen) = (Stage::Received, true);
-                e.reader.get_or_insert(e.age);
+                e.session_at.get_or_insert(e.age);
             }
         }
     }
@@ -97,20 +97,28 @@ impl Model {
         }
         let ev = &mut self.events[usize::from(e)];
         (ev.alarmed, ev.escalated) = (true, true);
-        ev.reader.get_or_insert(ev.age);
+        ev.operator_at.get_or_insert(ev.age);
         Ok(())
     }
 
     pub(crate) fn nudge_target(&self) -> bool {
         let s = &self.session;
-        s.life == Life::Idle && s.waiter != Waiter::Armed
+        s.life == Life::Idle && (s.waiter != Waiter::Armed || self.stale())
     }
 
-    /// The session is working or has a wait armed. A queued wake is not enough: it can be late
-    /// or lost, and then the supervisor must still act.
+    /// Some binding event is still unread by the session after its takeover age: an armed wait
+    /// does not help when the source hung or the fallback wake was lost.
+    fn stale(&self) -> bool {
+        self.events.iter().any(|e| {
+            e.binding && e.open() && e.age >= Params::ticks(self.p.budget(e.class).takeover_secs)
+        })
+    }
+
+    /// The session is working, or has a wait armed that can still fire. A queued wake is not
+    /// enough: it can be late or lost, and then the supervisor must still act.
     fn attended(&self) -> bool {
         let s = &self.session;
-        s.live() && (s.life == Life::Active || s.waiter == Waiter::Armed)
+        s.live() && (s.life == Life::Active || (s.waiter == Waiter::Armed && !self.stale()))
     }
 
     pub(crate) fn unattended(&self) -> bool {
@@ -137,7 +145,35 @@ impl Model {
             && self.unattended()
             && self.nudge_target()
             && u16::from(self.asleep_age) + 1 > self.sup_ticks();
-        takeover || alarm || scans || asleep
+        takeover || alarm || scans || asleep || self.session_overdue()
+    }
+
+    /// A live session has not read a binding event by its bound: the supervisor must end it,
+    /// or time stops; time is not left to a session that ignores the event.
+    fn session_overdue(&self) -> bool {
+        self.session.live()
+            && !self.has(Defect::NoKill)
+            && self.events.iter().any(|e| {
+                let bound = u16::from(self.bound_ticks(e.class));
+                e.binding && e.open() && u16::from(e.age) + 1 > bound
+            })
+    }
+
+    /// The supervisor ends a live session that has not read a binding event by its alarm age.
+    /// What replaces it belongs to the next slice; meanwhile the alarm keeps the operator told.
+    pub(crate) fn kill(&mut self) -> Result<(), Denied> {
+        let late = self.events.iter().any(|e| {
+            e.binding && e.open() && e.age >= Params::ticks(self.p.budget(e.class).alarm_secs)
+        });
+        if self.has(Defect::NoKill) || !self.session.live() || !late {
+            return Err(Denied::Guard);
+        }
+        self.session = Session {
+            life: Life::Stopped,
+            waiter: Waiter::Dead,
+            notify: false,
+        };
+        Ok(())
     }
 
     pub(crate) fn tick(&mut self) -> Result<(), Denied> {

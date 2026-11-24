@@ -9,16 +9,20 @@ impl Model {
         if active && !(g.fence && g.recovery && g.go && g.shadow_ok) {
             out.push(Invariant::ActivationGate);
         }
-        // The bound runs from occurrence to a first reader, in every mode and whatever the
-        // session does: a woken session that keeps working, a hung source or a dead role are
-        // handed to the operator by the alarm, which leaves the event pending for the session.
-        let unheld = |e: &&Evt| {
-            e.binding && e.open() && e.reader.is_none() && e.age > self.bound_ticks(e.class)
-        };
-        if self.events.iter().filter(unheld).count() > 0 {
+        // Two deadlines, tracked apart. The operator is told by the bound, in every mode (the
+        // alarm covers a dead role and a hung source). A live session has read it by the bound,
+        // or the supervisor has ended it; a late receipt stays visible after it happened.
+        let past = |e: &Evt| e.binding && e.age > self.bound_ticks(e.class);
+        let silent = |e: &&Evt| past(e) && e.open() && e.operator_at.is_none();
+        if self.events.iter().filter(silent).count() > 0 {
             out.push(Invariant::UrgentBound);
         }
-        let late = |e: &&Evt| e.binding && e.reader.is_some_and(|a| a > self.bound_ticks(e.class));
+        let live = self.session.live();
+        if live && self.events.iter().any(|e| past(e) && e.open()) {
+            out.push(Invariant::SessionUnread);
+        }
+        let late =
+            |e: &&Evt| e.binding && e.session_at.is_some_and(|a| a > self.bound_ticks(e.class));
         if self.events.iter().filter(late).count() > 0 {
             out.push(Invariant::LateReceipt);
         }
