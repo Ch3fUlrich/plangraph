@@ -41,12 +41,7 @@ fn admit<T>(result: Result<T, ToolError>) -> T {
 }
 
 fn reservations(state: &Path) -> usize {
-    std::fs::read_dir(state.join("lane-reservations"))
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-        .count()
+    pg_spawnd::lane_reservation::claim_files(state)
 }
 
 fn run_dirs(state: &Path) -> Vec<String> {
@@ -161,14 +156,8 @@ fn unsupported_dry_run_leaves_no_reservation() {
 
 #[test]
 fn refused_launch_releases_reservation() {
-    let state = tempfile::tempdir().unwrap();
-    // The launch is admitted and reserved, then fails while routing: the claim is gone.
-    let mut args = lane_args(json!({}));
-    args.insert("writer_families".into(), json!(5));
-    let error = refusal(crate::placement::native_spawn(state.path(), &args));
-    assert!(!error.contains("held by live lane"), "{error}");
-    assert_eq!(reservations(state.path()), 0);
     // While an admitted launch lives its keys stay reserved; its end frees them.
+    let state = tempfile::tempdir().unwrap();
     let (_, launched) = admit(crate::placement::admit_lane(
         state.path(),
         &lane_args(json!({})),
@@ -179,7 +168,23 @@ fn refused_launch_releases_reservation() {
         &lane_args(json!({})),
     ));
     assert!(error.contains("held by live lane reservation"), "{error}");
+    assert_eq!(reservations(state.path()), 1);
     drop(launched);
     assert_eq!(reservations(state.path()), 0);
     assert!(crate::placement::admit_lane(state.path(), &lane_args(json!({}))).is_ok());
+}
+
+#[test]
+fn a_valid_card_keeps_its_size_allowance_after_the_admitted_keys_are_added() {
+    let state = tempfile::tempdir().unwrap();
+    let mut args = lane_args(json!({}));
+    let base = args["card"].to_string().len();
+    // The caller's card is within the limit by less than the keys admission attaches.
+    args["card"]["note"] = json!("x".repeat(24000 - base - 12));
+    assert!(args["card"].to_string().len() <= 24000);
+    assert!(crate::placement::route_args(&args).is_ok());
+    let (admitted, _launched) = admit(crate::placement::admit_lane(state.path(), &args));
+    assert!(admitted["card"].to_string().len() > 24000);
+    assert!(crate::placement::route_args(&admitted).is_err());
+    assert!(crate::placement::route_argv(&admitted).is_ok());
 }

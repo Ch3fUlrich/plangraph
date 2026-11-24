@@ -57,15 +57,30 @@ impl LaneSource for Observed {
 
 /// The plan-item keys a writer brief names: `## key`, `### key |`, `Plan item: key`, `Item key: key`.
 pub fn item_keys(brief: &str) -> Vec<String> {
+    // The key grammar of run records and the card (`item_key`): the id part may hold colons.
     let assignment = regex::Regex::new(
-        r"(?m)^(?:## |### |Plan item: |Item key: )([A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+)(?::|[ \t|]|\r?$)",
+        r"(?m)^(?:## |### |Plan item: |Item key: )([A-Za-z0-9._-]+:[A-Za-z0-9._:-]{1,180})(?:[ \t|]|\r?$)",
     )
     .expect("valid assignment pattern");
     let found: BTreeSet<String> = assignment
         .captures_iter(brief)
-        .map(|capture| capture[1].to_owned())
+        // `## key: title` ends the key with the colon of the title.
+        .map(|capture| normalize(capture[1].trim_end_matches(':')))
         .collect();
     found.into_iter().collect()
+}
+
+/// A key as run records keep it: a repeated project prefix of the id part is dropped, so
+/// `demo:demo:ITEM` and `demo:ITEM` are one key. The id part keeps every later colon.
+pub fn normalize(key: &str) -> String {
+    let Some((project, mut id)) = key.split_once(':') else {
+        return key.to_owned();
+    };
+    let prefix = format!("{project}:");
+    while id.len() > prefix.len() && id.starts_with(&prefix) {
+        id = &id[prefix.len()..];
+    }
+    format!("{project}:{id}")
 }
 
 /// Records of the runs that are queued or running.
@@ -167,7 +182,8 @@ pub fn branch_lanes(repo: &Path, keys: &[String]) -> Vec<Lane> {
         .filter(|name| !name.ends_with("/HEAD") && *name != "origin/main")
         .filter(|name| own.as_deref() != name.strip_prefix("origin/"))
         .filter_map(|name| {
-            let branch = tokens(name);
+            // The remote's name is not part of the branch: `origin/lane/x` is the branch `lane/x`.
+            let branch = tokens(name.strip_prefix("origin/").unwrap_or(name));
             let held: Vec<String> = keys
                 .iter()
                 .filter(|key| {
@@ -220,7 +236,7 @@ pub fn refuse_held(
 
 /// The admission check of a rendered or plain brief: its keys, and `extra` keys the launch
 /// card names, against the observed lanes. `override_reason` comes from explicit launch
-/// metadata only (the typed input or the card), never from the brief text. Returns the
+/// metadata only (the card's reason), never from the brief text. Returns the
 /// override reason that admitted a deliberate second lane and the keys admitted.
 pub fn admit(
     brief: &str,
@@ -230,8 +246,9 @@ pub fn admit(
 ) -> Result<(Option<String>, Vec<String>), String> {
     let mut keys = item_keys(brief);
     for key in extra {
-        if !keys.contains(key) {
-            keys.push(key.clone());
+        let key = normalize(key);
+        if !keys.contains(&key) {
+            keys.push(key);
         }
     }
     let lanes = if keys.is_empty() {
@@ -280,14 +297,15 @@ pub struct LaunchRequest<'a> {
     /// The one state path of the entry point: lock, reservation and run lookup all use it.
     pub state: &'a Path,
     pub repo: &'a Path,
-    /// The override reason of explicit launch metadata (the card's `lane_override_reason`).
+    /// The override reason of the launch card (`lane_override_reason`), the only override a
+    /// dispatch admits: a `lane_override` in the typed prompt is metadata for the renderer.
     pub explicit: Option<&'a str>,
     /// Reserve the admitted keys for this launch; a check-only caller (a dry run) leaves them free.
     pub reserve: bool,
 }
 
-/// The one admission of a writer launch: render the prompt, take the override from `explicit`
-/// or the typed input, and check the keys of the brief and of the card against the live runs,
+/// The one admission of a writer launch: render the prompt, take the override from `explicit`,
+/// and check the keys of the brief and of the card against the live runs,
 /// the remote lane branches of `repo` and the reservations of other launches. With `reserve`
 /// the check and the reservation are one step under the state's lock, so two concurrent launches
 /// of a key cannot both be admitted.
@@ -299,12 +317,11 @@ pub fn admit_launch(request: &LaunchRequest) -> Result<Launched, String> {
         repo: request.repo.to_owned(),
         owner: owner.clone(),
     };
-    let reason = request.explicit.or(rendered.lane_override.as_deref());
     let _lock = request
         .reserve
         .then(|| crate::lane_reservation::lock(request.state))
         .transpose()?;
-    let (lane_override, keys) = admit(&rendered.brief, request.extra, &observed, reason)?;
+    let (lane_override, keys) = admit(&rendered.brief, request.extra, &observed, request.explicit)?;
     if keys.len() > MAX_KEYS {
         return Err(format!("a launch holds at most {MAX_KEYS} item keys"));
     }
@@ -537,12 +554,7 @@ mod tests {
     }
 
     fn reservation_files(state: &Path) -> usize {
-        fs::read_dir(state.join("lane-reservations"))
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-            .count()
+        crate::lane_reservation::claim_files(state)
     }
 
     #[test]
@@ -619,5 +631,99 @@ mod tests {
             assert_eq!(error, "lane_override requires a nonblank reason");
         }
         drop((first, launched));
+    }
+
+    #[test]
+    fn dropping_an_override_launch_leaves_the_original_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = ["demo:HELD".to_owned()];
+        let first = admit_launch(&request(dir.path(), &keys)).unwrap();
+        let mut second = request(dir.path(), &keys);
+        second.explicit = Some("on purpose");
+        let override_launch = admit_launch(&second).unwrap();
+        assert_eq!(reservation_files(dir.path()), 2);
+        // The override fails before it registers: the first launch is still pending and holds.
+        drop(override_launch);
+        assert_eq!(reservation_files(dir.path()), 1);
+        let error = admit_launch(&request(dir.path(), &keys)).unwrap_err();
+        assert!(error.contains("held by live lane reservation"), "{error}");
+        drop(first);
+        assert_eq!(reservation_files(dir.path()), 0);
+    }
+
+    #[test]
+    fn a_typed_prompt_override_does_not_admit_a_held_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = dir.path().join("runs/run-held");
+        fs::create_dir_all(&run).unwrap();
+        fs::write(
+            run.join("record.json"),
+            json!({"run_id":"run-held","status":"running","role":"implement",
+                   "item_key":"demo:FIXTURE"})
+            .to_string(),
+        )
+        .unwrap();
+        let mut input: Value = serde_json::from_str(
+            include_str!("../tests/fixtures/batch-writer-input.txt")
+                .replace("\r\n", "\n")
+                .strip_prefix("PLANGRAPH-BATCH-INPUT-V1\n")
+                .unwrap(),
+        )
+        .unwrap();
+        input["lane_override"] = json!("typed reason");
+        let prompt = format!("PLANGRAPH-BATCH-INPUT-V1\n{input}");
+        let mut typed = request(dir.path(), &[]);
+        typed.prompt = &prompt;
+        let error = admit_launch(&typed).unwrap_err();
+        assert!(
+            error.contains("demo:FIXTURE is held by live lane run-held"),
+            "{error}"
+        );
+        // The card field is the override a dispatch admits.
+        typed.explicit = Some("card reason");
+        let launched = admit_launch(&typed).unwrap();
+        assert_eq!(launched.lane_override.as_deref(), Some("card reason"));
+    }
+
+    #[test]
+    fn a_key_with_a_second_colon_is_one_key_in_briefs_runs_and_cards() {
+        assert_eq!(
+            item_keys("### demo:ITEM:detail | t\nWhy\n\n## demo:KEY: title\n"),
+            ["demo:ITEM:detail", "demo:KEY"]
+        );
+        assert_eq!(normalize("demo:demo:ITEM:detail"), "demo:ITEM:detail");
+        let runs = [json!({"run_id":"run-1","role":"implement","item_key":"demo:ITEM:detail"})];
+        let lanes = run_lanes(&runs);
+        assert_eq!(lanes[0].keys, ["demo:ITEM:detail"]);
+        // After registration the full key is held and its prefix is not.
+        let held = Fixed(lanes);
+        let full = ["demo:ITEM:detail".to_owned()];
+        assert!(admit("", &full, &held, None).is_err());
+        let short = ["demo:ITEM".to_owned()];
+        assert!(admit("", &short, &held, None).is_ok());
+    }
+
+    #[test]
+    fn the_remote_name_is_not_part_of_a_branch_slug() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git(repo, &["init", "-q", "-b", "main"]);
+        git(repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(repo, &["checkout", "-q", "-b", "lane/mine"]);
+        git(repo, &["commit", "-q", "--allow-empty", "-m", "own"]);
+        for branch in ["lane/unrelated", "lane/origin-fix"] {
+            git(
+                repo,
+                &[
+                    "update-ref",
+                    &format!("refs/remotes/origin/{branch}"),
+                    "HEAD",
+                ],
+            );
+        }
+        let lanes = branch_lanes(repo, &["demo:ORIGIN".to_owned()]);
+        let names: Vec<_> = lanes.iter().map(|lane| lane.name.as_str()).collect();
+        assert_eq!(names, ["origin/lane/origin-fix"]);
     }
 }

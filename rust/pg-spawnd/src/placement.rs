@@ -83,6 +83,15 @@ pub(crate) fn run(
     }
 }
 pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
+    let argv = route_argv(args)?;
+    if args["card"].to_string().len() > 24000 {
+        return Err(parameter("card too large for the route adapter"));
+    }
+    Ok(argv)
+}
+/// The route adapter arguments of `args`, without the size limit of the caller's card: dispatch
+/// checks that limit on the card as sent (`route_args`) and then adds the admitted keys.
+pub(crate) fn route_argv(args: &Args) -> Result<Vec<String>, ToolError> {
     crate::leg_ref::check_review_role(args)?;
     let card = args
         .get("card")
@@ -127,9 +136,6 @@ pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
                 .ok_or_else(|| parameter("bench_db must be a string"))?
                 .into(),
         ]);
-    }
-    if card.len() > 24000 {
-        return Err(parameter("card too large for the route adapter"));
     }
     argv.push("--json".into());
     Ok(argv)
@@ -240,7 +246,7 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
     // `_launched` until this call ends: the spawner has registered its run record by then, and a
     // refused or failed launch leaves no claim behind.
     let (args, _launched) = admit_lane(state, args)?;
-    let mut argv = route_args(&args)?;
+    let mut argv = route_argv(&args)?;
     argv[0] = "spawn".into();
     argv.extend(["--".into(), prompt.into()]);
     native_call(state, &argv, Duration::from_secs(200))

@@ -127,3 +127,82 @@ exit 2
         }
     }
 }
+
+fn spawn_key(fixture: &mut Fixture, key: &str) -> Value {
+    let prompt = format!("Brief\n### {key} | t\nWhy: x\n");
+    fixture.client.request(
+        "tools/call",
+        json!({"name":"plangraph_agent_spawn","arguments":{
+            "card":{"run_kind":"native-codex","repo":"/repo"},"prompt":prompt}}),
+    )
+}
+
+fn error_text(reply: &Value) -> String {
+    reply["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn claim_files(state: &std::path::Path) -> usize {
+    pg_spawnd::lane_reservation::claim_files(state)
+}
+
+#[test]
+fn native_mcp_spawn_failing_in_the_adapter_releases_its_reservation_for_the_retry() {
+    let mut fixture = Fixture::new(false, "running");
+    let state = fixture.state.path().to_owned();
+    // The adapter records the claim it can see while it runs, then refuses.
+    let script = format!(
+        "#!/bin/sh\nif [ \"$3\" = spawn ]; then\n  ls '{0}'/lane-reservations/*/*.json >> '{0}/seen' 2>/dev/null\n  echo call >> '{0}/spawns'\n  echo 'fixture refused' >&2\n  exit 2\nfi\n",
+        state.display()
+    );
+    fs::write(state.join("adapter"), script).unwrap();
+    for _ in 0..2 {
+        let reply = spawn_key(&mut fixture, "demo:RETRY");
+        assert!(error_text(&reply).contains("fixture refused"), "{reply}");
+        assert_eq!(claim_files(&state), 0);
+    }
+    // Both attempts reached the adapter with the key reserved; the first did not block the retry.
+    assert_eq!(
+        fs::read_to_string(state.join("spawns"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+    assert_eq!(
+        fs::read_to_string(state.join("seen"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn native_mcp_spawn_registers_a_key_with_a_second_colon_and_the_run_then_holds_it() {
+    let mut fixture = Fixture::new(false, "running");
+    let state = fixture.state.path().to_owned();
+    let script = format!(
+        "#!/bin/sh\nif [ \"$3\" = spawn ]; then\n  echo call >> '{0}/spawns'\n  mkdir -p '{0}/runs/run-new'\n  printf '%s' '{{\"run_id\":\"run-new\",\"status\":\"running\",\"role\":\"implement\",\"item_key\":\"demo:ITEM:detail\"}}' > '{0}/runs/run-new/record.json'\n  printf '%s' '{{\"run_id\":\"run-new\",\"run_kind\":\"native-codex\",\"status\":\"running\"}}'\nfi\n",
+        state.display()
+    );
+    fs::write(state.join("adapter"), script).unwrap();
+    assert!(spawn_key(&mut fixture, "demo:ITEM:detail")["error"].is_null());
+    assert_eq!(claim_files(&state), 0);
+    // The registered record holds the full key, not its prefix before the second colon.
+    let error = error_text(&spawn_key(&mut fixture, "demo:ITEM:detail"));
+    assert!(
+        error.contains("demo:ITEM:detail is held by live lane run-new"),
+        "{error}"
+    );
+    assert!(spawn_key(&mut fixture, "demo:ITEM")["error"].is_null());
+    assert_eq!(
+        fs::read_to_string(state.join("spawns"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+}
