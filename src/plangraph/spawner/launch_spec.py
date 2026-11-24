@@ -171,6 +171,7 @@ def build(request: dict) -> dict:
             raise LaunchRefused('writer_family', str(exc)) from None
     service.runner.default_cwd = request['cwd']
     service.runner._child_envs = _LaunchOwned()
+    service.runner._exe_paths = _LaunchOwned()
     service.runner._ocdata_dirs = _LaunchOwned()
     current = service.state / 'launch' / request['run_id']
     current.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -216,7 +217,9 @@ def build(request: dict) -> dict:
                 raise LaunchRefused('unavailable', reason)
             if admitted_by_render(leg.model):
                 events.append(dict(event='admitted_by_render', model=leg.model))
-            exe = codex or shutil.which(cmd[0], path=env.get('PATH')) or cmd[0]
+            # The harness is found on the PATH the launch had, not the seat's toolchain PATH.
+            exe_path = service.runner._exe_paths.get(job.job_id, env.get('PATH'))
+            exe = codex or shutil.which(cmd[0], path=exe_path) or cmd[0]
             exe, reason = runner._resolve_launch(exe, cmd[1:], is_nt=runner._is_nt())
             if reason:
                 raise LaunchRefused('launch', reason)

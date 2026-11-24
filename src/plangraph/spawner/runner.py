@@ -161,7 +161,7 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
-        self._ocdata_dirs = {}
+        self._ocdata_dirs, self._exe_paths = {}, {}  # _exe_paths: job id -> the PATH its harness is found on
         self._reaped_jobs = set()
         self._git_guards = {}
         self._stdin_payloads = {}
@@ -375,6 +375,7 @@ class SpawnerRunner:
                     worktree=work_dir, review_target=review_target)
             if render_reason is None:
                 self._child_envs[job_id] = child_env
+                self._exe_paths[job_id] = exe_search_path
 
             if dry_run:
                 served_model = model_or_combo
@@ -562,6 +563,7 @@ class SpawnerRunner:
                 lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
                 if lease is not None: lease.close()
                 self._child_envs.pop(job_id, None)
+                self._exe_paths.pop(job_id, None)
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
                 oc_dir = self._ocdata_dirs.pop(job_id, None)
@@ -761,6 +763,7 @@ class SpawnerRunner:
             self._git_guards.pop(job_id, None)
             self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)
+            self._exe_paths.pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)

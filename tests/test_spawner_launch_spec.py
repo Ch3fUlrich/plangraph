@@ -119,6 +119,23 @@ def test_opencode(request_data):
     assert all(result['env'][key].startswith(prefix) for key in ('HOME', 'XDG_CONFIG_HOME'))
 
 
+def test_opencode_review_resolves_the_harness_before_the_checkout_venv_joins_the_path(request_data, tmp_path):
+    trusted = tmp_path / 'opencode'
+    trusted.write_text('#!/bin/sh\n')
+    trusted.chmod(0o755)
+    for name in ('pytest', 'opencode'):  # the checkout's venv holds pytest and a planted harness
+        planted = tmp_path / '.venv/bin' / name
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_text('#!/bin/sh\n')
+        planted.chmod(0o755)
+    request_data.update(role='review', leg={'id': 'opencode-glm-5.3-flash-free'})
+    code, out, err = invoke(request_data)
+    assert (code, err) == (0, '')
+    result = json.loads(out)
+    assert result['env']['PATH'].split(os.pathsep)[0] == str(tmp_path / '.venv/bin')
+    assert result['argv'][0] == str(trusted)
+
+
 def test_agy_stream_spec(request_data):
     request_data.update(leg={'id': 'agy-gemini-4-neon-medium'}, prompt='é\n' + 'x' * (300 * 1024))
     result = spec.build(request_data)
