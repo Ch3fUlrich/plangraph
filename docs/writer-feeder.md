@@ -223,7 +223,7 @@ worker's `HOST_LINK_SSH`. A missing or unreadable file, or one older than
 `quota_facts_max_age_seconds` (default 900), refuses the tick as `quota_stale` and names
 the snapshot's age; quota is never null on such a host. `--export` reads the feeder's policy (`--policy PATH`, default `deploy/feeder/policy.toml` of the
 working directory) and `--push` reads the worker's own, `~/code/plangraph/deploy/feeder/policy.toml`
-over the same SSH destination (the path `pg-feeder.service` runs in; an unreadable one refuses). Both
+over the same SSH destination (`--worker-policy PATH`, relative to the worker's home, default the path `pg-feeder.service` runs in; the timer passes `FEEDER_POLICY`, which a worker whose feeder runs with `--policy PATH` sets in its `host-links/<worker-id>.env`; an unreadable one refuses). Both
 publish only while a codex observation within that `quota_max_age_seconds` (default 10800) exists,
 the limit the reading worker applies; otherwise they exit 2
 and leave the previous file to age. A worker that finds a fresh envelope around old or no codex

@@ -20,3 +20,4 @@ A live feeder tick checks the remaining deadline before each claim, reservation 
 The remote spawner ps projection keeps run_kind, so the feeder splits a remote fleet-session row's whole-card item_key as it does a local one.
 The feeder reads the spawner's receipt from stdout only (stderr of any size cannot lose it), keeps the claims of a launch that may have been admitted, and reports launch and quota-stale outcomes as typed values instead of matching message text.
 A live tick cuts a batch to the members whose claims and releases fit the remaining deadline before claiming, so larger batches make progress.
+The quota timer reads the policy file the worker's feeder actually uses (FEEDER_POLICY in the per-worker env file, plangraph quota --push --worker-policy PATH).

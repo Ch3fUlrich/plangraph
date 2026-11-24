@@ -177,24 +177,53 @@ fn observation_limit(policy_text: &str) -> Result<i64, String> {
         .map_err(|_| "invalid policy".to_string())
 }
 
-/// Pull `--policy PATH` out of the arguments; the rest are the verb's own.
-fn split_policy_arg(args: &[String]) -> Result<(Vec<String>, Option<String>), String> {
+/// The options `quota` takes beside its verb: the feeder policy of `--export` (`--policy`) and
+/// the policy file the worker's feeder reads, relative to its home (`--worker-policy`).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Options {
+    policy: Option<String>,
+    worker_policy: Option<String>,
+}
+
+/// Pull the two policy options out of the arguments; the rest are the verb's own.
+fn split_options(args: &[String]) -> Result<(Vec<String>, Options), String> {
     let mut rest = Vec::new();
-    let mut policy = None;
+    let mut options = Options::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        if arg == "--policy" {
-            policy = Some(
-                it.next()
-                    .filter(|p| !p.is_empty())
-                    .ok_or("--policy requires a path")?
-                    .clone(),
-            );
-        } else {
-            rest.push(arg.clone());
-        }
+        let slot = match arg.as_str() {
+            "--policy" => &mut options.policy,
+            "--worker-policy" => &mut options.worker_policy,
+            _ => {
+                rest.push(arg.clone());
+                continue;
+            }
+        };
+        *slot = Some(
+            it.next()
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| format!("{arg} requires a path"))?
+                .clone(),
+        );
     }
-    Ok((rest, policy))
+    Ok((rest, options))
+}
+
+/// A worker policy path is relative to the worker's home and made of plain path characters, so
+/// it cannot carry shell syntax into the remote `cat` or climb out of the home directory.
+fn valid_worker_policy(path: &str) -> Result<(), String> {
+    let plain = path
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b));
+    if path.is_empty()
+        || path.len() > 200
+        || path.starts_with(['/', '-'])
+        || !plain
+        || path.split('/').any(|c| c == ".." || c.is_empty())
+    {
+        return Err("quota push: invalid worker policy path".into());
+    }
+    Ok(())
 }
 
 /// The limit for publishing, from `--policy` or the feeder's default `deploy/feeder/policy.toml`.
@@ -263,10 +292,13 @@ fn valid_destination(destination: &str) -> Result<(), String> {
 /// `~/code/plangraph` with the default `deploy/feeder/policy.toml`.
 const WORKER_POLICY: &str = "code/plangraph/deploy/feeder/policy.toml";
 
-/// The observation-age limit the worker at `destination` reads with, from its own policy file
-/// over SSH. An unreadable or invalid worker policy refuses publishing rather than guessing.
-fn worker_limit(destination: &str, ssh: &str) -> Result<i64, String> {
+/// The observation-age limit the worker at `destination` reads with, from the policy file its
+/// feeder uses (`policy`, relative to its home; default `WORKER_POLICY`) over SSH. An unreadable
+/// or invalid worker policy refuses publishing rather than guessing.
+fn worker_limit(destination: &str, ssh: &str, policy: Option<&str>) -> Result<i64, String> {
     valid_destination(destination)?;
+    let policy = policy.unwrap_or(WORKER_POLICY);
+    valid_worker_policy(policy)?;
     let mut cmd = std::process::Command::new(ssh);
     cmd.args([
         "-o",
@@ -275,7 +307,7 @@ fn worker_limit(destination: &str, ssh: &str) -> Result<i64, String> {
         "ConnectTimeout=10",
         "--",
         destination,
-        &format!("cat {WORKER_POLICY}"),
+        &format!("cat {policy}"),
     ]);
     let text = pg_worker_core::host_command::output(&mut cmd, std::time::Duration::from_secs(15))
         .map_err(|e| format!("quota push: cannot read the worker policy: {e}"))?;
@@ -285,8 +317,14 @@ fn worker_limit(destination: &str, ssh: &str) -> Result<i64, String> {
 
 /// Publish `rows` to the worker only if they hold a codex observation the worker will accept,
 /// judged by the worker's own `quota_max_age_seconds`.
-fn push_snapshot(rows: &Value, destination: &str, ssh: &str, now: i64) -> Result<(), String> {
-    let limit = worker_limit(destination, ssh)?;
+fn push_snapshot(
+    rows: &Value,
+    destination: &str,
+    ssh: &str,
+    worker_policy: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
+    let limit = worker_limit(destination, ssh, worker_policy)?;
     publishable(rows, now, limit).map_err(|why| format!("quota push: {why}"))?;
     let doc = json!({"observed_at":now,"rows":rows});
     push(&doc.to_string(), destination, ssh)
@@ -327,7 +365,7 @@ fn push(doc: &str, destination: &str, ssh: &str) -> Result<(), String> {
 /// Print the most recent available observation for each provider, account and window.
 pub fn run_status(env: &Env, args: &[String]) -> i32 {
     let mut effective = env.clone();
-    let (args, policy) = match split_policy_arg(args) {
+    let (args, options) = match split_options(args) {
         Ok(split) => split,
         Err(e) => {
             eprintln!("{e}");
@@ -336,7 +374,7 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
     };
     let exporting = args.iter().any(|a| a == "--export");
     let limit = if exporting {
-        match publish_limit(policy.as_deref()) {
+        match publish_limit(options.policy.as_deref()) {
             Ok(limit) => limit,
             Err(e) => {
                 eprintln!("quota publish: {e}");
@@ -381,7 +419,13 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
                 return 2;
             };
             let now = chrono::Utc::now().timestamp();
-            return match push_snapshot(&rows, destination, "ssh", now) {
+            return match push_snapshot(
+                &rows,
+                destination,
+                "ssh",
+                options.worker_policy.as_deref(),
+                now,
+            ) {
                 Ok(()) => 0,
                 Err(e) => {
                     eprintln!("{e}");
@@ -391,7 +435,7 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
         }
         _ => {
             eprintln!(
-                "usage: plangraph quota [--db PATH | --export PATH [--policy PATH] | --push SSH_DESTINATION]"
+                "usage: plangraph quota [--db PATH | --export PATH [--policy PATH] | --push SSH_DESTINATION [--worker-policy PATH]]"
             );
             return 2;
         }
@@ -513,13 +557,51 @@ mod tests {
         assert!(observation_limit("quota_max_age_seconds = \"x\"").is_err());
     }
     #[test]
-    fn the_policy_argument_is_split_from_the_verb_arguments() {
+    fn the_policy_arguments_are_split_from_the_verb_arguments() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let (rest, policy) = split_policy_arg(&a(&["--push", "w", "--policy", "p.toml"])).unwrap();
-        assert_eq!((rest, policy), (a(&["--push", "w"]), Some("p.toml".into())));
-        assert_eq!(split_policy_arg(&a(&["--db", "x"])).unwrap().1, None);
-        assert!(split_policy_arg(&a(&["--policy"])).is_err());
+        let (rest, o) = split_options(&a(&[
+            "--push",
+            "w",
+            "--policy",
+            "p.toml",
+            "--worker-policy",
+            "etc/feeder.toml",
+        ]))
+        .unwrap();
+        assert_eq!(rest, a(&["--push", "w"]));
+        assert_eq!(
+            (o.policy.as_deref(), o.worker_policy.as_deref()),
+            (Some("p.toml"), Some("etc/feeder.toml"))
+        );
+        assert_eq!(
+            split_options(&a(&["--db", "x"])).unwrap().1,
+            Options::default()
+        );
+        assert!(split_options(&a(&["--policy"])).is_err());
+        assert!(split_options(&a(&["--worker-policy", ""])).is_err());
         assert!(publish_limit(Some("/nonexistent/policy.toml")).is_err());
+    }
+    #[test]
+    fn a_worker_policy_path_stays_inside_the_workers_home_and_is_plain() {
+        for ok in [
+            "code/plangraph/deploy/feeder/policy.toml",
+            "etc/feeder-2.toml",
+        ] {
+            assert!(valid_worker_policy(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "",
+            "/etc/passwd",
+            "-oProxyCommand=x",
+            "a/../b",
+            "a//b",
+            "a b",
+            "a;rm",
+            "$(x)",
+            "a\nb",
+        ] {
+            assert!(valid_worker_policy(bad).is_err(), "{bad:?}");
+        }
     }
     #[test]
     fn a_host_without_codex_rows_reads_the_center_file_and_never_gets_null_quota() {
@@ -577,24 +659,84 @@ mod tests {
         // the file the worker then reads is accepted with that same limit.
         let d = tempfile::tempdir().unwrap();
         let (ssh, out) = fake_ssh(d.path(), Some("quota_max_age_seconds = 21600\n"));
-        push_snapshot(&four_hours, "worker.example", ssh.to_str().unwrap(), now).unwrap();
+        push_snapshot(
+            &four_hours,
+            "worker.example",
+            ssh.to_str().unwrap(),
+            None,
+            now,
+        )
+        .unwrap();
         let sent = std::fs::read_to_string(&out).unwrap();
         assert!(center_rows(Some(&sent), now + 30, 900, 21_600).is_ok());
         // A worker on the default policy refuses it: nothing is sent.
         let d = tempfile::tempdir().unwrap();
         let (ssh, out) = fake_ssh(d.path(), Some("quota_floor_percent = 10.0\n"));
-        let err =
-            push_snapshot(&four_hours, "worker.example", ssh.to_str().unwrap(), now).unwrap_err();
+        let err = push_snapshot(
+            &four_hours,
+            "worker.example",
+            ssh.to_str().unwrap(),
+            None,
+            now,
+        )
+        .unwrap_err();
         assert!(err.contains("no usable codex observation"), "{err}");
         assert!(!out.exists());
         // An unreadable worker policy refuses rather than guessing.
         let d = tempfile::tempdir().unwrap();
         let (ssh, out) = fake_ssh(d.path(), None);
-        let err =
-            push_snapshot(&four_hours, "worker.example", ssh.to_str().unwrap(), now).unwrap_err();
+        let err = push_snapshot(
+            &four_hours,
+            "worker.example",
+            ssh.to_str().unwrap(),
+            None,
+            now,
+        )
+        .unwrap_err();
         assert!(err.contains("worker policy"), "{err}");
         assert!(!out.exists());
-        assert!(worker_limit("-oProxyCommand=x", "ssh").is_err());
+        assert!(worker_limit("-oProxyCommand=x", "ssh", None).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_feeder_started_with_its_own_policy_path_sets_the_publishers_limit() {
+        let now = 1_800_000_000;
+        let four_hours = json!([{"provider":"codex:a","windowKey":"5h","timestamp":now - 14_400,"remainingPct":70}]);
+        let d = tempfile::tempdir().unwrap();
+        // The worker's default policy file allows three hours; its feeder runs with another
+        // file (`--policy etc/feeder.toml`) that allows six. The fake serves only that path.
+        let (ssh, out) = fake_ssh(d.path(), Some("quota_max_age_seconds = 21600\n"));
+        let script = std::fs::read_to_string(&ssh)
+            .unwrap()
+            .replace("cat\\ *)", "\"cat etc/feeder.toml\")")
+            // Any other policy path does not exist on this worker.
+            .replace("  *) cat >", "  cat\\ *) exit 1 ;;\n  *) cat >");
+        std::fs::write(&ssh, script).unwrap();
+        let sshp = ssh.to_str().unwrap();
+        let custom = Some("etc/feeder.toml");
+        push_snapshot(&four_hours, "worker.example", sshp, custom, now).unwrap();
+        assert!(out.exists());
+        std::fs::remove_file(&out).unwrap();
+        // Without naming the path the publisher cannot read the worker's real policy: refused.
+        assert!(push_snapshot(&four_hours, "worker.example", sshp, None, now).is_err());
+        assert!(!out.exists());
+        assert!(push_snapshot(&four_hours, "worker.example", sshp, Some("../x"), now).is_err());
+    }
+    #[test]
+    fn the_quota_unit_passes_the_workers_feeder_policy_to_the_push() {
+        let unit = include_str!("../../../../deploy/systemd/pg-quota-facts@.service");
+        assert!(unit.contains("--worker-policy ${FEEDER_POLICY}"));
+        let default = unit
+            .lines()
+            .find_map(|l| l.strip_prefix("Environment=FEEDER_POLICY="))
+            .expect("default worker policy");
+        assert_eq!(default, WORKER_POLICY);
+        // The per-worker file is read after the default, so it overrides it.
+        let at = |needle: &str| unit.find(needle).unwrap();
+        assert!(
+            at("Environment=FEEDER_POLICY=")
+                < at("EnvironmentFile=%h/.config/plangraph/host-links")
+        );
     }
     #[test]
     fn the_worker_policy_path_is_the_one_the_feeder_service_reads() {
