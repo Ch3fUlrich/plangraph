@@ -191,6 +191,7 @@ fn a_train_failure_reaches_its_recorded_writer_and_defines_no_fix_lane() {
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        ..Default::default()
     };
     let mut keeper_called = false;
     let handled = route_or_define(dir.path(), &mut task, 100, |_| {
@@ -283,6 +284,7 @@ fn two_passes_never_send_the_same_record_twice() {
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        ..Default::default()
     };
     update_failures(dir.path(), |records| {
         Ok(super::batch_failure::record_failure(

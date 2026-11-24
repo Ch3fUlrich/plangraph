@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+mod classes;
 
 const PRS: &str = include_str!("../../tests/fixtures/ci-watch/prs.json");
 const RUNS: &str = include_str!("../../tests/fixtures/ci-watch/runs.json");
