@@ -422,7 +422,7 @@ import json, os, subprocess, sys
 args = sys.argv[1:]
 if args[:2] != ["land-train", "deploy-plan"]:
     sys.exit(subprocess.call([os.environ["MAIN_STATE_STUB"], *args]))
-flags = dict(zip(args[2::2], args[3::2]))
+flags = dict(zip(args[slice(2, None, 2)], args[slice(3, None, 2)]))
 record = dict(argv=args, spans=json.load(open(flags["--spans"])))
 open(os.environ["DEPLOY_PLAN_CALL"], "w").write(json.dumps(record))
 if os.path.exists(os.environ["DEPLOY_PLAN_FAIL"]):
@@ -458,7 +458,7 @@ def test_go_req_carries_the_deploy_plan_of_the_train_parts(env):
     assert "; deploy: unit.service@code; READY unit.service@code parts #1; PLAN plangraph:BATCH" in result.stdout
     call = json.loads((env.tmp / "call.json").read_text())
     argv = call["argv"]
-    flags = dict(zip(argv[2::2], argv[3::2]))
+    flags = dict(zip(argv[slice(2, None, 2)], argv[slice(3, None, 2)]))
     assert flags["--registry"] == str(registry) and flags["--repo"] == st["worktree"]
     probe = flags["--probe-cmd"].split()
     assert probe[1:] == ["host-sync", "--install-dry-run", "--registry", str(registry), "--repo", st["worktree"]]
