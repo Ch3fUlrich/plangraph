@@ -132,11 +132,23 @@ fn decode_runs(
                 .find(|i| i["key"].as_str() == Some(key))
         };
         // A batch run holds the files of every one of its items.
-        let item = find(&run.item_key).ok_or("writer_item_missing")?;
+        let lane = run.run_id.starts_with(super::lanes::LANE_RUN_PREFIX);
+        let item = match find(&run.item_key) {
+            Some(item) => item,
+            // A hand lane whose item left the ready list still holds its host slot.
+            None if lane => {
+                run.item_key.clear();
+                continue;
+            }
+            None => return Err("writer_item_missing".into()),
+        };
         run.files = decode_task(item)?.files;
         for key in run.item_keys.clone() {
-            let member = find(&key).ok_or("writer_item_missing")?;
-            run.files.extend(decode_task(member)?.files);
+            match find(&key) {
+                Some(member) => run.files.extend(decode_task(member)?.files),
+                None if lane => run.item_keys.retain(|k| *k != key),
+                None => return Err("writer_item_missing".into()),
+            }
         }
         let mut seen = std::collections::BTreeSet::new();
         run.files.retain(|file| seen.insert(file.clone()));
@@ -148,11 +160,22 @@ pub(super) fn runs(
     repo: &Path,
     ready: &Value,
     state: &Path,
+    home: &Path,
     dry: bool,
 ) -> Result<Vec<Run>, String> {
     let mut cmd = python(env, repo);
     cmd.args(["-m", "plangraph.spawner.cli", "ps"]);
-    let data = output(cmd)?;
+    let mut data = output(cmd)?;
+    // Hand lanes (fleet-launch writer sessions) count beside the spawner's runs.
+    let lanes = super::lanes::live_lane_runs(
+        &home.join(".local/state/routing/launch/sessions"),
+        &home.join(".claude/jobs"),
+        std::time::SystemTime::now(),
+    );
+    data["runs"]
+        .as_array_mut()
+        .ok_or("ps missing runs")?
+        .extend(lanes);
     // Snapshot is the existing API with full persisted notes, including claimed
     // items. Show omits note; brief only includes its final line and truncates it.
     let raw = read_runs(&data)?;
@@ -312,6 +335,46 @@ mod tests {
             disk_limit(100, Err(std::io::Error::other(reason))).unwrap_err(),
             reason
         );
+    }
+    #[test]
+    fn hand_lanes_count_as_host_writers_and_their_items_are_never_picked() {
+        let d = tempfile::tempdir().unwrap();
+        let (sessions, jobs) = (d.path().join("s"), d.path().join("j"));
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(jobs.join("aaa")).unwrap();
+        std::fs::create_dir_all(jobs.join("bbb")).unwrap();
+        std::fs::write(jobs.join("aaa/state.json"), r#"{"state":"working"}"#).unwrap();
+        std::fs::write(jobs.join("bbb/state.json"), r#"{"state":"working"}"#).unwrap();
+        for (name, job, card) in [
+            ("writer-1", "aaa", "plangraph:HELD-A"),
+            ("writer-2", "bbb", "plangraph:GONE"),
+        ] {
+            std::fs::write(
+                sessions.join(format!("{name}.json")),
+                json!({"name":"writer","session_name":name,"job_id":job,
+                    "host":"workstation","card":card,"ts":900})
+                .to_string(),
+            )
+            .unwrap();
+        }
+        let lanes =
+            super::super::lanes::live_lane_runs(&sessions, &jobs, std::time::SystemTime::now());
+        let data = json!({"runs": lanes});
+        let ready = json!({"items":[
+            {"key":"plangraph:HELD-A","priority":9,"files":["src/a.rs"]},
+            {"key":"plangraph:FREE-B","priority":1,"files":["src/b.rs"]}]});
+        let runs = decode_runs(&data, &ready, &json!({"items":[]}), &[]).unwrap();
+        assert_eq!(runs[0].files, ["src/a.rs"]);
+        // The lane whose item left the ready list still holds a slot, with no item.
+        assert_eq!(runs[1].item_key, "");
+        let p = Policy::default();
+        assert_eq!(pick(&ready, &runs, &p).unwrap().key, "plangraph:FREE-B");
+        let f: HostFacts = serde_json::from_value(json!({"host":"workstation",
+            "free_ram_bytes":40000000000u64,"free_disk_bytes":20000000000u64,
+            "quota_remaining_percent":80,"observed_at":1000}))
+        .unwrap();
+        let f = apply_facts(f, &runs, &p, 1001, false, None, None).unwrap();
+        assert_eq!(f.running_writers, 2);
     }
     #[test]
     fn card_identity_and_unknown_scope_only_consume_their_host_slot() {

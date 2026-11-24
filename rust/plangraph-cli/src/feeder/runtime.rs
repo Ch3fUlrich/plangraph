@@ -62,7 +62,7 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let local = sources::registry_policy(home, &mut policy)?;
     let ready = Keeper { env }.call("ready?fmt=json&all=1&agent=1&project=plangraph", None)?;
     validate_ready(&ready)?;
-    let running = sources::runs(env, &o.repo, &ready, state, o.dry)?;
+    let running = sources::runs(env, &o.repo, &ready, state, home, o.dry)?;
     let eligible = pick(&ready, &running, &policy).is_some();
     if !o.live && !eligible {
         return Ok(json!({"decision":"idle","reason":"no_eligible_item"}));
