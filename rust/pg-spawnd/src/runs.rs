@@ -313,6 +313,7 @@ impl Runs {
                     hook_group,
                 )),
                 allow_shas,
+                review_slot: launch.review_slot,
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}

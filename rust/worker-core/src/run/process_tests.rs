@@ -33,6 +33,7 @@ fn setup(script: &str) -> (tempfile::TempDir, Arc<Runtime>, RunSpec) {
         events: vec![],
         finish: None,
         allow_shas: Default::default(),
+        review_slot: None,
     };
     (d, rt, s)
 }

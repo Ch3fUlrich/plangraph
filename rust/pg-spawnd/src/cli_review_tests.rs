@@ -28,6 +28,7 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
         ],
     );
     let mut launch = LaunchSpec {
+        review_slot: None,
         argv: vec!["agy".into()],
         cwd: dir.path().into(),
         env: Default::default(),
@@ -427,8 +428,11 @@ assert sandbox['enabled'] and sandbox['failIfUnavailable'] and not sandbox['allo
 assert not sandbox['autoAllowBashIfSandboxed'] and sandbox['excludedCommands'] == [], sandbox
 assert sandbox['filesystem']['denyWrite'] == ['.'], sandbox
 target = Path(spec['env']['CARGO_TARGET_DIR'])
-assert target.is_dir() and sandbox['filesystem']['allowWrite'] == [str(target.parent)], sandbox
+assert sandbox['filesystem']['allowWrite'] == [str(target.parent)], sandbox
 assert not target.is_relative_to(Path.cwd()), target
+# A dry spec never runs, so the review slot it allocated is dropped with its lock file.
+assert spec['review_slot'] is None and not target.parent.exists(), spec['review_slot']
+assert not Path(str(target.parent) + '.plangraph-lock').exists()
 record = asyncio.run(SpawnService(state=state).spawn(card=dict(estimate_tokens=1000),
     prompt='review', role='review', leg='claude-sonnet-5-5-high', writer_families=['openai'],
     override_reason='fixture direct native Sonnet', dry_run=True))

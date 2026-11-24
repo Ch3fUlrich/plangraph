@@ -50,6 +50,7 @@ fn review_completion_requires_the_dispatched_diff() {
     .unwrap();
     std::fs::write(repo.path().join(".git/fast-checks").join(&head), "green").unwrap();
     let mut launch = LaunchSpec {
+        review_slot: None,
         argv: vec!["agy".into()],
         cwd: repo.path().into(),
         env: Default::default(),
@@ -78,6 +79,7 @@ fn review_completion_requires_the_dispatched_diff() {
         .unwrap()
         .contains(&format!("--no-textconv {base} {head} --")));
     let mut fallback = LaunchSpec {
+        review_slot: None,
         argv: vec!["claude".into()],
         cwd: repo.path().into(),
         env: Default::default(),
@@ -186,6 +188,7 @@ fn agy_review_commands_run_in_remote_free_clone_at_stamped_detached_head() {
     .ok()
     .unwrap();
     let mut launch = LaunchSpec {
+        review_slot: None,
         argv: vec![
             "agy".into(),
             "--add-dir".into(),

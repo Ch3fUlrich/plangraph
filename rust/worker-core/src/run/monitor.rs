@@ -24,8 +24,30 @@ pub(super) fn monitor(
     cancel: Arc<AtomicBool>,
 ) {
     let mut permit = None; // One run keeps its admission slot across review legs.
-    while let Some(next) = attempt(rt.clone(), spec, &mut record, cancel.clone(), &mut permit) {
-        spec = next;
+    let mut owned = Vec::new(); // Review slots this run allocated, one per leg at most.
+    loop {
+        let slot = spec
+            .review_slot
+            .clone()
+            .filter(|slot| crate::cargo_pool::is_review_slot(slot));
+        let run_id = spec.run_id.clone();
+        let next = attempt(rt.clone(), spec, &mut record, cancel.clone(), &mut permit);
+        owned.extend(slot);
+        match next {
+            Some(next) => spec = next,
+            None => {
+                // Only what the run allocated goes, and only once its record shows it finished.
+                let finished = RunRecord::read(&rt.cfg.state_dir, &run_id)
+                    .map(|r| crate::sweep_runs::finished(&r.to_value()).unwrap_or(false))
+                    .unwrap_or(false);
+                if finished {
+                    for slot in owned {
+                        crate::cargo_pool::remove_review_slot(&slot);
+                    }
+                }
+                return;
+            }
+        }
     }
 }
 fn attempt(
@@ -37,6 +59,8 @@ fn attempt(
 ) -> Option<RunSpec> {
     let mut grouped: Option<Grouped> = None;
     let mut capture = None;
+    #[cfg(target_os = "linux")]
+    let mut slot_lease: Option<crate::cargo_cache::CacheLease> = None;
     let cancelled = || cancel.load(Ordering::SeqCst) || record_dir_cancelled(&rt, &spec.run_id);
     let result = catch_unwind(AssertUnwindSafe(|| {
         if permit.is_none() {
@@ -69,6 +93,22 @@ fn attempt(
         }
         if cancelled() {
             return (1, true, StopOutcome::Empty);
+        }
+        // Each leg leases its own slot before it launches; a slot hygiene is reclaiming is refused.
+        #[cfg(target_os = "linux")]
+        if let Some(slot) = spec
+            .review_slot
+            .as_deref()
+            .filter(|slot| crate::cargo_pool::is_review_slot(slot))
+        {
+            match crate::cargo_cache::writer_lease(slot) {
+                Ok(lease) => slot_lease = Some(lease),
+                Err(error) => {
+                    record.set("error", json!("review slot unavailable"));
+                    record.set("reason", json!(format!("review slot lease: {error}")));
+                    return (1, false, StopOutcome::Empty);
+                }
+            }
         }
         let launch = LaunchSpec {
             program: &spec.program,
@@ -255,6 +295,8 @@ fn attempt(
         g.group.terminate();
     }
     drop(grouped);
+    #[cfg(target_os = "linux")]
+    drop(slot_lease);
     next
 }
 fn record_dir_cancelled(rt: &Runtime, id: &str) -> bool {

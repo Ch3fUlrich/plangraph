@@ -147,6 +147,49 @@ pub fn existing_pool_slots(primary: &Path) -> Vec<PathBuf> {
     slots
 }
 
+/// Remove a review slot and then its lock file. The slot's name is unique to one run, so once
+/// the directory is gone nothing else asks for that lock, and the file need not be kept.
+pub fn remove_review_slot(slot: &Path) {
+    if !is_review_slot(slot) {
+        return;
+    }
+    let _ = fs::remove_dir_all(slot);
+    if let Some(name) = slot.file_name().and_then(|n| n.to_str()) {
+        let _ = fs::remove_file(slot.with_file_name(format!("{name}.plangraph-lock")));
+    }
+}
+
+/// Remove lock files of review slots whose directory is gone and that nothing has touched for
+/// an hour (a killed run leaves one). Younger ones may belong to a slot about to be created.
+pub fn reap_orphan_review_locks(pool: &Path) -> usize {
+    let mut removed = 0;
+    for entry in fs::read_dir(pool).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(slot) = name
+            .strip_prefix("slot-review-")
+            .and_then(|rest| rest.strip_suffix(".plangraph-lock"))
+        else {
+            continue;
+        };
+        let idle = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= std::time::Duration::from_secs(3600));
+        if idle
+            && !path.with_file_name(format!("slot-review-{slot}")).exists()
+            && fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// The `slot-review-*` directories of the pool at `primary`: review seats' build slots.
 pub fn existing_review_slots(primary: &Path) -> Vec<PathBuf> {
     existing_pool_slots(primary)
@@ -197,17 +240,16 @@ pub fn pool_slots(primary: &Path, count: usize) -> io::Result<Vec<PathBuf>> {
     Ok(slots)
 }
 
-/// The `slot-review-<id>` directory of the pool that holds `target` (a review seat's
-/// `CARGO_TARGET_DIR` is `<pool>/slot-review-<id>/target`), if it is one.
-pub fn review_slot_of(target: &Path) -> Option<PathBuf> {
-    let slot = target.parent()?;
+/// Whether `slot` is a review seat's build slot: `<pool>/slot-review-<id>`, the only kind of
+/// directory a run may lease and remove on its own account.
+pub fn is_review_slot(slot: &Path) -> bool {
     let named = |path: &Path, test: fn(&str) -> bool| {
         path.file_name().and_then(|n| n.to_str()).is_some_and(test)
     };
-    let in_pool = slot
-        .parent()
-        .is_some_and(|pool| named(pool, |n| n.ends_with("-pool")));
-    (named(slot, |n| n.starts_with("slot-review-")) && in_pool).then(|| slot.to_path_buf())
+    named(slot, |n| n.starts_with("slot-review-"))
+        && slot
+            .parent()
+            .is_some_and(|pool| named(pool, |n| n.ends_with("-pool")))
 }
 
 pub fn lease_file_path(slot: &Path) -> io::Result<PathBuf> {
