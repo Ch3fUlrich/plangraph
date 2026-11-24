@@ -4,7 +4,7 @@ import os
 import pytest
 
 from plangraph.planner.context_pack import (
-    TAIL_RESERVE_TOKENS, PackTooBig, build_pack, estimate_tokens, pack_budget)
+    PackTooBig, build_pack, estimate_tokens, pack_budget)
 
 BIG = 10**6
 
@@ -291,7 +291,7 @@ def test_prefix_does_not_depend_on_tail_size_at_budget_edge(tmp_path):
     big = build(tmp_path, c, budget_tokens=1300, check_tail="y" * 100000)
     assert small.text[:small.prefix_chars] == big.text[:big.prefix_chars]
     assert small.skipped == big.skipped == (("r2.py", "over_budget"),)
-    assert small.tokens <= 1300 + TAIL_RESERVE_TOKENS and big.tokens <= 1300 + TAIL_RESERVE_TOKENS
+    assert small.tokens <= 1300 and big.tokens <= 1300
 
 
 def test_pack_tokens_still_reported_with_tail(tmp_path):
@@ -305,21 +305,39 @@ def test_pack_tokens_still_reported_with_tail(tmp_path):
 def test_first_tail_keeps_admitted_files_at_the_stock_budget(tmp_path):
     """Admission (no tail) and every retry (with a tail) choose the same files."""
     budget = pack_budget("128k")
-    body = "w" * 4 * (budget - 1500)            # write file just under the stock budget
-    put(tmp_path, "w.py", body)
-    put(tmp_path, "r.py", "r" * 4 * 500)         # read file that fits only without a reserve
+    put(tmp_path, "w.py", "w" * 4 * (budget - 2600))   # write file that fits with the tail reserve
+    put(tmp_path, "r.py", "r" * 4 * 500)                # read file that fits only without it
     c = card(write_set=["w.py"], read_set=["r.py"])
     first = build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG)
-    retry = build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG, check_tail="FAILED\n" * 50)
+    retry = build(tmp_path, c, budget_tokens=budget, check_tail="FAILED\n" * 50,
+                  max_file_tokens=BIG)
     assert [f.path for f in first.files] == [f.path for f in retry.files]
     assert first.skipped == retry.skipped
     assert retry.text[:retry.prefix_chars] == first.text
-    assert retry.tokens <= budget + TAIL_RESERVE_TOKENS
+    assert retry.tokens <= budget
 
 
-def test_tail_never_raises_pack_too_big_for_an_admitted_write_set(tmp_path):
+def test_stored_card_retry_stays_inside_the_leg_budget_at_the_boundary(tmp_path):
+    """An admitted card plus the largest tail never exceeds the selected leg's budget."""
     budget = pack_budget("128k")
-    put(tmp_path, "w.py", "w" * 4 * (budget - 100))
-    c = card(write_set=["w.py"])
-    build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG)   # admitted
-    build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG, check_tail="boom")  # still builds
+    huge_tail = "\n".join("E" * 400 for _ in range(60))
+    # a write file that would fill the budget is refused at admission, not at the retry
+    put(tmp_path, "edge.py", "w" * 4 * (budget - 100))
+    with pytest.raises(PackTooBig):
+        build(tmp_path, card(write_set=["edge.py"]), budget_tokens=budget, max_file_tokens=BIG)
+    # the largest admitted write file: its retry with the largest tail still fits
+    lo, hi = 0, budget
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        put(tmp_path, "edge.py", "w" * 4 * mid)
+        try:
+            build(tmp_path, card(write_set=["edge.py"]), budget_tokens=budget, max_file_tokens=BIG)
+            lo = mid
+        except PackTooBig:
+            hi = mid
+    put(tmp_path, "edge.py", "w" * 4 * lo)
+    c = card(write_set=["edge.py"])
+    first = build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG)
+    retry = build(tmp_path, c, budget_tokens=budget, check_tail=huge_tail, max_file_tokens=BIG)
+    assert retry.text[:retry.prefix_chars] == first.text
+    assert retry.tokens <= budget

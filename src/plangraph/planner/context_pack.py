@@ -4,10 +4,10 @@ A pack is plain text ordered for prompt-cache reuse: the stable material first (
 without the held-out check, then the files of the write set followed by the read set,
 bounded by a token budget), the per-run material last (an optional tail of the last failing
 check output).  A ``check_fail`` retry is the same pack plus ``check_tail``: the bytes before
-the tail (``Pack.prefix_chars``) do not change with the check output.  The budget bounds the
-stable prefix only, for the first attempt and every retry alike, so a tail never changes
-which files are admitted; the tail is clipped to ``TAIL_RESERVE_TOKENS`` and comes on top
-(``pack_budget`` already keeps a reserve below the window for it).
+the tail (``Pack.prefix_chars``) do not change with the check output.  The first attempt and
+every retry choose the same files, so a tail never changes which are admitted.  ``tail_cap_tokens`` of the budget (at most ``TAIL_RESERVE_TOKENS``)
+are held back for the tail on every pack, tail or not, and the tail is clipped to them, so an
+admitted card plus any tail stays within the leg's budget.
 
 Pure: reads files under ``repo_root`` only.  Entries may be files, directories (files at
 depth <= 2, no deeper) or globs; every file is resolved and must stay inside the root
@@ -32,7 +32,7 @@ from typing import Any, Mapping
 from plangraph.keeper.schema import RISK_TAGS, WINDOW_CLASSES
 from .readiness import WINDOW_TOKENS
 
-__all__ = ["CHARS_PER_TOKEN", "TAIL_RESERVE_TOKENS", "WINDOW_TOKENS", "PackFile", "Pack", "PackTooBig",
+__all__ = ["CHARS_PER_TOKEN", "TAIL_RESERVE_TOKENS", "tail_cap_tokens", "WINDOW_TOKENS", "PackFile", "Pack", "PackTooBig",
            "estimate_tokens", "pack_budget", "build_pack"]
 
 CHARS_PER_TOKEN = 4
@@ -239,13 +239,21 @@ def _header(card: Mapping[str, Any], key: str | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _tail_block(check_tail: str | None, tail_lines: int) -> str | None:
-    """The per-run ``# CHECK OUTPUT`` section, clipped to ``TAIL_RESERVE_TOKENS`` tokens."""
+def tail_cap_tokens(budget_tokens: int) -> int:
+    """Tokens of the budget held back for a check-output tail (always, tail or not)."""
+    return min(TAIL_RESERVE_TOKENS, budget_tokens // 8)
+
+
+def _tail_block(check_tail: str | None, tail_lines: int, cap_tokens: int) -> str | None:
+    """The per-run ``# CHECK OUTPUT`` section, at most ``cap_tokens`` tokens with its separator."""
     if check_tail is None:
         return None
     n = min(max(tail_lines, TAIL_MIN), TAIL_MAX)
     lines = check_tail.splitlines()[-n:]
-    cap = TAIL_RESERVE_TOKENS * CHARS_PER_TOKEN - 100  # room for the heading
+    # separator "\n" + heading (<= 40 chars) + body + closing "\n" stay within cap_tokens * 4
+    cap = cap_tokens * CHARS_PER_TOKEN - 42
+    if cap < 1:
+        return None
     while len(lines) > 1 and sum(len(x) + 1 for x in lines) > cap:
         del lines[0]  # keep the newest lines
     body = "\n".join(lines)
@@ -277,7 +285,10 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
     for rel in [r for r in reads if r in writes or r in new_writes]:
         del reads[rel]  # a file in both sets is shown once, as write
 
-    tail_block = _tail_block(check_tail, tail_lines)  # outside the file budget
+    limit = budget_tokens  # the leg's limit: files plus any tail stay within it
+    tail_cap = tail_cap_tokens(limit)
+    budget_tokens = limit - tail_cap  # held back always, so a retry never changes the files
+    tail_block = _tail_block(check_tail, tail_lines, tail_cap)
 
     files: list[PackFile] = []
     cur = _header(card, key)
@@ -294,7 +305,7 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
             loaded = _load((writes if role == "write" else reads)[rel], max_file_tokens)
             if loaded == "too_large" and role == "write":
                 size = (writes[rel]).stat().st_size
-                raise PackTooBig(size // CHARS_PER_TOKEN, budget_tokens, rel)
+                raise PackTooBig(size // CHARS_PER_TOKEN, limit, rel)
             if isinstance(loaded, str):
                 skipped.append((rel, loaded))
                 continue
@@ -304,7 +315,7 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
         need = estimate_tokens(cur + "\n" + block)
         if need > budget_tokens:
             if role == "write":
-                raise PackTooBig(need, budget_tokens, rel)
+                raise PackTooBig(need, limit, rel)
             over = True
             skipped.append((rel, "over_budget"))
             continue
