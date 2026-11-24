@@ -29,6 +29,8 @@ without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
 file-only affected preflight has 240 seconds (`TEST_TIMEOUT`) for selection and pytest together. Preflight sizes pytest-xdist from the host using half the cores, at most one worker per 2 GiB of available memory, and between 2 and 16 workers. If available memory cannot be read, preflight uses the core count alone. `PREFLIGHT_TEST_WORKERS` overrides the count. A timeout reports the step, deadline, and selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 
+A local selection for a change under `src/plangraph/spawner/`, `planner/` or `routing_support/` is not cut to `LOCAL_TEST_LIMIT` (preflight passes `--keep-local-bound` to keep its fixed deadline). A timed-out affected step on a host at or above 0.7 load per CPU also prints a `{"reason": "host_busy"}` line; `plangraph fast-checks --dispatch` places a command on the least loaded eligible host and retries that reason once elsewhere.
+
 When the local affected selection includes the fleet projection tests, the selector
 builds `pg-spawnd` from the selected checkout before pytest starts.
 `tools/pgtest.py` runs the bounded test subprocess and handles process-tree

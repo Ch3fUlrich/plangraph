@@ -7,7 +7,9 @@ activate it, then use bounded selection for writer and L2 checks:
 python3 tools/affected_tests.py --base origin/main --local --files-only --run
 ```
 
-Affected PR CI runs the selector without the local flags.
+Affected PR CI runs the selector without the local flags. The local selection stops at 39 test files,
+except for a change under `src/plangraph/spawner/`, `planner/` or `routing_support/`, which selects every
+test that reaches it (the pre-push hook keeps the bound with `--keep-local-bound`).
 
 The selector's optional PostgreSQL pass needs both the server binaries and
 `psycopg` in the test interpreter to start a throwaway cluster. It reports a
