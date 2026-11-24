@@ -80,17 +80,7 @@ fn remove_if_finished(
     if disposable_caches(path, report)?.is_none() {
         return Ok(());
     }
-    let merged = git(
-        path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "HEAD",
-            "refs/remotes/origin/main",
-        ],
-    )
-    .is_ok();
-    if !merged {
+    if !merged(path) {
         let pushed = !git(
             path,
             &[
@@ -110,19 +100,36 @@ fn remove_if_finished(
         ));
         return Ok(());
     }
-    if !safe_to_remove(path)? {
-        report
-            .skipped
-            .push(format!("{}: active work or build", path.display()));
-        return Ok(());
-    }
     if apply {
+        // Everything above was read without the lock. Take it, then check protection, cleanliness
+        // and ancestry again right before the removal: a run or a commit may have arrived meanwhile.
         let _lock = crate::worktree::mutation_lock(repo).map_err(io::Error::other)?;
+        if !safe_to_remove(path)? {
+            report
+                .skipped
+                .push(format!("{}: active work or build", path.display()));
+            return Ok(());
+        }
+        if disposable_caches(path, report)?.is_none() {
+            return Ok(());
+        }
+        if !merged(path) {
+            report.skipped.push(format!(
+                "{}: head left origin/main before removal",
+                path.display()
+            ));
+            return Ok(());
+        }
         let text = path
             .to_str()
             .ok_or_else(|| io::Error::other("non-UTF8 worktree path"))?;
         crate::git::git(repo, &["worktree", "remove", "--", text]).map_err(io::Error::other)?;
         report.freed_bytes = report.freed_bytes.saturating_add(bytes);
+    } else if !safe_to_remove(path)? {
+        report
+            .skipped
+            .push(format!("{}: active work or build", path.display()));
+        return Ok(());
     }
     report.actions.push(format!(
         "{} stray worktree {} bytes={bytes}",
@@ -130,4 +137,18 @@ fn remove_if_finished(
         path.display()
     ));
     Ok(())
+}
+
+/// The head is already part of `origin/main`.
+fn merged(path: &Path) -> bool {
+    git(
+        path,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "HEAD",
+            "refs/remotes/origin/main",
+        ],
+    )
+    .is_ok()
 }
