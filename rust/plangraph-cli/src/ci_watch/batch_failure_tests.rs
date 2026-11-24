@@ -249,8 +249,10 @@ fn two_jobs_that_failed_without_a_test_id_are_two_records() {
     let (mut a, mut b) = (task(Some(7)), task(Some(7)));
     a.test = "<job-failure>".into();
     a.job = "Rust workspace".into();
+    a.job_id = 11;
     b.test = "<job-failure>".into();
-    b.job = "Public scrub".into();
+    b.job = "Rust workspace".into();
+    b.job_id = 12;
     let mut records = vec![];
     let first = record_failure(&mut records, &owners(), &a, 5).unwrap();
     let second = record_failure(&mut records, &owners(), &b, 5).unwrap();
@@ -258,8 +260,8 @@ fn two_jobs_that_failed_without_a_test_id_are_two_records() {
     assert_eq!(records.len(), 2);
     // A real test keeps its id whatever job names it.
     let (mut c, mut d) = (task(Some(7)), task(Some(7)));
-    c.job = "x".into();
-    d.job = "y".into();
+    c.job_id = 1;
+    d.job_id = 2;
     assert_eq!(
         record_failure(&mut vec![], &owners(), &c, 5),
         record_failure(&mut vec![], &owners(), &d, 5)

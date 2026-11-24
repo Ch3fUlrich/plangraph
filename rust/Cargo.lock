@@ -2561,6 +2561,7 @@ dependencies = [
  "chrono",
  "getrandom 0.3.4",
  "libc",
+ "pg-jail",
  "pg-worker-core",
  "regex",
  "rusqlite",

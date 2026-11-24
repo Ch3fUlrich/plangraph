@@ -73,7 +73,8 @@ fn two_red_jobs_without_test_ids_get_two_tasks() {
     .unwrap();
     let rows = tasks(temp.path());
     assert_eq!(rows.len(), 2, "{rows:?}");
-    assert_ne!(rows[0].job, rows[1].job);
+    assert_eq!(rows[0].job, rows[1].job, "two jobs with one display name");
+    assert_ne!(rows[0].job_id, rows[1].job_id);
     assert_ne!(rows[0].key, rows[1].key);
 }
 
@@ -124,7 +125,53 @@ fn every_red_run_is_recorded_once_with_its_class_and_the_report_counts_the_gaps(
     let report = super::super::report::report(temp.path()).unwrap();
     assert_eq!(report["red_runs"], 1);
     assert_eq!(report["red_runs_by_class"]["fmt"], 1);
-    assert_eq!(report["fix_rounds_per_head_by_class"]["pr-42"]["fmt"], 1);
+    let sha = tasks(temp.path())[0].head_sha.clone();
+    assert_eq!(
+        report["red_runs_per_head_sha_by_class"][format!("pr-42@{sha}")]["fmt"],
+        1
+    );
     assert_eq!(report["red_runs_without_class"], 0);
     assert_eq!(report["red_runs_without_task"], 0);
+}
+
+#[test]
+fn the_report_keeps_two_head_commits_of_one_pull_request_apart_and_counts_real_fix_outcomes() {
+    use super::super::report::{append, report, RunRow};
+    let temp = tempfile::tempdir().unwrap();
+    let row = |run_id, sha: &str| RunRow {
+        run_id,
+        attempt: 1,
+        head: "pr-9".into(),
+        head_sha: sha.into(),
+        run_class: "fmt".into(),
+        jobs: vec![("Rust".into(), run_id, "fmt".into())],
+        tasks: 1,
+        action: "fix-task".into(),
+    };
+    append(temp.path(), &row(1, "aaa")).unwrap();
+    append(temp.path(), &row(2, "bbb")).unwrap();
+    std::fs::write(
+        temp.path().join("autofix.json"),
+        json!({"done": {
+            "o/r@aaa:fmt": "job 1: pushed deadbeef",
+            "o/r@deadbeef:fmt": "produced by the fix of job 1",
+            "o/r@bbb:fmt": "job 2: 80 lines; left to the fix writer"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let out = report(temp.path()).unwrap();
+    assert_eq!(
+        out["red_runs_per_head_sha_by_class"]["pr-9@aaa"]["fmt"], 1,
+        "{out}"
+    );
+    assert_eq!(
+        out["red_runs_per_head_sha_by_class"]["pr-9@bbb"]["fmt"], 1,
+        "{out}"
+    );
+    assert_eq!(out["automatic_fixes_by_class"]["fmt"]["pushed"], 1, "{out}");
+    assert_eq!(
+        out["automatic_fixes_by_class"]["fmt"]["left_to_writer"], 1,
+        "{out}"
+    );
 }
