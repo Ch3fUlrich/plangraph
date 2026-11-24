@@ -239,10 +239,7 @@ fn export(rows: &Value, path: &Path, now: i64) -> std::io::Result<()> {
     std::fs::rename(tmp, path)
 }
 
-/// Install `doc` as the snapshot file of the host at SSH `destination` (the destination the
-/// host-link units already use), by atomic replace on that host. `ssh` is the client program.
-fn push(doc: &str, destination: &str, ssh: &str) -> Result<(), String> {
-    use std::io::Write;
+fn valid_destination(destination: &str) -> Result<(), String> {
     if destination.is_empty()
         || destination.starts_with('-')
         || destination
@@ -251,6 +248,47 @@ fn push(doc: &str, destination: &str, ssh: &str) -> Result<(), String> {
     {
         return Err("quota push: invalid SSH destination".into());
     }
+    Ok(())
+}
+
+/// The policy a worker's feeder reads, relative to its home: `pg-feeder.service` runs in
+/// `~/code/plangraph` with the default `deploy/feeder/policy.toml`.
+const WORKER_POLICY: &str = "code/plangraph/deploy/feeder/policy.toml";
+
+/// The observation-age limit the worker at `destination` reads with, from its own policy file
+/// over SSH. An unreadable or invalid worker policy refuses publishing rather than guessing.
+fn worker_limit(destination: &str, ssh: &str) -> Result<i64, String> {
+    valid_destination(destination)?;
+    let mut cmd = std::process::Command::new(ssh);
+    cmd.args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "--",
+        destination,
+        &format!("cat {WORKER_POLICY}"),
+    ]);
+    let text = pg_worker_core::host_command::output(&mut cmd, std::time::Duration::from_secs(15))
+        .map_err(|e| format!("quota push: cannot read the worker policy: {e}"))?;
+    observation_limit(&String::from_utf8_lossy(&text))
+        .map_err(|e| format!("quota push: worker policy: {e}"))
+}
+
+/// Publish `rows` to the worker only if they hold a codex observation the worker will accept,
+/// judged by the worker's own `quota_max_age_seconds`.
+fn push_snapshot(rows: &Value, destination: &str, ssh: &str, now: i64) -> Result<(), String> {
+    let limit = worker_limit(destination, ssh)?;
+    publishable(rows, now, limit).map_err(|why| format!("quota push: {why}"))?;
+    let doc = json!({"observed_at":now,"rows":rows});
+    push(&doc.to_string(), destination, ssh)
+}
+
+/// Install `doc` as the snapshot file of the host at SSH `destination` (the destination the
+/// host-link units already use), by atomic replace on that host. `ssh` is the client program.
+fn push(doc: &str, destination: &str, ssh: &str) -> Result<(), String> {
+    use std::io::Write;
+    valid_destination(destination)?;
     let remote = "umask 077 && mkdir -p ~/.config/plangraph && cat > ~/.config/plangraph/quota-facts.json.tmp && mv ~/.config/plangraph/quota-facts.json.tmp ~/.config/plangraph/quota-facts.json";
     let mut child = std::process::Command::new(ssh)
         .args([
@@ -288,8 +326,8 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
             return 2;
         }
     };
-    let publishing = args.iter().any(|a| a == "--export" || a == "--push");
-    let limit = if publishing {
+    let exporting = args.iter().any(|a| a == "--export");
+    let limit = if exporting {
         match publish_limit(policy.as_deref()) {
             Ok(limit) => limit,
             Err(e) => {
@@ -335,12 +373,7 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
                 return 2;
             };
             let now = chrono::Utc::now().timestamp();
-            if let Err(why) = publishable(&rows, now, limit) {
-                eprintln!("quota push: {why}");
-                return 2;
-            }
-            let doc = json!({"observed_at":now,"rows":rows});
-            return match push(&doc.to_string(), destination, "ssh") {
+            return match push_snapshot(&rows, destination, "ssh", now) {
                 Ok(()) => 0,
                 Err(e) => {
                     eprintln!("{e}");
@@ -350,7 +383,7 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
         }
         _ => {
             eprintln!(
-                "usage: plangraph quota [--db PATH | --export PATH | --push SSH_DESTINATION] [--policy PATH]"
+                "usage: plangraph quota [--db PATH | --export PATH [--policy PATH] | --push SSH_DESTINATION]"
             );
             return 2;
         }
@@ -505,6 +538,63 @@ mod tests {
             rows_for_host(None, Some(50.0), &file, now, 900, 10_800).unwrap(),
             None
         );
+    }
+    /// A stand-in ssh: serves `policy` for the worker policy read and keeps what a push sends.
+    #[cfg(unix)]
+    fn fake_ssh(dir: &Path, policy: Option<&str>) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let (ssh, out) = (dir.join("ssh"), dir.join("received"));
+        let serve = match policy {
+            Some(p) => {
+                std::fs::write(dir.join("policy.toml"), p).unwrap();
+                format!("cat {}", dir.join("policy.toml").display())
+            }
+            None => "exit 1".to_string(),
+        };
+        let script = format!(
+            "#!/bin/sh\nfor last; do :; done\ncase \"$last\" in\n  cat\\ *) {serve} ;;\n  *) cat > {} ;;\nesac\n",
+            out.display()
+        );
+        std::fs::write(&ssh, script).unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (ssh, out)
+    }
+    #[cfg(unix)]
+    #[test]
+    fn the_deployed_push_judges_observations_by_the_workers_own_age_limit() {
+        let now = 1_800_000_000;
+        let four_hours = json!([{"provider":"codex:a","windowKey":"5h","timestamp":now - 14_400,"remainingPct":70}]);
+        // A worker on a six-hour policy accepts a four-hour observation: it is published, and
+        // the file the worker then reads is accepted with that same limit.
+        let d = tempfile::tempdir().unwrap();
+        let (ssh, out) = fake_ssh(d.path(), Some("quota_max_age_seconds = 21600\n"));
+        push_snapshot(&four_hours, "worker.example", ssh.to_str().unwrap(), now).unwrap();
+        let sent = std::fs::read_to_string(&out).unwrap();
+        assert!(center_rows(Some(&sent), now + 30, 900, 21_600).is_ok());
+        // A worker on the default policy refuses it: nothing is sent.
+        let d = tempfile::tempdir().unwrap();
+        let (ssh, out) = fake_ssh(d.path(), Some("quota_floor_percent = 10.0\n"));
+        let err =
+            push_snapshot(&four_hours, "worker.example", ssh.to_str().unwrap(), now).unwrap_err();
+        assert!(err.contains("no usable codex observation"), "{err}");
+        assert!(!out.exists());
+        // An unreadable worker policy refuses rather than guessing.
+        let d = tempfile::tempdir().unwrap();
+        let (ssh, out) = fake_ssh(d.path(), None);
+        let err =
+            push_snapshot(&four_hours, "worker.example", ssh.to_str().unwrap(), now).unwrap_err();
+        assert!(err.contains("worker policy"), "{err}");
+        assert!(!out.exists());
+        assert!(worker_limit("-oProxyCommand=x", "ssh").is_err());
+    }
+    #[test]
+    fn the_worker_policy_path_is_the_one_the_feeder_service_reads() {
+        let unit = include_str!("../../../../deploy/systemd/pg-feeder.service");
+        let dir = unit
+            .lines()
+            .find_map(|l| l.strip_prefix("WorkingDirectory=%h/"))
+            .expect("working directory");
+        assert_eq!(WORKER_POLICY, format!("{dir}/deploy/feeder/policy.toml"));
     }
     #[cfg(unix)]
     #[test]

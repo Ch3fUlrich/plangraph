@@ -14,7 +14,7 @@ The quota snapshot is published only with a usable codex observation, a worker n
 A live feeder tick claims no further batch once tick_budget_seconds (default 90) is nearly used, so the 110-second service timeout cannot strand a claim.
 The live feeder tick counts its deadline from service entry and begins no claim attempt, first or retry, that cannot finish (60 s reserve) before tick_budget_seconds (100).
 A fleet-session spawner row is split into its card's keys before the launcher record exists, and a malformed state.json no longer counts as proof of life for a hand lane.
-Publishing the quota snapshot uses the policy's quota_max_age_seconds, the limit the reading feeder applies (plangraph quota --policy PATH).
+Publishing the quota snapshot uses the reading worker's quota_max_age_seconds (plangraph quota --push reads the worker policy over SSH; --export takes --policy PATH).
 The shipped feeder policy test now pins the tick budget below the service timeout.
 A live feeder tick checks the remaining deadline before each claim, reservation check and launch, reserves time to release the held claims, bounds the spawner launch, and keeps the claims of a launch cut off at its deadline.
 The remote spawner ps projection keeps run_kind, so the feeder splits a remote fleet-session row's whole-card item_key as it does a local one.
