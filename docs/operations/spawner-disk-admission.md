@@ -79,7 +79,14 @@ holds its shared lease while Cargo runs. Cap checks run before and after each
 Cargo command. They count allocated blocks once per file inode. A non-Rust
 lane push with a current cached policy executable stages it under a read
 lease without invoking Cargo. Native Codex launches pin the same target; briefs forbid private
-targets. Continuous cap sampling in these two paths and exact-head fast-check
+targets. The native writer holds the shared lease per Cargo command, not per turn: `cargo` on the
+writer's `PATH` is a link to `pg-spawnd`, which runs the real Cargo under the lease, sets
+`PLANGRAPH_CARGO_LEASE_HELD=<target>` for its children (preflight and fast checks set it too), and
+skips the lease when that variable already names the target. Cap and trim refusals name the pids
+that hold the lease, read from `/proc/locks`. Before the protected push the supervisor reclaims an
+over-cap target from the host under the exclusive lease; a real `.git` entry in the target, a
+running build or a held lease leaves a `push_pending` receipt, and a retry pushes the same
+accepted head without a writer turn or a review. Continuous cap sampling in these two paths and exact-head fast-check
 stamps remain open.
 
 Worktree cache cleanup requires a clean worktree idle for over 24 hours.

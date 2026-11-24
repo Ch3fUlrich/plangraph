@@ -36,6 +36,9 @@ struct Fake {
     fail_first_review: bool,
     pushed: Vec<String>,
     push_failures: usize,
+    /// Reclaims the host refuses before the push succeeds.
+    reclaim_failures: usize,
+    reclaims: usize,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
@@ -145,6 +148,13 @@ impl Driver for Fake {
         } else {
             Err("gate failed".into())
         }
+    }
+    fn reclaim_target(&mut self) -> Result<(), String> {
+        self.reclaims += 1;
+        if self.reclaims <= self.reclaim_failures {
+            return Err("cargo_target_not_reclaimed: lease held by pid 4242".into());
+        }
+        Ok(())
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         self.pushed.push(head.into());
