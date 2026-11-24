@@ -250,17 +250,7 @@ fn class_search(args: &[String]) -> Result<Vec<String>, String> {
         }
         revisions.iter().map(String::as_str).collect()
     };
-    let format = Regex::new(
-        r"^Class-Search: (?:([0-9a-f]{8}) )?(\S.*) -> ([0-9]+) hits?, ([0-9]+) changed$",
-    )
-    .unwrap();
     let resolution = Regex::new(r"^Train [0-9]+: resolve(?:\s|$)").unwrap();
-    let valid_counts = |fields: &regex::Captures<'_>| {
-        let hits = fields[3].parse::<usize>();
-        let changed = fields[4].parse::<usize>();
-        matches!((hits, changed), (Ok(hits), Ok(changed)) if changed <= hits)
-    };
-
     let mut findings = Vec::new();
     for revision in revisions {
         let message = git(&[
@@ -287,22 +277,24 @@ fn class_search(args: &[String]) -> Result<Vec<String>, String> {
             .lines()
             .filter(|line| line.starts_with("Class-Search:"))
         {
-            match format.captures(line) {
-                Some(record) if valid_counts(&record) => inline |= record.get(1).is_none(),
-                _ => malformed.push(line),
+            match pg_policy::parse(line) {
+                Some(record) => inline |= record.short.is_none(),
+                None => malformed.push(line),
             }
         }
-        if (malformed.is_empty() && (inline || validate_range))
-            || later_class_search(&format, sha, valid_counts)?
-        {
+        if (malformed.is_empty() && (inline || validate_range)) || later_class_search(sha)? {
             continue;
         }
         let detail = if malformed.is_empty() {
             String::new()
         } else {
             format!(
-                ": {}; expected `Class-Search: <pattern> -> <n> hits, <m> changed` (`hit` for 1, nothing after `changed`, m <= n)",
-                malformed.join("; ")
+                ": {}",
+                malformed
+                    .iter()
+                    .map(|line| pg_policy::refusal(line))
+                    .collect::<Vec<_>>()
+                    .join("; ")
             )
         };
         findings.push(format!(
@@ -312,11 +304,7 @@ fn class_search(args: &[String]) -> Result<Vec<String>, String> {
     Ok(findings)
 }
 
-fn later_class_search(
-    format: &Regex,
-    sha: &str,
-    valid_counts: impl Fn(&regex::Captures<'_>) -> bool,
-) -> Result<bool, String> {
+fn later_class_search(sha: &str) -> Result<bool, String> {
     let prefix = &sha[..8];
     let later = git(&[
         "log",
@@ -329,9 +317,7 @@ fn later_class_search(
         "--",
     ])?;
     if !later.lines().any(|line| {
-        format.captures(line).is_some_and(|record| {
-            record.get(1).is_some_and(|short| short.as_str() == prefix) && valid_counts(&record)
-        })
+        pg_policy::parse(line).is_some_and(|record| record.short.as_deref() == Some(prefix))
     }) {
         return Ok(false);
     }
