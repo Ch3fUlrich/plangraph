@@ -1,0 +1,1 @@
+Add `docs/ext-action-receipts-adopters.md`: for the landing, spawn-idempotency, placement-broker and launch-recovery adopters, one table per adopter naming the receipt model's verbs (begin, admit, effect, takeover, read, obligations) for each external write, checked against section 3 of the receipts design, with the gaps listed as open questions.
