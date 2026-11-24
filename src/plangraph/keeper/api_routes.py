@@ -402,6 +402,9 @@ class MergeRefresh:
             try:
                 with server.lock:
                     scan = copy(server.store)
+                    # The copy shares the live landing cache: the scan fills its own, published
+                    # only with the rest of the scan.
+                    scan.__dict__["_landings"] = dict(server.store.__dict__.get("_landings", {}))
                     candidates = scan.merge_candidates()
                 scan.warm_merge_scan(candidates)
                 published = {field: scan.__dict__[field] for field in
@@ -411,17 +414,17 @@ class MergeRefresh:
                 published = dict(_warmed={}, _lanes={}, _deploy_warm={},
                                  _merge_scan_errors={"*": f"merge_scan_failed: {type(exc).__name__}"},
                                  _landing_decisions=None)
-            # Per-repository handlers absorb deadline refusals, so the budget is checked once more
-            # before anything is published.
-            over = timing.io_timeout(1) <= 0
+            with server.lock:
+                # Per-repository handlers absorb deadline refusals and the lock may have been
+                # waited for, so the budget is read once more under the lock that publishes.
+                over = timing.io_timeout(1) <= 0
+                if over:
+                    self.state = "failed"
+                else:
+                    server.store.__dict__.update(published)
+                    self.state = "ready"
         log = logging.getLogger("plangraph.keeper")
         seconds = monotonic() - started
-        with server.lock:
-            if over:
-                self.state = "failed"
-            else:
-                server.store.__dict__.update(published)
-                self.state = "ready"
         if over:
             log.warning("merge_index_refresh failed budget_exceeded seconds=%.1f", seconds)
         else:

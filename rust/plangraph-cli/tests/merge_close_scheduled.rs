@@ -234,3 +234,49 @@ fn the_merge_close_service_runs_the_scheduled_mode_with_a_state_directory() {
     assert!(timer.contains("Unit=pg-merge-close-continue.service"));
     assert!(timer.contains("OnUnitActiveSec=1min"));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_scheduled_run_skips_while_another_run_holds_the_state() {
+    use std::process::Command;
+
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state").join("pending.json");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .args(["merge-close", "--scheduled", "--state"])
+            .arg(&state)
+            .env_clear()
+            .env("HOME", root.path())
+            .env("PATH", root.path()) // no curl: a run that is not skipped fails
+            .env("PG_URL", "http://127.0.0.1")
+            .env("PG_TOKEN_FILE", root.path().join("token"))
+            .output()
+            .unwrap()
+    };
+    // The first run creates the state directory and the lock, then fails on the missing token.
+    assert_eq!(run().status.code(), Some(1));
+    let held = pg_worker_core::lockfile::try_lock(&state.with_extension("lock"))
+        .unwrap()
+        .expect("lock free after the run");
+    for extra in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_plangraph"));
+        command
+            .args(["merge-close", "--scheduled", "--state"])
+            .arg(&state)
+            .env_clear()
+            .env("HOME", root.path())
+            .env("PATH", root.path());
+        if extra {
+            command.arg("--continue");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with("merge_close_busy"));
+        assert!(!state.exists(), "a skipped run writes no streak");
+    }
+    drop(held);
+    assert_eq!(run().status.code(), Some(1), "the lock is released");
+}
