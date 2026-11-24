@@ -40,6 +40,12 @@ fn cargo_output(root: &Path) -> bool {
             }))
 }
 
+/// True when `root` is cargo's own output: cargo's marker present and no `.git` entry.
+#[cfg(target_os = "linux")]
+pub(crate) fn identified(root: &Path) -> bool {
+    cargo_output(root)
+}
+
 /// Recognize debug output by Cargo's target and profile markers before whole-profile eviction.
 #[cfg(target_os = "linux")]
 pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {

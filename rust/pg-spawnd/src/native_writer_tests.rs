@@ -36,6 +36,9 @@ struct Fake {
     fail_first_review: bool,
     pushed: Vec<String>,
     push_failures: usize,
+    /// Reclaims the host refuses before the push succeeds.
+    reclaim_failures: usize,
+    reclaims: usize,
     /// Turns from this call number on return the Codex usage-limit error.
     quota_from: Option<usize>,
     quota_booked: Vec<crate::native_writer::quota::Limit>,
@@ -155,6 +158,13 @@ impl Driver for Fake {
         } else {
             Err("gate failed".into())
         }
+    }
+    fn reclaim_target(&mut self) -> Result<(), String> {
+        self.reclaims += 1;
+        if self.reclaims <= self.reclaim_failures {
+            return Err("cargo_target_not_reclaimed: lease held by pid 4242".into());
+        }
+        Ok(())
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         self.pushed.push(head.into());

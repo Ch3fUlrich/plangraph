@@ -598,22 +598,18 @@ async def native_spawn(self, card, options):
     self._save(record)
     request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))
     atomic_write_private(directory / 'native-request.json', json.dumps(request))
-    from .host_ready import cargo_lease, cargo_child_env
-    lease = None
+    from .host_ready import cargo_child_env
+    # No lease here: the supervisor holds the shared lease per Cargo command (cargo shim) and
+    # reclaims the target before its push, which a lease held until it exits would block.
     try:
-        lease = await asyncio.to_thread(cargo_lease)
         process = await asyncio.create_subprocess_exec(binary, 'native-writer',
             str(directory / 'native-request.json'), stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE, start_new_session=True,
             env=cargo_child_env(os.environ))
     except (OSError, RuntimeError):
-        if lease: lease.close()
         record.update(status='failed', exit_code=6, reason='native worker launch failed', ended=time.time())
         self._save(record)
         return record
-    except BaseException:
-        if lease: lease.close()
-        raise
     from .proc_kill import root_identity
     identity = root_identity(process.pid)
     async def finish():
@@ -641,8 +637,6 @@ async def native_spawn(self, card, options):
             if survivors: record.update(reason='kill_incomplete', survivors=survivors)
             self._save(record)
             raise
-        finally:
-            lease.close()
     self.tasks[record['run_id']] = asyncio.create_task(finish())
     if options.get('wait_seconds') is None:
         await self.tasks[record['run_id']]
