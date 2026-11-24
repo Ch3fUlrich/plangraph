@@ -1,7 +1,6 @@
-//! The role's quota file: written from the live quota snapshots each scan, read back as a source.
+//! The role's quota file: written each scan from the router's own quota states, read back as a source.
 use super::{Env, Result};
-use crate::feeder::quota::{live_snapshots, remaining_by_provider};
-use rusqlite::{Connection, OpenFlags};
+use crate::feeder::quota::{live_leg_limits, live_snapshots, remaining_by_provider};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -10,53 +9,9 @@ use std::path::Path;
 pub(super) const MAX_AGE_SECONDS: u64 = 600;
 const SNAPSHOT_MAX_AGE_SECONDS: i64 = 10_800;
 
-/// Seconds a limit without a stated reset stays booked (routing's `REPROBE_MINUTES`).
-const REPROBE_SECONDS: f64 = 600.0;
-
-/// The provider limits routing has booked and not yet seen expire, by leg key, as the epoch second
-/// each ends: the latest provider-response or harness-stderr event of a leg that is not a 200 and
-/// whose reset (or reprobe window) is still ahead. This is the native AGY and Codex state the
-/// router reads from `leg-state.sqlite`, not a copy through another gateway.
-pub(super) fn active_limits(db: &Path, now: f64) -> Result<BTreeMap<String, i64>> {
-    if !db.is_file() {
-        return Ok(BTreeMap::new());
-    }
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|_| "cannot open leg state")?;
-    let mut rows = conn
-        .prepare(
-            "SELECT leg_key, status, reset_at, ts FROM leg_events \
-             WHERE source IN ('harness-stderr','provider-response') AND ts <= ?1 \
-             ORDER BY ts, id",
-        )
-        .map_err(|_| "cannot read leg state")?;
-    let mut latest: BTreeMap<String, (i64, Option<f64>, f64)> = BTreeMap::new();
-    let rows = rows
-        .query_map([now], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, Option<f64>>(2)?,
-                row.get::<_, f64>(3)?,
-            ))
-        })
-        .map_err(|_| "cannot read leg state")?;
-    for row in rows {
-        let (key, status, reset, ts) = row.map_err(|_| "cannot read leg state")?;
-        latest.insert(key, (status, reset, ts));
-    }
-    Ok(latest
-        .into_iter()
-        .filter(|(_, (status, _, _))| *status != 200)
-        .map(|(key, (_, reset, ts))| (key, reset.unwrap_or(ts + REPROBE_SECONDS)))
-        .filter(|(_, end)| *end > now)
-        .map(|(key, end)| (key, end as i64))
-        .collect())
-}
-
 pub(super) fn document(
     levels: Option<&BTreeMap<String, f64>>,
-    limits: &BTreeMap<String, i64>,
+    limits: Option<&BTreeMap<String, i64>>,
 ) -> Value {
     let rounded = levels.map(|levels| {
         levels
@@ -70,58 +25,62 @@ pub(super) fn document(
 pub(super) fn write(
     path: &Path,
     levels: Option<&BTreeMap<String, f64>>,
-    limits: &BTreeMap<String, i64>,
+    limits: Option<&BTreeMap<String, i64>>,
 ) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(&document(levels, limits)).map_err(|_| "quota encode")?;
     pg_worker_core::run::record_io::atomic_write_private(path, &bytes)
         .map_err(|_| "cannot write quota status".into())
 }
 
-/// Refresh `path` from the router's own states: the booked leg limits (AGY, Codex) and the
-/// remaining percent of every provider in the quota snapshots. A failed snapshot read leaves that
-/// part `null` without hiding the limits; a failed limits read fails the refresh.
-pub(super) fn refresh(
-    path: &Path,
-    env: &Env,
-    repo: &Path,
-    leg_state: &Path,
-    now: i64,
-) -> Result<()> {
-    let limits = active_limits(leg_state, now as f64)?;
-    let levels = live_snapshots(env, repo)
-        .ok()
-        .map(|rows| remaining_by_provider(&rows, now, SNAPSHOT_MAX_AGE_SECONDS));
-    write(path, levels.as_ref(), &limits)
+/// What the two sources gave. A source that could not be read is `None`, which the file records
+/// as `null`; an empty healthy state is a value. Both unreadable fails: the file must then go
+/// stale for the collector to report it, not be rewritten empty.
+pub(super) fn combine<L, M>(
+    levels: std::result::Result<L, String>,
+    limits: std::result::Result<M, String>,
+) -> Result<(Option<L>, Option<M>)> {
+    match (levels, limits) {
+        (Err(first), Err(second)) => Err(format!("quota sources unavailable: {first}; {second}")),
+        (levels, limits) => Ok((levels.ok(), limits.ok())),
+    }
 }
 
-/// Where the router books provider limits: `$XDG_STATE_HOME/plangraph/leg-state.sqlite`.
-pub(super) fn leg_state_path(env: &Env, home: &Path) -> std::path::PathBuf {
-    env.get("XDG_STATE_HOME")
-        .filter(|dir| !dir.is_empty())
-        .map_or_else(|| home.join(".local/state"), std::path::PathBuf::from)
-        .join("plangraph/leg-state.sqlite")
+/// Refresh `path` from the router's own states: the limits routing treats as active (AGY, Codex
+/// and every other leg, through its scoped reader) and the remaining percent of every provider in
+/// the quota snapshots.
+pub(super) fn refresh(path: &Path, env: &Env, repo: &Path, now: i64) -> Result<()> {
+    let levels = live_snapshots(env, repo)
+        .map(|rows| remaining_by_provider(&rows, now, SNAPSHOT_MAX_AGE_SECONDS));
+    let limits = live_leg_limits(env, repo);
+    let (levels, limits) = combine(levels, limits)?;
+    write(path, levels.as_ref(), limits.as_ref())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_shadow::{fixture, local};
+    use std::process::Command;
 
-    fn book(db: &Path, rows: &[(&str, i64, Option<f64>, f64, &str)]) {
-        let conn = Connection::open(db).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS leg_events (id INTEGER PRIMARY KEY, leg_key TEXT, \
-             account TEXT, combo TEXT, status INTEGER, body_excerpt TEXT, retry_after_s REAL, \
-             reset_at REAL, ts REAL, caller TEXT, source TEXT)",
-        )
-        .unwrap();
-        for (leg, status, reset, ts, source) in rows {
-            conn.execute(
-                "INSERT INTO leg_events (leg_key, status, reset_at, ts, source) VALUES (?1,?2,?3,?4,?5)",
-                rusqlite::params![leg, status, reset, ts, source],
-            )
+    fn repo() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// Run routing's own recorder against the fixture state, as the router and probes do.
+    fn record(env: &Env, code: &str) {
+        let output = Command::new("python3")
+            .current_dir(repo())
+            .envs(env)
+            .env("PYTHONPATH", repo().join("src"))
+            .args([
+                "-c",
+                &format!(
+                    "from plangraph.routing_support.leg_state import _default_store\ns = _default_store()\n{code}"
+                ),
+            ])
+            .output()
             .unwrap();
-        }
+        assert!(output.status.success(), "{output:?}");
     }
 
     #[test]
@@ -129,12 +88,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("quota.json");
         let levels = BTreeMap::from([("agy".to_owned(), 41.6), ("codex".to_owned(), 7.2)]);
-        write(
-            &path,
-            Some(&levels),
-            &BTreeMap::from([("agy:x".to_owned(), 5)]),
-        )
-        .unwrap();
+        let limits = BTreeMap::from([("agy:x".to_owned(), 5)]);
+        write(&path, Some(&levels), Some(&limits)).unwrap();
         let read: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(
             read,
@@ -143,81 +98,55 @@ mod tests {
     }
 
     #[test]
-    fn booked_agy_and_codex_limits_are_read_from_the_router_state() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("leg-state.sqlite");
-        assert!(active_limits(&db, 1000.0).unwrap().is_empty());
-        book(
-            &db,
-            &[
-                (
-                    "agy:gemini-4-hydrogen",
-                    429,
-                    Some(5000.0),
-                    900.0,
-                    "harness-stderr",
-                ),
-                ("codex-gpt", 429, None, 950.0, "provider-response"),
-                (
-                    "agy:gemini-4-argon",
-                    429,
-                    Some(990.0),
-                    800.0,
-                    "harness-stderr",
-                ),
-                (
-                    "agy:gemini-4-neon",
-                    429,
-                    Some(9000.0),
-                    700.0,
-                    "harness-stderr",
-                ),
-                ("agy:gemini-4-neon", 200, None, 800.0, "provider-response"),
-                ("agy:probe-only", 503, Some(9000.0), 700.0, "liveness-probe"),
-            ],
-        );
+    fn an_unreadable_source_is_null_and_two_unreadable_sources_fail_the_refresh() {
+        let bad = || Err::<u8, String>("down".into());
+        assert_eq!(combine(Ok(1u8), bad()).unwrap(), (Some(1), None));
+        assert_eq!(combine(bad(), Ok(2u8)).unwrap(), (None, Some(2)));
+        assert!(combine(bad(), bad()).unwrap_err().contains("unavailable"));
+        // An empty healthy state is a value, not an unavailable source.
         assert_eq!(
-            active_limits(&db, 1000.0).unwrap(),
-            BTreeMap::from([
-                ("agy:gemini-4-hydrogen".to_owned(), 5000),
-                ("codex-gpt".to_owned(), 1550),
-            ])
+            combine(Ok(BTreeMap::<String, f64>::new()), bad())
+                .unwrap()
+                .0,
+            Some(BTreeMap::new())
         );
     }
 
     #[test]
-    fn a_change_of_the_router_quota_state_reaches_the_collector_as_a_quota_event() {
+    fn booking_and_recovery_of_an_agy_limit_reach_the_collector_through_refresh() {
         let dir = tempfile::tempdir().unwrap();
         let config = fixture(dir.path());
-        let db = dir.path().join("leg-state.sqlite");
-        let refresh_from_state = |now: f64| {
-            let limits = active_limits(&db, now).unwrap();
-            write(&config.quota, None, &limits).unwrap();
+        let state = dir.path().join("xdg");
+        let env: Env = BTreeMap::from([
+            ("XDG_STATE_HOME".into(), state.display().to_string()),
+            ("PLANGRAPH_OMNIROUTE_LEG_STATE".into(), "0".into()),
+            (
+                "QUOTA_SNAPSHOT_DB".into(),
+                dir.path().join("none.sqlite").display().to_string(),
+            ),
+        ]);
+        let now = || chrono::Utc::now().timestamp();
+        let read = |cursor: Value| {
+            refresh(&config.quota, &env, &repo(), now()).unwrap();
+            local::quota(&config, cursor).unwrap()
         };
-        refresh_from_state(1000.0);
-        let (cursor, first, _) = local::quota(&config, Value::Null).unwrap();
-        assert_eq!(first.len(), 1, "the first read is the baseline level");
-        let (cursor, quiet, _) = local::quota(&config, cursor).unwrap();
-        assert!(quiet.is_empty());
-        book(
-            &db,
-            &[(
-                "agy:gemini-4-hydrogen",
-                429,
-                Some(5000.0),
-                900.0,
-                "harness-stderr",
-            )],
+        let (cursor, baseline, _) = read(Value::Null);
+        assert_eq!(baseline.len(), 1);
+        assert_eq!(baseline[0].data["limited_until"], json!({}));
+        record(
+            &env,
+            "s.record_harness_limit('agy/gemini-4-hydrogen-high', 'RESOURCE_EXHAUSTED (code 429): Per-model quota reached. Resets in 10h40m26s.', 'fixture')",
         );
-        refresh_from_state(1000.0);
-        let (cursor, limited, _) = local::quota(&config, cursor).unwrap();
-        assert_eq!(limited.len(), 1);
-        assert_eq!(
-            limited[0].data["limited_until"]["agy:gemini-4-hydrogen"],
-            5000
+        let (cursor, booked, _) = read(cursor);
+        assert_eq!(booked.len(), 1, "a booked limit is a quota event");
+        assert!(booked[0].data["limited_until"]["agy:gemini-4-hydrogen"].is_i64());
+        // Routing clears the limit after a successful probe; so must the shadow file.
+        record(
+            &env,
+            "s.record_probe_pass('agy/gemini-4-hydrogen-high', 'fixture')",
         );
-        // The booked reset passes: the limit leaves the file and the collector reports it.
-        refresh_from_state(6000.0);
-        assert_eq!(local::quota(&config, cursor).unwrap().1.len(), 1);
+        let (_, recovered, _) = read(cursor);
+        assert_eq!(recovered.len(), 1, "recovery is a quota event");
+        assert_eq!(recovered[0].data["limited_until"], json!({}));
     }
 }

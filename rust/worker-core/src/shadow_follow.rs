@@ -86,25 +86,39 @@ pub fn transcript_for(home: &Path, session_id: &str, cwd: &Path) -> PathBuf {
     })
 }
 
-/// The role's collector configuration: the `PLANGRAPH_STATE_CONFIG` its `ROLE.env` sets, else the
-/// default `ROLE.json` beside it. The launcher and the collector must act on the same file.
+/// The value of an environment-file assignment in systemd syntax: double-quoted with backslash
+/// escapes, single-quoted literally, or unquoted up to the end of the line.
+fn env_value(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if let Some(inner) = raw.strip_prefix('"') {
+        let inner = inner.strip_suffix('"')?;
+        let mut out = String::new();
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            out.push(if ch == '\\' { chars.next()? } else { ch });
+        }
+        return Some(out);
+    }
+    if let Some(inner) = raw.strip_prefix('\'') {
+        return inner.strip_suffix('\'').map(str::to_owned);
+    }
+    (!raw.is_empty()).then(|| raw.to_owned())
+}
+
+/// The role's collector configuration: the `PLANGRAPH_STATE_CONFIG` its `ROLE.env` sets (the last
+/// assignment wins, as for the service), else the default `ROLE.json` beside it. The launcher and
+/// the collector must act on the same file.
 pub fn config_path(home: &Path, role: &str) -> PathBuf {
     let dir = home.join(".config/plangraph/state-shadow");
     fs::read_to_string(dir.join(format!("{role}.env")))
         .ok()
         .and_then(|text| {
-            text.lines().find_map(|line| {
-                let value = line.strip_prefix("PLANGRAPH_STATE_CONFIG=")?;
-                let quoted = value.trim().strip_prefix('"')?.strip_suffix('"')?;
-                let mut out = String::new();
-                let mut chars = quoted.chars();
-                while let Some(ch) = chars.next() {
-                    out.push(if ch == '\\' { chars.next()? } else { ch });
-                }
-                Some(PathBuf::from(out))
-            })
+            text.lines()
+                .filter_map(|line| line.trim_start().strip_prefix("PLANGRAPH_STATE_CONFIG="))
+                .filter_map(env_value)
+                .next_back()
         })
-        .unwrap_or_else(|| dir.join(format!("{role}.json")))
+        .map_or_else(|| dir.join(format!("{role}.json")), PathBuf::from)
 }
 
 /// The session the role's committed launch record names (the launcher writes it, and the watchdog
@@ -202,6 +216,36 @@ mod tests {
             config_path(home.path(), "routing"),
             PathBuf::from("/x/my \"cfg\".json")
         );
+    }
+
+    #[test]
+    fn config_path_honors_unquoted_single_quoted_and_the_last_assignment() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".config/plangraph/state-shadow");
+        fs::create_dir_all(&dir).unwrap();
+        let env = dir.join("routing.env");
+        for (text, want) in [
+            ("PLANGRAPH_STATE_CONFIG=/p/custom.json\n", "/p/custom.json"),
+            (
+                "PLANGRAPH_STATE_CONFIG=/p/with space.json  \n",
+                "/p/with space.json",
+            ),
+            (
+                "PLANGRAPH_STATE_CONFIG='/p/lit$eral.json'\n",
+                "/p/lit$eral.json",
+            ),
+            (
+                "PLANGRAPH_STATE_CONFIG=/p/first.json\nPLANGRAPH_STATE_CONFIG=\"/p/last.json\"\n",
+                "/p/last.json",
+            ),
+        ] {
+            fs::write(&env, text).unwrap();
+            assert_eq!(
+                config_path(home.path(), "routing"),
+                PathBuf::from(want),
+                "{text}"
+            );
+        }
     }
 
     #[test]

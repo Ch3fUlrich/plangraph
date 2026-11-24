@@ -1,4 +1,4 @@
-use super::adapters::{quota_snapshots, Env};
+use super::adapters::{leg_limits, quota_snapshots, Env};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 fn field<'a>(r: &'a Value, names: &[&str]) -> Option<&'a Value> {
@@ -123,6 +123,14 @@ pub(crate) fn remaining_by_provider(rows: &Value, now: i64, max_age: i64) -> BTr
 /// The live snapshot rows of the quota store, read through the repository's adapter.
 pub(crate) fn live_snapshots(env: &Env, repo: &std::path::Path) -> Result<Value, String> {
     quota_snapshots(env, repo)
+}
+
+/// The provider limits routing treats as active now, by leg and scope, each with its end.
+pub(crate) fn live_leg_limits(
+    env: &Env,
+    repo: &std::path::Path,
+) -> Result<BTreeMap<String, i64>, String> {
+    serde_json::from_value(leg_limits(env, repo)?).map_err(|_| "invalid leg limits".into())
 }
 
 /// Print the most recent available observation for each provider, account and window.

@@ -204,6 +204,14 @@ fn follow_session(
             Some((session, cwd)) => {
                 let transcript =
                     pg_worker_core::shadow_follow::transcript_for(home, &session, &cwd);
+                if session != fresh.session_id || transcript != fresh.transcript {
+                    // Keep the role file in step with the record so a restart reads the same.
+                    if let Err(error) =
+                        pg_worker_core::shadow_follow::follow_session(path, home, &session, &cwd)
+                    {
+                        eprintln!("state: role configuration not updated: {error}");
+                    }
+                }
                 (session, transcript)
             }
             None if fresh.transcript.is_file() => (fresh.session_id, fresh.transcript),
@@ -233,8 +241,7 @@ fn refresh_quota(config: &Config, env: &Env, home: &std::path::Path) {
         .get("PLANGRAPH_REPO")
         .map_or_else(|| home.join("code/plangraph"), PathBuf::from);
     let now = chrono::Utc::now().timestamp();
-    let leg_state = quota_file::leg_state_path(env, home);
-    if let Err(error) = quota_file::refresh(&config.quota, env, &repo, &leg_state, now) {
+    if let Err(error) = quota_file::refresh(&config.quota, env, &repo, now) {
         eprintln!("state: quota refresh: {error}");
     }
 }
@@ -361,9 +368,12 @@ mod tests {
         std::fs::write(&record, r#"{"session_id":"adopted-3","cwd":"/work/b"}"#).unwrap();
         let followed = follow_session(&old, &path, dir.path(), &state).unwrap();
         assert_eq!(followed.session_id, "adopted-3");
-        assert_eq!(
-            followed.transcript,
-            dir.path().join(".claude/projects/-work-b/adopted-3.jsonl")
-        );
+        let adopted = dir.path().join(".claude/projects/-work-b/adopted-3.jsonl");
+        assert_eq!(followed.transcript, adopted);
+        // The role file on disk carries both fields, so a restarted collector reads them too.
+        let disk: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(disk["session_id"], "adopted-3");
+        assert_eq!(disk["transcript"], json!(adopted));
+        assert_eq!(disk["principal"], "routing-reader");
     }
 }

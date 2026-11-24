@@ -32,6 +32,31 @@ pub(super) fn quota_snapshots(env: &Env, repo: &Path) -> Result<Value, String> {
     cmd.args(["-c", "import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
     output(cmd)
 }
+/// Provider limits routing itself treats as active, by leg and scope, as the epoch second each
+/// ends, as of now. Routing's own `LegStateStore.leg_status` decides (scopes, probe recovery), never a copy.
+pub(super) fn leg_limits(env: &Env, repo: &Path) -> Result<Value, String> {
+    let mut cmd = python(env, repo);
+    cmd.args(["-c", LEG_LIMITS]);
+    output(cmd)
+}
+const LEG_LIMITS: &str = r#"
+import json, sqlite3, time
+from plangraph.routing_support.leg_state import REPROBE_MINUTES, _default_store
+now = time.time()  # routing's own clock, with sub-second precision
+store = _default_store()
+scopes = []
+if store.path.exists() and store.path.stat().st_size:
+    with sqlite3.connect(store.path.as_uri() + "?mode=ro", uri=True) as db:
+        scopes = db.execute("SELECT DISTINCT leg_key, account, combo FROM leg_events WHERE status<>200 AND ts<=?", (now,)).fetchall()
+out = {}
+for key, account, combo in scopes:
+    status = store.leg_status(key, now=now, account=account, combo=combo)
+    if status["state"] == "limited":
+        ev = status["evidence"]
+        name = key if account is None and combo is None else f"{key}@{account or ''}/{combo or ''}"
+        out[name] = int(ev["reset_at"] if ev["reset_at"] is not None else ev["ts"] + REPROBE_MINUTES * 60)
+print(json.dumps(out))
+"#;
 pub trait Transport {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String>;
 }
