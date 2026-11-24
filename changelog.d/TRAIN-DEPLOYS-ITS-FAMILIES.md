@@ -1,0 +1,1 @@
+Add `land-train deploy-apply`: after the merge, install the families the GO row names, read one run of each, write the keeper deploy rows only after a good first run, and on a failed first run disable the timer and stop; the deploy plan now carries the item keys of each target and `deploy-plan --plan-out` saves it.
