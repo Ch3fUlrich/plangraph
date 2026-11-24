@@ -1,6 +1,14 @@
 use crate::*;
 
 impl Model {
+    pub(crate) fn bound_ticks(&self, class: UrgentClass) -> u8 {
+        Params::ticks(self.p.budget(class).bound_secs)
+    }
+
+    fn sup_ticks(&self) -> u16 {
+        u16::from(Params::ticks(self.p.supervisor_secs))
+    }
+
     pub(crate) fn occur(&mut self, e: u8) -> Result<(), Denied> {
         let mode = self.mode;
         let ev = self.events.get_mut(usize::from(e)).ok_or(Denied::Index)?;
@@ -8,18 +16,22 @@ impl Model {
             return Err(Denied::Guard);
         }
         ev.stage = Stage::Occurred;
-        self.occurred = self.occurred.saturating_add(1);
-        ev.order = self.occurred;
         // A role that is not switched keeps today's wake path, which carries it at once.
         ev.escalated = mode != Mode::Active;
         if mode != Mode::Active {
-            self.wake_adopted();
+            self.wake();
         }
         Ok(())
     }
 
+    pub(crate) fn wake(&mut self) {
+        if self.session.live() {
+            self.session.notify = true;
+        }
+    }
+
     /// A scan moves events into a digest (the scan cursor). It never acknowledges them: only
-    /// a session's `Receive` does (the ack cursor), so a crash replays what was not received.
+    /// a session's `Receive` or the alarm does.
     pub(crate) fn scan(&mut self, s: u8) -> Result<(), Denied> {
         let src = Self::source(s)?;
         if self.mode == Mode::Off {
@@ -28,7 +40,6 @@ impl Model {
         self.since_scan[src] = 0;
         // A read that times out is visible at once; it never reads another source.
         self.blind[src] = self.hung[src];
-        let scan_acks = self.has(Defect::ScanIsReceipt);
         if !self.hung[src] {
             for e in self
                 .events
@@ -36,195 +47,108 @@ impl Model {
                 .filter(|e| usize::from(e.source) == src)
             {
                 if e.stage == Stage::Occurred {
-                    e.stage = if scan_acks {
-                        Stage::Received
-                    } else {
-                        Stage::Detected
-                    };
+                    e.stage = Stage::Detected;
                 }
             }
         }
         Ok(())
     }
 
-    /// A receipt hands over every event of today's wake path (escalated: each one is its own
-    /// message), and of the digest as many as fit its byte limit after the range header, urgent
-    /// first and oldest first by occurrence; the rest stay pending for the next receipt.
+    /// A receipt hands the session every event of today's wake path and every scanned one.
     pub(crate) fn receive(&mut self) {
         let active = self.mode == Mode::Active;
-        let open = |e: &Evt| matches!(e.stage, Stage::Occurred | Stage::Detected);
-        for e in self.events.iter_mut().filter(|e| open(e) && e.escalated) {
-            (e.stage, e.seen) = (Stage::Received, true);
-        }
-        let mut ids: Vec<usize> = (0..self.events.len())
-            .filter(|&i| active && self.events[i].stage == Stage::Detected)
-            .collect();
-        ids.sort_by_key(|&i| (self.events[i].class != Class::Urgent, self.events[i].order));
-        let limit = u32::from(self.p.digest_bytes);
-        let (mut used, mut taken) = (u32::from(HEADER_BYTES), Vec::new());
-        for i in ids {
-            let fits = used + u32::from(self.events[i].bytes) <= limit;
-            if !fits && !self.has(Defect::DigestUnbounded) {
-                break;
+        for e in &mut self.events {
+            if e.open() && (e.escalated || (active && e.stage == Stage::Detected)) {
+                (e.stage, e.seen) = (Stage::Received, true);
             }
-            used += u32::from(self.events[i].bytes);
-            taken.push(i);
-        }
-        let orders: Vec<u8> = taken.iter().map(|&i| self.events[i].order).collect();
-        if let (Some(&first), Some(&last)) = (orders.iter().min(), orders.iter().max()) {
-            // The range comes first, so an output cut at the byte limit keeps it.
-            let mut parts = vec![Part::Range(first, last)];
-            parts.extend(orders.iter().map(|&o| Part::Event(o)));
-            if self.has(Defect::FooterRange) {
-                parts.rotate_left(1);
-            }
-            self.last_digest = Some(Digest { parts, bytes: used });
-        }
-        for i in taken {
-            (self.events[i].stage, self.events[i].seen) = (Stage::Received, true);
         }
     }
 
-    pub(crate) fn fire(&mut self, ix: usize) {
-        self.sessions[ix].waiter = Waiter::Fired;
-        self.sessions[ix].notify = true;
-    }
-
-    pub(crate) fn fire_enabled(&self, ix: usize) -> bool {
-        let s = &self.sessions[ix];
+    pub(crate) fn fire_enabled(&self) -> bool {
         self.mode == Mode::Active
-            && !s.fenced
-            && s.waiter == Waiter::Armed
-            && self
-                .events
-                .iter()
-                .any(|e| e.class == Class::Urgent && e.stage == Stage::Detected)
+            && self.session.waiter == Waiter::Armed
+            && self.events.iter().any(|e| e.stage == Stage::Detected)
     }
 
+    /// The supervisor hands an unread event to today's wake path once it has reached its
+    /// takeover age: the session is woken, or told in its turn.
     pub(crate) fn escalate(&mut self, e: u8) -> Result<(), Denied> {
-        let takeover = Params::ticks(self.p.takeover_secs);
         let ev = *self.events.get(usize::from(e)).ok_or(Denied::Index)?;
-        let open = matches!(ev.stage, Stage::Occurred | Stage::Detected);
-        if self.mode != Mode::Active
-            || self.has(Defect::NoTakeover)
-            || ev.class != Class::Urgent
-            || !open
-            || ev.escalated
-            || ev.age < takeover
-        {
+        let takeover = Params::ticks(self.p.budget(ev.class).takeover_secs);
+        if self.mode != Mode::Active || !ev.open() || ev.escalated || ev.age < takeover {
             return Err(Denied::Guard);
         }
         self.events[usize::from(e)].escalated = true;
-        self.wake_adopted();
+        self.wake();
+        Ok(())
+    }
+
+    /// The supervisor tells the operator about an event still unread at its alarm age. The
+    /// operator holds it from then on, so the bound is kept whatever the session does.
+    pub(crate) fn alarm(&mut self, e: u8) -> Result<(), Denied> {
+        let ev = *self.events.get(usize::from(e)).ok_or(Denied::Index)?;
+        let alarm = Params::ticks(self.p.budget(ev.class).alarm_secs);
+        if self.mode != Mode::Active || self.has(Defect::NoAlarm) || !ev.open() || ev.age < alarm {
+            return Err(Denied::Guard);
+        }
+        let ev = &mut self.events[usize::from(e)];
+        (ev.alarmed, ev.escalated, ev.stage) = (true, true, Stage::Received);
         Ok(())
     }
 
     pub(crate) fn nudge_target(&self) -> bool {
-        let s = &self.sessions[usize::from(self.adopted)];
+        let s = &self.session;
         s.life == Life::Idle && !s.notify && s.waiter != Waiter::Armed
     }
 
-    /// Some session is working, armed, woken, or about to be replaced by a live successor.
+    /// The session is working, armed or woken.
     fn attended(&self) -> bool {
-        let covered = match self.recycle {
-            Recycle::Launching { pred, succ } | Recycle::Confirmed { pred, succ } => {
-                self.sessions[usize::from(succ)].live() && self.quiescent(pred)
-            }
-            _ => false,
-        };
-        covered
-            || self.sessions.iter().any(|s| {
-                s.live()
-                    && !s.fenced
-                    && (s.life == Life::Active || s.waiter == Waiter::Armed || s.notify)
-            })
+        let s = &self.session;
+        s.live() && (s.life == Life::Active || s.waiter == Waiter::Armed || s.notify)
     }
 
     pub(crate) fn unattended(&self) -> bool {
         self.mode == Mode::Active && !self.attended()
     }
 
-    /// The supervisor has a move: nudge, recover, abort a launch or retry a stop. When it has
-    /// none (every slot used) the role raises an alarm instead.
-    pub(crate) fn supervisor_can_act(&self) -> bool {
-        self.nudge_target() || self.recycle_possible() || self.recycle != Recycle::Idle
-    }
-
-    /// A working current session must read what was handed to it: the fallback message of a
-    /// takeover, or the digest of a fired wait. Without this the bound would end at a queue.
-    fn receipt_due(&self) -> bool {
-        self.mode == Mode::Active
-            && !self.has(Defect::FallbackNotAwaited)
-            && self.sessions.iter().any(|s| {
-                s.life == Life::Active
-                    && !s.fenced
-                    && self.events.iter().any(|e| {
-                        e.class == Class::Urgent
-                            && matches!(e.stage, Stage::Occurred | Stage::Detected)
-                            && (e.escalated
-                                || (e.stage == Stage::Detected && s.waiter == Waiter::Fired))
-                    })
-            })
+    /// Is some event past the age at which `step` must have happened? `step` picks the budget.
+    fn overdue(&self, step: impl Fn(&Budget) -> u16, skip: impl Fn(&Evt) -> bool) -> bool {
+        self.events.iter().any(|e| {
+            let due = Params::ticks(step(&self.p.budget(e.class))) as u16 + self.sup_ticks();
+            e.open() && !skip(e) && u16::from(e.age) + 1 > due
+        })
     }
 
     /// An obligation that must run before time may pass.
     fn due(&self) -> bool {
-        let takeover = Params::ticks(self.p.takeover_secs) + Params::ticks(self.p.supervisor_secs);
-        let scan = Params::ticks(self.p.scan_secs);
-        let sup = Params::ticks(self.p.supervisor_secs);
-        let instant = (0..self.sessions.len()).any(|ix| {
-            self.fire_enabled(ix)
-                || (self.sessions[ix].life == Life::Idle && self.sessions[ix].notify)
-        });
-        let overdue = self.mode == Mode::Active
-            && !self.has(Defect::NoTakeover)
-            && self.events.iter().any(|e| {
-                e.class == Class::Urgent
-                    && matches!(e.stage, Stage::Occurred | Stage::Detected)
-                    && !e.escalated
-                    && u16::from(e.age) + 1 > u16::from(takeover)
-            });
-        let scans = self.mode != Mode::Off
-            && self
-                .since_scan
-                .iter()
-                .any(|s| u16::from(*s) + 1 > u16::from(scan));
+        let active = self.mode == Mode::Active;
+        let s = &self.session;
+        let instant = self.fire_enabled() || (s.life == Life::Idle && s.notify);
+        let takeover = active && self.overdue(|b| b.takeover_secs, |e| e.escalated);
+        let alarm =
+            active && !self.has(Defect::NoAlarm) && self.overdue(|b| b.alarm_secs, |_| false);
+        let scan = u16::from(Params::ticks(self.p.scan_secs));
+        let scans =
+            self.mode != Mode::Off && self.since_scan.iter().any(|s| u16::from(*s) + 1 > scan);
         let asleep = !self.has(Defect::NoSupervisor)
             && self.unattended()
-            && self.supervisor_can_act()
-            && u16::from(self.asleep_age) + 1 > u16::from(sup);
-        let launching = matches!(
-            self.recycle,
-            Recycle::Launching { .. } | Recycle::Confirmed { .. }
-        );
-        let stalled = launching
-            && u16::from(self.recycle_age) + 1 > u16::from(Params::ticks(self.p.recycle_secs));
-        instant || self.receipt_due() || overdue || scans || asleep || stalled
+            && self.nudge_target()
+            && u16::from(self.asleep_age) + 1 > self.sup_ticks();
+        instant || takeover || alarm || scans || asleep
     }
 
     pub(crate) fn tick(&mut self) -> Result<(), Denied> {
         if self.due() {
             return Err(Denied::Deadline);
         }
-        let bound = Params::ticks(self.p.bound_secs).saturating_add(1);
-        for e in &mut self.events {
-            if matches!(e.stage, Stage::Occurred | Stage::Detected) {
-                e.age = e.age.saturating_add(1).min(bound);
-            }
-        }
-        if matches!(
-            self.recycle,
-            Recycle::Launching { .. } | Recycle::Confirmed { .. }
-        ) {
-            let cap = Params::ticks(self.p.recycle_secs).saturating_add(1);
-            self.recycle_age = self.recycle_age.saturating_add(1).min(cap);
+        let cap = (MAX_TICKS + 1) as u8;
+        for e in self.events.iter_mut().filter(|e| e.open()) {
+            e.age = e.age.saturating_add(1).min(cap);
         }
         if self.mode != Mode::Off {
-            let cap = Params::ticks(self.p.scan_secs).saturating_add(1);
             self.since_scan = self.since_scan.map(|s| s.saturating_add(1).min(cap));
         }
         if self.unattended() {
-            let cap = Params::ticks(self.p.supervisor_secs).saturating_add(1);
             self.asleep_age = self.asleep_age.saturating_add(1).min(cap);
         }
         Ok(())
@@ -236,12 +160,6 @@ impl Model {
         }
         if self.mode == Mode::Off {
             self.since_scan = [0; MAX_SOURCES];
-        }
-        if !matches!(
-            self.recycle,
-            Recycle::Launching { .. } | Recycle::Confirmed { .. }
-        ) {
-            self.recycle_age = 0;
         }
     }
 }

@@ -5,106 +5,31 @@ impl Model {
     pub fn violations(&self) -> Vec<Invariant> {
         let mut out = Vec::new();
         let g = self.gates;
-        let gated = g.fence != Fence::Absent && g.recovery && g.go && g.shadow_ok;
         let active = self.mode == Mode::Active;
-        if active && !gated {
+        if active && !(g.fence && g.recovery && g.go && g.shadow_ok) {
             out.push(Invariant::ActivationGate);
         }
-        if self.live_current() > 1 || self.sessions[usize::from(self.adopted)].fenced {
-            out.push(Invariant::SingleCurrent);
-        }
-        if self
-            .sessions
-            .iter()
-            .filter(|s| s.live() && s.waiter == Waiter::Armed)
-            .count()
-            > 1
-        {
-            out.push(Invariant::TwoArmed);
-        }
-        if !self.recycle_shape_ok() {
-            out.push(Invariant::RecycleShape);
-        }
-        let stranded = |m: &Msg| match m.home {
-            Home::Session(i) => {
-                let s = &self.sessions[usize::from(i)];
-                s.life == Life::Stopped && s.fenced && !m.record
-            }
-            _ => false,
-        };
-        if self.msgs.iter().any(stranded) {
-            out.push(Invariant::MessageStranded);
-        }
-        if self.msgs.iter().any(|m| m.record && !m.acted) {
-            out.push(Invariant::HandledWithoutAction);
-        }
-        // The bound runs from occurrence to the session's receipt, across recovery too. With no
-        // live current session nothing can read the event, so by the bound it must at least be
-        // handed to today's path, which then is the operator alarm; adoption delivers it.
-        let bound = Params::ticks(self.p.bound_secs);
-        let live = self.live_current() > 0;
-        let late = |e: &&Evt| {
-            e.class == Class::Urgent
-                && matches!(e.stage, Stage::Occurred | Stage::Detected)
-                && e.age > bound
-                && (live || !e.escalated)
-        };
+        // The bound runs from occurrence to a reader, whatever the session does: a woken session
+        // that keeps working, a hung source or a dead role are handed to the operator by the alarm.
+        let late = |e: &&Evt| e.open() && e.age > self.bound_ticks(e.class);
         if active && self.events.iter().filter(late).count() > 0 {
             out.push(Invariant::UrgentBound);
         }
         if self
             .events
             .iter()
-            .any(|e| e.stage == Stage::Received && !e.seen)
+            .any(|e| e.stage == Stage::Received && !e.seen && !e.alarmed)
         {
             out.push(Invariant::ReceivedUnread);
         }
-        if let Some(d) = &self.last_digest {
-            if d.bytes > u32::from(self.p.digest_bytes) {
-                out.push(Invariant::DigestOverBudget);
-            }
-            let ranges = d
-                .parts
-                .iter()
-                .filter(|p| matches!(p, Part::Range(..)))
-                .count();
-            if ranges != 1 || !matches!(d.parts.first(), Some(Part::Range(..))) {
-                out.push(Invariant::RangeNotFirst);
-            }
-        }
-        let sup = Params::ticks(self.p.supervisor_secs);
-        if active && self.asleep_age > sup && self.supervisor_can_act() {
+        if active && self.asleep_age > Params::ticks(self.p.supervisor_secs) && self.nudge_target()
+        {
             out.push(Invariant::Unattended);
-        }
-        if self.adopted_over_active {
-            out.push(Invariant::AdoptedOverActive);
-        }
-        if active && self.sessions.iter().any(|s| s.live() && s.cron) {
-            out.push(Invariant::CronInActive);
-        }
-        if self.sessions.iter().any(|s| s.blocks > self.p.stop_cap) {
-            out.push(Invariant::StopCap);
         }
         out
     }
 
     pub fn invariants_hold(&self) -> bool {
         self.violations().is_empty()
-    }
-
-    fn recycle_shape_ok(&self) -> bool {
-        let n = self.p.sessions;
-        match self.recycle {
-            Recycle::Idle => true,
-            // Only an active role launches or confirms; rollback and a lost GO abort these.
-            Recycle::Launching { pred, succ } | Recycle::Confirmed { pred, succ } => {
-                self.mode == Mode::Active
-                    && pred != succ
-                    && succ < n
-                    && pred == self.adopted
-                    && self.sessions[usize::from(succ)].fenced
-            }
-            Recycle::StopPending { pred, succ } => pred != succ && succ < n && succ == self.adopted,
-        }
     }
 }

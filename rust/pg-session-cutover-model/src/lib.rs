@@ -1,15 +1,15 @@
-//! Pure model of one orchestrator role switching from today's waits to the digest wait.
+//! Pure model of the urgent-event timing of one orchestrator role on the digest wait.
 //! Each successful event is one atomic transition; a refused event changes nothing.
-//! Time is a `Tick` of `TICK_SECS`; a tick is refused while an obligation is due, so an
-//! obligation (scan, wake, receipt, takeover, supervision) cannot be skipped by letting time pass.
+//! Time is a `Tick` of `TICK_SECS`; a tick is refused while an obligation is due, so a scan,
+//! wake, takeover, alarm or supervisor pass cannot be skipped by letting time pass.
+//! Recycle, adoption, session slots and the digest window belong to later slices.
 mod invariants;
 mod model;
 mod params;
-mod recycle;
 mod time;
 mod transition;
 mod types;
 
-pub use model::{Digest, Model, Part};
+pub use model::Model;
 pub use params::*;
 pub use types::*;
