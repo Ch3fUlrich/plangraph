@@ -339,6 +339,9 @@ class SpawnerRunner:
                 # no inherited config layer: HOME and XDG_CONFIG_HOME live in the per-job dir and every
                 # caller-set OPENCODE_* override outside _REVIEW_OPENCODE_ENV_ALLOW is dropped.
                 render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
+                # The seat's own HOME hides the user's profile: give it cargo and the repository's pytest.
+                from plangraph.routing_support.review_toolchain import review_tool_path
+                child_env['PATH'] = review_tool_path(child_env.get('PATH'), child_env.get('HOME'))
                 child_env['HOME'] = oc_dir
                 xdg_config = os.path.join(oc_dir, 'config')
                 os.mkdir(xdg_config, 0o700)
