@@ -678,3 +678,58 @@ fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
         );
     }
 }
+
+/// A shared target configured under a legacy container (`~/.cache/cargo-target/…`) is the
+/// host's live target: the legacy sweep must keep it however long it sat idle, while a
+/// neighbouring idle legacy target is removed.
+#[test]
+fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
+    let (tmp, repo, root) = fixture();
+    let home = tmp.path().join("home");
+    let container = home.join(".cache/cargo-target");
+    let old = SystemTime::now() - Duration::from_secs(3 * 86400);
+    for name in ["shared", "batch23"] {
+        let dir = container.join(name);
+        fs::create_dir_all(dir.join("debug")).unwrap();
+        fs::write(dir.join(".rustc_info.json"), b"{}").unwrap();
+        fs::write(dir.join("debug/blob"), [0u8; 64]).unwrap();
+        for p in [
+            dir.join("debug/blob"),
+            dir.join(".rustc_info.json"),
+            dir.join("debug"),
+            dir.clone(),
+        ] {
+            fs::File::open(p).unwrap().set_modified(old).unwrap();
+        }
+    }
+    let pins = tmp.path().join("pins.json");
+    fs::write(&pins, "[]").unwrap();
+    let state = tmp.path().join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::create_dir_all(tmp.path().join("tmp-sweep")).unwrap();
+    let reader = tmp.path().join("process-cwds");
+    fs::write(&reader, "#!/bin/sh\necho '[[],false]'\n").unwrap();
+    fs::set_permissions(&reader, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
+        .args(["--apply", "--repo"])
+        .arg(&repo)
+        .arg("--root")
+        .arg(&root)
+        .arg("--pins")
+        .arg(&pins)
+        .arg("--tmp-root")
+        .arg(tmp.path().join("tmp-sweep"))
+        .arg("--state")
+        .arg(&state)
+        .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env("PG_PROCESS_CWD_READER", &reader)
+        .env("PLANGRAPH_CARGO_TARGET_DIR", container.join("shared"))
+        .output()
+        .unwrap();
+    let row: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.join("disk-hygiene.json")).unwrap()).unwrap();
+    assert!(output.status.success(), "{row}");
+    assert!(container.join("shared/debug/blob").exists(), "{row}");
+    assert!(!container.join("batch23").exists(), "{row}");
+}

@@ -60,8 +60,12 @@ pub fn sweep(
                 ));
                 continue;
             }
+            // Only the target itself may not be a link: a symlinked ancestor (a home reached through one)
+            // is no reason to keep it, and the guards and process checks use the resolved path.
             let canonical = target.canonicalize()?;
-            if canonical != target || guards.protects(&canonical) {
+            if fs::symlink_metadata(&target)?.file_type().is_symlink()
+                || guards.protects(&canonical)
+            {
                 report.skipped.push(format!(
                     "{}: legacy target pinned, live or symlinked",
                     target.display()
