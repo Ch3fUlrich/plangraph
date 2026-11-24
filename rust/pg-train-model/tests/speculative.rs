@@ -145,3 +145,23 @@ fn a_candidate_is_never_rebuilt_in_place() {
     ok(&mut m, Event::Speculate { pred: 0 });
     assert_eq!(denied(&mut m, Event::Rebuild { train: 1 }), Denied::Phase);
 }
+
+#[test]
+fn a_candidate_whose_verification_was_lost_cannot_be_promoted() {
+    let mut m = Model::new(policy(1, 5, 0, Order::Oldest), disjoint(4));
+    register_all(&mut m, 0..4);
+    ok(&mut m, Event::Select);
+    start(&mut m, 0);
+    // The candidate takes part 1 and records parts 2 and 3 as left out at the target.
+    assert_eq!(ok(&mut m, Event::Speculate { pred: 0 }), Outcome::Train(1));
+    assert_eq!(m.left_out(1).len(), 2);
+    ci(&mut m, 1, true);
+    ok(&mut m, Event::OmitLeftOut { train: 1, part: 2 });
+    ci(&mut m, 0, true);
+    ok(&mut m, Event::Settle { train: 0 });
+    assert_eq!(
+        denied(&mut m, Event::Promote { train: 1 }),
+        Denied::Unverified
+    );
+    assert!(m.invariants_hold());
+}

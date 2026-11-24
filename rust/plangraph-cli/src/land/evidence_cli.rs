@@ -76,26 +76,22 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
             need(flags, "day")?,
             need(flags, "batch")?,
             head,
-            head != &old.head,
+            evidence_git::was_rebased(Path::new(need(flags, "repo")?), &old.head, head)?,
         );
         append(out, &records)?;
     }
-    if let (Some(path), Accept::Carried { old_head, new_head }, Ci::Carried { .. }) =
-        (flags.get("carry-out"), &d.accept, &d.ci)
-    {
-        // Both the ACCEPT and the part CI carry: persist it for the builder (`build --carries`).
-        let carry = Carry {
-            old_head: old_head.clone(),
-            new_head: new_head.clone(),
-            patch_id: evidence_git::key_of(
-                Path::new(need(flags, "repo")?),
-                need(flags, "main")?,
-                need(flags, "head")?,
-            )?
-            .patch_id,
+    if let Some(path) = flags.get("carry-out") {
+        // Both the ACCEPT and the part CI carry: persist the carry for the builder; otherwise the entry
+        // an earlier assessment left for this head is cleared.
+        let carry = match (&d.accept, &d.ci) {
+            (Accept::Carried { old_head, new_head }, Ci::Carried { .. }) => Some(Carry {
+                old_head: old_head.clone(),
+                new_head: new_head.clone(),
+                evidence: old.clone(),
+            }),
+            _ => None,
         };
-        std::fs::write(path, serde_json::to_vec(&carry).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("{path}: {e}"))?;
+        store_carry(path, need(flags, "head")?, carry)?;
     }
     Ok(lines(&d))
 }
@@ -183,13 +179,50 @@ pub(super) fn report_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         .collect())
 }
 
-/// A part whose receipt names an older head takes the verified carry-over to its head, so the builder's
-/// admission accepts the receipt of the head the ACCEPT and CI were earned on.
-pub(super) fn attach_carries(parts: &mut [super::train::PartIn], carries: &[Carry]) {
+/// The carries file is a JSON array; `evidence-assess --carry-out` keeps one entry per new head: it
+/// replaces the entry of that head, or removes it when the assessment no longer carries.
+fn store_carry(path: &str, new_head: &str, carry: Option<Carry>) -> Result<(), String> {
+    let mut all: Vec<Carry> = match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{path}: {e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(format!("{path}: {e}")),
+    };
+    all.retain(|c| c.new_head != new_head);
+    all.extend(carry);
+    std::fs::write(path, serde_json::to_vec(&all).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("{path}: {e}"))
+}
+
+/// A part whose receipt names an older head takes its carry only if the evidence still carries when
+/// assessed against the base the train is built on and the trains landed now: the same decision
+/// `evidence-assess` makes, taken again at admission.
+pub(super) fn admit_carries(
+    repo: &Path,
+    base: &str,
+    flags: &BTreeMap<String, String>,
+    parts: &mut [super::train::PartIn],
+) -> Result<(), String> {
+    let Some(path) = flags.get("carries") else {
+        return Ok(());
+    };
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let carries: Vec<Carry> = serde_json::from_slice(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    let trains: u64 = need(flags, "trains-landed")?
+        .parse()
+        .map_err(|_| "--trains-landed is not a number".to_owned())?;
     for p in parts.iter_mut().filter(|p| p.receipt.head != p.head) {
-        p.receipt.carried = carries
+        let found = carries
             .iter()
-            .find(|c| c.new_head == p.head && c.old_head == p.receipt.head)
-            .cloned();
+            .find(|c| c.new_head == p.head && c.old_head == p.receipt.head);
+        if let Some(c) = found {
+            let d = evidence_git::assess(repo, &c.evidence, base, &p.head, trains)?;
+            if matches!(
+                (&d.accept, &d.ci),
+                (Accept::Carried { .. }, Ci::Carried { .. })
+            ) {
+                p.receipt.carried = Some(c.clone());
+            }
+        }
     }
+    Ok(())
 }

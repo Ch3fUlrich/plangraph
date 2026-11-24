@@ -5,3 +5,5 @@ red required CI merge.
 The patch identity keeps whitespace, main's touched paths come from its commits (a touch and a revert still
 voids), a verified carry is persisted (`--carry-out`) and consumed by `land-train build --carries`, and the
 log counts each rebase once per batch and head with the landed batches as denominator.
+A carry is assessed again at admission against the build base and the landed trains, merges count by what
+they changed against main, and only a head that does not contain the old one counts as a rebase.

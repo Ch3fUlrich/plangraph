@@ -16,27 +16,41 @@ fn paths_between(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, S
     .collect())
 }
 
-/// Paths any commit of `from..to` touched, merges included: a path touched and reverted still counts,
-/// which two endpoint trees would miss.
+/// Paths any commit of `from..to` touched: every commit that brought a change in, and a merge by what it
+/// changed against its first parent (main as it was). A path touched and reverted still counts, which two
+/// endpoint trees would miss, and what main already held before `from` does not.
 fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, String> {
     let range = format!("{from}..{to}");
-    Ok(git::out(
-        dir,
-        &[
-            "log",
-            "-m",
-            "--no-renames",
-            "--name-only",
-            "--format=",
-            "--end-of-options",
-            &range,
-            "--",
-        ],
-    )?
-    .lines()
-    .filter(|l| !l.is_empty())
-    .map(str::to_owned)
-    .collect())
+    let list = |kind: &str, diff: &str| {
+        git::out(
+            dir,
+            &[
+                "log",
+                kind,
+                diff,
+                "--no-renames",
+                "--name-only",
+                "--format=",
+                "--end-of-options",
+                &range,
+                "--",
+            ],
+        )
+    };
+    let commits = list("--no-merges", "--diff-merges=off")?;
+    let merges = list("--merges", "--diff-merges=first-parent")?;
+    Ok(commits
+        .lines()
+        .chain(merges.lines())
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Whether `new_head` is a rewrite of `old_head`: a different commit that does not contain it. A commit on
+/// top of the old head, or a merge of main into it, is not a rebase.
+pub fn was_rebased(dir: &Path, old_head: &str, new_head: &str) -> Result<bool, String> {
+    Ok(old_head != new_head && !git::is_ancestor(dir, old_head, new_head)?)
 }
 
 /// The identity of the diff `from..to` that keeps every byte of content, whitespace included (`git

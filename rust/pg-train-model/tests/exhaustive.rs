@@ -50,6 +50,7 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
                 Event::Conflict { train, part },
                 Event::Adopt { train, part },
                 Event::VerifyLeftOut { train, part },
+                Event::OmitLeftOut { train, part },
                 Event::RecordLeftOut {
                     train,
                     part,

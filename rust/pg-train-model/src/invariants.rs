@@ -1,6 +1,14 @@
 //! The relations that must hold after every event.
 use super::*;
 
+/// The red rounds the lineage of a retry group had before it.
+fn lineage_round(t: &Train) -> u8 {
+    match t.kind {
+        Kind::Retry { round, .. } => round,
+        _ => 0,
+    }
+}
+
 impl Model {
     pub fn invariants_hold(&self) -> bool {
         self.membership_holds()
@@ -47,7 +55,7 @@ impl Model {
                     && (!t.landed || t.ci == Ci::Green && t.bound && t.checked && t.tested == Some(t.tree))
                     && (t.ci != Ci::Running || t.sealed && t.bound)
                     // Fixing in place ends with the second red round.
-                    && (t.closed || t.ci != Ci::Red || t.red_rounds < 2)
+                    && (t.closed || t.ci != Ci::Red || t.red_rounds + lineage_round(t) < 2)
             })
             && self.trains.iter().filter(|t| t.landed).count() <= self.main as usize
     }
