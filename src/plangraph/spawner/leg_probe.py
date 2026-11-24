@@ -275,12 +275,12 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             async def launch():
                 from .probe_cleanup import OWNED
                 OWNED.set(owned_ids)
+                # A Codex writer commits only where its sandbox may write the git dir (as pg-spawnd grants it).
                 return await runner.spawn(
                     prompt=REVIEW_PROMPT if review_mode else PROMPT,
                     role='review' if review_mode else 'implement',
                     model_or_combo=leg.model,
                     client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
-                    # A Codex writer commits only where its sandbox may write the git dir (as pg-spawnd grants it).
                     writable_dirs=[str(Path(root) / '.git')] if leg.harness == 'codex' and not review_mode else (),
                     watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
                                   max_s=timeout + 60, interval=1))
