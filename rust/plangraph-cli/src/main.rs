@@ -141,6 +141,19 @@ fn run() -> i32 {
             }
         };
     }
+    if args.first().is_some_and(|s| s == "baseline") {
+        return match std::process::Command::new("pg-telemetry")
+            .envs(&effective)
+            .args(&args[1..])
+            .status()
+        {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(error) => {
+                eprintln!("baseline: cannot start pg-telemetry: {error}");
+                1
+            }
+        };
+    }
     if args.first().is_some_and(|s| s == "feed") {
         return feeder::run(&home, &effective, &args[1..]);
     }
