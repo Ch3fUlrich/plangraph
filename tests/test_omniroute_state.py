@@ -265,3 +265,7 @@ def test_from_env_management_401_403_raises_auth_refused(status):
     with pytest.raises(OmniRouteAuthRefused, match="auth_refused") as error:
         reader.snapshot()
     assert "mgmt-secret" not in str(error.value)
+
+
+def test_valid_empty_connection_list_is_an_empty_snapshot_not_bad_data():
+    assert Harness(payload()).reader.snapshot() == {}

@@ -94,6 +94,28 @@ def _normalize_gateway_url(url: str) -> str:
     return urllib.parse.urlunsplit((p.scheme, p.netloc, path, "", ""))
 
 
+def configured_gateway_url(providers: dict, env) -> str | None:
+    """Gateway endpoint a child config resolves to, in the launcher's precedence.
+
+    The configured omniroute endpoint comes first, then the environment overrides,
+    then the omniroute ``options`` endpoint; invalid candidates are skipped.
+    Admission probes use this same resolution so they test the URL the launch uses.
+    """
+    omniroute = providers.get("omniroute")
+    child_settings = omniroute.get("settings") if isinstance(omniroute, dict) else None
+    child_options = omniroute.get("options") if isinstance(omniroute, dict) else None
+    for cand in (
+        child_settings.get("baseURL") if isinstance(child_settings, dict) else None,
+        env.get("OMNIROUTE_BASE_URL"),
+        env.get("PLANGRAPH_GATEWAY_URL"),
+        env.get("AUTOOS_OMNIROUTE_URL"),  # transitional: drop with AO-SPAWNER-REMOVE (D-2800)
+        child_options.get("baseURL") if isinstance(child_options, dict) else None,
+    ):
+        if isinstance(cand, str) and cand.strip() and _is_valid_url(cand):
+            return _normalize_gateway_url(cand)
+    return None
+
+
 def _mimo_template() -> dict[str, Any]:
     return {
         "package": "@opencode/ai/providers/openai-compatible",
@@ -170,20 +192,7 @@ def render_gateway_providers(
 
     # Step 4: Honour the already-configured child endpoint before env fallbacks.
     # Read the parsed config directly: no clients import or eager fallback call.
-    omniroute = providers.get("omniroute")
-    child_settings = omniroute.get("settings") if isinstance(omniroute, dict) else None
-    child_options = omniroute.get("options") if isinstance(omniroute, dict) else None
-    resolved_url = None
-    for cand in (
-        child_settings.get("baseURL") if isinstance(child_settings, dict) else None,
-        env.get("OMNIROUTE_BASE_URL"),
-        env.get("PLANGRAPH_GATEWAY_URL"),
-        env.get("AUTOOS_OMNIROUTE_URL"),  # transitional: drop with AO-SPAWNER-REMOVE (D-2800)
-        child_options.get("baseURL") if isinstance(child_options, dict) else None,
-    ):
-        if isinstance(cand, str) and cand.strip() and _is_valid_url(cand):
-            resolved_url = _normalize_gateway_url(cand)
-            break
+    resolved_url = configured_gateway_url(providers, env)
 
     containers = [providers]
     singular = config.get("provider")

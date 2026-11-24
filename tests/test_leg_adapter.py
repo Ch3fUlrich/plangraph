@@ -523,3 +523,50 @@ def test_tcp_gateway_probe_refuses_a_closed_port():
         assert leg_state.tcp_gateway_probe('http://127.0.0.1:8080/v1') is True
     finally:
         _socket.create_connection = real
+
+
+def providers_file(tmp_path, text):
+    path = tmp_path / 'providers.json'
+    path.write_text(text)
+    return path
+
+
+MIMO_ROOT = ('{"providers": {"mimo": {"settings": {"baseURL": "http://127.0.0.1:8080/v1"}},'
+             ' "omniroute": {"settings": %s}}}')
+
+
+def test_gateway_url_follows_the_launcher_endpoint_for_gateway_providers(tmp_path):
+    cfg = providers_file(tmp_path, MIMO_ROOT % '{}')
+    env = {'OMNIROUTE_BASE_URL': 'http://host-a.example:9000'}
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', cfg, env) == 'http://host-a.example:9000/v1'
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', cfg, {}) == 'http://127.0.0.1:8080/v1'
+    # The configured omniroute endpoint outranks the environment, as in the launcher.
+    cfg = providers_file(tmp_path, MIMO_ROOT % '{"baseURL": "http://cfg.example:1/v1"}')
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', cfg, env) == 'http://cfg.example:1/v1'
+
+
+@pytest.mark.parametrize('text', ['{not json', '{"providers": []}', '{"providers": {"mimo": 5}}',
+                                  '{"providers": {"mimo": {"settings": {"baseURL": 5}}}}',
+                                  '{"providers": {"mimo": {"settings": {"baseURL": "not a url"}}}}'])
+def test_gateway_url_survives_malformed_provider_config(tmp_path, text):
+    assert leg_state.gateway_url('mimo/mimo-v2.6-pro', providers_file(tmp_path, text), {}) is None
+
+
+def test_tcp_gateway_probe_does_not_raise_on_an_invalid_port():
+    assert leg_state.tcp_gateway_probe('http://127.0.0.1:99999/v1') is False
+
+
+def test_gateway_leg_with_a_known_alias_pool_does_not_borrow_another_pool(tmp_path):
+    pools = {'codex': SimpleNamespace(available=False, stale=False, reason='inactive', until=''),
+             'deepseek': UPSTREAM['deepseek']}
+    reader = gateway(tmp_path, ('omniroute/cx-gpt-6-luna',), pools)
+    assert reader('omniroute/cx-gpt-6-luna')['reason'] == 'provider_inactive'
+    reader = gateway(tmp_path, ('omniroute/cx-gpt-6-luna',), {'deepseek': UPSTREAM['deepseek']})
+    assert reader('omniroute/cx-gpt-6-luna')['reason'] == 'unreachable'
+
+
+def test_empty_provider_list_is_down_unreachable_not_a_fallback_trigger(tmp_path):
+    from plangraph.routing_support.leg_state_flag import _needs_fallback
+    status = gateway(tmp_path, ('omniroute/deepseek-v4.1-flash',), {})('omniroute/deepseek-v4.1-flash')
+    assert (status['state'], status['reason']) == ('down', 'unreachable')
+    assert not _needs_fallback(status)
