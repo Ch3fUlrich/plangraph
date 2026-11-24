@@ -364,3 +364,40 @@ fn a_plain_state_wait_unit_name_is_not_needed_for_other_units() {
     let needs = plan("a.service", dir.path(), None).unwrap();
     assert!(needs.programs.is_empty());
 }
+
+#[test]
+fn relative_paths_of_the_state_shadow_configuration_start_at_the_working_directory_of_the_service()
+{
+    let unit = "[Service]\nWorkingDirectory=%h/work\nEnvironmentFile=%h/.config/p/e.env\nExecStart=%h/.local/bin/plangraph state wait --role routing\n";
+    let dir = units(&[("sh.service", unit)]);
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path().display();
+    put(home.path(), ".local/bin/plangraph", "", 0o755);
+    put(
+        home.path(),
+        ".config/p/e.env",
+        &format!("PG_URL=http://k\nPG_TOKEN_FILE={h}/token\nPLANGRAPH_STATE_CONFIG={h}/c.json\n"),
+        0o600,
+    );
+    put(home.path(), "token", "x", 0o600);
+    let config = format!(
+        "{{\"role\":\"routing\",\"principal\":\"p\",\"directory\":\"{h}/state\",\"inbox\":\"{h}/inbox\",\
+         \"transcript\":\"rel/session.jsonl\",\"session_id\":\"session\",\"data_repo\":\"rel/data\",\
+         \"decision_base\":\"{}\",\"github_repo\":\"example/demo\",\"github_since\":\"2026-01-01T00:00:00Z\",\
+         \"quota\":\"{h}/quota.json\"}}",
+        "a".repeat(40)
+    );
+    put(home.path(), "c.json", &config, 0o600);
+    fs::create_dir_all(home.path().join("work")).unwrap();
+    let needs = plan("sh.service", dir.path(), None).unwrap();
+    // Files that exist in the home directory, not in the service's working directory, do not count.
+    put(home.path(), "rel/session.jsonl", "", 0o600);
+    fs::create_dir_all(home.path().join("rel/data")).unwrap();
+    assert_eq!(
+        missing(&needs, home.path()),
+        ["path ~/work/rel/data", "path ~/work/rel/session.jsonl"]
+    );
+    put(home.path(), "work/rel/session.jsonl", "", 0o600);
+    fs::create_dir_all(home.path().join("work/rel/data")).unwrap();
+    assert!(missing(&needs, home.path()).is_empty());
+}
