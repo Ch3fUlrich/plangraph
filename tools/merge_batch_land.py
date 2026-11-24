@@ -66,11 +66,16 @@ HEAD_LINE = re.compile(r"HEAD: ([0-9a-fA-F]{40})")
 PASS_LINES = ("VERDICT: PASS", "VERDICT: pass")
 
 
+#: The deploy rule of a keeper schema rise, in the PR body and the GO-REQ: a plain restart leaves the keeper down.
+MIGRATION_DEPLOY = ("keeper deploy: plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE, "
+                    "never a plain restart")
+
+
 def cell(text):
     return str(text).replace("|", "\\|").replace("\n", " ").strip()
 
 
-def render_body(st):
+def render_body(st, migration=None):
     rows = ["| PR | Plan-Item | Head | Merge | Title |", "|---|---|---|---|---|"]
     for rec in st["merged"]:
         pr = st["prs"][str(rec["pr"])]
@@ -81,6 +86,8 @@ def render_body(st):
                     f"`{short(rec['merge'])}` | {title} |")
     body = [f"Merge batch `{st['name']}` into `{st['base']}`: {len(st['merged'])} PRs, merged with `--no-ff` "
             "in this order.", "", *rows, "", go_key_block(st)]
+    if migration is not None:
+        body += ["", f"MIGRATION {migration}", MIGRATION_DEPLOY]
     if st.get("dropped"):
         body += ["", "Dropped after merge: " + ", ".join(f"#{p['pr']}" for p in st["dropped"])]
     if st["skipped"]:
@@ -134,7 +141,7 @@ def cmd_push(args):
     workflow = Path(wt, ".github/workflows/tests.yml")
     if workflow.is_file():   # a red Windows run refuses the push before anything leaves the machine
         windows_gate(st, workflow.read_text(encoding="utf-8"))
-    body_text = render_body(active)
+    body_text = render_body(active, keeper_migration(active))
     git("push", REMOTE, f"refs/heads/{st['branch']}:refs/heads/{st['branch']}", cwd=wt)
     if keeper_landing_configured():
         record_stage(st["repo"], landing_batch_key(st), "push", head, started)
@@ -779,8 +786,7 @@ def cmd_go_req(args):
     deviations += st.get("forced", [])
     deviation = "; ".join(deviations) or "none"
     version = keeper_migration(st)
-    migration = (f"MIGRATION {version}; keeper deploy: plangraph keeper-restart CHECKOUT KEEPER_CONFIG "
-                 "MIGRATION_DSN_FILE, never a plain restart; " if version is not None else "")
+    migration = f"MIGRATION {version}; {MIGRATION_DEPLOY}; " if version is not None else ""
     summary = landing_report(st).get("summary") if keeper_landing_configured() else None
     timeline = f"timeline: {summary}; " if summary else ""
     line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
