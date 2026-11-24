@@ -42,7 +42,7 @@ from .evidence_decisions import decision_book, decisions_naming
 from .evidence_pr import landing_record
 from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
-from .item_fields import PREMISE_FIELDS
+from .item_fields import PREMISE_FIELDS, premise_texts
 from .schema import DEFINITION_EVENTS
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
@@ -82,9 +82,18 @@ def _premise_ids(payload):
     ``category``, ``supersedes``) cannot carry an id into the watermark.
     """
     after = payload.get("after")
-    after = after if isinstance(after, dict) else {}
-    return src.decision_ids(*(payload.get(name) for name in PREMISE_FIELDS),
-                            *(after.get(name) for name in PREMISE_FIELDS))
+    return src.decision_ids(*premise_texts(payload),
+                            *premise_texts(after if isinstance(after, dict) else {}))
+
+
+def _changes_premise(kind, payload):
+    """Does this definition event create the item or change one of its premise fields?
+
+    An edit that touches only other fields (``depends_on``, a tier, a host) leaves the
+    premise the item was last read against: it must not move the watermark anchor.
+    """
+    return kind == "item_created" or bool(
+        set(payload.get("fields") or ()) & set(PREMISE_FIELDS))
 
 
 def _graph(index):
@@ -142,9 +151,13 @@ class ContextMixin:
 
         ``marks[i]`` is the highest D-id cited in the premise fields of any item
         definition up to ``seqs[i]`` (:func:`_premise_ids`: never metadata such
-        as ``session``); ``last`` maps a key to its newest definition seq;
-        ``reconfirmed`` maps a key to the highest decision a ``premise_reconfirmed``
-        event named for it, the per-item floor every claim path reads.  Kept on
+        as ``session``); ``last`` maps a key to the seq of its creation or last premise
+        change, the anchor of its fallback watermark (a metadata-only edit never moves
+        it; an event that lacks premise text raises nothing and is never filled from the
+        item's current text); ``reconfirmed`` maps a key to the highest decision a
+        ``premise_reconfirmed`` event named for it, the per-item floor every claim path
+        reads.  A later premise change of the key clears its floor: the router read the
+        premise as it was then.  Kept on
         the store and rebuilt whenever the (count, max, sum of seq) of these
         events changes, so a rollback or an out-of-order commit never leaves
         it behind.
@@ -173,7 +186,9 @@ class ContextMixin:
                 mark = max(mark, _num(ids[-1]))
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
-            clock["last"][row["key"]] = row["seq"]
+            if _changes_premise(row["type"], payload):
+                clock["last"][row["key"]] = row["seq"]
+                clock["reconfirmed"].pop(row["key"], None)
         self._ctx_clock = clock
         return clock
 
@@ -195,7 +210,7 @@ class ContextMixin:
 
     @staticmethod
     def _texts(item):
-        return [item.get(name) for name in PREMISE_FIELDS]
+        return premise_texts(item)
 
     def _work(self, item, fetch, fresh_lanes=False):
         gitad = self._adapter("git")
@@ -513,6 +528,23 @@ class ContextMixin:
                           f"force_stale reason is over {FORCE_STALE_MAX} chars")
         return value.strip()
 
+    def _claim_book(self, shared):
+        """The decision book a claim enforces on: re-read, strict (an unreadable log refuses)."""
+        try:
+            if "book" not in shared:
+                adapter = self._adapter("decisions")
+                with timing.outside_request_lock():
+                    shared["book"] = timing.share_inflight(
+                        ("decisions", id(adapter)),
+                        lambda: src.decision_book(adapter, fresh=True),
+                        step="decision book",
+                    )
+        except src.DecisionsUnreadable:
+            timing.check_io_deadline("decision book")
+            path = getattr(self._adapter("decisions"), "_path", None)
+            raise Refused("bad_state", f"cannot read decisions file: {path}") from None
+        return shared["book"]
+
     def _claim_guard(self, item, reason, *, shared=None, stale_checks=True):
         """Refuse a stale claim with the facts, or return the override record."""
         reason = self._force_stale_reason(reason)
@@ -528,10 +560,11 @@ class ContextMixin:
                           + ", ".join(f"#{number}" for number in prs))
         unknown = [name for name, entry in indexes.items()
                    if entry and entry.get("prs_unverified")]
+        if "clock" not in shared:
+            shared["clock"] = self._decision_clock()
+        timing.check_io_deadline("decision clock")
+        book = self._claim_book(shared)           # the one fresh, strict read of every claim path
         if not stale_checks:
-            adapter = self._adapter("decisions")
-            with timing.outside_request_lock():
-                book = src.decision_book(adapter)
             work = self._indexed_delivery(indexes, item["key"], project, book)
             facts = []
             if work["commits"]:
@@ -539,34 +572,18 @@ class ContextMixin:
                 facts.append(f"already merged: {head.get('source', 'Plan-Item commit')} {head['sha'][:8]}")
             # A system lease skips the git freshness reads, never the premise: the
             # watermark, retired premises and floor are the ones an ordinary claim reads.
-            cited, _, newer, superseded = self._premise_state(item, book, self._decision_clock())
+            cited, _, newer, superseded = self._premise_state(item, book, shared["clock"])
             facts += self._premise_facts({d: superseded[d] for d in cited if d in superseded}, newer)
             override = self._stale_override(item["key"], reason, facts)
             if unknown:
                 raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
             return override
         index = self._item_neighborhood(item)
-        if "clock" not in shared:
-            shared["clock"] = self._decision_clock()
-        timing.check_io_deadline("decision clock")
-        try:
-            if "book" not in shared:
-                adapter = self._adapter("decisions")
-                with timing.outside_request_lock():
-                    shared["book"] = timing.share_inflight(
-                        ("decisions", id(adapter)),
-                        lambda: src.decision_book(adapter, fresh=True),
-                        step="decision book",
-                    )
-        except src.DecisionsUnreadable:
-            timing.check_io_deadline("decision book")
-            path = getattr(self._adapter("decisions"), "_path", None)
-            raise Refused("bad_state", f"cannot read decisions file: {path}") from None
         ctx = self._task_context(item, index, inputs={
-            "graph": _graph(index), "book": shared["book"], "clock": shared["clock"]}, git=False)
+            "graph": _graph(index), "book": book, "clock": shared["clock"]}, git=False)
         timing.check_io_deadline("task context")
         work_index = indexes[project]
-        ctx["work_exists"] = self._indexed_delivery(indexes, item["key"], project, shared["book"])
+        ctx["work_exists"] = self._indexed_delivery(indexes, item["key"], project, book)
         facts = self._claim_staleness(ctx)
         if work_index is not None and work_index.get("stale"):
             facts.append("work index unverified: " + work_index["reason"])
