@@ -39,6 +39,7 @@ import re
 
 from . import auth
 from .errors import Refused
+from .evidence_types import live_evidence_status
 from .store_outbox import _StoredReceipt
 from .store_waiver import _known_family
 
@@ -303,6 +304,20 @@ class ReviewMixin:
         return {"reviewer": principal.name,
                 "family": auth.norm_family(principal.family),
                 "ok": True, "epoch": item["epoch"], "round": item["round"]}
+
+    def _live_status(self, item, since=None):
+        """The code that holds ``item`` from closing (``live_evidence_status``), or ``None``."""
+        if not self.require_live_evidence:
+            return None
+        return live_evidence_status(item, self._evidence(item["key"]), since)
+
+    def _require_live_evidence(self, item):
+        """Every close path ends here (or in ``_pass``): the item went into production or says why it need not."""
+        code = self._live_status(item)
+        if code:
+            raise Refused("evidence_unverified",
+                          f"{code}: {item['key']} needs a verified deploy evidence row of its current epoch"
+                          " or a 'no deploy needed: <reason>' line (D-6790)")
 
     def _pass(self, principal, key, reason, item, now, reviews_passed, release=False, flags=None):
         """Write ``done`` (and lock it) plus ``review_passed``, under the lock.
