@@ -41,23 +41,55 @@ def test_daemon_writes_loaded_sha_pid_and_start_time(checkout, tmp_path, monkeyp
     assert path.stat().st_mode & 0o777 == 0o600
 
 
-def test_daemon_publishes_loaded_state_for_its_lifetime(tmp_path):
+@pytest.fixture
+def code_copy(tmp_path, monkeypatch):
+    """Run the daemon from a committed copy of src, so the result never depends on the
+    uncommitted state of the checkout the tests run in (dirty tree, nested worktree)."""
+    import test_keeper_daemon
+    repo = tmp_path / 'code'
+    shutil.copytree(test_keeper_daemon.SRC, repo / 'src',
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    git(repo, 'init', '-q', '-b', 'main')
+    git(repo, 'config', 'user.name', 'Fixture')
+    git(repo, 'config', 'user.email', 'fixture@example.invalid')
+    git(repo, 'add', '.')
+    git(repo, 'commit', '-q', '-m', 'loaded')
+    monkeypatch.setattr(test_keeper_daemon, 'SRC', repo / 'src')
+    return repo
+
+
+def published_row(tmp_path):
     from test_keeper_daemon import free_port, make_db_and_config, spawn, stop_daemon, wait_health
     port = free_port()
-    db, cfg = make_db_and_config(tmp_path, port)
+    run = tmp_path / 'run'
+    run.mkdir()  # the Postgres backend does not create it; keeper.json is written into it
+    db, cfg = make_db_and_config(run, port)
     path = db.with_name(db.name + '.loaded.json')
     process = spawn(cfg)
     try:
         assert wait_health(port, proc=process)['status'] == 'ok'
         row = json.loads(path.read_text())
         assert row['pid'] == process.pid
-        assert len(row['loaded_sha']) in (40, 64) and row['start_time'] > 0
         assert stop_daemon(process)[0] == 0
         assert not path.exists()
+        return row
     finally:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
+
+
+def test_daemon_publishes_loaded_state_for_its_lifetime(code_copy, tmp_path):
+    row = published_row(tmp_path)
+    assert row['loaded_sha'] == git(code_copy, 'rev-parse', 'HEAD')
+    assert row['dirty'] is False and row['start_time'] > 0
+
+
+def test_daemon_run_from_a_dirty_tree_publishes_no_sha(code_copy, tmp_path):
+    # Documented: an uncommitted change means no trusted sha (_loaded_identity.code_identity).
+    (code_copy / 'src/plangraph/keeper/daemon.py').write_text('# changed\n' + (code_copy / 'src/plangraph/keeper/daemon.py').read_text())
+    row = published_row(tmp_path)
+    assert row['loaded_sha'] is None and row['dirty'] is True
 
 
 @pytest.mark.parametrize('kind', ['dirty', 'detached', 'non-git', 'nested', 'skip-worktree', 'assume-unchanged'])

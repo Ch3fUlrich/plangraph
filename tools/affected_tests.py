@@ -427,11 +427,11 @@ def base_dependency_graph(root, base, head):
     return dependency_graph(texts)
 
 
-def selection_plan(selected, within, reason, *, bounded=False, priority=(), direct=()):
+def selection_plan(selected, within, reason, *, bounded=False, priority=(), direct=(), required=()):
     tests = filter_within(sorted(selected), within)
     plan = {"tests": tests, "reason": reason}
     if bounded and len(tests) > LOCAL_TEST_LIMIT:
-        ranked = sorted(tests, key=lambda path: (path not in priority, path not in direct, path))
+        ranked = sorted(tests, key=lambda path: (path not in required, path not in priority, path not in direct, path))
         plan["tests"] = sorted(ranked[:LOCAL_TEST_LIMIT])
         plan["ci_deferred"] = len(tests) - LOCAL_TEST_LIMIT
         plan["reason"] += "; additional files deferred to CI"
@@ -467,7 +467,7 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
     # Keep them outside affected-file selection, including docs-only local runs.
     selected = LOCAL_POLICY_TESTS.intersection(texts) if local else set()
     priority = LOCAL_POLICY_TESTS | set(changed)
-    direct = set()
+    required, direct = set(), set()  # required: ranked before everything under the local cap
     asset_cache = {}
     base_reverse = None
     for path in changed:
@@ -476,7 +476,7 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
                 or path.startswith('tests/') and path.endswith('.py')):
             guard = 'tests/test_spawner_import_guard.py'
             if guard in texts:
-                selected.add(guard)
+                selected.add(guard); required.add(guard)
         def fallback(reason):
             return {"tests": filter_within(["tests"], within), "reason": reason + ": " + path}
         p = Path(path)
@@ -568,7 +568,7 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
     reason = "reverse imports and explicit file references"
     if bounded and not keep_local_bound and any(path.startswith(UNBOUNDED_PREFIXES) for path in changed):
         bounded, reason = False, reason + "; spawner/planner core change, no local bound"
-    return selection_plan(selected, within, reason, bounded=bounded, priority=priority, direct=direct)
+    return selection_plan(selected, within, reason, bounded=bounded, priority=priority, direct=direct, required=required)
 
 
 def changed_files(root, base, head=None):
