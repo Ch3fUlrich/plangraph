@@ -44,7 +44,7 @@ predecessor.
   retry group of seven runs although no ordinary part is due, a legacy settled train whose child waits for
   the verified outcome, the child of a reverted part refused at registration and at build, a stack of three
   or more dropped or reverted while held, a restart that keeps deferral age and red rounds.
-- `tests/exhaustive.rs`: every ordering of the alphabet to depth 7 from three starting points (a fresh model, a train under test with a part waiting, two parts under test) over four parts (a stack of three with
+- `tests/exhaustive.rs`: every ordering of the alphabet to depth 6 from three starting points (a fresh model, a train under test with a part waiting, two parts under test) over four parts (a stack of three with
   an overlap, and an independent part), under policy (a), policy (b) and the default.
 - `tests/replay.rs`: replay of trains 9 to 16 (`fixtures/trains_9_16.json`, 52 batches from git history;
   ready = committer time of the batch head, paths = indices of the files of its own diff). The ignored test
@@ -87,9 +87,14 @@ fast-forward in place of being rebuilt.
 
 Ruling D-6840 (routing, an EXPERIMENT): option (b) with k = 2 in tested fast-forward, option (a) with k = 2
 in pull request merge mode (the live path, rule 3.44 (3)); `Policy::stale_k` is k, coded by `Policy::landing`.
-In tested fast-forward a retry train rebuilt twice is not rebuilt a third time (`Denied::StaleBound`): its
-green result lands on the main as it is now (`Model::stale_landings`). In pull request merge mode, once the
-live retry train was rebuilt twice an ordinary selection runs beside it. `stale_k` 0 (`without_stale_bound`)
+In tested fast-forward a retry train rebuilt twice because its base went stale is not rebuilt a third time
+(`Denied::StaleBound`): its green result lands on the main as it is now (`Model::stale_landings`), but only
+when what main gained since its tested base touches none of its paths (`Event::MainMove { paths }` and the
+landings carry theirs), so the tested tree is what a fast-forward of the current main would hold; a move
+that touches them makes a rebuild necessary and it is not refused. Rebuilds on an unchanged base do not
+count. In pull request merge mode, once the live retry train was rebuilt twice an ordinary selection runs
+beside it; that ordinary train goes on after the retry train closes, and the queued retry groups start when
+it has landed or gone red. `stale_k` 0 (`without_stale_bound`)
 is the plain per-group bound; the test `with_the_plain_per_group_bound_main_moves_restart_a_retry_train_without_end_*`
 keeps the three moves of main giving four runs under it.
 

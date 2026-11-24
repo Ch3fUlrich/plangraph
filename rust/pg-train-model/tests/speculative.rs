@@ -58,7 +58,7 @@ fn a_candidate_whose_predecessor_is_no_longer_mains_tip_is_discarded() {
             ci(&mut m, 0, true);
             ok(&mut m, Event::Settle { train: 0 });
         }
-        ok(&mut m, Event::MainMove);
+        ok(&mut m, Event::MainMove { paths: 0 });
         assert!(m.train_closed(1));
         assert_eq!((m.status(2), m.status(3)), (Status::Ready, Status::Ready));
         assert_eq!(denied(&mut m, Event::Promote { train: 1 }), Denied::Phase);

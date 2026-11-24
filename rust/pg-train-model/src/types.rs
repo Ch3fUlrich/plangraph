@@ -112,6 +112,12 @@ pub(crate) struct Train {
     pub rebuilds: u8,
     /// Landed on a main that had moved since its tested base (D-6840).
     pub stale_landed: bool,
+    /// The paths main's moves changed between its tested base and its landing.
+    pub stale_over: u16,
+    /// An ordinary train cut beside a retry train that hit its rebuild bound (pull request merge).
+    pub beside: bool,
+    /// The wait and deferral count of every ready part when the train was cut.
+    pub captured: Vec<(PartId, u8, u8)>,
     /// `VerifyComplete` accepted this exact membership, reasons and tree.
     pub checked: bool,
     /// Landed, closed by a red CI, or discarded.
@@ -258,7 +264,10 @@ pub enum Event {
     Readmit {
         part: PartId,
     },
-    MainMove,
+    /// Main moves by a commit that changes these paths (a bit set; 0 touches no part).
+    MainMove {
+        paths: u16,
+    },
     /// The builder restarts: what is in the landing journal stays, an open train must be bound again.
     Restart,
     /// Build the next candidate on the unlanded `pred` and test it meanwhile.
@@ -355,6 +364,9 @@ impl Train {
             run: 0,
             rebuilds: 0,
             stale_landed: false,
+            stale_over: 0,
+            beside: false,
+            captured: Vec::new(),
             checked: false,
             closed: false,
             landed: false,

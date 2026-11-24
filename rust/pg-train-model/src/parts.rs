@@ -200,6 +200,7 @@ impl Model {
         }
         let all: Vec<PartId> = (0..self.parts.len() as PartId).collect();
         let family = self.with_descendants(part, &all);
+        let paths = self.paths_of(&family);
         // A child in a running train waits for that train; one in an open train leaves it.
         let sealed = |p: &PartId| match self.parts[*p as usize].status {
             Status::InTrain(t) => self.trains[t as usize].sealed,
@@ -224,7 +225,7 @@ impl Model {
             self.parts[p as usize].reverted |= s == Status::Landed;
         }
         self.cascade_drops();
-        self.bump_main();
+        self.bump_main(paths);
         Ok(Outcome::Dropped)
     }
 

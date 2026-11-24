@@ -12,6 +12,19 @@ impl Model {
         p.waited >= policy.bound || (policy.order == Order::Count && p.deferrals > policy.due_after)
     }
 
+    /// The recorded wait is the wait the selection captured, and the part was not due then.
+    fn matches_capture(&self, t: &Train, part: PartId, waited: u8) -> bool {
+        match t.captured.iter().find(|c| c.0 == part) {
+            Some(&(_, was, deferrals)) => {
+                let policy = &self.policy;
+                waited == was
+                    && was < policy.bound
+                    && !(policy.order == Order::Count && deferrals >= policy.due_after)
+            }
+            None => true,
+        }
+    }
+
     fn descends_from(&self, mut part: PartId, of: PartId) -> bool {
         while let Some(q) = self.parts[part as usize].spec.parent {
             if q == of {
@@ -39,6 +52,7 @@ impl Model {
                         && overlap(&p.spec, &self.parts[with as usize].spec)
                         && waited < self.policy.bound
                         && !self.due_now(p)
+                        && self.matches_capture(t, part, waited)
                 }
                 Disposition::ParentNotLanded { parent } => {
                     p.spec.parent == Some(parent)

@@ -76,7 +76,12 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
             need(flags, "day")?,
             need(flags, "batch")?,
             head,
-            evidence_git::was_rebased(Path::new(need(flags, "repo")?), &old.head, head)?,
+            evidence_git::was_rebased(
+                Path::new(need(flags, "repo")?),
+                &old,
+                need(flags, "main")?,
+                head,
+            )?,
         );
         append(out, &records)?;
     }
@@ -193,15 +198,17 @@ fn store_carry(path: &str, new_head: &str, carry: Option<Carry>) -> Result<(), S
         .map_err(|e| format!("{path}: {e}"))
 }
 
-/// A part whose receipt names an older head takes its carry only if the evidence still carries when
-/// assessed against the base the train is built on and the trains landed now: the same decision
-/// `evidence-assess` makes, taken again at admission.
+/// Parts as read from `--parts` carry nothing of their own: a carry embedded in the file is dropped, and a
+/// part whose receipt names an older head takes a carry only if the evidence still carries when assessed
+/// against the base the train is built on and the trains landed now: the same decision `evidence-assess`
+/// makes, taken again at admission, for every command that reads parts.
 pub(super) fn admit_carries(
     repo: &Path,
     base: &str,
     flags: &BTreeMap<String, String>,
     parts: &mut [super::train::PartIn],
 ) -> Result<(), String> {
+    parts.iter_mut().for_each(|p| p.receipt.carried = None);
     let Some(path) = flags.get("carries") else {
         return Ok(());
     };

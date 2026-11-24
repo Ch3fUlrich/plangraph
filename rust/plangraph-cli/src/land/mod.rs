@@ -11,6 +11,8 @@ mod deploy_probe;
 mod deploy_tests;
 pub mod evidence;
 mod evidence_cli;
+#[cfg(test)]
+mod evidence_cli_tests;
 mod evidence_git;
 #[cfg(test)]
 mod evidence_git_tests;

@@ -49,7 +49,10 @@ impl Model {
             // Retry precedence: nothing else is open while retry work is pending or running.
             && (ordinary + spec == 0
                 || (retry == 0 && self.groups.is_empty())
-                || self.retry_beside())
+                || self.retry_beside()
+                // An ordinary train cut beside a retry train goes on after that one closes; the queued
+                // groups start when it has landed or gone red.
+                || self.trains.iter().filter(|t| !t.closed && t.kind == Kind::Ordinary).all(|t| t.beside))
             && self.trains.iter().all(|t| {
                 (!t.sealed || t.parts == t.frozen)
                     && (t.kind != Kind::Ordinary || t.parts.len() <= self.policy.target as usize)
@@ -58,16 +61,13 @@ impl Model {
                     && (t.ci != Ci::Running || t.sealed && t.bound)
                     // Fixing in place ends with the second red round.
                     && (t.closed || t.ci != Ci::Red || t.red_rounds + lineage_round(t) < 2)
-                    // The stale bound (D-6840): tested fast-forward never rebuilds a retry train a third time,
-                    // and only such a train lands stale.
-                    && (self.policy.stale_k == 0
-                        || self.policy.landing != Landing::TestedFf
-                        || !matches!(t.kind, Kind::Retry { .. })
-                        || t.rebuilds <= self.policy.stale_k)
+                    // A stale landing (D-6840) is a retry train in tested fast-forward, rebuilt `stale_k`
+                    // times, over moves of main that touched none of its paths.
                     && (!t.stale_landed
                         || matches!(t.kind, Kind::Retry { .. })
                             && self.policy.landing == Landing::TestedFf
-                            && t.rebuilds >= self.policy.stale_k)
+                            && t.rebuilds >= self.policy.stale_k
+                            && t.stale_over & self.paths_of(&t.parts) == 0)
             })
             && self.trains.iter().filter(|t| t.landed).count() <= self.main as usize
     }
