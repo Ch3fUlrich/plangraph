@@ -21,6 +21,8 @@ pub struct Candidate {
     pub name: String,
     /// SSH destination; `None` runs on this host.
     pub route: Option<String>,
+    /// WSL distribution on a Windows SSH host.
+    pub wsl_distro: Option<String>,
     /// Checkout the command runs in.
     pub cwd: String,
     pub mem_floor_mb: u64,
