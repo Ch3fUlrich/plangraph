@@ -1,0 +1,1 @@
+- `plangraph router ruling-row ROW.txt` refuses a decision row or proposal that states a `cause:`, `size:` or `time:` without a `Measured:` line holding our own numbers and their source (rule 4.02); the router and oversight skills run it before a ruling is logged.
