@@ -379,3 +379,17 @@ def test_the_leading_go_head_is_read_by_one_helper():
     assert _go_leading_head("GO `deadbeef12` demo:A") == "deadbeef12"
     assert _go_leading_head("GO #31 demo:A") is None
     assert _go_leading_head("GO abc") is None
+
+
+def test_a_go_row_for_the_landed_pr_but_another_head_is_not_recorded(env, tmp_path):
+    ci, path = forge(env, tmp_path)
+    env.store.merge_close_decision = STANDING
+    head, _ = land_merge(env, ci, "A", 31, "a")
+    other = "e" * 40
+    assert other != head
+    path.write_text(ROWS.format(head=other, key="A"), encoding="utf-8")
+    result = env.store.close_merged_auto(env.p("system"))
+    assert [c["key"] for c in result["closed"]] == ["demo:A"]   # a gap is flagged, never a refusal
+    landing = evidence(env, "demo:A")["landing"]
+    assert landing["go_rows"] == []
+    assert landing["flags"]["go_row_missing"] == {"prs": [31]}

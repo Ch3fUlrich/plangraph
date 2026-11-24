@@ -605,10 +605,12 @@ class ContextMixin:
             statement = go_statement(snapshot["texts"].get(did))
             if statement is None or not names_item(statement, item["key"]):
                 continue
-            pr = next((found for found, _ in (go_binding(statement, p) for p in sorted(projects)) if found), None)
+            pr, head = next((b for b in (go_binding(statement, p) for p in sorted(projects)) if b[0]), (None, None))
             bound = go_leading_head(statement)
+            # A row bound to a PR counts only for the PR that merged with exactly that head.
             rows += [{"decision_id": did, "pr": p["pr"]} for p in proofs
-                     if p["pr"] == pr or (pr is None and bound and p["head"].startswith(bound.lower()))]
+                     if (pr is not None and p["pr"] == pr and p["head"].startswith(head))
+                     or (pr is None and bound and p["head"].startswith(bound.lower()))]
         return rows
 
     @staticmethod
