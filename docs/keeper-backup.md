@@ -27,6 +27,9 @@ The values live in `~/.config/plangraph/keeper-backup.env` (mode `0600`, templat
 
 ## Install (keeper host, after the merge)
 
+The crate marks `pg-keeper-backup` as `optional-host-binaries` in its `[package.metadata.plangraph]`, so
+`host-sync --install-release REPO --with-keeper-backup` installs it with the other host binaries.
+
 Step 1, install the files (nothing runs yet):
 
 ```sh
