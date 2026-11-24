@@ -401,6 +401,24 @@ fn invalid_policy_refuses_before_resource_checks() {
     }
 }
 
+/// Batching is reachable live: the shipped policy holds more than one item per run, is a valid
+/// policy, and the unit hands exactly that file to the feeder.
+#[test]
+fn shipped_policy_batches_and_the_unit_passes_it() {
+    let p: Policy = toml::from_str(include_str!("../../../deploy/feeder/policy.toml")).unwrap();
+    assert!(
+        p.batch_max_items > 1,
+        "batch_max_items stays 1: batching unreachable live"
+    );
+    assert_eq!(admit(&facts(), &p), Admission::Admit);
+    let unit = include_str!("../../../deploy/systemd/pg-feeder.service");
+    let exec = unit.lines().find(|l| l.starts_with("ExecStart=")).unwrap();
+    assert!(
+        exec.contains("--policy deploy/feeder/policy.toml"),
+        "{exec}"
+    );
+}
+
 #[test]
 fn shipped_policy_preserves_host_caps_and_admission_floors() {
     let p: Policy = toml::from_str(include_str!("../../../deploy/feeder/policy.toml")).unwrap();

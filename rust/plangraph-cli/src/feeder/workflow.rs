@@ -109,10 +109,46 @@ fn with_failures(reason: String, failures: &[(String, String)]) -> String {
         format!("{reason}; release of {key} failed: {error}")
     })
 }
+/// The run's name part: the first item's key after the namespace, as a file-safe lower-case slug.
+/// Items of concurrent runs are claimed exclusively, so each run's first key, and this slug, is
+/// its own.
+fn run_slug(items: &[Task]) -> String {
+    let slug: String = items[0]
+        .key
+        .rsplit(':')
+        .next()
+        .unwrap_or("batch")
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        "batch".into()
+    } else {
+        slug
+    }
+}
+/// The status file of one run, directly inside the review directory. The card carries it as
+/// `writer_status_path` (the native writer host records it) and the brief quotes it as
+/// STATUS_FILE, so a run never reads or writes another run's DONE lines.
+fn status_path(items: &[Task], reviews: &str) -> String {
+    format!(
+        "{}/status-{}.txt",
+        reviews.trim_end_matches('/'),
+        run_slug(items)
+    )
+}
 /// The card and brief of one writer run for `items`: the plain item card for one item, the
 /// first item's card with every key and the union of the files for a batch.
 fn batch_card(items: &[Task], repo: &str, reviews: &str, policy: &Policy) -> Value {
     let mut c = card(&items[0], repo, reviews, policy);
+    c["writer_status_path"] = json!(status_path(items, reviews));
     if items.len() > 1 {
         let mut files: Vec<&String> = items.iter().flat_map(|t| &t.files).collect();
         files.sort();
@@ -146,16 +182,11 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
         .collect();
     trailers.push(WRITER_TRAILER.into());
     trailers.push("Changelog: a changelog.d/<ITEM>.md fragment, or a Changelog: skip (<reason>) trailer on every commit without one".into());
-    let slug = items[0]
-        .key
-        .rsplit(':')
-        .next()
-        .unwrap_or("batch")
-        .to_ascii_lowercase();
+    let slug = run_slug(items);
     let input = json!({"items":named, "run":{
         "name":format!("feeder-{slug}"), "worktree":"the run worktree (the current directory)",
         "base":"origin/main at launch", "writer_family":"gpt",
-        "status_file":format!("{}/status.txt", reviews.trim_end_matches('/')),
+        "status_file":status_path(items, reviews),
         "fast_checks":["python3 tools/affected_tests.py --base origin/main --head HEAD --local --files-only --run -n 2",
             "python3 tools/preflight.py --base origin/main --head HEAD --lane"],
         "review_cmd":"the native worker starts the review of another family on the exact head",
