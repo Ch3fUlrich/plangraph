@@ -7,9 +7,10 @@ const NEW: &str = "2222222222222222222222222222222222222222";
 const RUN: &str = "run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OTHER_RUN: &str = "run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-const HYDROGEN: &str = DEFAULT_SINGLE_SEAT;
+const HYDROGEN: &str = "agy-gemini-4-hydrogen-high";
 const DEEPSEEK: &str = "opencode-go-deepseek-v4-flash";
 const GLM: &str = "opencode-go-glm-5.3-flash";
+const GPT: &str = "cx-gpt-6.2-sol-high";
 
 fn answer(leg: &str, run: &str, head: &str, verdict: &str) -> String {
     format!(
@@ -71,7 +72,7 @@ fn the_required_pair_counts_on_two_runs_and_one_of_them_alone_does_not() {
         let one = dir_with(&[(name, text)]);
         let error = require(&gate(&one, &[HYDROGEN]), &[part(7, NEW, run)]).unwrap_err();
         assert!(
-            error.contains("neither the exact single-seat leg nor both"),
+            error.contains("neither a single-seat leg meeting its conditions nor both"),
             "{error}"
         );
     }
@@ -152,13 +153,73 @@ fn request_changes_writer_status_and_unserved_text_never_count() {
     assert!(require(&gate(&dir, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_err());
 }
 
+fn gpt_answer(extra: &str) -> String {
+    format!("{extra}{}", answer(GPT, RUN, NEW, "ACCEPT"))
+}
+
+fn default_gate(dir: &tempfile::TempDir) -> AcceptGate {
+    AcceptGate {
+        dir: dir.path().to_owned(),
+        single_seat: DEFAULT_SINGLE_SEAT.split(',').map(str::to_owned).collect(),
+    }
+}
+
+#[test]
+fn the_default_single_seat_set_is_hydrogen_and_gpt() {
+    assert_eq!(DEFAULT_SINGLE_SEAT, format!("{HYDROGEN},{GPT}"));
+}
+
+#[test]
+fn gpt_high_with_the_effort_decision_and_another_writer_family_counts_alone() {
+    let card = "EFFORT: high\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n";
+    let dir = dir_with(&[("g.txt", gpt_answer(card))]);
+    assert!(require(&default_gate(&dir), &[part(7, NEW, RUN)]).is_ok());
+}
+
+#[test]
+fn gpt_without_the_high_effort_or_the_decision_is_refused() {
+    for card in [
+        "WRITER_FAMILIES: claude\n",
+        "EFFORT: high\nWRITER_FAMILIES: claude\n",
+        "EFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n",
+        "EFFORT: medium\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n",
+        "EFFORT: high\nEFFORT_DECISION: D-1\nWRITER_FAMILIES: claude\n",
+        "EFFORT: high\nEFFORT_DECISION: D-6804\n",
+    ] {
+        let dir = dir_with(&[("g.txt", gpt_answer(card))]);
+        let error = require(&default_gate(&dir), &[part(7, NEW, RUN)]).unwrap_err();
+        assert!(error.contains("meeting its conditions"), "{card}: {error}");
+    }
+}
+
+#[test]
+fn a_gpt_review_of_a_gpt_written_head_is_refused() {
+    for family in ["gpt", "openai", "claude, GPT", "codex"] {
+        let card = format!("EFFORT: high\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: {family}\n");
+        let dir = dir_with(&[("g.txt", gpt_answer(&card))]);
+        assert!(
+            require(&default_gate(&dir), &[part(7, NEW, RUN)]).is_err(),
+            "{family}"
+        );
+    }
+}
+
+#[test]
+fn hydrogen_needs_no_card_conditions_and_the_override_replaces_the_default() {
+    let dir = dir_with(&[("h.txt", answer(HYDROGEN, RUN, NEW, "ACCEPT"))]);
+    assert!(require(&default_gate(&dir), &[part(7, NEW, RUN)]).is_ok());
+    let card = "EFFORT: high\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n";
+    let gpt = dir_with(&[("g.txt", gpt_answer(card))]);
+    assert!(require(&gate(&gpt, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_err());
+}
+
 #[test]
 fn every_part_needs_its_own_evidence_and_the_single_seat_set_is_configurable() {
-    let dir = dir_with(&[("h.txt", answer("cx-gpt-6.2-sol-high", RUN, NEW, "ACCEPT"))]);
+    let dir = dir_with(&[("h.txt", answer("some-other-leg", RUN, NEW, "ACCEPT"))]);
     assert!(require(&gate(&dir, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_err());
-    let gpt = gate(&dir, &["cx-gpt-6.2-sol-high"]);
-    assert!(require(&gpt, &[part(7, NEW, RUN)]).is_ok());
-    assert!(require(&gpt, &[part(7, NEW, RUN), part(8, OLD, OTHER_RUN)]).is_err());
+    let other = gate(&dir, &["some-other-leg"]);
+    assert!(require(&other, &[part(7, NEW, RUN)]).is_ok());
+    assert!(require(&other, &[part(7, NEW, RUN), part(8, OLD, OTHER_RUN)]).is_err());
 }
 
 #[test]

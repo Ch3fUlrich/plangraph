@@ -12,7 +12,7 @@ const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA 
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
-accept dir DIR: the reviewers' answers; build refuses a part unless exactly one ACCEPT at its head carries the receipt run and either is a --single-seat leg (exact id, default agy-gemini-4-hydrogen-high) or both opencode-go-deepseek-v4-flash and opencode-go-glm-5.3-flash accepted it on two runs\n\
+accept dir DIR: the reviewers' answers; build refuses a part unless exactly one ACCEPT at its head carries the receipt run and either is a --single-seat leg (exact ids, comma separated; default hydrogen and gpt-6.2-high, gpt only on a card with EFFORT high, EFFORT_DECISION D-6804 and another writer family) or both opencode-go-deepseek-v4-flash and opencode-go-glm-5.3-flash accepted it on two runs\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 

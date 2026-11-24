@@ -14,13 +14,38 @@ pub struct Accept {
     /// The review leg named by the `[served by LEG via spawner run RUN, ...]` header, lowercased.
     pub leg: String,
     pub run_id: String,
+    /// The review card's `EFFORT:` line, lowercased.
+    pub effort: Option<String>,
+    /// The review card's `EFFORT_DECISION:` line (a D-id).
+    pub effort_decision: Option<String>,
+    /// The review card's `WRITER_FAMILIES:` line: the model families that wrote the head, lowercased.
+    pub writer_families: Vec<String>,
 }
 
 /// The two OpenCode seats every head needs when no single-seat leg accepted it (rule 3.66 (f)): the
 /// exact route leg ids of `REVIEW_REQUIRED` in `plangraph.planner.legs`.
 const REQUIRED_PAIR: [&str; 2] = ["opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash"];
-/// The exact leg whose one ACCEPT counts for the head alone (`REVIEW_HYDROGEN`).
-pub const DEFAULT_SINGLE_SEAT: &str = "agy-gemini-4-hydrogen-high";
+/// The exact legs whose one ACCEPT counts for the head alone, comma separated (rule 3.66 (f10) clause 8,
+/// D-6804): Hydrogen (`REVIEW_HYDROGEN`), and the gpt high-effort leg under the conditions of `GPT_ALONE`.
+pub const DEFAULT_SINGLE_SEAT: &str = "agy-gemini-4-hydrogen-high,cx-gpt-6.2-sol-high";
+/// A single-seat leg that counts alone only on a review card with `EFFORT: high`, `EFFORT_DECISION: D-6804`
+/// and a `WRITER_FAMILIES:` line that does not name the reviewer's own family.
+const GPT_ALONE: (&str, [&str; 3]) = ("cx-gpt-6.2-sol-high", ["gpt", "openai", "codex"]);
+const GPT_EFFORT_DECISION: &str = "D-6804";
+
+/// Whether a single-seat answer meets the extra conditions of its leg.
+fn alone_conditions_met(accept: &Accept) -> bool {
+    if accept.leg != GPT_ALONE.0 {
+        return true;
+    }
+    accept.effort.as_deref() == Some("high")
+        && accept.effort_decision.as_deref() == Some(GPT_EFFORT_DECISION)
+        && !accept.writer_families.is_empty()
+        && !accept
+            .writer_families
+            .iter()
+            .any(|family| GPT_ALONE.1.contains(&family.as_str()))
+}
 
 /// Where the reviewers' answers are and which exact legs count alone; part of every train build.
 #[derive(Clone, Debug)]
@@ -61,10 +86,25 @@ pub fn parse(text: &str) -> Option<Accept> {
         .find_map(|l| l.trim().strip_prefix("HEAD:"))?
         .trim();
     let full = head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit());
+    let line = |key: &str| {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(key))
+            .map(|v| v.trim().to_owned())
+    };
     full.then(|| Accept {
         head: head.to_ascii_lowercase(),
         leg,
         run_id,
+        effort: line("EFFORT:").map(|v| v.to_ascii_lowercase()),
+        effort_decision: line("EFFORT_DECISION:"),
+        writer_families: line("WRITER_FAMILIES:")
+            .map(|v| {
+                v.split(',')
+                    .map(|f| f.trim().to_ascii_lowercase())
+                    .filter(|f| !f.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -118,7 +158,7 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
         let paired = pair.iter().all(|runs| runs.len() == 1) && pair[0][0] != pair[1][0];
         let counted = match bound.as_slice() {
             [one] => {
-                single_seat.iter().any(|leg| *leg == one.1.leg)
+                single_seat.iter().any(|leg| *leg == one.1.leg) && alone_conditions_met(&one.1)
                     || (paired && pair.iter().any(|runs| runs[0] == one.1.run_id))
             }
             _ => false,
@@ -146,7 +186,7 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
                     .collect();
                 let why = match bound.len() {
                     0 => "no ACCEPT at this head carries the receipt run",
-                    1 => "neither the exact single-seat leg nor both required legs on two runs accepted it",
+                    1 => "neither a single-seat leg meeting its conditions nor both required legs on two runs accepted it",
                     _ => "the receipt run appears in more than one ACCEPT at this head",
                 };
                 return Err(format!(
