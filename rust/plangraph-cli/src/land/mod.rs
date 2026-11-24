@@ -19,6 +19,9 @@ mod main_gh_tests;
 pub mod main_state;
 #[cfg(test)]
 mod main_state_tests;
+pub mod merge_body;
+#[cfg(test)]
+mod merge_body_tests;
 mod push;
 pub mod registrar;
 #[cfg(test)]

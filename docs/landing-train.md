@@ -126,3 +126,11 @@ subject, head, host, start, end, result. `report --last N` prints, per train, th
 critical path (parallel jobs count once), idle time between stages and the bottleneck stage, then the stage with the most
 critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
 them into a keeper table needs a keeper schema step that is not part of this change.
+
+## Merge body, part CI and the published GO row
+
+`plangraph land-train merge-body --repo DIR --manifest FILE` prints the body of the train's merge commit: one
+`Plan-Item: <key>` per item of every part (read from the part's own commits) and one
+`Review-Run: <key> <seat run id> <part head>` per item and part, the run and head from the manifest's part
+receipt. These are the lines the close reads (`store_runs._REVIEW_RUN`). `--check BODYFILE` refuses a body that
+lacks any of them, and a part without a `Plan-Item` has no body.
