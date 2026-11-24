@@ -1,0 +1,1 @@
+A merged close counts a review seat run of a batch card that names its parts in `item_keys` (no `item_key`), so reviewed trains no longer close with `seats_missing`. A run that names neither the part in `item_key` nor in `item_keys` is still no seat.

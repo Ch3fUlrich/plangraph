@@ -143,6 +143,32 @@ def test_a_train_of_unwitnessed_agy_seat_runs_records_no_seats_missing_flag(batc
     assert [c["key"] for c in result["closed"] if c.get("flags")] == [] and result["listed"] == []
 
 
+def test_a_batch_card_seat_run_names_its_parts_in_item_keys(batch):
+    """LE-MERGED-CLOSE-FLAGS-SEATS-MISSING cause: a batch review run keeps ``item_keys``, no ``item_key``."""
+    land(batch, cited=("A", "B", "C"))
+    for key in "ABC":
+        path = batch.mirror / f"fixture/run-part-{key.lower()}-0/record.json"
+        record = json.loads(path.read_text())
+        record.pop("item_key")
+        record["item_keys"] = ["demo:A", "demo:B", "demo:C"]
+        path.write_text(json.dumps(record))
+    result = batch.store.close_merged_auto(batch.p("system"))
+    assert {c["key"] for c in result["closed"]} == {"demo:A", "demo:B", "demo:C", "demo:BATCH"}
+    assert [c["key"] for c in result["closed"] if c.get("flags")] == [] and result["listed"] == []
+
+
+def test_a_seat_run_without_any_item_key_is_not_a_seat_for_the_part(batch):
+    land(batch, cited=("A", "B", "C"))
+    for key in "ABC":
+        path = batch.mirror / f"fixture/run-part-{key.lower()}-0/record.json"
+        record = json.loads(path.read_text())
+        record.pop("item_key")
+        record["item_keys"] = ["demo:OTHER"]
+        path.write_text(json.dumps(record))
+    result = batch.store.close_merged_auto(batch.p("system"))
+    assert {c["key"] for c in result["closed"]} == {"demo:BATCH"}
+
+
 def test_a_part_without_a_seat_run_still_refuses_with_no_witness(batch):
     land(batch, cited=("A",))
     result = batch.store.close_merged_auto(batch.p("system"))
