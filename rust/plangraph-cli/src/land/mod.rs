@@ -22,6 +22,9 @@ mod main_state_tests;
 pub mod merge_body;
 #[cfg(test)]
 mod merge_body_tests;
+pub mod part_ci;
+#[cfg(test)]
+mod part_ci_tests;
 mod push;
 pub mod registrar;
 #[cfg(test)]
