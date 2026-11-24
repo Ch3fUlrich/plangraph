@@ -237,9 +237,6 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         }
         Err("no free status file name".into())
     }
-    fn discard_status(&mut self, path: &str) {
-        let _ = fs::remove_file(path);
-    }
     fn rival(
         &mut self,
         key: &str,
@@ -284,6 +281,21 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         Ok(None)
     }
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String> {
+        // The reserved status file is given back only while no writer can have started: when
+        // the spawner never ran. Once it ran, a lost or malformed receipt does not prove that
+        // no writer started, and a freed name could be reserved again while that writer appends.
+        let mut spawner_ran = false;
+        let result = self.launch(card, brief, &mut spawner_ran);
+        if result.is_err() && !spawner_ran {
+            if let Some(path) = card["writer_status_path"].as_str() {
+                let _ = fs::remove_file(path);
+            }
+        }
+        result
+    }
+}
+impl<T: Transport> Adapters<'_, T> {
+    fn launch(&self, card: &Value, brief: &str, spawner_ran: &mut bool) -> Result<Value, String> {
         let dir = tempfile::Builder::new()
             .prefix("launch-")
             .tempdir_in(&self.state)
@@ -306,7 +318,11 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         .arg("--prompt-file")
         .arg(prompt_path)
         .args(["--wait", "0"]);
-        let out = cmd.output().map_err(|_| "cannot execute spawner")?;
+        *spawner_ran = true;
+        let out = cmd.output().map_err(|_| {
+            *spawner_ran = false;
+            "cannot execute spawner"
+        })?;
         let mut run = receipt(&out.stdout, out.status.code())?;
         if run["host"].as_str().is_none_or(str::is_empty) {
             run["host"] = json!(self.host);
@@ -332,7 +348,7 @@ impl<T: Transport> Launch for Adapters<'_, T> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn status_files_are_reserved_exclusively_and_given_back() {
+    fn status_files_are_reserved_exclusively() {
         let dir = tempfile::tempdir().unwrap();
         let wanted = dir.path().join("reviews/status-a-1-e1.txt");
         let wanted = wanted.to_str().unwrap();
@@ -348,13 +364,48 @@ mod tests {
         assert_eq!(first, wanted);
         assert_eq!(second, wanted.replace("-e1.txt", "-e1-1.txt"));
         assert!(Path::new(&first).is_file() && Path::new(&second).is_file());
-        a.discard_status(&first);
-        assert!(!Path::new(&first).exists());
-        // A freed name can be reserved again.
-        assert_eq!(a.allocate_status(wanted).unwrap(), wanted);
     }
     use super::*;
     use std::cell::RefCell;
+    fn adapters<'a>(repo: &Path, state: &Path, env: &'a Env) -> Adapters<'a, Fake> {
+        Adapters {
+            keeper: Fake(RefCell::new(vec![])),
+            env,
+            repo: repo.into(),
+            state: state.into(),
+            host: "h".into(),
+        }
+    }
+    #[test]
+    fn a_status_file_is_kept_once_the_spawner_ran_and_given_back_when_it_never_did() {
+        let d = tempfile::tempdir().unwrap();
+        let env = Env::new();
+        let reserve = |a: &mut Adapters<'_, Fake>, name: &str| {
+            let wanted = d.path().join(name);
+            let path = a.allocate_status(wanted.to_str().unwrap()).unwrap();
+            json!({"item_key":"plangraph:A","writer_status_path":path})
+        };
+        // The spawner runs and prints a malformed receipt: a writer may have started.
+        let repo = d.path().join("repo");
+        fs::create_dir_all(repo.join("src/plangraph/spawner")).unwrap();
+        for file in ["plangraph/__init__.py", "plangraph/spawner/__init__.py"] {
+            fs::write(repo.join("src").join(file), "").unwrap();
+        }
+        fs::write(
+            repo.join("src/plangraph/spawner/cli.py"),
+            "print('not a receipt')",
+        )
+        .unwrap();
+        let mut ran = adapters(&repo, d.path(), &env);
+        let card = reserve(&mut ran, "status-ran.txt");
+        assert!(ran.start(&card, "brief").is_err());
+        assert!(Path::new(card["writer_status_path"].as_str().unwrap()).exists());
+        // The spawner cannot be executed at all: nothing started, the name goes back.
+        let mut never = adapters(&d.path().join("missing-checkout"), d.path(), &env);
+        let card = reserve(&mut never, "status-never.txt");
+        assert!(never.start(&card, "brief").is_err());
+        assert!(!Path::new(card["writer_status_path"].as_str().unwrap()).exists());
+    }
     #[test]
     fn python_adapter_uses_the_selected_checkout_before_installed_sources() {
         let d = tempfile::tempdir().unwrap();

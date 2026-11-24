@@ -263,9 +263,6 @@ pub fn tick(
         };
         let c = batch_card(&items, repo, reviews, &status, policy);
         let started = launch.start(&c, &batch_brief(&items, rules, &status));
-        if started.is_err() {
-            launch.discard_status(&status);
-        }
         match started {
             Ok(run) => {
                 let mut row = decided(run);

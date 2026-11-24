@@ -62,6 +62,15 @@ pub trait Admission: Send + Sync {
     fn acquire(&self, run_id: &str, cancelled: &AtomicBool) -> Admit;
     /// The launcher started `identity` for a run this admission granted.
     fn launched(&self, _run_id: &str, _identity: &Identity) {}
+    /// Before anything of the run is written: claim its id exclusively. A refusal leaves every
+    /// existing record, directory and slot of that id untouched.
+    fn precheck(&self, _run_id: &str) -> Result<(), BindError> {
+        Ok(())
+    }
+    /// A field the queued record carries to name its owner (see [`Self::enqueued`]).
+    fn owner(&self) -> Option<Value> {
+        None
+    }
     /// The queued run record exists; persist whatever must be durable before `start` returns
     /// (the monitor thread is not running yet). `base` holds the caller's run fields.
     fn enqueued(&self, _run_id: &str, _base: &Map<String, Value>) -> Result<(), BindError> {
@@ -172,6 +181,7 @@ const RESERVED: &[&str] = &[
     "error",
     "survivors",
     "launch_started",
+    "slot_owner",
 ];
 pub fn validate(spec: &RunSpec) -> Result<(), StartError> {
     if !valid_run_id(&spec.run_id)
@@ -197,6 +207,9 @@ pub fn validate(spec: &RunSpec) -> Result<(), StartError> {
 }
 pub fn create_record(rt: &Runtime, spec: &mut RunSpec) -> Result<RunRecord, StartError> {
     validate(spec)?;
+    if let Some(owner) = rt.admission.owner() {
+        spec.base.insert("slot_owner".into(), owner);
+    }
     let mut record = RunRecord::create(
         &rt.cfg.state_dir,
         &spec.run_id,
@@ -252,8 +265,18 @@ fn abandon(mut spec: RunSpec, mut record: RunRecord, reason: &str) {
     );
 }
 pub fn start(rt: &Arc<Runtime>, mut spec: RunSpec) -> Result<RunHandle, StartError> {
+    validate(&spec)?;
+    // The id is claimed before a byte of the run is written, so a refused start never touches
+    // an existing run's record.
+    rt.admission.precheck(&spec.run_id)?;
     let fields = spec.base.clone();
-    let record = create_record(rt, &mut spec)?;
+    let record = match create_record(rt, &mut spec) {
+        Ok(record) => record,
+        Err(e) => {
+            rt.admission.withdrawn(&spec.run_id);
+            return Err(e);
+        }
+    };
     let id = spec.run_id.clone();
     // The queued record is durable before the ticket, and the ticket before the monitor, so a
     // crash at any point leaves a record that recovery can match to its ticket.

@@ -178,14 +178,15 @@ fn a_refused_bind_makes_no_launcher_call() {
     })
     .unwrap();
     let (s, launcher) = supervisor(d.path(), 2);
-    // The refusal comes back from `start` itself, with no launcher call; the queued record
-    // that was created first ends as failed.
+    // The refusal comes back from `start` itself, before any record is written, with no
+    // launcher call.
     assert!(matches!(
         s.start(spec(d.path(), 3, "true")),
         Err(SupervisorError::Start(StartError::Admission(_)))
     ));
     assert_eq!(launcher.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(status(d.path(), 3), "failed");
+    assert!(RunRecord::read(d.path(), "run-3").is_err());
+    assert!(!d.path().join("runs/run-3").exists());
     // The other owner's row is untouched and no ticket of ours is left behind.
     let t = table(d.path());
     assert_eq!(t.active.len(), 1);
@@ -475,4 +476,87 @@ fn restart_keeps_a_row_already_keyed_by_a_launched_process() {
         release_pre_exec(d.path(), &Fake { owner_alive: false }, &Proof(Started::No)).unwrap();
     assert!(freed.is_empty());
     assert_eq!(table(d.path()), before);
+}
+
+#[test]
+fn a_start_for_an_id_that_already_has_a_run_leaves_that_run_untouched() {
+    let d = tempfile::tempdir().unwrap();
+    let mut existing = RunRecord::create(
+        d.path(),
+        "run-5",
+        "h",
+        Default::default(),
+        Status::Running,
+        finalize::now(),
+    )
+    .unwrap();
+    existing.set("pid", json!(4242));
+    existing.save().unwrap();
+    let before = RunRecord::read(d.path(), "run-5").unwrap().to_value();
+    let (s, launcher) = supervisor(d.path(), 2);
+    assert!(matches!(
+        s.start(spec(d.path(), 5, "true")),
+        Err(SupervisorError::Start(StartError::Admission(
+            BindError::Exists
+        )))
+    ));
+    assert_eq!(
+        RunRecord::read(d.path(), "run-5").unwrap().to_value(),
+        before
+    );
+    assert_eq!(launcher.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(table(d.path()), SlotTable::default());
+}
+
+#[test]
+fn the_queued_record_names_the_daemon_that_created_it() {
+    let d = tempfile::tempdir().unwrap();
+    let (s, _launcher) = supervisor(d.path(), 1);
+    s.start(spec(d.path(), 0, HOLD)).unwrap();
+    until(|| status(d.path(), 0) == "running");
+    let v = RunRecord::read(d.path(), "run-0").unwrap().to_value();
+    assert_eq!(
+        v[SLOT_OWNER],
+        json!({"pid": DAEMON.0, "start_time": DAEMON.1})
+    );
+    std::fs::write(d.path().join("go"), "").unwrap();
+    until(|| status(d.path(), 0) == "completed");
+}
+
+fn owned_queued_record(dir: &Path, id: &str, owner: Option<(u32, u64)>) {
+    let base = owner
+        .map(|(pid, start)| json!({SLOT_OWNER: {"pid": pid, "start_time": start}}))
+        .map(|v| v.as_object().unwrap().clone())
+        .unwrap_or_default();
+    RunRecord::create(dir, id, "h", base, Status::Queued, finalize::now()).unwrap();
+}
+
+#[test]
+fn restart_settles_a_queued_record_a_dead_daemon_abandoned_before_its_ticket() {
+    let d = tempfile::tempdir().unwrap();
+    // No ticket and no slot row: the crash came between the record and the ticket.
+    owned_queued_record(d.path(), "run-lost", Some(DAEMON));
+    // Records that must stay: another owner, no owner, a launch that began.
+    owned_queued_record(d.path(), "run-other", Some((99, 5)));
+    owned_queued_record(d.path(), "run-plain", None);
+    owned_queued_record(d.path(), "run-began", Some(DAEMON));
+    let mut began = RunRecord::read(d.path(), "run-began").unwrap();
+    began.set(LAUNCH_STARTED, json!(1));
+    began.save().unwrap();
+    struct OnlyDaemonDead;
+    impl GroupLiveness for OnlyDaemonDead {
+        fn group_state(&self, _: &str) -> GroupState {
+            GroupState::Unknown
+        }
+        fn process_alive(&self, pid: u32, _: u64) -> bool {
+            pid != DAEMON.0
+        }
+    }
+    let settled = release_pre_exec(d.path(), &OnlyDaemonDead, &Proof(Started::No)).unwrap();
+    assert_eq!(settled, ["run-lost"]);
+    let state = |id: &str| RunRecord::read(d.path(), id).unwrap().to_value()["status"].clone();
+    assert_eq!(state("run-lost"), "failed");
+    for kept in ["run-other", "run-plain", "run-began"] {
+        assert_eq!(state(kept), "queued", "{kept}");
+    }
 }
