@@ -134,6 +134,44 @@ fn assignments(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// The words of a command line, quotes removed.
+fn words(command: &str) -> Vec<String> {
+    let (mut out, mut word, mut quote, mut open) = (Vec::new(), String::new(), None, false);
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match (c, quote) {
+            ('\\', _) => word.extend(chars.next()),
+            ('\'' | '"', None) => (quote, open) = (Some(c), true),
+            (c, Some(q)) if c == q => quote = None,
+            (c, None) if c.is_whitespace() => {
+                if open || !word.is_empty() {
+                    out.push(std::mem::take(&mut word));
+                }
+                open = false;
+            }
+            (c, _) => word.push(c),
+        }
+    }
+    if open || !word.is_empty() {
+        out.push(word);
+    }
+    out
+}
+
+/// The variables systemd substitutes in a command line: `${NAME}` anywhere in a word and `$NAME` as a
+/// whole word. Anything else, such as the locals of a `bash -c` script, belongs to the program.
+fn substituted_keys(command: &str) -> BTreeSet<String> {
+    let braced = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
+    let bare = Regex::new(r"^\$([A-Za-z_][A-Za-z0-9_]*)$").unwrap();
+    let mut keys = BTreeSet::new();
+    for word in words(command) {
+        let word = word.replace("$$", "");
+        keys.extend(braced.captures_iter(&word).map(|c| c[1].to_owned()));
+        keys.extend(bare.captures(&word).map(|c| c[1].to_owned()));
+    }
+    keys
+}
+
 fn plan_unit(file: &str, instance: Option<&str>, units: &Path, follow: bool, needs: &mut Needs) {
     let Ok(text) = std::fs::read_to_string(units.join(file)) else {
         needs
@@ -145,7 +183,6 @@ fn plan_unit(file: &str, instance: Option<&str>, units: &Path, follow: bool, nee
         Some(i) => s.replace("%i", i).replace("%I", i),
         None => s.to_owned(),
     };
-    let dollars = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)").unwrap();
     let mut timer_unit = None;
     for line in logical_lines(&text) {
         let Some((key, value)) = line.split_once('=') else {
@@ -170,13 +207,10 @@ fn plan_unit(file: &str, instance: Option<&str>, units: &Path, follow: bool, nee
             "Unit" => timer_unit = Some(value),
             "ExecStart" if !value.is_empty() => {
                 let command = value.trim_start_matches(['@', '-', ':', '+', '!']);
-                if let Some(binary) = command.split_whitespace().next() {
-                    needs.binaries.insert(binary.to_owned());
+                if let Some(binary) = words(command).into_iter().next() {
+                    needs.binaries.insert(binary);
                 }
-                for cap in dollars.captures_iter(&command.replace("$$", "")) {
-                    let key = cap.get(1).or_else(|| cap.get(2)).unwrap().as_str();
-                    needs.keys.insert(key.to_owned());
-                }
+                needs.keys.extend(substituted_keys(command));
             }
             _ => {}
         }
