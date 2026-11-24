@@ -164,6 +164,15 @@ class MergeLocksMixin:
             return self._lock_acquire(principal, repo, {"owner": body.get("owner"), "ttl_s": 1800}, now)
         if action == "release":
             return self._lock_release(principal, repo, {"owner": body.get("owner"), "token": body.get("token")}, now)
+        if action == "recent":
+            limit = body.get("limit", 10)
+            if type(limit) is not int or not 1 <= limit <= 100:
+                raise Refused("validation", "recent landed trains need a limit from 1 to 100")
+            rows = self.conn.execute(
+                "SELECT * FROM landing_trains WHERE repo=? AND merged IS NOT NULL AND abandoned=0"
+                " ORDER BY pr DESC LIMIT ?", (repo, limit))
+            return {"trains": [{"pr": data["pr"], "batch_key": data["batch_key"], "merge": data["merge"]}
+                               for data in map(_landing_data, rows)]}
         if action == "pending":
             rows = self.conn.execute(
                 "SELECT * FROM landing_trains WHERE repo=? AND abandoned=0 AND cursor<? ORDER BY pr",
