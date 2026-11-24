@@ -161,6 +161,12 @@ pub fn processes() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
     resolve_processes(processes_direct(), || read_processes(&[]))
 }
 
+/// The reference inventory of one process tree root (`/proc` in production), without the
+/// external reader fallback.
+pub fn process_references_at(root: &Path) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
+    scan_process_paths(root, true)
+}
+
 pub fn process_references() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
     resolve_processes(process_references_direct(), || {
         read_processes(&["--references"])
