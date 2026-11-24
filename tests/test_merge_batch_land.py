@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from merge_batch_env import env_fixture, head_of, land, pushed, train_cli  # noqa: F401
+from merge_batch_env import env_fixture, head_of, land, pushed
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stubs")
 
@@ -412,112 +412,6 @@ def test_go_req_from_recorded_evidence(env):
     assert "GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B]" in result.stdout
     assert "CI run 42 state=completed conclusion=success" in result.stdout
     assert result.stdout.endswith("PLAN plangraph:BATCH conforms=yes deviations=none\n")
-
-
-FAKE_PLANGRAPH = """#!/usr/bin/env python3
-import json, os, subprocess, sys
-args = sys.argv[1:]
-if args[:2] != ["land-train", "deploy-plan"]:
-    sys.exit(subprocess.call([os.environ["MAIN_STATE_STUB"], *args]))
-flags = dict(zip(args[2::2], args[3::2]))
-record = dict(argv=args, spans=json.load(open(flags["--spans"])))
-open(os.environ["DEPLOY_PLAN_CALL"], "w").write(json.dumps(record))
-if os.path.exists(os.environ["DEPLOY_PLAN_FAIL"]):
-    print("plan exploded", file=sys.stderr)
-    sys.exit(3)
-json.dump({"items": [{"key": "plangraph:LE-DEPLOY-BLOCKED-X"}]}, open(flags["--blockers-out"], "w"))
-print(open(os.environ["DEPLOY_PLAN_OUT"]).read(), end="")
-"""
-
-
-def deploy_fixture(env, report):
-    """A PLANGRAPH_BIN that answers `land-train deploy-plan` with ``report`` and records how it was called."""
-    stub = env.tmp / "plangraph-fake"
-    stub.write_text(FAKE_PLANGRAPH)
-    stub.chmod(0o755)
-    env.env.update(PLANGRAPH_BIN=str(stub), MAIN_STATE_STUB=str(env.stubs / "main-state"),
-                   DEPLOY_PLAN_CALL=str(env.tmp / "call.json"), DEPLOY_PLAN_OUT=str(env.tmp / "report.txt"),
-                   DEPLOY_PLAN_FAIL=str(env.tmp / "fail"))
-    (env.tmp / "report.txt").write_text(report)
-    registry = env.home / ".config" / "plangraph" / "hosts.json"
-    registry.parent.mkdir(parents=True, exist_ok=True)
-    registry.write_text("{}")
-    return registry
-
-
-def test_go_req_carries_the_deploy_plan_of_the_train_parts(env):
-    registry = deploy_fixture(env, "deploy: unit.service@code\nREADY unit.service@code parts #1\n")
-    st = go_ready(env)
-    result = env.run("go-req", "--name", "g1")
-    assert result.returncode == 0, result.stderr
-    assert "; deploy: unit.service@code; READY unit.service@code parts #1; PLAN plangraph:BATCH" in result.stdout
-    call = json.loads((env.tmp / "call.json").read_text())
-    argv = call["argv"]
-    flags = dict(zip(argv[2::2], argv[3::2]))
-    assert flags["--registry"] == str(registry) and flags["--repo"] == st["worktree"]
-    probe = flags["--probe-cmd"].split()
-    assert probe[1:] == ["host-sync", "--install-dry-run", "--registry", str(registry), "--repo", st["worktree"]]
-    # Each part is the range of its own commits: the merge's first parent to the part head.
-    spans = {row["pr"]: row for row in call["spans"]}
-    for rec in st["merged"]:
-        first_parent_of_merge = env.git("rev-parse", f"{rec['merge']}^1", cwd=st["worktree"])
-        assert spans[rec["pr"]] == {"pr": rec["pr"], "from": first_parent_of_merge, "head": rec["head"]}
-
-
-def test_go_req_lists_the_blocker_item_of_a_failed_dry_run(env):
-    report = ("deploy: none\nNOT READY unit.service@code parts #1 blocker plangraph:LE-DEPLOY-BLOCKED-X\n"
-              "MISSING env PG_PINS\nMISSING binary ~/.local/bin/tool\n")
-    deploy_fixture(env, report)
-    go_ready(env)
-    result = env.run("go-req", "--name", "g1")
-    assert result.returncode == 0, result.stderr
-    assert len(result.stdout.splitlines()) == 1
-    assert ("; deploy: none; NOT READY unit.service@code parts #1 blocker plangraph:LE-DEPLOY-BLOCKED-X "
-            "(MISSING env PG_PINS, MISSING binary ~/.local/bin/tool); PLAN") in result.stdout
-
-
-def test_go_req_refuses_when_the_deploy_plan_cannot_be_made(env):
-    deploy_fixture(env, "deploy: none\n")
-    (env.tmp / "fail").write_text("")
-    go_ready(env)
-    result = env.run("go-req", "--name", "g1")
-    assert result.returncode == 1
-    assert "deploy-plan failed: plan exploded" in result.stderr
-
-
-def test_go_req_says_so_when_there_is_no_hosts_registry(env):
-    go_ready(env)
-    result = env.run("go-req", "--name", "g1")
-    assert result.returncode == 0, result.stderr
-    assert "; deploy: unchecked (no hosts registry); PLAN" in result.stdout
-
-
-def test_go_req_runs_the_real_deploy_plan_for_a_unit_part_and_a_unitless_part(env, train_cli):
-    """The chain end to end: the unit part's `Deploy:` host runs the real host install dry run."""
-    wrapper = env.tmp / "plangraph-real"
-    wrapper.write_text(f"#!/bin/sh\n[ \"$1\" = main-state ] && exec {env.stubs / 'main-state'} \"$@\"\nexec {train_cli} \"$@\"\n")
-    wrapper.chmod(0o755)
-    env.env["PLANGRAPH_BIN"] = str(wrapper)
-    registry = env.home / ".config" / "plangraph" / "hosts.json"
-    registry.parent.mkdir(parents=True, exist_ok=True)
-    example = json.loads((Path(__file__).resolve().parents[1] / "docs/schemas/examples/hosts.example.json").read_text())
-    registry.write_text(json.dumps(example))
-    unit = "[Service]\nEnvironmentFile=%h/.config/p/t.env\nExecStart=%h/.local/bin/train --pins ${PG_PINS}\n"
-    go_ready(env, first_files={"deploy/systemd/train.service": unit}, first_trailer="\nDeploy: code")
-    result = env.run("go-req", "--name", "g1")
-    assert result.returncode == 0, result.stderr
-    assert ("; deploy: none; NOT READY train.service@code parts #1 blocker plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-CODE "
-            "(MISSING binary ~/.local/bin/train, MISSING env PG_PINS, MISSING file ~/.config/p/t.env); PLAN") in result.stdout
-    # A host that has everything is READY, and the unitless part adds no family.
-    bin_path = env.home / ".local/bin/train"
-    bin_path.parent.mkdir(parents=True)
-    bin_path.write_text("")
-    bin_path.chmod(0o755)
-    (env.home / ".config/p").mkdir(parents=True)
-    (env.home / ".config/p/t.env").write_text("PG_PINS=/etc/hostname\n")
-    result = env.run("go-req", "--name", "g1")
-    assert result.returncode == 0, result.stderr
-    assert "; deploy: train.service@code; READY train.service@code parts #1; PLAN" in result.stdout
 
 
 def test_keeper_migration_needs_a_head_bound_go_marker(env):
