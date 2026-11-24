@@ -46,17 +46,25 @@ the referenced evidence against the authoritative source before acting.
 
 ## Running a list
 
-`pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B --base SHA --brief FILE`
+`pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B --base SHA --brief FILE --train-cmd "ARGV" --ci-workflow NAME...`
 runs the list of one batch. `RUN_ID` is the native run whose record holds the worktree and
 the writer card. A missing steps file starts the list; an existing one is validated and
 resumed after its last recorded row, so a killed run repeats no finished step. The steps
-file is rewritten after every attempt. Optional flags: `--check "ARGV"` (repeatable fast
-check), `--keeper-cmd "ARGV"` (default `pg --json`), `--train-cmd "ARGV"` (prints
-`{"train":..,"manifest":..}` for `--head --pr --run --attempt`), `--branch`, `--no-journal`.
+file is rewritten after every attempt. `--train-cmd` and at least one `--ci-workflow` are
+required, so a list never runs to the end of CI before failing for want of them. Optional
+flags: `--keeper-cmd "ARGV"` (default `pg --json`), `--branch`, `--state`, `--no-journal`.
 Exit 0 means the part joined a train, 3 red CI, 1 any other stop.
 
-The service steps are `claim` (`claim-batch`, all keys or none), `ci_class` (green when every
-workflow run of the head completed without a failure, red naming the failing run, an error
-when the runs do not finish within the waiting budget) and `train_join`. The agent steps
-are the native writer `Driver`: `write` is its first turn, `review` one review run on the
-stamped head, `fix` a turn of the same session with the kept review text.
+The agent host is the native writer Host: `worktree` is its checkout (it pins the base the
+review reads), `fast_checks` its gates, which write the stamp the review seat reads, and
+`push` verifies that same stamp before publishing the head. `write`, `review` and `fix`
+are its writer turns and review runs; the review state (previous review, HIGH+MED count of
+each round) lives beside the steps file, so the delta review and the round stop rule
+(`round_progress`: no progress, slow progress, cap of 8 reviews) survive a restart.
+
+The service steps are `claim` (`claim-batch`; on a refused key only the epochs this attempt
+was granted are released, each at its epoch, and a failed release is reported), `ci_class`
+(runs of the head that belong to the pull request; green when every required workflow ran
+and nothing failed, red naming the failing run, an error when the runs do not finish within
+the waiting budget) and `train_join` (the `--train-cmd`, called with `--head --pr --run
+--attempt`, printing `{"train":..,"manifest":..}`).
