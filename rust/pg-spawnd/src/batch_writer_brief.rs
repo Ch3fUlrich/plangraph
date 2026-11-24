@@ -10,6 +10,9 @@ const PREFIX: &str = "PLANGRAPH-BATCH-INPUT-V1\n";
 struct BatchInput {
     items: Vec<Item>,
     run: RunValues,
+    /// Why this brief deliberately repeats an item key another live lane holds.
+    #[serde(default)]
+    lane_override: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -92,7 +95,11 @@ pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
     let Some(payload) = payload else {
         return Ok(Cow::Borrowed(text));
     };
-    let BatchInput { items, run } = serde_json::from_str(payload)
+    let BatchInput {
+        items,
+        run,
+        lane_override,
+    } = serde_json::from_str(payload)
         .map_err(|err| format!("invalid batch writer input: {err}"))?;
     if items.is_empty() {
         return Err("batch writer input requires at least one item".into());
@@ -113,12 +120,32 @@ pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
     }
     rendered.push('\n');
     run.render(&mut rendered)?;
+    if let Some(reason) = lane_override {
+        let reason = reason.trim();
+        if !single_line(reason) {
+            return Err("lane_override requires a nonblank single-line reason".into());
+        }
+        writeln!(rendered, "LANE_OVERRIDE: {reason}").unwrap();
+    }
     Ok(Cow::Owned(rendered))
+}
+
+/// `render`, then the lane admission of its items: a key another live lane holds is refused
+/// with the lane name unless the brief carries a `LANE_OVERRIDE` reason. The one entry point
+/// of every writer launch (Claude session, native dispatch, external brief generation).
+/// Returns the brief and the override reason that admitted a deliberate second lane.
+pub fn render_admitted<'a>(
+    text: &'a str,
+    lanes: &dyn crate::lane_guard::LaneSource,
+) -> Result<(Cow<'a, str>, Option<String>), String> {
+    let brief = render(text)?;
+    let reason = crate::lane_guard::check_brief(&brief, lanes, None)?;
+    Ok((brief, reason))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{render, Cow, PREFIX};
+    use super::{render, render_admitted, Cow, PREFIX};
     use serde_json::{json, Value};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/batch-writer-input.txt");
@@ -213,6 +240,48 @@ mod tests {
         let rendered = render(&crlf).unwrap();
         assert!(matches!(rendered, Cow::Owned(_)));
         assert_eq!(rendered, render(&lf).unwrap());
+    }
+
+    struct Held(&'static str);
+    impl crate::lane_guard::LaneSource for Held {
+        fn lanes(&self, _: &[String]) -> Vec<crate::lane_guard::Lane> {
+            vec![crate::lane_guard::Lane {
+                name: "writer-0673".into(),
+                keys: vec![self.0.into()],
+                source: "run",
+            }]
+        }
+    }
+
+    #[test]
+    fn admission_refuses_a_held_key_and_names_the_lane() {
+        let text = format!("{PREFIX}{}", fixture());
+        let error = render_admitted(&text, &Held("demo:FIXTURE")).unwrap_err();
+        assert!(
+            error.contains("demo:FIXTURE is held by live lane writer-0673"),
+            "{error}"
+        );
+        assert!(render_admitted(&text, &Held("demo:OTHER")).is_ok());
+    }
+
+    #[test]
+    fn admission_accepts_an_override_and_keeps_its_reason_in_the_brief() {
+        let mut input = fixture();
+        input["lane_override"] = json!(" fix lane for the review ");
+        let text = format!("{PREFIX}{input}");
+        let (brief, reason) = render_admitted(&text, &Held("demo:FIXTURE")).unwrap();
+        assert_eq!(reason.as_deref(), Some("fix lane for the review"));
+        assert!(brief.ends_with("LANE_OVERRIDE: fix lane for the review\n"));
+        // A forwarded launch sees the rendered brief and admits it the same way.
+        let (_, again) = render_admitted(&brief, &Held("demo:FIXTURE")).unwrap();
+        assert_eq!(again, reason);
+        for blank in ["", "  ", "a\nb"] {
+            input["lane_override"] = json!(blank);
+            let text = format!("{PREFIX}{input}");
+            assert!(render_admitted(&text, &Held("demo:FIXTURE"))
+                .unwrap_err()
+                .starts_with("lane_override requires a nonblank"));
+        }
     }
 
     #[test]
