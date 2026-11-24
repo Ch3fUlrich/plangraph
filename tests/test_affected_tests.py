@@ -391,7 +391,8 @@ def test_cli_unknown_within_path_refuses(tmp_path, capsys, monkeypatch):
     assert rc == 2
     captured = capsys.readouterr()
     assert "unknown --within path: tests/test_nope.py" in captured.err
-    assert captured.out == ""
+    # A refusal of a --run still ends with the one machine-read result line, and nothing else.
+    assert captured.out == "AFFECTED rc=2 batches=0 failed=1\n"
 
 
 def test_cli_existing_within_file_and_dir_accepted(tmp_path, capsys, monkeypatch):

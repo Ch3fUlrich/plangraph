@@ -245,8 +245,34 @@ def affected_summary(batches):
     return code, f"AFFECTED rc={code} batches={len(batches)} failed={len(failed)}"
 
 
+_REPORTED = []
+
+
 def report_batches(batches):
     """Print the result line last (readers never infer it from the tail of pytest output); return the exit code."""
     code, line = affected_summary(batches)
+    _REPORTED.append(True)
     print(line, flush=True)
     return code
+
+
+def with_result_line(run, is_run):
+    """Run `run()`; a `--run` that exits non-zero before any batch reported still prints the one AFFECTED line."""
+    _REPORTED.clear()
+    code = run()
+    if code and is_run and not _REPORTED:
+        print(f"AFFECTED rc={code} batches=0 failed=1", flush=True)
+    return code
+
+
+def build_fleet_spawnd(root, env):
+    """Build pg-spawnd from the selected checkout (a push preflight runs in a detached one); a failing exit code, else None."""
+    print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
+    try:
+        build = subprocess.run(
+            ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'pg-spawnd'],
+            cwd=root, env=env)
+    except OSError as error:
+        print(f'CARGO FAIL: could not prepare pg-spawnd ({error})', file=sys.stderr)
+        return 1
+    return build.returncode or None

@@ -84,9 +84,12 @@ pub(crate) fn gh(args: &[String], budget: Duration) -> Result<String, String> {
         .spawn()
         .map_err(|_| "cannot execute gh".to_string())?;
     let mut stdout = child.stdout.take().ok_or("no gh stdout")?;
-    let reader = std::thread::spawn(move || {
+    // The output is read on a thread and awaited with the same limit: a descendant of `gh` that
+    // keeps the pipe open after `gh` exited must not hold the wait past its deadline.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut text = String::new();
-        stdout.read_to_string(&mut text).map(|_| text)
+        let _ = sender.send(stdout.read_to_string(&mut text).map(|_| text));
     });
     let started = Instant::now();
     let status = loop {
@@ -100,9 +103,13 @@ pub(crate) fn gh(args: &[String], budget: Duration) -> Result<String, String> {
             None => std::thread::sleep(Duration::from_millis(50)),
         }
     };
-    let text = reader
-        .join()
-        .map_err(|_| "gh reader panicked")?
+    let text = receiver
+        .recv_timeout(
+            limit
+                .saturating_sub(started.elapsed())
+                .max(Duration::from_millis(50)),
+        )
+        .map_err(|_| GH_TIMED_OUT.to_string())?
         .map_err(|e| e.to_string())?;
     if status.success() {
         Ok(text)

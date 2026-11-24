@@ -74,8 +74,9 @@ impl Host {
         {
             return Err("push_ref must name refs/heads/...".into());
         }
-        self.brief = pg_spawnd::batch_writer_brief::render(
+        self.brief = pg_spawnd::batch_writer_brief::render_in(
             request["prompt"].as_str().ok_or("prompt missing")?,
+            &self.cwd,
         )?
         .into_owned();
         self.effort = writer_effort(&request["card"])?;

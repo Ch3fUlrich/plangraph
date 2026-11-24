@@ -5,6 +5,7 @@ BASE: 1111111111111111111111111111111111111111
 WRITER_FAMILY: gpt
 STATUS_FILE: fixture-status
 FAST_CHECKS: plangraph fast-checks --owned-worktree
+PUSH: git push --atomic origin HEAD:refs/heads/lane/fixture-batch +refs/notes/plangraph-fast-checks:refs/notes/plangraph-fast-checks-lane-fixture-batch
 REVIEW_CMD: fixture-review
 REVIEW_WAIT_SECONDS: 60
 ROUND_CAP: 3
