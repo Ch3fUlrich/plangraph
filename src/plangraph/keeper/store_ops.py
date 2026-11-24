@@ -166,7 +166,10 @@ class OpsMixin:
                 self._oversight_denied_written = True
             raise
         finally:
-            self._flush_counts()      # after the commit or the rollback, so a refused batch is counted
+            if dry_run:               # a preview is not an application: nothing of it is counted
+                self.__dict__.pop("_deferred_counts", None)
+            else:
+                self._flush_counts()  # after the commit or the rollback, so a refused batch is counted
 
     # ----------------------------------------------------------- planning
     def _plan_ops(self, ops, batch_ref, principal=None):

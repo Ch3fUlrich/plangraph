@@ -375,7 +375,7 @@ def _jaccard(a, b):
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
-def similar_items(definition, items, exact_only=False):
+def similar_items(definition, items):
     """``[(key, score)]``: open items of the same project that are near
     copies of *definition* by title, description and files (the one function
     every creation path shares)."""
@@ -397,7 +397,7 @@ def similar_items(definition, items, exact_only=False):
         if (my_exact := _exact(definition)) and my_exact == _exact(other):
             out.append((other["key"], 1.0))
             continue
-        if not wordy or exact_only:
+        if not wordy:
             continue
         # The title carries the weight: boilerplate descriptions alone never match.
         score = _jaccard(mine, _tokens(other, "title"))

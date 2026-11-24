@@ -505,7 +505,8 @@ class ContextMixin:
                     raise Refused("not_found", f"no decision {did} in the decisions log")
                 self._append(principal, key, "premise_reconfirmed",
                              {"decision": did, "who": principal.name,
-                              **({"supersession": named} if named else {})}, now)
+                              **({"supersession": named, "link_rev": self._link_revision(key, named)}
+                                 if named else {})}, now)
             return {"key": key, "reconfirmed": did,
                     **({"cleared_supersession": named} if named else {})}
         return self._run(principal, "reconfirm", key, record)
@@ -528,12 +529,31 @@ class ContextMixin:
             return {}                      # no links: no cleared-pair or alias reads
         return _superseded_map(index, self._cleared_supersessions(), self.resolve_key)
 
+    def _link_revision(self, old, new):
+        """The seq of the event that put the link *old* <- *new* in force; ``None`` when it is not.
+        Removing the link and adding it again is a new revision."""
+        rev = None
+        for row in self.conn.execute(
+                "SELECT seq, payload FROM events WHERE key=? AND type IN ('item_created','item_defined')"
+                " ORDER BY seq", (new,)):
+            links = _payload(row["payload"]).get("supersedes")
+            if links is None:
+                continue
+            if old in [self.resolve_key(k) for k in links]:
+                rev = rev or row["seq"]
+            else:
+                rev = None
+        return rev
+
     def _cleared_supersessions(self):
-        """``{(old key, superseder key)}`` the router re-confirmed (audited ``premise_reconfirmed``)."""
+        """``{(old key, superseder key)}`` the router re-confirmed (audited ``premise_reconfirmed``)
+        for the link as it stands: a link removed and added again is not cleared."""
         out = set()
         for row in self.conn.execute(
                 "SELECT key, payload FROM events WHERE type='premise_reconfirmed'"):
-            if (mark := _payload(row["payload"]).get("supersession")):
+            data = _payload(row["payload"])
+            if (mark := data.get("supersession")) and data.get("link_rev") \
+                    and data["link_rev"] == self._link_revision(row["key"], mark):
                 out.add((row["key"], mark))
         return out
 
@@ -573,8 +593,10 @@ class ContextMixin:
             # A system lease skips the freshness reads, never the retired premise or contract.
             if contract := superseded_contract(item):
                 facts.append(contract)
+            confirmed = self._decision_clock()["reconfirmed"].get(item["key"], -1)     # as an ordinary claim
             facts += [f"premise {d} superseded by {book['superseded'][d]}"
-                      for d in src.decision_ids(*self._texts(item)) if d in book["superseded"]]
+                      for d in src.decision_ids(*self._texts(item))
+                      if d in book["superseded"] and _num(book["superseded"][d]) > confirmed]
             override = self._stale_override(item["key"], reason, facts)
             if unknown:
                 raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))

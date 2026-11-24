@@ -7,16 +7,18 @@ items: every claim role refuses them, again under the claim transaction (`supers
 superseder keeps them retired, a cancelled one frees them), and `ready` lists them under `needs_reconcile`, so the feeder drops them, as it
 does items whose cited decision was retired (`superseded_premises`, `superseded_contract`; checked for every claim role). A link follows a
 rehome alias, may not close a cycle of any length, and to another project's item (also through a grant, a `similar` answer or `apply_ops`)
-is the router's. `reconfirm KEY D-NNN --supersession SUPERSEDER` clears exactly that pair (audited).
+is the router's. `reconfirm KEY D-NNN --supersession SUPERSEDER` clears exactly that pair for the link as it stands (audited; a link removed
+and added again is a new one); cycle checks resolve aliases too.
 Every create path (`define`, `define --edit` of a title or description, `apply_ops`/md-sync, plan import) runs one similarity check
 (`item_fields.similar_items`: token overlap of title 60% and description 40%, files when both name them, titles of 3+ words, threshold 0.6, an exact
-title+description copy at any length, same project, open items, batch and import peers, slices of one parent excepted) and refuses a near copy with the matching keys until each is answered
+title+description copy at any length, same project, open items, batch and import peers (an export carries each item's recorded answers), slices of one parent excepted) and refuses a near copy with the matching keys until each is answered
 `similar={KEY: supersedes|depends_on|distinct}` (md-sync: a `Similar: KEY=answer, ...` token ending the step cell; YAML plans: a `similar`
 mapping); the answer is stored in the event. EXPERIMENT (rule 3.76): `reap`-independent day counters `similar_matches_shown`,
-`similar_answered.<answer>` count matches shown and answers; a later `supersedes` edit by hand is the duplicate found afterwards.
+`similar_answered.<answer>` count matches shown and answers (not for a dry run); a later `supersedes` edit by hand is the duplicate found afterwards.
 
 **Premise precision (KEEPER-STALE-PREMISE-PRECISION).** The premise gate ignores a newer decision that is the item's own `source` or whose
-row orders, GOes or defines the item with no scope or condition word (approval, requirement, "but", "also" ...; the log has no class column, so rows are read by text). The operator's third
+row orders, GOes or defines the item with no scope or condition word (approval, requirement, "but", "also" ...) and nothing else but the item's keys and ordering words (at most two others): the
+log has no class column, so a longer row is left to a human and `reconfirm`. The operator's third
 case, "logged within 2 h of the define by the same session", is not applied: the log carries neither date nor session, so a time of day
 would let a row of another day mask a later scope change. `reconfirm KEY D-NNN` records, as an audited `premise_reconfirmed` event, that
 the premise was read against that decision: it clears `newer_decisions` and retired premises up to it, not an explicit `supersedes` link
@@ -35,7 +37,7 @@ network, planning, ui-ux, feature, cleanup); `add-category NAME` appends one, `r
 [--dry-run]` sets OPEN uncategorised items by key/track rules, names skipped and failed items, and returns the unmatched keys for a model pass.
 `ready`, the feeder (`category_rank` on the ready row) and the web table order by category rank, then effective priority, then age (oldest
 first), after the feeder's classes (live PR, CI fix: `work_class`); an item without category sorts last. The snapshot always carries `categories` and `uncategorised` (block `categories`), and
-`category_overrides` for projects with their own order. `reap` records `category_ready.NAME` (claimable items only) and `category_merged.NAME` (verified merges,
+`category_overrides` for projects with their own order. `reap` records `category_ready.NAME` (the keeper's own ready list) and `category_merged.NAME` (verified merges,
 explicit zeros) per day and raises `category_starved` on the oldest ready item of a category that has waited over 48 h since its last
 dependency was done, with no verified merge. The web page is read-only (it holds no keeper token): its reorder buttons re-sort ONE chosen project's rows at once and show the
 `rank-categories PROJECT ...` command that stores the order; a reload then shows the stored order. `copy-to-pg` replaces the target's seed rows with the source's.

@@ -121,3 +121,16 @@ def test_a_ci_fix_row_sorts_before_a_speed_row_in_the_default_order(tmp_path):
             {"key": "pr", "priority": 1, "work_class": 0}]
     got = run_node(tmp_path, RUNNER, "defaults", {"rows": rows})
     assert got["sorted"] == ["pr", "cifix", "speed"]
+
+
+def test_the_static_page_has_no_write_path_so_the_rank_is_saved_by_the_verb():
+    """The page ships inside a static snapshot and holds no keeper token: it may read one sibling
+    file (GET) and nothing else, so a drag cannot be an authorised Keeper write from the browser.
+    The order is stored by ``rank-categories`` and a reload shows it (test_keeper_category_rank)."""
+    import re
+    web = Path(__file__).resolve().parents[1] / "src" / "plangraph" / "web"
+    for path in sorted(web.glob("*.js")):
+        code = re.sub(r"/\*.*?\*/|//[^\n]*", "", path.read_text(encoding="utf-8"), flags=re.S)
+        assert "fetch(" not in code, path.name
+        assert not re.search(r"\.open\(\s*[\"'](?!GET)", code), path.name
+        assert not re.search(r"(?i)authorization|bearer|\.token", code), path.name

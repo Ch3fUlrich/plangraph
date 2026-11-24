@@ -57,6 +57,7 @@ items:
     evidence_kinds: [decision]
     operator: false
     source: docs/plan/mini.md#A4
+    similar: {borealis:A3: distinct}
   - project: borealis
     id: A5
     title: Client docs

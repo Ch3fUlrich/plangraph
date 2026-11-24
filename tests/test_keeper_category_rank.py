@@ -205,3 +205,22 @@ def test_a_saved_project_order_survives_a_reload_and_leaves_other_projects_alone
     assert reloaded["demo:D2"]["category_rank"] < reloaded["demo:D1"]["category_rank"]
     assert reloaded["other:O1"]["category_rank"] < reloaded["other:O2"]["category_rank"]
     assert w.store._snapshot(w.clock())["category_overrides"]["demo"][:2] == ["cleanup", "speed"]
+
+
+def test_telemetry_follows_the_keepers_ready_classification(w, tmp_path):
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    log = tmp_path / "decisions.md"
+    log.write_text("| ID | project | decision |\n|---|---|---|\n", encoding="utf-8")
+    w.store.ctx = {"decisions": DecisionsAdapter(log)}
+    w.store.create_items(w.p("router"), [defn("STALE", category="speed", description="per D-10"),
+                                         defn("FINE", category="speed"),
+                                         defn("GOAL", ["STALE", "FINE"], kind="goal")])
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write("| D-12 | demo | (05:0xZ) demo:STALE premise changed, start after P7 |\n")
+    ready = lambda: w.conn.execute(
+        "SELECT value FROM metrics WHERE metric='category_ready.speed' ORDER BY computed_at DESC LIMIT 1").fetchone()[0]
+    w.store.reap(w.p("system"))
+    assert ready() == 1.0                      # STALE is scope-stale: not in the keeper's ready list
+    w.store.reconfirm(w.p("router"), "demo:STALE", "D-12")
+    w.store.reap(w.p("system"))
+    assert ready() == 2.0                      # re-confirmed: ready again, so counted

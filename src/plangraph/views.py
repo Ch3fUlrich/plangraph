@@ -8,6 +8,8 @@ Item shape (all keys fully qualified) is documented in ``docs/SPEC.md``.
 """
 from __future__ import annotations
 
+import json
+
 import re
 
 from . import views_graph as _g
@@ -211,34 +213,49 @@ def warnings(items):
 
 _FALSY = ("false", "0", "null", "none", "no", "n/a", "n-a", "nil")
 _PR_FIELDS = ("pr", "pr_url", "pr_number", "pull_request", "open_pr")
+_NOTE_FIELDS = _PR_FIELDS + ("pr_state", "ci_fix")
 
 
 def _signal(value):
+    """Does a PR/CI metadata value say "yes"?  Mirrors ``signal`` in ``feeder/selection.rs``:
+    a merged or closed PR object says no, an object with a number, url or id says yes."""
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
         return value > 0
-    return isinstance(value, str) and value.strip().lower() not in ("",) + _FALSY
+    if isinstance(value, str):
+        return bool(value.strip()) and value.strip().lower() not in _FALSY
+    if isinstance(value, dict):
+        if value.get("state") in ("closed", "merged") or value.get("merged") is True:
+            return False
+        return any(_signal(value.get(k)) for k in ("number", "url", "id"))
+    return False
+
+
+def _metadata(item):
+    """The item's PR/CI fields: explicit non-null fields win over ``name: value`` note
+    lines, whose value is JSON when it parses (as the feeder decodes them)."""
+    found = {k: item[k] for k in _NOTE_FIELDS if item.get(k) is not None}
+    for line in (item.get("note") or "").splitlines():
+        name, sep, value = line.partition(": ")
+        if sep and name in _NOTE_FIELDS and name not in found:
+            try:
+                found[name] = json.loads(value)
+            except ValueError:
+                found[name] = value
+    return found
 
 
 def work_class(item):
     """The feeder's class order, before category: 0 an item that carries a live PR,
     1 a CI fix, 2 anything else (mirrors ``class`` in ``feeder/selection.rs``)."""
-    note = {}
-    for line in (item.get("note") or "").splitlines():
-        name, sep, value = line.partition(": ")
-        if sep:
-            note.setdefault(name, value)
-
-    def has(name):
-        return _signal(item[name] if item.get(name) is not None else note.get(name))
-
-    if (str(note.get("pr_state") or item.get("pr_state") or "") not in ("closed", "merged")
-            and any(has(f) for f in _PR_FIELDS)):
+    meta = _metadata(item)
+    if (meta.get("pr_state") not in ("closed", "merged")
+            and any(_signal(meta.get(f)) for f in _PR_FIELDS)):
         return 0
     tokens = item.get("key", "").split(":", 1)[-1].upper().split("-")
-    if has("ci_fix") or item.get("kind") in ("ci-fix", "ci_fix") or any(
-            pair == ["CI", "FIX"] for pair in (tokens[i:i + 2] for i in range(len(tokens)))):
+    if (_signal(meta.get("ci_fix")) or item.get("kind") in ("ci-fix", "ci_fix")
+            or any(tokens[i:i + 2] == ["CI", "FIX"] for i in range(len(tokens)))):
         return 1
     return 2
 

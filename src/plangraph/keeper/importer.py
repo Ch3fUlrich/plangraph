@@ -207,14 +207,32 @@ def load_dir(path):
 
 # ------------------------------------------------------------------ export
 
+def _created_answers(conn):
+    """``{key: similar}``: the near-copy answers recorded when each item was created, so an
+    exported plan re-imports without a new refusal."""
+    out = {}
+    for row in conn.execute("SELECT key, payload FROM events WHERE type='item_created' ORDER BY seq"):
+        raw = row["payload"]
+        try:
+            data = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict) and data.get("similar"):
+            out[row["key"]] = data["similar"]
+    return out
+
+
 def _read_items(source):
     """Store rows in definition shape, from a Store or a raw connection."""
     if hasattr(source, "_all_items"):
-        return source._all_items()
+        answers = _created_answers(source.conn)
+        return [dict(item, similar=answers[item["key"]]) if item["key"] in answers else item
+                for item in source._all_items()]
     deps = {}
     for row in source.execute("SELECT src,dst FROM edges"):
         deps.setdefault(row["src"], []).append(row["dst"])
     out = []
+    answers = _created_answers(source)
     for row in source.execute("SELECT * FROM items ORDER BY key"):
         item = dict(row)
         try:
@@ -224,6 +242,8 @@ def _read_items(source):
         item["evidence_kinds"] = kinds
         item["operator"] = bool(item.get("operator"))
         item["depends_on"] = sorted(deps.get(item["key"], []))
+        if item["key"] in answers:
+            item["similar"] = answers[item["key"]]
         try:
             item["supersedes"] = json.loads(item.get("supersedes") or "[]")
         except (ValueError, TypeError):
@@ -248,6 +268,8 @@ def _export_record(item):
                 and value.is_integer():
             value = int(value)  # SQLite REAL columns coerce whole numbers
         record[field] = value
+    if item.get("similar"):
+        record["similar"] = item["similar"]
     return record
 
 

@@ -285,3 +285,22 @@ def test_a_plan_import_of_a_near_copy_is_refused_until_answered(tmp_path):
     answered = _plan_dir(tmp_path / "again", {**copy, "similar": {"demo:ORIG": "distinct"}}, goal)
     world.store.import_items(world.p("router"), load_dir(answered))
     assert world.store.show(world.p("router"), "demo:COPY")["state"] == "open"
+
+
+def test_siblings_differing_by_one_word_in_one_import_need_an_answer_and_the_export_keeps_it(tmp_path):
+    world = World(tmp_path)
+    goal = {"project": "demo", "id": "GOAL", "title": "Goal", "kind": "goal", "owner": "o",
+            "depends_on": ["S1", "S2"], "evidence_kinds": ["any"]}
+    one = _item("S1", title=LONG_TITLE, description=LONG_TITLE)
+    two = _item("S2", title=LONG_TITLE + " today", description=LONG_TITLE)
+    with pytest.raises(Refused) as exc:
+        world.store.import_items(world.p("router"), load_dir(_plan_dir(tmp_path, one, two, goal)))
+    assert "demo:S1" in exc.value.msg
+    (tmp_path / "ok").mkdir()
+    plan = _plan_dir(tmp_path / "ok", one, {**two, "similar": {"demo:S1": "distinct"}}, goal)
+    world.store.import_items(world.p("router"), load_dir(plan))
+    export_yaml(world.store, tmp_path / "out")
+    exported = {it["key"]: it for it in load_dir(tmp_path / "out")}
+    assert exported["demo:S2"]["similar"] == {"demo:S1": "distinct"} and "similar" not in exported["demo:S1"]
+    other = World(tmp_path / "again" if (tmp_path / "again").mkdir() is None else tmp_path)
+    other.store.import_items(other.p("router"), load_dir(tmp_path / "out"))      # re-imports without a refusal

@@ -439,3 +439,27 @@ def test_answers_of_one_type_are_each_counted_and_survive_a_refused_batch(w):
     after = dict(w.conn.execute("SELECT metric, value FROM metrics WHERE metric LIKE 'similar_%'").fetchall())
     assert after["similar_answered.distinct"] - before.get("similar_answered.distinct", 0) == 2
     assert after["similar_matches_shown"] > before.get("similar_matches_shown", 0)
+
+
+# ------------------------------------------------------------ review round 4
+def test_a_cycle_through_a_rehome_alias_is_refused(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("A"), defn("B"), defn("GOAL", ["A", "B"], kind="goal")])
+    w.store.edit_definition(router, "demo:A", {"supersedes": ["demo:B"]})
+    new_b = w.store.rehome(router, "demo:B", "other", None)["new"]
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(w.p("router"), new_b, {"supersedes": ["demo:A"]})
+    assert "cycle" in exc.value.msg
+
+
+def test_a_dry_run_does_not_count_the_experiment(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("ORIG", title=LONG, description=LONG),
+                                  defn("GOAL", ["ORIG"], kind="goal")])
+    copy = defn("COPY", title=NEAR, description=NEAR, under=G, similar={"demo:ORIG": "distinct"})
+    q = "SELECT COALESCE(SUM(value),0) FROM metrics WHERE metric LIKE 'similar_%'"
+    before = w.conn.execute(q).fetchone()[0]
+    w.store.apply_ops(router, [{"op": "create", "item": copy}], dry_run=True)
+    assert w.conn.execute(q).fetchone()[0] == before
+    w.store.apply_ops(router, [{"op": "create", "item": copy}])
+    assert w.conn.execute(q).fetchone()[0] > before

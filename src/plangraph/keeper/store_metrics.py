@@ -10,9 +10,7 @@ import re
 from datetime import date
 
 from .. import views
-from .brief import superseded_contract
 from .errors import Refused
-from . import context_sources as src
 
 #: metric and provider names share the budget ``[A-Za-z0-9._:-]{1,64}`` alphabet.
 _NAME_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
@@ -281,24 +279,23 @@ class MetricsMixin:
                     "failed": failed, "dry_run": bool(dry_run)}
         return self._run(principal, "backfill_categories", None, fill)
 
-    def _record_categories(self, items, now):
+    def _record_categories(self, now):
         """EXPERIMENT (rule 3.76): per-day ready counts and verified merges per category
         (explicit zeros), and a finding for a category whose ready items waited over
-        48 h with no verified merge.  An item is ready since its last dependency was
-        done (its creation when it has none)."""
+        48 h with no verified merge.  "Ready" is the keeper's own classification
+        (``_ready_groups``: not superseded, not scope-stale, not carried by a PR);
+        an item is ready since its last dependency was done (its creation without one).
+        Read outside the write lock: the classification may consult the work index."""
         stamp, day, cutoff = self._iso(now), self._iso(now)[:10], self._iso(now - 48 * 3600)
+        items = self._all_items()
         created, done, _, merged_keys = self._snapshot_run_meta()
         cat = {i["key"]: i.get("category") for i in items}
         names = sorted({*self._category_list("*"), *(c for c in cat.values() if c)})
         ready, merged = {n: 0 for n in names}, {n: 0 for n in names}
         recent, waiting = set(), {}
-        inputs = self._inputs({i["key"]: i for i in items})
-        for item in views.ready(items):
+        for item in self._ready_groups(n=None)["items"]:
             name = item.get("category")
-            # only what a claim would hand out: not superseded, no retired contract or premise
-            if (not name or inputs["superseded"].get(item["key"]) or superseded_contract(item)
-                    or any(d in inputs["book"]["superseded"]
-                           for d in src.decision_ids(*self._texts(item)))):
+            if not name:
                 continue
             ready[name] += 1
             since = max([item.get("created_at") or created.get(item["key"]) or stamp]
@@ -311,19 +308,20 @@ class MetricsMixin:
                     merged[cat[key]] += 1
                 if ts >= cutoff:
                     recent.add(cat[key])
-        for kind, counts in (("ready", ready), ("merged", merged)):
-            for name, value in counts.items():
-                self.conn.execute(
-                    "INSERT INTO metrics(day,metric,value,source,computed_at) VALUES(?,?,?,?,?)"
-                    " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
-                    "computed_at=excluded.computed_at",
-                    (day, f"category_{kind}.{name}", float(value), "reap", stamp))
         starved = {key: name for name, (_, key) in waiting.items() if name not in recent}
         code = "category_starved"
-        previous = {r["key"] for r in self.conn.execute(
-            "SELECT key FROM alerts WHERE code=? AND state='open'", (code,))}
-        for key, name in starved.items():
-            self._alerts_raise_finding(
-                key, code, f"category {name}: ready items waited over 48h with no verified merge", now)
-        for key in sorted(previous - starved.keys()):
-            self._alerts_resolve(key, now, code=code)
+        with self._write():
+            for kind, counts in (("ready", ready), ("merged", merged)):
+                for name, value in counts.items():
+                    self.conn.execute(
+                        "INSERT INTO metrics(day,metric,value,source,computed_at) VALUES(?,?,?,?,?)"
+                        " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
+                        "computed_at=excluded.computed_at",
+                        (day, f"category_{kind}.{name}", float(value), "reap", stamp))
+            previous = {r["key"] for r in self.conn.execute(
+                "SELECT key FROM alerts WHERE code=? AND state='open'", (code,))}
+            for key, name in starved.items():
+                self._alerts_raise_finding(
+                    key, code, f"category {name}: ready items waited over 48h with no verified merge", now)
+            for key in sorted(previous - starved.keys()):
+                self._alerts_resolve(key, now, code=code)

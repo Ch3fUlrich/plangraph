@@ -257,17 +257,18 @@ class InputMixin:
             raise Refused("validation", f"{key}: category must be one of {self._category_list(project)}")
         return value
 
-    @staticmethod
-    def _supersedes_reaches(index, start, goal):
-        """Does following ``supersedes`` links from *start* reach *goal*?"""
-        seen, todo = set(), [start]
+    def _supersedes_reaches(self, index, start, goal):
+        """Does following ``supersedes`` links from *start* reach *goal*?  Every edge is
+        resolved through the rehome aliases, as the claim and ready gates resolve it."""
+        goal = self.resolve_key(goal)
+        seen, todo = set(), [self.resolve_key(start)]
         while todo:
             node = todo.pop()
             if node == goal:
                 return True
             if node not in seen:
                 seen.add(node)
-                todo += (index.get(node) or {}).get("supersedes") or []
+                todo += [self.resolve_key(k) for k in (index.get(node) or {}).get("supersedes") or []]
         return False
 
     @staticmethod
@@ -341,10 +342,9 @@ class InputMixin:
             key, project = definition["key"], definition["project"]
             self._checked_category(key, definition.get("category"), project)
             answers = definition.get("similar") or {}
-            # An import round-trips plans whose siblings were answered when they were created
-            # (the YAML has no answers): its siblings only collide when they are exact copies.
-            matches = (similar_items(definition, before) + similar_items(definition, peers, exact_only=legacy))
-            matches = sorted(set(matches), key=lambda m: (-m[1], m[0]))
+            # An import answers for its siblings like any batch; an exported plan carries the
+            # answers given when its items were created (``similar``).
+            matches = similar_items(definition, before + peers)
             self._refuse_unanswered(key, matches, answers)
             deps, sups = self._apply_answers(principal, key, project, answers,
                                              {**index, **{d["key"]: d for d in peers}},

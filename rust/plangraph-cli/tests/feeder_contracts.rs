@@ -101,6 +101,32 @@ fn whole_tick_dry_run_does_not_touch_claim_or_spawner() {
     assert!(f.calls.is_empty());
 }
 #[test]
+fn feeder_pr_class_reads_a_pr_object_like_the_keeper_view_does() {
+    // The same cases are pinned in tests/test_views_effective_priority.py (work_class).
+    let item = |key: &str, note: &str| json!({"key": key, "state": "open", "priority": 1, "created_at": "2026-01-01T00:00:00Z", "note": note});
+    let top = |notes: &[(&str, &str)]| {
+        let items: Vec<Value> = notes.iter().map(|(k, n)| item(k, n)).collect();
+        pick(&json!({"items": items}), &[], &Policy::default())
+            .unwrap()
+            .key
+    };
+    assert_eq!(
+        top(&[
+            ("p:A-MERGED", "pr: {\"number\": 7, \"state\": \"merged\"}"),
+            ("p:B-FLAG", "pr: {\"number\": 9, \"merged\": true}"),
+            ("p:C-LIVE", "pr: {\"number\": 8, \"state\": \"open\"}"),
+        ]),
+        "p:C-LIVE"
+    );
+    assert_eq!(
+        top(&[
+            ("p:A-QUOTED", "pr: 12\npr_state: \"closed\""),
+            ("p:B-FIX", "ci_fix: true")
+        ]),
+        "p:B-FIX"
+    );
+}
+#[test]
 fn feeder_orders_by_category_rank_before_priority() {
     let mut v = ready();
     v["items"][4]["context"]["newer_decisions"] = json!(["D-123"]);

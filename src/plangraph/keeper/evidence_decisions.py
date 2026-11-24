@@ -579,6 +579,25 @@ _CHANGES_SCOPE = re.compile(
     r"|not|but|also|second|additional)\b")
 
 
+#: Words an ordering row may carry besides item keys, a stamp and at most ``_TERSE_LEFTOVER`` others.
+_ORDER_WORDS = frozenset((
+    "go order ordered orders ordering operator router define defined defines queue queued queues "
+    "create created priority prioritize prioritise prioritized prioritised sequence sequenced first "
+    "next now the a an is are was be and or in of to for on at it its this that as by with plan plans "
+    "item items lesson lessons").split())
+_TERSE_LEFTOVER = 2
+
+
+def _terse_order(lines):
+    """Is the row only an order of the item: after the stamp, keys and ordering words at most two
+    other words remain?  A row that says more (a backend change, a new rule) is read by a human."""
+    cells = " ".join(lines).split("|")
+    text = re.sub(r"\(\d\d:\d[\dx]Z[^)]*\)", " ", cells[3] if len(cells) > 3 else " ".join(cells))
+    text = re.sub(r"[\w.-]+:[\w.-]+|D-\d+", " ", text)
+    left = [w for w in re.findall(r"[A-Za-z]+", text) if w.lower() not in _ORDER_WORDS]
+    return len(left) <= _TERSE_LEFTOVER
+
+
 def premise_neutral(lines, did, source):
     """May the decision *did* (its row *lines*) be ignored by the premise gate?
 
@@ -587,9 +606,11 @@ def premise_neutral(lines, did, source):
     case, "logged within two hours of the define by the same session", needs the
     session and the full date, which the log does not carry: a time of day and an
     id gap would let a row of another day or session mask a later scope change,
-    so that case is not guessed.
+    so that case is not guessed.  The ordering row must also be terse (a keyword
+    list cannot tell an order from an order that changes a backend).
     """
     if did in re.findall(r"D-\d+", source or ""):
         return True
     text = " ".join(lines)
-    return not _CHANGES_SCOPE.search(text) and bool(_ORDERS_ITEM.search(text))
+    return (not _CHANGES_SCOPE.search(text) and bool(_ORDERS_ITEM.search(text))
+            and _terse_order(lines))

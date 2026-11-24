@@ -56,8 +56,8 @@ class ReapMixin:
             gate_alerts = self._check_gate_capacity(items, now)
             aged = self._age_priorities(principal, now)
             self._record_inheritance(items, now)
-            self._record_categories(items, now)
             alerts = self._alerts_expire(now)
+        self._record_categories(now)     # after the lock: it reads the keeper's ready classification
         if expired or aged or findings or alerts or gate_alerts:
             self._reap_revision = getattr(self, "_reap_revision", 0) + 1
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}

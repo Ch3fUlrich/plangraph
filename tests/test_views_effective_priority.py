@@ -76,3 +76,12 @@ def test_a_ci_fix_and_a_live_pr_sort_before_a_speed_item_as_in_the_feeder():
     assert [views.work_class(i) for i in (pr, ci, speed, closed)] == [0, 1, 2, 2]
     got = [i["key"] for i in views.ready([speed, closed, ci, pr])]
     assert got == ["d:CARRIED", "d:BUILD-CI-FIX", "d:SPEED", "d:MERGED-PR"]
+
+
+def test_a_merged_pr_object_in_the_note_is_not_a_live_pr_like_in_the_feeder():
+    merged = {**_it("OBJ-MERGED", 1), "note": 'pr: {"number": 7, "state": "merged"}'}
+    live = {**_it("OBJ-LIVE", 1), "note": 'pr: {"number": 8, "state": "open"}'}
+    flagged = {**_it("OBJ-FLAG", 1), "note": 'pr: {"number": 9, "merged": true}'}
+    quoted = {**_it("QUOTED", 1), "note": 'pr: 12\npr_state: "closed"'}
+    fix = {**_it("PLAIN", 1), "note": "ci_fix: true"}
+    assert [views.work_class(i) for i in (merged, live, flagged, quoted, fix)] == [2, 0, 2, 2, 1]

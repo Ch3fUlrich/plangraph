@@ -225,3 +225,42 @@ def test_the_alerts_text_shows_the_force_stale_count(w, decisions):
     assert "force_stale_claims 2" in fmt.alerts_text({"force_stale_claims": 2, "lease_expiring": [],
                                                       "review_overdue": [], "findings": [], "refusals": [],
                                                       "stalled": False, "warnings": []})
+
+
+def test_a_removed_and_re_added_supersedes_link_is_not_cleared_by_the_old_reconfirmation(w, decisions):
+    _items(w)
+    key = "demo:SCOPE-ITEM"
+    w.store.create_items(w.p("router"), [defn("NEWER", supersedes=[key], under="demo:GOAL")])
+    _decide(decisions, 5900, "(05:0xZ) demo:SCOPE-ITEM re-read")
+    w.store.reconfirm(w.p("router"), key, "D-5900", supersession="demo:NEWER")
+    assert w.store.claim(w.p("l1main"), key)["epoch"] == 1                # cleared for this link
+    w.store.release(w.p("l1main"), key, 1)
+    w.store.edit_definition(w.p("router"), "demo:NEWER", {"supersedes": []})        # link removed
+    assert w.store.claim(w.p("l1main"), key)["epoch"] == 2                # free while no link
+    w.store.release(w.p("l1main"), key, 2)
+    w.store.edit_definition(w.p("router"), "demo:NEWER", {"supersedes": [key]})     # link added again
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), key)
+    assert "superseded by demo:NEWER" in exc.value.msg
+
+
+def test_a_go_row_that_changes_the_backend_is_not_a_terse_order(w, decisions):
+    _items(w)
+    _decide(decisions, 5880, "(05:0xZ) GO demo:SPAWNER-DEFAULT with the keeper storage on Postgres instead of SQLite")
+    _decide(decisions, 5881, "(05:0xZ) GO demo:PHASE-LINE-GREEN: the keeper now stores plans in Postgres")
+    for key, did in (("demo:SPAWNER-DEFAULT", "D-5880"), ("demo:PHASE-LINE-GREEN", "D-5881")):
+        with pytest.raises(Refused) as exc:
+            w.store.claim(w.p("l1main"), key)
+        assert f"premise outdated: {did}" in exc.value.msg
+
+
+def test_a_system_lease_honours_the_same_reconfirmation_watermark(w, decisions):
+    w.store.create_items(w.p("router"), [defn("PREM", description="per D-5"),
+                                         defn("GOAL", ["PREM"], kind="goal")])
+    _decide(decisions, 9, "supersedes D-5 for demo")
+    with pytest.raises(Refused):
+        w.store.worker_claim_lease(w.p("system"), "demo:PREM")
+    w.store.reconfirm(w.p("router"), "demo:PREM", "D-9")
+    assert w.store.claim(w.p("l1main"), "demo:PREM")["epoch"] == 1       # an ordinary claim passes
+    w.store.release(w.p("l1main"), "demo:PREM", 1)
+    assert w.store.worker_claim_lease(w.p("system"), "demo:PREM")["epoch"] == 2
