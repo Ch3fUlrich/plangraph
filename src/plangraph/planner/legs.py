@@ -81,6 +81,11 @@ def _codex_context(model):
     return _registry_limit('omniroute', model).get('context', 1_000_000)
 
 
+#: Bound while the registry file is absent or has no entry for the model (a copied tree
+#: without ``configuration/``); the registry logs the missing file and routing stays safe.
+_NO_REGISTRY_REQUEST_TOKENS = 100_000
+
+
 def _registry_request_tokens(provider, model):
     """Largest request an opencode leg takes: the registry context minus its output reserve.
 
@@ -88,6 +93,8 @@ def _registry_request_tokens(provider, model):
     a model's window; ``legs.py`` types no limit for a model the registry lists.
     """
     limit = _registry_limit(provider, model)
+    if not isinstance(limit.get('context'), int):
+        return _NO_REGISTRY_REQUEST_TOKENS
     return limit['context'] - limit.get('output', 0)
 
 

@@ -61,3 +61,8 @@ def test_400k_review_card_offers_mimo_pro():
     assert "mimo-v2.6-pro" in {leg.id for leg in plan.legs}
     assert not [s for s in plan.skipped if s["leg"] == "mimo-v2.6-pro"
                 and "max_request_tokens" in str(s.get("reason"))]
+
+
+def test_model_without_a_registry_entry_gets_the_safe_bound():
+    from plangraph.planner import legs
+    assert legs._registry_request_tokens("nope", "nope") == 100_000
