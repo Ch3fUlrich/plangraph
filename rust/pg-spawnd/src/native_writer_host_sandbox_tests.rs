@@ -133,17 +133,23 @@ fn writer_command_denies_reads_of_the_config_directory_and_the_ssh_directory() {
     assert!(line.contains("/.ssh\"=\"none\""), "{line}");
 }
 
-/// A fixture secret variable set in the parent never reaches the process `writer_command` builds.
+/// A fixture secret variable set in the parent never reaches the process `writer_command`
+/// builds. The fixture reports only whether the variables arrived, never their values or the
+/// rest of the environment.
 #[cfg(unix)]
 #[test]
 fn a_parent_secret_variable_is_absent_in_the_writer_child() {
     let dir = tempfile::tempdir().unwrap();
     let (host, _, _) = fixture_host(&dir);
-    let seen = dir.path().join("child-env");
+    let seen = dir.path().join("child-report");
     let fixture = dir.path().join("fixture-codex");
     pg_worker_core::executable_test_support::write_executable(
         &fixture,
-        format!("#!/bin/sh\n/usr/bin/env > '{}'\n", seen.display()),
+        format!(
+            "#!/bin/sh\n{{ [ -n \"${{PG_FIXTURE_PARENT_SECRET_TOKEN+x}}\" ] && echo secret-present || echo secret-absent\n\
+             [ -n \"${{HOME+x}}\" ] && echo home-present || echo home-absent; }} > '{}'\n",
+            seen.display()
+        ),
     );
     std::env::set_var("PG_FIXTURE_PARENT_SECRET_TOKEN", "fixture-leak-value");
     let mut command = host
@@ -151,14 +157,29 @@ fn a_parent_secret_variable_is_absent_in_the_writer_child() {
         .unwrap();
     assert!(command.status().unwrap().success());
     std::env::remove_var("PG_FIXTURE_PARENT_SECRET_TOKEN");
-    let child = fs::read_to_string(&seen).unwrap();
-    assert!(
-        child.lines().any(|l| l.starts_with("HOME=")),
-        "the allowlisted variables still arrive: {child}"
+    let report = fs::read_to_string(&seen).unwrap();
+    assert_eq!(
+        report.lines().collect::<Vec<_>>(),
+        ["secret-absent", "home-present"]
     );
+}
+
+/// The harness API key reaches Codex itself but not the commands the agent runs.
+#[test]
+fn writer_command_keeps_the_harness_api_key_out_of_the_agent_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let (host, _, _) = fixture_host(&dir);
+    let command = host
+        .writer_command("codex", None, &dir.path().join("run"))
+        .unwrap();
+    let line = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(
-        !child.contains("PG_FIXTURE_PARENT_SECRET_TOKEN") && !child.contains("fixture-leak-value"),
-        "{child}"
+        line.contains("shell_environment_policy.exclude=[\"OPENAI_*\"]"),
+        "{line}"
     );
 }
 

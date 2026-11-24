@@ -220,3 +220,36 @@ fn failed_bwrap_probe_is_persisted_and_refuses_placement() {
     assert!(reason.starts_with("sandbox_unavailable: bwrap: setting up uid map: Permission denied"));
     assert!(reason.contains("AppArmor"));
 }
+
+/// Starting the sandbox is not enough for placement: the writer policy must also deny a fixture
+/// read. A fixture `codex` that starts the child but denies nothing is refused; one that denies
+/// the fixture file is accepted.
+#[cfg(unix)]
+#[test]
+fn writer_readiness_requires_a_denied_fixture_read() {
+    use pg_worker_core::host_readiness::Native;
+
+    let run = |body: &str| {
+        let tmp = tempfile::tempdir().unwrap();
+        let codex = tmp.path().join("codex");
+        pg_worker_core::executable_test_support::write_executable(&codex, body);
+        let mut runner = Native {
+            codex,
+            executable: env!("CARGO_BIN_EXE_pg-host-readiness").into(),
+            tool_path: None,
+        };
+        runner.probe(Probe::Sandbox, tmp.path(), "workspace-write")
+    };
+    let skip = "while [ \"$1\" != -- ]; do shift; done\nshift\n";
+    let open = run(&format!("#!/bin/sh\n{skip}exec \"$@\"\n"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        open.contains("credential isolation is not enforced") && open.contains("readable"),
+        "{open}"
+    );
+    run(&format!(
+        "#!/bin/sh\n{skip}case \"$*\" in *credential-fixture*) echo denied;; *) exec \"$@\";; esac\n"
+    ))
+    .unwrap();
+}

@@ -150,7 +150,11 @@ def test_sonnet_without_sandbox_is_read_only(tmp_path, monkeypatch):
         assert argv[argv.index(flag) + 1] == "Read,Grep,Glob"
     assert argv[argv.index("--disallowedTools") + 1] == "Write,Edit,Bash,mcp__*"
     assert argv[argv.index("--setting-sources") + 1] == ""
-    assert "--settings" not in argv
+    # No sandbox settings, only permission rules that deny the built-in read tools on secrets.
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert set(settings) == {"permissions"} and set(settings["permissions"]) == {"deny"}
+    assert {"Read(~/.ssh)", "Read(~/.ssh/**)", "Read(~/.config/plangraph/**)"} <= set(
+        settings["permissions"]["deny"])
     assert "--restricted" in argv
     assert "TESTS: none: sandbox unavailable on fixture-host" in argv[-1]
     assert event == {"event": "sandbox_unavailable", "host": "fixture-host", "python_job_id": "fixture"}
@@ -223,3 +227,20 @@ def test_review_sandbox_denies_the_shared_secret_list(tmp_path, monkeypatch):
     deny = json.loads(argv[argv.index("--settings") + 1])["sandbox"]["filesystem"]["denyRead"]
     assert {"~/.ssh", "~/.config/plangraph", "~/.netrc"} <= set(deny)
     assert set(claude_seat.secret_paths()) <= set(deny)
+
+
+def test_a_relocated_config_home_is_denied_with_and_without_the_sandbox(tmp_path, monkeypatch):
+    from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
+    from plangraph.routing_support import claude_seat
+
+    leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
+    xdg = str(tmp_path / "xdg")
+    for available in (True, False):
+        monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: available, raising=False)
+        argv = claude_access_args("review")
+        claude_seat.configure_review_tests(argv, {"XDG_CONFIG_HOME": xdg}, leg, "review", {},
+                                           "fixture", review_target=str(tmp_path / "target"))
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        assert f"Read(/{xdg}/plangraph/**)" in settings["permissions"]["deny"]
+        if available:
+            assert f"{xdg}/plangraph" in settings["sandbox"]["filesystem"]["denyRead"]

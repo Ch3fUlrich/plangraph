@@ -120,9 +120,13 @@ Reads are denied too: the same command line carries the `plangraph_isolated` Cod
 profile (`credential_isolation.rs`), which reads everywhere except the paths of
 `src/plangraph/config/secret_paths.json` (the plangraph config directory under `~/.config` and
 `XDG_CONFIG_HOME`, the ssh, aws, gnupg and gcloud directories, git, netrc and docker credentials).
-A card that names `sandbox: danger-full-access` is refused with `sandbox_refused:`.
-`pg-host-readiness --credential-probe` prints `denied <path>` for each of those paths that exists
-on the host and `ISOLATED`; run it on every host after a deploy.
+Codex also drops `OPENAI_*` (the same data file) from the environment of the commands the agent
+runs; Codex itself keeps its harness auth. A card that names `sandbox: danger-full-access` is
+refused with `sandbox_refused:`. Readiness is only `sandbox_ok` when the effective writer policy
+also denies a fixture file (`credential isolation is not enforced` otherwise).
+`pg-host-readiness --credential-probe` runs that policy against every existing secret path and
+prints `denied <path>` lines, then `ISOLATED` only when the plangraph config directory itself was
+denied; run it on every host after a deploy.
 Package placement requires a fresh `workspace-write` record from `pg-host-readiness`.
 The probe starts Codex's sandbox and commits in a scratch linked worktree using the
 same sandbox overrides as the writer. On Linux, the writer account's AppArmor policy
