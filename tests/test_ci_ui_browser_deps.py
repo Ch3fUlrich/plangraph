@@ -7,10 +7,14 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def browser_steps():
+def browser_job():
     jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
     assert jobs["browser"]["name"] == "UI tests in headless Chromium"
-    return jobs["browser"]["steps"]
+    return jobs["browser"]
+
+
+def browser_steps():
+    return browser_job()["steps"]
 
 
 def index_of(steps, needle):
@@ -24,6 +28,8 @@ def test_browser_deps_are_installed_in_their_own_bounded_retried_step():
     deps = steps[index_of(steps, "install-deps")]
     tests = steps[index_of(steps, "pytest -q tests/browser -m browser")]
     assert steps.index(deps) < steps.index(tests)
+    assert "if" not in deps
+    assert "install-deps chromium" in deps["with"]["command"]
     assert isinstance(deps.get("timeout-minutes"), int)
     assert deps["uses"] == "./.github/actions/bounded-step"
     # The step deadline sits below its step timeout, and the last try's failure fails the step.
@@ -48,3 +54,9 @@ def test_browser_download_and_tests_are_not_relaxed_and_do_not_use_apt():
     # No apt work remains inside the timed test step or the browser download step.
     for step in (chromium, tests):
         assert "apt" not in step["with"]["command"]
+
+
+def test_job_timeout_covers_every_step_running_to_its_own_timeout():
+    job = browser_job()
+    worst_case = sum(step["timeout-minutes"] for step in job["steps"] if "timeout-minutes" in step)
+    assert job["timeout-minutes"] >= worst_case

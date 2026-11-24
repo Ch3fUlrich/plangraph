@@ -278,6 +278,12 @@ Only the shared setup may use actions whose names contain `rust` or `toolchain`.
 Its upstream action is commit-pinned with an action-version comment; update that
 SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
+The UI job (`UI tests in headless Chromium`) installs the Chromium system packages in
+their own step with at most 3 tries and its own timeout, before the timed browser tests, and
+its job timeout covers every step running to its own limit.
+`python3 -m pytest -q tests/test_ci_ui_browser_deps.py` checks the step order, the retry bound and
+the job timeout; a workflow-only change selects it with the other CI regression tests.
+
 ## Lanes
 
 Completed Rust ports remove only their own Python waiver from

@@ -264,7 +264,9 @@ jobs:
     needs: select
     if: needs.select.outputs.browser == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # Sum of the step timeouts (every step running to its own limit): checkout 3 + Python 3
+    # + pip 5 + cache 3 + deps 12 + Chromium 5 + browser tests 10 + screenshots 3 = 44.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         timeout-minutes: 3
