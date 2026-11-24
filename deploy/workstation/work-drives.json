@@ -1,0 +1,7 @@
+{
+  "work_drives": [
+    {"path": "/mnt/work-d/plangraph/checkout", "disk_floor_gb": 20},
+    {"path": "/mnt/work-g/plangraph/checkout", "disk_floor_gb": 20},
+    {"path": "/mnt/work-f/plangraph/checkout", "disk_floor_gb": 50}
+  ]
+}
