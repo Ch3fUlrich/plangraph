@@ -14,7 +14,7 @@ fn git_in(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().into()
 }
 
-/// A cargo target of ten idle build variants, 1 043 bytes in all.
+/// A cargo target of ten idle build variants, one disk block each.
 fn over_cap_target(dir: &Path) -> PathBuf {
     let target = dir.join("shared-target");
     let build = target.join("debug/build");
@@ -71,7 +71,7 @@ fn host_reclaims_an_over_cap_target_under_the_lease_and_then_pushes_the_same_hea
         python_src: None,
     };
     let target = over_cap_target(dir.path());
-    let cap = 700;
+    let cap = pg_worker_core::disk_measure::allocated_bytes(&target).unwrap() / 2;
     let idle = || Ok((vec![], false));
 
     // A live Cargo command holds the shared lease: the reclaim refuses and names its pid.
@@ -90,7 +90,7 @@ fn host_reclaims_an_over_cap_target_under_the_lease_and_then_pushes_the_same_hea
     // Between commands the host takes the exclusive lease, trims, and the same head is pushed.
     drop(command);
     host.reclaim_at(&target, cap, idle).unwrap();
-    assert!(pg_worker_core::disk_hygiene::scan(&target).unwrap().0 <= cap);
+    assert!(pg_worker_core::disk_measure::allocated_bytes(&target).unwrap() <= cap);
     assert_eq!(
         host.push(&head).unwrap().as_deref(),
         Some("refs/heads/lane/fixture")
@@ -102,6 +102,68 @@ fn host_reclaims_an_over_cap_target_under_the_lease_and_then_pushes_the_same_hea
     assert!(pg_worker_core::cargo_cache::try_exclusive_lease(&target)
         .unwrap()
         .is_some());
+}
+
+fn host_in(dir: &Path, repo: &Path) -> Host {
+    fs::create_dir_all(dir.join("run")).unwrap();
+    Host {
+        repo: repo.into(),
+        run_id: "run-handoff".into(),
+        cwd: repo.into(),
+        reviews: dir.join("reviews"),
+        record_path: dir.join("run/record.json"),
+        base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.to_path_buf(),
+        brief: "brief".into(),
+        push_ref: Some("refs/heads/lane/fixture".into()),
+        reviews_started: 0,
+        review_override: None,
+        review_cli: vec!["false".into()],
+        python_src: None,
+    }
+}
+
+#[test]
+fn an_accepted_run_reaches_the_host_reclaim_and_pushes_the_same_head_without_another_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = dir.path().join("remote.git");
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&remote).unwrap();
+    fs::create_dir_all(&repo).unwrap();
+    git_in(&remote, &["init", "-q", "--bare"]);
+    git_in(&repo, &["init", "-q", "-b", "main"]);
+    git_in(
+        &repo,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git_in(&repo, &["commit", "--allow-empty", "-qm", "accepted"]);
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    let target = over_cap_target(dir.path());
+    let cap = pg_worker_core::disk_measure::allocated_bytes(&target).unwrap() / 2;
+    let host = std::rc::Rc::new(std::cell::RefCell::new(host_in(dir.path(), &repo)));
+    let (reclaiming, pushing) = (host.clone(), host.clone());
+    let reclaim_target = target.clone();
+
+    let (record, turns, reviews) = crate::native_writer::tests::run_with_host_handoff(
+        &head,
+        Box::new(move || {
+            reclaiming
+                .borrow()
+                .reclaim_at(&reclaim_target, cap, || Ok((vec![], false)))
+        }),
+        Box::new(move |head| pushing.borrow_mut().push(head)),
+    );
+
+    // The production lifecycle drove the host's reclaim, then pushed the accepted head.
+    assert_eq!(record["status"], "completed", "{record}");
+    assert!(pg_worker_core::disk_measure::allocated_bytes(&target).unwrap() <= cap);
+    assert_eq!(
+        git_in(&remote, &["rev-parse", "refs/heads/lane/fixture"]),
+        head
+    );
+    assert_eq!((turns, reviews), (1, 1), "no second writer turn or review");
 }
 
 #[test]

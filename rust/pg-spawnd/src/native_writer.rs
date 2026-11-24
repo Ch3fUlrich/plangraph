@@ -421,6 +421,10 @@ fn final_gates(driver: &mut impl Driver, head: &str) -> Result<(), (i32, String)
     }
     Ok(())
 }
+/// A push refusal whose cause is the shared Cargo target over its cap, which no commit fixes.
+fn host_cap_refusal(failure: &str) -> bool {
+    failure.contains("cargo_target_cap:")
+}
 /// Reclaim the shared target before the push. A refusal keeps the accepted head as `push_pending`
 /// with its receipt: a retry runs [`push_only`], never another writer turn or review.
 fn reclaim_for_push(
@@ -624,6 +628,18 @@ fn writer_attempt(
                     record.as_object_mut().unwrap().remove("push_pending");
                     return Ok(0);
                 }
+                Err(failure) if host_cap_refusal(&failure) => {
+                    // The shared target, not the writer's work, is over the cap: keep the
+                    // accepted head for a push-only retry instead of a writer turn.
+                    push_failure(record, &head, &failure);
+                    record["push_pending"] = json!({
+                        "head":head, "receipt":failure, "at":chrono::Utc::now().to_rfc3339()
+                    });
+                    return Err((
+                        7,
+                        format!("push_blocked_by_host: accepted head {head} kept for a push-only retry: {failure}"),
+                    ));
+                }
                 Err(failure) => {
                     let failures = push_failure(record, &head, &failure);
                     if failures > PUSH_FIXES || round_cap(record) || session.is_empty() {
@@ -671,4 +687,4 @@ fn writer_attempt(
 }
 #[cfg(test)]
 #[path = "native_writer_tests.rs"]
-mod tests;
+pub(crate) mod tests;
