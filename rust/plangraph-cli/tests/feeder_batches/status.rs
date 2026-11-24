@@ -153,8 +153,8 @@ fn a_single_item_run_also_gets_its_own_status_file() {
     );
 }
 
-/// The cards and briefs of two overlapping feeder launches, with the claim epoch of each
-/// status path normalised to `N`: the fixture the native writer host test feeds through its
+/// The cards and briefs of two overlapping feeder launches, with the claim epoch and key digest
+/// of each status path normalised to `N` and `aaaaaaaa`: the fixture the native writer host test feeds through its
 /// own record persistence (`reviews_rendered_from_saved_writer_records...`).
 const OVERLAP_LAUNCHES: &str =
     include_str!("../../../pg-spawnd/tests/fixtures/feeder-overlap-launches.json");
@@ -177,7 +177,18 @@ fn normalised(text: &str) -> String {
             rest = &rest[i + 2..];
         }
     }
-    out + rest
+    // The key digest before it is random-looking hex; the fixture keeps a readable stand-in.
+    let mut text = out + rest;
+    while let Some(i) = text.find("-eN.txt") {
+        let digest = i.checked_sub(9).filter(|&d| {
+            text[d..i].starts_with('-') && text[d + 1..i].chars().all(|c| c.is_ascii_hexdigit())
+        });
+        match digest {
+            Some(d) => text.replace_range(d..i + 7, "-aaaaaaaa-eK.txt"),
+            None => text.replace_range(i..i + 7, "-eK.txt"),
+        }
+    }
+    text.replace("-eK.txt", "-eN.txt")
 }
 
 #[test]
