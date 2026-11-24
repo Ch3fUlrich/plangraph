@@ -347,11 +347,15 @@ class SpawnerRunner:
                              if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
                     del child_env[name]
-                apply_review_permissions(child_env, _DENIED_TOOLS,
-                                         repository_tools=chosen is not None and opencode_repository_review(leg))
+                repository_tools = chosen is not None and opencode_repository_review(leg)
+                apply_review_permissions(child_env, _DENIED_TOOLS, repository_tools=repository_tools)
             if render_reason is None:
                 from .opencode_answer import configure_launch_output
                 render_reason = configure_launch_output(child_env, model_or_combo, role, reasoning_cap)
+            if role == 'review' and render_reason is None:
+                from .opencode_isolation import review_policy_refusal
+                render_reason = review_policy_refusal(child_env.get('OPENCODE_CONFIG_CONTENT') or '',
+                                                      _DENIED_TOOLS, repository_tools=repository_tools)
             if role == 'review':
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
@@ -719,6 +723,10 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
+            if job.command and job.command[0] == 'opencode' and job.role == 'review':
+                from .opencode_isolation import permission_denied_count
+                if denied_calls := permission_denied_count(stdout_text):
+                    job.events.append({'event': 'permission_denied', 'count': denied_calls})
             # The trusted response-side log is independent of child tool permissions.
             if is_opencode(job):
                 from .gateway_witness import witness

@@ -18,7 +18,6 @@ mod phase_options;
 pub mod phase_workflow;
 pub mod question;
 pub mod rollover;
-pub mod seat_tools;
 pub mod tls;
 pub mod workflow;
 

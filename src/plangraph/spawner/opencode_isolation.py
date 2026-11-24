@@ -260,8 +260,19 @@ _DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'gre
                  'webfetch', 'websearch')
 
 
+#: The shell commands a repository-tools review seat may run inside its checkout.
+_CHECKOUT_COMMANDS = ('git diff *', 'git show *', 'git status *', 'git log *',
+                      'git rev-parse *', 'cargo test *', 'pytest *',
+                      'python -m pytest *', 'python3 -m pytest *')
+_READ_TOOLS = ('read', 'glob', 'grep', 'list')
+
+
 def apply_review_permissions(env, denied_tools, *, repository_tools):
-    """Set the isolated review permissions while preserving provider config."""
+    """Set the isolated review permissions while preserving provider config.
+
+    Session sharing is always disabled: a review child cannot tell whether the repository it
+    reads is public, and an unknown visibility stays private.
+    """
     try:
         config = json.loads(env.get('OPENCODE_CONFIG_CONTENT') or '{}')
     except (ValueError, TypeError):
@@ -270,14 +281,57 @@ def apply_review_permissions(env, denied_tools, *, repository_tools):
         return
     permission = dict.fromkeys(('*', *denied_tools), 'deny')
     if repository_tools:
-        permission.update(read='allow', glob='allow', grep='allow', list='allow')
-        permission['bash'] = {'*': 'deny', **dict.fromkeys((
-            'git diff *', 'git show *', 'git status *', 'git log *',
-            'git rev-parse *', 'cargo test *', 'pytest *',
-            'python -m pytest *', 'python3 -m pytest *',
-        ), 'allow')}
-    config.update(permission=permission, mcp={}, plugin=[])
+        permission.update(dict.fromkeys(_READ_TOOLS, 'allow'))
+        permission['bash'] = {'*': 'deny', **dict.fromkeys(_CHECKOUT_COMMANDS, 'allow')}
+    config.update(permission=permission, mcp={}, plugin=[], share='disabled')
     env['OPENCODE_CONFIG_CONTENT'] = json.dumps(config)
+
+
+def review_policy_refusal(config_json, denied_tools, *, repository_tools):
+    """Why a review child's final config grants more than the seat policy, else None.
+
+    Refuses a grant: a permission outside the policy with any value but 'deny' (an unknown key,
+    an extra bash allow, an `edit` or `external_directory` allow), or sharing set to anything but 'disabled'. A
+    config that is missing a deny, malformed, or carries `mcp`/`plugin` is not refused here: it
+    launches unwitnessed through `_opencode_tools_denied` (`opencode_tools_not_denied`).
+    """
+    try:
+        cfg = json.loads(config_json or '{}')
+    except (ValueError, TypeError):
+        return None
+    permission = cfg.get('permission') if isinstance(cfg, dict) else None
+    if not isinstance(permission, dict):
+        return None
+    allowed = set(_READ_TOOLS) if repository_tools else set()
+    for tool, value in permission.items():
+        if tool in allowed:
+            ok = value in ('allow', 'deny')
+        elif tool == 'bash' and repository_tools and isinstance(value, dict):
+            ok = value.get('*') == 'deny' and all(
+                effect == 'deny' or (effect == 'allow' and command in _CHECKOUT_COMMANDS)
+                for command, effect in value.items())
+        else:
+            ok = value == 'deny'
+        if not ok:
+            return f'review_policy: {tool} is allowed'
+    if cfg.get('share') not in (None, 'disabled'):
+        return 'review_policy: sharing is not disabled'
+    return None
+
+
+def permission_denied_count(stdout_text):
+    """Tool calls in an `opencode run --format json` stream that failed because permission was refused."""
+    count = 0
+    for line in str(stdout_text or '').splitlines():
+        try:
+            event = json.loads(line)
+            state = event['part']['state']
+        except (ValueError, KeyError, TypeError):
+            continue
+        if (isinstance(state, dict) and state.get('status') == 'error'
+                and 'denied' in str(state.get('error') or '').lower()):
+            count += 1
+    return count
 
 
 def _opencode_managed_dir(env: Mapping) -> Path:
