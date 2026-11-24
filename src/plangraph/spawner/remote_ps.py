@@ -9,16 +9,17 @@ import selectors
 import secrets
 import shlex
 import time
+from .item_key import MAX_BATCH_KEYS, valid_item
 from .runner import is_terminal
 
 MAX_OUTPUT = 1024 * 1024
 MAX_WORKERS = 16
 
 TIMEOUT = 3
-FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code', 'item_key')
+FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code', 'item_key', 'item_keys')
 FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
                    started=(int, float), ended=(int, float, type(None)),
-                   pid=(int, type(None)), exit_code=(int, type(None)), item_key=(str, type(None)))
+                   pid=(int, type(None)), exit_code=(int, type(None)), item_key=(str, type(None)), item_keys=(list,))
 
 
 class HostQueryError(ValueError):
@@ -263,6 +264,9 @@ def _fetch(host, transport):
                            for k in FIELDS if k in row)
                     or not 1 <= len(row['host']) <= 253
                     or not row['run_id']
+                    or ('item_keys' in row and (
+                        not 1 <= len(row['item_keys']) <= MAX_BATCH_KEYS
+                        or not all(valid_item(key) for key in row['item_keys'])))
                     or any(any(ord(c) < 32 or 127 <= ord(c) <= 159 or
                                0xD800 <= ord(c) <= 0xDFFF for c in row[k])
                            for k in FIELDS if k in row and isinstance(row[k], str))):
