@@ -376,7 +376,7 @@ class SpawnPlan:
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
-                catalog_rows=None, installed=None) -> SpawnPlan:
+                catalog_rows=None, installed=None, busy_legs=()) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
     Measured inputs rank within cost tiers; implement writer priority is final.
     ``exclude_families`` excludes the specified family names from candidate legs.
@@ -384,6 +384,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     paused harnesses.  A review leg whose family is ANY writer family is
     excluded; seats cover each writer part (:func:`pick_seats`).  An inline-only
     review leg needs ``card["diff_ref"]``: the spawner inlines that diff.
+    ``busy_legs`` names review legs whose parallel review slots are all taken (rule 3.66 f10 clause 6).
     ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
@@ -523,6 +524,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         return st
 
     states = {l.id: _leg_status(l) for l in candidates}
+    busy = set(busy_legs) if native_review else set()
     quota_states = {"agy:" + model: (states[leg_id] if leg_id in states and leg_id != REVIEW_SONNET else
         read_status("agy:" + model))
         for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
@@ -573,7 +575,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             state_reason = status.get("reason") or state_reason
         if leg.id in blocked and (status.get("evidence") or {}).get("kind") == "auth_refused":
             state_reason = "auth_refused"
-        reason = policy.skip_reason(leg, role) or state_reason
+        reason = policy.skip_reason(leg, role) or state_reason or ("review_slots_busy" if leg.id in busy else None)
         if (not reason and (native_implement or native_review) and leg.claude_family
                 and not (native_implement and leg.id in SONNET_WRITERS and codex_limited)
                 and not (native_implement and leg.id not in SONNET_WRITERS and claude_quota_fallback)
@@ -628,7 +630,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
-        "review_route_excluded", "low_risk_only", "claude_requires_gpt_and_hydrogen_limits",
+        "review_route_excluded", "review_slots_busy", "low_risk_only", "claude_requires_gpt_and_hydrogen_limits",
         "claude_requires_codex_limited",
         "repository_review_tools_unavailable", "benchmark_unmeasured", "opencode_tools_denied",
         "effort_channel", "stale_row", "canary_pending")}
@@ -702,7 +704,16 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             sorted(ordered, key=lambda leg: seat_order.get(leg.id, len(seat_order))), writer_set, high=high)
     smart_seat = False
     if native_review:
-        smart = next((leg for leg in ordered if leg.id in REVIEW_SMART), None)
+        # Rule 3.66 (f10) clause 6 (D-6787): the head's smart seat is its first family-eligible smart leg
+        # (Sonnet first on a credential diff). Limited, unserved or with every parallel slot busy, the
+        # weak pair seats the head at once; no head waits for a smart slot.
+        primary = next((leg.id for id_ in ((REVIEW_SONNET, *REVIEW_SMART) if sensitive_review else REVIEW_SMART)
+                        for leg in candidates if leg.id == id_ and leg.family not in excluded
+                        and not policy.skip_reason(leg, role)), None)
+        smart = next((leg for leg in ordered if leg.id == primary), None)
+        if smart is None:
+            ordered = [*(leg for leg in ordered if leg.id in REVIEW_REQUIRED),
+                       *(leg for leg in ordered if leg.id not in REVIEW_REQUIRED)]
         if smart is not None:
             # Rule 3.66 (f10): one counted seat on the first smart leg; the weak pair seats only when none serves.
             smart_seat = True

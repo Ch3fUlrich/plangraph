@@ -29,7 +29,7 @@ __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("route_policy.json")
 _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families",
-         "review_tools_denied_legs")
+         "review_tools_denied_legs", "review_parallel_slots")
 
 
 def review_priority(leg) -> int:
@@ -101,6 +101,8 @@ class RoutePolicy:
     paused_harnesses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     review_allowed_families: tuple[str, ...] = ()
     review_tools_denied_legs: tuple[str, ...] = ()
+    #: Rule 3.66 (f10) clause 6: leg id -> parallel review runs it serves; a smart leg at its cap is busy.
+    review_parallel_slots: Mapping[str, int] = field(default_factory=dict)
 
     def allows(self, harness: str, role: str) -> bool:
         """False when ``harness`` is paused and ``role`` is not one it still serves."""
@@ -186,9 +188,19 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
             problems.append(f"paused_harnesses.{harness}: needs allowed_roles, a subset of {LEG_ROLES}")
             continue
         paused[harness] = tuple(roles)
+    slots_raw = doc.get("review_parallel_slots", {})
+    slots: dict[str, int] = {}
+    if not isinstance(slots_raw, Mapping):
+        problems.append("review_parallel_slots: must be an object")
+        slots_raw = {}
+    for leg_id, cap in slots_raw.items():
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+            problems.append(f"review_parallel_slots.{leg_id}: must be a positive integer")
+        else:
+            slots[leg_id] = cap
     if problems:
         raise ValueError("invalid route policy: " + "; ".join(problems))
-    return RoutePolicy(banned, off, paused, review_allowed, tools_denied)
+    return RoutePolicy(banned, off, paused, review_allowed, tools_denied, slots)
 
 
 def codex_leg_effort(leg, card):
