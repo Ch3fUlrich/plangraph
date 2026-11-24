@@ -249,7 +249,7 @@ impl Driver for Host {
                 .args(["check-ref-format", &self.base_ref]),
         )?;
         // Pin the base in a per-run namespace: parallel fetches cannot change this base.
-        let pin = format!("refs/plangraph/native/{}/base", self.run_id);
+        let pin = self.base_pin();
         self.pin_base(&pin)?;
         let base = output(
             self.command("git")
@@ -257,13 +257,7 @@ impl Driver for Host {
                 .arg(&self.repo)
                 .args(["rev-parse", &format!("{pin}^{{commit}}")]),
         )?;
-        output(self.command("git").arg("-C").arg(&self.repo).args([
-            "merge-base",
-            "--is-ancestor",
-            "refs/remotes/origin/main",
-            &base,
-        ]))
-        .map_err(|_| "stale base: pushed ref does not contain origin/main".to_owned())?;
+        self.admit_review_main(&base)?;
         fs::create_dir_all(self.cwd.parent().ok_or("worktree parent missing")?)
             .map_err(|e| e.to_string())?;
         {
@@ -291,6 +285,9 @@ impl Driver for Host {
         // Preserve writer commits and dirty files: conflicts fail closed for the orchestrator.
         self.git(&["merge", "--no-edit", "origin/main"])?;
         self.git(&["rev-parse", "origin/main"])
+    }
+    fn prepare_review(&mut self, head: &str) -> Result<Option<native_writer::ReviewBase>, String> {
+        self.prepare_review_base(head).map(Some)
     }
     fn execute(&mut self, session_id: Option<&str>, prompt: &str) -> Result<String, String> {
         session::execute(self, session_id, prompt)

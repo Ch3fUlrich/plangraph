@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from . import timing
-from .evidence_pr import part_changes
+from .evidence_pr import landed_deploy_work, part_changes
 from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
 __all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "trailer_entries", "plan_items", "valid_ref",
@@ -580,7 +580,7 @@ class GitAdapter:
         r"Landing train [0-9]+\b|batch [A-Za-z0-9_-]+: (?:#[0-9]+ )+\(#[0-9]+\)$", re.I)
 
     def deploy_changes(self, repo: str, sha: str, ref: str, item_key=None) -> list[tuple[str, str]]:
-        """Changes landed by *sha* on *ref*, including any untagged work in its merge."""
+        """Changes landed by *sha* on *ref*, scoped to the item when supplied."""
         return self._deploy_work(repo, sha, ref, item_key)[0]
 
     def deploy_part_changes(self, repo, sha, ref, item_key):
@@ -610,12 +610,9 @@ class GitAdapter:
             parents, _, subject = proc.stdout.partition("\n")
             landed = parents.split()
             if len(landed) == 2 and all(valid_commit_ref(p) for p in landed):
-                if item_key and self._TRAIN_MERGE_SUBJECT.match(subject):
-                    parts = list(self._train_deploy_changes(
-                        repo, *landed, {item_key, item_key.rsplit(":", 1)[-1]}))
-                    if parts:
-                        return [change for _, _, paths in parts for change in paths], parts
-                    # A key carried only by the aggregate merge keeps its whole-diff scan.
+                if item_key:
+                    return landed_deploy_work(self, repo, *landed, merge[0], item_key,
+                                              train=bool(self._TRAIN_MERGE_SUBJECT.match(subject)))
             else:
                 landed = []
         changes = self._name_status(

@@ -35,7 +35,14 @@ output (stdout and stderr in full), at most twice per head. A turn that leaves H
 the base is resumed with the items of its brief and runs no gate; after two such
 resumes the run ends exit 7 `no_commit`. `codex-host-readiness` reports a placeholder
 git identity (`example.invalid`, `localhost`, unset) as not ready. A review is refused without the stamp of exactly
-that head. The worker then starts one review run through the spawner CLI (role
+that head. Before stamping it, the worker fetches main and rebases a stale
+package onto it. A rebase conflict restores the writer's head and uses its
+previously admitted main for that review. The owning writer's private record
+binds the exact checked head to the base used for admission. The writer and review
+records log the head, base, main observed at preparation and outcome in
+`review_base`. If main advances between preparation and review admission and
+the gate reports a stale head, the worker prepares and checks the head again.
+The worker then starts one review run through the spawner CLI (role
 `review`, one `--writer-family` per family in the Writer trailers of base..head plus the
 served writer model's family, read by `pg_worker_core::writer_families`, the reader
 `plangraph review` shares). Admission can run the review on the writer's host
@@ -66,7 +73,8 @@ ends BLOCKED with exit 4. The review text is kept in `review_dir` as
 REQUEST_CHANGES resumes the same session with a pointer to a private brief
 in the run directory. The file preserves the original brief byte for byte
 before the follow-up instructions and review text. Later rounds review
-the delta from the previous head. The HIGH+MED count of each round goes to
+the delta from the previous head when it is an ancestor. After a rebase they
+review the full diff and carry forward the previous findings. The HIGH+MED count of each round goes to
 `round_counts`; `native_writer::round_stop` applies the round progress rule of
 `round_progress.rs` to the round just finished and caps the run at that file's
 `MAX_ROUNDS` (exit 3 with `round_stop` `round_cap`, `no_progress` or

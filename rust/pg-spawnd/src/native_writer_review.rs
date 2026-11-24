@@ -59,6 +59,21 @@ fn skipped_items(brief: &str, log: &str) -> Vec<String> {
 }
 
 impl Host {
+    fn review_delta_base<'a>(
+        &self,
+        base: &'a str,
+        head: &str,
+        previous: Option<(&'a str, &str)>,
+    ) -> &'a str {
+        review_diff_base(
+            base,
+            head,
+            previous.filter(|(prev, _)| {
+                self.git(&["merge-base", "--is-ancestor", prev, head])
+                    .is_ok()
+            }),
+        )
+    }
     /// Fast-checks stamp of `head`, in the worktree's own git directory.
     pub(super) fn stamp(&self, head: &str) -> Result<PathBuf, String> {
         if head.len() != 40 || !head.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -256,7 +271,7 @@ impl Host {
         versioned: &str,
         skill: &str,
     ) -> Result<String, String> {
-        let diff_base = review_diff_base(base, head, previous);
+        let diff_base = self.review_delta_base(base, head, previous);
         let skill_block = if skill.is_empty() {
             String::new()
         } else {
@@ -279,7 +294,8 @@ impl Host {
         }
         match previous {
             Some((prev, text)) if prev == head => prompt.push_str(&format!("This is a later round on the same head {head}: the previous review (its text follows) judged it and the writer answered its findings with evidence. Review the whole change {base}..{head} and check that every earlier HIGH and MED finding is fixed or refuted with evidence.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
-            Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head}, check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
+            Some((prev, text)) if prev == diff_base => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head}, check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
+            Some((prev, text)) => prompt.push_str(&format!("The previous review judged head {prev} before the base changed. Review the whole change {base}..{head} and check that every earlier HIGH and MED finding is fixed or refuted with evidence.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head}.\n")),
         }
         prompt.push_str(&format!("{REVIEW_OUTPUT_SECTION}Name each finding as file:line. Include one TEST-GAMING: line and a FILES READ: line using the seat's required formats. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
@@ -301,12 +317,8 @@ impl Host {
         let tag = format!("{}-{}", &head[..8.min(head.len())], self.reviews_started);
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
         let base = base.as_str();
-        let prev = previous
-            .and_then(|review| Some((review["head"].as_str()?, review["text"].as_str()?)))
-            .filter(|(prev, _)| {
-                self.git(&["merge-base", "--is-ancestor", prev, head])
-                    .is_ok()
-            });
+        let prev =
+            previous.and_then(|review| Some((review["head"].as_str()?, review["text"].as_str()?)));
         let skill = self.skill("review").unwrap_or_default();
         let trusted_python = || {
             let mut python =
@@ -332,7 +344,7 @@ impl Host {
         let mut card = json!({"estimate_tokens":300000, "max_min":max_min, "stall_min":20,
             "repository_review_required":true, "review_workspace":true,
             "native_writer_run":self.run_id,
-            "diff_ref":{"repo":self.repo, "base":review_diff_base(base, head, prev), "head":head}});
+            "diff_ref":{"repo":self.repo, "base":self.review_delta_base(base, head, prev), "head":head}});
         if let Some(item) = item {
             card["item_key"] = json!(item);
         }
@@ -357,9 +369,11 @@ impl Host {
         let serialized_card = card.to_string();
         let mut command = self.command(&self.review_cli[0]);
         if let Some(host) = writer["host"].as_str().filter(|host| !host.is_empty()) {
+            // The owning host has the private writer record used at review admission.
             command
                 .env("PLANGRAPH_HOST_NAME", host)
-                .env("PLANGRAPH_HOST", host);
+                .env("PLANGRAPH_HOST", host)
+                .env("PLANGRAPH_PLACED_HOST", host);
         }
         command
             .args(&self.review_cli[1..])
@@ -430,6 +444,12 @@ impl Host {
             return Ok(result);
         }
         if record["status"] != "completed" {
+            if let Some(reason) = record["reason"].as_str() {
+                if reason.starts_with("base_stale:") {
+                    return Ok(json!({"status":"base_stale","head":head,"reason":reason,
+                                     "run_id":record["run_id"]}));
+                }
+            }
             return Err(format!("review run incomplete: {}", record["reason"]));
         }
         let mut verdict = review_record_verdict(
