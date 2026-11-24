@@ -1,4 +1,7 @@
 //! One bounded CI scan; all external effects are behind the Github adapter.
+pub mod autofix;
+#[cfg(test)]
+mod autofix_tests;
 #[cfg(test)]
 mod batch_delivery_tests;
 pub mod batch_failure;
@@ -48,6 +51,9 @@ pub struct Task {
     pub run_class: String,
     #[serde(default)]
     pub job_id: u64,
+    /// Head commit of the run that failed; an automatic fix applies to it only.
+    #[serde(default)]
+    pub head_sha: String,
 }
 #[derive(Deserialize)]
 struct Flakes {
@@ -115,11 +121,13 @@ fn failed(value: &Value) -> bool {
 
 pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Result<()> {
     if args.iter().any(|a| {
-        !matches!(a.as_str(), "--dry-run" | "--keeper" | "--main-freeze")
-            && !a.starts_with("--ack=")
+        !matches!(
+            a.as_str(),
+            "--dry-run" | "--keeper" | "--main-freeze" | "--autofix"
+        ) && !a.starts_with("--ack=")
     }) {
         return Err(
-            "usage: plangraph ci-watch [--dry-run] [--keeper] [--main-freeze] [--ack=ID]".into(),
+            "usage: plangraph ci-watch [--dry-run] [--keeper] [--main-freeze] [--autofix] [--ack=ID]".into(),
         );
     }
     let dry = args.iter().any(|a| a == "--dry-run");
@@ -163,6 +171,16 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
         },
     )?;
     let mut rows = rows;
+    if args.iter().any(|a| a == "--autofix") && !dry {
+        let tasks = load_tasks(&dir.join("tasks.jsonl"))?;
+        let mut gh = Gh { repo: repo.clone() };
+        rows.extend(autofix::pass(
+            &dir,
+            &tasks,
+            |pr| autofix::pr_head(&mut gh, &repo, pr),
+            |request, scratch| autofix::apply(scratch, request),
+        )?);
+    }
     if args.iter().any(|a| a == "--main-freeze") && !dry {
         rows.extend(run_main_freeze(
             &repo,
@@ -272,9 +290,14 @@ fn scan(
                 .log(number(&job, "id")?)
                 .unwrap_or_else(|_| "Job log unavailable; inspect the failed job on GitHub".into());
             let found = logs::failures(&log);
-            let flaky = found.keys().any(|test| flakes.contains_key(test));
-            let class = classify::classify_job(&name, &logs::scrub(&log), flaky);
+            // A known flake is classed per test: one flaky test never hides a real failure of the same job.
+            let base = classify::classify_job(&name, &logs::scrub(&log), false);
             for (test, excerpt) in found {
+                let class = if flakes.contains_key(&test) {
+                    classify::RedClass::Flake
+                } else {
+                    base
+                };
                 failures.push((
                     name.clone(),
                     logs::scrub(&test),
@@ -370,6 +393,7 @@ fn scan(
                 class: class.name().into(),
                 run_class: run_class.name().into(),
                 job_id,
+                head_sha: sha.to_owned(),
             };
             output.push(format!(
                 "{}task: {}",
