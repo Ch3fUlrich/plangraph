@@ -87,19 +87,21 @@ CODEX_REVIEW_CLIENT_MISSING = 10
 
 
 def resolve_codex_client(env=None):
-    """Use the configured executable, the user install, then the shared harness resolver (host table, PATH)."""
+    """Use the configured executable, the host's harness_bins table, the user install, then the PATH search."""
     env = os.environ if env is None else env
     configured = env.get("PLANGRAPH_CODEX_BIN")
     if configured:
         candidate = Path(configured).expanduser()
         executable = shutil.which(str(candidate)) if candidate.is_absolute() else None
         return executable, configured
+    found = resolve_harness_binary("codex", env)   # the host's harness_bins table outranks a user-local install
+    if found.source == "host_table":
+        return found.path, found.path
     home = env.get("HOME") or env.get("USERPROFILE")
     if home:
         local = Path(home) / ".local" / "bin" / ("codex.exe" if os.name == "nt" else "codex")
         if local.is_absolute() and (executable := shutil.which(str(local))):
             return executable, str(local)
-    found = resolve_harness_binary("codex", env)   # the host's harness_bins table, then the search path
     return found.path, ("PATH" if found.source in ("search", "missing") else found.path)
 
 

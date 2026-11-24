@@ -674,13 +674,21 @@ def test_host_record_keeps_native_sandbox_failure(tmp_path):
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result
 
 
-def test_local_record_carries_served_legs_and_main_prints_the_digest(tmp_path, monkeypatch):
+def test_local_record_carries_served_legs_and_main_prints_the_digest(tmp_path, monkeypatch, capsys):
     from plangraph.routing_support import leg_state
     from plangraph.routing_support.leg_state import DiscoveryFailed
     monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models',
                         staticmethod(lambda: DiscoveryFailed('managed_service_port_conflict')))
-    result = h.check_host('fiction', dict(CONFIG, local=True, registry=True), tmp_path, plan_runner([]))
-    glm = result['served_legs']['opencode-go-glm-5.3-flash']
-    assert glm == dict(served=False, reason='managed_service_port_conflict')
-    assert json.loads((tmp_path / 'fiction.json').read_text())['served_legs'] == result['served_legs']
-    assert leg_state.served_digest({'fiction': result['served_legs']}).startswith('legs served per host: fiction 0/')
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'hosts': {'fiction': dict(CONFIG, local=True, registry=True)}}))
+    use_projected_overflow_config(monkeypatch, config)
+    monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
+    original = h.check_host
+    monkeypatch.setattr(h, 'check_host', lambda name, cfg, state: original(name, cfg, state, plan_runner([])))
+    assert h.main([]) == 0
+    out = capsys.readouterr().out
+    digest = next(line for line in out.splitlines() if line.startswith('legs served per host: '))
+    assert 'fiction 0/' in digest and 'managed_service_port_conflict' in digest
+    record = json.loads((tmp_path / '.local/state/plangraph/host-ready/fiction.json').read_text())
+    assert record['served_legs']['opencode-go-glm-5.3-flash'] == dict(
+        served=False, reason='managed_service_port_conflict')

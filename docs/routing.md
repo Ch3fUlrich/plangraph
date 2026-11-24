@@ -125,7 +125,7 @@ child config via `opencode models --standalone` and skips an absent id with
 `not_served_on_host` before starting a harness run; a missing harness binary is refused as
 `harness_not_found <name> <searched paths>` (one resolver, `resolve_harness_binary`). The request bound of an
 opencode leg listed in `configuration/opencode/providers.json` is that registry's context minus its output
-(mimo 1M); only a cost or headroom cap may sit below it. The recorded local probe
+(mimo 1M); only a named routing-policy cap (`POLICY_REQUEST_CAPS`, `RESEARCH_REQUEST_CAP` in `legs.py`) may sit below it. The recorded local probe
 does not yet list the corrected OmniRoute id; gateway and credential readiness remain a host-side operator request. Never replace
 it with the distinct paid `omniroute/deepseek-direct-flash` route.
 

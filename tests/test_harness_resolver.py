@@ -132,10 +132,30 @@ def _spawn_claude(tmp_path, monkeypatch, home):
 
 
 def test_spawn_from_a_bare_unit_executes_the_harness_found_off_path(bare_unit, tmp_path, monkeypatch):
-    binary = _binary(bare_unit / ".nvm/versions/node/v24.19.0/bin", "claude")
+    """The production process factory runs the fixture: its output and exit status come back."""
+    import asyncio
+    from plangraph.spawner.runner import SpawnerRunner
+    directory = bare_unit / ".nvm/versions/node/v24.19.0/bin"
+    directory.mkdir(parents=True)
+    binary = directory / "claude"
+    binary.write_text("#!/bin/sh\necho harness-ran-ok\n")
+    binary.chmod(0o755)
     assert shutil_which_system("claude") is None
-    exe, _ = _spawn_claude(tmp_path, monkeypatch, bare_unit)
-    assert exe == str(binary)   # the process factory received the resolver's absolute path
+    monkeypatch.setenv("HOME", str(bare_unit))
+    monkeypatch.setenv("PATH", SYSTEM_PATH)
+    monkeypatch.setenv("INVOCATION_ID", "unit")
+
+    async def run():
+        runner = SpawnerRunner(default_cwd=str(tmp_path))
+        job = await runner.spawn("review this", "claude-haiku-5-5", role="review", client="claude", cwd=str(tmp_path))
+        for _ in range(300):
+            if job.status not in ("running", "pending"):
+                break
+            await asyncio.sleep(0.05)
+        return job
+    job = asyncio.run(run())
+    assert job.exit_code == 0, (job.status, job.stderr)
+    assert "harness-ran-ok" in job.stdout
 
 
 def test_spawn_without_the_harness_is_refused_by_name_before_any_exec(bare_unit, tmp_path, monkeypatch):
@@ -150,3 +170,18 @@ def test_mimo_admission_shortcut_never_hides_a_missing_opencode(bare_unit):
     assert resolver.host_skip_reason(row).startswith("harness_not_found opencode ")
     _binary(bare_unit / ".local/bin")
     assert not (resolver.host_skip_reason(row) or "").startswith("harness_not_found")
+
+
+def test_native_codex_prefers_the_host_table_over_a_user_local_install(bare_unit, tmp_path):
+    pinned = _binary(tmp_path / "pinned", "codex")
+    _binary(bare_unit / ".local/bin", "codex")   # the user-local fixture the old lookup chose
+    config = tmp_path / "config/plangraph"
+    config.mkdir(parents=True)
+    (config / "hosts.json").write_text(json.dumps(
+        {"self": "h1", "hosts": [{"id": "h1", "harness_bins": {"codex": str(pinned)}}]}))
+    env = {"PATH": SYSTEM_PATH, "HOME": str(bare_unit)}
+    assert clients.resolve_codex_client(env)[0] == str(pinned)
+    assert resolve_harness_binary("codex", env).path == str(pinned)
+    # the explicit override still outranks the table
+    explicit = _binary(tmp_path / "explicit", "codex")
+    assert clients.resolve_codex_client(dict(env, PLANGRAPH_CODEX_BIN=str(explicit)))[0] == str(explicit)

@@ -11,14 +11,6 @@ REGISTRY = Path(__file__).resolve().parents[1] / "configuration/opencode/provide
 DIFF = {"repo": "/srv/repo", "base": "a1b2", "head": "c3d4"}
 
 
-#: Legs whose request bound is a deliberate cost cap below the registry window.
-#: ... or a deliberate headroom cap (research routes stay under 900k of a 1M window).
-COST_CAPPED = {
-    "deepseek": "paid pay-as-you-go leg, only if really needed (legs.py note)",
-    "opencode-go-glm-5.3-flash": "research headroom cap 900k (test_placement_planning)",
-}
-
-
 def _registry_by_model_id():
     """Registry limits keyed by every name a leg may use: modelID and provider/key."""
     providers = json.loads(REGISTRY.read_text())["providers"]
@@ -35,16 +27,25 @@ def _clear(model, **scope):
 
 
 def test_every_opencode_leg_with_a_registry_limit_matches_it():
+    from plangraph.planner.legs import POLICY_REQUEST_CAPS
     registry = _registry_by_model_id()
     checked = [leg for leg in DEFAULT_LEGS if leg.harness == "opencode" and leg.model in registry]
-    assert {"mimo-v2.6-pro", "mimo-v2.6-flash"} <= {leg.id for leg in checked}
+    assert {"mimo-v2.6-pro", "mimo-v2.6-flash", "opencode-go-glm-5.3-flash", "deepseek"} <= {leg.id for leg in checked}
     for leg in checked:
         limit = registry[leg.model]
         bound = limit["context"] - limit.get("output", 0)
-        if leg.id in COST_CAPPED:
-            assert leg.max_request_tokens <= bound, leg.id
-        else:
-            assert leg.max_request_tokens == bound, leg.id
+        # exact: the registry bound, lowered only by a named routing-policy cap
+        assert leg.max_request_tokens == min(bound, POLICY_REQUEST_CAPS.get(leg.id, bound)), leg.id
+
+
+def test_research_headroom_is_routing_policy_not_a_typed_leg_limit():
+    from plangraph.planner.legs import RESEARCH_REQUEST_CAP, research_route_pool
+    pool = research_route_pool(DEFAULT_LEGS)
+    assert pool and all(leg.max_request_tokens <= RESEARCH_REQUEST_CAP for leg in pool)
+    glm = next(leg for leg in pool if leg.id == "opencode-go-glm-5.3-flash")
+    assert glm.max_request_tokens == RESEARCH_REQUEST_CAP
+    registry_glm = next(leg for leg in DEFAULT_LEGS if leg.id == glm.id)
+    assert registry_glm.max_request_tokens > RESEARCH_REQUEST_CAP   # the leg itself keeps the registry bound
 
 
 def test_mimo_legs_are_not_capped_at_200k():
