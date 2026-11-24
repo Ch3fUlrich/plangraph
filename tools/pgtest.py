@@ -256,6 +256,13 @@ def report_batches(batches):
     return code
 
 
+def run_flag_in(options):
+    """Whether argv tokens spell `--run` (or its accepted abbreviation `--ru`); nothing after `--` is a flag."""
+    if "--" in options:
+        options = options[: options.index("--")]
+    return any(len(arg) >= 4 and "--run".startswith(arg) for arg in options)
+
+
 def with_result_line(run, wants_run):
     """Run `run()`; a `--run` that ends without any batch reported (a refusal, an argparse exit, a
     collection-only run, an operational error) still prints the one AFFECTED line, nonzero on any
