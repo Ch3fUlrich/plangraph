@@ -177,7 +177,33 @@ the queue retains its head and newest 255 events, reporting overflow on stderr.
 
 ## Collectors, freshness and host integration
 
-Collectors, freshness and host integration are deployment prerequisites, not supplied by this checker.
+`plangraph flow-snapshot [--json] [--out PATH] [--readings FILE]` writes the snapshot
+atomically (default `~/.local/state/plangraph/flow-snapshot.json`). Run it from the
+checkout just before each tick. Readings and the derivation of each field:
+
+- `pace`, `budget`: `tools/claude_usage.py pace --json` (`weighted`, `budget_per_day`).
+- `ci_*`: `gh run list`, runs created in the last 7 days. `failure`, `timed_out` and
+  `startup_failure` fail; the last two are `infra_failed`; other conclusions are not counted.
+- `review_age_hours`, `review_rounds`: keeper snapshot items in `in_review`; rounds are the
+  `changes_requested` events of the item plus one.
+- `critical_idle_hours`: keeper critical path; zero while a path item holds a live lease,
+  else hours since the newest `updated_at` among its open items.
+- `closes_recent`, `closes_previous`: `review_passed`, `closed_on_decision` and `answered`
+  events in the last and the preceding 24 hours.
+- `hosts`, `host_drift`: the checkout's `HEAD`, `origin/main`, ancestry count and the age of
+  the first missing commit, `/tmp` and `/` use; drift is also set when an installed
+  user unit differs from its source in `deploy/` (templated units are skipped).
+- `coding_vm_runs`, `worker_idle`: the newest fleet-series sample per host
+  (`PLANGRAPH_FLEET_SERIES_DIR`, default `<state>/fleet-series`) for the hosts in
+  `PLANGRAPH_FLOW_CODING_HOSTS` and `PLANGRAPH_FLOW_WORKER_HOSTS`.
+- `lapsed_leases`, `ordered_items`, `ready_owners`, `idle_capacity`, `merged_reviews`: keeper
+  items; ready means open, unclaimed, not waiting on the operator, every dependency done.
+  `ready_families` maps each owner to the project families with ready work.
+
+A reading that fails is named on stderr, its fields are left out and the exit status is 3;
+the checker then queues `invalid snapshot` rather than reading a made-up healthy zero.
+`go_requests`, `writer_activity`, `review_leg_activity`, `session_activity` and
+`host_idle_capacity` are not collected yet: a snapshot without them is a legacy snapshot.
 
 ## Optional turn-budget reader
 

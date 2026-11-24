@@ -1,0 +1,1 @@
+- **FLOW-SNAPSHOT-COLLECTOR:** `plangraph flow-snapshot` writes the `flow-snapshot.json` the flow watchdog reads, from keeper, git, claude usage, CI, installed unit checksums and the fleet series. A failed reading leaves its fields out so the watchdog reports an invalid snapshot instead of a healthy zero.
