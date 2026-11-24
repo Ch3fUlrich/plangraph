@@ -156,6 +156,8 @@ pub(super) fn validate(
     let mut index = 0;
     let mut steps = Vec::new();
     let mut main_line: Option<BTreeSet<String>> = None;
+    // The newest main a replayed remerge brought in; main history beyond it has no account.
+    let mut accounted = base.to_owned();
     for line in history.lines() {
         let row: Vec<&str> = line.split_whitespace().collect();
         let step = match row.as_slice() {
@@ -182,6 +184,7 @@ pub(super) fn validate(
                 }
                 let tree = git::out(repo, &["rev-parse", &format!("{commit}^{{tree}}")])?;
                 replay_remerge(repo, previous, landed, &tree, attributes)?;
+                accounted = (*landed).to_owned();
                 Step::Remerge {
                     commit: (*commit).into(),
                     parent: (*parent).into(),
@@ -230,6 +233,18 @@ pub(super) fn validate(
             "chain: train has {index} merges, its manifest has {} parts",
             heads.len()
         ));
+    }
+    // The train may contain main only up to its base or its newest replayed remerge: a part that brings in
+    // newer main history would hide a landed change behind a merge commit nobody replayed.
+    if let Some((main, _)) = main {
+        let held = git::out(repo, &["merge-base", main, tip])?;
+        if held != accounted {
+            return Err(format!(
+                "chain: train contains main history up to {} that no replayed remerge accounts for (base or last remerge {})",
+                &held[..12.min(held.len())],
+                &accounted[..12.min(accounted.len())]
+            ));
+        }
     }
     Ok(steps)
 }

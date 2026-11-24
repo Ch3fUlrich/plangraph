@@ -46,8 +46,18 @@ pub enum Step {
 }
 
 /// The next steps for `trains` given in the order their CI finished. A landing comes first and alone
-/// (main moves with it); without one, stale trains meet main; red trains drop a part in every case.
+/// (main moves with it); without one, stale trains meet main and red trains drop a part.
 pub fn plan(main_tip: &str, trains: &[TrainState]) -> Vec<Step> {
+    // A landing comes first and alone: recovery work (drops, rebuilds) waits until main is read again, so
+    // a failing rebuild can never hide a green train's landing.
+    if let Some(first) = trains
+        .iter()
+        .find(|t| t.ci == Ci::Green && t.main_in == main_tip)
+    {
+        return vec![Step::Land {
+            train: first.name.clone(),
+        }];
+    }
     let mut steps: Vec<Step> = trains
         .iter()
         .filter_map(|t| match &t.ci {
@@ -59,19 +69,9 @@ pub fn plan(main_tip: &str, trains: &[TrainState]) -> Vec<Step> {
             _ => None,
         })
         .collect();
-    let live = |t: &&TrainState| !matches!(t.ci, Ci::Red { .. });
-    if let Some(first) = trains
-        .iter()
-        .find(|t| t.ci == Ci::Green && t.main_in == main_tip)
-    {
-        steps.push(Step::Land {
-            train: first.name.clone(),
-        });
-        return steps;
-    }
     let stale: Vec<String> = trains
         .iter()
-        .filter(live)
+        .filter(|t| !matches!(t.ci, Ci::Red { .. }))
         .filter(|t| t.main_in != main_tip)
         .map(|t| t.name.clone())
         .collect();

@@ -76,21 +76,29 @@ pub fn publish_swap(
         push::stage_manifest(repo, branch, next)?;
     }
     write(&staged, next)?;
-    git::out(
+    // A retry after a failure behind the move finds the branch already at the new head: it carries on.
+    let moved = git::out(
         repo,
-        &[
-            "update-ref",
-            &format!("refs/heads/{branch}"),
-            &next.train_sha,
-            &before.train_sha,
-        ],
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
     )
-    .map_err(|e| {
-        format!(
-            "remerge: {branch} no longer holds {}: {e}",
-            before.train_sha
+    .ok();
+    if moved.as_deref() != Some(next.train_sha.as_str()) {
+        git::out(
+            repo,
+            &[
+                "update-ref",
+                &format!("refs/heads/{branch}"),
+                &next.train_sha,
+                &before.train_sha,
+            ],
         )
-    })?;
+        .map_err(|e| {
+            format!(
+                "remerge: {branch} no longer holds {}: {e}",
+                before.train_sha
+            )
+        })?;
+    }
     if train_branch {
         push::promote_manifest(repo, branch)?;
     }

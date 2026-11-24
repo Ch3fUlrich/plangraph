@@ -107,7 +107,7 @@ The driver steps (`parallel.rs`, `remerge.rs`, `combine.rs`; commands in `driver
   merges stay, so no part is reviewed again. A conflict is refused: combine the train instead.
 - `land-train drive --repo DIR --trains FILE --out DIR --grant-digest D --snapshot-position N` runs the next steps: it remerges,
   combines (one build on live main) and rebuilds a red train without its hinted part through the production builder, and
-  hands the first green train to the GO gate (`land`; it merges nothing). The GO verifier binds CI and the delta review to
+  hands the first green train to the GO gate (`land`, alone: recovery waits until main is read again; it merges nothing). An unattributed red train keeps both halves as trains of their own (`NAME-drop-1`, `-2`). The GO verifier binds CI and the delta review to
   the exact head, so every changed head needs its own full CI and delta review, never a part review.
 - `land-train combine --manifests A,B,... --out FILE` writes the union of the parts (each pull request once, receipts kept)
   as `--parts` input for one `build` on the new main.

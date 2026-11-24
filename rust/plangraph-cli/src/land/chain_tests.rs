@@ -154,3 +154,57 @@ fn replay_records_the_remerge_for_the_diff_review_and_refuses_an_edited_one() {
     let err = verify_manifest_with(fx.path(), &m, &parts, &[], &[]).unwrap_err();
     assert!(err.contains("extra or missing edit"), "{err}");
 }
+
+#[cfg(unix)]
+#[test]
+fn the_hook_form_with_a_relative_repository_path_replays_a_remerge() {
+    let fx = Fx::new();
+    let (m, _, heads) = open_train(&fx);
+    let landed = land_other(&fx);
+    let tip = remerge(fx.path(), &m.train_sha, &landed);
+    // The installed hook runs `check-chain --repo .`; any relative path must name the same repository.
+    let cwd = std::env::current_dir().unwrap();
+    let up = "../".repeat(cwd.components().count() - 1);
+    let relative = format!("{up}{}", fx.path().strip_prefix("/").unwrap().display());
+    let args = [
+        "check-chain",
+        "--repo",
+        &relative,
+        "--head",
+        &tip,
+        "--heads",
+        heads.to_str().unwrap(),
+    ]
+    .map(str::to_owned);
+    let python = || std::process::Command::new("false");
+    super::cli::run_inner(fx.path(), &args, &python).unwrap();
+}
+
+#[test]
+fn a_part_that_brings_in_main_without_a_remerge_is_refused_even_with_a_hollow_merge() {
+    let fx = Fx::new();
+    let m0 = fx.base();
+    g(fx.path(), &["update-ref", "refs/remotes/origin/main", &m0]);
+    let a = fx.commit(&m0, "a.txt", "a\n");
+    let landed = land_other(&fx);
+    // A part branched from the new main carries its history into the train.
+    let p = fx.commit(&landed, "p.txt", "p\n");
+    let heads = fx.path().join(".git").join("heads.txt");
+    std::fs::write(&heads, format!("{a}\n{p}\n")).unwrap();
+    let r = fx.path();
+    g(r, &["checkout", "-q", "--detach", &m0]);
+    g(r, &["merge", "--no-ff", "-q", "-m", "part a", &a]);
+    let first = g(r, &["rev-parse", "HEAD"]);
+    g(r, &["merge", "--no-ff", "-q", "-m", "part p", &p]);
+    let honest = g(r, &["rev-parse", "HEAD"]);
+    g(r, &["checkout", "-q", "main"]);
+    let err = check_push(r, &honest, &heads).unwrap_err();
+    assert!(err.contains("no replayed remerge accounts for"), "{err}");
+    // The same parents with a tree that leaves the landed file out: refused as well.
+    let tree = format!("{first}^{{tree}}");
+    let hollow = g(
+        r,
+        &["commit-tree", &tree, "-p", &first, "-p", &p, "-m", "part p"],
+    );
+    assert!(check_push(r, &hollow, &heads).is_err());
+}

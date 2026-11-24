@@ -51,11 +51,14 @@ pub enum Outcome {
         build: String,
         head: String,
     },
-    /// The hinted parts left the train; the rest was rebuilt on live main when anything remained.
+    /// The hinted parts left the train. Every candidate the red-train session froze (one, or both halves
+    /// of an unattributed failure) was rebuilt on live main as a train of its own, so each is planned,
+    /// landed or remerged like any other; `blocked` parts wait for the part or prefix below them.
     Dropped {
         train: String,
         evicted: Vec<u64>,
-        rebuilt: Option<(String, String)>,
+        blocked: Vec<u64>,
+        rebuilt: Vec<(String, String)>,
     },
     Wait,
 }
@@ -166,29 +169,33 @@ pub fn drive(ctx: &Ctx, trains: &[DriveTrain]) -> Result<Vec<Outcome>, String> {
                 let t = find(trains, &train)?;
                 let (mut session, first) = Session::new(t.parts.clone());
                 let actions = session.red(&first.id, &hints, &log);
-                let evicted = actions
-                    .iter()
-                    .filter_map(|a| match a {
-                        Action::Evict { pr, .. } => Some(*pr),
-                        _ => None,
-                    })
-                    .collect();
-                let next = actions.iter().find_map(|a| match a {
-                    Action::Freeze(c) => Some(c.parts.clone()),
-                    _ => None,
-                });
-                let rebuilt = match next {
-                    Some(parts) => {
-                        let name = format!("{train}-drop");
-                        let head =
-                            rebuild(ctx, &name, parts, &t.manifest.policy.attributes, &t.adopted)?;
-                        Some((name, head))
+                let mut evicted = Vec::new();
+                let mut blocked = Vec::new();
+                let mut candidates = Vec::new();
+                for action in actions {
+                    match action {
+                        Action::Evict { pr, .. } => evicted.push(pr),
+                        Action::Blocked(prs) => blocked.extend(prs),
+                        Action::Freeze(c) => candidates.push(c.parts),
+                        _ => {}
                     }
-                    None => None,
-                };
+                }
+                let many = candidates.len() > 1;
+                let mut rebuilt = Vec::new();
+                for (i, parts) in candidates.into_iter().enumerate() {
+                    let name = if many {
+                        format!("{train}-drop-{}", i + 1)
+                    } else {
+                        format!("{train}-drop")
+                    };
+                    let head =
+                        rebuild(ctx, &name, parts, &t.manifest.policy.attributes, &t.adopted)?;
+                    rebuilt.push((name, head));
+                }
                 Outcome::Dropped {
                     train,
                     evicted,
+                    blocked,
                     rebuilt,
                 }
             }

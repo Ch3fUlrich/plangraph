@@ -19,6 +19,21 @@ pub struct Delta {
     pub resolutions: Vec<DeltaResolution>,
 }
 
+impl Delta {
+    /// The replay record of the GO evidence, taken from this verified replay: its base, head and the main it
+    /// proved the train contains. The verifier trusts this record only from the replay run, never from a
+    /// manifest or a GO row, so evidence is built from it and from nothing else.
+    pub fn replay(&self, manifest: &str) -> super::go_verify::Replay {
+        super::go_verify::Replay {
+            verified: true,
+            base: self.base.clone(),
+            train_sha: self.train_sha.clone(),
+            manifest: manifest.to_owned(),
+            main_in: Some(self.main_in.clone()),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct DeltaResolution {
     commit: String,

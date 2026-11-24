@@ -80,9 +80,11 @@ fn landing_remerging_and_the_fresh_ci_requirement_run_through_the_driver() {
         .join(".git/plangraph/train-manifests/land/train-t2.heads");
     check_push(fx.path(), head, &heads).unwrap();
 
-    // The GO gate wants the CI run and the delta review of the NEW head: the old head's are unbound.
+    // The GO gate gets the replay's own output for the new head: with the CI run and the delta review of
+    // that head it has no refusal for the current main, and `stale_base` once main moves again.
+    let delta = verify_manifest_with(fx.path(), &written, &two.parts, &[], &[]).unwrap();
     let p = Pins::protected().unwrap();
-    let evidence = |ci_head: &str, delta_head: &str| {
+    let evidence = |ci_head: &str, delta_head: &str, main: &str| {
         let jobs = p.matrix.tiers["self"]
             .keys()
             .map(|n| GoJob {
@@ -94,7 +96,7 @@ fn landing_remerging_and_the_fresh_ci_requirement_run_through_the_driver() {
         Evidence {
             repo: "o/n".into(),
             pr: 2,
-            base: m0.clone(),
+            base: delta.base.clone(),
             head: head.clone(),
             tree: "t".repeat(40),
             manifest: "m".into(),
@@ -102,23 +104,22 @@ fn landing_remerging_and_the_fresh_ci_requirement_run_through_the_driver() {
                 repo: "o/n".into(),
                 pr: 2,
                 pr_head: head.clone(),
-                pr_base: m1.clone(),
-                main_tip: m1.clone(),
+                pr_base: main.into(),
+                main_tip: main.into(),
             },
-            replay: Replay {
-                verified: true,
-                base: m0.clone(),
-                train_sha: head.clone(),
-                manifest: "m".into(),
-                main_in: Some(m1.clone()),
-            },
+            replay: delta.replay("m"),
             ci: Ci2 {
                 head: ci_head,
                 jobs,
                 p: &p,
             }
             .build(),
-            approvals: vec![],
+            approvals: vec![Approval {
+                d_id: "D-100".into(),
+                repo: "o/n".into(),
+                pr: 2,
+                head: head.clone(),
+            }],
             delta: Some(DeltaAcceptance {
                 run_id: format!("run-{}", "ab".repeat(16)),
                 head: delta_head.into(),
@@ -130,22 +131,18 @@ fn landing_remerging_and_the_fresh_ci_requirement_run_through_the_driver() {
             main: State::Green,
         }
     };
+    let codes = |e: &Evidence| verify(e, &p).iter().map(|r| r.code).collect::<Vec<_>>();
+    assert_eq!(delta.main_in, m1);
+    assert_eq!(codes(&evidence(head, head, &m1)), Vec::<&str>::new());
+    assert_eq!(
+        codes(&evidence(head, head, &"9".repeat(40))),
+        ["stale_base"]
+    );
     let old = &two.manifest.train_sha;
-    let refused: Vec<&str> = verify(&evidence(old, old), &p)
-        .iter()
-        .map(|r| r.code)
-        .collect();
+    let refused = codes(&evidence(old, old, &m1));
     assert!(
         refused.contains(&"ci_unbound") && refused.contains(&"delta_unbound"),
         "{refused:?}"
-    );
-    let fresh: Vec<&str> = verify(&evidence(head, head), &p)
-        .iter()
-        .map(|r| r.code)
-        .collect();
-    assert!(
-        !fresh.contains(&"ci_unbound") && !fresh.contains(&"delta_unbound"),
-        "{fresh:?}"
     );
 }
 
@@ -231,14 +228,15 @@ fn waiting_trains_are_combined_and_a_red_train_is_rebuilt_without_its_part_by_th
     )
     .unwrap();
     let [Outcome::Dropped {
-        evicted,
-        rebuilt: Some((name, _)),
-        ..
+        evicted, rebuilt, ..
     }] = dropped.as_slice()
     else {
         panic!("{dropped:?}")
     };
     assert_eq!(evicted, &[11]);
+    let [(name, _)] = rebuilt.as_slice() else {
+        panic!("{rebuilt:?}")
+    };
     let rebuilt: Manifest = super::cli::read(
         &out.path()
             .join(format!("{name}.manifest.json"))
@@ -355,4 +353,92 @@ fn the_push_check_replays_a_remerge_and_refuses_one_that_dropped_a_landed_change
     // The honest remerge passes through the same entry point.
     let next = remerge_verified(fx.path(), &two.manifest, &m1, &two.parts, &[], &[]).unwrap();
     run_inner(fx.path(), &args(&next.train_sha), &python).unwrap();
+}
+
+#[test]
+fn an_unattributed_red_train_keeps_both_halves_as_trains_of_their_own() {
+    let fx = Fx::new();
+    let m0 = fx.base();
+    set_main(&fx, &m0);
+    let one = train(&fx, "t1", &m0, 1, &["a.txt"]);
+    let two = train(&fx, "t2", &m0, 2, &["b.txt"]);
+    let both = merged(&fx, &one, &two);
+    let out = tempfile::tempdir().unwrap();
+    let done = drive(
+        &ctx(&fx, &m0, out.path(), &State::Green),
+        &[DriveTrain {
+            state: state(
+                "big",
+                &m0,
+                Ci::Red {
+                    hints: vec![],
+                    log: "log".into(),
+                },
+            ),
+            ..both
+        }],
+    )
+    .unwrap();
+    let [Outcome::Dropped {
+        evicted, rebuilt, ..
+    }] = done.as_slice()
+    else {
+        panic!("{done:?}")
+    };
+    assert!(evicted.is_empty());
+    let names: Vec<&str> = rebuilt.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["big-drop-1", "big-drop-2"]);
+    for (name, head) in rebuilt {
+        assert_eq!(
+            g(fx.path(), &["rev-parse", &format!("land/train-{name}")]),
+            *head
+        );
+    }
+}
+
+/// One train of the parts of two (the shape of a red combined train).
+fn merged(fx: &Fx, a: &Built, b: &Built) -> DriveTrain {
+    let parts: Vec<_> = a.parts.iter().chain(&b.parts).cloned().collect();
+    let mut input = fx.input(parts.clone(), "", None);
+    input.build = "big".into();
+    let manifest = super::build::build(&input).unwrap().manifest.unwrap();
+    DriveTrain {
+        state: state("big", &fx.base(), Ci::Green),
+        manifest,
+        parts,
+        adopted: vec![],
+    }
+}
+
+#[test]
+fn a_failing_publish_after_the_branch_moved_is_recoverable_by_retrying_the_same_remerge() {
+    let fx = Fx::new();
+    let m0 = fx.base();
+    set_main(&fx, &m0);
+    let one = train(&fx, "t1", &m0, 1, &["a.txt"]);
+    let two = train(&fx, "t2", &m0, 5, &["b.txt"]);
+    let m1 = land(&fx, &m0, &one.manifest.train_sha);
+    set_main(&fx, &m1);
+    let next = remerge_verified(fx.path(), &two.manifest, &m1, &two.parts, &[], &[]).unwrap();
+    // The same remerge again is the same commit: a retry from the original manifest finds its own result.
+    let again = remerge_verified(fx.path(), &two.manifest, &m1, &two.parts, &[], &[]).unwrap();
+    assert_eq!(again.train_sha, next.train_sha);
+    // The last step fails after the branch moved: the output path is a directory with content in it.
+    let dir = tempfile::tempdir().unwrap();
+    let blocked = dir.path().join("out.json");
+    std::fs::create_dir_all(blocked.join("keep")).unwrap();
+    assert!(publish_swap(fx.path(), "land/train-t2", &two.manifest, &next, &blocked).is_err());
+    assert_eq!(
+        g(fx.path(), &["rev-parse", "land/train-t2"]),
+        next.train_sha
+    );
+    // Retrying with the original manifest completes instead of failing the compare-and-swap.
+    let out = dir.path().join("retry.json");
+    publish_swap(fx.path(), "land/train-t2", &two.manifest, &again, &out).unwrap();
+    let written: Manifest = super::cli::read(&out.to_string_lossy()).unwrap();
+    assert_eq!(written.train_sha, next.train_sha);
+    let heads = fx
+        .path()
+        .join(".git/plangraph/train-manifests/land/train-t2.heads");
+    check_push(fx.path(), &next.train_sha, &heads).unwrap();
 }

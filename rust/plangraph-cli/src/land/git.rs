@@ -181,6 +181,11 @@ pub struct Checkout {
 
 impl Checkout {
     pub fn new(repo: &Path, commit: &str) -> Result<Checkout, String> {
+        // The clone runs inside the temporary directory: a relative repository path (the hook passes `.`)
+        // would name that empty directory, so it is made absolute first.
+        let repo = &repo
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", repo.display()))?;
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let target = dir.path().to_string_lossy().into_owned();
         let source = repo.to_string_lossy().into_owned();

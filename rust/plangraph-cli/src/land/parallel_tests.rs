@@ -170,17 +170,16 @@ fn a_red_train_drops_its_failing_part_and_never_blocks_the_others() {
     let m0 = fx.base();
     let bad = train(&fx, "bad", &m0, 1, &["a.txt", "b.txt"]);
     let trains = [state("bad", &m0, red(&[2])), state("ok", &m0, Ci::Green)];
-    let steps = plan(&m0, &trains);
+    // The landing comes first and alone: recovery waits until main is read again.
+    assert_eq!(plan(&m0, &trains), vec![Step::Land { train: "ok".into() }]);
+    let trains = [state("bad", &m0, red(&[2])), state("ok", &m0, Ci::Running)];
     assert_eq!(
-        steps,
-        vec![
-            Step::DropPart {
-                train: "bad".into(),
-                hints: vec![2],
-                log: "log".into()
-            },
-            Step::Land { train: "ok".into() }
-        ]
+        plan(&m0, &trains),
+        vec![Step::DropPart {
+            train: "bad".into(),
+            hints: vec![2],
+            log: "log".into()
+        }]
     );
     // The drop is the existing red-train session: the hinted part is evicted, the rest freezes again.
     let (mut session, first) = Session::new(bad.parts.clone());
@@ -228,11 +227,8 @@ fn the_cli_plans_combines_and_remerges_through_land_train() {
         ]),
     );
     let lines = run(&["plan", "--main", &m0, "--trains", &trains]).unwrap();
-    assert_eq!(lines.len(), 2);
-    assert!(
-        lines[0].contains("drop_part") && lines[1].contains("\"land\""),
-        "{lines:?}"
-    );
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].contains("\"land\""), "{lines:?}");
 
     let (a, b) = (
         file("a.json", serde_json::to_value(&t1.manifest).unwrap()),
