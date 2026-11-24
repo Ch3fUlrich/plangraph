@@ -421,13 +421,12 @@ fn the_command_builds_nothing_while_main_is_red_or_pending_and_otherwise_writes_
     let fx = Fx::new();
     let a = fx.commit(&fx.base(), "a.txt", "a\n");
     let out = tempfile::tempdir().unwrap();
-    let parts = vec![part(1, &a, None)];
-    let (_accepted, accept) = crate::land::accept_tests::counted_for(&parts);
+    let (_accepted, accept) = crate::land::accept_tests::counted_for(&[part(1, &a, None)]);
     let job = Build {
         repo: fx.path().to_owned(),
         base: fx.base(),
         name: "b1".into(),
-        parts,
+        parts: vec![part(1, &a, None)],
         attributes: String::new(),
         cap: None,
         out: out.path().to_owned(),

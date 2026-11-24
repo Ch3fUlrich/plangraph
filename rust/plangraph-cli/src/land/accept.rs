@@ -158,7 +158,7 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
         let paired = pair.iter().all(|runs| runs.len() == 1) && pair[0][0] != pair[1][0];
         let counted = match bound.as_slice() {
             [one] => {
-                single_seat.iter().any(|leg| *leg == one.1.leg) && alone_conditions_met(&one.1)
+                single_seat.contains(&one.1.leg) && alone_conditions_met(&one.1)
                     || (paired && pair.iter().any(|runs| runs[0] == one.1.run_id))
             }
             _ => false,
