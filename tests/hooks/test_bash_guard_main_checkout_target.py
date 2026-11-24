@@ -245,6 +245,8 @@ def test_unrelated_unsets_and_a_target_given_after_the_unset_stay_allowed(repos,
     "declare -x CARGO_TARGET_DIR=/var/cache/shared; cargo build",
     "bash -c 'export CARGO_TARGET_DIR=/var/cache/shared; cargo build'",
     "export CARGO_TARGET_DIR=rust/target; export CARGO_TARGET_DIR=/var/cache/shared; cargo build",
+    "export CARGO_TARGET_DIR=/var/cache; export CARGO_TARGET_DIR+=/shared; cargo build",
+    "export -n CARGO_TARGET_DIR=rust/target; export CARGO_TARGET_DIR=/var/cache/shared; cargo build",
 ])
 def test_an_exported_shared_target_reaches_the_later_cargo_build(repos, command):
     main, _ = repos
@@ -258,6 +260,9 @@ def test_an_exported_shared_target_reaches_the_later_cargo_build(repos, command)
     "declare CARGO_TARGET_DIR=/var/cache/shared; cargo build",
     "export RUSTFLAGS=-Dwarnings; cargo build",
     "declare -x CARGO_TARGET_DIR=rust/target; cargo test",
+    "export CARGO_TARGET_DIR=/var/cache/shared; export -n CARGO_TARGET_DIR; cargo build",
+    "declare -x CARGO_TARGET_DIR=/var/cache/shared; declare +x CARGO_TARGET_DIR; cargo build",
+    "export CARGO_TARGET_DIR=rust; export CARGO_TARGET_DIR+=/target; cargo build",
 ])
 def test_an_export_that_is_not_the_shared_target_leaves_the_build_refused(repos, command):
     """`declare` without -x sets a shell variable cargo never sees; an export of a checkout target is no shared target."""
