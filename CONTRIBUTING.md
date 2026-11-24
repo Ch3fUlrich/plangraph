@@ -770,6 +770,13 @@ denies:
   never through the Bash tool). `claude -p`/`--print`, `claude --bg --resume
   <uuid|hex>` / `-r <uuid|hex>` without `-n`/`--name`, `claude --resume`,
   `claude agents`, and `claude stop <id>` stay allowed.
+- `cargo build|check|test|nextest|clippy|run|bench|doc`, also through `pgtest`, `pgtest.py` and the
+  other wrappers, whose target resolves inside a main checkout (a repository root whose `.git` is a
+  directory) or a linked worktree under `.claude/worktrees`: the build would fill an uncapped
+  `rust/target`. The target is `--target-dir`, then `CARGO_TARGET_DIR` / `CARGO_BUILD_TARGET_DIR`,
+  else `target` of the directory cargo runs in (cwd, leading `cd`, `-C`, `--manifest-path`); it is
+  refused from any cwd. The message names the shared target (`~/.cache/plangraph/cargo-target`).
+  Other linked worktrees and `cargo fmt` stay allowed.
 - A while or until condition where a literal `pgrep -f` pattern can match the
   shell running the loop. Wait on the PID or unit, or put the original command
   in the Bash tool's background mode.

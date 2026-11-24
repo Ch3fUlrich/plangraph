@@ -1,0 +1,1 @@
+- The Bash guard's cargo target rule also covers `pgtest cargo ...` and `python3 tools/pgtest.py cargo ...`, and refuses a build whose resolved target lies inside any main checkout or `.claude/worktrees` tree from any working directory (`cd /tmp && CARGO_TARGET_DIR=<main>/rust/target cargo build`).
