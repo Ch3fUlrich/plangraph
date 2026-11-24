@@ -83,7 +83,7 @@ pub fn live_runs(state: &Path) -> Vec<Value> {
 }
 
 /// A live writer run holds its `item_key`, the keys of its brief and the keys a fleet
-/// session recorded as `brief_items`. Review and orchestration runs only read an item.
+/// session recorded as `item_keys` (the same field batch cards use). Review and orchestration runs only read an item.
 pub fn run_lanes(runs: &[Value]) -> Vec<Lane> {
     runs.iter()
         .filter(|record| record["role"] == "implement")
@@ -96,7 +96,7 @@ pub fn run_lanes(runs: &[Value]) -> Vec<Lane> {
             if let Some(key) = record["item_key"].as_str() {
                 keys.extend(key_like(key));
             }
-            for key in record["brief_items"].as_array().into_iter().flatten() {
+            for key in record["item_keys"].as_array().into_iter().flatten() {
                 keys.extend(key.as_str().into_iter().flat_map(key_like));
             }
             if let Some(brief) = record["manifest"]["brief"].as_str() {
@@ -288,7 +288,7 @@ mod tests {
             json!({"run_id":"run-2","role":"implement",
                    "manifest":{"brief":"### demo:TWO | t\nWhy\n"}}),
             json!({"run_id":"run-3","role":"implement","fleet_session_name":"writer-0009",
-                   "brief_items":["demo:THREE"]}),
+                   "item_keys":["demo:THREE"]}),
             json!({"run_id":"run-4","role":"implement","item_key":"bad key"}),
             json!({"run_id":"run-5","role":"review","item_key":"demo:ONE"}),
         ];

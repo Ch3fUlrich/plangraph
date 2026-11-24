@@ -275,7 +275,8 @@ pub(crate) fn admit_lane(state: &Path, args: &Args) -> Result<Args, ToolError> {
         .as_object_mut()
         .unwrap()
         .remove("lane_override");
-    admitted["card"]["brief_items"] = serde_json::json!(keys);
+    // Batch members land on the run record through the card's `item_keys` (at most 50).
+    admitted["card"]["item_keys"] = serde_json::json!(keys);
     if let Some(reason) = reason {
         admitted["card"]["lane_override"] = Value::String(reason);
     }

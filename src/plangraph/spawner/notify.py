@@ -408,9 +408,6 @@ def annotate_native(record, card):
         parent = card.get('parent_session') or os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION')
         if isinstance(parent, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', parent):
             record['parent_session'] = parent
-        items = card.get('brief_items')
-        if isinstance(items, list):
-            record['brief_items'] = [item for item in items if isinstance(item, str)]
         override = card.get('lane_override')
         if isinstance(override, str) and override.strip():
             record['lane_override'] = override.strip()
