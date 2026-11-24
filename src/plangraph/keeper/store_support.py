@@ -93,7 +93,7 @@ class SupportMixin:
         a refusal in the ``lane_merge_unproven`` class when a named row does not vouch for it.
         """
         sha, subject = merge.get("sha"), str(merge.get("subject") or "")
-        ids = list(dict.fromkeys(re.findall(r"\((D-[0-9]+)(?![\w-])", subject)))
+        ids = list(dict.fromkeys(f"D-{int(n)}" for n in re.findall(r"\(D-([0-9]+)(?![\w-])", subject)))   # canonical: D-0123 is D-123
         if not ids or not valid_commit_ref(sha):
             return None
         from .store_waiver import _names_item as names_item  # circular at import time

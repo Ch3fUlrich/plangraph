@@ -45,6 +45,8 @@ def test_an_agy_seat_with_a_recorded_harness_counts(tmp_path):
     {"stdout_tail": TEXT.replace(HEAD, "0" * 40)},      # the verdict names another head
     {"stdout_tail": TEXT.replace("FILES READ: src/lib.rs:3", "FILES READ: none")},
     {"pinned": True},
+    {"completion": {}},                                 # no head_sha: a refusal, never a TypeError
+    {"completion": {"head_sha": None}},
 ])
 def test_an_agy_seat_without_its_recorded_facts_is_refused(tmp_path, changes):
     with pytest.raises(ValueError, match="not a passing witnessed seat"):

@@ -69,6 +69,7 @@ def _recorded_harness_seat(record, completion, text, head):
     if (not isinstance(harness, str) or harness in ("", "unknown") or not isinstance(model, str)
             or leg.get("harness") not in (None, harness) or not leg.get("family") or not model_family(model)
             or not isinstance(text, str) or not has_files_read(text)
+            or not isinstance(head, str) or not head
             or not re.search(rf"(?<![0-9a-fA-F]){re.escape(head)}(?![0-9a-fA-F])", text, re.I)
             or (harness == "opencode" and not _tests_reported(text))):
         return None

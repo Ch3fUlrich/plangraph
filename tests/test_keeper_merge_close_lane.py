@@ -59,6 +59,21 @@ def test_a_pre_pr_lane_merge_closes_on_the_decision_row_naming_its_sha(env):
     assert (proof["kind"], proof["decision_id"], proof["merge_sha"], proof["pr"]) == ("lane_merge", "D-123", merge, None)
 
 
+def test_a_lane_merge_close_flags_no_missing_go_row(env):
+    """A lane_merge proof carries a decision row and no PR: it is never a ``go_row_missing`` PR."""
+    lane_merge(env, [("D-123", "Merged demo:C at {sha}")])
+    auto(env)
+    landing = env.store._evidence("demo:C")[-1]["ref"]["landing"]
+    assert "go_row_missing" not in landing["flags"]
+
+
+def test_a_zero_padded_decision_id_in_the_subject_reads_the_same_row_frozen_or_not(env):
+    lane_merge(env, [("D-123", "Merged demo:C at {sha}")], did="D-0123")
+    result = frozen_close(env)
+    assert [c["key"] for c in result["closed"]] == ["demo:C"], result
+    assert env.store._evidence("demo:C")[-1]["ref"]["prs"][0]["decision_id"] == "D-123"
+
+
 @pytest.mark.parametrize("rows", [
     [],                                                       # the named row does not exist
     [("D-123", "Merged demo:C at 0123456789abcdef0123456789abcdef01234567")],   # row names another sha
