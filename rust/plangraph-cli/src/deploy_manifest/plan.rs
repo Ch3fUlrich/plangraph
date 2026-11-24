@@ -24,6 +24,8 @@ pub enum Fix {
     OperatorEnv(String),
     /// A root unit: never installed by this command.
     OperatorRoot,
+    /// Installed and enabled; nothing to do until the timer has started its service once and it succeeded.
+    AwaitFirstRun,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +44,7 @@ impl Row {
             Fix::EnvFamily(family) => format!("create env files (family {family})"),
             Fix::OperatorEnv(name) => format!("OPERATOR: provide {name}"),
             Fix::OperatorRoot => "OPERATOR: install as root (system unit)".into(),
+            Fix::AwaitFirstRun => "wait: the first run of the service is not done".into(),
         }
     }
 
@@ -97,7 +100,7 @@ pub fn plan(
         }
         let mut notes = Vec::new();
         for file in &unit.files {
-            let wanted = std::fs::read(repo.join("deploy/systemd").join(file)).ok();
+            let wanted = std::fs::read(repo.join(unit.source_dir()).join(file)).ok();
             match (std::fs::read(unit_dir.join(file)).ok(), wanted) {
                 (None, _) => notes.push(format!("{file} missing")),
                 (Some(have), Some(want)) if have != want => notes.push(format!("{file} outdated")),

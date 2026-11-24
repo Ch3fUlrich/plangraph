@@ -1,5 +1,6 @@
 //! Build and publish the host tooling from the synchronized Rust tree.
 use super::{is_executable, Env};
+use crate::deploy_manifest::stamp::release_stamp;
 use crate::deploy_manifest::{this_host_roles, Manifest};
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -81,7 +82,14 @@ pub(super) fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> 
     } else {
         "release-built-tree"
     });
-    let tree = git(&repo, &["rev-parse", "HEAD:rust"])?;
+    // The stamp covers the Rust tree and the files outside it that the sources embed, so an exceptions-only
+    // change is a new release.
+    let (tree, embedded) = release_stamp(&repo).map_err(io::Error::other)?;
+    let dirty = |repo: &Path| -> io::Result<bool> {
+        let mut args = vec!["status", "--porcelain", "--", "rust"];
+        args.extend(embedded.iter().map(String::as_str));
+        Ok(!git(repo, &args)?.is_empty())
+    };
     if fs::read_to_string(&stamp).is_ok_and(|saved| saved.trim() == tree)
         && binaries
             .iter()
@@ -90,7 +98,7 @@ pub(super) fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> 
         println!("SAME release {tree}");
         return Ok(());
     }
-    if !git(&repo, &["status", "--porcelain", "--", "rust"])?.is_empty() {
+    if dirty(&repo)? {
         return Err(io::Error::other("Rust checkout has local changes"));
     }
     let target = env::var_os("CARGO_TARGET_DIR")
@@ -117,9 +125,7 @@ pub(super) fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> 
     if !status.success() {
         return Err(io::Error::other(format!("release build: {status}")));
     }
-    if git(&repo, &["rev-parse", "HEAD:rust"])? != tree
-        || !git(&repo, &["status", "--porcelain", "--", "rust"])?.is_empty()
-    {
+    if release_stamp(&repo).map_err(io::Error::other)?.0 != tree || dirty(&repo)? {
         return Err(io::Error::other(
             "Rust checkout changed during release build",
         ));

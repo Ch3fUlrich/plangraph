@@ -6,16 +6,28 @@ use std::path::Path;
 
 const UNIT_EXTENSIONS: [&str; 4] = [".service", ".timer", ".socket", ".path"];
 
-/// Unit file names directly under `deploy/systemd` (templates included; `*.example` files and drop-in
-/// directories are not unit files).
+/// Unit files the tree ships, as coverage names them: a plain name for `deploy/systemd`, `<dir>/<name>` for a
+/// unit that ships beside its tooling in another directory directly under `deploy/` (templates included;
+/// `*.example` files and drop-in directories are not unit files).
 pub fn unit_files(repo: &Path) -> Result<BTreeSet<String>, String> {
-    let dir = repo.join("deploy/systemd");
+    let deploy = repo.join("deploy");
     let mut out = BTreeSet::new();
-    for entry in fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+    for entry in fs::read_dir(&deploy).map_err(|e| format!("{}: {e}", deploy.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if entry.path().is_file() && UNIT_EXTENSIONS.iter().any(|ext| name.ends_with(ext)) {
-            out.insert(name);
+        let dir_name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.path().is_dir() {
+            continue;
+        }
+        for file in fs::read_dir(entry.path()).map_err(|e| e.to_string())? {
+            let file = file.map_err(|e| e.to_string())?;
+            let name = file.file_name().to_string_lossy().into_owned();
+            if file.path().is_file() && UNIT_EXTENSIONS.iter().any(|ext| name.ends_with(ext)) {
+                out.insert(if dir_name == "systemd" {
+                    name
+                } else {
+                    format!("{dir_name}/{name}")
+                });
+            }
         }
     }
     Ok(out)

@@ -19,6 +19,7 @@ pub mod live;
 pub mod plan;
 pub mod report;
 pub mod scan;
+pub mod stamp;
 pub mod systemd;
 
 /// The role that every host has.
@@ -41,8 +42,11 @@ pub enum Scope {
 #[serde(deny_unknown_fields)]
 pub struct UnitEntry {
     pub name: String,
-    /// File names under `deploy/systemd`.
+    /// File names under `deploy/<dir>` (`deploy/systemd` unless `dir` says otherwise).
     pub files: Vec<String>,
+    /// The directory under `deploy/` that holds the unit files; units that ship beside their tooling
+    /// (`liveness`, `pganchor`, `watchdog`) name it.
+    pub dir: Option<String>,
     /// The unit that is enabled and must be active: the timer of a timer family, else the service.
     pub enable: Option<String>,
     #[serde(default)]
@@ -88,6 +92,19 @@ pub fn is_template(file: &str) -> bool {
 }
 
 impl UnitEntry {
+    /// The repository directory of the unit files.
+    pub fn source_dir(&self) -> String {
+        format!("deploy/{}", self.dir.as_deref().unwrap_or("systemd"))
+    }
+
+    /// How coverage names one of its files: the plain name under `deploy/systemd`, else `<dir>/<name>`.
+    pub fn coverage_key(&self, file: &str) -> String {
+        match self.dir.as_deref() {
+            None | Some("systemd") => file.to_owned(),
+            Some(dir) => format!("{dir}/{file}"),
+        }
+    }
+
     /// The unit that must be active: `enable`, else the only timer, else the only file.
     pub fn enable_unit(&self) -> Result<&str, String> {
         if let Some(unit) = &self.enable {
@@ -237,18 +254,28 @@ impl Manifest {
         bins: &BTreeSet<(String, String)>,
     ) -> Vec<String> {
         let mut problems = Vec::new();
-        let named: BTreeSet<&String> = self.unit.iter().flat_map(|u| &u.files).collect();
+        let named: BTreeSet<String> = self
+            .unit
+            .iter()
+            .flat_map(|u| u.files.iter().map(|f| u.coverage_key(f)))
+            .collect();
         for file in unit_files {
             if !named.contains(file) {
                 problems.push(format!(
-                    "unit file deploy/systemd/{file} is not in {MANIFEST_PATH}: add it to a [[unit]] entry, or an entry with not_deployed = \"<reason>\""
+                    "unit file deploy/{} is not in {MANIFEST_PATH}: add it to a [[unit]] entry (dir = \"<subdir>\" outside deploy/systemd), or an entry with not_deployed = \"<reason>\"",
+                    if file.contains('/') { file.clone() } else { format!("systemd/{file}") }
                 ));
             }
         }
-        for file in named {
+        for file in &named {
             if !unit_files.contains(file) {
                 problems.push(format!(
-                    "{MANIFEST_PATH} names deploy/systemd/{file}, which does not exist"
+                    "{MANIFEST_PATH} names deploy/{}, which does not exist",
+                    if file.contains('/') {
+                        file.clone()
+                    } else {
+                        format!("systemd/{file}")
+                    }
                 ));
             }
         }
@@ -338,5 +365,7 @@ mod guard_tests;
 mod install_tests;
 #[cfg(test)]
 mod live_tests;
+#[cfg(test)]
+mod stamp_tests;
 #[cfg(test)]
 mod tests;

@@ -97,18 +97,83 @@ pub fn read_ledgers(dir: &Path) -> (Vec<(String, Ledger)>, Vec<Finding>) {
     (ledgers, findings)
 }
 
-/// Every refusal of the deploy part of the GO check at `now`.
-pub fn check(ledgers: &[(String, Ledger)], exceptions: &[Exception], now: i64) -> Vec<Finding> {
-    if ledgers.is_empty() {
+/// A host the GO check expects a fresh ledger from: a registry host the fleet install can reach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpectedHost {
+    pub id: String,
+    pub aliases: Vec<String>,
+}
+
+impl ExpectedHost {
+    fn owns(&self, ledger_name: &str) -> bool {
+        std::iter::once(&self.id)
+            .chain(&self.aliases)
+            .any(|name| name.eq_ignore_ascii_case(ledger_name))
+    }
+}
+
+/// The hosts of the registry text that must report: `local` and `ssh` hosts. A `keeper`-transport host has
+/// no install path (`host-sync --install --fleet` names it a failure on its own), so it has no ledger to ask for.
+pub fn expected_hosts(registry: &str) -> Result<Vec<ExpectedHost>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(registry).map_err(|e| format!("hosts registry: {e}"))?;
+    let hosts = value["hosts"]
+        .as_array()
+        .ok_or("hosts registry has no hosts list")?;
+    let names = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|n| n.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Ok(hosts
+        .iter()
+        .filter(|h| matches!(h["transport"].as_str(), Some("local" | "ssh")))
+        .filter_map(|h| {
+            Some(ExpectedHost {
+                id: h["id"].as_str()?.to_owned(),
+                aliases: names(&h["aliases"]),
+            })
+        })
+        .collect())
+}
+
+/// Every refusal of the deploy part of the GO check at `now`: every expected host has a fresh ledger
+/// (the newest file under its id or an alias), and no entry of those ledgers is over the limit.
+pub fn check(
+    ledgers: &[(String, Ledger)],
+    expected: &[ExpectedHost],
+    exceptions: &[Exception],
+    now: i64,
+) -> Vec<Finding> {
+    if expected.is_empty() {
         return vec![Finding {
-            code: "deploy_ledger_missing",
-            detail: "no host has written a deploy-status ledger; run `plangraph deploy-status` on every host".into(),
+            code: "deploy_hosts_unknown",
+            detail: "no expected host: the hosts registry is missing, unreadable or lists no local or ssh host".into(),
         }];
     }
     let mut out = Vec::new();
-    for (host, ledger) in ledgers {
+    for host in expected {
+        let Some((_, ledger)) = ledgers
+            .iter()
+            .filter(|(name, _)| host.owns(name))
+            .max_by_key(|(_, l)| l.written_at)
+        else {
+            out.push(Finding {
+                code: "deploy_ledger_missing",
+                detail: format!(
+                    "{}: no deploy-status ledger; run `plangraph host-sync --install --check --fleet` from the center",
+                    host.id
+                ),
+            });
+            continue;
+        };
+        let host = &host.id;
         let stale = ledger::age_hours(ledger.written_at, now);
-        if stale > LEDGER_MAX_AGE_HOURS {
+        if now - ledger.written_at > LEDGER_MAX_AGE_HOURS * 3600 {
             out.push(Finding {
                 code: "deploy_ledger_stale",
                 detail: format!(
@@ -117,10 +182,11 @@ pub fn check(ledgers: &[(String, Ledger)], exceptions: &[Exception], now: i64) -
             });
         }
         for (key, since) in &ledger.not_live_since {
-            let age = ledger::age_hours(*since, now);
-            if age <= LIMIT_HOURS {
+            // Seconds, not rounded hours: 24 h and one second is over the limit.
+            if now - since <= LIMIT_HOURS * 3600 {
                 continue;
             }
+            let age = ledger::age_hours(*since, now);
             let excused = exceptions
                 .iter()
                 .any(|e| e.entry == *key && until_epoch(&e.until).is_some_and(|end| now < end));

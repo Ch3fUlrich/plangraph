@@ -5,14 +5,13 @@
 //! `deploy_manifest::apply` and `deploy_manifest::fleet`.
 use super::Env;
 use crate::deploy_manifest::apply::{self, Host, Steps};
-use crate::deploy_manifest::fleet::{hosts_from_registry, run_fleet, FleetHost, Remote};
+use crate::deploy_manifest::fleet::{hosts_from_registry, run_fleet, Processes};
 use crate::deploy_manifest::report::{host_id, ledger_dir, state_dir, LocalFacts};
-use crate::deploy_manifest::systemd::{HostSystemctl, Out};
+use crate::deploy_manifest::systemd::HostSystemctl;
 use crate::deploy_manifest::{this_host_roles, Manifest};
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const USAGE: &str =
     "usage: host-sync --install [--check] [--fleet] [--repo PATH] [--hosts FILE] [--machine]";
@@ -55,22 +54,6 @@ impl Steps for RealSteps<'_> {
 
     fn env_family(&self, family: &str) -> Result<(), String> {
         super::unit_env::install(family, self.home, &[]).map_err(|e| e.to_string())
-    }
-}
-
-struct Processes;
-
-impl Remote for Processes {
-    fn run(&self, _: &FleetHost, argv: &[String]) -> Result<Out, String> {
-        let output = Command::new(&argv[0])
-            .args(&argv[1..])
-            .output()
-            .map_err(|e| format!("{}: {e}", argv[0]))?;
-        Ok(Out {
-            code: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
     }
 }
 

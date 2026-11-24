@@ -54,7 +54,10 @@ impl HostFacts for LocalFacts {
     }
 
     fn source_tree(&self) -> Option<String> {
-        git(&self.repo, &["rev-parse", "HEAD:rust"]).filter(|t| !t.is_empty())
+        super::stamp::release_stamp(&self.repo)
+            .ok()
+            .map(|(stamp, _)| stamp)
+            .filter(|t| !t.is_empty())
     }
 
     fn merged_at(&self, paths: &[String]) -> Option<i64> {

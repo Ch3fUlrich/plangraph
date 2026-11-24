@@ -80,12 +80,31 @@ impl HostFacts for Facts {
     }
 }
 
-fn show(sysctl: &mut Fixture, unit: &str, load: &str, file: &str, active: &str, result: &str) {
-    let call = format!("--user show {unit} -p LoadState -p ActiveState -p UnitFileState -p Result");
+fn show_with(
+    sysctl: &mut Fixture,
+    unit: &str,
+    (load, file, active, result): (&str, &str, &str, &str),
+    (reload, started, status): (&str, &str, &str),
+) {
+    let props: Vec<String> = super::live::SHOW_PROPS
+        .iter()
+        .map(|p| format!("-p {p}"))
+        .collect();
+    let call = format!("--user show {unit} {}", props.join(" "));
     sysctl.answer(
         &call,
         0,
-        &format!("LoadState={load}\nActiveState={active}\nUnitFileState={file}\nResult={result}\n"),
+        &format!("LoadState={load}\nActiveState={active}\nUnitFileState={file}\nResult={result}\nNeedDaemonReload={reload}\nExecMainStartTimestamp={started}\nExecMainStatus={status}\n"),
+    );
+}
+
+/// A unit that has run to success once (a service with a start time), no reload pending.
+fn show(sysctl: &mut Fixture, unit: &str, load: &str, file: &str, active: &str, result: &str) {
+    show_with(
+        sysctl,
+        unit,
+        (load, file, active, result),
+        ("no", "Mon 2026-11-23 10:00:00 UTC", "0"),
     );
 }
 
@@ -382,4 +401,62 @@ fn the_digest_line_counts_not_live_entries_across_hosts_and_names_the_oldest() {
         report::digest_line(dir.path(), now),
         "deploy-not-live 3 oldest host-b:binary:p/tool 50h (2 hosts reporting)"
     );
+}
+
+#[test]
+fn an_active_timer_is_not_live_while_its_service_is_missing_or_has_never_run() {
+    let manifest = Manifest::parse(MANIFEST).unwrap();
+    let live = |service: &dyn Fn(&mut Fixture)| {
+        let mut sysctl = Fixture::default();
+        healthy(&mut sysctl);
+        service(&mut sysctl);
+        find(
+            &read_live(&manifest, &roles(&["keeper"]), &sysctl, &Facts::current()),
+            "pg-a",
+        )
+        .live
+        .clone()
+    };
+    assert!(matches!(
+        live(&|s| show(s, "pg-a.service", "not-found", "", "inactive", "")),
+        Live::NeverRun(why) if why.contains("not loaded")
+    ));
+    assert!(matches!(
+        live(&|s| show_with(s, "pg-a.service", ("loaded", "static", "inactive", "success"), ("no", "", ""))),
+        Live::NeverRun(why) if why.contains("has not run")
+    ));
+    assert_eq!(
+        live(&|s| show_with(
+            s,
+            "pg-a.service",
+            ("loaded", "static", "inactive", "success"),
+            ("no", "Mon", "3")
+        )),
+        Live::LastRunFailed("3".into()),
+        "a non-zero exit status of the last run is a failure even when Result is success"
+    );
+    assert_eq!(
+        live(&|s| show_with(
+            s,
+            "pg-a.service",
+            ("loaded", "static", "inactive", "success"),
+            ("no", "Mon", "0")
+        )),
+        Live::Live
+    );
+}
+
+#[test]
+fn a_unit_file_changed_on_disk_but_not_reloaded_is_not_live() {
+    let manifest = Manifest::parse(MANIFEST).unwrap();
+    let mut sysctl = Fixture::default();
+    healthy(&mut sysctl);
+    show_with(
+        &mut sysctl,
+        "pg-a.timer",
+        ("loaded", "enabled", "active", "success"),
+        ("yes", "Mon", "0"),
+    );
+    let entries = read_live(&manifest, &roles(&["keeper"]), &sysctl, &Facts::current());
+    assert_eq!(find(&entries, "pg-a").live, Live::NeedsReload);
 }

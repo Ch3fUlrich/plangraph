@@ -128,6 +128,23 @@ pub trait Remote: Sync {
     fn run(&self, host: &FleetHost, argv: &[String]) -> Result<Out, String>;
 }
 
+/// Runs the command lines as real processes.
+pub struct Processes;
+
+impl Remote for Processes {
+    fn run(&self, _: &FleetHost, argv: &[String]) -> Result<Out, String> {
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .output()
+            .map_err(|e| format!("{}: {e}", argv[0]))?;
+        Ok(Out {
+            code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
 /// One host's result.
 #[derive(Debug)]
 pub struct HostResult {

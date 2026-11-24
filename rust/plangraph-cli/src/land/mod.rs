@@ -6,6 +6,9 @@ mod chain;
 pub mod cli;
 pub mod delta;
 pub mod deploy;
+pub mod deploy_guard;
+#[cfg(test)]
+mod deploy_guard_tests;
 mod deploy_probe;
 #[cfg(test)]
 mod deploy_tests;

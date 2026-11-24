@@ -1,6 +1,6 @@
 //! Install and enable the unit families of the manifest that belong on this host's roles.
 //!
-//! Unit files are copied from `deploy/systemd` into the unit directory only when their content differs; a
+//! Unit files are copied from their `deploy/<dir>` (`deploy/systemd` by default) into the unit directory only when their content differs; a
 //! family whose required env file is missing is reported (`NEEDS-ENV`) and not enabled, so no unit starts
 //! without its configuration. Template units are installed but never enabled (an instance is enabled per
 //! worker or role). The scope of the run (user or system) selects which entries it handles.
@@ -51,7 +51,7 @@ fn install_entry(entry: &UnitEntry, target: &Target, sysctl: &dyn Systemctl, rep
     let name = &entry.name;
     let mut changed = false;
     for file in &entry.files {
-        let from = target.repo.join("deploy/systemd").join(file);
+        let from = target.repo.join(entry.source_dir()).join(file);
         match copy_if_changed(&from, &target.unit_dir.join(file)) {
             Ok(did) => changed |= did,
             Err(error) => {
@@ -83,7 +83,12 @@ fn install_entry(entry: &UnitEntry, target: &Target, sysctl: &dyn Systemctl, rep
             return;
         }
     };
-    if changed {
+    // A reload that failed on an earlier run left files equal to the checkout and systemd on the old text:
+    // systemd itself says so (NeedDaemonReload), so the retry reloads even though no file changed.
+    let reload_pending = sysctl
+        .run(target.scope, &["show", enable, "-p", "NeedDaemonReload"])
+        .is_ok_and(|out| out.stdout.contains("NeedDaemonReload=yes"));
+    if changed || reload_pending {
         match sysctl.run(target.scope, &["daemon-reload"]) {
             Ok(out) if out.code == 0 => {}
             other => {

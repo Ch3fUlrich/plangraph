@@ -175,3 +175,91 @@ fn install_units_refuses_a_checkout_without_a_manifest() {
         "{output:?}"
     );
 }
+
+/// A change only to a file the binaries embed (the GO verifier carries `deploy/exceptions.toml`) is a new
+/// release: the stamp covers the embedded input, so the install rebuilds instead of printing SAME.
+#[test]
+fn an_exceptions_only_change_is_a_new_release() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let repo = home.join("repo");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    fs::create_dir_all(repo.join("rust/emb/src")).unwrap();
+    fs::create_dir_all(repo.join("deploy")).unwrap();
+    git(&["init", "-q"]);
+    fs::write(
+        repo.join("rust/emb/src/lib.rs"),
+        "const X: &str = include_str!(\"../../../deploy/exceptions.toml\");\n",
+    )
+    .unwrap();
+    fs::write(repo.join("deploy/exceptions.toml"), "# none\n").unwrap();
+    fs::write(
+        repo.join("deploy/manifest.toml"),
+        "[[binary]]\npackage = \"plangraph-cli\"\nbin = \"plangraph\"\nhosts = [\"all\"]\nfirst_run = \"run it\"\n",
+    )
+    .unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "one"]);
+
+    let tools = home.join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        tools.join("cargo"),
+        "#!/bin/sh\nset -eu\nmkdir -p \"$CARGO_TARGET_DIR/release\"\ncp \"$FIXTURE_BINARY\" \"$CARGO_TARGET_DIR/release/plangraph\"\n",
+    );
+    let path =
+        std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
+    let run = || {
+        let out = Command::new(env!("CARGO_BIN_EXE_host-sync"))
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", &path)
+            .env("CARGO_TARGET_DIR", home.join("artifacts"))
+            .env("FIXTURE_BINARY", env!("CARGO_BIN_EXE_plangraph"))
+            .arg("--install-release")
+            .arg(&repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(run().contains("INSTALLED"));
+    assert!(
+        run().contains("SAME"),
+        "nothing changed: the second run is a no-op"
+    );
+    let rust_tree = git(&["rev-parse", "HEAD:rust"]);
+
+    fs::write(
+        repo.join("deploy/exceptions.toml"),
+        "# an exception was added\n",
+    )
+    .unwrap();
+    git(&["commit", "-qam", "exceptions only"]);
+    assert_eq!(
+        git(&["rev-parse", "HEAD:rust"]),
+        rust_tree,
+        "the Rust tree did not change"
+    );
+    let third = run();
+    assert!(
+        third.contains("INSTALLED") && !third.contains("SAME"),
+        "{third}"
+    );
+    assert!(run().contains("SAME"));
+}

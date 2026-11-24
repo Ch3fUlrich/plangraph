@@ -1,7 +1,21 @@
-use super::guard::{check, parse_exceptions, read_ledgers, Exception, LEDGER_MAX_AGE_HOURS};
+use super::guard::{
+    check as check_hosts, expected_hosts, parse_exceptions, read_ledgers, Exception, ExpectedHost,
+    Finding, LEDGER_MAX_AGE_HOURS,
+};
 use super::ledger::Ledger;
 
 const NOW: i64 = 1_800_000_000; // 2027-01-15
+
+fn host_a() -> Vec<ExpectedHost> {
+    vec![ExpectedHost {
+        id: "host-a".into(),
+        aliases: vec![],
+    }]
+}
+
+fn check(ledgers: &[(String, Ledger)], exceptions: &[Exception], now: i64) -> Vec<Finding> {
+    check_hosts(ledgers, &host_a(), exceptions, now)
+}
 
 fn ledger(key: &str, hours_ago: i64) -> (String, Ledger) {
     let mut l = Ledger {
@@ -57,7 +71,14 @@ fn a_dated_routing_exception_excuses_only_its_entry_until_the_end_of_its_day() {
 
 #[test]
 fn an_empty_or_stale_ledger_refuses_instead_of_passing() {
-    assert_eq!(check(&[], &[], NOW)[0].code, "deploy_ledger_missing");
+    let missing = check(&[], &[], NOW);
+    assert_eq!(missing[0].code, "deploy_ledger_missing");
+    assert!(missing[0].detail.contains("host-a"));
+    assert_eq!(
+        check_hosts(&[], &[], &[], NOW)[0].code,
+        "deploy_hosts_unknown",
+        "no expected host is a refusal, not a pass"
+    );
     let (host, mut l) = ledger("unit:x", 1);
     l.written_at = NOW - (LEDGER_MAX_AGE_HOURS + 1) * 3600;
     let findings = check(&[(host, l)], &[], NOW);
@@ -93,4 +114,84 @@ fn ledgers_are_read_from_a_directory_and_a_broken_file_is_a_finding() {
     assert_eq!(ledgers.len(), 1);
     assert_eq!(ledgers[0].0, "host-a");
     assert_eq!(findings[0].code, "deploy_ledger_unreadable");
+}
+
+const REGISTRY: &str = r#"{"version":1,"self":"center","hosts":[
+ {"id":"center","aliases":["coding-vm"],"transport":"local"},
+ {"id":"dell","aliases":[],"transport":"ssh","ssh_target":"dell-ssh"},
+ {"id":"odd","aliases":[],"transport":"keeper"}]}"#;
+
+fn fresh() -> Ledger {
+    Ledger {
+        written_at: NOW - 60,
+        ..Ledger::default()
+    }
+}
+
+#[test]
+fn one_fresh_ledger_is_not_enough_while_another_expected_host_never_reported() {
+    let expected = expected_hosts(REGISTRY).unwrap();
+    assert_eq!(
+        expected.len(),
+        2,
+        "the keeper-transport host has no ledger to ask for"
+    );
+    let only_center = [("center".to_owned(), fresh())];
+    let findings = check_hosts(&only_center, &expected, &[], NOW);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].code, "deploy_ledger_missing");
+    assert!(
+        findings[0].detail.starts_with("dell:"),
+        "{}",
+        findings[0].detail
+    );
+}
+
+#[test]
+fn a_ledger_under_an_alias_counts_and_the_newest_file_of_a_host_decides() {
+    let expected = expected_hosts(REGISTRY).unwrap();
+    let mut old = fresh();
+    old.written_at = NOW - 100 * 3600;
+    let ledgers = [
+        ("center".to_owned(), old),
+        ("Coding-VM".to_owned(), fresh()),
+        ("dell".to_owned(), fresh()),
+    ];
+    assert!(check_hosts(&ledgers, &expected, &[], NOW).is_empty());
+}
+
+#[test]
+fn a_ledger_of_a_host_outside_the_registry_is_not_asked_about() {
+    let expected = expected_hosts(REGISTRY).unwrap();
+    let mut stale = fresh();
+    stale.written_at = 1;
+    let ledgers = [
+        ("center".to_owned(), fresh()),
+        ("dell".to_owned(), fresh()),
+        ("retired".to_owned(), stale),
+    ];
+    assert!(check_hosts(&ledgers, &expected, &[], NOW).is_empty());
+}
+
+#[test]
+fn the_limit_is_compared_in_seconds_so_24_hours_and_one_second_refuses() {
+    let (host, mut l) = ledger("unit:pg-feeder", 24);
+    l.not_live_since
+        .insert("unit:pg-feeder".into(), NOW - 24 * 3600 - 1);
+    let findings = check(&[(host.clone(), l.clone())], &[], NOW);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].code, "deploy_not_live");
+    l.not_live_since
+        .insert("unit:pg-feeder".into(), NOW - 24 * 3600);
+    assert!(
+        check(&[(host, l)], &[], NOW).is_empty(),
+        "exactly 24 h is inside the limit"
+    );
+}
+
+#[test]
+fn a_ledger_six_hours_and_one_second_old_is_stale() {
+    let (host, mut l) = ledger("unit:x", 1);
+    l.written_at = NOW - LEDGER_MAX_AGE_HOURS * 3600 - 1;
+    assert_eq!(check(&[(host, l)], &[], NOW)[0].code, "deploy_ledger_stale");
 }

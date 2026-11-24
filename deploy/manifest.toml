@@ -5,6 +5,7 @@
 # worker host) and `all`. A host lists its roles in PG_HOST_ROLES or in ~/.config/plangraph/host-roles.
 # env_family names the `host-sync --install-env` family that creates the env files from documented defaults;
 # without it a missing env file is reported by name for the operator (secrets are never created).
+# dir names the directory under deploy/ that holds the unit files when it is not deploy/systemd.
 # env_files are file names under ~/.config/plangraph (or /etc/plangraph for system units), never values.
 # first_run is what an operator checks after the first start; `plangraph deploy-status` also reads the
 # unit's active state, enabled state and last run result.
@@ -25,6 +26,34 @@ name = "plangraph-host-sync"
 files = ["plangraph-host-sync.service", "plangraph-host-sync.timer"]
 hosts = ["all"]
 first_run = "systemctl --user start plangraph-host-sync.service journals 'nothing to do' on a complete host"
+
+[[unit]]
+name = "liveness-watchdog"
+dir = "liveness"
+files = ["liveness-watchdog@.service", "liveness-watchdog@.timer"]
+hosts = ["all"]
+first_run = "enable one instance per config under ~/.config/plangraph/liveness; its timer then drives one pass every 10 minutes"
+
+[[unit]]
+name = "pganchor"
+dir = "pganchor"
+files = ["pganchor.socket", "pganchor@.service"]
+enable = "pganchor.socket"
+scope = "system"
+hosts = ["keeper"]
+first_run = "the keeper appends an anchor record through /run/pganchor/anchor.sock (operator step: root installs both units)"
+
+[[unit]]
+name = "flow-watchdog"
+dir = "watchdog"
+files = ["flow-watchdog.service", "flow-watchdog.timer"]
+not_deployed = "needs a host collector that refreshes ~/.local/state/plangraph/flow-snapshot.json (docs/flow-watchdog.md); none is deployed yet, the binary is installed on every host"
+
+[[unit]]
+name = "stall-watchdog"
+dir = "watchdog"
+files = ["watchdog.service", "watchdog.timer"]
+not_deployed = "carries @ROOT@ and @PYTHON@ placeholders: `python -m plangraph.spawner.stall_watchdog install` renders and installs it (deploy/bootstrap.sh), so a verbatim copy would be wrong"
 
 [[unit]]
 name = "pg-feeder"

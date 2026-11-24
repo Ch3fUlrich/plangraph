@@ -20,3 +20,9 @@ Every item, not only one with a `Live:` clause, now needs a verified deploy evid
 `host-sync --install` is the one command that makes a host complete from the manifest (plan, `--check`, install
 binaries, units, timers and env defaults, ledger, idempotent), `plangraph-host-sync.timer` runs it, and
 `host-sync --install --fleet` runs it on every host of the hosts registry over ssh from the center.
+The landing step now asks `plangraph land-train deploy-guard --refresh yes` before it merges or fast-forwards: every
+`local` and `ssh` host of the hosts registry must have a fresh ledger and no entry over 24 hours (in seconds) not live.
+A timer is live only when its service is loaded and has run to success; a pending daemon reload keeps a unit not live and
+the installer reloads on retry; the release stamp includes embedded files outside `rust/` (an exceptions-only change is a
+new release); unit files under `deploy/liveness`, `deploy/pganchor` and `deploy/watchdog` are manifest entries; and the
+daily `landing report --day` carries the `deploy-not-live` line.

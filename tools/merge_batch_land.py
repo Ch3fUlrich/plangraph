@@ -343,6 +343,25 @@ def main_admission(repo, exception=None, binary=None):
                           "only a GO row for this head with EXCEPTION:main-red-fix passes, and only while main is red")
 
 
+def require_deploy_live(binary=None):
+    """Refuse to land while a manifest entry is over 24 h not live on any host of the fleet (D-6790 guard).
+
+    Asks ``plangraph land-train deploy-guard --refresh yes``: it collects a fresh ledger from every host of the
+    hosts registry first, so a missing, unreachable or stale host refuses too. Runs before both landing modes."""
+    binary = binary or os.environ.get("PLANGRAPH_BIN") or shutil.which("plangraph")
+    if not binary:
+        raise MergeBatchError("deploy_guard_unknown: the plangraph binary is not on PATH (set PLANGRAPH_BIN)")
+    argv = [binary, "land-train", "deploy-guard", "--refresh", "yes"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=3600, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise MergeBatchError(f"deploy_guard_unknown: deploy-guard did not run: {exc}") from None
+    if proc.returncode:
+        detail = (proc.stderr or proc.stdout).strip()
+        raise MergeBatchError(f"deploy_not_live: the fleet is not deployed, landing refused "
+                              f"(plangraph land-train deploy-guard): {detail}")
+
+
 def require_main_green(repo, head, go_row=None):
     """Freeze land while main is not green; the GO row exception is passed to the state function."""
     exception = None
@@ -573,6 +592,7 @@ def land_with_lease(args, lease, st, mode):
         if pr.get("baseRefName") != "main":
             raise MergeBatchError("full_ci: batch PR must target main")
         require_migration_go(st, args.go_row)
+        require_deploy_live()
         batch_key = landing_batch_key(st) if lease else None
         reruns = require_full_run(repo, st["head"], st["branch"], batch_key)
         require_current_base(repo, st["head"])

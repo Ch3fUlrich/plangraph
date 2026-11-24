@@ -29,6 +29,10 @@ pub enum Live {
     NotActive(String),
     /// The service the timer starts ended in a failed state or reported a failed result.
     LastRunFailed(String),
+    /// The unit files changed on disk and systemd has not reloaded them (`NeedDaemonReload=yes`).
+    NeedsReload,
+    /// The service of an active timer is not loaded, or has never run: nothing shows the unit works yet.
+    NeverRun(String),
     /// The installed binaries are older than the checkout, or no release was installed.
     Stale(String),
     /// systemd could not be read; the entry is counted as not live.
@@ -49,6 +53,8 @@ impl Live {
             Live::NotEnabled(s) => format!("not-enabled({s})"),
             Live::NotActive(s) => format!("not-active({s})"),
             Live::LastRunFailed(s) => format!("last-run-failed({s})"),
+            Live::NeedsReload => "needs-daemon-reload".into(),
+            Live::NeverRun(s) => format!("never-run({s})"),
             Live::Stale(s) => format!("stale({s})"),
             Live::Unreadable(s) => format!("unreadable({})", s.replace(['\n', '\t'], " ")),
             Live::Elsewhere(s) => format!("elsewhere({s})"),
@@ -87,26 +93,27 @@ impl Entry {
     }
 }
 
+/// The properties read of every unit.
+pub const SHOW_PROPS: [&str; 7] = [
+    "LoadState",
+    "ActiveState",
+    "UnitFileState",
+    "Result",
+    "NeedDaemonReload",
+    "ExecMainStartTimestamp",
+    "ExecMainStatus",
+];
+
 fn show(
     sysctl: &dyn Systemctl,
     scope: Scope,
     unit: &str,
 ) -> Result<BTreeMap<String, String>, String> {
-    let out = sysctl.run(
-        scope,
-        &[
-            "show",
-            unit,
-            "-p",
-            "LoadState",
-            "-p",
-            "ActiveState",
-            "-p",
-            "UnitFileState",
-            "-p",
-            "Result",
-        ],
-    )?;
+    let mut args = vec!["show", unit];
+    for prop in SHOW_PROPS {
+        args.extend(["-p", prop]);
+    }
+    let out = sysctl.run(scope, &args)?;
     if out.code != 0 {
         return Err(format!("systemctl show {unit}: {}", out.stderr.trim()));
     }
@@ -134,6 +141,9 @@ fn unit_live(entry: &UnitEntry, sysctl: &dyn Systemctl) -> Live {
     if is_template(enable) {
         return Live::Live;
     }
+    if get("NeedDaemonReload") == "yes" {
+        return Live::NeedsReload;
+    }
     let file_state = get("UnitFileState");
     if !(file_state.starts_with("enabled") || file_state == "static" || file_state == "alias") {
         return Live::NotEnabled(file_state.to_owned());
@@ -142,20 +152,36 @@ fn unit_live(entry: &UnitEntry, sysctl: &dyn Systemctl) -> Live {
         return Live::NotActive(get("ActiveState").to_owned());
     }
     let service = entry.service_unit().unwrap_or_else(|| enable.to_owned());
-    let run = if service == enable {
-        facts
-    } else {
-        match show(sysctl, entry.scope, &service) {
-            Ok(facts) => facts,
-            Err(error) => return Live::Unreadable(error),
-        }
+    if service == enable {
+        // A service that is itself the enabled unit is running: that is its proof.
+        return Live::Live;
+    }
+    // A timer proves nothing alone: the service it starts must be loaded and have run to success.
+    let run = match show(sysctl, entry.scope, &service) {
+        Ok(facts) => facts,
+        Err(error) => return Live::Unreadable(error),
     };
-    let (active, result) = (
-        run.get("ActiveState").map(String::as_str).unwrap_or(""),
-        run.get("Result").map(String::as_str).unwrap_or(""),
-    );
-    if active == "failed" || !(result.is_empty() || result == "success") {
-        return Live::LastRunFailed(if result.is_empty() { active } else { result }.to_owned());
+    let run_get = |k: &str| run.get(k).map(String::as_str).unwrap_or("");
+    if run_get("LoadState") != "loaded" {
+        return Live::NeverRun(format!("{service} is not loaded"));
+    }
+    let (active, result) = (run_get("ActiveState"), run_get("Result"));
+    let status = run_get("ExecMainStatus");
+    if active == "failed"
+        || (result != "success" && !result.is_empty())
+        || !matches!(status, "" | "0")
+    {
+        let why = if result != "success" && !result.is_empty() {
+            result
+        } else if !matches!(status, "" | "0") {
+            status
+        } else {
+            active
+        };
+        return Live::LastRunFailed(why.to_owned());
+    }
+    if run_get("ExecMainStartTimestamp").is_empty() {
+        return Live::NeverRun(format!("{service} has not run since it was installed"));
     }
     Live::Live
 }
@@ -193,7 +219,7 @@ pub fn read_live(
         let paths: Vec<String> = unit
             .files
             .iter()
-            .map(|f| format!("deploy/systemd/{f}"))
+            .map(|f| format!("{}/{f}", unit.source_dir()))
             .collect();
         out.push(Entry {
             kind: Kind::Unit,

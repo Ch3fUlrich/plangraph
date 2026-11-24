@@ -27,6 +27,11 @@ first_run = "tool --version"
 struct FakeSystemd {
     unit_dir: PathBuf,
     enabled: RefCell<BTreeSet<String>>,
+    /// Services that have run once: a timer starts its service only when it fires, not when it is enabled.
+    fired: RefCell<BTreeSet<String>>,
+    reload_fails: Cell<bool>,
+    /// What systemd has loaded: the unit file texts as of its last daemon-reload.
+    loaded_text: RefCell<std::collections::BTreeMap<String, Vec<u8>>>,
 }
 
 impl Systemctl for FakeSystemd {
@@ -42,11 +47,15 @@ impl Systemctl for FakeSystemd {
             ["show", unit, ..] => {
                 let loaded = self.unit_dir.join(unit).is_file();
                 let on = self.enabled.borrow().contains(*unit);
+                let ran = self.fired.borrow().contains(*unit);
                 ok(format!(
-                    "LoadState={}\nActiveState={}\nUnitFileState={}\nResult=success\n",
+                    "LoadState={}\nActiveState={}\nUnitFileState={}\nResult=success\nNeedDaemonReload={}\nExecMainStartTimestamp={}\nExecMainStatus={}\n",
                     if loaded { "loaded" } else { "not-found" },
                     if on { "active" } else { "inactive" },
-                    if on { "enabled" } else { "disabled" }
+                    if on { "enabled" } else { "disabled" },
+                    if loaded && self.loaded_text.borrow().get(*unit) != fs::read(self.unit_dir.join(unit)).ok().as_ref() { "yes" } else { "no" },
+                    if ran { "Mon 2026-11-23 10:00:00 UTC" } else { "" },
+                    if ran { "0" } else { "" }
                 ))
             }
             ["is-enabled", unit] => ok(if self.enabled.borrow().contains(*unit) {
@@ -61,6 +70,21 @@ impl Systemctl for FakeSystemd {
             }),
             ["enable", "--now", unit] => {
                 self.enabled.borrow_mut().insert((*unit).to_owned());
+                ok(String::new())
+            }
+            ["daemon-reload"] if self.reload_fails.get() => Ok(Out {
+                code: 1,
+                stdout: String::new(),
+                stderr: "Failed to connect to bus".into(),
+            }),
+            ["daemon-reload"] => {
+                let mut loaded = self.loaded_text.borrow_mut();
+                for entry in fs::read_dir(&self.unit_dir).into_iter().flatten().flatten() {
+                    loaded.insert(
+                        entry.file_name().to_string_lossy().into_owned(),
+                        fs::read(entry.path()).unwrap_or_default(),
+                    );
+                }
                 ok(String::new())
             }
             _ => ok(String::new()),
@@ -126,6 +150,9 @@ fn world(text: &str) -> World {
     let systemd = FakeSystemd {
         unit_dir: root.join("units"),
         enabled: RefCell::default(),
+        fired: RefCell::default(),
+        reload_fails: Cell::new(false),
+        loaded_text: RefCell::default(),
     };
     let steps = FakeSteps {
         bin_dir: root.join("bin"),
@@ -140,6 +167,11 @@ fn world(text: &str) -> World {
         systemd,
         steps,
     }
+}
+
+/// The timer fires: its service runs once and succeeds.
+fn fire(w: &World, service: &str) {
+    w.systemd.fired.borrow_mut().insert(service.to_owned());
 }
 
 fn install(w: &World, check_only: bool) -> Outcome {
@@ -197,7 +229,12 @@ fn the_install_fixes_all_three_and_a_second_run_changes_nothing() {
     let w = world(MANIFEST);
     let first = install(&w, false);
     let text = first.lines.join("\n");
-    assert!(!first.pending, "{text}");
+    // Installed and enabled, but the timer has not fired yet: nothing shows the service works.
+    assert!(first.pending, "{text}");
+    assert!(
+        text.contains("still: never-run(pg-a.service has not run since it was installed)"),
+        "{text}"
+    );
     for row in [
         "result\tbinary\tp/tool\tnot-installed\tok",
         "result\tunit\tpg-a\tenv file missing: x.env\tok",
@@ -208,9 +245,8 @@ fn the_install_fixes_all_three_and_a_second_run_changes_nothing() {
         w.dir.path().join("units/pg-a.timer").is_file() && w.dir.path().join("bin/tool").is_file()
     );
     assert!(w.systemd.enabled.borrow().contains("pg-a.timer"));
-    assert!(text.contains("deploy-not-live\t0"), "{text}");
-    let ledger = fs::read_to_string(w.dir.path().join("state/deploy-live/h.json")).unwrap();
-    assert!(ledger.contains("\"not_live_since\": {}"), "{ledger}");
+    assert!(text.contains("deploy-not-live\t1"), "{text}");
+    fire(&w, "pg-a.service");
 
     let second = install(&w, false);
     assert!(!second.pending);
@@ -228,12 +264,15 @@ fn the_install_fixes_all_three_and_a_second_run_changes_nothing() {
         !install(&w, true).pending,
         "--check exits clean after the install"
     );
+    let ledger = fs::read_to_string(w.dir.path().join("state/deploy-live/h.json")).unwrap();
+    assert!(ledger.contains("\"not_live_since\": {}"), "{ledger}");
 }
 
 #[test]
 fn an_outdated_unit_file_is_replanned_and_repaired() {
     let w = world(MANIFEST);
     install(&w, false);
+    fire(&w, "pg-a.service");
     fs::write(
         w.dir.path().join("repo/deploy/systemd/pg-a.timer"),
         "[Unit]\n# newer\n",
@@ -283,4 +322,39 @@ fn a_root_unit_is_listed_as_an_operator_step_and_never_installed() {
     );
     assert!(out.pending);
     assert!(!w.dir.path().join("units/pg-sys.timer").exists());
+}
+
+#[test]
+fn a_failed_daemon_reload_leaves_the_run_pending_and_the_retry_reloads() {
+    let w = world(MANIFEST);
+    install(&w, false);
+    fire(&w, "pg-a.service");
+    assert!(!install(&w, false).pending);
+    // The checkout changes the timer; the copy succeeds, the reload fails.
+    fs::write(
+        w.dir.path().join("repo/deploy/systemd/pg-a.timer"),
+        "[Unit]\n# newer\n",
+    )
+    .unwrap();
+    w.systemd.reload_fails.set(true);
+    let failed = install(&w, false);
+    let text = failed.lines.join("\n");
+    assert!(
+        failed.pending,
+        "the installer's own failure keeps the run pending: {text}"
+    );
+    assert!(text.contains("FAIL pg-a: daemon-reload"), "{text}");
+    // The file now equals the checkout: only systemd's NeedDaemonReload still shows the work.
+    assert_eq!(
+        fs::read(w.dir.path().join("units/pg-a.timer")).unwrap(),
+        fs::read(w.dir.path().join("repo/deploy/systemd/pg-a.timer")).unwrap()
+    );
+    let check = install(&w, true);
+    assert!(check.pending, "{:?}", check.lines);
+    assert!(check.lines.join("\n").contains("needs-daemon-reload"));
+    w.systemd.reload_fails.set(false);
+    assert!(
+        !install(&w, false).pending,
+        "the retry reloads and ends clean"
+    );
 }

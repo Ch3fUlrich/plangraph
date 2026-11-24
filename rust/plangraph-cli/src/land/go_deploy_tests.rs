@@ -13,6 +13,9 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 
+const REGISTRY: &str = r#"{"version":1,"self":"host-a","hosts":[
+ {"id":"host-a","aliases":[],"transport":"local"}]}"#;
+
 fn write_ledger(dir: &Path, hours_not_live: Option<i64>) {
     let mut l = Ledger {
         written_at: now(),
@@ -30,12 +33,15 @@ fn write_ledger(dir: &Path, hours_not_live: Option<i64>) {
 fn go_verify(dir: &Path) -> Result<Vec<String>, String> {
     let evidence = dir.join("evidence.json");
     std::fs::write(&evidence, serde_json::to_vec(&green()).unwrap()).unwrap();
+    std::fs::write(dir.join("hosts.json"), REGISTRY).unwrap();
     let args: Vec<String> = [
         "go-verify",
         "--evidence",
         evidence.to_str().unwrap(),
         "--deploy-ledgers",
         dir.join("ledgers").to_str().unwrap(),
+        "--hosts",
+        dir.join("hosts.json").to_str().unwrap(),
     ]
     .map(String::from)
     .to_vec();
@@ -76,15 +82,37 @@ fn the_compiled_in_exceptions_parse_and_refusals_carry_the_stable_codes() {
     let dir = tempfile::tempdir().unwrap();
     write_ledger(dir.path(), Some(48));
     let compiled = include_str!("../../../../deploy/exceptions.toml");
-    let refusals = deploy_refusals(dir.path(), compiled, now()).unwrap();
+    let refusals = deploy_refusals(dir.path(), compiled, Some(REGISTRY), now()).unwrap();
     assert_eq!(
         refusals.iter().map(|r| r.code).collect::<Vec<_>>(),
         ["deploy_not_live"]
     );
     let excused =
         "[[exception]]\nentry='unit:pg-feeder'\nuntil='2999-01-01'\ndecision='D-1'\nreason='r'\n";
-    assert!(deploy_refusals(dir.path(), excused, now())
+    assert!(deploy_refusals(dir.path(), excused, Some(REGISTRY), now())
         .unwrap()
         .is_empty());
-    assert!(deploy_refusals(dir.path(), "[[exception]]\nentry='x'\n", now()).is_err());
+    assert!(deploy_refusals(
+        dir.path(),
+        "[[exception]]\nentry='x'\n",
+        Some(REGISTRY),
+        now()
+    )
+    .is_err());
+}
+
+#[test]
+fn a_train_is_refused_while_a_registry_host_never_reported_even_with_one_fresh_ledger() {
+    let dir = tempfile::tempdir().unwrap();
+    write_ledger(&dir.path().join("ledgers"), None);
+    let two = r#"{"version":1,"self":"host-a","hosts":[
+      {"id":"host-a","aliases":[],"transport":"local"},
+      {"id":"host-b","aliases":[],"transport":"ssh","ssh_target":"b"}]}"#;
+    let refusals = deploy_refusals(&dir.path().join("ledgers"), "", Some(two), now()).unwrap();
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert!(
+        refusals[0].code == "deploy_ledger_missing" && refusals[0].detail.starts_with("host-b")
+    );
+    let unreadable = deploy_refusals(&dir.path().join("ledgers"), "", None, now()).unwrap();
+    assert_eq!(unreadable[0].code, "deploy_hosts_unknown");
 }

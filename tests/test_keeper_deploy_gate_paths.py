@@ -787,3 +787,33 @@ def test_the_automatic_close_holds_a_merge_with_neither_and_closes_one_with_a_re
     assert held["closed"] == [] and "live_evidence_missing" in held["listed"][0]["reason"]
     _edit_text(env, "demo:A", note="no deploy needed: docs only")
     assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+
+
+def test_the_router_close_needs_a_deploy_row_from_after_the_merge(env):  # noqa: F811
+    """MED: the router GO close applies the same merge-time floor as the automatic close."""
+    from plangraph.keeper.evidence import VERIFIERS
+    from plangraph.keeper.evidence_types import as_epoch
+    from test_keeper_merge_close_auto import set_states, state
+
+    set_states(env)
+    router, key = env.p("router"), "demo:C"
+    env.store.edit_definition(router, key, LIVE_CLAUSE)
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    head = env.repo.land("w1", f"Plan-Item: {key}", 400)
+    merged = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main"))
+    env.store.record_run(env.p("spawner"), key, {
+        "run_id": "fixture-seats", "phase": "finished", "rc": 0,
+        "seats": [{"model": "gemini-test", "verdict": "pass"}]})
+    path = env.repo.root.parent / "DECISIONS.md"
+    path.write_text(f"| D-1 | demo | GO {head} |\n", encoding="utf-8")
+    env.store.ctx["decisions"] = DecisionsAdapter(path)
+
+    env.clock.t = merged - 60
+    assert env.store.add_evidence_router(router, key, "deploy", LIVE_PROOF)["verified"]
+    env.clock.t = merged + 60
+    held = env.store.close_merged(router, key, "D-1", ["google"])
+    assert "live_evidence_missing" in str(held), held
+    assert state(env, key)["state"] == "in_review", "a row older than the merge proves nothing"
+
+    assert env.store.add_evidence_router(router, key, "deploy", LIVE_PROOF)["verified"]
+    assert env.store.close_merged(router, key, "D-1", ["google"])["state"] == "done"

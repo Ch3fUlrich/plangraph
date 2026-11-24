@@ -52,11 +52,53 @@ fn daily_report_names_the_slowest_stage_in_minutes() {
             "stage":"push", "batch_key":"train-2", "duration_ms":150_000, "minutes":2.5,
         })
     );
-    assert_eq!(result["summary"], "push 2.5 minutes");
+    // No host has written a ledger in the test's state directory: the line says so instead of printing zero.
+    assert_eq!(
+        result["summary"],
+        "push 2.5 minutes; deploy-not-live unknown: no host has written a deploy-status ledger"
+    );
+}
+
+#[test]
+fn the_daily_report_carries_the_not_live_deploy_count_from_the_host_ledgers() {
+    let state = tempfile::tempdir().unwrap();
+    let ledgers = state.path().join("plangraph/deploy-live");
+    std::fs::create_dir_all(&ledgers).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    std::fs::write(
+        ledgers.join("host-a.json"),
+        json!({"written_at": now, "not_live_since": {"unit:pg-feeder": now - 30 * 3600},
+               "state": {"unit:pg-feeder": "not-installed"}})
+        .to_string(),
+    )
+    .unwrap();
+    let result = report_in(
+        &["--day", "2026-01-01"],
+        &json!({"stages": []}),
+        state.path(),
+    );
+    assert_eq!(
+        result["deploy_not_live"],
+        "deploy-not-live 1 oldest host-a:unit:pg-feeder 30h (1 hosts reporting)"
+    );
+    assert_eq!(
+        result["summary"], result["deploy_not_live"],
+        "no stage rows: the deploy line alone"
+    );
 }
 
 fn report(args: &[&str], fixture: &Value) -> Value {
+    let empty = tempfile::tempdir().unwrap();
+    report_in(args, fixture, empty.path())
+}
+
+/// `plangraph landing report` with `state` as its XDG state directory (where the deploy ledgers are read).
+fn report_in(args: &[&str], fixture: &Value, state: &std::path::Path) -> Value {
     let mut child = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .env("XDG_STATE_HOME", state)
         .args(["landing", "report", "example/repo"])
         .args(args)
         .arg("--fixture")

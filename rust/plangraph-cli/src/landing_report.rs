@@ -147,7 +147,14 @@ pub(super) fn run(keeper: &dyn Transport, args: &[String]) -> Result<Value, Stri
                     row["minutes"].as_f64().unwrap_or_default()
                 )
             });
-            Ok(json!({"day": date, "slowest": slow, "summary": summary}))
+            // The operator's daily line also carries how many deploy entries are not live (D-6790): read from
+            // the per-host ledgers, `unknown` when no host has reported, never zero by omission.
+            let deploy = crate::deploy_manifest::report::digest_line_local();
+            let summary = match summary {
+                Some(stage) => format!("{stage}; {deploy}"),
+                None => deploy.clone(),
+            };
+            Ok(json!({"day": date, "slowest": slow, "deploy_not_live": deploy, "summary": summary}))
         }
     }
 }

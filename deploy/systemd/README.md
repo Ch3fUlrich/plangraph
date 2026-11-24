@@ -173,6 +173,26 @@ the ledger of every host that answered is written to the center's `deploy-live/`
 reads it. A host that cannot be reached, answers no result or has a transport without an install path (`keeper`)
 is a `FAIL` row, and the exit status is 1 while any host or entry is missing.
 
+### What counts as live, and who asks
+
+A unit is live when systemd has loaded it, no reload is pending (`NeedDaemonReload`), it is enabled and active, and,
+for a timer, the service it starts is loaded, has run at least once and its last run succeeded (exit status 0). A
+timer that has not fired yet is `never-run(...)`: `--install` lists it as `wait: the first run of the service is not
+done` and exits 1 until it has run, which every shipped timer does within a day (the 24-hour limit then applies).
+The release stamp covers the Rust tree and every file outside `rust/` that the Rust sources embed (for example
+`deploy/exceptions.toml`, compiled into the GO verifier), so a change to such a file is a new release.
+
+The landing step (`tools/merge_batch_land.py`) runs `plangraph land-train deploy-guard --refresh yes` before it
+merges or fast-forwards, in every landing mode. It collects a fresh ledger from every `local` and `ssh` host of the
+hosts registry (`host-sync --install --check --fleet`, which changes nothing), then refuses while an expected host
+has no ledger newer than 6 hours or an entry is more than 24 hours (compared in seconds) not live without a dated
+exception. `land-train go-verify` applies the same check to the same hosts (`--hosts FILE`, default
+`~/.config/plangraph/hosts.json`); an unreadable registry is a refusal, not a pass. Hosts with transport `keeper`
+have no install path and are not asked for a ledger.
+
+Unit files that ship beside their tooling (`deploy/liveness`, `deploy/pganchor`, `deploy/watchdog`) are manifest
+entries with `dir = "<subdir>"`; the coverage test names every unit file under any `deploy/<dir>`.
+
 ## Host units
 
 `host-sync --install-units REPO [--scope user|system]` copies the unit files of every deployed family the

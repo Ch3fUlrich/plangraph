@@ -109,6 +109,12 @@ MAIN_STATE_STUB = """#!/usr/bin/env python3
 import json, os, sys
 state = json.load(open(os.path.join(os.environ["GH_STUB_DIR"], "state.json"))).get("main_state", "green")
 args = sys.argv[1:]
+if args[:2] == ["land-train", "deploy-guard"]:
+    guard = json.load(open(os.path.join(os.environ["GH_STUB_DIR"], "state.json"))).get("deploy_guard", "ok")
+    if guard == "ok" and args[2:] == ["--refresh", "yes"]:
+        sys.exit(0)
+    print(guard if guard != "ok" else "deploy-guard called without --refresh yes", file=sys.stderr)
+    sys.exit(1)
 exception = args[args.index("--exception") + 1] if "--exception" in args else None
 if args[:1] != ["main-state"] or "--admit" not in args:
     sys.exit(2)

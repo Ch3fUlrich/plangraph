@@ -554,3 +554,19 @@ def test_tested_ff_reads_exactly_one_land_base_trailer(env, tools_importable, mo
             merge_batch_land.require_tested_ff_evidence(state)
     else:
         merge_batch_land.require_tested_ff_evidence(state)
+
+
+@pytest.mark.parametrize("value", ["tested-ff", "train-pr-merge", "single-pr"])
+def test_an_overdue_deploy_entry_prevents_landing_in_every_mode(env, value):
+    """D-6790: the landing step asks the deploy guard before it merges or fast-forwards."""
+    approval = pushed(env, prs=(1,) if value == "single-pr" else (1, 2, 3))
+    head, tip = head_of(env), main_tip(env)
+    mode(env, value)
+    env.state["deploy_guard"] = "deploy_not_live: dell: unit:pg-feeder is not-installed for 30h"
+    env.save()
+    res = land(env, approval)
+    assert res.returncode != 0 and "deploy_not_live" in res.stderr and "30h" in res.stderr, res.stderr
+    assert not env.calls("pr", "merge") and main_tip(env) == tip and main_tip(env) != head
+    env.state["deploy_guard"] = "ok"
+    env.save()
+    assert land(env, approval).returncode == 0

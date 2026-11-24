@@ -57,7 +57,7 @@ fn a_unit_systemd_does_not_know_is_listed_not_live_and_fails_the_run() {
 
 #[test]
 fn a_live_unit_gives_a_clean_run() {
-    let script = "#!/bin/sh\necho LoadState=loaded\necho ActiveState=active\necho UnitFileState=enabled\necho Result=success\n";
+    let script = "#!/bin/sh\necho LoadState=loaded\necho ActiveState=active\necho UnitFileState=enabled\necho Result=success\necho ExecMainStartTimestamp=Mon\necho ExecMainStatus=0\n";
     let (output, _dir) = run(script);
     let text = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -66,4 +66,16 @@ fn a_live_unit_gives_a_clean_run() {
         "{text}"
     );
     assert!(text.contains("deploy-not-live\t0"), "{text}");
+}
+
+#[test]
+fn an_active_timer_whose_service_never_ran_is_not_live() {
+    let script = "#!/bin/sh\necho LoadState=loaded\necho ActiveState=active\necho UnitFileState=enabled\necho Result=success\n";
+    let (output, _dir) = run(script);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        text.contains("never-run(pg-a.service has not run since it was installed)"),
+        "{text}"
+    );
 }

@@ -263,10 +263,17 @@ fn the_cli_prints_one_line_for_green_evidence_and_every_refusal_otherwise() {
         ..Default::default()
     };
     crate::deploy_manifest::ledger::save(&ledgers.join("h.json"), &ledger).unwrap();
+    let hosts = dir.path().join("hosts.json");
+    std::fs::write(
+        &hosts,
+        r#"{"version":1,"self":"h","hosts":[{"id":"h","aliases":[],"transport":"local"}]}"#,
+    )
+    .unwrap();
     let flags = |p: &std::path::Path| {
         std::collections::BTreeMap::from([
             ("evidence".to_string(), p.display().to_string()),
             ("deploy-ledgers".to_string(), ledgers.display().to_string()),
+            ("hosts".to_string(), hosts.display().to_string()),
         ])
     };
     std::fs::write(&file, serde_json::to_vec(&green()).unwrap()).unwrap();

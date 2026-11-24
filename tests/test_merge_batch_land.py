@@ -146,6 +146,17 @@ def test_land_refuses_when_main_is_not_green_and_the_exception_passes_nothing_bu
     assert res.returncode != 0 and word in res.stderr and not env.calls("pr", "merge")
 
 
+def test_land_asks_the_deploy_guard_with_a_fleet_refresh_before_it_merges(env):
+    approval = pushed(env)
+    env.state["deploy_guard"] = "deploy_ledger_missing: dell: no deploy-status ledger"
+    env.save()
+    res = land(env, approval)
+    assert res.returncode != 0 and "deploy_ledger_missing" in res.stderr and not env.calls("pr", "merge")
+    env.state["deploy_guard"] = "ok"  # the stub then also insists on `--refresh yes`
+    env.save()
+    assert land(env, approval).returncode == 0 and len(env.calls("pr", "merge")) == 1
+
+
 def test_land_on_a_red_main_merges_only_with_the_main_red_fix_row(env):
     approval = pushed(env)
     env.state["main_state"] = "red"

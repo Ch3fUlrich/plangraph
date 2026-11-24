@@ -100,7 +100,9 @@ pub fn run(
                 now.map_or_else(|| "ok".to_owned(), |a| format!("still: {}", a.before))
             ));
         }
-        pending = !after.is_empty() || !failures.is_empty();
+        // The installer's own pending flag counts too: a reload that failed after the files were copied
+        // leaves the files equal to the checkout, so a re-read of the files alone would not see it.
+        pending = !after.is_empty() || !failures.is_empty() || report.pending;
     }
     let (status, ledger) =
         status_full(host.repo, roles, sysctl, facts, host.ledger_path.as_deref())?;

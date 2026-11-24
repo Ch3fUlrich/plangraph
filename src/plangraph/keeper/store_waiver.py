@@ -542,7 +542,8 @@ class WaiverMixin:
             if token is not None and not waiver_only and project != item["project"] and revision is None:
                 changes |= self._merged_go_deploy_changes(item, head)
             pending = self._deploy_pending(item, changes, token)
-            if code := self._live_status(item):
+            floor = self._merge_floor(item, head)  # read outside the write lock, like every git read
+            if code := self._live_status(item, floor):
                 pending = [*pending, code]
             if token is not None and not self._deploy_scan_current(item, token):
                 raise Refused("conflict", "merged_on_default_changed")
@@ -598,6 +599,10 @@ class WaiverMixin:
                 ref["go_part"] = part   # the named part head covering a key the row's list omits
             if token is not None and not self._deploy_scan_current(fresh, token):
                 raise Refused("conflict", "merged_on_default_changed")
+            # The evidence rows are read again under the lock, against the same merge-time floor as above.
+            if code := self._live_status(fresh, floor):
+                raise Refused("evidence_unverified", f"{code}: {key} needs a verified deploy row recorded after its merge, "
+                              "or a 'no deploy needed: <reason>' line (D-6790)")
             return self._land_merged(principal, fresh, head, seats, witnessed, decision_id, from_open,
                                      ("decision", ref, result), f"router GO {decision_id} merged {head}", now,
                                      flags=flags)
@@ -688,6 +693,27 @@ class WaiverMixin:
                                      f"merge close: merged {head}", now, release=True, flags=flags)
             return {**result, "key": key, "state": done["state"], "prs": proofs, "seats": seats,
                     **self._flags_of(flags), **gaps}
+
+    def _merge_floor(self, item, head):
+        """When the GO head landed on the default ref (epoch seconds): a deploy row older than that proves nothing.
+
+        The date of the merge commit that brought the head in (local reads only, no forge or fetch), else
+        the head's own commit time (a direct or squash landing); infinity when neither can be read, so no
+        row counts; ``None`` when the adapter keeps no commit dates at all."""
+        git = self._adapter("git")
+        commit_time = getattr(git, "commit_time", None)
+        if commit_time is None:
+            return None
+        project = self._merge_project(item)
+        try:
+            repo = git.repo_path(project)
+            merged = git.merge_commit_of(repo, head, item.get("_close_head") or git.repo_ref(project))
+            landed = as_epoch(git.merge_proof_fields(repo, merged[0])[-1]) if merged else None
+            if landed is None:
+                landed = commit_time(repo, head)
+        except (OSError, RuntimeError, ValueError, IndexError):
+            landed = None
+        return landed if landed is not None else float("inf")
 
     def _live_evidence_missing(self, item, proofs):
         """The code that holds the item, or ``None``: see ``live_evidence_status``; the row must follow the last merge."""

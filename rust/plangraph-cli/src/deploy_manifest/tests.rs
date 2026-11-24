@@ -130,3 +130,48 @@ fn host_roles_come_from_the_env_then_the_file_and_reject_typos() {
     assert!(host_roles(None, None).unwrap().is_empty());
     assert!(host_roles(Some("keper"), None).is_err());
 }
+
+#[test]
+fn unit_files_outside_deploy_systemd_need_a_placement_or_an_exclusion() {
+    let dir = tempfile::tempdir().unwrap();
+    let deploy = dir.path().join("deploy");
+    for (sub, file) in [
+        ("systemd", "a.service"),
+        ("liveness", "w@.service"),
+        ("pganchor", "p.socket"),
+    ] {
+        std::fs::create_dir_all(deploy.join(sub)).unwrap();
+        std::fs::write(deploy.join(sub).join(file), "[Unit]\n").unwrap();
+    }
+    std::fs::write(deploy.join("liveness/router.toml"), "x = 1\n").unwrap();
+    let shipped = super::scan::unit_files(dir.path()).unwrap();
+    assert_eq!(
+        shipped.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["a.service", "liveness/w@.service", "pganchor/p.socket"]
+    );
+    let only_systemd =
+        Manifest::parse("[[unit]]\nname='a'\nfiles=['a.service']\nhosts=['all']\nfirst_run='x'\n")
+            .unwrap();
+    let problems = only_systemd.coverage(&shipped, &Default::default());
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(problems
+        .iter()
+        .any(|p| p.contains("deploy/liveness/w@.service")));
+    assert!(problems
+        .iter()
+        .any(|p| p.contains("deploy/pganchor/p.socket")));
+    let covered = Manifest::parse(
+        "[[unit]]\nname='a'\nfiles=['a.service']\nhosts=['all']\nfirst_run='x'\n\
+         [[unit]]\nname='w'\ndir='liveness'\nfiles=['w@.service']\nhosts=['all']\nfirst_run='x'\n\
+         [[unit]]\nname='p'\ndir='pganchor'\nfiles=['p.socket']\nscope='system'\nhosts=['keeper']\nfirst_run='x'\n",
+    )
+    .unwrap();
+    assert!(covered.coverage(&shipped, &Default::default()).is_empty());
+    let excluded = Manifest::parse(
+        "[[unit]]\nname='a'\nfiles=['a.service']\nhosts=['all']\nfirst_run='x'\n\
+         [[unit]]\nname='w'\ndir='liveness'\nfiles=['w@.service']\nnot_deployed='needs a collector'\n\
+         [[unit]]\nname='p'\ndir='pganchor'\nfiles=['p.socket']\nnot_deployed='root only'\n",
+    )
+    .unwrap();
+    assert!(excluded.coverage(&shipped, &Default::default()).is_empty());
+}
