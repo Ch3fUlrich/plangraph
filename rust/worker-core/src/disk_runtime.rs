@@ -106,6 +106,7 @@ fn scan_process_paths(
         }
         push_process_path(&path.join("cwd"), &mut cwds)?;
         if references {
+            push_cargo_target_env(&path.join("environ"), &mut cwds)?;
             push_process_path(&path.join("exe"), &mut cwds)?;
             push_process_path(&path.join("root"), &mut cwds)?;
             match fs::read_dir(path.join("fd")) {
@@ -124,6 +125,27 @@ fn scan_process_paths(
         }
     }
     Ok((cwds, building))
+}
+
+/// A running build names its target in `CARGO_TARGET_DIR`; that directory is in use even when
+/// the process works elsewhere.
+fn push_cargo_target_env(environ: &Path, output: &mut Vec<std::path::PathBuf>) -> io::Result<()> {
+    match fs::read(environ) {
+        Ok(bytes) => {
+            for entry in bytes.split(|b| *b == 0) {
+                let value = entry.strip_prefix(b"CARGO_TARGET_DIR=");
+                if let Some(target) = value.and_then(|v| std::str::from_utf8(v).ok()) {
+                    let target = std::path::PathBuf::from(target);
+                    if target.is_absolute() {
+                        output.push(target);
+                    }
+                }
+            }
+        }
+        Err(e) if !vanished(&e) => return Err(e),
+        _ => {}
+    }
+    Ok(())
 }
 
 fn push_process_path(path: &Path, output: &mut Vec<std::path::PathBuf>) -> io::Result<()> {
@@ -222,7 +244,14 @@ pub fn shared_cache_capped(
     report: &mut Report,
 ) -> io::Result<()> {
     shared_cache_using(
-        path, guards, building, cap, pressure, apply, report, processes,
+        path,
+        guards,
+        building,
+        cap,
+        pressure,
+        apply,
+        report,
+        process_references,
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -287,8 +316,8 @@ fn shared_cache_levels(
             .push(format!("{}: cache lease held", path.display()));
         return Ok(());
     };
-    let (cwds, building) = process_reader()?;
-    if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
+    let (cwds, _) = process_reader()?;
+    if cwds.iter().any(|p| p.starts_with(&canonical)) {
         return Ok(());
     }
     let mut bytes = crate::disk_hygiene::scan(path)?.0;
@@ -313,8 +342,8 @@ fn shared_cache_levels(
         {
             continue;
         }
-        let (cwds, building) = process_reader()?;
-        if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
+        let (cwds, _) = process_reader()?;
+        if cwds.iter().any(|p| p.starts_with(&canonical)) {
             return Ok(());
         }
         if apply {
@@ -339,8 +368,8 @@ fn shared_cache_levels(
             if guards.protects(&profile) {
                 continue;
             }
-            let (cwds, building) = process_reader()?;
-            if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
+            let (cwds, _) = process_reader()?;
+            if cwds.iter().any(|p| p.starts_with(&canonical)) {
                 return Ok(());
             }
             if apply {

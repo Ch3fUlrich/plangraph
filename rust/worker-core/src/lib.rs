@@ -19,8 +19,9 @@ pub mod cpu;
 pub mod cpu_linux;
 pub mod diffscan;
 pub mod disk_hygiene;
-pub mod disk_runtime;
 #[cfg(target_os = "linux")]
+pub mod disk_pressure;
+pub mod disk_runtime;
 pub mod disk_watermark;
 pub mod events;
 #[cfg(all(unix, any(test, feature = "test-support")))]

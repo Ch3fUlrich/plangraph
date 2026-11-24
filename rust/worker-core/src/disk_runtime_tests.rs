@@ -60,7 +60,14 @@ fn disk_hygiene_shared_cache_apply_rechecks_builds_cwds_and_symlinks() {
         &mut report,
         || {
             probes += 1;
-            Ok((vec![], probes == 2))
+            Ok((
+                if probes == 2 {
+                    vec![cache.clone()]
+                } else {
+                    vec![]
+                },
+                false,
+            ))
         },
     )
     .unwrap();
@@ -206,7 +213,15 @@ fn shared_cap_evicts_old_build_variants_and_rechecks_live_cargo() {
         &mut report,
         || {
             probes += 1;
-            Ok((vec![], probes == 2)) // Cargo starts with cwd outside the target.
+            // Cargo starts with its cwd outside the target; CARGO_TARGET_DIR names it.
+            Ok((
+                if probes == 2 {
+                    vec![cache.to_path_buf()]
+                } else {
+                    vec![]
+                },
+                false,
+            ))
         },
     )
     .unwrap();
@@ -353,8 +368,19 @@ fn post_run_caps_identified_debug_only_when_idle() {
     )
     .unwrap();
 
-    let run =
-        |building| post_run_cargo_using(&checkout, &target, 80, || Ok((vec![], building))).unwrap();
+    let run = |building| {
+        post_run_cargo_using(&checkout, &target, 80, || {
+            Ok((
+                if building {
+                    vec![target.clone()]
+                } else {
+                    vec![]
+                },
+                false,
+            ))
+        })
+        .unwrap()
+    };
     let lease = crate::cargo_cache::try_exclusive_lease(&target)
         .unwrap()
         .unwrap();
