@@ -152,7 +152,8 @@ fn keep_reason(
     Ok(Ok((bytes, canonical)))
 }
 
-/// Remove idle targets, largest first, until `free + freed` reaches `floor`.
+/// Remove idle targets, largest first, until the filesystem's free space reaches `floor`
+/// (measured again through `fresh_free` after each removal).
 /// Returns every kept target with its reason.
 #[allow(clippy::too_many_arguments)]
 pub fn reclaim(
@@ -160,6 +161,7 @@ pub fn reclaim(
     guards: &Guards,
     refs: &[PathBuf],
     (free, floor): (u64, u64),
+    fresh_free: &dyn Fn() -> Option<u64>,
     now: SystemTime,
     apply: bool,
     report: &mut Report,
@@ -185,7 +187,15 @@ pub fn reclaim(
     idle.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     let mut gained = 0u64;
     for (bytes, canonical, candidate) in idle {
-        if free.saturating_add(gained) >= floor {
+        // After a removal the filesystem is measured again; the estimate stands in for a dry
+        // run and for a failed measurement.
+        let estimate = free.saturating_add(gained);
+        let current = if apply && gained > 0 {
+            fresh_free().unwrap_or(estimate)
+        } else {
+            estimate
+        };
+        if current >= floor {
             kept.push(Kept {
                 path: candidate.target.clone(),
                 bytes,

@@ -305,25 +305,35 @@ fn execute_with(
             }
         }
     }
+    // Review seats whose shared target sits under the system temp directory build in the default
+    // pool; its review slots are trimmed to the same cap (the pool's other slots are not ours).
+    if let (Some(primary), Some(home)) = (shared.first(), env::var_os("HOME")) {
+        if let Some(fallback) =
+            pg_worker_core::cargo_cache::review_fallback_primary(primary, Path::new(&home))
+        {
+            let slots = pg_worker_core::cargo_pool::existing_review_slots(&fallback);
+            if let Err(error) =
+                pg_worker_core::cargo_pool::enforce_pool_cap(&slots, cap, apply, &mut report)
+            {
+                report.alarm = true;
+                report.error = Some(error.to_string());
+            }
+        }
+    }
     // Below the floor, idle Cargo targets go largest first; every kept one carries a reason,
     // and a run that frees nothing there fails with the largest kept paths named.
     #[cfg(target_os = "linux")]
     {
-        let roots: Vec<_> = available
-            .iter()
-            .map(|(root, space)| {
-                let floor = thresholds.for_filesystem(space.total).cleanup_free_bytes;
-                (root.clone(), space.free, floor)
-            })
-            .collect();
+        let roots: Vec<PathBuf> = available.keys().cloned().collect();
         let cache = shared.first().and_then(|primary| primary.parent());
         reclaim_below_floor(
             &repo,
             &roots,
+            thresholds,
             &scratch,
             cache,
-            &guards,
-            &refs,
+            (&guards, &refs),
+            &|path| disk_runtime::disk_space(path).map(|space| (space.free, space.total)),
             apply,
             &mut report,
         )?;
@@ -336,17 +346,20 @@ fn device(path: &Path) -> Option<u64> {
     std::fs::metadata(path).ok().map(|meta| meta.dev())
 }
 
-/// One reclaim per filesystem: roots sharing a device share one free-space figure, so
-/// cleanup that already restored the floor for one root ends the work for the others.
+/// One reclaim per filesystem, grouped by the device each target is really on (a nested mount
+/// under a root is its own group). `space` measures (free, total) of the filesystem holding a
+/// path; it is called again after each removal, so cleanup that already restored the floor ends
+/// the work for the group.
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)]
 fn reclaim_below_floor(
     repo: &Path,
-    roots: &[(PathBuf, u64, u64)],
+    roots: &[PathBuf],
+    thresholds: Thresholds,
     scratch: &[PathBuf],
     cache: Option<&Path>,
-    guards: &Guards,
-    refs: &[PathBuf],
+    (guards, refs): (&Guards, &[PathBuf]),
+    space: &dyn Fn(&Path) -> io::Result<(u64, u64)>,
     apply: bool,
     report: &mut Report,
 ) -> io::Result<()> {
@@ -355,41 +368,41 @@ fn reclaim_below_floor(
         .filter_map(|line| line.strip_prefix("worktree "))
         .skip(1)
         .filter_map(|path| Path::new(path).canonicalize().ok())
+        .filter(|tree| roots.iter().any(|root| tree.starts_with(root)))
         .collect();
-    let mut devices = std::collections::BTreeMap::<u64, Vec<&(PathBuf, u64, u64)>>::new();
-    for row in roots {
-        if row.1 < row.2 {
-            if let Some(dev) = device(&row.0) {
-                devices.entry(dev).or_default().push(row);
-            }
+    let mut candidates = disk_pressure::worktree_targets(&trees);
+    for path in scratch {
+        candidates.extend(disk_pressure::scratch_targets(path));
+    }
+    if let Some(cache) = cache {
+        candidates.extend(disk_pressure::fast_check_targets(cache));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    candidates.retain(|c| seen.insert(c.target.clone()));
+    let mut devices = std::collections::BTreeMap::<u64, Vec<disk_pressure::Candidate>>::new();
+    for candidate in candidates {
+        if let Some(dev) = device(&candidate.target) {
+            devices.entry(dev).or_default().push(candidate);
         }
     }
     let mut kept = Vec::new();
-    let below_floor = !devices.is_empty();
-    for (dev, rows) in devices {
-        let free = rows.iter().map(|row| row.1).min().unwrap_or(0);
-        let floor = rows.iter().map(|row| row.2).max().unwrap_or(0);
-        let under = |tree: &PathBuf| rows.iter().any(|row| tree.starts_with(&row.0));
-        let mut candidates = disk_pressure::worktree_targets(
-            &trees
-                .iter()
-                .filter(|tree| under(tree))
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
-        for path in scratch.iter().filter(|path| device(path) == Some(dev)) {
-            candidates.extend(disk_pressure::scratch_targets(path));
+    let mut below_floor = false;
+    for group in devices.into_values() {
+        let probe = group[0].target.clone();
+        let Ok((free, total)) = space(&probe) else {
+            continue;
+        };
+        let floor = thresholds.for_filesystem(total).cleanup_free_bytes;
+        if free >= floor {
+            continue;
         }
-        if let Some(cache) = cache.filter(|cache| device(cache) == Some(dev)) {
-            candidates.extend(disk_pressure::fast_check_targets(cache));
-        }
-        let mut seen = std::collections::BTreeSet::new();
-        candidates.retain(|c| seen.insert(c.target.clone()));
+        below_floor = true;
         kept.extend(disk_pressure::reclaim(
-            &candidates,
+            &group,
             guards,
             refs,
             (free, floor),
+            &|| space(&probe).ok().map(|(free, _)| free),
             SystemTime::now(),
             apply,
             report,
@@ -669,32 +682,68 @@ mod tests {
     }
 
     #[test]
-    fn roots_on_one_filesystem_reclaim_the_deficit_once() {
+    fn free_space_is_measured_again_after_each_removal() {
         let (fixture, repo, root, _args) = pressure_fixture();
         let canonical = root.canonicalize().unwrap();
-        // Both roots sit on one filesystem and each sees the same 3000-byte deficit; one
-        // 4098-byte target restores the floor, so the second root's target must stay.
-        let rows = vec![
-            (canonical.clone(), 0, 3000),
-            (fixture.path().canonicalize().unwrap(), 0, 3000),
-        ];
+        let targets = ["tree-a", "tree-b"].map(|n| canonical.join(n).join("rust/target"));
+        // A fake filesystem: 0 bytes free at the start and 4098 more per target removed. With a
+        // floor of 3000, one removal restores it, so the second target must stay (a sample taken
+        // before cleanup would remove both).
+        let space = |_: &Path| -> io::Result<(u64, u64)> {
+            let gone = targets.iter().filter(|t| !t.exists()).count() as u64;
+            Ok((gone * 4098, 1000))
+        };
+        let thresholds = Thresholds {
+            alarm_free_bytes: 1,
+            cleanup_free_bytes: 3000,
+        };
         let mut report = Report::default();
         reclaim_below_floor(
             &repo,
-            &rows,
+            &[canonical.clone(), fixture.path().canonicalize().unwrap()],
+            thresholds,
             &[],
             None,
-            &Guards::default(),
-            &[],
+            (&Guards::default(), &[]),
+            &space,
             true,
             &mut report,
         )
         .unwrap();
-        let left = ["tree-a", "tree-b"]
-            .iter()
-            .filter(|n| canonical.join(n).join("rust/target").exists())
-            .count();
+        let left = targets.iter().filter(|t| t.exists()).count();
         assert_eq!(left, 1, "{report:?}");
-        assert!(report.freed_bytes > 0 && report.freed_bytes < 2 * 4098);
+        assert!(report.error.is_none());
+    }
+
+    #[test]
+    fn candidates_are_grouped_by_the_device_they_are_on() {
+        let (fixture, repo, root, _args) = pressure_fixture();
+        let canonical = root.canonicalize().unwrap();
+        // Every probe reports the same full filesystem, so a group is built per real device: the
+        // fixture lives on one, and its two targets are one group sampled by one probe path.
+        let probes = std::cell::RefCell::new(Vec::new());
+        let space = |path: &Path| -> io::Result<(u64, u64)> {
+            probes.borrow_mut().push(path.to_path_buf());
+            Ok((u64::MAX / 2, u64::MAX / 2))
+        };
+        let mut report = Report::default();
+        reclaim_below_floor(
+            &repo,
+            &[canonical],
+            Thresholds::default(),
+            &[],
+            None,
+            (&Guards::default(), &[]),
+            &space,
+            true,
+            &mut report,
+        )
+        .unwrap();
+        assert_eq!(
+            probes.borrow().len(),
+            1,
+            "one device, one measurement: {report:?}"
+        );
+        drop(fixture);
     }
 }
