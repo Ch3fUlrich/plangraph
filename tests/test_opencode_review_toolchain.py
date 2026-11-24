@@ -51,3 +51,24 @@ def test_review_seat_env_resolves_cargo_and_python_pytest(tmp_path, monkeypatch,
     python = shutil.which('python', path=env['PATH'])
     assert python == str(venv / 'bin/python')
     assert shutil.which('pytest', path=env['PATH']) == str(venv / 'bin/pytest')
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
+def test_review_checkout_venv_wins_and_is_not_shadowed_by_a_later_path_entry(tmp_path, monkeypatch):
+    from plangraph.routing_support.claude_seat import review_tool_path
+    checkout = tmp_path / 'checkout'
+    _tool(checkout / '.venv/bin/pytest')
+    _tool(checkout / '.venv/bin/python')
+    service = tmp_path / 'service'  # sys.prefix venv without pytest
+    (service / 'bin').mkdir(parents=True)
+    monkeypatch.setattr(sys, 'prefix', str(service))
+    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
+    venv_bin = str(checkout / '.venv/bin')
+    path = review_tool_path(os.pathsep.join(['/usr/bin', venv_bin]), str(tmp_path), str(checkout))
+    assert path.split(os.pathsep)[0] == venv_bin and path.split(os.pathsep).count(venv_bin) == 1
+    # Without a checkout venv the configured PREFLIGHT_PYTHON's directory is used.
+    other = tmp_path / 'other'
+    _tool(other / 'bin/pytest')
+    _tool(other / 'bin/python')
+    monkeypatch.setenv('PREFLIGHT_PYTHON', str(other / 'bin/python'))
+    assert review_tool_path('/usr/bin', str(tmp_path), str(tmp_path / 'empty')).split(os.pathsep)[0] == str(other / 'bin')
