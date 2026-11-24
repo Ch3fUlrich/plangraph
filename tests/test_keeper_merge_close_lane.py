@@ -1,0 +1,78 @@
+"""Merge-close refusals: one repository under several names, and pre-PR lane merges."""
+import pytest
+
+from plangraph.keeper.evidence_git import GitAdapter
+from test_keeper_merge_close_auto import auto, env, git, set_states, state  # noqa: F401 - env is a fixture
+
+
+def test_one_repository_registered_under_two_names_is_one_candidate(env):
+    """LE-MERGE-CLOSE-SAME-REPO-REGISTERED-TWICE: two names for one path never read as ambiguous."""
+    set_states(env)
+    alias = env.repo.root.parent / "alias"
+    alias.symlink_to(env.repo.root)
+    env.store.ctx["git"] = GitAdapter({"demo": str(env.repo.root), "alias": str(alias)})
+    env.repo.land("w1", "Plan-Item: demo:C", 400)
+    env.store.require_seats = False
+    result = auto(env)
+    assert [c["key"] for c in result["closed"]] == ["demo:C"] and result["listed"] == []
+    # the item's own project name wins over an earlier-sorted alias
+    item = env.store._item("demo:C")
+    assert env.store._scan_projects(item) == ["demo"]
+    assert env.store._scan_projects(dict(item, project="alias")) == ["alias"]
+
+
+def test_one_repository_under_two_names_is_one_candidate_for_a_named_close(env):
+    set_states(env)
+    alias = env.repo.root.parent / "alias"
+    alias.symlink_to(env.repo.root)
+    env.store.ctx["git"] = GitAdapter({"demo": str(env.repo.root), "alias": str(alias)})
+    env.repo.land("w1", "Plan-Item: demo:C", 400)
+    item = env.store._item("demo:C")
+    item = dict(item, project="other")
+    tagged = env.store._with_merge_repo(dict(item, project="other"))
+    assert tagged["_merge_project"] == "alias"  # first sorted name; one candidate, no refusal
+
+
+def lane_merge(env, rows, key="demo:C", did="D-123"):
+    """A key that reached main through ``Merge lane/x into main (D-123 ...)``, with the decision rows given."""
+    set_states(env)
+    env.repo.land("x", f"Plan-Item: {key}", 0, subject=f"Merge lane/x into main ({did} fixture lane)")
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    path = env.repo.root.parent / "DECISIONS.md"
+    path.write_text("".join(f"| {d} | demo | {text.format(sha=merge)} |\n" for d, text in rows), encoding="utf-8")
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    env.store.ctx["decisions"] = DecisionsAdapter(path)
+    env.store.require_seats = False
+    return merge
+
+
+def test_a_pre_pr_lane_merge_closes_on_the_decision_row_naming_its_sha(env):
+    """LE-PRE-PR-LANE-MERGES-READ-MERGED-PR-MISSING: the merge subject's D-row names the merge sha and the key."""
+    merge = lane_merge(env, [("D-123", "Merged demo:C at {sha}")])
+    result = auto(env)
+    assert [c["key"] for c in result["closed"]] == ["demo:C"] and result["listed"] == []
+    assert state(env, "demo:C")["state"] == "done"
+    proof = env.store._evidence("demo:C")[-1]["ref"]["prs"][0]
+    assert (proof["kind"], proof["decision_id"], proof["merge_sha"], proof["pr"]) == ("lane_merge", "D-123", merge, None)
+
+
+@pytest.mark.parametrize("rows", [
+    [],                                                       # the named row does not exist
+    [("D-123", "Merged demo:C at 0123456789abcdef0123456789abcdef01234567")],   # row names another sha
+    [("D-123", "Merged demo:C")],                             # row names no sha
+    [("D-123", "Merged demo:B at {sha}")],                    # row names another key
+    [("D-999", "Merged demo:C at {sha}")],                    # the subject names another decision
+])
+def test_a_pre_pr_lane_merge_without_a_vouching_row_is_listed_as_lane_merge_unproven(env, rows):
+    lane_merge(env, rows)
+    result = auto(env)
+    assert result["closed"] == []
+    assert "lane_merge_unproven" in result["listed"][0]["reason"]
+    assert state(env, "demo:C")["state"] == "in_review"
+
+
+def test_a_merge_without_pr_or_decision_in_its_subject_still_reads_merged_pr_missing(env):
+    set_states(env)
+    env.repo.land("x", "Plan-Item: demo:C", 0, subject="Merge lane/x into main")
+    result = auto(env, require_seats=False)
+    assert "merged_pr_missing" in result["listed"][0]["reason"]

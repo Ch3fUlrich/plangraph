@@ -22,12 +22,12 @@ The decision does not waive on its own: its D-row must carry the whole token
 from __future__ import annotations
 
 import json
-import os
 import re
 
 from . import auth, context_sources, timing
 from .coverage import writer_families
 from .errors import Refused
+from .store_lane_merge import LaneMergeMixin
 from .evidence_types import Result, as_epoch, valid_commit_ref
 from .store_runs import go_key_scope
 from .schema import RISK_TAGS
@@ -100,7 +100,7 @@ def _names_item(statement, key):
                for name in (key, bare))
 
 
-class WaiverMixin:
+class WaiverMixin(LaneMergeMixin):
     """Router decision verbs for reviews: waive a family or close merged work."""
 
     def close_merged(self, principal, key, decision_id, families=None, *, from_open=False, apply=False,
@@ -157,22 +157,6 @@ class WaiverMixin:
         names = list(scan()) if callable(scan) else []
         ordered = [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
         return self._one_name_per_repository(ordered)
-
-    def _one_name_per_repository(self, names):
-        """*names* with each repository (resolved path and ref) kept once, under its first name.
-
-        keeper.json can register one directory under several names; the commits of
-        such a directory are one candidate, not an ambiguity.
-        """
-        git, seen, kept = self._adapter("git"), set(), []
-        for name in names:
-            path = git.repo_path(name) if callable(getattr(git, "repo_path", None)) else None
-            ref = git.repo_ref(name) if callable(getattr(git, "repo_ref", None)) else "main"
-            ident = (os.path.realpath(path), ref) if path else (name, None)
-            if ident not in seen:
-                seen.add(ident)
-                kept.append(name)
-        return kept
 
     def _merge_project(self, item):
         return self._merge_repository(item)[0]
@@ -715,28 +699,6 @@ class WaiverMixin:
         last_merge = max(stamps)
         return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
                        and (as_epoch(row["at"]) or 0) >= last_merge for row in self._evidence(item["key"]))
-
-    def _lane_merge_decision(self, item, merge, now):
-        """The D-id of a pre-PR lane merge: named in its subject, and its row names this merge sha and the item.
-
-        ``None`` when the subject names no decision (the merge has no proof at all);
-        a refusal in the ``lane_merge_unproven`` class when a named row does not vouch for it.
-        """
-        sha, subject = merge.get("sha"), str(merge.get("subject") or "")
-        ids = list(dict.fromkeys(re.findall(r"\((D-[0-9]+)(?![\w-])", subject)))
-        if not ids or not valid_commit_ref(sha):
-            return None
-        decisions = self._ctx(item, now).decisions
-        for did in ids:
-            try:
-                text = decisions.text(did) if decisions.has(did) else None
-            except Exception:  # noqa: BLE001 - an unreadable row never vouches
-                text = None
-            if (text and re.search(rf"(?<![0-9a-fA-F]){re.escape(sha)}(?![0-9a-fA-F])", text, re.I)
-                    and _names_item(text, item["key"]) and self._verify_evidence(
-                        item, "decision", {"id": did}, now).ok):
-                return did
-        raise Refused("evidence_unverified", f"lane_merge_unproven: {sha[:12]} {', '.join(ids)}")
 
     def _merged_auto_proofs(self, item, now=None):
         """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open.
