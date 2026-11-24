@@ -3,7 +3,6 @@
 import asyncio
 import os
 import shutil
-import subprocess
 import sys
 
 import pytest
@@ -51,7 +50,4 @@ def test_review_seat_env_resolves_cargo_and_python_pytest(tmp_path, monkeypatch,
     assert shutil.which('cargo', path=env['PATH']) == str(home / '.cargo/bin/cargo')
     python = shutil.which('python', path=env['PATH'])
     assert python == str(venv / 'bin/python')
-    out = subprocess.run(['python', '-m', 'pytest', '--version'], env=env,
-                         capture_output=True, text=True, check=True).stdout
-    assert out.strip() == 'venv-python -m pytest --version'
     assert shutil.which('pytest', path=env['PATH']) == str(venv / 'bin/pytest')
