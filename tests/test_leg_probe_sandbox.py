@@ -166,3 +166,29 @@ def test_a_real_no_commit_still_books_the_leg_down(tmp_path, monkeypatch):
         return _job(stdout='done')
     result, _ = _probe_with(tmp_path, monkeypatch, spawn)
     assert result['ok'] is False and not result['infra'] and result['reason'].startswith('no commit')
+
+
+NOISY = r'''
+import sys, time
+sys.stderr.write('fatal: Unable to create .git/index.lock: Read-only file system\n')
+for n in range(350):
+    sys.stderr.write(f'diagnostic line {n}\n')
+sys.stderr.flush()
+time.sleep(60)
+'''
+
+
+def test_a_denial_that_scrolled_out_of_the_live_tail_before_the_timeout_is_still_a_probe_defect(tmp_path, monkeypatch):
+    """Through SpawnerRunner: a real child prints the denial, then 350 lines, then hangs until the probe times out."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **k: '/bin/codex')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda *a, **k: ('codex', None))
+
+    async def factory(exe, *args, **kwargs):
+        return await asyncio.create_subprocess_exec(sys.executable, '-c', NOISY, **kwargs)
+    runner = SpawnerRunner(process_factory=factory)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=4, store=store))
+    assert any(e.get('event') == 'sandbox_denied' for job in runner.jobs.values() for e in job.events)
+    assert result['ok'] is False and result['infra'] is True and 'sandbox' in result['reason'], result
+    assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'

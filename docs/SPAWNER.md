@@ -305,7 +305,7 @@ MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
 Result/status/cancel accept `run_id`; legacy job-id operations remain available.
 MCP `ps` is compact (all running/queued runs, the newest 20 ended, `total`, `omitted`); use `result` or CLI `ps` for full records.
-After the Python MCP source changes on disk, `route` and `health` reload the planner code in place (deferred while a job runs; `health` prints `served_sha`, `checkout_sha`, `route_reload_error`). Reconnect before a probe or a run or session; status, result, steer and cancel stay available.
+After the Python MCP source changes on disk, the session reloads the planner code in place (on `route`/`health`, and every `PLANGRAPH_MCP_RELOAD_S`=60 s while idle; running jobs keep their runner and tasks). `python3 -m plangraph.spawner.mcp --served-sha` prints the sha each live session serves (exit 1 if any is not the checkout head); `health` shows `served_sha`, `checkout_sha`, `route_reload_error`. Reconnect before a probe or a run or session; status, result, steer and cancel stay available.
 No JSON-RPC notification is answered or dispatched. A reply over 8 MiB becomes a `ReplyTooLarge` error (code -32000, same request id); stdio keeps serving.
 Only actual probe results write liveness state. Gateway adapters call
 `runner.provider_response` with actual captured responses.

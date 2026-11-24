@@ -227,7 +227,7 @@ class LiveLog:
 async def collect(runner, job_id, proc):
     from .runner import redact
     from .reap import cancel_and_close
-    from .env_redact import early_refusal, harness_limit_line, redact_env_values, OutputLines, redact_output
+    from .env_redact import early_refusal, harness_limit_line, redact_env_values, OutputLines, redact_output, sandbox_denial
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
@@ -269,6 +269,9 @@ async def collect(runner, job_id, proc):
                     continue
                 if name == 'stdout' and tools.feed(line):
                     loop_found.set()
+                # Kept as an event: the live tails are bounded, a denial may scroll out before the run ends.
+                if sandbox_denial(line) and not any(e.get('event') == 'sandbox_denied' for e in job.events):
+                    job.events.append({'event': 'sandbox_denied', 'stream': name})
                 if is_activity(line):
                     active = True
                     if getattr(job, 'role', None) == 'review' or (seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES):   # F1: banner/spinner frames may precede the refusal

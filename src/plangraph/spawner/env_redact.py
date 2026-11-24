@@ -412,6 +412,15 @@ def opencode_limit(text):
     return None
 
 
+SANDBOX_DENIAL = re.compile(r'read-only (?:file ?system|sandbox|git|\.git)|sandbox (?:denied|blocked|refused)', re.I)
+
+
+def sandbox_denial(*texts):
+    """True when a harness's own output reports its sandbox denied a write."""
+    return any(SANDBOX_DENIAL.search(text.decode('utf-8', 'replace') if isinstance(text, bytes) else text or '')
+               for text in texts)
+
+
 def harness_limit_line(exit_code, stdout, stderr):
     structured = opencode_limit(stderr) or opencode_limit(stdout)
     if structured:

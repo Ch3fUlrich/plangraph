@@ -23,7 +23,8 @@ from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefuse
 from plangraph.spawner import bench_entry, leg_probe, remote_ps
 from plangraph.spawner.clients import effective_child_base_url
 from plangraph.spawner.leg_state import leg_status
-from plangraph.spawner.mcp_limits import SourceGuard, checkout_head, encode_reply, ps_reply, reload_spawn_sources
+from plangraph.spawner.mcp_limits import (SourceGuard, checkout_head, encode_reply, ps_reply, publish_served,
+                                          reload_spawn_sources, served_report)
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
@@ -177,38 +178,45 @@ class MCPSpawnerServer:
         self._served_identity = self._source_guard.started
         self._served_head = checkout_head()
         self._reload_error = None
+        self.publish_served()
+
+    def publish_served(self):
+        publish_served(self.service.state, self._served_head, self._served_identity, self._reload_error)
 
     def _build_service(self, state, previous=None):
-        self.service = spawn_service(self.runner, state=state)
+        self.service = self._make_service(state, previous)
+
+    def _make_service(self, state, previous=None):
+        service = spawn_service(self.runner, state=state)
         if previous is not None:
             # Run tasks, records and stderr captures belong to the runs already started: share them.
-            self.service.tasks = previous.tasks
-            self.service._running_records = previous._running_records
-            self.service._stderr_captures = previous._stderr_captures
+            service.tasks = previous.tasks
+            service._running_records = previous._running_records
+            service._stderr_captures = previous._stderr_captures
         # An explicitly supplied default-equivalent runner is still a live path.
         from .seat_spawn import live_runner
-        self.service.fresh_tree = live_runner(self.runner)
+        service.fresh_tree = live_runner(self.runner)
+        return service
 
     def refresh_route_code(self):
         """Serve the checkout's current planner/routing code when its head moved, without a restart.
 
-        The runner (job history) and the service's run tasks carry over; the reload is deferred while a
-        job or run task is live. A failed reload keeps the previous modules and is reported by
-        ``plangraph_agent_health``."""
+        Route and health never wait for a running job: the runner (job history) and the service's run
+        tasks carry over to the new service. Modules, service and served sha change together or not at
+        all; a failed reload keeps the previous generation and is reported by ``plangraph_agent_health``."""
         current = self._source_guard.identity()
         if current == self._served_identity:
             return
-        if (any(job.status == 'running' for job in self.runner.jobs.values())
-                or any(not task.done() for task in self.service.tasks.values())):
-            return
+        previous, built = self.service, []
         try:
-            previous = self.service
-            reload_spawn_sources(globals())
-            self._build_service(previous.state, previous)
+            reload_spawn_sources(globals(), commit=lambda: built.append(self._make_service(previous.state, previous)))
         except Exception as exc:
             self._reload_error = f'{type(exc).__name__}: {exc}'[:300]
+            self.publish_served()
             return
+        self.service = built[0]
         self._served_identity, self._served_head, self._reload_error = current, checkout_head(), None
+        self.publish_served()
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""
@@ -271,7 +279,7 @@ class MCPSpawnerServer:
         if name == "plangraph_agent_status":
             job_id = arguments.get("job_id")
             res = await self.runner.status(job_id=job_id)
-            if isinstance(res, JobInfo):
+            if hasattr(res, 'to_dict'):  # duck-typed: retained jobs keep the class they were created with
                 return res.to_dict()
             if isinstance(res, list):
                 return {"jobs": [j.to_dict() for j in res]}
@@ -434,20 +442,50 @@ def _read_line(stdin) -> asyncio.Future:
     return asyncio.wrap_future(done)
 
 
+async def keep_current(server, interval) -> None:
+    """Follow the checkout head while the session is idle, so an update reaches it within ``interval``."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            server.refresh_route_code()
+        except Exception as exc:  # a failed check must not end the idle follower
+            server._reload_error = f'{type(exc).__name__}: {exc}'[:300]
+
+
 async def run_stdio_server() -> None:
     """Run MCP server over standard input and output."""
     server = MCPSpawnerServer()
+    import os
+    refresher = asyncio.create_task(keep_current(server, float(os.environ.get('PLANGRAPH_MCP_RELOAD_S', '60'))))
     # connect_read_pipe cannot serve an inherited stdin on Windows: the Proactor loop fails inside
     # a transport callback and the awaiting reader hangs forever. A private reader, not
     # sys.stdin.buffer, because a daemon thread holding that lock can abort interpreter shutdown.
     stdin = open(sys.stdin.fileno(), 'rb', closefd=False)
 
-    while line := await _read_line(stdin):
-        reply = await stdio_reply(server, line)
-        if reply is not None:
-            sys.stdout.write(reply + '\n')
-            sys.stdout.flush()
+    try:
+        while line := await _read_line(stdin):
+            reply = await stdio_reply(server, line)
+            if reply is not None:
+                sys.stdout.write(reply + '\n')
+                sys.stdout.flush()
+    finally:
+        refresher.cancel()
+
+
+def served_main(state=None) -> int:
+    """``--served-sha``: print the sha each live MCP session serves; exit 1 when any is not the checkout head."""
+    import os
+    from pathlib import Path
+    state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE', Path(os.environ.get(
+        'XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
+    rows = served_report(state)
+    for row in rows:
+        print(f"pid={row['pid']} served={row['served_sha'][:12] or 'unknown'} checkout={row['checkout_sha'][:12]} "
+              f"{'current' if row['current'] else 'STALE'}" + (f" error={row['route_reload_error']}" if row['route_reload_error'] else ''))
+    return 0 if rows and all(row['current'] for row in rows) else 1
 
 
 if __name__ == "__main__":
+    if '--served-sha' in sys.argv[1:]:
+        raise SystemExit(served_main())
     asyncio.run(run_stdio_server())

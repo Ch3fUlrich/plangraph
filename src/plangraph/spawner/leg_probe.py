@@ -4,7 +4,6 @@ import json
 import logging
 import math
 import os
-import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +17,7 @@ from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
 from .host_ready import harness_path
-from .env_redact import harness_limit_line
+from .env_redact import harness_limit_line, sandbox_denial
 from .exit_outcome import quota_models
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
@@ -213,15 +212,6 @@ def _missing_harness(harness, seconds_elapsed=0.0):
                 infra=True, seconds=seconds_elapsed)
 
 
-SANDBOX_DENIAL = re.compile(r'read-only (?:file ?system|sandbox|git|\.git)|sandbox (?:denied|blocked|refused)', re.I)
-
-
-def _sandbox_denied(*texts):
-    """True when a Codex writer's own output reports its sandbox denied a write (the probe's defect)."""
-    return any(SANDBOX_DENIAL.search(text.decode('utf-8', 'replace') if isinstance(text, bytes) else text or '')
-               for text in texts)
-
-
 async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_reprobe=False):
     """One real commit task (or tiny OK prompt for reviews) in a disposable dir; infra failures book no leg state.
 
@@ -344,7 +334,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
             if not quota and not leaked and leg.harness == 'codex' and not review_mode and diagnostic is not None \
-                    and _sandbox_denied(stderr, getattr(diagnostic, 'stdout', '')):
+                    and (sandbox_denial(stderr, getattr(diagnostic, 'stdout', ''))
+                         or any(e.get('event') == 'sandbox_denied' for e in getattr(diagnostic, 'events', None) or ())):
                 # The probe's sandbox blocked the writer (also when it then ran out of time): never a leg failure.
                 ok, reason, infra, excerpt = False, 'probe infra: sandbox denied a write', True, ''
             elif not quota:

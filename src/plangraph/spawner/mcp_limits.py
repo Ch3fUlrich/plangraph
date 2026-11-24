@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import uuid
 
 from plangraph.routing_errors import ParameterRefused, SpawnRefused
@@ -179,11 +180,12 @@ def _rebind(namespace, purged):
                 namespace[key] = fresh
 
 
-def reload_spawn_sources(namespace, root=None):
+def reload_spawn_sources(namespace, root=None, commit=None):
     """Re-read the spawn import closure from disk and import it fresh, without a process restart.
 
-    Sources are read and parsed before any module is dropped. If the fresh import fails, the previous
-    modules and snapshot are restored and the error propagates. Returns the reloaded module names."""
+    Sources are read and parsed before any module is dropped. ``commit`` runs after the fresh import
+    and rebinding, still inside the transaction: if it or the import fails, the previous modules,
+    package bindings and snapshot are restored and the error propagates. Returns the reloaded names."""
     global SPAWN_MODULES
     fresh = {}
     modules = _spawn_modules(root=root, sources=fresh)
@@ -200,10 +202,16 @@ def reload_spawn_sources(namespace, root=None):
     try:
         for name in saved_modules:
             del sys.modules[name]
+        for name in purged:  # `from package import module` consults the package attribute before sys.modules
+            parent = sys.modules.get(name.rpartition('.')[0])
+            if parent is not None and '.' in name:
+                parent.__dict__.pop(name.rpartition('.')[2], None)
         for name in sorted(purged):
             if name in _SPAWN_SOURCES and name in saved_modules:
                 importlib.import_module(name)
         _rebind(namespace, purged)
+        if commit is not None:
+            commit()
     except BaseException:
         for name in purged:
             sys.modules.pop(name, None)
@@ -222,6 +230,42 @@ def reload_spawn_sources(namespace, root=None):
         namespace.update(saved_namespace)
         raise
     return tuple(sorted(purged))
+
+
+SERVED_DIR = 'mcp-sessions'
+
+
+def publish_served(state, served_sha, identity, error=None):
+    """Record the code this MCP process serves, one file per process, for the per-session deploy report."""
+    directory = Path(state) / SERVED_DIR
+    row = {'pid': os.getpid(), 'served_sha': served_sha, 'identity': identity,
+           'route_reload_error': error, 'updated': time.time()}
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        tmp = directory / f'.{os.getpid()}.tmp'
+        tmp.write_text(json.dumps(row), encoding='utf-8')
+        os.replace(tmp, directory / f'{os.getpid()}.json')
+    except OSError:
+        pass
+
+
+def served_report(state, checkout=None):
+    """Every live MCP process of this state root with the sha it serves and whether that is the checkout head.
+
+    Rows of dead processes are removed. ``checkout`` defaults to this checkout's HEAD."""
+    checkout = checkout_head() if checkout is None else checkout
+    rows = []
+    for path in sorted((Path(state) / SERVED_DIR).glob('*.json')):
+        try:
+            row = json.loads(path.read_text(encoding='utf-8'))
+            os.kill(row['pid'], 0)
+        except ProcessLookupError:
+            path.unlink(missing_ok=True)
+            continue
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        rows.append({**row, 'checkout_sha': checkout, 'current': row.get('served_sha') == checkout})
+    return rows
 
 
 GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_agent_probe',

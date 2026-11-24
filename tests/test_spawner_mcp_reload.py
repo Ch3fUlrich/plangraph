@@ -1,5 +1,6 @@
 """The spawner MCP serves new route code when the checkout head moves, without a process restart."""
 import asyncio
+import os
 import sys
 from unittest.mock import Mock
 
@@ -98,21 +99,93 @@ def test_reload_keeps_job_history_and_run_tasks(tmp_path, monkeypatch):
     assert 'run-done' in server.service.tasks and 'j' in server.service._running_records
 
 
-def test_a_live_run_task_defers_the_reload_and_stays_cancellable(tmp_path, monkeypatch):
+def test_a_live_run_task_never_delays_the_reload_and_stays_cancellable(tmp_path, monkeypatch):
     identity = Mock(return_value=OLD)
     server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
-    service = server.service
+    old = server.service
 
     async def scenario():
         live = asyncio.ensure_future(asyncio.sleep(3600))
-        service.tasks['run-live'] = live
+        old.tasks['run-live'] = live
+        server.runner.jobs['j'] = Mock(status='running')
         identity.return_value = NEW
         moved_sources(monkeypatch)
         server.refresh_route_code()
-        assert server.service is service and not live.done()
-        live.cancel()
+        assert server.service is not old and server.service.tasks['run-live'] is live
+        assert sys.modules[SENTINEL].MERGED_ROUTE_CODE is True
+        assert not live.done()
+        server.service.tasks['run-live'].cancel()   # the same task object: the new service owns it
+        await asyncio.sleep(0)
+        assert live.cancelled()
     asyncio.run(scenario())
-    assert not hasattr(sys.modules[SENTINEL], 'MERGED_ROUTE_CODE')
+
+
+def test_package_bindings_are_cleared_so_candidates_import_the_new_sibling(tmp_path, monkeypatch):
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    identity.return_value = NEW
+    moved_sources(monkeypatch, **{'plangraph.spawner.env_redact': '\nMERGED_SETTING = True\n'})
+    server.refresh_route_code()
+    fresh = sys.modules['plangraph.spawner.env_redact']
+    assert fresh.MERGED_SETTING is True
+    assert sys.modules['plangraph.spawner.runner'].env_redact is fresh   # `from . import env_redact`
+    assert sys.modules['plangraph.spawner'].env_redact is fresh
+
+
+def test_service_construction_failure_restores_the_previous_generation(tmp_path, monkeypatch):
+    identity = Mock(return_value=OLD)
+    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: 'a' * 40)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    before, service, bench = sys.modules[SENTINEL], server.service, sys.modules['plangraph.spawner.bench_entry']
+    identity.return_value = NEW
+    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: 'b' * 40)
+    moved_sources(monkeypatch, **{
+        'plangraph.spawner.bench_entry': '\nREJECTED_CANDIDATE = True\n',
+        'plangraph.spawner.service': '\ndef _boom(self, *a, **k):\n    raise RuntimeError("ctor")\n'
+                                     'SpawnService.__init__ = _boom\n'})
+    server.refresh_route_code()
+    assert 'ctor' in server._reload_error
+    assert sys.modules[SENTINEL] is before and sys.modules['plangraph.spawner.bench_entry'] is bench
+    assert not hasattr(bench, 'REJECTED_CANDIDATE') and mcp.bench_entry is bench
+    assert server.service is service and server._served_head == 'a' * 40
+    assert call(server, 'health')['served_sha'] == 'a' * 40
+
+
+def test_the_legacy_status_rpc_survives_a_reload_of_retained_jobs(tmp_path, monkeypatch):
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    server.runner.jobs['j'] = mcp.JobInfo(job_id='j', status='completed', task_prompt='p', model_or_combo='m')
+    first = call(server, 'status', {'job_id': 'j'})
+    identity.return_value = NEW
+    moved_sources(monkeypatch)
+    server.refresh_route_code()
+    assert sys.modules[SENTINEL].MERGED_ROUTE_CODE is True
+    assert call(server, 'status', {'job_id': 'j'}) == first
+    assert call(server, 'status')['jobs'][0]['job_id'] == 'j'
+
+
+def test_an_idle_session_follows_the_head_and_the_deploy_report_prints_every_served_sha(tmp_path, monkeypatch, capsys):
+    heads = {'now': 'a' * 40}
+    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: heads['now'])
+    monkeypatch.setattr(mcp_limits, 'checkout_head', lambda source=None: heads['now'])
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    assert mcp.served_main(tmp_path) == 0
+    assert 'current' in capsys.readouterr().out
+    heads['now'] = 'b' * 40
+    identity.return_value = NEW
+    moved_sources(monkeypatch)
+    assert mcp.served_main(tmp_path) == 1          # the session still serves the old head
+    assert 'STALE' in capsys.readouterr().out
+
+    async def idle():
+        follower = asyncio.ensure_future(mcp.keep_current(server, 0.01))
+        await asyncio.sleep(0.5)                    # no request arrives
+        follower.cancel()
+    asyncio.run(idle())
+    assert sys.modules[SENTINEL].MERGED_ROUTE_CODE is True
+    assert mcp.served_main(tmp_path) == 0
+    assert ('pid=%d' % os.getpid()) in capsys.readouterr().out
 
 
 def test_health_prints_the_served_sha_and_the_checkout_sha(tmp_path, monkeypatch):
@@ -120,16 +193,6 @@ def test_health_prints_the_served_sha_and_the_checkout_sha(tmp_path, monkeypatch
     server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=Mock(return_value=OLD))
     health = call(server, 'health')
     assert health['served_sha'] == 'c' * 40 and health['checkout_sha'] == 'c' * 40
-
-
-def test_running_job_defers_the_reload(tmp_path, monkeypatch):
-    identity = Mock(return_value=OLD)
-    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
-    server.runner.jobs['j'] = Mock(status='running')
-    identity.return_value = NEW
-    moved_sources(monkeypatch)
-    server.refresh_route_code()
-    assert not hasattr(sys.modules[SENTINEL], 'MERGED_ROUTE_CODE')
 
 
 def test_failed_reload_keeps_serving_the_previous_code(tmp_path, monkeypatch):
