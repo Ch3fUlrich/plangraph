@@ -585,6 +585,32 @@ def clamp_effort(model_id: str, requested_effort: str) -> str:
         return "xhigh"
     return requested_effort
 
+#: An own measurement replaces the public indices from this many runs on.
+OWN_P_HAT_MIN_RUNS = 20
+#: Standard deviation charged to an imputed row that carries no standard error.
+IMPUTED_DEFAULT_SD = 3.0
+
+
+def row_quality(model: Mapping[str, Any]) -> float:
+    """The quality a row ranks by: own p_hat at n >= 20, else the coding index, else the AA index.
+
+    An imputed row (a value filled in, not measured) ranks at its mean minus one standard deviation,
+    so it never outranks a measured row of the same mean.
+    """
+    own = (model.get("origin") == "own" and model.get("score") is not None
+           and (model.get("n_runs") or 0) >= OWN_P_HAT_MIN_RUNS)
+    if own:
+        quality = _validated_metric(model, "score")
+    elif model.get("coding_index") is not None:
+        quality = _validated_metric(model, "coding_index")
+    else:
+        quality = _validated_metric(model, "aa_intelligence")
+    if model.get("imputed"):
+        se = model.get("score_se")
+        quality = max(0.0, quality - (float(se) if isinstance(se, (int, float)) and se > 0 else IMPUTED_DEFAULT_SD))
+    return quality
+
+
 def score_model(
     model: Mapping[str, Any],
     role: str = "implement",
@@ -615,7 +641,7 @@ def score_model(
     risk_l = _validate_risk(risk)
     role_l = _validate_role(role)
 
-    intel = _validated_metric(model, "aa_intelligence")
+    intel = row_quality(model)
     cost = _validated_metric(model, "cost_per_task_usd", default=0.20)
     burn = _validated_metric(model, "pool_burn_weight", default=1.0)
     _speed_for_model(model)
@@ -691,7 +717,8 @@ def rank_candidates(
                 out_band.append(item)
 
         # Sort in_band by speed descending, then score descending as tertiary tie breaker
-        in_band.sort(key=lambda x: (x[2], x[1]), reverse=True)
+        # A measured row always precedes an imputed one inside the band: speed never lifts a filled-in value.
+        in_band.sort(key=lambda x: (not x[0].get("imputed"), x[2], x[1]), reverse=True)
         for item in in_band:
             ranked.append(item[0])
 

@@ -16,9 +16,10 @@ from plangraph.retired_models import check_route_targets
 from plangraph.model_admission import validate_model  # compatibility re-export
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
-                         BenchRequired, benchmark_for_leg, benchmark_rows_from_db)
+                         BenchRequired, benchmark_for_leg, benchmark_rows_from_db,
+                         current_facts, current_index_version, rank_ineligible)
 from .legs import CODEX_FALLBACK_WRITERS, SONNET_WRITERS, SONNET_WRITER_HARD, DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
-from .legs import LEG_ROLES, research_route_pool
+from .legs import CARD_NEEDS, LEG_ROLES, TOOL_MODES, research_route_pool, unmet_need
 from .provider_stop import next_leg_after_provider_stop
 from .readiness import WINDOW_TOKENS, USABLE_FRACTION
 from .review_order import review_key, catalog_tiers
@@ -78,6 +79,15 @@ def effective_estimate(estimate_tokens: int | None, subtasks: int = 1) -> int:
         raise ValueError("subtasks must be an int >= 1")
     # integer arithmetic: ceil(estimate * (10 + subtasks - 1) / 10), no float drift
     return -(-estimate_tokens * (9 + subtasks) // 10)
+
+
+def check_card_needs(card: Mapping) -> None:
+    """``needs`` lists what the card requires of a leg; ``tool_mode`` the weakest tool mode it accepts."""
+    needs = card.get("needs", ())
+    if not isinstance(needs, (list, tuple)) or any(n not in CARD_NEEDS for n in needs):
+        raise ValueError(f"needs must be a list drawn from {CARD_NEEDS}")
+    if card.get("tool_mode") is not None and card["tool_mode"] not in TOOL_MODES:
+        raise ValueError(f"tool_mode must be one of {TOOL_MODES}")
 
 
 def _window_share(window_class: str) -> int:
@@ -210,6 +220,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     bad = [t for t in tags if t not in RISK_TAGS]
     if bad:
         raise ValueError(f"unknown risk tags: {bad}")
+    check_card_needs(card)
     per_leg = effective_role in LEG_ROLES and not overflow
     largest = WINDOW_CLASSES[-1]
     full_window = research and per_leg
@@ -252,6 +263,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             why = "unavailable"
         elif leg.family in exclude_fams:
             why = "excluded_family"
+        elif (need := unmet_need(leg, card)) is not None:
+            why = "needs_" + need
         elif no_train and leg.trains_on_data:
             why = "trains_on_data"
         elif research and card.get("web_required") and not leg.has_web_tools:
@@ -408,6 +421,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             raise SpawnRefused(f'{field} has invalid value')
     if any(t not in RISK_TAGS for t in card.get('risk_tags', ())):
         raise SpawnRefused('risk_tags has invalid value')
+    try:
+        check_card_needs(card)
+    except ValueError as exc:
+        raise SpawnRefused(str(exc)) from None
     if 'diff_ref' in card:
         _check_diff_ref(card['diff_ref'])
     if policy is None:
@@ -545,6 +562,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     from plangraph.routing_support.quota_snapshots import skip_reason as quota_skip_reason
     candidate_details = []
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
+    index_version = current_index_version(rows)
+    rank_evidence = {}
     for leg in candidates:
         row = benchmark_for_leg(rows, leg)
         status = states[leg.id]
@@ -581,6 +600,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai" and not (
                 low_risk and leg.id in LOW_RISK_ONLY_LEGS):
             reason = "review_route_excluded"
+        elif row is not None and (ineligible := rank_ineligible(
+                leg, row, risk=ranking_risk, effort=card.get('effort'), now=now,
+                current=current_facts(leg, catalog_rows, index_version))):
+            reason, rank_evidence[leg.id] = ineligible
         else:
             try:
                 route_card(card, legs=(leg,), role=role, exclude_families=excluded, now=now)
@@ -589,7 +612,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
         if reason:
             skipped.append({"leg": leg.id, "reason": reason,
-                            "evidence": states[leg.id]["evidence"]})
+                            "evidence": rank_evidence.get(leg.id, states[leg.id]["evidence"])})
         detail = {"leg": leg.id, "tier": leg.tier,
                   "u_core": score_model(dict(row, tier=leg.tier), role=score_role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
@@ -599,14 +622,15 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if row is not None:
             detail.update(intelligence=row.get("aa_intelligence"), cost_per_task=row.get("cost_per_task_usd"))
         if reason:
-            detail.update(reason=reason, evidence=states[leg.id]["evidence"])
+            detail.update(reason=reason, evidence=rank_evidence.get(leg.id, states[leg.id]["evidence"]))
         candidate_details.append(detail)
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
         "review_route_excluded", "low_risk_only", "claude_requires_gpt_and_hydrogen_limits",
         "claude_requires_codex_limited",
-        "repository_review_tools_unavailable", "benchmark_unmeasured", "opencode_tools_denied")}
+        "repository_review_tools_unavailable", "benchmark_unmeasured", "opencode_tools_denied",
+        "effort_channel", "stale_row", "canary_pending")}
     try:
         route = route_card(card, legs=candidates, unavailable=blocked | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
