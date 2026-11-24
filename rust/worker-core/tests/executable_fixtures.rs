@@ -62,6 +62,7 @@ fn mode_is_not_a_fixture_write(path: &str, line: &str) -> bool {
                 || line.contains("set_permissions(path,")
                 || line.trim() == "b.mode(0o700);"
         }
+        "worker-core/src/cargo_cache.rs" => line.contains("set_permissions(parent.path(),"),
         "worker-core/src/finalize_promote_tests.rs" => line.contains("set_permissions(&dir,"),
         "worker-core/src/private_targets_tests.rs" => {
             line.contains("set_permissions(&public,")

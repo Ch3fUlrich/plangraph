@@ -2,12 +2,14 @@
 #![cfg(target_os = "linux")]
 use pg_worker_core::cargo_cache::{lease_holders, try_exclusive_lease};
 use pg_worker_core::cargo_command_lease::install_shim;
-use std::{os::unix::fs::PermissionsExt, path::Path, process::Command, time::Duration};
+use std::{path::Path, process::Command, time::Duration};
 
 fn script(dir: &Path, name: &str, body: &str) {
-    let path = dir.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_script(
+        dir,
+        name,
+        &format!("#!/bin/sh\n{body}\n"),
+    );
 }
 
 fn wait_for(mut done: impl FnMut() -> bool) -> bool {
