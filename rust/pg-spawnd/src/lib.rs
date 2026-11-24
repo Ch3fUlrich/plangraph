@@ -1,4 +1,5 @@
 pub mod batch_writer_brief;
+pub mod brief_gate_paths;
 #[cfg(target_os = "linux")]
 pub mod external_run;
 pub mod landing_journal;
