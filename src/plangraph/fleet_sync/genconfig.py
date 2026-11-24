@@ -7,6 +7,11 @@ from pathlib import Path
 from plangraph.routing_support.private_io import atomic_write_private
 
 
+# A registry without a `public_repos` key lists this public repository; an explicit list,
+# even an empty one, replaces the default.
+DEFAULT_PUBLIC_REPOS = ('plangraph',)
+
+
 def config_dir():
     return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'plangraph'
 
@@ -19,7 +24,8 @@ def work_mounts(host):
 def generate(registry):
     ps, overflow = [], {}
     local_name = registry.get('self', '').lower()
-    public_ids = set(registry.get('public_repos', []))
+    public_ids = set(registry['public_repos'] if 'public_repos' in registry
+                     else DEFAULT_PUBLIC_REPOS)
     public = {}
     for host in registry['hosts']:
         name = host['id']
@@ -56,7 +62,8 @@ def generate(registry):
                 overflow[name].update(roles=host['roles'], state_dir=host['state_dir'],
                     placement_fallback=host.get('placement_fallback', False),
                     repos={key: entry['root'] for key, entry in repos.items() if key in public_ids},
-                    session_unit=host.get('env', {}).get('PG_SESSION_UNIT'), registry=True)
+                    session_unit=host.get('env', {}).get('PG_SESSION_UNIT'), registry=True,
+                    remote_placement=host.get('remote_placement') is True)
             if mounts := work_mounts(host):
                 overflow[name]['work_mounts'] = mounts
     return {'ps-hosts.json': {'hosts': ps}, 'overflow-hosts.json': {
