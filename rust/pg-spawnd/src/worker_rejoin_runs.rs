@@ -62,9 +62,12 @@ impl Ssh<'_> {
     }
 
     /// Release the Keeper claim a dead run held, with the epoch the run recorded
-    /// (`claim_epoch`), then read the item back. A newer claim by another run has a
-    /// newer epoch and is refused by the Keeper; a run with no recorded epoch is
-    /// not released here because its claim cannot be told from a newer one.
+    /// (`claim_epoch`). The release verb is a write that never falls back to a local
+    /// snapshot, so its receipt (`{"key": ITEM}`) is the proof. A refusal that says the
+    /// item is not claimed, or that the epoch is stale, means the original claim is
+    /// already gone (released, or replaced by a newer claim that is left alone). Any
+    /// other outcome keeps the run unsettled. A run with no recorded epoch is not
+    /// released: its claim cannot be told from a newer one.
     fn release_claim(&self, item: &str, epoch: Option<u64>) -> io::Result<()> {
         let epoch = epoch.ok_or_else(|| {
             io::Error::other(format!(
@@ -76,28 +79,30 @@ impl Ssh<'_> {
                 "PG_KEEPER_CLI is not set; the claim on {item} is not released"
             ))
         })?;
-        let call = |verb: &[&str]| {
-            pg_worker_core::host_command::capture(
-                Command::new(&cli)
-                    .env("PG_EPOCH", epoch.to_string())
-                    .args(verb),
-                Duration::from_secs(60),
-            )
-        };
-        let released = call(&["release", item])?;
-        let shown = call(&["show", item, "--json"])?;
-        let state: Value = serde_json::from_slice(&shown.stdout).unwrap_or(Value::Null);
-        // Another run's newer claim is left alone and is not this run's to release.
-        if state["state"] == "claimed" && state["epoch"].as_u64().is_some_and(|now| now > epoch) {
+        let out = pg_worker_core::host_command::capture(
+            Command::new(&cli)
+                .env("PG_EPOCH", epoch.to_string())
+                .args(["release", item, "--json"]),
+            Duration::from_secs(60),
+        )?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if out.status.success() {
+            let receipt: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+            return if receipt["key"] == item {
+                Ok(())
+            } else {
+                Err(io::Error::other(format!(
+                    "the release of {item} returned no receipt for it"
+                )))
+            };
+        }
+        if stderr.contains("not claimed") || stderr.contains("epoch_stale") {
             return Ok(());
         }
-        if state["state"] == "claimed" || !shown.status.success() {
-            return Err(io::Error::other(format!(
-                "the claim on {item} is still held after release ({})",
-                String::from_utf8_lossy(&released.stderr).trim()
-            )));
-        }
-        Ok(())
+        Err(io::Error::other(format!(
+            "the claim on {item} was not confirmed released: {}",
+            stderr.trim()
+        )))
     }
 
     pub(super) fn settle(&mut self, run: &str, fate: RunFate) -> io::Result<()> {

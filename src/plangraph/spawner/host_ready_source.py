@@ -164,11 +164,13 @@ def configured_work_drives(policy):
     return parsed
 
 
-def configured_build_target(policy, free_gb):
+def configured_build_target(policy, free_gb, *, floors=True):
     """The Cargo target on the `build_drives` entry with the most free space above its floor.
 
     None when the policy lists no build drive. Refuses with `disk_low` when every
-    listed drive is under its floor or unreadable.
+    listed drive is under its floor, unreadable or not mounted. A drive entry with a
+    `mount` must have that mount present. `floors=False` is the running guard: the
+    admission floor does not apply once a build runs, only the runtime stop floor.
     """
     drives = policy.get('build_drives')
     if not drives:
@@ -176,8 +178,10 @@ def configured_build_target(policy, free_gb):
     best, shortfalls = None, []
     for entry in drives:
         floor = float(entry.get('disk_floor_gb', 5))
-        if not Path(entry['path']).is_dir():
-            # Measuring a missing path would read its parent's filesystem.
+        mount = entry.get('mount')
+        if not Path(entry['path']).is_dir() or (
+                mount and not (os.path.ismount(mount) and Path(entry['path']).is_relative_to(mount))):
+            # An unmounted path would be measured through its parent's filesystem.
             shortfalls.append(f"{entry['path']}: not mounted")
             continue
         try:
@@ -185,7 +189,7 @@ def configured_build_target(policy, free_gb):
         except OSError as error:
             shortfalls.append(f"{entry['path']}: {error}")
             continue
-        if free >= floor:
+        if free >= floor or not floors:
             if best is None or free > best[0]:
                 best = (free, entry['path'])
         else:

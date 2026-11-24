@@ -202,8 +202,14 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
         bin.join("keeper-cli"),
         r#"#!/bin/sh
 case "$1" in
-release) echo "$2 $PG_EPOCH" > "$FIXTURE_ROOT/released";;
-show) if [ -f "$FIXTURE_ROOT/stuck" ] || [ ! -f "$FIXTURE_ROOT/released" ]; then echo '{"state":"claimed","epoch":11}'; else echo '{"state":"open"}'; fi;;
+release)
+  if [ -f "$FIXTURE_ROOT/stuck" ]; then
+    # An offline keeper: no receipt, or a successful exit with a body that is no receipt.
+    read -r mode < "$FIXTURE_ROOT/stuck"
+    if [ "$mode" = malformed ]; then echo '{}'; exit 0; fi
+    echo "keeper unreachable" >&2; exit 3
+  fi
+  echo "$2 $PG_EPOCH" > "$FIXTURE_ROOT/released"; echo "{\"key\":\"$2\"}";;
 esac
 "#,
     );
@@ -268,11 +274,16 @@ esac
     fs::write(root.join("stuck"), "").unwrap();
     let stuck = rejoin();
     assert!(!stuck.status.success());
-    assert!(String::from_utf8_lossy(&stuck.stderr).contains("still held"));
+    assert!(String::from_utf8_lossy(&stuck.stderr).contains("not confirmed released"));
     let unsettled: Value =
         serde_json::from_slice(&fs::read(dead.join("record.json")).unwrap()).unwrap();
     assert_eq!(unsettled["status"], "running");
     assert_eq!(store.phase().unwrap(), Phase::Rejoining);
+    // A successful exit without a receipt for the item is not a release either.
+    fs::write(root.join("stuck"), "malformed").unwrap();
+    let malformed = rejoin();
+    assert!(!malformed.status.success());
+    assert!(String::from_utf8_lossy(&malformed.stderr).contains("no receipt"), "{}", String::from_utf8_lossy(&malformed.stderr));
     fs::remove_file(root.join("stuck")).unwrap();
     fs::remove_file(root.join("synced")).unwrap();
     let result = rejoin();
