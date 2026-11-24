@@ -16,7 +16,8 @@ import time
 import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_busy_reason, host_load, planned_test_binaries, running_test_binary, rust_bound
+from ci_select import (MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_busy_reason, host_load, is_nextest,
+                       planned_test_binaries, running_test_binary, rust_bound, rust_test_runner)
 from pgtest import run_test_process as run_bounded_test, selected_count, test_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -25,6 +26,8 @@ from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_ta
                                           running_disk_refusal, shared_cargo_target)
 from plangraph.spawner.overflow import available_memory_mb
 
+NEXTEST_TEST_RESULT = (r"^[ \t]*(?P<status>FAIL|TIMEOUT) +\[[^\n]*?\] +"
+                       r"\( *\d+/ *\d+\) +(?P<name>[^\r\n]+)")
 CHECK_TIMEOUT = 60
 MIN_BUILD_JOBS = 4
 # A normal affected run takes around 50 s, with a larger bound for hundreds of test paths.
@@ -86,7 +89,7 @@ def build_jobs(env, cores, load):
 
 
 def check_timeout(command, cwd=None, env=None):
-    if command[:2] in (["cargo", "clippy"], ["cargo", "test"], ["cargo", "build"]):
+    if is_nextest(command) or command[:2] in (["cargo", "clippy"], ["cargo", "test"], ["cargo", "build"]):
         load, cores = host_load()
         return rust_bound(planned_test_binaries([command], cwd or Path.cwd()), load, cores, floor=RUST_TIMEOUT)
     if is_affected_step(command):
@@ -112,11 +115,17 @@ def run_test_process(command, **kwargs):
 def run(command, cwd, env):
     timeout = check_timeout(command, cwd, env)
     try:
-        runner = run_test_process if is_affected_step(command) else subprocess.run
+        runner = run_test_process if is_affected_step(command) or is_nextest(command) else subprocess.run
         result = runner(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=timeout)
-        return result.returncode, result.stdout
+        output = result.stdout
+        if is_nextest(command) and result.returncode:
+            names = (name.strip() for status, name in re.findall(NEXTEST_TEST_RESULT, output, re.M)
+                     if status == "TIMEOUT")
+            for name in dict.fromkeys(names):
+                output += f"HUNG {name}\n"
+        return result.returncode, output
     except subprocess.TimeoutExpired as exc:
         if is_affected_step(command):
             # A timeout on a loaded host is no verdict on the tests: the reason line lets the
@@ -145,14 +154,15 @@ def with_no_fail_fast(command):
 
 
 def failing_tests(output):
-    """Ids of every test cargo reported as FAILED, in order, without repeats."""
-    ids = re.findall(r"^test (\S+) \.\.\. FAILED$", output, re.M)
-    return list(dict.fromkeys(ids))
+    """Ids reported as failed or timed out, in order, without repeats."""
+    pattern = r"^test (?P<libtest>\S+) \.\.\. FAILED$|" + NEXTEST_TEST_RESULT
+    return list(dict.fromkeys((match["libtest"] or match["name"]).strip()
+                              for match in re.finditer(pattern, output, re.M)))
 
 
 def first_error(output):
     lines = [line.strip() for line in output.splitlines() if line.strip()]
-    marked = [line for line in lines if re.search(r"FAIL|error|exceeded", line, re.I)]
+    marked = [line for line in lines if re.search(r"FAIL|error|exceeded|^HUNG ", line, re.I)]
     return (marked or lines or ["no output"])[0]
 
 
@@ -185,7 +195,7 @@ def changed_rust_paths(root, base, head):
     return [p for p in changed if p.startswith("rust/") or p == "rust-toolchain.toml"]
 
 
-def rust_commands(root, base, head, env=None):
+def rust_commands(root, base, head, env=None, run_tests=True):
     root = root.resolve()
     changed = changed_rust_paths(root, base, head)
     if not changed:
@@ -233,22 +243,23 @@ def rust_commands(root, base, head, env=None):
         if dependents <= selected:
             break
         selected.update(dependents)
+    test = rust_test_runner(root, env, CHECK_TIMEOUT) if run_tests else ["cargo", "test"]
     packages = [arg for p in sorted(selected & manifests.keys()) for arg in ("-p", manifests[p])]
     commands = ([["cargo", "fmt", "--check"],
                  ["cargo", "clippy", *packages, "--all-targets", "--", "-D", "warnings"],
-                 ["cargo", "test", *packages]] if packages else [])
+                 [*test, *packages]] if packages else [])
     for owner in sorted(selected & standalone.keys()):
         target = ["--manifest-path", str(standalone[owner])]
         if owner == 'rust/spikes/temporal-spike':
             # This experiment's CI contract is replay only (tests.yml rust-spike).
-            commands.append(["cargo", "test", *target, "--test", "replay"])
+            commands.append([*test, *target, "--test", "replay"])
         else:
             # Worker integration tests require a real Temporal server/CLI. CI
             # supplies those through ci-temporal; local checks stay offline.
             tests = ["--lib", "--bins"] if owner == 'rust/worker' else []
             commands += [["cargo", "fmt", *target, "--check"],
                          ["cargo", "clippy", *target, "--all-targets", "--", "-D", "warnings"],
-                         ["cargo", "test", *target, *tests]]
+                         [*test, *target, *tests]]
     return commands
 
 
@@ -359,7 +370,7 @@ def private_rust_target(parent, cleanup):
 def rust_compile_failure(command, output):
     if command[0] != "cargo":
         return False
-    if command[1] == "test":
+    if command[1] == "test" or is_nextest(command):
         return bool(re.search(r"^error: could not compile\b", output, re.M))
     return command[1] in {"build", "check", "clippy"} and bool(
         re.search(r"^error(?:\[E\d+\])?: ", output, re.M))
@@ -657,7 +668,7 @@ def _main(argv, root, cleanup):
             try:
                 if commands is None:
                     rust_base = (args.scrub_base or args.base) if args.lane else args.base
-                    commands = rust_commands(root, rust_base, args.head, env)
+                    commands = rust_commands(root, rust_base, args.head, env, not args.lane)
                     if args.lane:
                         commands = lane_rust_commands(commands)
                 family_env = policy_env if family == "policy" else env
@@ -695,7 +706,7 @@ def _main(argv, root, cleanup):
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
                     command_env = family_env
-                    if (family == "rust" and command[:2] == ["cargo", "test"]
+                    if (family == "rust" and (command[:2] == ["cargo", "test"] or is_nextest(command))
                             and "--manifest-path" in command
                             and command[command.index("--manifest-path") + 1]
                             == str((root / "rust/worker/Cargo.toml").resolve())

@@ -798,3 +798,5 @@ one `granted_apply` report line per applied batch to `routing`.
 
 The Bash and context guards have a fail-closed fleet registration and an
 isolated missing-file, crash, and timeout fixture. [Guard hooks](docs/guard-hooks.md)
+
+Preflight and `plangraph fast-checks` probe `cargo nextest --version` when `rust/.config/nextest.toml` exists, log `HUNG <test>` on timeouts, and fall back to `cargo test` when nextest is absent. [Test hang detection](docs/contributing/TEST-HANG-DETECTION-CI-AND-PUSH-GATE.md)

@@ -14,12 +14,13 @@ def crate(root, name, tests):
     (root / "rust" / name / "Cargo.toml").write_text(f'[package]\nname = "{name}"\n')
 
 
-def test_planned_binaries_count_the_test_files_of_every_tested_crate(tmp_path):
+@pytest.mark.parametrize("test_command", [["cargo", "test"], ["cargo", "nextest", "run"]])
+def test_planned_binaries_count_the_test_files_of_every_tested_crate(tmp_path, test_command):
     crate(tmp_path, "pg-spawnd", ["a", "b", "c"])
     crate(tmp_path, "pg-policy", ["x"])
     commands = [["cargo", "fmt", "--check"],
                 ["cargo", "clippy", "-p", "pg-spawnd", "--all-targets"],
-                ["cargo", "test", "-p", "pg-spawnd", "-p", "pg-policy"]]
+                [*test_command, "-p", "pg-spawnd", "-p", "pg-policy"]]
     # one lib/bin binary per crate plus every tests/*.rs file
     assert preflight.planned_test_binaries(commands, tmp_path) == 3 + 1 + 1 + 1
 
@@ -29,6 +30,14 @@ def test_a_standalone_manifest_counts_its_own_tests(tmp_path):
     manifest = tmp_path / "rust/worker/Cargo.toml"
     assert preflight.planned_test_binaries(
         [["cargo", "test", "--manifest-path", str(manifest)]], tmp_path) == 3
+
+
+def test_check_timeout_scales_for_nextest_without_stubbing_the_binary_count(tmp_path, monkeypatch):
+    crate(tmp_path, "worker", [f"test_{i}" for i in range(40)])
+    manifest = tmp_path / "rust/worker/Cargo.toml"
+    monkeypatch.setattr(preflight, "host_load", lambda: (0.0, 32))
+    command = ["cargo", "nextest", "run", "--manifest-path", str(manifest)]
+    assert preflight.check_timeout(command, tmp_path, {}) == 615
 
 
 @pytest.mark.parametrize("binaries,load,cores,expected", [

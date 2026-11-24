@@ -295,11 +295,16 @@ def test_default_root_is_script_relative(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("pin_only", [False, True])
-def test_rust_selection(repo, monkeypatch, pin_only):
+@pytest.mark.parametrize("nextest", ["unconfigured", "installed", "missing"])
+def test_rust_selection(repo, monkeypatch, capsys, pin_only, nextest):
     crate = repo / "rust/one"
     crate.mkdir(parents=True)
     (crate / "Cargo.toml").write_text('[package]\nname = "one"\n')
     (crate / "lib.rs").write_text("// changed\n")
+    if nextest != "unconfigured":
+        config = repo / "rust/.config/nextest.toml"
+        config.parent.mkdir()
+        config.write_text('[profile.default]\nslow-timeout = { period = "2m", terminate-after = 1 }\n')
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                     "commit", "-qm", "rust"], cwd=repo, check=True)
@@ -309,9 +314,25 @@ def test_rust_selection(repo, monkeypatch, pin_only):
         subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                         "commit", "-qm", "pin"], cwd=repo, check=True)
     monkeypatch.setattr(preflight.shutil, "which", lambda _: "/fake/cargo")
+    real_run = subprocess.run
+    probes = []
+
+    def run(command, *args, **kwargs):
+        if command[1:] == ["nextest", "--version"]:
+            probes.append(command)
+            assert kwargs["cwd"] == repo / "rust"
+            return subprocess.CompletedProcess(command, int(nextest != "installed"))
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(preflight.subprocess, "run", run)
     commands = preflight.rust_commands(repo, "HEAD~1", "HEAD")
+    assert len(probes) == int(nextest != "unconfigured")
+    assert ("falling back to cargo test" in capsys.readouterr().err) == (nextest == "missing")
     assert commands[1] == ["cargo", "clippy", "-p", "one", "--all-targets", "--", "-D", "warnings"]
-    assert commands[2] == ["cargo", "test", "-p", "one"]
+    expected = (["cargo", "nextest", "run", "--config-file", str(config), "--no-fail-fast",
+                 "--color", "never", "-p", "one"]
+                if nextest == "installed" else ["cargo", "test", "-p", "one"])
+    assert commands[2] == expected
 
 
 @pytest.mark.parametrize("rust_changed", [False, True])
@@ -728,3 +749,18 @@ def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch,
         assert "cargo post-run trim" not in output
     else:
         assert message in output
+
+
+@pytest.mark.parametrize("counter", ["(1/1)", "( 1/12)", "(10/12)", "( 1/ 12)"])
+def test_preflight_names_nextest_timeouts(monkeypatch, repo, counter):
+    command = ["cargo", "nextest", "run"]
+    message = f"     TIMEOUT [   2.017s] {counter} example::unit nested::blocked\n"
+    monkeypatch.setattr(preflight, "check_timeout", lambda *args: 60)
+    monkeypatch.setattr(preflight, "run_test_process", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(command, 100, message * 2))
+    code, output = preflight.run(command, repo, {})
+    assert code == 100
+    assert output.count("HUNG example::unit nested::blocked") == 1
+    assert preflight.failing_tests(
+        output + f"        FAIL [   0.016s] {counter} example::unit nested::failed\n"
+    ) == ["example::unit nested::blocked", "example::unit nested::failed"]
