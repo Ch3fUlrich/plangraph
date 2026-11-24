@@ -392,7 +392,7 @@ def deploy_report(st, active):
     """The deploy part of the GO-REQ: ``plangraph land-train deploy-plan`` over the train parts, with the host
     install dry run as the probe. A refused target is listed with its blocker item key and its MISSING lines; the
     blocker items are filed with ``pg define --file`` when the keeper is configured."""
-    registry = Path.home() / ".config" / "plangraph" / "hosts.json"
+    registry = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph" / "hosts.json"
     if not registry.is_file():
         return "deploy: unchecked (no hosts registry)"
     binary, wt = plangraph_binary(), st["worktree"]
