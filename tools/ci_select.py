@@ -337,6 +337,28 @@ def landing_evidence(statuses, tree: str, creator_id):
     return f"{named.group(1)} attempt {named.group(2)}"
 
 
+def reword_evidence(statuses, run, old_head: str, new_head: str, old_tree: str, new_tree: str):
+    """Evidence text when a commit that only differs in message from ``old_head`` may reuse its green full run.
+
+    Both commits must have the same non-empty Git tree. The newest ``ci-full`` status of the old head must be
+    success and name a run and attempt that the verified run record (``run``: the Actions run of the old head)
+    confirms: same run id, head ``old_head``, this workflow on a pull request, the latest attempt, concluded
+    success. Anything else, a newer red attempt included, is None and the suite runs again."""
+    if not new_tree or old_tree != new_tree or not old_head or old_head == new_head:
+        return None
+    full = _latest(statuses, CI_FULL)
+    seen = _FULL_EVIDENCE.fullmatch((full or {}).get("description") or "")
+    if not full or full.get("state") != "success" or not seen or seen.group(3) != new_tree:
+        return None
+    run = run or {}
+    if (str(run.get("id")), str(run.get("run_attempt"))) != seen.group(1, 2) or run.get("head_sha") != old_head:
+        return None
+    if run.get("conclusion") != "success" or run.get("path") != ".github/workflows/tests.yml" \
+            or run.get("event") != "pull_request":
+        return None
+    return f"{seen.group(0)} reused from {old_head} for {new_head}"
+
+
 def gate(needs: dict, require_full: bool = False) -> list[str]:
     if not isinstance(needs, dict) or "select" not in needs or not isinstance(needs["select"], dict):
         return ["select: missing"]
@@ -521,6 +543,8 @@ def main(argv: list[str] | None = None) -> int:
     select_parser.add_argument("--statuses", default=None, help="JSON list of the commit statuses of the pushed commit")
     select_parser.add_argument("--tree", default="", help="tree id of the pushed commit")
     select_parser.add_argument("--land-creator-id", type=int, default=None, help="id of the land App's bot user")
+    for flag in ("old-head", "new-head", "old-tree", "old-run"):   # reword reuse (reword_evidence)
+        select_parser.add_argument(f"--{flag}", default="", help="previous head, new head, its tree, run record file")
     ci_full_parser = subparsers.add_parser("ci-full")
     ci_full_parser.add_argument("--run-id", required=True)
     ci_full_parser.add_argument("--attempt", required=True)
@@ -574,10 +598,15 @@ def main(argv: list[str] | None = None) -> int:
             selection = {s: True for s in SUITES} | {"full": True}
 
         evidence = None
-        if args.event == "push" and args.statuses:
+        if args.statuses and (args.event == "push" or (args.event == "pull_request" and args.old_head)):
             try:
                 with open(args.statuses, encoding="utf-8") as handle:
-                    evidence = landing_evidence(json.load(handle), args.tree, args.land_creator_id)
+                    statuses = json.load(handle)
+                if args.event == "push":
+                    evidence = landing_evidence(statuses, args.tree, args.land_creator_id)
+                else:
+                    run = json.loads(Path(args.old_run).read_text(encoding="utf-8")) if args.old_run else {}
+                    evidence = reword_evidence(statuses, run, args.old_head, args.new_head, args.old_tree, args.tree)
             except (OSError, ValueError):
                 evidence = None  # an unreadable record is no evidence: the full suite runs
         if evidence:
