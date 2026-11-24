@@ -1,7 +1,7 @@
 //! A fix round for a native writer owned by another host. The origin routes the prompt through
 //! the spawner (`route`); the owning host starts the resume of the saved session detached
 //! (`local_cli`) so the route returns a receipt while the round runs.
-use pg_worker_core::run::{record::run_dir, record_io::atomic_write_private};
+use pg_worker_core::run::record::run_dir;
 use serde_json::{json, Value};
 use std::{
     io::{Read, Write},
@@ -10,7 +10,6 @@ use std::{
 };
 
 const MAX_PROMPT: u64 = 1024 * 1024;
-const PROMPT_FILE: &str = "resume-prompt.md";
 
 fn refusal(id: &str, error: &str) -> Value {
     json!({"run_id":id,"ok":false,"resumed":false,"error":error})
@@ -55,30 +54,93 @@ pub(crate) fn route(
     }
 }
 
-fn start(state: &Path, id: &str, prompt: &str) -> Result<Value, &'static str> {
+/// How long the owning host waits for the detached resume to reopen the run before it refuses.
+const REOPEN_WAIT: Duration = Duration::from_secs(60);
+
+/// Reserve the next resume round of the run, start it detached and acknowledge only once the
+/// resume has reopened the run (it holds the supervisor lock and has bumped `resume_number`).
+/// The prompt file belongs to that round alone.
+fn start(state: &Path, id: &str, prompt: &str) -> Result<Value, String> {
     let directory = run_dir(state, id).map_err(|_| "unknown run id")?;
-    let record = crate::records::read_record_file(&directory.join("record.json"))
-        .map_err(|_| "unknown run id")?;
+    let record_path = directory.join("record.json");
+    let read =
+        || crate::records::read_record_file(&record_path).map_err(|_| "unknown run id".to_owned());
+    let record = read()?;
     if record["run_id"] != id
         || record["run_kind"] != "native-codex"
         || record["overflow_remote"] == true
         || record["origin_receipt"] == true
     {
-        return Err("resume requires a native writer on its owning host");
+        return Err("resume requires a native writer on its owning host".into());
     }
     if !matches!(record["status"].as_str(), Some("completed" | "failed"))
         || !record["ended"].is_number()
         || record["session_id"].as_str().is_none_or(str::is_empty)
     {
-        return Err("native writer has no safely ended run to resume");
+        return Err("native writer has no safely ended run to resume".into());
     }
     if prompt.trim().is_empty() {
-        return Err("resume prompt must contain between 1 byte and 1 MiB of text");
+        return Err("resume prompt must contain between 1 byte and 1 MiB of text".into());
     }
-    let file = directory.join(PROMPT_FILE);
-    atomic_write_private(&file, prompt.as_bytes()).map_err(|_| "resume prompt not stored")?;
-    spawn_detached(state, id, &directory, &file)?;
-    Ok(json!({"run_id":id,"host":record["host"],"ok":true,"resumed":true,"queued":true}))
+    let round = record["resume_number"].as_u64().unwrap_or(0) + 1;
+    let file = directory.join(format!("resume-prompt-{round}.md"));
+    store_prompt(&file, prompt).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => format!("resume round {round} is already reserved"),
+        _ => "resume prompt not stored".to_owned(),
+    })?;
+    let started = spawn_detached(state, id, &directory, &file, round).and_then(|mut child| {
+        let deadline = std::time::Instant::now() + REOPEN_WAIT;
+        loop {
+            let reopened = read().is_ok_and(|r| r["resume_number"].as_u64() >= Some(round));
+            if reopened {
+                return Ok(());
+            }
+            if child
+                .try_wait()
+                .map_err(|_| "resume child unreadable")?
+                .is_some()
+            {
+                return Err(failure(&directory, round));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("resume did not reopen the run in time".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    if let Err(reason) = started {
+        let _ = std::fs::remove_file(&file);
+        return Err(reason);
+    }
+    Ok(
+        json!({"run_id":id,"host":record["host"],"ok":true,"resumed":true,"queued":true,
+              "resume_number":round}),
+    )
+}
+
+/// The last line the failed resume child logged.
+fn failure(directory: &Path, round: u64) -> String {
+    std::fs::read_to_string(directory.join(format!("resume-{round}.log")))
+        .ok()
+        .and_then(|log| log.lines().last().map(str::to_owned))
+        .filter(|line| !line.is_empty())
+        .unwrap_or_else(|| "resume could not reopen the run".into())
+}
+
+#[cfg(unix)]
+fn store_prompt(file: &Path, prompt: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(file)?;
+    out.write_all(prompt.as_bytes())
+}
+
+#[cfg(not(unix))]
+fn store_prompt(file: &Path, prompt: &str) -> std::io::Result<()> {
+    std::fs::write(file, prompt)
 }
 
 #[cfg(unix)]
@@ -87,13 +149,14 @@ fn spawn_detached(
     id: &str,
     directory: &Path,
     prompt: &Path,
-) -> Result<(), &'static str> {
+    round: u64,
+) -> Result<std::process::Child, String> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(directory.join("resume.log"))
+        .open(directory.join(format!("resume-{round}.log")))
         .map_err(|_| "resume log not writable")?;
     let exe = std::env::current_exe().map_err(|_| "own executable unknown")?;
     Command::new(exe)
@@ -106,13 +169,18 @@ fn spawn_detached(
         .stderr(log)
         .process_group(0)
         .spawn()
-        .map(drop)
-        .map_err(|_| "resume could not start")
+        .map_err(|_| "resume could not start".into())
 }
 
 #[cfg(not(unix))]
-fn spawn_detached(_: &Path, _: &str, _: &Path, _: &Path) -> Result<(), &'static str> {
-    Err("native writer resume requires the POSIX transport")
+fn spawn_detached(
+    _: &Path,
+    _: &str,
+    _: &Path,
+    _: &Path,
+    _: u64,
+) -> Result<std::process::Child, String> {
+    Err("native writer resume requires the POSIX transport".into())
 }
 
 /// `pg-spawnd resume-local RUN_ID [--state PATH]`: the prompt is read from standard input.
@@ -131,14 +199,14 @@ pub(crate) fn local_cli(
     let reply = input
         .take(MAX_PROMPT + 1)
         .read_to_string(&mut prompt)
-        .map_err(|_| "resume prompt is unreadable")
+        .map_err(|_| "resume prompt is unreadable".to_owned())
         .and_then(|_| {
             if prompt.len() as u64 > MAX_PROMPT {
-                Err("resume prompt must contain between 1 byte and 1 MiB of text")
+                Err("resume prompt must contain between 1 byte and 1 MiB of text".to_owned())
             } else {
                 start(&state, id, &prompt)
             }
         })
-        .unwrap_or_else(|reason| refusal(id, reason));
+        .unwrap_or_else(|reason| refusal(id, &reason));
     writeln!(output, "{reply}").map_err(|e| e.to_string())
 }

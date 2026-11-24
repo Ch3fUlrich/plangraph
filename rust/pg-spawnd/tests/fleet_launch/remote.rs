@@ -297,7 +297,18 @@ fn check_destination(launcher: &Launcher) {
             .split_once("'''")
             .unwrap()
             .0;
-        assert_eq!(receiver, required);
+        if matches!(launcher, Launcher::Rust(_)) {
+            // The Rust receiver adds target-side respawn handling; its import header and the
+            // state directory line stay those of the installed fleet launcher.
+            let head = |text: &str| text.lines().take(3).collect::<Vec<_>>().join("\n");
+            let (ours, theirs) = (head(&receiver), head(required));
+            assert_eq!(
+                ours.split_once("root=").map(|p| p.0),
+                theirs.split_once("root=").map(|p| p.0)
+            );
+        } else {
+            assert_eq!(receiver, required);
+        }
     }
     let install = super::sandbox::receiver_router(&receiver).unwrap();
     assert!(Path::new(&install)
@@ -355,6 +366,10 @@ fn check_destination(launcher: &Launcher) {
         .as_array_mut()
         .unwrap()
         .push(json!("--respawn"));
+    // The target keeps no record of this role yet and the origin sent none: refused.
+    let launch_dir = s.path("target/.local/state/routing/launch");
+    fs::remove_file(launch_dir.join("writer.json")).unwrap();
+    fs::remove_dir_all(launch_dir.join("sessions")).unwrap();
     let output = deliver(&s, encoded, &payload);
     s.expect(
         &output,
@@ -362,6 +377,80 @@ fn check_destination(launcher: &Launcher) {
         "",
         "fleet-launch: refused host fixture-remote: missing launch spec; no launch\n",
     );
+    if matches!(launcher, Launcher::Rust(_)) {
+        check_target_only_respawn(&s, encoded, &payload);
+    }
+}
+
+/// The saved session exists only on the target: the forwarded dry run and the live respawn both
+/// run the target's launcher with the forwarded prompt and read the target's own record.
+fn check_target_only_respawn(s: &Sandbox, encoded: &str, payload: &Value) {
+    let launch_dir = s.path("target/.local/state/routing/launch");
+    fs::create_dir_all(launch_dir.join("sessions")).unwrap();
+    fs::write(
+        launch_dir.join("sessions/writer-0776.json"),
+        json!({"name":"writer","session_name":"writer-0776","session_id":SID,"seq":776,
+               "cwd":s.path("work"),"children":[],"host":REMOTE})
+        .to_string(),
+    )
+    .unwrap();
+    let mut payload = payload.clone();
+    payload["spec"] = json!({});
+    payload["seq"] = Value::Null;
+    payload["argv"][0] = json!("writer-0776");
+    payload["argv"][4] = json!("/origin-only/prompt");
+    let mut dry = payload.clone();
+    dry["argv"].as_array_mut().unwrap().push(json!("--dry-run"));
+    let output = deliver(s, encoded, &dry);
+    let stdout = s.normalize(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        s.normalize(&output.stderr)
+    );
+    assert!(
+        stdout.contains(&format!("--bg --resume {SID} ")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("-n writer-0776 "), "{stdout}");
+    // A dry run leaves no prompt or record on the target.
+    assert!(!launch_dir.join("writer-0776.remote-prompt.md").exists());
+    assert!(!launch_dir.join("writer.json").exists());
+
+    let mut live = payload.clone();
+    live["argv"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("--respawn"));
+    live["argv"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("--session"), json!("writer-0776")]);
+    let output = deliver(s, encoded, &live);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        s.normalize(&output.stderr)
+    );
+    let stdout = s.normalize(&output.stdout);
+    let (_, record) = stdout.split_once("FLEET_REMOTE_SPEC=").expect(&stdout);
+    let record: Value = serde_json::from_str(record).unwrap();
+    assert_eq!(record["session_name"], "writer-0776");
+    assert_eq!(record["session_id"], SID);
+    let child = s.json("child.json");
+    let argv: Vec<&str> = child["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let at = argv
+        .iter()
+        .position(|a| *a == "--resume")
+        .expect("--resume");
+    assert_eq!(argv[at + 1], SID);
 }
 
 fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {

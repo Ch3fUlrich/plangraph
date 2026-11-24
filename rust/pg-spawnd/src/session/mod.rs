@@ -135,7 +135,6 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
     let host_policy = std::env::var_os("FLEET_HOST_POLICY").map_or(policy_path, PathBuf::from);
     let host_policy = policy::load(&host_policy);
     let placement = Placement::new(&request, host_policy.as_ref());
-    request.resume = request.resume_target(placement.is_worker_role(&request.args.role));
     let host = match placement.choose(&request, forwarded) {
         Ok(host) => host,
         Err(error) => {
@@ -145,6 +144,10 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
     };
     if !placement.local(&host) {
         return remote::launch(&request, paths, &host, out);
+    }
+    match request.resume_target(placement.is_worker_role(&request.args.role)) {
+        Ok(resume) => request.resume = resume,
+        Err(reason) => request.resume_refusal = Some(reason),
     }
     let admission = Admission::check(
         &request,
@@ -188,6 +191,11 @@ fn local(
             eprintln!("fleet-launch: admission refused{admission_suffix}");
         }
         log("refused", None);
+        return Ok(2);
+    }
+    if let Some(reason) = &request.resume_refusal {
+        log("refused", None);
+        eprintln!("fleet-launch: respawn refused: {reason}");
         return Ok(2);
     }
     if !Path::new(&args.cwd).is_dir() {

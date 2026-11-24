@@ -366,7 +366,8 @@ async def check():
     # session detached, and its commit lands on the same checkout.
     routed = subprocess.run([os.environ['NATIVE_BINARY'], 'resume-local', run['run_id'],
         '--state', str(root/'state')], input='brief marker external fix routed', capture_output=True, text=True)
-    assert json.loads(routed.stdout)['resumed'] is True, (routed.stdout, routed.stderr)
+    routed_receipt = json.loads(routed.stdout)
+    assert routed_receipt['resumed'] is True and routed_receipt['resume_number'] == 2, (routed.stdout, routed.stderr)
     for _ in range(600):
         again = service.result(run['run_id'])
         if again.get('resume_number') == 2 and again['status'] in ('completed', 'failed'):

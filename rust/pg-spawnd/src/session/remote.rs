@@ -26,30 +26,44 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(180);
 const RECEIVER_HEADER: &str = "import json,os,pathlib,subprocess,sys\np=json.load(sys.stdin)\n";
 const RECEIVER_BODY: &str = r#"state=pathlib.Path.home()/".local/state/routing/launch"
 a=p["argv"]
-if "--dry-run" in a:
- sys.exit(subprocess.call([str(root/"bin/fleet-launch")]+a,env=dict(os.environ,FLEET_LOCAL_HOST=p["host"],FLEET_FORWARDED="1")))
-if not p["spec"] and "--respawn" in a:
+env=dict(os.environ,FLEET_LOCAL_HOST=p["host"],FLEET_FORWARDED="1")
+role=a[0].rsplit("-",1)
+role=role[0] if len(role)==2 and role[1].isdigit() and len(role[1])>=4 else a[0]
+saved=state/"sessions"/((a[a.index("--session")+1] if "--session" in a else a[0])+".json")
+if "--respawn" in a and not p["spec"] and not saved.exists() and not (state/(role+".json")).exists():
  print("fleet-launch: refused host "+p["host"]+": missing launch spec; no launch",file=sys.stderr)
  sys.exit(2)
-env=dict(os.environ,FLEET_LOCAL_HOST=p["host"],FLEET_FORWARDED="1")
 if p.get("seq"):
  env["FLEET_SESSION_SEQ"]=str(p["seq"])
-state.mkdir(parents=True,exist_ok=True)
-prompt=state/(a[0]+".remote-prompt.md")
+dry="--dry-run" in a
+if dry:
+ import tempfile
+ work=pathlib.Path(tempfile.mkdtemp())
+else:
+ work=state
+ state.mkdir(parents=True,exist_ok=True)
+prompt=work/(a[0]+".remote-prompt.md")
 prompt.write_text(p["prompt"])
-mcp=state/(a[0]+".remote-mcp.json")
+mcp=work/(a[0]+".remote-mcp.json")
 mcp.write_text(p["mcp"])
 a[4]=str(prompt)
-if p["spec"]:
- (state/(a[0]+".json")).write_text(json.dumps(p["spec"]))
- if "--session" in a:
-  sessions=state/"sessions"
-  sessions.mkdir(exist_ok=True)
-  (sessions/(a[a.index("--session")+1]+".json")).write_text(json.dumps(p["spec"]))
 a += ["--mcp",str(mcp)]
+if dry:
+ rc=subprocess.call([str(root/"bin/fleet-launch")]+a,env=env)
+ import shutil
+ shutil.rmtree(work,ignore_errors=True)
+ sys.exit(rc)
+if p["spec"]:
+ targets=[state/(role+".json")]
+ if "--session" in a:
+  (state/"sessions").mkdir(exist_ok=True)
+  targets.append(state/"sessions"/(a[a.index("--session")+1]+".json"))
+ for target in targets:
+  if not target.exists():
+   target.write_text(json.dumps(p["spec"]))
 rc=subprocess.call([str(root/"bin/fleet-launch")]+a,env=env)
 if rc == 0:
- print("FLEET_REMOTE_SPEC="+(state/(a[0]+".json")).read_text().replace(chr(10), ""))
+ print("FLEET_REMOTE_SPEC="+(state/(role+".json")).read_text().replace(chr(10), ""))
 sys.exit(rc)
 "#;
 

@@ -451,8 +451,14 @@ def native_result(record, *, verb='result', message=None):
         if (remote.get('run_id') != run_id or remote.get('host') != record.get('host') or remote.get('run_kind') != record.get('run_kind')
                 or remote.get('role') != record.get('role')):
             raise ValueError('receipt mismatch')
-        return native_receipt(dict(remote, host=record['host'], overflow_remote=True,
-                    overflow_reason=record.get('overflow_reason'), placement=record.get('placement')))
+        refreshed = dict(remote, host=record['host'], overflow_remote=True,
+                         overflow_reason=record.get('overflow_reason'), placement=record.get('placement'))
+        wanted = record.get('resume_requested')
+        if wanted and (remote.get('resume_number') or 0) < wanted:
+            # The target still shows the previous round: keep the origin receipt running until the
+            # target reports the round that was requested, never the earlier terminal HEAD.
+            refreshed = dict(record, resume_requested=wanted)
+        return native_receipt(refreshed)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         if verb in STDIN_VERBS:
             return dict(run_id=record['run_id'], ok=False, **{_RECEIPT_FLAG[verb]: False},
@@ -502,7 +508,17 @@ def _route_native(service, run_id, message, host, verb):
         if len(hosts) != 1:
             return refused(f'{verb} host is ambiguous' if hosts else 'unknown run id')
         host = hosts.pop()
-    return native_result(dict(run_id=run_id, host=host), verb=verb, message=message)
+    receipt = native_result(dict(run_id=run_id, host=host), verb=verb, message=message)
+    if verb == 'resume' and receipt.get('resumed') and record and record.get('overflow_remote'):
+        _track_resume(service, record, receipt)
+    return receipt
+
+
+def _track_resume(service, record, receipt):
+    """The origin receipt follows the requested fix round: running until the target reports it."""
+    number = receipt.get('resume_number')
+    if type(number) is int and number > 0:
+        service._save(dict(record, status='running', ended=None, resume_requested=number))
 
 
 def collect_local(state):

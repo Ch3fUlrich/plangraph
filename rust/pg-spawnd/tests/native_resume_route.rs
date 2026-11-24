@@ -2,7 +2,7 @@
 //! owning host stores the prompt and starts the resume detached.
 #![cfg(unix)]
 use serde_json::{json, Value};
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, time::Duration};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 const RUN: &str = "run-fixture1";
 
@@ -100,7 +100,7 @@ fn resume_local(state: &Path, id: &str, prompt: &str) -> Value {
 }
 
 #[test]
-fn owning_host_stores_the_prompt_and_starts_the_resume_detached() {
+fn owning_host_acknowledges_only_a_resume_that_reopened_the_run() {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
     record(
@@ -108,29 +108,27 @@ fn owning_host_stores_the_prompt_and_starts_the_resume_detached() {
         json!({"run_id":RUN,"run_kind":"native-codex","status":"completed","ended":1.0,
                "session_id":"fixture-session","host":"fixture-host"}),
     );
+    // The fixture has no saved request, so the detached resume cannot reopen the run: the
+    // round is refused with the child's own reason and its prompt is not left behind.
     let receipt = resume_local(&state, RUN, "fix round prompt");
     assert_eq!(
         receipt,
-        json!({"run_id":RUN,"host":"fixture-host","ok":true,"resumed":true,"queued":true})
+        json!({"run_id":RUN,"ok":false,"resumed":false,"error":"unknown run id"})
     );
-    let file = state.join("runs").join(RUN).join("resume-prompt.md");
-    assert_eq!(fs::read_to_string(&file).unwrap(), "fix round prompt");
+    let directory = state.join("runs").join(RUN);
+    assert!(!directory.join("resume-prompt-1.md").exists());
     assert_eq!(
-        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
-        0o600
+        fs::read_to_string(directory.join("resume-1.log")).unwrap(),
+        "unknown run id\n"
     );
-    // The detached `resume` child started: it reports on its own log that it cannot reopen the
-    // run (the fixture has no saved request).
-    let log = state.join("runs").join(RUN).join("resume.log");
-    let mut text = String::new();
-    for _ in 0..100 {
-        text = fs::read_to_string(&log).unwrap_or_default();
-        if !text.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    assert_eq!(text, "unknown run id\n");
+    // A prompt already reserved for the round is never overwritten.
+    fs::write(directory.join("resume-prompt-1.md"), "first").unwrap();
+    let receipt = resume_local(&state, RUN, "second");
+    assert_eq!(receipt["error"], "resume round 1 is already reserved");
+    assert_eq!(
+        fs::read_to_string(directory.join("resume-prompt-1.md")).unwrap(),
+        "first"
+    );
 }
 
 #[test]
@@ -208,6 +206,71 @@ with patch('plangraph.spawner.overflow.registry_caps', return_value={}), \
     with patch('sys.stdin', io.StringIO('  ')), contextlib.redirect_stdout(stdout):
         cli.main(['--state', state, 'resume', run_id, '--host', 'posix'])
     assert json.loads(stdout.getvalue())['resumed'] is False and len(seen) == 1
+"#,
+        )
+        .arg(state.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// After a routed fix round the origin receipt stays running until the target reports that round:
+/// `result` never returns the earlier terminal head.
+#[test]
+fn origin_receipt_follows_the_requested_resume_round() {
+    let state = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let output = test_python::command()
+        .env("PYTHONPATH", source)
+        .arg("-c")
+        .arg(
+            r#"
+import asyncio, contextlib, io, json, pathlib, re, sys
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.spawner import cli, remote_ps
+from plangraph.spawner.service import SpawnService
+
+state = pathlib.Path(sys.argv[1])
+run_id = 'run-fixture1'
+base = dict(run_id=run_id, run_kind='native-codex', role='implement', host='posix')
+origin = dict(base, status='completed', ended=10.0, started=1.0, overflow_remote=True,
+              origin_receipt=True, final_head='old-head', resume_number=0)
+(state / 'runs' / run_id).mkdir(parents=True)
+(state / 'runs' / run_id / 'record.json').write_text(json.dumps(origin))
+host = dict(repo=str(state), ssh='fixture', spawner_src=str(state), state_dir=str(state))
+routes = {'hosts': {'posix': host}}
+target = [dict(base, status='completed', ended=10.0, final_head='old-head', resume_number=0)]
+def ssh(argv, *, input=None, **kwargs):
+    begin, end = re.findall(r'PLANGRAPH_RECEIPT_[a-f0-9]+_(?:BEGIN|END)', argv[-1])
+    if 'resume-local' in argv[-1]:
+        body = dict(run_id=run_id, ok=True, resumed=True, queued=True, resume_number=1)
+        return SimpleNamespace(stdout=f'{begin}\n{json.dumps(body)}\n{end}\n'.encode())
+    # `result` reads the target's text output.
+    return SimpleNamespace(stdout=f'{begin}\n{json.dumps(target[0])}\n{end}\n')
+service = SpawnService(state=state)
+with patch('plangraph.spawner.overflow.registry_caps', return_value={}), \
+     patch('plangraph.spawner.overflow.placement_config', return_value=routes), \
+     patch.object(remote_ps.subprocess, 'run', side_effect=ssh):
+    out = io.StringIO()
+    with patch('sys.stdin', io.StringIO('fix round')), contextlib.redirect_stdout(out):
+        assert cli.main(['--state', str(state), 'resume', run_id, '--host', 'posix']) == 0
+    assert json.loads(out.getvalue())['resume_number'] == 1
+    saved = service.result(run_id)
+    assert saved['status'] == 'running' and saved['resume_requested'] == 1, saved
+    # The target still shows the previous round: the origin keeps the round running.
+    seen = asyncio.run(service.refresh_result(run_id))
+    assert seen['status'] == 'running' and seen['final_head'] == 'old-head', seen
+    assert 'remote_query_error' not in seen, seen
+    # The target reports the requested round: its outcome replaces the receipt.
+    target[0] = dict(base, status='completed', ended=20.0, final_head='new-head', resume_number=1)
+    done = asyncio.run(service.refresh_result(run_id))
+    assert done['status'] == 'completed' and done['final_head'] == 'new-head', done
+    assert 'resume_requested' not in service.result(run_id)
 "#,
         )
         .arg(state.path())

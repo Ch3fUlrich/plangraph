@@ -41,7 +41,7 @@ pub fn check(launcher: &Launcher) {
     assert!(stdout.contains(&format!("--resume {SID}")), "{stdout}");
     assert!(stdout.contains("-n writer-0776 "), "{stdout}");
 
-    // A non-worker role starts a fresh session; so does a worker without a saved id.
+    // A non-worker role starts a fresh session.
     let s = Sandbox::new(launcher);
     s.write_json(
         "state/launch/sessions/review-0001.json",
@@ -50,15 +50,30 @@ pub fn check(launcher: &Launcher) {
     let (code, stdout, stderr) = dry_line(&s, "review-0001", &[]);
     assert_eq!(code, 0, "{stderr}");
     assert!(!stdout.contains("--resume"), "{stdout}");
-    let (_, stdout, _) = dry_line(&s, "writer-0777", &[]);
-    assert!(!stdout.contains("--resume"), "{stdout}");
 
-    // A saved id that could be read as an option is never passed on.
+    // A numbered worker whose transcript cannot be resumed is refused with the reason, never
+    // started as a fresh session under the old name.
     let s = Sandbox::new(launcher);
-    s.write_json(
-        "state/launch/sessions/writer-0778.json",
-        json!({"name":"writer","session_id":"--dangerous","cwd":s.path("work"),"children":[]}),
+    let (code, stdout, stderr) = dry_line(&s, "writer-0777", &[]);
+    assert_eq!((code, stdout.as_str()), (2, ""), "{stderr}");
+    assert_eq!(
+        stderr,
+        "fleet-launch: respawn refused: writer-0777 has no saved session_id to resume\n"
     );
-    let (_, stdout, _) = dry_line(&s, "writer-0778", &[]);
-    assert!(!stdout.contains("--dangerous"), "{stdout}");
+    for (id, reason) in [
+        (json!("--dangerous"), "is not a plain token"),
+        (json!(""), "has no saved session_id"),
+        (json!(7), "has no saved session_id"),
+    ] {
+        s.write_json(
+            "state/launch/sessions/writer-0778.json",
+            json!({"name":"writer","session_id":id,"cwd":s.path("work"),"children":[]}),
+        );
+        let (code, stdout, stderr) = dry_line(&s, "writer-0778", &[]);
+        assert_eq!((code, stdout.as_str()), (2, ""), "{stderr}");
+        assert!(
+            stderr.contains("respawn refused") && stderr.contains(reason),
+            "{stderr}"
+        );
+    }
 }

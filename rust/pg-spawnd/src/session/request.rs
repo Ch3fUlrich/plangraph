@@ -22,6 +22,7 @@ pub(super) struct Request {
     pub override_cap: Option<Value>,
     pub restart: Option<Restart>,
     pub resume: Option<Resume>,
+    pub resume_refusal: Option<String>,
 }
 
 impl Request {
@@ -60,27 +61,35 @@ impl Request {
             override_cap,
             restart: None,
             resume: None,
+            resume_refusal: None,
         })
     }
 
     /// A respawn of a numbered worker session continues the saved transcript under the same
-    /// name; any other respawn starts a fresh session from its handoff.
-    pub fn resume_target(&self, worker: bool) -> Option<Resume> {
+    /// name; a respawn that cannot is refused with the reason. Any other respawn starts a fresh
+    /// session from its handoff.
+    pub fn resume_target(&self, worker: bool) -> Result<Option<Resume>, String> {
         let args = &self.args;
         let source = args.option("session").unwrap_or(&args.name);
-        let id = self.spec["session_id"].as_str()?;
+        if !(args.respawn && worker && source != args.role) {
+            return Ok(None);
+        }
+        if role_of(source) != args.role || !basename(source) {
+            return Err(format!("{source} is not a {} session name", args.role));
+        }
+        let id = match self.spec["session_id"].as_str() {
+            Some(id) if !id.is_empty() => id,
+            _ => return Err(format!("{source} has no saved session_id to resume")),
+        };
         let plain = |c: char| c.is_ascii_alphanumeric() || c == '-';
-        (args.respawn
-            && worker
-            && source != args.role
-            && role_of(source) == args.role
-            && basename(source)
-            && !id.starts_with('-')
-            && !id.is_empty()
-            && id.chars().all(plain))
-        .then(|| Resume {
+        if id.starts_with('-') || !id.chars().all(plain) {
+            return Err(format!(
+                "the saved session_id of {source} is not a plain token"
+            ));
+        }
+        Ok(Some(Resume {
             name: source.to_owned(),
             session_id: id.to_owned(),
-        })
+        }))
     }
 }
