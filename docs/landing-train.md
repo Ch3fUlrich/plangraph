@@ -74,16 +74,21 @@ a blocker item for each refused target. `merge_batch.py go-req` runs it over the
 blocks into the GO-REQ line (`deploy: unchecked` when there is no hosts registry); it files the blocker items
 with `pg define --file` when the keeper is configured.
 
-`plangraph land-train go-evidence --repo DIR --pr N --manifest FILE --receipt FILE --rows FILE --out FILE`
-writes that evidence file; nobody writes it by hand. It reads the pull request twice (before and after every
-other read) and refuses a head that moved between them (`moved_head`) or a main tip that differs from the
-state it judged (`stale_base`). From GitHub it reads the pull request ref and merge base, the changed paths
-and tree of the train head, the newest `tests.yml` `pull_request` run of that head with the jobs of its
-judged attempt, the newest attempt number after the jobs were read, and the workflow file at the head
-(hashed for the pin). A run counts only when it belongs to the requested pull request, and the judged attempt needs a successful `ci-full` receipt of the CI publisher for the tree of the train. A rename names both paths. `--rows` is the decisions log: a `GO #PR GO-HEAD sha` row (or `GO owner/name PR #N
-GO-HEAD sha`) of this repository is an approval, and `GATE-EDIT <prefix> GO-HEAD sha` is a grant for one
-head. `--receipt` is what `land-train admit --receipt-out FILE` wrote after the verified replay and the
-accepted delta review. The manifest identity is the SHA-256 of the manifest file.
+`plangraph land-train go-evidence --repo DIR --pr N --manifest FILE --parts FILE --open FILE --freeze FILE
+--result FILE --item KEY --review-run ID --out FILE` writes that evidence file; nobody writes it by hand. It
+re-runs the `admit` proof (artifacts, freeze, replay of the manifest and of the result, and the accepted
+review of the train delta), so the replay and the delta acceptance rest on that proof and not on a file. It
+reads the pull request twice (before and after every other read) and refuses a head that moved between them
+(`moved_head`) or a main tip that differs from the state it judged (`stale_base`). From GitHub it reads the
+pull request ref and merge base, the changed paths (both ends of a rename) and tree of the train head, the
+newest `tests.yml` `pull_request` run of that head with the jobs of its judged attempt, the newest attempt
+number after the jobs were read, and the workflow file at the head (hashed for the pin). A run counts only
+when it belongs to the requested pull request, and the judged attempt needs a successful `ci-full` receipt of
+the CI publisher for the tree of the train. The decisions come from the document named by `decisions_file` in
+the keeper configuration, as committed on `origin/main` (fetched, never the local file): a row is a GO by the
+Keeper's grammar (a timestamp prefix, one numbered GO ruling of a `RULINGS` row, backticked numbers and
+heads, `GO #PR` or `GO project PR #PR`, one full `GO-HEAD`), and `GATE-EDIT <prefix> GO-HEAD sha` written by
+the operator is a grant for one head. The manifest identity is the SHA-256 of the manifest file.
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this
