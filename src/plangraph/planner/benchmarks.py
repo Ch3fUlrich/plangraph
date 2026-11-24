@@ -1,7 +1,11 @@
 """Benchmark rows for :func:`plangraph.planner.routing.plan_spawn` (split from routing.py)."""
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from plangraph.routing_errors import SpawnRefused
@@ -86,6 +90,12 @@ def benchmark_rows_from_db(path):
             result = {}
             cells = benchmark_cells(conn)
             if cells is not None:
+                if "coding_index" in {c[1] for c in conn.execute("PRAGMA table_info(catalog_benchmarks)")}:
+                    # the coding index the view does not carry
+                    coding = dict(conn.execute("SELECT model_id, coding_index FROM catalog_benchmarks"))
+                    for model, values in cells.items():
+                        for cell in values:
+                            cell.setdefault("coding_index", coding.get(model))
                 for model, values in cells.items():
                     first = next((row for row in values if row['legacy']), values[0])
                     result[model] = dict(_utility_row(first), benchmark_rows=values,
@@ -117,3 +127,102 @@ def benchmark_rows_from_db(path):
             conn.close()
     except (OSError, ValueError, sqlite3.Error) as exc:
         return {}, [f"{path}: cannot read benchmark database: {exc}"]
+
+
+# --- Rank eligibility rules (plangraph:ROUTE-RANK-RULES) -------------------------------------------
+
+#: A measured row older than this, or measured under another index version, price or served model,
+#: no longer speaks for a high or critical card.
+STALE_DAYS = 45
+#: A new own row needs this many canary cards before it counts for a high or critical card.
+CANARY_CARDS = 5
+HIGH_RISKS = ("high", "critical")
+
+
+def _measured_at(row):
+    stamp = row.get("measured_at")
+    if not stamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def _facts(row):
+    """What the row was measured under: its own keys, else the JSON ``source_record``."""
+    record = row.get("source_record")
+    if isinstance(record, str):
+        try:
+            record = json.loads(record)
+        except ValueError:
+            record = None
+    record = record if isinstance(record, dict) else {}
+    return {name: row.get(name, record.get(name)) for name in ("price", "served_model")}
+
+
+def current_index_version(rows):
+    """The index version of the newest measurement: a row on another version is out of date."""
+    dated = [(_measured_at(row), row.get("index_version")) for row in rows.values()
+             if isinstance(row, dict) and row.get("index_version")]
+    dated = [item for item in dated if item[0] is not None]
+    return max(dated, key=lambda item: item[0])[1] if dated else None
+
+
+def current_facts(leg, catalog_rows, index_version=None):
+    """Price, served model and index version now in force for a leg (catalog row, else unknown)."""
+    catalog_id = leg.model if "/" in leg.model else f"{leg.harness}/{leg.model}"
+    row = next((r for r in catalog_rows if (r.get("id") or r.get("model_id")) in (catalog_id, leg.model)), None) or {}
+    return dict(index_version=index_version, price=row.get("price"),
+                served_model=row.get("served_model", row.get("upstream_id")))
+
+
+def stale_reason(row, current, now=None):
+    """Why a measured row is out of date (age, index_version, price, served_model), or None."""
+    now = time.time() if now is None else now
+    measured = _measured_at(row)
+    if (measured is not None and now - measured > STALE_DAYS * 86400) or (measured is None and row.get("stale")):
+        return "age"
+    if current.get("index_version") and row.get("index_version") and row["index_version"] != current["index_version"]:
+        return "index_version"
+    facts = _facts(row)
+    for name in ("price", "served_model"):
+        if facts[name] is not None and current.get(name) is not None and facts[name] != current[name]:
+            return name
+    return None
+
+
+def effort_passes(leg, row, requested):
+    """Whether the row's ``effort_channel`` can carry the requested effort unchanged.
+
+    ``none`` carries no effort, ``fixed`` only the effort the row was measured at, ``parameter`` any
+    effort the model accepts (an effort the model clamps lower is not carried). An absent or unknown
+    channel proves nothing and does not block. An effort is ineligible, never lowered.
+    """
+    if requested is None:
+        return True
+    channel = row.get("effort_channel")
+    if channel == "none":
+        return False
+    if channel == "fixed":
+        return requested == (row.get("effort") or leg.effort)
+    if channel == "parameter":
+        from plangraph.routing_support.resolver import clamp_effort
+        return clamp_effort(leg.model, requested) == requested
+    return True
+
+
+def rank_ineligible(leg, row, *, risk, effort, current, now=None):
+    """``(reason, evidence)`` when the measured row may not rank the leg for this card, else None."""
+    if not effort_passes(leg, row, effort):
+        reason = ("effort_channel", dict(kind="effort_channel", channel=row.get("effort_channel"), effort=effort))
+    elif risk in HIGH_RISKS and (why := stale_reason(row, current, now)):
+        reason = ("stale_row", dict(kind="stale_row", why=why, measured_at=row.get("measured_at")))
+    elif (risk in HIGH_RISKS and row.get("origin") == "own" and row.get("n_runs") is not None
+          and row["n_runs"] < CANARY_CARDS):
+        reason = ("canary_pending", dict(kind="canary_pending", n_runs=row["n_runs"], needed=CANARY_CARDS))
+    else:
+        return None
+    logging.getLogger(__name__).info("route_rank_ineligible %s %s", leg.id, json.dumps(reason[1], default=str))
+    return reason
