@@ -307,8 +307,8 @@ class ContextMixin:
             return {name: index for job in jobs for name, index in job.result().items()}
 
     @staticmethod
-    def _indexed_delivery(indexes, key, project, book):
-        """Keep bare IDs local and match qualified deliveries across repositories."""
+    def _indexed_trailer_work(indexes, key, project):
+        """Plan-Item trailer commits of the key: bare IDs stay local, qualified ones match across repositories."""
         work = src.indexed_work(indexes[project], key)
         commits = {commit["sha"]: commit for commit in work["commits"] or ()}
         for name, index in indexes.items():
@@ -318,7 +318,12 @@ class ContextMixin:
                 commits.setdefault(commit["sha"], commit)
         if commits:
             work["commits"] = list(commits.values())[:src.COMMIT_LIMIT]
-        elif proof := merged_decision_delivery(indexes, book, key, project):
+        return work
+
+    def _indexed_delivery(self, indexes, key, project, book):
+        """The trailer commits, else a decision-only delivery."""
+        work = self._indexed_trailer_work(indexes, key, project)
+        if not work["commits"] and (proof := merged_decision_delivery(indexes, book, key, project)):
             work["commits"] = [proof]
         return work
 

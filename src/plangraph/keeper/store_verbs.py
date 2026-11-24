@@ -127,12 +127,11 @@ class VerbsMixin:
             raise Refused("forbidden", "a run token is bound to a claim; an open item has none")
         self._require_project(principal, item["project"])
         self._epoch_ok(item, epoch)
-        # The same delivery lookup as the claim guard: qualified trailers of other
-        # scanned repositories and decision-only deliveries count as merged.
+        # The claim guard's trailer lookup (qualified trailers of other scanned repositories
+        # count); a decision-only delivery names no Plan-Item commit, so it does not.
         with timing.outside_request_lock():
             indexes = self._work_indexes({item["project"]}, fresh=True)
-            book = src.decision_book(self._adapter("decisions"))
-        commits = self._indexed_delivery(indexes, key, item["project"], book)["commits"]
+        commits = self._indexed_trailer_work(indexes, key, item["project"])["commits"]
         if not commits:
             raise Refused("bad_state", f"{key} is open, not claimed, and has no"
                           " Plan-Item commit on the default branch")

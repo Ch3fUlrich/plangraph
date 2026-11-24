@@ -171,7 +171,7 @@ Claimant, delegate or writer run token. `{key, epoch, kind, ref}` (`kind`
 `commit` is `403`). `200 {key, kind, verified, detail, ref}` [Evidence]; an
 unverified row is still `200`. `400 bad_state` unless `claimed`, except kind
 `deploy` on an `open` item whose Plan-Item commit is on the default branch (of
-any scanned repository): an l1 or worker scoped to the project may attach it
+any scanned repository; a decision-only delivery does not count): an l1 or worker scoped to the project may attach it
 without a claim; `403` for any other principal; the event carries `merged_open`.
 
 ### `POST /v1/add_evidence_router`
@@ -320,6 +320,6 @@ Router. `{key, kind:"question"|"operator_task"}` for an `open` `lane`; sets
 
 ### `POST /v1/lift_operator_gate`
 Router. `{key, decision_id:"D-<n>"}`: the decision row must be an OPERATOR row
-with `Lifts-Gate: <key>` (naming alone does not count). Clears `operator`; `200 {key, operator:false,
+with a `Lifts-Gate: <key>` field and not superseded (naming alone does not count). Clears `operator`; `200 {key, operator:false,
 waits_on_operator:false, decision_id}` [LiftOperatorGate]. `400 validation|
 evidence_unverified|bad_state`, `403 forbidden`.

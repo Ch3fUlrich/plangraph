@@ -13,7 +13,9 @@ from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_git import GitAdapter
 from plangraph.keeper.events import read_events
 from plangraph.keeper.evidence import VERIFIERS
+from keeper_util import seed
 from test_keeper_deploy_gate_paths import _land_with_unit
+from test_task_context_guard import _commit, _decide, _git, decisions, repo, w  # noqa: F401 - fixtures
 from test_keeper_merge_close_auto import auto, env  # noqa: F401 - env is a fixture
 
 KEY = "demo:A"
@@ -125,3 +127,22 @@ def test_an_item_merged_in_another_scanned_repository_takes_the_evidence(env, tm
         env.store.claim(env.p("l1main"), KEY)
     out = env.store.add_evidence(env.p("l1main"), KEY, _epoch(env), "deploy", PROOF)
     assert out["verified"] is True and len(_events(env)) == 1
+
+
+def test_a_decision_only_delivery_is_no_plan_item_commit_and_takes_no_evidence(w, repo, decisions):  # noqa: F811
+    """The claim refuses a close-decision delivery as stale, but it names no Plan-Item commit here."""
+    key, = seed(w, [("CLOSE-TOKEN", [])])
+    _git(repo, "checkout", "-qb", "part")
+    _commit(repo, "legacy-work", "work before item trailers")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Land legacy work (#56)", "part")
+    merged = _git(repo, "rev-parse", "HEAD")
+    _decide(decisions, 56, f"Router checked merged delivery. Closes: {key}@{merged}")
+    w.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    with pytest.raises(Refused, match="already merged: Close decision D-56"):
+        w.store.claim(w.p("l1main"), key)
+    epoch = w.store._item(key)["epoch"]
+    with pytest.raises(Refused) as exc:
+        w.store.add_evidence(w.p("l1main"), key, epoch, "deploy", PROOF)
+    assert exc.value.code == "bad_state" and "no Plan-Item commit" in exc.value.msg
+    assert [e for e in read_events(w.conn) if e["type"] == "evidence_added"] == []
