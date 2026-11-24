@@ -510,21 +510,11 @@ class SpawnService(SeatSpawnMixin):
                 launched = False
                 for chosen in plan.legs:
                     if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
-                    from .inline_diff import InlineDiffError, inline_diff_prompt
-                    from plangraph.planner.legs import REVIEW_SONNET
+                    from .inline_diff import InlineDiffError, review_sonnet_diff_prompt
                     try:
                         leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run,
                             deadline=watchdog.get('deadline'))   # Dry runs never launch; live document reviews require --leg.
-                        if role == 'review' and chosen.id == REVIEW_SONNET and card.get('diff_ref'):
-                            from .context_pack import bound_prompt
-                            remaining = watchdog.get('deadline', float('inf')) - time.time()
-                            if remaining <= 0:
-                                raise InlineDiffError('review prompt packaging deadline exceeded')
-                            leg_prompt = await asyncio.to_thread(
-                                inline_diff_prompt, leg_prompt, card['diff_ref'],
-                                max_chars=chosen.max_request_tokens * 3, timeout=min(60, remaining),
-                                repository_tools=True)
-                            leg_prompt = bound_prompt(leg_prompt, chosen.max_request_tokens)
+                        leg_prompt = await review_sonnet_diff_prompt(leg_prompt, card, role, chosen, deadline=watchdog.get('deadline'))
                     except InlineDiffError as exc:
                         record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                             skip_reason='inline_diff_failed: ' + str(exc),
