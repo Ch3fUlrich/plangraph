@@ -4,7 +4,7 @@ fn run(state: &Path, id: &str, ended: i64, leg: &str, verdict: bool, log: &str) 
     let dir = state.join("runs").join(id);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("live.log"), log).unwrap();
-    json!({"role":"review", "status":"completed", "ended":ended, "run_id":id,
+    json!({"role":"review", "status":"completed", "started":ended - 1, "ended":ended, "run_id":id,
         "chosen_leg":{"id":leg}, "review_result":if verdict {"verdict"} else {"missing_verdict"}})
 }
 
@@ -84,19 +84,25 @@ fn execute_refuses_overlapping_or_missing_windows() {
     assert!(String::from_utf8(out).unwrap().contains("--before-since"));
 }
 
+fn attempts(rows: &[(&str, &str)]) -> Value {
+    json!(rows
+        .iter()
+        .map(|(leg, status)| json!({"leg":{"id":leg}, "status":status}))
+        .collect::<Vec<_>>())
+}
+
 #[test]
-fn fallthrough_runs_share_one_log_so_their_usage_is_excluded_and_counted() {
+fn shared_log_fallthrough_is_excluded_and_counted_apart_from_missing_usage() {
     let state = tempfile::tempdir().unwrap();
     let s = state.path();
     let mut mixed = run(s, "run-mix", 10, "w", true, &step(100, 100));
-    mixed["attempts"] = json!([
-        {"leg":{"id":"first"}, "status":"limited"},
-        {"leg":{"id":"skip"}, "status":"skipped"},
-        {"leg":{"id":"w"}, "status":"completed"}
+    mixed["attempts"] = attempts(&[
+        ("first", "limited"),
+        ("skip", "skipped"),
+        ("w", "completed"),
     ]);
     let mut single = run(s, "run-one", 11, "w", true, &step(10, 90));
-    single["attempts"] = json!([{"leg":{"id":"skip"}, "status":"skipped"},
-        {"leg":{"id":"w"}, "status":"completed"}]);
+    single["attempts"] = attempts(&[("skip", "skipped"), ("w", "completed")]);
     let after = run(s, "run-after", 30, "w", true, &step(1, 1));
     let report = compare(s, &[mixed, single, after], (0, 20), (20, 40), &[]);
     let before = &report["strata"]["w"]["before"];
@@ -106,4 +112,60 @@ fn fallthrough_runs_share_one_log_so_their_usage_is_excluded_and_counted() {
     assert_eq!(before["usage_runs"], 1);
     assert_eq!(before["input_tokens"], 100);
     assert_eq!(before["cached_input_tokens"], 90);
+}
+
+#[test]
+fn archived_attempt_logs_leave_a_clean_final_leg_log_that_counts() {
+    let state = tempfile::tempdir().unwrap();
+    let s = state.path();
+    let mut retried = run(s, "run-retry", 10, "w", true, &step(10, 90));
+    retried["attempts"] = attempts(&[("first", "limited"), ("w", "completed")]);
+    std::fs::write(s.join("runs/run-retry/live-attempt-1.log"), step(999, 0)).unwrap();
+    let after = run(s, "run-after", 30, "w", true, &step(1, 1));
+    let report = compare(s, &[retried, after], (0, 20), (20, 40), &[]);
+    let before = &report["strata"]["w"]["before"];
+    assert_eq!(before["mixed_leg_excluded"], 0);
+    assert_eq!(before["usage_runs"], 1);
+    assert_eq!(before["input_tokens"], 100);
+    assert_eq!(before["cached_input_tokens"], 90);
+}
+
+#[test]
+fn reviews_group_by_the_last_launched_leg_and_unlaunched_runs_are_reported_apart() {
+    let state = tempfile::tempdir().unwrap();
+    let s = state.path();
+    let mut trailing = run(s, "run-trail", 10, "skipped-leg", true, &step(10, 90));
+    trailing["attempts"] = attempts(&[("w", "completed"), ("skipped-leg", "skipped")]);
+    let mut none = run(s, "run-none", 11, "skipped-leg", false, &step(500, 0));
+    none["attempts"] = attempts(&[("skipped-leg", "skipped"), ("other", "skipped")]);
+    let mut after = run(s, "run-after", 30, "w", true, &step(1, 1));
+    after["attempts"] = attempts(&[("w", "completed")]);
+    let report = compare(s, &[trailing, none, after], (0, 20), (20, 40), &[]);
+    assert_eq!(report["strata"]["w"]["before"]["reviews"], 1);
+    assert_eq!(report["strata"]["w"]["before"]["input_tokens"], 100);
+    assert!(report["strata"]["skipped-leg"].is_null());
+    assert_eq!(report["excluded"]["unlaunched"]["before"], 1);
+}
+
+#[test]
+fn a_review_that_started_before_the_cutoff_is_not_an_after_review() {
+    let state = tempfile::tempdir().unwrap();
+    let s = state.path();
+    let mut crossing = run(s, "run-cross", 25, "w", true, &step(1, 1));
+    crossing["started"] = json!(15); // dispatched in the before window, finished after
+    let mut nostart = run(s, "run-nostart", 26, "w", true, &step(1, 1));
+    nostart.as_object_mut().unwrap().remove("started");
+    let before = run(s, "run-before", 10, "w", true, &step(1, 1));
+    let after = run(s, "run-after", 30, "w", true, &step(1, 1));
+    let report = compare(
+        s,
+        &[crossing, nostart, before, after],
+        (0, 20),
+        (20, 40),
+        &[],
+    );
+    assert_eq!(report["strata"]["w"]["before"]["reviews"], 1);
+    assert_eq!(report["strata"]["w"]["after"]["reviews"], 1);
+    assert_eq!(report["excluded"]["boundary_crossing"]["before"], 1);
+    assert_eq!(report["excluded"]["no_start_time"], 1);
 }

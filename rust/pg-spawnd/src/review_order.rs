@@ -51,11 +51,36 @@ fn live_log(state: &Path, record: &Value) -> Option<String> {
     (text.len() as u64 <= MAX_LOG).then_some(text)
 }
 
-/// Attempts that launched a leg (a skipped attempt never wrote to the log).
-fn launched_attempts(record: &Value) -> usize {
+/// Launched attempts of a record (a skipped attempt never ran), in order.
+fn launched(record: &Value) -> Vec<&Value> {
     record["attempts"]
         .as_array()
-        .map_or(0, |a| a.iter().filter(|x| x["status"] != "skipped").count())
+        .map(|a| a.iter().filter(|x| x["status"] != "skipped").collect())
+        .unwrap_or_default()
+}
+
+/// The leg that produced the review: the last launched attempt, else the chosen leg of a
+/// record with no attempt list. `None` when attempts exist but none launched.
+fn final_leg(record: &Value) -> Option<&str> {
+    match record["attempts"].as_array().filter(|a| !a.is_empty()) {
+        Some(_) => launched(record)
+            .last()
+            .and_then(|a| a["leg"]["id"].as_str()),
+        None => record["chosen_leg"]["id"].as_str(),
+    }
+}
+
+/// An archived `live-attempt-N.log` means the retry path moved earlier legs' output away, so
+/// `live.log` holds the final leg only; otherwise fallback legs share one log.
+fn log_is_final_leg_only(state: &Path, record: &Value) -> bool {
+    launched(record).len() <= 1
+        || directory(state, record)
+            .and_then(|d| std::fs::read_dir(d).map_err(Into::into))
+            .is_ok_and(|mut entries| {
+                entries.any(|e| {
+                    e.is_ok_and(|e| e.file_name().to_string_lossy().starts_with("live-attempt-"))
+                })
+            })
 }
 
 #[derive(Default)]
@@ -104,22 +129,44 @@ pub(crate) fn compare(
     legs: &[String],
 ) -> Value {
     let mut tallies: BTreeMap<&str, [Tally; 2]> = BTreeMap::new();
+    let windows = [before, after];
+    let cohort_of = |t: f64| {
+        windows
+            .iter()
+            .position(|&(since, until)| t >= since as f64 && t < until as f64)
+    };
+    let (mut unlaunched, mut crossing, mut no_start) = ([0u64; 2], [0u64; 2], 0u64);
     for record in records {
-        let Some((leg, (ended, _, class))) = sample(state, record) else {
+        let Some((_, (ended, _, class))) = sample(state, record) else {
             continue;
         };
-        if !legs.is_empty() && !legs.iter().any(|l| l == leg) {
+        // The cohort is the window of the dispatch time: the prompt was built then.
+        let Some(started) = record["started"].as_f64() else {
+            if cohort_of(ended).is_some() {
+                no_start += 1;
+            }
+            continue;
+        };
+        let Some(cohort) = cohort_of(started) else {
+            continue;
+        };
+        let leg = final_leg(record);
+        if leg.is_some_and(|l| !legs.is_empty() && !legs.iter().any(|x| x == l)) {
             continue;
         }
-        let window = [before, after]
-            .iter()
-            .position(|&(since, until)| ended >= since as f64 && ended < until as f64);
-        let Some(window) = window else { continue };
-        let tally = &mut tallies.entry(leg).or_default()[window];
+        let Some(leg) = leg else {
+            unlaunched[cohort] += 1;
+            continue;
+        };
+        if cohort_of(ended) != Some(cohort) {
+            crossing[cohort] += 1;
+            continue;
+        }
+        let tally = &mut tallies.entry(leg).or_default()[cohort];
         tally.reviews += 1;
         tally.no_verdict += u64::from(class != "verdict");
-        if launched_attempts(record) > 1 {
-            tally.mixed += 1; // fallthrough legs share one live.log: usage is not per leg
+        if !log_is_final_leg_only(state, record) {
+            tally.mixed += 1; // fallback legs share one live.log: usage is not per leg
         } else if let Some((input, cached)) = live_log(state, record).as_deref().and_then(usage) {
             tally.usage_runs += 1;
             tally.input += input;
@@ -143,11 +190,14 @@ pub(crate) fn compare(
     }
     json!({"query":"pg-spawnd health review-order: terminal review runs (role review, status \
         completed|succeeded|terminated_after_answer|failed|timeout|timed_out|stalled|limited|killed) \
-        by ended in [since, until), grouped by last attempt leg; no_verdict = review result other \
+        by dispatch time (started) in [since, until) with the end in the same window, grouped by the last launched attempt leg; no_verdict = review result other \
         than verdict; cached share = cached / total input tokens summed over live.log usage \
-        frames; runs with more than one launched attempt share one live.log and are excluded from usage \
+        frames; runs with more than one launched attempt and no archived live-attempt log share one live.log and are excluded from usage \
         (mixed_leg_excluded, also in missing_usage); runs without usage frames count as missing_usage and stay out of the token share",
         "strata":strata, "unmatched":unmatched,
+        "excluded":{"unlaunched":{"before":unlaunched[0], "after":unlaunched[1]},
+            "boundary_crossing":{"before":crossing[0], "after":crossing[1]},
+            "no_start_time":no_start},
         "matched_total":{"before":sum_before.view("before", before), "after":sum_after.view("after", after)}})
 }
 
