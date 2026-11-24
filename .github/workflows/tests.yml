@@ -264,7 +264,7 @@ jobs:
     needs: select
     if: needs.select.outputs.browser == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         timeout-minutes: 3
@@ -284,12 +284,25 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
+      # System packages come from apt, which can be slow: a separate step with its own
+      # budget and 3 tries (apt resumes partial downloads); the third failure fails the job.
+      - name: Install Chromium system dependencies
+        timeout-minutes: 12
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 660
+          command: |
+            for try in 1 2 3; do
+              timeout -k 1s 210 python -m playwright install-deps chromium && exit 0
+              echo "install-deps try $try failed"
+            done
+            exit 1
       - name: Install Chromium
         timeout-minutes: 5
         uses: ./.github/actions/bounded-step
         with:
           seconds: 285
-          command: python -m playwright install --with-deps chromium
+          command: python -m playwright install chromium
       - name: browser tests
         timeout-minutes: 10
         uses: ./.github/actions/bounded-step
