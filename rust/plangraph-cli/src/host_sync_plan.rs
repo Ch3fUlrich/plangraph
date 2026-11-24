@@ -74,22 +74,83 @@ pub(super) fn plan(metadata: &Value, with_optional: bool) -> Result<Vec<Binary>,
     Ok(plan)
 }
 
-/// Fails when a binary marked host-binary in `metadata` is missing from `plan`.
-pub(super) fn check(metadata: &Value, plan: &[Binary], with_optional: bool) -> Result<(), String> {
-    let expected = self::plan(metadata, with_optional)?;
-    let missing: Vec<String> = expected
-        .iter()
-        .filter(|binary| !plan.contains(binary))
-        .map(|(package, name)| format!("{package}/{name}"))
-        .collect();
+/// The cargo arguments that build `binaries`: every package and every binary by name.
+pub(super) fn build_args(binaries: &[Binary]) -> Vec<String> {
+    let mut args: Vec<String> = ["build", "--release", "--locked"]
+        .map(str::to_owned)
+        .to_vec();
+    let packages: std::collections::BTreeSet<_> =
+        binaries.iter().map(|(package, _)| package).collect();
+    for package in packages {
+        args.extend(["-p".to_owned(), package.clone()]);
+    }
+    for (_, name) in binaries {
+        args.extend(["--bin".to_owned(), name.clone()]);
+    }
+    args
+}
+
+fn missing(
+    expected: Vec<String>,
+    present: impl Fn(&str) -> bool,
+    what: &str,
+) -> Result<(), String> {
+    let missing: Vec<String> = expected.into_iter().filter(|name| !present(name)).collect();
     if missing.is_empty() {
         Ok(())
     } else {
         Err(format!(
-            "host binaries missing from the install plan: {}",
+            "host binaries missing from {what}: {}",
             missing.join(", ")
         ))
     }
+}
+
+/// Fails when a binary the workspace marks as host binary is not in the cargo arguments that
+/// will build it. It reads the arguments themselves, not the generator that made them, so an
+/// omission anywhere between the marks and the build is caught.
+pub(super) fn check_build(
+    metadata: &Value,
+    args: &[String],
+    with_optional: bool,
+) -> Result<(), String> {
+    let after = |flag: &str, value: &str| {
+        args.windows(2)
+            .any(|pair| pair[0] == flag && pair[1] == value)
+    };
+    let expected = plan(metadata, with_optional)?;
+    let wanted = expected
+        .iter()
+        .flat_map(|(package, name)| [format!("-p {package}"), format!("--bin {name}")])
+        .collect();
+    missing(
+        wanted,
+        |entry| {
+            let (flag, value) = entry.split_once(' ').unwrap_or_default();
+            after(flag, value)
+        },
+        "the release build",
+    )
+}
+
+/// Fails when a binary the workspace marks as host binary was not published to the host.
+pub(super) fn check_installed(
+    metadata: &Value,
+    installed: &[String],
+    with_optional: bool,
+) -> Result<(), String> {
+    let expected = plan(metadata, with_optional)?
+        .into_iter()
+        .map(|(package, name)| format!("{package}/{name}"))
+        .collect();
+    missing(
+        expected,
+        |entry| {
+            let name = entry.rsplit('/').next().unwrap_or(entry);
+            installed.iter().any(|done| done == name)
+        },
+        "the install",
+    )
 }
 
 #[cfg(test)]
@@ -142,12 +203,31 @@ mod tests {
     }
 
     #[test]
-    fn check_fails_on_a_marked_binary_left_out() {
+    fn the_build_check_reads_the_arguments_and_fails_on_a_marked_binary_left_out() {
         let metadata = fixture();
-        let mut short = plan(&metadata, false).unwrap();
-        check(&metadata, &short, false).unwrap();
+        let binaries = plan(&metadata, false).unwrap();
+        let args = build_args(&binaries);
+        check_build(&metadata, &args, false).unwrap();
+        // An omission by the generator itself still fails: the check is against the marks.
+        let mut short = binaries.clone();
         short.retain(|(_, name)| name != "plangraph");
-        let error = check(&metadata, &short, false).unwrap_err();
+        let error = check_build(&metadata, &build_args(&short), false).unwrap_err();
+        assert!(error.contains("--bin plangraph"), "{error}");
+        // Naming the binary without its package, or the package alone, is not enough.
+        let bin_only: Vec<String> = args
+            .iter()
+            .filter(|a| *a != "plangraph-cli")
+            .cloned()
+            .collect();
+        assert!(check_build(&metadata, &bin_only, false).is_err());
+    }
+
+    #[test]
+    fn the_install_check_fails_on_a_binary_that_was_not_published() {
+        let metadata = fixture();
+        let all = ["pg-spawnd".to_owned(), "plangraph".to_owned()];
+        check_installed(&metadata, &all, false).unwrap();
+        let error = check_installed(&metadata, &all[..1], false).unwrap_err();
         assert!(error.contains("plangraph-cli/plangraph"), "{error}");
     }
 
@@ -178,6 +258,6 @@ mod tests {
         ] {
             assert!(plan.iter().any(|(_, bin)| bin == name), "{name} not marked");
         }
-        check(&metadata, &plan, true).unwrap();
+        check_build(&metadata, &build_args(&plan), true).unwrap();
     }
 }
