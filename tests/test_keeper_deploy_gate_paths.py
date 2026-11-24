@@ -622,16 +622,17 @@ def test_merge_close_reports_the_age_of_unproven_unit_and_live_work(env):
     assert pending["demo:B"]["missing"] == ["live_evidence_missing"]
     assert all(row["age_hours"] >= 26 and row["merged_at"] for row in pending.values())
     assert preview["merged_not_done"] == 2
-    assert [row["key"] for row in preview["would_close"]] == ["demo:B"]
+    # A Live: clause without live evidence holds the item like a shipped unit without deploy proof.
+    assert preview["would_close"] == []
     assert all(env.store._item(key)["state"] == "open" for key in pending)
     applied = frozen(env, require_seats=False)
-    assert [row["key"] for row in applied["closed"]] == ["demo:B"]
-    assert [row["key"] for row in applied["listed"]] == ["demo:A"]
+    assert applied["closed"] == []
+    assert sorted(row["key"] for row in applied["listed"]) == ["demo:A", "demo:B"]
     assert applied["deployment_pending"] == preview["deployment_pending"]
-    assert applied["merged_not_done"] == 1
-    assert env.store._item("demo:B")["state"] == "done"
-    assert [(row["key"], row["code"]) for row in env.store.alerts(env.p("reader"))["findings"]
-            if row["code"] == "deploy_pending"] == [("demo:A", "deploy_pending")]
+    assert applied["merged_not_done"] == 2
+    assert env.store._item("demo:B")["state"] == "open"
+    assert sorted((row["key"], row["code"]) for row in env.store.alerts(env.p("reader"))["findings"]
+                  if row["code"] == "deploy_pending") == [("demo:A", "deploy_pending"), ("demo:B", "deploy_pending")]
 
 
 def test_a_live_clause_requires_verified_evidence_from_after_the_merge(env):
@@ -653,7 +654,62 @@ def test_a_live_clause_requires_verified_evidence_from_after_the_merge(env):
     env.clock.t = merged + 60
     preview = frozen(env, require_seats=False, apply=False)
     assert preview["deployment_pending"][0]["key"] == key
-    assert preview["would_close"][0]["key"] == key
+    assert preview["would_close"] == [], "evidence from before the merge does not prove it"
     assert env.store.add_evidence_router(env.p("router"), key, "deploy", proof)["verified"]
     result = frozen(env, require_seats=False, apply=False)
     assert result["deployment_pending"] == [] and result["would_close"][0]["key"] == key
+
+
+LIVE_CLAUSE = {
+    "done_criteria": "Live: observe the service in use.",
+    "criteria_reason": "Require a live service observation",
+    "criteria_evidence": "Service deployment fixture",
+}
+LIVE_PROOF = {"host": "fixture", "unit": "test.service", "is_active": "active"}
+
+
+def test_the_automatic_close_holds_an_item_with_a_live_clause_until_live_evidence_exists(env):  # noqa: F811
+    from plangraph.keeper.evidence import VERIFIERS
+    from plangraph.keeper.evidence_types import as_epoch
+
+    key = "demo:A"
+    env.store.edit_definition(env.p("router"), key, LIVE_CLAUSE)
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    env.repo.land("live", f"Plan-Item: {key}", 98)
+    held = auto(env, require_seats=False)
+    assert held["closed"] == []
+    assert env.store._item(key)["state"] == "open"
+    assert "live_evidence_missing" in held["listed"][0]["reason"]
+    assert [f["code"] for f in env.store.alerts(env.p("reader"))["findings"] if f["key"] == key] == ["deploy_pending"]
+    env.clock.t = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main")) + 60
+    assert env.store.add_evidence_router(env.p("router"), key, "deploy", LIVE_PROOF)["verified"]
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == [key]
+
+
+def test_the_router_close_of_merged_work_with_a_live_clause_needs_live_evidence(w):  # noqa: F811
+    from plangraph.keeper.evidence import VERIFIERS
+
+    w.store.edit_definition(w.p("router"), "demo:A", LIVE_CLAUSE)
+    w.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["closed"] is False and "live_evidence_missing" in out["missing"], out
+    assert w.store._item("demo:A")["state"] == "in_review"
+    assert w.store.add_evidence_router(w.p("router"), "demo:A", "deploy", LIVE_PROOF)["verified"]
+    assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
+
+
+def test_a_passing_review_cannot_close_an_item_with_a_live_clause_and_no_live_evidence(env):  # noqa: F811
+    from keeper_util import to_in_review
+    from plangraph.keeper.evidence import VERIFIERS
+    from plangraph.keeper.store import Refused
+
+    key = "demo:B"
+    env.store.edit_definition(env.p("router"), key, LIVE_CLAUSE)
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    to_in_review(env, key)
+    with pytest.raises(Refused) as refused:
+        env.store.verdict(env.p("reviewer"), key, True, "passed")
+    assert refused.value.code == "evidence_unverified" and "live_evidence_missing" in refused.value.msg
+    assert env.store._item(key)["state"] == "in_review"
+    assert env.store.add_evidence_router(env.p("router"), key, "deploy", LIVE_PROOF)["verified"]
+    assert env.store.verdict(env.p("reviewer"), key, True, "passed")["state"] == "done"
