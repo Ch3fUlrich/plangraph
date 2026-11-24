@@ -37,7 +37,13 @@ impl Model {
         }
         // After `pred` lands, main is at the version one past the one `pred` was built on.
         let base = self.main + 1;
+        let before = self.clone();
         let id = self.cut(Kind::Speculative { pred }, base)?;
+        // A candidate is built only on a complete, verified membership; a refusal changes nothing.
+        if let Err(d) = self.verify_train(id) {
+            *self = before;
+            return Err(d);
+        }
         self.trains[id as usize] = self.trains[id as usize].clone().started();
         Ok(Outcome::Train(id))
     }

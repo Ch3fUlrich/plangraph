@@ -32,8 +32,40 @@ pub fn register_all(m: &mut Model, parts: impl IntoIterator<Item = PartId>) {
     }
 }
 
-/// Bind and start the CI of an open train as the builder does.
+/// A CI result of the run in flight.
+pub fn ci(m: &mut Model, train: TrainId, green: bool) -> Outcome {
+    let run = m.run(train);
+    ok(m, Event::CiResult { train, run, green })
+}
+
+/// A red CI of the run in flight that names its failing part.
+pub fn red(m: &mut Model, train: TrainId, culprit: PartId) -> Outcome {
+    let run = m.run(train);
+    ok(
+        m,
+        Event::CiRed {
+            train,
+            run,
+            culprit,
+        },
+    )
+}
+
+/// A red round of the run in flight that the builder will fix in place.
+pub fn fix_red(m: &mut Model, train: TrainId) -> Outcome {
+    let run = m.run(train);
+    ok(m, Event::CiRedFix { train, run })
+}
+
+/// A refused red round of the run in flight.
+pub fn denied_fix_red(m: &mut Model, train: TrainId) -> Denied {
+    let run = m.run(train);
+    denied(m, Event::CiRedFix { train, run })
+}
+
+/// Verify, bind and start the CI of an open train as the builder does.
 pub fn start(m: &mut Model, train: TrainId) {
+    ok(m, Event::VerifyComplete { train });
     let base = m.main();
     ok(
         m,
@@ -54,6 +86,6 @@ pub fn disjoint(n: u8) -> Vec<PartSpec> {
 /// Land an open train as the builder and CI do.
 pub fn land(m: &mut Model, train: TrainId) {
     start(m, train);
-    ok(m, Event::CiResult { train, green: true });
+    ci(m, train, true);
     ok(m, Event::Settle { train });
 }

@@ -12,13 +12,7 @@ fn a_red_train_of_fourteen_runs_its_retry_group_of_seven_although_no_ordinary_pa
     assert_eq!(m.train_parts(0).len(), 14);
     start(&mut m, 0);
     assert_eq!(
-        ok(
-            &mut m,
-            Event::CiResult {
-                train: 0,
-                green: false
-            }
-        ),
+        ci(&mut m, 0, false),
         Outcome::Red {
             groups: 2,
             escalated: false
@@ -43,36 +37,18 @@ fn retry_groups_keep_precedence_over_every_ordinary_selection() {
     register_all(&mut m, [0, 1]);
     ok(&mut m, Event::Select);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: false,
-        },
-    );
+    ci(&mut m, 0, false);
     register_all(&mut m, [2, 3, 4]);
     ok(&mut m, Event::Tick);
     // Due by size and by age, yet the groups go first, then the running retry train.
     assert_eq!(denied(&mut m, Event::Select), Denied::RetryFirst);
     ok(&mut m, Event::StartRetry);
     assert_eq!(denied(&mut m, Event::Select), Denied::RetryFirst);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 1,
-            green: true,
-        },
-    );
+    ci(&mut m, 1, true);
     ok(&mut m, Event::Settle { train: 1 });
     assert_eq!(denied(&mut m, Event::Select), Denied::RetryFirst);
     ok(&mut m, Event::StartRetry);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 2,
-            green: true,
-        },
-    );
+    ci(&mut m, 2, true);
     ok(&mut m, Event::Settle { train: 2 });
     assert_eq!(ok(&mut m, Event::Select), Outcome::Train(3));
 }
@@ -84,13 +60,7 @@ fn the_second_red_round_of_a_lineage_escalates_once() {
     ok(&mut m, Event::Select);
     start(&mut m, 0);
     assert_eq!(
-        ok(
-            &mut m,
-            Event::CiResult {
-                train: 0,
-                green: false
-            }
-        ),
+        ci(&mut m, 0, false),
         Outcome::Red {
             groups: 2,
             escalated: false
@@ -98,13 +68,7 @@ fn the_second_red_round_of_a_lineage_escalates_once() {
     );
     ok(&mut m, Event::StartRetry);
     assert_eq!(
-        ok(
-            &mut m,
-            Event::CiResult {
-                train: 1,
-                green: false
-            }
-        ),
+        ci(&mut m, 1, false),
         Outcome::Red {
             groups: 2,
             escalated: true
@@ -113,13 +77,7 @@ fn the_second_red_round_of_a_lineage_escalates_once() {
     // A later red round of the same lineage does not escalate it again.
     ok(&mut m, Event::StartRetry);
     assert_eq!(
-        ok(
-            &mut m,
-            Event::CiResult {
-                train: 2,
-                green: false
-            }
-        ),
+        ci(&mut m, 2, false),
         Outcome::Red {
             groups: 0,
             escalated: false
@@ -137,13 +95,7 @@ fn an_ordinary_part_waits_behind_a_red_train_for_at_most_two_n_minus_two_retry_r
     ok(&mut m, Event::Select);
     assert_eq!(m.train_parts(0), [0, 1]);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: false,
-        },
-    );
+    ci(&mut m, 0, false);
     let mut runs = 0;
     while !m.pending_groups().is_empty() {
         assert_eq!(denied(&mut m, Event::Select), Denied::RetryFirst);
@@ -151,13 +103,7 @@ fn an_ordinary_part_waits_behind_a_red_train_for_at_most_two_n_minus_two_retry_r
             panic!()
         };
         runs += 1;
-        ok(
-            &mut m,
-            Event::CiResult {
-                train: t,
-                green: false,
-            },
-        );
+        ci(&mut m, t, false);
     }
     assert_eq!(runs, 2);
     assert_eq!(m.retry_runs(1), 2);
@@ -180,13 +126,7 @@ fn a_red_train_drops_the_failing_part_and_lands_the_rest() {
     ok(&mut m, Event::Select);
     start(&mut m, 0);
     assert_eq!(
-        ok(
-            &mut m,
-            Event::CiRed {
-                train: 0,
-                culprit: 1
-            }
-        ),
+        red(&mut m, 0, 1),
         Outcome::Red {
             groups: 1,
             escalated: false
@@ -198,13 +138,7 @@ fn a_red_train_drops_the_failing_part_and_lands_the_rest() {
     );
     assert_eq!(m.pending_groups(), [vec![0, 3]]);
     assert_eq!(ok(&mut m, Event::StartRetry), Outcome::Train(1));
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 1,
-            green: true,
-        },
-    );
+    ci(&mut m, 1, true);
     ok(&mut m, Event::Settle { train: 1 });
     assert_eq!(
         (m.status(0), m.status(3), m.landed()),
@@ -218,6 +152,7 @@ fn a_red_train_drops_the_failing_part_and_lands_the_rest() {
             &mut m,
             Event::CiRed {
                 train: 2,
+                run: 0,
                 culprit: 1
             }
         ),
@@ -228,6 +163,7 @@ fn a_red_train_drops_the_failing_part_and_lands_the_rest() {
             &mut m,
             Event::CiRed {
                 train: 2,
+                run: 0,
                 culprit: 0
             }
         ),
@@ -242,13 +178,7 @@ fn a_culprit_that_is_the_only_part_leaves_no_retry_group() {
     ok(&mut m, Event::Select);
     start(&mut m, 0);
     assert_eq!(
-        ok(
-            &mut m,
-            Event::CiRed {
-                train: 0,
-                culprit: 0
-            }
-        ),
+        red(&mut m, 0, 0),
         Outcome::Red {
             groups: 0,
             escalated: false
@@ -256,4 +186,26 @@ fn a_culprit_that_is_the_only_part_leaves_no_retry_group() {
     );
     assert_eq!(m.status(0), Status::Dropped);
     assert!(m.pending_groups().is_empty());
+}
+
+#[test]
+fn after_a_legacy_settlement_a_held_child_waits_for_the_verified_outcome_of_its_parent() {
+    // The stack 0 <- 1 <- 2 goes red with no culprit and is cut into [0, 1] and [2].
+    let specs = vec![spec(1, None), spec(2, Some(0)), spec(4, Some(1))];
+    let mut m = Model::new(Policy::every_ready_rides(Order::Oldest), specs);
+    register_all(&mut m, 0..3);
+    ok(&mut m, Event::Select);
+    start(&mut m, 0);
+    ci(&mut m, 0, false);
+    assert_eq!(m.pending_groups(), [vec![0, 1], vec![2]]);
+    ok(&mut m, Event::StartRetry);
+    ci(&mut m, 1, true);
+    ok(&mut m, Event::SettleLegacy { train: 1 });
+    // The record names no included list: the child's group does not start on it.
+    assert_eq!(denied(&mut m, Event::StartRetry), Denied::Dependency);
+    ok(&mut m, Event::VerifyOutcome { train: 1 });
+    assert_eq!(ok(&mut m, Event::StartRetry), Outcome::Train(2));
+    ci(&mut m, 2, true);
+    ok(&mut m, Event::Settle { train: 2 });
+    assert_eq!(m.landed(), 3);
 }

@@ -83,10 +83,13 @@ names next to the old one, while the patch-id and paths are unchanged, no main c
 base touched those paths and the merge dry run is clean. A conflict re-reviews only the range-diff of the
 resolution; a main change on the batch's paths voids both. After more than 3 trains landed since the
 evidence base the ACCEPT still carries and the part CI runs again. A rebase happens only on a textual
-conflict. A flake verdict (a red that also fails without the patch, or a hung test) decides only what
+conflict. The patch identity keeps whitespace, and the paths main touched are read from its commits since the
+evidence base, so a path touched and reverted still voids. `--carry-out FILE` persists a carry when both
+carry, and `plangraph land-train build --carries FILE` makes the builder accept the receipt of the old head
+for exactly that carry. A flake verdict (a red that also fails without the patch, or a hung test) decides only what
 voids an ACCEPT; it never lets a red required CI merge. `evidence-red --red FILE --ci-green BOOL --main-state FILE` prints whether a red is a flake and, separately,
-whether the merge gate lets the batch in. `evidence-assess --records-out FILE --day D` and `evidence-record`
-append the log lines; `evidence-report --records FILE` prints per day the rebases (assessments where the head changed), carried ACCEPTs and CI
+whether the merge gate lets the batch in. `evidence-assess --records-out FILE --day D --batch B` and `evidence-record` append the log lines (one
+event counts once however often it is logged; `--kind landed` logs the denominator); `evidence-report --records FILE` prints per day the rebases (assessments where the head changed), carried ACCEPTs and CI
 runs, re-reviews and fix rounds caused by a rebase.
 
 ## Push a built train

@@ -13,6 +13,7 @@ fn part(pr: u64, parent: Option<u64>) -> PartIn {
         receipt: PartReceipt {
             run_id: format!("run-{pr}"),
             head: format!("h{pr}"),
+            carried: None,
         },
     }
 }

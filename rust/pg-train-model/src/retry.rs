@@ -104,6 +104,15 @@ impl Model {
         if self.live_retry() || self.live_ordinary() || self.live_spec() || self.groups.is_empty() {
             return Err(Denied::Phase);
         }
+        // A held child waits for its parent's verified outcome: a legacy settlement verifies nothing.
+        let waiting = self.groups[0].parts.iter().any(|&p| {
+            self.parts[p as usize].spec.parent.is_some_and(|q| {
+                !self.groups[0].parts.contains(&q) && !self.parts[q as usize].verified
+            })
+        });
+        if waiting {
+            return Err(Denied::Dependency);
+        }
         let g = self.groups.remove(0);
         let id = self.trains.len() as TrainId;
         self.release(&g.parts, Status::InTrain(id));

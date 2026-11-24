@@ -44,7 +44,7 @@ impl Model {
                 (!t.sealed || t.parts == t.frozen)
                     && (t.kind != Kind::Ordinary || t.parts.len() <= self.policy.target as usize)
                     && t.parts.len() <= self.policy.cap as usize
-                    && (!t.landed || t.ci == Ci::Green && t.bound && t.tested == Some(t.tree))
+                    && (!t.landed || t.ci == Ci::Green && t.bound && t.checked && t.tested == Some(t.tree))
                     && (t.ci != Ci::Running || t.sealed && t.bound)
                     // Fixing in place ends with the second red round.
                     && (t.closed || t.ci != Ci::Red || t.red_rounds < 2)

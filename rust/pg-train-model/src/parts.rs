@@ -88,6 +88,7 @@ impl Model {
         t.parts.retain(|p| !leaving.contains(p));
         t.included = Some(t.parts.clone());
         t.bound = false;
+        t.checked = false;
         t.closed = t.parts.is_empty();
         for &p in leaving {
             if !t.ready_at_cut.contains(&p) {
@@ -162,6 +163,7 @@ impl Model {
         t.left_out.retain(|l| !back.contains(&l.0));
         t.conflicted.retain(|&p| p != part);
         t.bound = false;
+        t.checked = false;
         self.release(&back, Status::InTrain(train));
         Ok(Outcome::Applied)
     }

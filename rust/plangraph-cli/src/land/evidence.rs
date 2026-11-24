@@ -194,54 +194,63 @@ pub fn may_merge(required_ci_green: bool, main: &State) -> Result<(), &'static s
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Kind {
     Rebase,
-    AcceptCarried { old_head: String, new_head: String },
-    CiCarried { old_head: String, new_head: String },
+    AcceptCarried {
+        old_head: String,
+        new_head: String,
+    },
+    CiCarried {
+        old_head: String,
+        new_head: String,
+    },
     ReReview,
     FixRoundAfterRebase,
+    /// The batch landed: the denominator of the per-batch rates.
+    Landed,
 }
 
-/// One line of the evidence log.
+/// One line of the evidence log. `batch` and `head` identify the event: the same event logged twice
+/// counts once.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub day: String,
+    pub batch: String,
+    pub head: String,
     #[serde(flatten)]
     pub kind: Kind,
 }
 
 impl Record {
-    pub fn new(day: &str, kind: Kind) -> Record {
+    pub fn new(day: &str, batch: &str, head: &str, kind: Kind) -> Record {
         Record {
             day: day.to_owned(),
+            batch: batch.to_owned(),
+            head: head.to_owned(),
             kind,
         }
     }
 }
 
-/// The log lines of one decision; `rebased` is true when the head changed, which is what a rebase is.
-pub fn records_of(d: &Decision, day: &str, rebased: bool) -> Vec<Record> {
+/// The log lines of one decision about `batch` at `head`; `rebased` is true when the head changed,
+/// which is what a rebase is.
+pub fn records_of(d: &Decision, day: &str, batch: &str, head: &str, rebased: bool) -> Vec<Record> {
+    let rec = |kind| Record::new(day, batch, head, kind);
     let mut out = Vec::new();
     if rebased {
-        out.push(Record::new(day, Kind::Rebase));
+        out.push(rec(Kind::Rebase));
     }
     match &d.accept {
-        Accept::Carried { old_head, new_head } => out.push(Record::new(
-            day,
-            Kind::AcceptCarried {
-                old_head: old_head.clone(),
-                new_head: new_head.clone(),
-            },
-        )),
-        Accept::Void { .. } => out.push(Record::new(day, Kind::ReReview)),
+        Accept::Carried { old_head, new_head } => out.push(rec(Kind::AcceptCarried {
+            old_head: old_head.clone(),
+            new_head: new_head.clone(),
+        })),
+        Accept::Void { .. } => out.push(rec(Kind::ReReview)),
         Accept::None => {}
     }
     if let Ci::Carried { old_head, new_head } = &d.ci {
-        out.push(Record::new(
-            day,
-            Kind::CiCarried {
-                old_head: old_head.clone(),
-                new_head: new_head.clone(),
-            },
-        ));
+        out.push(rec(Kind::CiCarried {
+            old_head: old_head.clone(),
+            new_head: new_head.clone(),
+        }));
     }
     out
 }
@@ -253,13 +262,25 @@ pub struct DayReport {
     pub ci_carried: u64,
     pub re_reviews: u64,
     pub fix_rounds_after_rebase: u64,
+    pub landed: u64,
 }
 
-/// Counts per day. A carry that does not name both heads is refused: the evidence trail must be complete.
+/// Counts per day. An event counts once however often it was logged; a carry that does not name both
+/// heads, or a record without its batch and head, is refused: the evidence trail must be complete.
 pub fn daily(records: &[Record]) -> Result<BTreeMap<String, DayReport>, String> {
     let mut days: BTreeMap<String, DayReport> = BTreeMap::new();
+    let mut seen = std::collections::BTreeSet::new();
     for r in records {
+        if r.batch.is_empty() || r.head.is_empty() {
+            return Err(format!(
+                "evidence record of {} names no batch or head: it cannot be told from another",
+                r.day
+            ));
+        }
         let d = days.entry(r.day.clone()).or_default();
+        if !seen.insert(format!("{:?}|{}|{}", r.kind, r.batch, r.head)) {
+            continue;
+        }
         match &r.kind {
             Kind::Rebase => d.rebases += 1,
             Kind::AcceptCarried { old_head, new_head } | Kind::CiCarried { old_head, new_head } => {
@@ -277,6 +298,7 @@ pub fn daily(records: &[Record]) -> Result<BTreeMap<String, DayReport>, String> 
             }
             Kind::ReReview => d.re_reviews += 1,
             Kind::FixRoundAfterRebase => d.fix_rounds_after_rebase += 1,
+            Kind::Landed => d.landed += 1,
         }
     }
     Ok(days)

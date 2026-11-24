@@ -39,23 +39,11 @@ fn a_candidate_is_built_on_the_unlanded_train_and_tested_meanwhile() {
 fn a_candidate_lands_only_in_tested_ff_on_its_exact_predecessor() {
     let mut m = pipeline(tested_ff());
     ok(&mut m, Event::Speculate { pred: 0 });
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 1,
-            green: true,
-        },
-    );
+    ci(&mut m, 1, true);
     // The predecessor has not landed: main's tip is not the commit the candidate sits on.
     assert_eq!(denied(&mut m, Event::Promote { train: 1 }), Denied::Phase);
     assert_eq!(denied(&mut m, Event::Settle { train: 1 }), Denied::Phase);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Settle { train: 0 });
     ok(&mut m, Event::Promote { train: 1 });
     assert_eq!((m.landed(), m.main()), (4, 2));
@@ -67,13 +55,7 @@ fn a_candidate_whose_predecessor_is_no_longer_mains_tip_is_discarded() {
         let mut m = pipeline(tested_ff());
         ok(&mut m, Event::Speculate { pred: 0 });
         if landed_first {
-            ok(
-                &mut m,
-                Event::CiResult {
-                    train: 0,
-                    green: true,
-                },
-            );
+            ci(&mut m, 0, true);
             ok(&mut m, Event::Settle { train: 0 });
         }
         ok(&mut m, Event::MainMove);
@@ -88,13 +70,15 @@ fn any_change_to_the_predecessor_discards_the_candidate() {
     let changes = [
         Event::Amend { train: 0 },
         Event::Rebuild { train: 0 },
-        Event::CiRedFix { train: 0 },
+        Event::CiRedFix { train: 0, run: 1 },
         Event::CiResult {
             train: 0,
+            run: 1,
             green: false,
         },
         Event::CiRed {
             train: 0,
+            run: 1,
             culprit: 0,
         },
     ];
@@ -113,20 +97,8 @@ fn a_promotion_in_a_pull_request_merge_mode_is_refused_and_the_candidate_stays_s
     p.landing = Landing::PrMerge;
     let mut m = pipeline(p);
     ok(&mut m, Event::Speculate { pred: 0 });
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 1,
-            green: true,
-        },
-    );
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 1, true);
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Settle { train: 0 });
     assert_eq!(denied(&mut m, Event::Promote { train: 1 }), Denied::Mode);
     assert_eq!((m.landed(), m.main()), (2, 1));
@@ -136,16 +108,7 @@ fn a_promotion_in_a_pull_request_merge_mode_is_refused_and_the_candidate_stays_s
 fn a_red_candidate_is_discarded_and_changes_nothing_on_main() {
     let mut m = pipeline(tested_ff());
     ok(&mut m, Event::Speculate { pred: 0 });
-    assert_eq!(
-        ok(
-            &mut m,
-            Event::CiResult {
-                train: 1,
-                green: false
-            }
-        ),
-        Outcome::Discarded
-    );
+    assert_eq!(ci(&mut m, 1, false), Outcome::Discarded);
     assert!(m.pending_groups().is_empty());
     assert_eq!(
         (m.status(2), m.status(3), m.main()),
@@ -157,21 +120,9 @@ fn a_red_candidate_is_discarded_and_changes_nothing_on_main() {
 fn a_candidate_that_was_amended_after_its_ci_cannot_be_promoted() {
     let mut m = pipeline(tested_ff());
     ok(&mut m, Event::Speculate { pred: 0 });
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 1,
-            green: true,
-        },
-    );
+    ci(&mut m, 1, true);
     ok(&mut m, Event::Amend { train: 1 });
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Settle { train: 0 });
     assert_eq!(
         denied(&mut m, Event::Promote { train: 1 }),
@@ -182,13 +133,7 @@ fn a_candidate_that_was_amended_after_its_ci_cannot_be_promoted() {
 #[test]
 fn retry_precedence_holds_over_a_candidate() {
     let mut m = pipeline(tested_ff());
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: false,
-        },
-    );
+    ci(&mut m, 0, false);
     assert_eq!(denied(&mut m, Event::Speculate { pred: 0 }), Denied::Phase);
     ok(&mut m, Event::StartRetry);
     assert_eq!(denied(&mut m, Event::Speculate { pred: 1 }), Denied::Phase);
