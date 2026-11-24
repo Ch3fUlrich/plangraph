@@ -3,6 +3,19 @@
 Use `systemctl --user` for the user units below. The WSL cache guard uses
 a root system service and timer.
 
+## 0. The deploy manifest
+
+`deploy/manifest.toml` is the one table of what runs where: every unit file under `deploy/` (any depth; service,
+timer, socket, target, mount, path and the other systemd unit types) and every binary target of the workspace
+crates is named there. A unit family lists its files, scope, host roles (`keeper`, `worker`, `wsl`, `all`), the
+env file names it reads (never values) and its first-run check. A binary lists its package, bin, host roles and,
+in `install_paths`, every path a consumer runs it from besides the user bin directory, each with its roles. A host
+lists its roles in `PG_HOST_ROLES` or in `~/.config/plangraph/host-roles`; the manifest holds no host names. A unit
+or binary that should not run anywhere gets an entry with `not_deployed = "<reason>"`, the only way to leave one
+out. The `cargo test -p plangraph-cli deploy_manifest` tests fail for a unit file or binary target the manifest
+does not name and for an entry whose file is gone, so adding a unit means adding its entry in the same change.
+Nothing in them reads systemd. The tables below describe the units; the manifest decides where they are installed.
+
 ## 1. Files
 
 | File | Role | Host |
