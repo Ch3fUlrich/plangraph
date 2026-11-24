@@ -310,18 +310,65 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
         let commit = git(root, &["rev-parse", "HEAD"]);
         let output = run(fail);
         assert_eq!(output.status.success(), fail == "0", "{output:?}");
-        assert_eq!(
-            root.join(".git/plangraph-state/fast-checks")
-                .join(&commit)
-                .is_file(),
-            fail == "0"
+        // Every outcome leaves a receipt for the head; only a passing run leaves a green one.
+        let receipt =
+            fs::read_to_string(root.join(".git/plangraph-state/fast-checks").join(&commit))
+                .unwrap();
+        let verdict = if fail == "0" { "green" } else { "red" };
+        assert!(
+            receipt.starts_with(&format!("head {commit}\nresult {verdict}\n")),
+            "{receipt}"
         );
+        assert!(
+            receipt.contains(&format!("check affected-tests rc={fail} wall=")),
+            "{receipt}"
+        );
+        // The receipt also travels as a note on the head.
+        let note = git(
+            root,
+            &["notes", "--ref=plangraph-fast-checks", "show", &commit],
+        );
+        assert_eq!(note, receipt.trim());
         assert_eq!(
             git(root, &["worktree", "list", "--porcelain"]).replace(&commit, &base),
             before
         );
         assert!(!root.join("generated").exists());
     }
+}
+
+#[test]
+fn stamp_green_accepts_only_a_green_receipt_of_that_head() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    git(root, &["init", "-q"]);
+    git(root, &["commit", "--allow-empty", "-qm", "base"]);
+    let head = git(root, &["rev-parse", "HEAD"]);
+    let ask = |head: &str| {
+        Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .current_dir(root)
+            .args(["fast-checks", "--stamp-green", head])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    assert!(!ask(&head), "no receipt");
+    let state = root.join(".git/plangraph-state/fast-checks");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(
+        state.join(&head),
+        format!("head {head}\nresult red\ncheck fmt rc=1 wall=1.000\n"),
+    )
+    .unwrap();
+    assert!(!ask(&head), "red receipt");
+    fs::write(
+        state.join(&head),
+        format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.000\n"),
+    )
+    .unwrap();
+    assert!(ask(&head), "green receipt");
+    assert!(!ask(&"0".repeat(40)), "another head");
 }
 
 #[test]

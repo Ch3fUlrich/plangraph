@@ -236,3 +236,17 @@ def run_keeper_postgres(root, changed, env, *, runner=subprocess.run, search=POS
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def affected_summary(batches):
+    """(exit code, final line) of a run: the first failing batch's code, one line a machine can read."""
+    failed = [code for _, code in batches if code]
+    code = failed[0] if failed else 0
+    return code, f"AFFECTED rc={code} batches={len(batches)} failed={len(failed)}"
+
+
+def report_batches(batches):
+    """Print the result line last (readers never infer it from the tail of pytest output); return the exit code."""
+    code, line = affected_summary(batches)
+    print(line, flush=True)
+    return code

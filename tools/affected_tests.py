@@ -16,7 +16,7 @@ import time
 import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pgtest import affected_pytest, keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
+from pgtest import affected_pytest, keeper_postgres_files, postgres_bin, report_batches, run_keeper_postgres, test_environment
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
@@ -789,10 +789,10 @@ def main(root=None):
                 hashes.append(tree_hash(root))
                 for line in flake_labels(failed, low, high, hashes, parallel=ran_workers):
                     print(line)
-            if args.within is not None:
-                return code
-            postgres = run_keeper_postgres(root, changed, env, runner=run_pytest)
-            return code or postgres
+            batches = [("pytest", code)]
+            if args.within is None and keeper_postgres_files(root, changed):
+                batches.append(("keeper-postgres", run_keeper_postgres(root, changed, env, runner=run_pytest)))
+            return report_batches(batches)
     return 0
 
 
