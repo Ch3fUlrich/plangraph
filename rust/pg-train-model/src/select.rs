@@ -99,6 +99,16 @@ impl Model {
         let id = self.trains.len() as TrainId;
         let riding: Vec<PartId> = riding.into_iter().map(|p| p as PartId).collect();
         let mut train = Train::new(kind, riding.clone(), base);
+        train.captured = ready
+            .iter()
+            .map(|&p| {
+                (
+                    p,
+                    self.parts[p as usize].waited,
+                    self.parts[p as usize].deferrals,
+                )
+            })
+            .collect();
         train.ready_at_cut = ready;
         for (p, l) in left {
             let d = match l {
@@ -134,6 +144,9 @@ impl Model {
             return Err(Denied::OrdinaryOpen);
         }
         let base = self.main;
-        self.cut(Kind::Ordinary, base).map(Outcome::Train)
+        let id = self.cut(Kind::Ordinary, base)?;
+        // Cut beside a retry train that hit its rebuild bound: the queued groups wait for it to close.
+        self.trains[id as usize].beside = beside;
+        Ok(Outcome::Train(id))
     }
 }

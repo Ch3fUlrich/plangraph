@@ -3,6 +3,21 @@ use super::select::ModelPool;
 use super::*;
 
 impl Model {
+    /// The paths of a set of parts, as a bit set.
+    pub(crate) fn paths_of(&self, parts: &[PartId]) -> u16 {
+        parts
+            .iter()
+            .fold(0, |m, &p| m | self.parts[p as usize].spec.paths)
+    }
+
+    /// The paths main's moves changed since version `since`.
+    pub(crate) fn moved_since(&self, since: u8) -> u16 {
+        // A candidate's base is the version after its predecessor: nothing has moved past it yet.
+        self.moves
+            .get(since as usize..)
+            .map_or(0, |moves| moves.iter().fold(0, |m, &p| m | p))
+    }
+
     fn train_mut(&mut self, train: TrainId) -> Result<&mut Train, Denied> {
         match self.trains.get_mut(train as usize) {
             Some(t) if !t.closed => Ok(t),
@@ -24,11 +39,17 @@ impl Model {
         parts
             .iter()
             .for_each(|&p| self.parts[p as usize].verified = verified);
+        let paths = self.paths_of(&parts);
+        self.moves.push(paths);
         self.main += 1;
     }
 
     fn settle(&mut self, train: TrainId, verified: bool) -> Result<Outcome, Denied> {
         let (main, policy) = (self.main, self.policy);
+        let (own, moved) = {
+            let t = self.trains.get(train as usize).ok_or(Denied::Phase)?;
+            (self.paths_of(&t.parts), self.moved_since(t.base))
+        };
         let t = self.train_mut(train)?;
         if matches!(t.kind, Kind::Speculative { .. }) {
             return Err(Denied::Phase);
@@ -36,11 +57,14 @@ impl Model {
         if t.ci != Ci::Green || !t.bound {
             return Err(Denied::NotGreen);
         }
-        // A retry train stale `stale_k` times lands on the current main as tested (D-6840).
+        // A retry train stale `stale_k` times lands on the current main as tested (D-6840), when what
+        // main gained since its tested base touches none of its paths: only then is the tested tree what
+        // a fast-forward of the current main would hold.
         let stale_ok = matches!(t.kind, Kind::Retry { .. })
             && policy.landing == Landing::TestedFf
             && policy.stale_k > 0
-            && t.rebuilds >= policy.stale_k;
+            && t.rebuilds >= policy.stale_k
+            && moved & own == 0;
         let stale = t.base != main;
         if stale && !stale_ok {
             return Err(Denied::Stale);
@@ -52,6 +76,7 @@ impl Model {
             return Err(Denied::Unverified);
         }
         t.stale_landed = stale;
+        t.stale_over = if stale { moved } else { 0 };
         self.land(train, verified);
         Ok(Outcome::Applied)
     }
@@ -240,16 +265,24 @@ impl Model {
             }
             Event::Rebuild { train } => {
                 let (main, policy) = (self.main, self.policy);
+                let (own, moved) = {
+                    let t = self.trains.get(train as usize).ok_or(Denied::Phase)?;
+                    (self.paths_of(&t.parts), self.moved_since(t.base))
+                };
                 let t = self.train_mut(train)?;
                 // A candidate is never rebuilt: a changed predecessor discards it.
                 if matches!(t.kind, Kind::Speculative { .. }) {
                     return Err(Denied::Phase);
                 }
-                if matches!(t.kind, Kind::Retry { .. }) {
-                    // No third rebuild in tested fast-forward: it lands on the current main instead.
+                let stale = t.base != main;
+                if matches!(t.kind, Kind::Retry { .. }) && stale {
+                    // No third rebuild in tested fast-forward when a stale landing is valid (what main
+                    // gained touches none of the train's paths); a rebuild that main's changes make
+                    // necessary is not refused. Only rebuilds caused by a stale base count.
                     if policy.landing == Landing::TestedFf
                         && policy.stale_k > 0
                         && t.rebuilds >= policy.stale_k
+                        && moved & own == 0
                     {
                         return Err(Denied::StaleBound);
                     }
@@ -269,8 +302,8 @@ impl Model {
             Event::Drop { part } => self.drop_part(part),
             Event::Revert { part } => self.revert(part),
             Event::Readmit { part } => self.readmit(part),
-            Event::MainMove => {
-                self.bump_main();
+            Event::MainMove { paths } => {
+                self.bump_main(paths);
                 Ok(Outcome::Applied)
             }
             Event::Restart => {

@@ -79,7 +79,7 @@ fn a_train_built_on_a_moved_main_cannot_bind_or_settle_until_rebuilt() {
     ok(&mut m, Event::Select);
     start(&mut m, 0);
     ci(&mut m, 0, true);
-    ok(&mut m, Event::MainMove);
+    ok(&mut m, Event::MainMove { paths: 0 });
     assert_eq!(denied(&mut m, Event::Settle { train: 0 }), Denied::Stale);
     ok(&mut m, Event::Rebuild { train: 0 });
     assert_eq!(m.train_ci(0), Ci::NotStarted);

@@ -438,10 +438,11 @@ fn a_merge_is_judged_by_what_it_changed_against_main_and_a_reverted_branch_commi
 }
 
 #[test]
-fn only_a_rewritten_head_is_a_rebase_an_amendment_or_a_merge_of_main_is_not() {
+fn only_a_rewritten_head_on_a_new_base_is_a_rebase_an_amendment_or_a_merge_of_main_is_not() {
     let fx = Fx::new();
     let base = fx.base();
     let head = fx.commit(&base, "a.txt", "a\n");
+    let old = recorded(&fx, &base, &head);
     let on_top = fx.commit(&head, "b.txt", "b\n");
     let main1 = advance_main(&fx, "log.txt", "entry 1\n");
     let moved = rebased(&fx, &head, &main1);
@@ -449,10 +450,56 @@ fn only_a_rewritten_head_is_a_rebase_an_amendment_or_a_merge_of_main_is_not() {
     g(p, &["checkout", "-q", "--detach", &head]);
     g(p, &["merge", "--no-ff", "-q", "-m", "merge main", &main1]);
     let merged = g(p, &["rev-parse", "HEAD"]);
+    // An amendment of the head on the same base: a different commit that does not contain the old one.
+    g(p, &["checkout", "-q", "--detach", &head]);
+    g(p, &["commit", "-q", "--amend", "-m", "reworded"]);
+    let amended = g(p, &["rev-parse", "HEAD"]);
     g(p, &["checkout", "-q", "main"]);
-    let was = |new: &str| evidence_git::was_rebased(p, &head, new).unwrap();
-    assert!(!was(&head));
-    assert!(!was(&on_top));
-    assert!(!was(&merged));
-    assert!(was(&moved));
+    let was = |main: &str, new: &str| evidence_git::was_rebased(p, &old, main, new).unwrap();
+    assert!(!was(&base, &head));
+    assert!(!was(&base, &on_top));
+    assert!(!was(&main1, &merged));
+    assert!(!was(&base, &amended));
+    assert!(!was(&main1, &amended));
+    assert!(was(&main1, &moved));
+}
+
+#[test]
+fn a_nested_merge_that_synced_main_into_a_side_branch_inherits_nothing() {
+    let fx = Fx::new();
+    let base0 = fx.base();
+    let p = fx.path();
+    let ev_base = advance_main(
+        &fx,
+        "shared.txt",
+        "head change\nline 2\nline 3\nline 4\nline 5\nline 6\n",
+    );
+    let head = fx.commit(
+        &ev_base,
+        "shared.txt",
+        "head change\nline 2\nline 3\nline 4\nline 5\nmine\n",
+    );
+    let old = recorded(&fx, &ev_base, &head);
+    // A side branch from before the evidence base syncs main into itself, then main merges the branch.
+    let side = fx.commit(&base0, "other.txt", "x\n");
+    g(p, &["checkout", "-q", "--detach", &side]);
+    g(
+        p,
+        &[
+            "merge",
+            "--no-ff",
+            "-q",
+            "-m",
+            "sync main into side",
+            &ev_base,
+        ],
+    );
+    let synced = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["checkout", "-q", "--detach", &ev_base]);
+    g(p, &["merge", "--no-ff", "-q", "-m", "land side", &synced]);
+    let landed = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["update-ref", "refs/heads/main", &landed]);
+    g(p, &["checkout", "-q", "main"]);
+    let d = assess(&fx, &old, &landed, &head, 1);
+    assert!(matches!(d.accept, Accept::Carried { .. }), "{d:?}");
 }

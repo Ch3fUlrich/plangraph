@@ -5,7 +5,7 @@ use pg_train_model::*;
 use std::collections::HashSet;
 use support::*;
 
-const DEPTH: usize = 7;
+const DEPTH: usize = 6;
 const PARTS: PartId = 4;
 const TRAINS: TrainId = 3;
 
@@ -27,7 +27,7 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
         Event::Tick,
         Event::Select,
         Event::StartRetry,
-        Event::MainMove,
+        Event::MainMove { paths: 0 },
         Event::Restart,
     ];
     for part in 0..PARTS {
