@@ -288,3 +288,43 @@ fn a_cut_leaves_fetch_head_alone_and_makes_no_ref_but_its_branch() {
         "{refs}"
     );
 }
+
+/// The exact name an earlier version gave its hold ref (process id and the picked head the gate is given) is
+/// seeded by a gate stub that sees that head, before the cut can adopt it; the ref must survive the cut.
+#[test]
+fn a_ref_at_the_name_an_old_hold_ref_would_take_survives_the_cut() {
+    use super::cut::{cut, Cut};
+    let fx = fx_with_base_gate(&std::fs::read_to_string(gate()).unwrap());
+    let src = fx.source("a.txt", TRAILERS);
+    let stub = fx.p().join(".git/seed_gate.py");
+    std::fs::write(
+        &stub,
+        "import os, subprocess, sys\n\
+         head = sys.argv[sys.argv.index('--head') + 1]\n\
+         ref = 'refs/plangraph/cut-hold/%d-%s' % (os.getppid(), head)\n\
+         subprocess.run(['git', '-C', os.environ['SEED_REPO'], 'update-ref', ref, os.environ['SEED_BASE']], check=True)\n",
+    )
+    .unwrap();
+    let python_seeding = || {
+        let mut c = python();
+        c.env("SEED_REPO", fx.p()).env("SEED_BASE", &fx.base);
+        c
+    };
+    let none = std::collections::BTreeMap::new();
+    cut(
+        &Cut {
+            repo: fx.p(),
+            base: &fx.base,
+            branch: "slice/a",
+            commits: &[src],
+            gate_edits: &none,
+            grants: &[],
+            gate: &stub,
+        },
+        &python_seeding,
+    )
+    .unwrap();
+    let head = g(fx.p(), &["rev-parse", "slice/a"]);
+    let seeded = format!("refs/plangraph/cut-hold/{}-{head}", std::process::id());
+    assert_eq!(g(fx.p(), &["rev-parse", &seeded]), fx.base);
+}
