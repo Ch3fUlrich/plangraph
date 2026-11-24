@@ -320,3 +320,39 @@ fn blocker_items_are_the_definitions_the_keeper_accepts() {
     .unwrap();
     assert_eq!(plan.blocker_items(), golden);
 }
+
+/// A probe that gives a different answer to every call, to show that a target is asked once.
+struct Flaky(std::cell::Cell<u32>);
+
+impl Probe for Flaky {
+    fn probe(&self, _host: &str, _family: &str) -> Result<(), Vec<Finding>> {
+        self.0.set(self.0.get() + 1);
+        if self.0.get() == 1 {
+            Ok(())
+        } else {
+            Err(vec![Finding {
+                kind: "env".into(),
+                name: "LATER".into(),
+            }])
+        }
+    }
+}
+
+#[test]
+fn two_parts_of_one_target_are_probed_once_and_never_both_ready_and_not_ready() {
+    let parts: Vec<_> = [1u64, 2]
+        .into_iter()
+        .map(|pr| PartDeploy {
+            pr,
+            families: ["a.service".to_string()].into(),
+            items: BTreeSet::new(),
+            trailer_hosts: ["alpha".to_string()].into(),
+        })
+        .collect();
+    let flaky = Flaky(Default::default());
+    let plan = deploy_plan(&parts, &BTreeMap::new(), &hosts(&["alpha"]), &flaky);
+    assert_eq!(flaky.0.get(), 1);
+    assert_eq!(plan.targets.len(), 1);
+    assert_eq!(plan.targets[0].parts, [1, 2]);
+    assert!(plan.blockers.is_empty(), "{plan:?}");
+}
