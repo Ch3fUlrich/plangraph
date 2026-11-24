@@ -327,13 +327,13 @@ mod tests {
 
     #[test]
     fn the_launcher_state_directory_and_claude_config_directory_are_honoured() {
-        let home = Path::new("/home/u");
+        let home = Path::new("fixture-home");
         let mut env = Env::new();
         assert_eq!(
             sessions_dir(home, &env),
-            Path::new("/home/u/.local/state/routing/launch/sessions")
+            Path::new("fixture-home/.local/state/routing/launch/sessions")
         );
-        assert_eq!(jobs_dir(home, &env), Path::new("/home/u/.claude/jobs"));
+        assert_eq!(jobs_dir(home, &env), Path::new("fixture-home/.claude/jobs"));
         env.insert("ROUTING_STATE_DIR".into(), "/srv/routing".into());
         env.insert("CLAUDE_CONFIG_DIR".into(), "/srv/claude".into());
         assert_eq!(
