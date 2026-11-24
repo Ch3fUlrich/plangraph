@@ -139,6 +139,33 @@ CANARY_CARDS = 5
 HIGH_RISKS = ("high", "critical")
 
 
+#: An own measurement replaces the public indices from this many runs on.
+OWN_P_HAT_MIN_RUNS = 20
+#: Standard deviation charged to an imputed row that carries no standard error.
+IMPUTED_DEFAULT_SD = 3.0
+
+
+def row_quality(model):
+    """The quality a row ranks by: own p_hat at n >= 20, else the coding index, else the AA index.
+
+    An imputed row (a value filled in, not measured) ranks at its mean minus one standard deviation,
+    so it never outranks a measured row of the same mean.
+    """
+    from plangraph.routing_support.resolver import _validated_metric
+    own = (model.get("origin") == "own" and model.get("score") is not None
+           and (model.get("n_runs") or 0) >= OWN_P_HAT_MIN_RUNS)
+    if own:
+        quality = _validated_metric(model, "score")
+    elif model.get("coding_index") is not None:
+        quality = _validated_metric(model, "coding_index")
+    else:
+        quality = _validated_metric(model, "aa_intelligence")
+    if model.get("imputed"):
+        se = model.get("score_se")
+        quality = max(0.0, quality - (float(se) if isinstance(se, (int, float)) and se > 0 else IMPUTED_DEFAULT_SD))
+    return quality
+
+
 def _measured_at(row):
     stamp = row.get("measured_at")
     if not stamp:
