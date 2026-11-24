@@ -341,3 +341,146 @@ fn fold_docs_refuses_to_run_without_the_line_caps() {
     assert!(err.contains("no line cap"), "{err}");
     assert!(dir.path().join("docs/spawner/ITEM.md").exists());
 }
+
+/// A git repository holding a copy of the real shared references and size checker, with one fragment per area.
+fn production_copy() -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for rel in [
+        "CONTRIBUTING.md",
+        "docs/KEEPER.md",
+        "docs/SPAWNER.md",
+        "tools/check_file_size.py",
+    ] {
+        write(
+            dir.path(),
+            rel,
+            &std::fs::read_to_string(root.join(rel)).unwrap(),
+        );
+    }
+    write(
+        dir.path(),
+        "docs/contributing/NEW-CONTRIB.md",
+        "Contributing note.\n",
+    );
+    write(dir.path(), "docs/keeper/NEW-KEEPER.md", "Keeper note.\n");
+    write(dir.path(), "docs/spawner/NEW-SPAWNER.md", "Spawner note.\n");
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "landed"]);
+    let merge = git(&["rev-parse", "HEAD"]);
+    (dir, merge)
+}
+
+#[test]
+fn the_production_references_have_room_for_a_fragment_each_under_their_caps() {
+    let (dir, _) = production_copy();
+    let flags: BTreeMap<String, String> = [
+        (
+            "repo-dir".to_owned(),
+            dir.path().to_string_lossy().into_owned(),
+        ),
+        ("check".to_owned(), "1".to_owned()),
+    ]
+    .into();
+    let lines = super::docs_fold::run(&flags).unwrap();
+    for f in [
+        "docs/contributing/NEW-CONTRIB.md",
+        "docs/keeper/NEW-KEEPER.md",
+        "docs/spawner/NEW-SPAWNER.md",
+    ] {
+        assert!(lines.contains(&format!("would fold {f}")), "{lines:?}");
+    }
+    assert!(!lines.iter().any(|l| l.starts_with("kept")), "{lines:?}");
+}
+
+#[test]
+fn the_landed_fold_commits_on_a_branch_once_and_leaves_the_checkout_alone() {
+    let (dir, merge) = production_copy();
+    let root = dir.path();
+    let before = read(root, "docs/SPAWNER.md");
+    let first = fold_landed(root, 9, &merge).unwrap();
+    assert!(
+        first.starts_with("folded 3 fragment(s) on land/docs-fold-9 at "),
+        "{first}"
+    );
+    let show = |spec: &str| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["show", spec])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(show("land/docs-fold-9:docs/SPAWNER.md").contains("<!-- fragment:NEW-SPAWNER -->"));
+    assert!(show("land/docs-fold-9:docs/KEEPER.md").contains("Keeper note."));
+    assert_eq!(
+        read(root, "docs/SPAWNER.md"),
+        before,
+        "the checkout is untouched"
+    );
+    assert!(root.join("docs/spawner/NEW-SPAWNER.md").exists());
+    let parent = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "land/docs-fold-9^"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&parent.stdout).trim(), merge);
+    let again = fold_landed(root, 9, &merge).unwrap();
+    assert!(
+        again.starts_with("land/docs-fold-9 already holds the fold"),
+        "{again}"
+    );
+    // A branch of that name on another base is not reused.
+    assert!(fold_landed(root, 9, &"f".repeat(40)).is_err());
+}
+
+#[test]
+fn a_tree_without_fragments_folds_nothing_and_creates_no_branch() {
+    let (dir, _) = production_copy();
+    let root = dir.path();
+    for rel in [
+        "docs/contributing/NEW-CONTRIB.md",
+        "docs/keeper/NEW-KEEPER.md",
+        "docs/spawner/NEW-SPAWNER.md",
+    ] {
+        std::fs::remove_file(root.join(rel)).unwrap();
+    }
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "clean"]);
+    let merge = String::from_utf8_lossy(&git(&["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_owned();
+    assert_eq!(fold_landed(root, 4, &merge).unwrap(), "nothing to fold");
+    assert!(
+        !git(&["rev-parse", "--verify", "refs/heads/land/docs-fold-4"])
+            .status
+            .success()
+    );
+}

@@ -1,54 +1,24 @@
 # Contributing
 
-Run `python3 tools/preflight.py --base origin/main --head HEAD` before pushing:
-it blocks on scrub, CI policy (including commit trailers), changed-crate Rust checks,
-and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/INFRA
-summary; failed checks with HTTP 5xx output in any family (including policy) are
-inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
-The Rust step prints `CARGO_TARGET_DIR` (or its default `rust/target`) before running
-Cargo. pg-spawnd CLI integration tests reuse Cargo's executable unless
-`CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`) points outside the checkout. For
-that shared case they build into `<shared target>/cli-tests/<checkout path hash>`,
-so another checkout cannot replace their CLI and extra output stays under the shared cap.
-Preflight pins Cargo to `PLANGRAPH_CARGO_TARGET_DIR` (default
-`~/.cache/plangraph/cargo-target`), disables incremental builds and holds the
-shared cleanup lease. It checks the host cache cap before and after each Cargo
-command; never override this with a private target. See [disk limits and
-cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty.
+Run `python3 tools/preflight.py --base origin/main --head HEAD` before pushing: it blocks on scrub, CI policy (including commit trailers), changed-crate Rust checks, and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/INFRA summary; failed checks with HTTP 5xx output in any family (including policy) are inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1. The Rust step prints `CARGO_TARGET_DIR` (or its default `rust/target`) before running
+Cargo. pg-spawnd CLI integration tests reuse Cargo's executable unless `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`) points outside the checkout. For that shared case they build into `<shared target>/cli-tests/<checkout path hash>`, so another checkout cannot replace their CLI and extra output stays under the shared cap. Preflight pins Cargo to `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`), disables incremental builds and holds the shared cleanup lease. It checks the host cache cap before and after each Cargo
+command; never override this with a private target. See [disk limits and cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty.
 
-On Linux, preflight calls `pg-spawnd host post-run-cargo` after all checks
-finish and the build leases have been released. Older pg-spawnd installs
-skip this extra trim until upgraded. The helper trims idle
-build entries first and can reclaim an identified debug profile if the
-shared target still exceeds its cap.
+On Linux, preflight calls `pg-spawnd host post-run-cargo` after all checks finish and the build leases have been released. Older pg-spawnd installs skip this extra trim until upgraded. The helper trims idle build entries first and can reclaim an identified debug profile if the shared target still exceeds its cap.
 
-Rust packages outside the `rust/` workspace (including `rust/worker`) run through
-their owning `Cargo.toml` with `--manifest-path`, including excluded packages
-without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
+Rust packages outside the `rust/` workspace (including `rust/worker`) run through their owning `Cargo.toml` with `--manifest-path`, including excluded packages without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
 
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
 file-only affected preflight has 240 seconds (`TEST_TIMEOUT`) for selection and pytest together. Preflight sizes pytest-xdist from the host using half the cores, at most one worker per 2 GiB of available memory, and between 2 and 16 workers. If available memory cannot be read, preflight uses the core count alone. `PREFLIGHT_TEST_WORKERS` overrides the count. A timeout reports the step, deadline, and selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 
 A local selection for a change under `src/plangraph/spawner/`, `planner/` or `routing_support/` is not cut to `LOCAL_TEST_LIMIT` (preflight passes `--keep-local-bound` to keep its fixed deadline). A timed-out affected step on a host at or above 0.7 load per CPU also prints a `{"reason": "host_busy"}` line; `plangraph fast-checks --dispatch` places a command on the least loaded eligible host and retries that reason once elsewhere.
 
-When the local affected selection includes the fleet projection tests, the selector
-builds `pg-spawnd` from the selected checkout before pytest starts.
-`tools/pgtest.py` runs the bounded test subprocess and handles process-tree
-cleanup when it times out. Preflight chooses the deadline and reports failures.
-When preflight selects `tests/test_hooks_prepush_paths.py`, it builds and stages
-one `plangraph` CLI before starting the 240-second step. Every pytest worker
-uses that executable through `PLANGRAPH_TEST_CLI`. Direct pytest and selector
-runs build the CLI once per pytest session when the variable is unset. Set it
-to a prebuilt executable's path to reuse a build.
+When the local affected selection includes the fleet projection tests, the selector builds `pg-spawnd` from the selected checkout before pytest starts. `tools/pgtest.py` runs the bounded test subprocess and handles process-tree cleanup when it times out. Preflight chooses the deadline and reports failures. When preflight selects `tests/test_hooks_prepush_paths.py`, it builds and stages one `plangraph` CLI before starting the 240-second step. Every pytest worker uses that executable through `PLANGRAPH_TEST_CLI`. Direct pytest and selector
+runs build the CLI once per pytest session when the variable is unset. Set it to a prebuilt executable's path to reuse a build.
 
 The Rust step bound is `max(600, planned test binaries x 15)` seconds times `1 + load/cores`, capped at 3600 (`rust_bound`), and a timeout names the test binary that was running. `CARGO_BUILD_JOBS` follows the free cores (cores minus load, floor 4) unless it is set. `cargo test` runs with `--no-fail-fast`, the Rust family runs every cargo check, and the Python tests still run after a Rust failure, so one pass lists every failing Rust test (`failing test:` lines) and every Python failure. The affected-test selector takes `--parts-union` (preflight passes it): a pushed batch or train selects the tests of every part's changed files. Standalone preflight uses the train and base first-parent histories to find the range.
 
-The affected-test selector can also run changed or added `tests/test_keeper_*.py`
-files with `PG_KEEPER_BACKEND=postgres`. The optional throwaway cluster requires
-`initdb`, `pg_ctl`, and `createdb` from `PG_BIN`, `PATH`, or standard install
-directories, plus `psycopg` in the test interpreter. If the binaries or
-`psycopg` are missing, it prints `keeper-postgres: SKIPPED`. An explicit
-`PG_DSN` runs the tests against that database and reports missing dependencies
+The affected-test selector can also run changed or added `tests/test_keeper_*.py` files with `PG_KEEPER_BACKEND=postgres`. The optional throwaway cluster requires `initdb`, `pg_ctl`, and `createdb` from `PG_BIN`, `PATH`, or standard install directories, plus `psycopg` in the test interpreter. If the binaries or `psycopg` are missing, it prints `keeper-postgres: SKIPPED`. An explicit `PG_DSN` runs the tests against that database and reports missing dependencies
 or test failures as errors.
 
 Keeper tests insert many rows with `World.execute_many`; `tests/test_keeper_tests_lint.py` refuses `w.conn.executemany`.

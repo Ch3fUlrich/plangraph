@@ -6,53 +6,23 @@
 
 ### QUOTA-PAUSE-GATE
 
-The usage owner creates `quota-pause` in the spawner state directory at usage >=95% and unlinks it at reset.
-Presence alone (including a dangling symlink) pauses admission: no second meter, expiry or automatic clearing. Flag read errors also pause admission.
-An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then `$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses `~/.local/state/plangraph`.
-Session `launch` and `relaunch` refuse with `quota pause` before invoking the
-action or stopping an existing session, without a model filter. Dry runs do not
-bypass the quota check or write audit records.
+The usage owner creates `quota-pause` in the spawner state directory at usage >=95% and unlinks it at reset. Presence alone (including a dangling symlink) pauses admission: no second meter, expiry or automatic clearing. Flag read errors also pause admission. An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then `$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses `~/.local/state/plangraph`. Session `launch` and `relaunch` refuse with `quota pause` before invoking the
+action or stopping an existing session, without a model filter. Dry runs do not bypass the quota check or write audit records.
 
-For an operator pause, place a regular UTF-8 file named `fleet-launch.pause` in the spawner state
-directory. Session launch, launch preview and relaunch refuse with the trimmed file contents as the
-reason; an empty file reports `operator pause`. Remove the file to resume accepting session launches.
-Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
-pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
-metadata. Known other providers are unaffected; missing provider metadata is
-unknown-provider and cannot bypass a pause.
-`basic-analysis` is the sole exempt role. After stripping one trailing `-<digits>`
-counter, a role or session name must equal `basic-analysis` or end in `-basic-analysis`.
-Thus `<host>-L1-` + `basic-analysis-0412` is exempt; `basic-analysis-helper-0001`,
-`not-basic-analysisx-0001` and empty names are not.
-Seat mixins accept `state` or `_state`. Probes check runner roots (`state`,
-`_state`, `state_root`) or environment defaults before resolving the probe store,
-then check its `state_root` or database parent if no runner root was configured.
-Launch-spec retains its required `state` and `role` request fields; quota refusals
-use reason code `quota_pause`. Omitted required fields remain invalid requests,
-not environment-defaulted builds.
-The deployed ctx-watchdog skips its external router call with one alert line for
-either a flag or symlink, or a missing, invalid, unreadable or unsearchable state
-directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
+For an operator pause, place a regular UTF-8 file named `fleet-launch.pause` in the spawner state directory. Session launch, launch preview and relaunch refuse with the trimmed file contents as the reason; an empty file reports `operator pause`. Remove the file to resume accepting session launches. Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping metadata. Known other providers are unaffected; missing provider metadata is
+unknown-provider and cannot bypass a pause. `basic-analysis` is the sole exempt role. After stripping one trailing `-<digits>` counter, a role or session name must equal `basic-analysis` or end in `-basic-analysis`. Thus `<host>-L1-` + `basic-analysis-0412` is exempt; `basic-analysis-helper-0001`, `not-basic-analysisx-0001` and empty names are not. Seat mixins accept `state` or `_state`. Probes check runner roots (`state`, `_state`, `state_root`) or environment defaults before resolving the probe store,
+then check its `state_root` or database parent if no runner root was configured. Launch-spec retains its required `state` and `role` request fields; quota refusals use reason code `quota_pause`. Omitted required fields remain invalid requests, not environment-defaulted builds. The deployed ctx-watchdog skips its external router call with one alert line for either a flag or symlink, or a missing, invalid, unreadable or unsearchable state directory. Its home fallback is systemd `%h`, independent of the manager's `HOME`;
 redeploy the service template to apply the guard.
 
 Source mode leaves only computed credential-name assignments readable (calls, subscripts, bracketed values without a string literal; literals are masked), for spawner-generated review git diffs and tracked context-file content; private-key blocks are masked in both modes, a slice or hunk inside a key block (judged on the whole file) is withheld, and token-shaped rules remain. Internal exact spans, never framing markers, keep caller text/card fields under the full scrubber at the final prompt boundary; command/stdin and prompt records use that same result. Source mode never applies to env, logs, stdout/stderr tails, run records or caller text, and has no flag, env, card, CLI or MCP switch.
-Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P (Python first masks wider names as below):
-shield every matched assignment's name/quote/separator with an indexed marker
-`U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
-then restore the names.
-P escapes literal opening markers before shielding so they stay readable and cannot disable the wrapped join.
-Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
-token catalog and JWT. P protects only OLD matched names; the unchanged joins can still eat wider names.
-Source mode (`redact_source`) joins wrapped tokens first, skips P, and masks literal assignment values; computed ones stay.
+Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass P (Python first masks wider names as below): shield every matched assignment's name/quote/separator with an indexed marker `U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join, then restore the names. P escapes literal opening markers before shielding so they stay readable and cannot disable the wrapped join. Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
+token catalog and JWT. P protects only OLD matched names; the unchanged joins can still eat wider names. Source mode (`redact_source`) joins wrapped tokens first, skips P, and masks literal assignment values; computed ones stay.
 Python masks wider plain assignments and exact `os.environ` subscript assignments through the physical line end (CR/LF only), before P. D-5703 extends those masks through any intersecting wrapped span that pre-A1 main already masked, including its final physical line; OLD behavior and both joins are unchanged. A1 masks the value before a join can eat the wider name (a1-J03); slice C still owns name preservation.
-Exact new double-quoted colon keys remain open gap A2, the JSON-key rule. Next-line and backslash continuation forms remain open gap slice C REDACT-ASSIGN-JOIN-GAPS; neither join is fixed.
-JSON-tail limit-loss: a wider plain assignment hides the rest of its line, including later limit evidence inside JSON strings or dict-style text. Structured 429/402 JSON readers can lose limit evidence after scrubbing; dict-style lines are not read even raw, while raw streaming refusal detection and raw step accounting still run before scrubbing.
+Exact new double-quoted colon keys remain open gap A2, the JSON-key rule. Next-line and backslash continuation forms remain open gap slice C REDACT-ASSIGN-JOIN-GAPS; neither join is fixed. JSON-tail limit-loss: a wider plain assignment hides the rest of its line, including later limit evidence inside JSON strings or dict-style text. Structured 429/402 JSON readers can lose limit evidence after scrubbing; dict-style lines are not read even raw, while raw streaming refusal detection and raw step accounting still run before scrubbing.
 Slice A2 also owns three known gaps: a wider name starting where an older-rule match ends is not masked yet; a wider name hides the whole rest of its line, including a later older-rule label; and quoted keys with blanks before the colon stay as on main.
 Under D-5703, fixture-known readable credential portions are compared against local git-loaded pre-A1 e7964367 modules and tagged with their owner, not endorsed as correct. A2 owns below-floor wrapped assignment continuation a1-J04 (5); slice C owns remaining join gaps; Rust-readable expectations belong to slice B `plangraph:REDACT-RUST-NAME-SCOPE-ALIGN`. The old Python assignment rule already consumes the stray closing bracket in `API_KEY=[REDACTED]]`.
 D-5751 pins both historical modules to full commit `e7964367542646ea603a1fc84f67f7036b298bcb` and checks helper identity plus an A1-only behavior difference, preventing absolute imports from silently using the current scanner. The LF/CRLF-before-separator fixture rows retain slice C ownership. The Python and Rust parity tests require wrapped assignments to be masked even when the input carries literal U+E000, U+E001 or indexed markers. Mask-growth tests preserve literal placeholders and reject ambiguous alignments. Both Python modules' work is counted, with a separate child CPU limit covering C-regex blank-run work.
-Secrecy-safe over-masks remain unchanged: mismatched or half quotes around wider names, Unicode line and paragraph separators counted as blanks, and a comparison sign after a subscript name.
-The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
-share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
+Secrecy-safe over-masks remain unchanged: mismatched or half quotes around wider names, Unicode line and paragraph separators counted as blanks, and a comparison sign after a subscript name. The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
 Source spans must start and end on line boundaries; invalid spans (even empty ones) withhold the prompt.
 Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
 only on child output via Python's `redact_output`, and as part of Rust's `redact`.

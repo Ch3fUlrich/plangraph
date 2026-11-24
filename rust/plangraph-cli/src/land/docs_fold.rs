@@ -199,6 +199,97 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git {}: {}",
+            args.first().unwrap_or(&""),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// The once-per-train fold on the landed tree: fold the fragments of `merge` in a throwaway worktree and
+/// commit the result on `land/docs-fold-<train>`, whose parent is the merge. The checkout in `root` is
+/// never touched. Repeating it finds the branch and changes nothing. Returns a one-line account.
+pub fn fold_landed(root: &Path, train_pr: u64, merge: &str) -> Result<String, String> {
+    let branch = format!("land/docs-fold-{train_pr}");
+    if let Ok(tip) = git_in(
+        root,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    ) {
+        let parent = git_in(root, &["rev-parse", &format!("{tip}^")]).unwrap_or_default();
+        return if parent == merge {
+            Ok(format!("{branch} already holds the fold at {tip}"))
+        } else {
+            Err(format!("{branch} exists on another base than {merge}"))
+        };
+    }
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let tree = tmp.path().join("tree");
+    let tree_str = tree.to_string_lossy().into_owned();
+    git_in(root, &["worktree", "add", "--detach", &tree_str, merge])?;
+    let account = fold_in_worktree(&tree, &branch, train_pr);
+    let removed = git_in(root, &["worktree", "remove", "--force", &tree_str]);
+    let account = account?;
+    removed?;
+    Ok(account)
+}
+
+fn fold_in_worktree(tree: &Path, branch: &str, train_pr: u64) -> Result<String, String> {
+    let caps = caps(tree);
+    if let Some((_, reference)) = AREAS.iter().find(|(_, r)| !caps.contains_key(*r)) {
+        return Err(format!("no line cap for {reference}"));
+    }
+    let report = fold(tree, &caps, true)?;
+    let kept = if report.kept.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", kept {} (see `fold-docs --check 1`)",
+            report
+                .kept
+                .iter()
+                .map(|(f, _)| f.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
+    if report.folded.is_empty() {
+        return Ok(format!("nothing to fold{kept}"));
+    }
+    git_in(tree, &["checkout", "-q", "-b", branch])?;
+    git_in(tree, &["add", "-A", "--", "docs", "CONTRIBUTING.md"])?;
+    let message = format!(
+        "Fold documentation fragments of train #{train_pr}\n\nPlan-Item: plangraph:LE-DOCS-FRAGMENT-LANDING-FOLD\nChangelog: skip (the fold moves fragments into the references)\n"
+    );
+    git_in(
+        tree,
+        &[
+            "-c",
+            "user.name=plangraph-land",
+            "-c",
+            "user.email=land@plangraph.invalid",
+            "commit",
+            "-q",
+            "-m",
+            &message,
+        ],
+    )?;
+    let commit = git_in(tree, &["rev-parse", "HEAD"])?;
+    Ok(format!(
+        "folded {} fragment(s) on {branch} at {commit}{kept}",
+        report.folded.len()
+    ))
+}
+
 /// Commits in `base..head` that edit a shared reference directly, per reference: the number the
 /// fragments are meant to bring to zero.
 pub fn direct_edits(root: &Path, range: &str) -> Result<Vec<(String, usize)>, String> {
