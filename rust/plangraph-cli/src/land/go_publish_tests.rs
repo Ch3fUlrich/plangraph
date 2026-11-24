@@ -314,3 +314,60 @@ fn ids_are_allocated_above_the_highest_row_outside_fences() {
         "D-3"
     );
 }
+
+#[test]
+fn a_fenced_example_row_with_the_new_id_is_no_row_for_the_read_back() {
+    let before = format!(
+        "{HEADER}| D-1 | demo | first | op | |\n```\n| D-2 | demo | example | op | |\n```\n"
+    );
+    let row = go().line("D-2");
+    // The canonical reader and the allocation skip fenced rows, so D-2 is free and the one real row counts.
+    assert_eq!(next_id(&before), "D-2");
+    let scripted = Scripted {
+        reads: RefCell::new(vec![before.clone(), format!("{before}{row}\n")]),
+        submitted: RefCell::new(vec![]),
+    };
+    let bound = Binds(Some((1234, HEAD.into())));
+    assert_eq!(
+        publish(&scripted, &bound, &go(), &fresh, 1).unwrap().d_id,
+        "D-2"
+    );
+}
+
+#[test]
+fn an_uppercase_head_is_written_lowercase_and_a_short_head_is_refused() {
+    let before = format!("{HEADER}| D-1 | demo | first | op | |\n");
+    let mut upper = go();
+    upper.head = "ABCDEF0123".repeat(4);
+    let lower = upper.head.to_ascii_lowercase();
+    let mut written = go();
+    written.head = lower.clone();
+    let scripted = Scripted {
+        reads: RefCell::new(vec![
+            before.clone(),
+            format!("{before}{}\n", written.line("D-2")),
+        ]),
+        submitted: RefCell::new(vec![]),
+    };
+    // The reader lowercases the head it returns.
+    publish(
+        &scripted,
+        &Binds(Some((1234, lower.clone()))),
+        &upper,
+        &fresh,
+        1,
+    )
+    .unwrap();
+    assert!(scripted.submitted.borrow()[0].contains(&format!("GO-HEAD {lower} |")));
+    let mut short = go();
+    short.head = "abc".into();
+    assert!(publish(&scripted, &Binds(None), &short, &fresh, 1)
+        .unwrap_err()
+        .contains("40 hex"));
+}
+
+#[test]
+fn the_published_decision_cell_is_the_one_the_batch_row_uses() {
+    let cell = crate::router_batch::go_decision_cell(1234, HEAD);
+    assert!(go().line("D-9").contains(&format!("| {cell} |")));
+}

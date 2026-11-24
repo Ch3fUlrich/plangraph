@@ -116,6 +116,12 @@ fn review_refusal(text: &str, head: &str) -> Option<&'static str> {
     (!pg_worker_core::review_split::has_files_read(text)).then_some("review file has no FILES READ")
 }
 
+/// The decision cell of a GO row: the GO and its binding to one PR and one full head. The one place
+/// that spells it; the published row (`land::go_publish`) uses it too.
+pub fn go_decision_cell(pr: u64, head: &str) -> String {
+    format!("GO #{pr} GO-HEAD {head}")
+}
+
 /// The one GO row of a batch PR in the decisions-log schema (`| ID | project | decision | by |
 /// why |`): the decision cell holds the GO and its binding (`GO #PR GO-HEAD head`), the why
 /// cell the per-part evidence table. Refuses, naming the part, when a head is not 40 hex, CI is
@@ -207,11 +213,10 @@ pub fn go_row(
         ));
     }
     Ok(format!(
-        "| {} | {} | GO #{} GO-HEAD {} | router | parts {}: {} |",
+        "| {} | {} | {} | router | parts {}: {} |",
         input.decision,
         input.project,
-        input.pr,
-        input.head,
+        go_decision_cell(input.pr, &input.head),
         input.parts.len(),
         table.join("; ")
     ))
