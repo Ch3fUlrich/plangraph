@@ -215,6 +215,8 @@ pub enum Invariant {
     UrgentBound,
     /// Req 6: a digest, range header included, never exceeds its byte limit.
     DigestOverBudget,
+    /// Req 6: a digest starts with its range header, so a cut output keeps it.
+    RangeNotFirst,
     /// Req 6: an event is received only by a session's receipt, never by a scan.
     ReceivedUnread,
     /// Req 4: no active role stays asleep with nothing armed or woken beyond one supervisor pass.

@@ -43,8 +43,9 @@ fn a_scan_is_not_a_receipt_and_a_digest_is_bounded_and_replayed_after_a_crash() 
             Event::Adopt,
         ],
     );
-    assert_eq!((m.stage(1), m.stage(2)), (Stage::Detected, Stage::Detected));
-    run(&mut m, &[Event::Receive(1), Event::Receive(1)]);
+    // Adoption delivers the waiting urgent event with the card; the ordinary one is replayed.
+    assert_eq!((m.stage(1), m.stage(2)), (Stage::Received, Stage::Detected));
+    run(&mut m, &[Event::Receive(1)]);
     assert_eq!((m.stage(1), m.stage(2)), (Stage::Received, Stage::Received));
     // A scan that counted as the receipt would lose an event nobody read.
     let mut bad = armed_ready(params(vec![URGENT(0)], 0)).with_defect(Defect::ScanIsReceipt);
@@ -131,7 +132,7 @@ fn receipts_follow_occurrence_order_not_event_ids() {
         &[Event::WaiterFire(0), Event::BeginTurn(0), Event::Receive(0)],
     );
     assert_eq!((m.stage(1), m.stage(0)), (Stage::Received, Stage::Detected));
-    assert_eq!(m.last_digest().map(|d| d.range), Some((1, 1)));
+    assert_eq!(m.last_digest().and_then(|d| d.range()), Some((1, 1)));
 }
 
 #[test]
@@ -156,11 +157,16 @@ fn a_digest_starts_with_its_range_and_never_exceeds_its_byte_limit() {
     );
     let digest = m.last_digest().expect("a digest was written");
     assert_eq!(
-        (digest.events, digest.bytes, digest.range),
-        (2, limit, (1, 2))
+        (digest.events(), digest.bytes, digest.range()),
+        (2, u32::from(limit), Some((1, 2)))
+    );
+    // The sections are written range first, then the events in occurrence order.
+    assert_eq!(
+        digest.parts,
+        vec![Part::Range(1, 2), Part::Event(1), Part::Event(2)]
     );
     assert!(
-        digest.bytes >= HEADER_BYTES + 2 * EVENT_BYTES,
+        digest.bytes >= u32::from(HEADER_BYTES + 2 * EVENT_BYTES),
         "the range header is counted"
     );
     assert_eq!(
@@ -170,8 +176,8 @@ fn a_digest_starts_with_its_range_and_never_exceeds_its_byte_limit() {
     );
     run(&mut m, &[Event::Receive(0)]);
     assert_eq!(
-        m.last_digest().map(|d| (d.events, d.range)),
-        Some((1, (3, 3)))
+        m.last_digest().map(|d| (d.events(), d.range())),
+        Some((1, Some((3, 3))))
     );
     // A digest that ignores its limit pushes the range header past the output cap.
     let mut bad = armed_ready(p).with_defect(Defect::DigestUnbounded);
@@ -187,4 +193,91 @@ fn a_digest_starts_with_its_range_and_never_exceeds_its_byte_limit() {
     run(&mut bad, &[Event::WaiterFire(0), Event::BeginTurn(0)]);
     assert_eq!(bad.apply(Event::Receive(0)), Ok(Outcome::Applied));
     assert_eq!(bad.violations(), vec![Invariant::DigestOverBudget]);
+}
+
+#[test]
+fn a_range_written_after_the_events_is_caught() {
+    // gpt-6.2-sol-high round 3 MED: an output cut at the byte limit must keep the range.
+    let mut p = params(vec![URGENT(0), URGENT(0)], 0);
+    digest_of(&mut p, 2);
+    let mut bad = armed_ready(p).with_defect(Defect::FooterRange);
+    run(
+        &mut bad,
+        &[Event::Occur(0), Event::Occur(1), Event::Scan(0)],
+    );
+    run(&mut bad, &[Event::WaiterFire(0), Event::BeginTurn(0)]);
+    assert_eq!(bad.apply(Event::Receive(0)), Ok(Outcome::Applied));
+    assert_eq!(
+        bad.last_digest().map(|d| d.parts.clone()),
+        Some(vec![Part::Event(1), Part::Event(2), Part::Range(1, 2)])
+    );
+    assert_eq!(bad.violations(), vec![Invariant::RangeNotFirst]);
+}
+
+#[test]
+fn the_largest_digest_budget_does_not_overflow_and_leaves_the_rest_pending() {
+    // gpt-6.2-sol-high round 3 MED: 40,000 + 30,000 bytes in a 65,535-byte digest.
+    let big = |bytes| EventSpec {
+        class: Class::Urgent,
+        source: 0,
+        bytes,
+    };
+    let mut p = params(vec![big(40_000), big(30_000)], 0);
+    p.digest_bytes = u16::MAX;
+    let mut m = armed_ready(p);
+    run(&mut m, &[Event::Occur(0), Event::Occur(1), Event::Scan(0)]);
+    run(
+        &mut m,
+        &[Event::WaiterFire(0), Event::BeginTurn(0), Event::Receive(0)],
+    );
+    assert_eq!((m.stage(0), m.stage(1)), (Stage::Received, Stage::Detected));
+    assert_eq!(
+        m.last_digest().map(|d| d.bytes),
+        Some(u32::from(HEADER_BYTES) + 40_000)
+    );
+    // An unbounded digest of both is over the limit, not a wrapped small number.
+    let mut p = params(vec![big(40_000), big(30_000)], 0);
+    p.digest_bytes = u16::MAX;
+    let mut bad = armed_ready(p).with_defect(Defect::DigestUnbounded);
+    run(
+        &mut bad,
+        &[Event::Occur(0), Event::Occur(1), Event::Scan(0)],
+    );
+    run(&mut bad, &[Event::WaiterFire(0), Event::BeginTurn(0)]);
+    assert_eq!(bad.apply(Event::Receive(0)), Ok(Outcome::Applied));
+    assert_eq!(bad.violations(), vec![Invariant::DigestOverBudget]);
+}
+
+#[test]
+fn the_occurrence_counter_cannot_wrap_so_more_events_than_it_holds_are_refused() {
+    // gpt-6.2-sol-high round 3 MED: the 256th occurrence saturated the order counter.
+    let many = |n: usize| params(vec![URGENT(0); n], 0);
+    assert_eq!(
+        Model::new(many(MAX_EVENTS + 1)).err(),
+        Some(ParamError::Range)
+    );
+    let mut p = many(MAX_EVENTS);
+    digest_of(&mut p, 1);
+    let mut m = armed_ready(p);
+    // Every event occurs, newest id first; receipts still follow the occurrence order.
+    for e in (0..MAX_EVENTS as u8).rev() {
+        run(&mut m, &[Event::Occur(e)]);
+    }
+    run(
+        &mut m,
+        &[
+            Event::Scan(0),
+            Event::WaiterFire(0),
+            Event::BeginTurn(0),
+            Event::Receive(0),
+        ],
+    );
+    let last = MAX_EVENTS as u8 - 1;
+    assert_eq!(
+        m.stage(last),
+        Stage::Received,
+        "the oldest occurrence goes first"
+    );
+    assert_eq!(m.last_digest().and_then(|d| d.range()), Some((1, 1)));
+    assert_eq!(m.stage(0), Stage::Detected);
 }

@@ -60,24 +60,25 @@ impl Model {
             .filter(|&i| active && self.events[i].stage == Stage::Detected)
             .collect();
         ids.sort_by_key(|&i| (self.events[i].class != Class::Urgent, self.events[i].order));
-        let (mut used, mut taken) = (HEADER_BYTES, Vec::new());
+        let limit = u32::from(self.p.digest_bytes);
+        let (mut used, mut taken) = (u32::from(HEADER_BYTES), Vec::new());
         for i in ids {
-            let fits = used + self.events[i].bytes <= self.p.digest_bytes;
+            let fits = used + u32::from(self.events[i].bytes) <= limit;
             if !fits && !self.has(Defect::DigestUnbounded) {
                 break;
             }
-            used += self.events[i].bytes;
+            used += u32::from(self.events[i].bytes);
             taken.push(i);
         }
-        if let (Some(first), Some(last)) = (
-            taken.iter().map(|&i| self.events[i].order).min(),
-            taken.iter().map(|&i| self.events[i].order).max(),
-        ) {
-            self.last_digest = Some(Digest {
-                events: taken.len() as u8,
-                bytes: used,
-                range: (first, last),
-            });
+        let orders: Vec<u8> = taken.iter().map(|&i| self.events[i].order).collect();
+        if let (Some(&first), Some(&last)) = (orders.iter().min(), orders.iter().max()) {
+            // The range comes first, so an output cut at the byte limit keeps it.
+            let mut parts = vec![Part::Range(first, last)];
+            parts.extend(orders.iter().map(|&o| Part::Event(o)));
+            if self.has(Defect::FooterRange) {
+                parts.rotate_left(1);
+            }
+            self.last_digest = Some(Digest { parts, bytes: used });
         }
         for i in taken {
             (self.events[i].stage, self.events[i].seen) = (Stage::Received, true);
@@ -206,11 +207,8 @@ impl Model {
             return Err(Denied::Deadline);
         }
         let bound = Params::ticks(self.p.bound_secs).saturating_add(1);
-        // Event time runs while a live current session could read it. A role with none is
-        // bounded by its recovery (supervisor pass, then the launch budget), not by this clock.
-        let live = self.live_current() > 0;
         for e in &mut self.events {
-            if live && matches!(e.stage, Stage::Occurred | Stage::Detected) {
+            if matches!(e.stage, Stage::Occurred | Stage::Detected) {
                 e.age = e.age.saturating_add(1).min(bound);
             }
         }
