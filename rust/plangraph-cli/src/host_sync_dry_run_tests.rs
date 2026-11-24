@@ -20,8 +20,12 @@ fn put(home: &Path, rel: &str, text: &str, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
     let path = home.join(rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, text).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+    if mode & 0o111 != 0 {
+        pg_worker_core::executable_test_support::write_executable(&path, text);
+    } else {
+        fs::write(&path, text).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+    }
 }
 
 const SERVICE: &str = "[Service]\nEnvironmentFile=%h/.config/p/a.env\nEnvironmentFile=-%h/.config/p/opt.env\nExecStart=%h/.local/bin/tool --repo ${PG_REPO} --pins $PG_PINS\n";
@@ -178,4 +182,31 @@ fn printed_names_have_no_spaces_and_hide_the_home() {
     let home = Path::new("/h/me");
     assert_eq!(shown(Path::new("/h/me/a b/c"), home), "~/a%20b/c");
     assert_eq!(shown(Path::new("/etc/x"), home), "/etc/x");
+}
+
+#[test]
+fn shell_variables_inside_a_quoted_script_are_not_environment_keys() {
+    // systemd substitutes `${NAME}` inside a word and `$NAME` only as a whole word: the locals of a
+    // `bash -c` script are the shell's, not the unit's.
+    let unit = "[Service]\nExecStart=/bin/bash -c 'S=$(date) && echo \"$S\" \"${PG_OUT:?}\" ${PG_REAL} $$HOME'\nExecStart=/bin/tool $PG_WHOLE \"$PG_QUOTED\" a$NOT_WHOLE --x=${PG_IN_WORD}\n";
+    let dir = units(&[("q.service", unit)]);
+    let needs = plan("q.service", dir.path(), None).unwrap();
+    let keys: Vec<_> = needs.keys.iter().map(String::as_str).collect();
+    assert_eq!(keys, ["PG_IN_WORD", "PG_QUOTED", "PG_REAL", "PG_WHOLE"]);
+    // The unit of the repository that holds such a script needs only its own keys.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/systemd");
+    let render = plan("plangraph-render.service", &root, None).unwrap();
+    assert!(
+        render
+            .keys
+            .iter()
+            .all(|k| k.starts_with("PLANGRAPH_") && !["S", "R", "T"].contains(&k.as_str())),
+        "{:?}",
+        render.keys
+    );
+    assert!(
+        !render.keys.contains("PLANGRAPH_BUILD_SHA"),
+        "{:?}",
+        render.keys
+    );
 }
