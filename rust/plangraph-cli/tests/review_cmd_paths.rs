@@ -89,3 +89,54 @@ fn dry_run_flag_prints_the_dry_run_verdict_and_writes_no_approval() {
     assert!(stdout.contains("verdict=DRY_RUN approval=none"), "{stdout}");
     assert!(!approval.exists());
 }
+
+/// The spawn rows the mock spawner logged for one dry-run review of a one-file change.
+fn dry_run_spawn_rows(mode: &str) -> Vec<serde_json::Value> {
+    let (tmp, work, _bare, base) = init_repo_with_origin();
+    git(&work, &["checkout", "-b", "feat"]);
+    fs::write(work.join("f.rs"), "pub fn f() {}\n").unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-m", "f\n\nWriter: gemini run-1"]);
+    let head = git(&work, &["rev-parse", "HEAD"]);
+    let state = tmp.path().join("state");
+    let log = tmp.path().join("spawner.jsonl");
+    let mock = write_mock_spawner(tmp.path(), &state, &log, mode);
+    let out = Command::new(plangraph_bin())
+        .args(["review", "--repo", work.to_str().unwrap()])
+        .args(["--base", &base, "--head", &head, "--no-fetch", "--dry-run"])
+        .args(["--state", state.to_str().unwrap()])
+        .env("PLANGRAPH_SPAWNER_CMD", &mock)
+        .env("PYTHONPATH", repo_root().join("src"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|row| row["verb"] == "spawn")
+        .collect()
+}
+
+#[test]
+fn build_capable_leg_review_is_placed_on_a_worker_host_not_the_repo_checkout() {
+    let rows = dry_run_spawn_rows("agy_build");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    // The card asks for a review workspace and names no cwd, so the spawner places the
+    // checkout on a worker host (the review host only as its logged last resort).
+    assert_eq!(rows[0]["review_workspace"], true, "{rows:?}");
+    assert_eq!(rows[0]["repository_review_required"], true, "{rows:?}");
+    assert!(rows[0]["cwd"].is_null(), "{rows:?}");
+}
+
+#[test]
+fn inline_only_leg_review_keeps_the_repo_checkout() {
+    let rows = dry_run_spawn_rows("split_pass");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0]["review_workspace"].is_null(), "{rows:?}");
+    assert!(rows[0]["cwd"].is_string(), "{rows:?}");
+}

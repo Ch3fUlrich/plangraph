@@ -239,6 +239,8 @@ def _close_queue(service, queued, **fields):
 def admit(service, options, *, card=None, preview=False):
     """Enforce disk and RAM admission even without overflow configuration."""
     if options.get('dry_run'):
+        if not preview and options.get('role') == 'review' and (card or {}).get('review_workspace') is True:
+            options['_placement'] = admit(service, dict(options, dry_run=False), card=card, preview=True) or {}
         return None
     from . import overflow
     from .item_key import native_writer_review
