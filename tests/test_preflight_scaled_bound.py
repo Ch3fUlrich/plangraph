@@ -90,4 +90,3 @@ def test_memavailable_line_without_value_raises_valueerror(tmp_path, monkeypatch
     with pytest.raises(ValueError):
         overflow.available_memory_mb()
     assert preflight.affected_workers({}, cores=12, memory_mb=overflow.available_memory_mb) == 6
-

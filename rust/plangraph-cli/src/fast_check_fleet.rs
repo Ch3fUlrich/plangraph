@@ -6,17 +6,46 @@
 //! Capacity comes from the existing probe: this host reads it directly, other hosts
 //! answer `pg-spawnd probe --json`. The memory floor is the registry's `mem_floor_mb`.
 use crate::fast_check_dispatch::{dispatch, summarize, Candidate, Fleet, Outcome, Sample, Verdict};
+use pg_worker_core::host_command;
 use pg_worker_core::host_probe::{self, HostProbe};
 use pg_worker_core::hosts::HostRegistry;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-const SSH_OPTIONS: [&str; 4] = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"];
-
 struct Machines {
     command: Vec<String>,
     local: String,
+}
+
+fn words(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
+
+/// `ssh` to the host's route (validated, option-safe) running `argv`; a WSL host goes
+/// through `wsl.exe --distribution D --exec`, in `cwd` when `in_cwd`.
+fn remote_command(host: &Candidate, argv: &[String], in_cwd: bool) -> Result<Command, String> {
+    let route = host.route.as_deref().ok_or("host has no SSH route")?;
+    let mut command = host_command::ssh(route).map_err(|_| "invalid SSH route".to_string())?;
+    if let Some(distro) = host.wsl_distro.as_deref() {
+        if !host_command::valid_wsl_distro(distro) {
+            return Err("invalid WSL distribution".into());
+        }
+        command.args(["wsl.exe", "--distribution", distro]);
+        if in_cwd {
+            command.args(["--cd", &host.cwd]);
+        }
+        command.arg("--exec").args(argv);
+    } else {
+        let line: Vec<String> = argv.iter().map(|w| quote(w)).collect();
+        let line = line.join(" ");
+        command.arg(if in_cwd {
+            format!("cd {} && {line}", quote(&host.cwd))
+        } else {
+            line
+        });
+    }
+    Ok(command)
 }
 
 fn quote(word: &str) -> String {
@@ -27,13 +56,9 @@ impl Fleet for Machines {
     fn sample(&mut self, host: &Candidate) -> Option<Sample> {
         let probe: HostProbe = match &host.route {
             None => host_probe::probe(&self.local).ok()?,
-            Some(route) => {
-                let remote = format!("pg-spawnd probe --json --host-id {}", quote(&host.name));
-                let out = Command::new("ssh")
-                    .args(SSH_OPTIONS)
-                    .args([route, &remote])
-                    .output()
-                    .ok()?;
+            Some(_) => {
+                let probe = words(&["pg-spawnd", "probe", "--json", "--host-id", &host.name]);
+                let out = remote_command(host, &probe, false).ok()?.output().ok()?;
                 out.status
                     .success()
                     .then(|| serde_json::from_slice(&out.stdout).ok())
@@ -54,13 +79,15 @@ impl Fleet for Machines {
                 local.args(&self.command[1..]).current_dir(&host.cwd);
                 local
             }
-            Some(route) => {
-                let words: Vec<String> = self.command.iter().map(|w| quote(w)).collect();
-                let remote = format!("cd {} && {}", quote(&host.cwd), words.join(" "));
-                let mut ssh = Command::new("ssh");
-                ssh.args(SSH_OPTIONS).args([route, &remote]);
-                ssh
-            }
+            Some(_) => match remote_command(host, &self.command, true) {
+                Ok(ssh) => ssh,
+                Err(error) => {
+                    return Outcome {
+                        code: 1,
+                        output: format!("{}: {error}\n", host.name),
+                    }
+                }
+            },
         };
         match command.output() {
             Ok(out) => Outcome {
@@ -98,6 +125,7 @@ fn candidates(
             Some(Candidate {
                 name: h.id.clone(),
                 route,
+                wsl_distro: h.wsl_distro.clone(),
                 cwd: h.repo(repo)?.root.clone(),
                 mem_floor_mb: h.caps.mem_floor_mb,
             })
@@ -189,7 +217,20 @@ pub(super) fn run(args: &[String]) -> super::Result<()> {
     }
     match done.verdict {
         Verdict::Pass => Ok(()),
-        Verdict::HostBusy => Err("host_busy on every eligible host".into()),
-        Verdict::TestFailure => Err(format!("failed with exit {}", done.code)),
+        verdict => Err(verdict_error(verdict, done.code)),
     }
 }
+
+fn verdict_error(verdict: Verdict, code: i32) -> String {
+    match verdict {
+        Verdict::HostBusy => {
+            "host_busy: the busy-host retry was exhausted (one retry on another eligible host)"
+                .into()
+        }
+        _ => format!("failed with exit {code}"),
+    }
+}
+
+#[cfg(test)]
+#[path = "fast_check_fleet_tests.rs"]
+mod tests;
