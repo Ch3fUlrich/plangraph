@@ -273,3 +273,20 @@ fn a_gate_edit_the_source_already_carries_must_be_granted_too() {
     assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
     fx.cut_granted(&[flow], &[], &["D-77".to_string()]).unwrap();
 }
+
+#[test]
+fn a_gate_edit_hidden_in_the_body_next_to_a_cherry_pick_line_is_refused() {
+    let fx = Fx::new();
+    let src = fx.source(
+        "a.txt",
+        &format!("{TRAILERS}\nsome words\n(cherry picked from commit ab12)\nGate-Edit: D-88"),
+    );
+    let err = fx
+        .cut_granted(std::slice::from_ref(&src), &[], &["D-1".to_string()])
+        .unwrap_err();
+    assert!(
+        err.contains("D-88") && err.contains("does not grant"),
+        "{err}"
+    );
+    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
+}

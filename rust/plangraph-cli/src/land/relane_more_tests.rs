@@ -185,7 +185,7 @@ fn a_merge_with_edits_of_its_own_is_refused_and_a_plain_merge_is_not() {
     assert!(g(&fx.origin, &["branch", "--list", "lane/evil-r2"]).is_empty());
 }
 
-fn body(writer: &str) -> String {
+pub(super) fn body(writer: &str) -> String {
     format!("x\\n\\nWriter: claude-sonnet-5-5 s (high writer {writer}, Claude Code, dell, D-1)")
 }
 
@@ -263,27 +263,6 @@ fn a_second_run_after_a_push_finds_the_branch_and_reports_the_lane_done() {
     let second = relane_cli::relane_all(&fx.work, "origin", &onto, true, &spec).unwrap();
     assert_eq!(second, [format!("CURRENT lane/twice-r1 {pushed}")]);
     assert_eq!(g(&fx.origin, &["rev-parse", "lane/twice-r2"]), pushed);
-}
-
-#[test]
-fn an_existing_next_branch_that_lacks_the_new_main_is_a_refusal_not_a_overwrite() {
-    let fx = Fx::new();
-    let head = fx.lane("lane/clash-r1", "w-c", &[("a.txt", "c\n2\n3\n")]);
-    fx.lane("lane/clash-r2", "w-other", &[("b.txt", "1\nx\n3\n")]);
-    let onto = fx.advance("c.txt", "1\n2\nmain\n");
-    let before = g(&fx.origin, &["rev-parse", "lane/clash-r2"]);
-    let spec = Spec {
-        branch: "lane/clash-r1".into(),
-        head,
-        writer: "w-c".into(),
-        parent: None,
-    };
-    let err = relane_cli::relane_all(&fx.work, "origin", &onto, true, &[spec]).unwrap_err();
-    assert!(
-        err.contains("lane/clash-r2 exists and does not contain"),
-        "{err}"
-    );
-    assert_eq!(g(&fx.origin, &["rev-parse", "lane/clash-r2"]), before);
 }
 
 #[test]

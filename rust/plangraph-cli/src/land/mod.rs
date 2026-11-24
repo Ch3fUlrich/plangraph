@@ -32,6 +32,8 @@ mod relane_git;
 #[cfg(test)]
 mod relane_more_tests;
 #[cfg(test)]
+mod relane_successor_tests;
+#[cfg(test)]
 mod relane_tests;
 pub mod resolve;
 #[cfg(test)]

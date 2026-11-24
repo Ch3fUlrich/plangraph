@@ -118,6 +118,9 @@ fn refuse(lane: &str, reason: impl Into<String>) -> Result<Outcome, String> {
     })
 }
 
+/// How many successor names (`-r2`, `-r3` ...) are passed over before a lane is given up on.
+const MAX_SUCCESSORS: usize = 20;
+
 /// Rebases one lane. `Err` is an environment failure (fetch, git); a lane that cannot be relaned is an
 /// `Outcome` and stays as it was.
 pub fn relane(l: &Lane) -> Result<Outcome, String> {
@@ -209,26 +212,6 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
             l, &old, &old, true, &before, &before, None,
         )));
     }
-    let target = next_branch(l.branch);
-    if l.push {
-        // A run that stopped after its push finds the branch again: the lane is done, not refused as a clash.
-        if let Some(tip) = remote_branch(repo, l.remote, &target)? {
-            if !git::is_ancestor(repo, &onto, &tip)? {
-                return refuse(
-                    l.branch,
-                    format!("{target} exists and does not contain {onto}"),
-                );
-            }
-            let theirs = own_commits(repo, &format!("{onto}..{tip}"))?;
-            if let Some(bad) = foreign(repo, &theirs, l.writer)? {
-                return refuse(l.branch, format!("{target} has foreign commit {bad}"));
-            }
-            let mut r = report(l, &old, &tip, true, &before, &theirs, Some(target));
-            r.patch_ids_equal =
-                patch_ids(repo, &own_range)? == patch_ids(repo, &format!("{onto}..{tip}"))?;
-            return Ok(Outcome::Current(r));
-        }
-    }
     let new = match rebase_in_worktree(repo, &old, &onto, boundary.as_deref(), l.branch)? {
         Ok(new) => new,
         Err(files) => {
@@ -249,6 +232,36 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
         );
     }
     let equal = patch_ids(repo, &own_range)? == patch_ids(repo, &format!("{onto}..{new}"))?;
+    // The first free successor name: a successor an earlier run pushed is adopted when it is that run's result
+    // on this main; one that predates the new main is passed over, never overwritten.
+    let mut target = next_branch(l.branch);
+    for _ in 0..MAX_SUCCESSORS {
+        if !l.push {
+            break;
+        }
+        let Some(tip) = remote_branch(repo, l.remote, &target)? else {
+            break;
+        };
+        if git::is_ancestor(repo, &onto, &tip)? {
+            let theirs = own_commits(repo, &format!("{onto}..{tip}"))?;
+            let same = !theirs.is_empty()
+                && foreign(repo, &theirs, l.writer)?.is_none()
+                && patch_ids(repo, &format!("{onto}..{tip}"))?
+                    == patch_ids(repo, &format!("{onto}..{new}"))?;
+            if !same {
+                return refuse(
+                    l.branch,
+                    format!("{target} holds none of this lane's own patches on the new main"),
+                );
+            }
+            let r = report(l, &old, &tip, equal, &before, &theirs, Some(target));
+            return Ok(Outcome::Current(r));
+        }
+        target = next_branch(&target);
+    }
+    if l.push && remote_branch(repo, l.remote, &target)?.is_some() {
+        return refuse(l.branch, format!("no free successor name up to {target}"));
+    }
     git::out(repo, &["update-ref", &result_ref(&target), &new])?;
     let pushed = if l.push {
         let _lock = push_lock(repo)?;

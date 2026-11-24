@@ -1,0 +1,1 @@
+`land-train relane` adopts a pushed successor branch only when it holds the lane's own patches on the new main, passes over one that predates it, and names a lane in a `Writer` trailer as a whole name; a PR list that cannot be decoded is a retry (exit 4); `land-train cut` refuses any `Gate-Edit:` line in a source message that the GO row does not grant.

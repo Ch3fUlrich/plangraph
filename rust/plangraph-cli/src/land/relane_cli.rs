@@ -139,6 +139,15 @@ fn lane_stem(branch: &str) -> &str {
     }
 }
 
+/// `text` holds `stem` as a whole lane name: not inside a longer one (`alpha` is not in `alpha-extra`).
+fn names_lane(text: &str, stem: &str) -> bool {
+    let name = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.';
+    text.match_indices(stem).any(|(at, _)| {
+        !text[..at].chars().next_back().is_some_and(name)
+            && !text[at + stem.len()..].chars().next().is_some_and(name)
+    })
+}
+
 /// The `Writer` trailer value of the lane's newest commit that has one (a merge of main has none), when it
 /// names the lane. The lane's name comes from the branch, not from its history, so a lane that holds only
 /// another lane's commits cannot vouch for them; an empty value is refused by `relane`.
@@ -153,7 +162,7 @@ fn writer_of(pr: &Pr) -> String {
                 .find_map(|l| l.strip_prefix("Writer: "))
         })
         .map(str::trim)
-        .filter(|w| w.contains(lane_stem(&pr.head_ref_name)))
+        .filter(|w| names_lane(w, lane_stem(&pr.head_ref_name)))
         .unwrap_or("")
         .to_owned()
 }
@@ -161,7 +170,7 @@ fn writer_of(pr: &Pr) -> String {
 /// The open `lane/` pull requests (from `gh pr list --json headRefName,headRefOid,baseRefName,commits`) as
 /// specs, parents first. A lane whose writer does not name it gets an empty writer: `relane` refuses it by name.
 pub fn specs_from_prs(json: &str) -> Result<Vec<Spec>, String> {
-    let prs: Vec<Pr> = serde_json::from_str(json).map_err(|e| format!("gh pr list: {e}"))?;
+    let prs: Vec<Pr> = serde_json::from_str(json).map_err(|e| format!("retry: gh pr list: {e}"))?;
     let open: BTreeMap<&str, &Pr> = prs
         .iter()
         .filter(|p| p.head_ref_name.starts_with("lane/"))

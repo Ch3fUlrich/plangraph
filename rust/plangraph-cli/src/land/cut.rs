@@ -23,6 +23,18 @@ pub struct Cut<'a> {
     pub gate: &'a Path,
 }
 
+/// The first `Gate-Edit:` line of `message`, wherever it stands (a trailer parse can miss one that cutting
+/// then exposes), whose D-id the GO row does not grant.
+fn ungranted_gate_edit(message: &str, grants: &[String]) -> Option<String> {
+    message.lines().find_map(|line| {
+        let line = line.trim();
+        let (key, value) = line.split_once(':')?;
+        let value = value.trim();
+        (key.eq_ignore_ascii_case("gate-edit") && !grants.iter().any(|g| g == value))
+            .then(|| value.to_owned())
+    })
+}
+
 /// A `(cherry picked from commit ...)` line is what `cherry-pick -x` leaves; inside the trailer paragraph
 /// it ends the block, so the cutter writes `Picked-From:` instead and drops the line.
 fn is_picked_line(line: &str) -> bool {
@@ -108,19 +120,8 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
             return Err(format!("cut: {src} is not a single-parent commit"));
         }
         // A Gate-Edit the source already carries survives the pick: it counts only when the GO row grants it.
-        let carried = git::out(
-            repo,
-            &[
-                "log",
-                "-1",
-                "--format=%(trailers:key=Gate-Edit,valueonly,separator=%x20)",
-                src,
-            ],
-        )?;
-        if let Some(d) = carried
-            .split_whitespace()
-            .find(|d| !c.grants.iter().any(|g| g == d))
-        {
+        let message = git::out(repo, &["log", "-1", "--format=%B", src])?;
+        if let Some(d) = ungranted_gate_edit(&message, c.grants) {
             return Err(format!(
                 "cut: {src} carries Gate-Edit {d}, which the GO row does not grant"
             ));
@@ -179,6 +180,12 @@ fn pick_all(c: &Cut, wt: &Path) -> Result<String, String> {
             trailers.push(format!("Gate-Edit: {d}"));
         }
         let message = with_trailers(&git::out(wt, &["log", "-1", "--format=%B"])?, &trailers)?;
+        // The message as it will be committed, after the `-x` line is gone, is what the grants must cover.
+        if let Some(d) = ungranted_gate_edit(&message, c.grants) {
+            return Err(format!(
+                "cut: {src} would carry Gate-Edit {d}, which the GO row does not grant"
+            ));
+        }
         let mut amend = git::command(wt, None);
         amend.args(["commit", "--amend", "--allow-empty", "-q", "-F", "-"]);
         let mut child = amend
