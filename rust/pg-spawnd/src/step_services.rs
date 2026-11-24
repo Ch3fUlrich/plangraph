@@ -62,6 +62,9 @@ impl Default for CiWait {
 pub enum Reading {
     /// No run yet, or one that has not completed.
     Pending(&'static str),
+    /// Every run finished and none failed, yet a required workflow has no passing run: a skipped
+    /// workflow is no evidence for a train, and waiting longer will not change it.
+    Unproven(String),
     Done(CiClass),
 }
 
@@ -94,12 +97,16 @@ pub fn classify(runs: &[CiRun], required: &[String]) -> Reading {
     if runs.iter().any(|run| conclusion(run).is_none()) {
         return Reading::Pending("a CI run has not completed");
     }
-    // Green speaks for the required workflows: each ran for this head and none failed.
-    if required
-        .iter()
-        .any(|name| !runs.iter().any(|run| &run.name == name))
-    {
-        return Reading::Pending("a required workflow has no run for the head yet");
+    // Green speaks for the required workflows: each ran for this head and one of its runs
+    // passed. A skipped or neutral run satisfies "no failure" but proves nothing.
+    for name in required {
+        let mut of_name = runs.iter().filter(|run| &run.name == name).peekable();
+        if of_name.peek().is_none() {
+            return Reading::Pending("a required workflow has no run for the head yet");
+        }
+        if !of_name.any(|run| run.conclusion.as_deref() == Some("success")) {
+            return Reading::Unproven(format!("required workflow {name} has no passing run"));
+        }
     }
     let last = runs
         .iter()
@@ -148,6 +155,7 @@ impl<K: Keeper, C: CiRuns, T: TrainDesk, A: StepActions> StepActions for Service
             }
             match classify(&self.ci.runs(head, pr)?, &self.required) {
                 Reading::Done(class) => return Ok(class),
+                Reading::Unproven(why) => return Err(format!("CI of {head}: {why}")),
                 Reading::Pending(why) => last = why,
             }
         }

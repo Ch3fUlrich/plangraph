@@ -348,6 +348,41 @@ impl Driver for Host {
     fn worktree(&self) -> Option<PathBuf> {
         Some(self.cwd.clone())
     }
+    fn clean(&mut self) -> Result<(), String> {
+        // The review directory may sit inside the checkout; it holds evidence, not code.
+        let reviews = self
+            .reviews
+            .strip_prefix(&self.cwd)
+            .ok()
+            .map(Path::to_owned);
+        let status = self.git(&["status", "--porcelain", "--untracked-files=all"])?;
+        let dirty: Vec<&str> = status
+            .lines()
+            .filter(|line| {
+                // `output` trims the text, so the first line may have lost its leading blank.
+                let path = line.trim_start().split_once(' ').map_or(*line, |(_, p)| p);
+                let path = Path::new(path.trim());
+                !reviews.as_ref().is_some_and(|dir| path.starts_with(dir))
+            })
+            .collect();
+        if dirty.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "the worktree differs from the committed tree: {}",
+            dirty.join("; ")
+        ))
+    }
+    fn probe_review_base(
+        &mut self,
+        head: &str,
+    ) -> Result<Option<native_writer::ReviewBase>, String> {
+        self.probe_base(head).map(Some)
+    }
+    fn load(&mut self) -> Result<Value, String> {
+        crate::records::read_record_file(&self.record_path)
+            .map_err(|error| error.into_error_data().message.into_owned())
+    }
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
         self.review_run(head, previous)
     }

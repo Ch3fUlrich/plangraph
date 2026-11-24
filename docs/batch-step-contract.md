@@ -57,14 +57,20 @@ Exit 0 means the part joined a train, 3 red CI, 1 any other stop.
 
 The agent host is the native writer Host: `worktree` is its checkout (it pins the base the
 review reads), `fast_checks` its gates, which write the stamp the review seat reads, and
-`push` verifies that same stamp before publishing the head. `write`, `review` and `fix`
+`push` verifies that same stamp before publishing the head. Before the gates, `fast_checks`
+refuses a tree that differs from the commit and a main that moved since the base was pinned
+(the step list binds every step to one head, so no rebase happens under it); after them it
+saves the record fields the review admission reads: admitted base, review basis, the head,
+its passed checks and the previous review. `write`, `review` and `fix`
 are its writer turns and review runs; the review state (previous review, HIGH+MED count of
-each round) lives beside the steps file, so the delta review and the round stop rule
-(`round_progress`: no progress, slow progress, cap of 8 reviews) survive a restart.
+each round) is read from the committed rows of the steps file and the review runs kept
+beside it, so the delta review and the round stop rule (`round_progress`: no progress, slow
+progress, cap of 8 reviews) survive a restart and never count a review whose row was not
+saved.
 
 The service steps are `claim` (`claim-batch`; on a refused key only the epochs this attempt
 was granted are released, each at its epoch, and a failed release is reported), `ci_class`
-(runs of the head that belong to the pull request; green when every required workflow ran
-and nothing failed, red naming the failing run, an error when the runs do not finish within
+(runs of the head that belong to the pull request; green when every required workflow has a passing run
+(a skipped one is no evidence) and nothing failed, red naming the failing run, an error when the runs do not finish within
 the waiting budget) and `train_join` (the `--train-cmd`, called with `--head --pr --run
 --attempt`, printing `{"train":..,"manifest":..}`).

@@ -84,9 +84,8 @@ impl Host {
             .map(drop)
     }
 
-    /// Rebase the package before its checks so the stamp, receipts and push all bind to one head.
-    pub(super) fn prepare_review_base(&self, head: &str) -> Result<ReviewBase, String> {
-        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
+    /// The review basis of `head` against the main observed now. The caller holds the guard.
+    fn current_review_base(&self, head: &str) -> Result<ReviewBase, String> {
         if self.git(&["rev-parse", "HEAD"])? != head {
             return Err(format!("worktree is not at {head}"));
         }
@@ -103,13 +102,34 @@ impl Host {
             // Saved runs predating the main pin still have the original package base.
             Err(_) => self.git(&["merge-base", &base, &observed_main])?,
         };
-        let current = ReviewBase {
+        Ok(ReviewBase {
             head: head.into(),
             base,
             mode: "current",
             main,
             observed_main,
-        };
+        })
+    }
+
+    /// The review basis of `head` for a caller that cannot follow a changing head (the step
+    /// list binds every step to one head): a main that moved since the base was pinned is
+    /// refused before the checkout is touched.
+    pub(super) fn probe_base(&self, head: &str) -> Result<ReviewBase, String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
+        let current = self.current_review_base(head)?;
+        if current.main != current.observed_main {
+            return Err(format!(
+                "origin/main moved from {} to {} since the base was pinned; start the batch on the new main",
+                current.main, current.observed_main
+            ));
+        }
+        Ok(current)
+    }
+
+    /// Rebase the package before its checks so the stamp, receipts and push all bind to one head.
+    pub(super) fn prepare_review_base(&self, head: &str) -> Result<ReviewBase, String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
+        let current = self.current_review_base(head)?;
         if current.main == current.observed_main {
             return Ok(current);
         }

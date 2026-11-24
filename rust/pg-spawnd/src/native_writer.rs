@@ -28,6 +28,20 @@ pub(crate) trait Driver {
     fn stamp_path(&mut self, _head: &str) -> Option<std::path::PathBuf> {
         None
     }
+    /// Fails unless the checkout holds nothing but the committed tree: the gates read files,
+    /// so they only speak for the head when no file differs from it.
+    fn clean(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    /// The review basis of `head` without touching the checkout: a main that moved is an
+    /// error, not a rebase. For callers that bind every step to one head.
+    fn probe_review_base(&mut self, _head: &str) -> Result<Option<ReviewBase>, String> {
+        Ok(None)
+    }
+    /// The run record as last saved.
+    fn load(&mut self) -> Result<Value, String> {
+        Err("the driver keeps no record".into())
+    }
     /// The checkout the writer works in, once prepared.
     fn worktree(&self) -> Option<std::path::PathBuf> {
         None

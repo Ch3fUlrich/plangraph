@@ -212,8 +212,13 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn std::io::Write) -> Result
     let args = parse(&args)?;
     let state = crate::state::resolve_state(args.state.as_deref(), |key| std::env::var_os(key))?;
     let findings = args.steps.with_extension("findings");
-    let host =
-        crate::native_writer_host::step_host(&state, &args.run_id, &args.inputs.base, findings)?;
+    let host = crate::native_writer_host::step_host(
+        &state,
+        &args.run_id,
+        &args.inputs.base,
+        findings,
+        args.steps.clone(),
+    )?;
     let mut actions = crate::step_run_actions::production(&args, host);
     let code = drive(&args, &mut actions, out)?;
     if code != 0 {
