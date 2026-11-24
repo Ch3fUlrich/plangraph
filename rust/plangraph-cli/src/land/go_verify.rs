@@ -294,22 +294,37 @@ fn ci(e: &Evidence, pins: &Pins, out: &mut Vec<Refusal>) {
 }
 
 /// The dated routing exceptions, compiled in like the workflow pin.
-const DEPLOY_EXCEPTIONS: &str = include_str!("../../../../deploy/exceptions.toml");
+pub(super) const DEPLOY_EXCEPTIONS: &str = include_str!("../../../../deploy/exceptions.toml");
 
 /// The deploy part of the GO: no manifest entry may be not live for more than 24 h on a reporting host.
+/// Every host of the hosts registry `registry` (its text, `None` when unreadable) must have a fresh ledger.
 pub(super) fn deploy_refusals(
     ledger_dir: &std::path::Path,
     exceptions: &str,
+    registry: Option<&str>,
     now: i64,
 ) -> Result<Vec<Refusal>, String> {
     use crate::deploy_manifest::guard;
     let exceptions = guard::parse_exceptions(exceptions)?;
     let (ledgers, mut findings) = guard::read_ledgers(ledger_dir);
-    findings.extend(guard::check(&ledgers, &exceptions, now));
+    let expected = match registry.map(guard::expected_hosts) {
+        Some(Ok(hosts)) => hosts,
+        Some(Err(error)) => {
+            findings.push(guard::Finding {
+                code: "deploy_hosts_unknown",
+                detail: error,
+            });
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    if findings.iter().all(|f| f.code != "deploy_hosts_unknown") {
+        findings.extend(guard::check(&ledgers, &expected, &exceptions, now));
+    }
     Ok(findings.into_iter().map(|f| no(f.code, f.detail)).collect())
 }
 
-fn deploy_ledger_dir(flags: &BTreeMap<String, String>) -> std::path::PathBuf {
+pub(super) fn deploy_ledger_dir(flags: &BTreeMap<String, String>) -> std::path::PathBuf {
     if let Some(dir) = flags.get("deploy-ledgers") {
         return dir.into();
     }
@@ -321,20 +336,41 @@ fn deploy_ledger_dir(flags: &BTreeMap<String, String>) -> std::path::PathBuf {
     crate::deploy_manifest::report::ledger_dir(&state.join("plangraph"))
 }
 
-/// `land-train go-verify --evidence FILE [--deploy-ledgers DIR]`: prints one `GO-VERIFIED` line, or refuses with every reason.
+/// The hosts registry the deploy check reads: `--hosts FILE`, else the user's `hosts.json`.
+pub(super) fn deploy_registry_text(flags: &BTreeMap<String, String>) -> Option<String> {
+    let path = flags
+        .get("hosts")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let config = std::env::var_os("XDG_CONFIG_HOME")
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config"))
+                })?;
+            Some(config.join("plangraph/hosts.json"))
+        })?;
+    std::fs::read_to_string(path).ok()
+}
+
+pub(super) fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// `land-train go-verify --evidence FILE [--deploy-ledgers DIR] [--hosts FILE]`: prints one `GO-VERIFIED` line, or refuses with every reason.
 pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let path = flags.get("evidence").ok_or("missing --evidence")?;
     let e: Evidence =
         serde_json::from_slice(&std::fs::read(path).map_err(|x| format!("{path}: {x}"))?)
             .map_err(|x| format!("{path}: {x}"))?;
     let mut refusals = verify(&e, &Pins::protected()?);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
     refusals.extend(deploy_refusals(
         &deploy_ledger_dir(flags),
         DEPLOY_EXCEPTIONS,
-        now,
+        deploy_registry_text(flags).as_deref(),
+        now_secs(),
     )?);
     if !refusals.is_empty() {
         let lines: Vec<_> = refusals
