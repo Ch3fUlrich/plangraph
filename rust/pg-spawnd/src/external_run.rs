@@ -92,13 +92,9 @@ fn terminal(record: &Value, status: &str, code: i32, reason: Option<&str>, ended
 
 /// A completed Claude batch session is reported only when its head passes the same gate the
 /// native Codex driver runs (`head_gate::run`) on the admitted base. A rejected head becomes a
-/// failed run with the gate diagnostic on the record. Briefs without an admitted base (plain
-/// briefs, restarts) and sessions that did not complete are returned unchanged.
-pub fn gate_completed(record: &Value, finished: Value) -> Value {
-    gate_completed_with(record, finished, crate::head_gate::scrub_words())
-}
-
-/// `gate_completed` with an explicit private scrub words file.
+/// failed run with the gate diagnostic on the record. Plain briefs (no admitted base) and
+/// sessions that did not complete are returned unchanged. `words` is the private scrub words
+/// file; none skips the scrub.
 pub fn gate_completed_with(record: &Value, mut finished: Value, words: Option<PathBuf>) -> Value {
     let (Some(base), Some(cwd)) = (
         record["admitted_base"].as_str(),
@@ -151,6 +147,19 @@ pub fn gate_completed_with(record: &Value, mut finished: Value, words: Option<Pa
 
 /// Recover only active registrations. A failed roster probe cannot prove a fleet exit.
 pub fn recover(state: &Path) -> io::Result<()> {
+    recover_with(
+        state,
+        &crate::session::agent_roster,
+        crate::head_gate::scrub_words(),
+    )
+}
+
+/// `recover` with the fleet roster and the private scrub words file supplied.
+pub fn recover_with(
+    state: &Path,
+    roster: &dyn Fn() -> io::Result<Vec<Value>>,
+    words: Option<PathBuf>,
+) -> io::Result<()> {
     let markers = match fs::read_dir(state.join("run-lifecycle/external")) {
         Ok(markers) => markers,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -219,12 +228,12 @@ pub fn recover(state: &Path) -> io::Result<()> {
         }
     }
     if !fleet.is_empty() {
-        let agents = crate::session::agent_roster()?;
+        let agents = roster()?;
         for (path, record, witness) in fleet {
             // Keep the first daemon observation, including across a crash
             // before the corresponding lifecycle publication.
             if let Some(finished) = fleet_outcome(&record, &agents, now())
-                .map(|finished| gate_completed(&record, finished))
+                .map(|finished| gate_completed_with(&record, finished, words.clone()))
             {
                 atomic_write_private(&witness, &serde_json::to_vec(&finished)?)?;
                 lifecycle::publish_recovered(state, &path, &record, &finished)?;

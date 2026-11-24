@@ -10,6 +10,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// A lane that holds item keys: a live spawner run or an unmerged remote branch.
@@ -31,6 +32,8 @@ pub struct Observed {
     pub state: PathBuf,
     pub repo: PathBuf,
     pub keeper: Option<crate::lane_keeper::Fetch>,
+    /// The launch asking: its own reservations are not lanes of another launch.
+    pub owner: String,
 }
 
 impl Observed {
@@ -40,6 +43,7 @@ impl Observed {
             state,
             repo,
             keeper: crate::lane_keeper::from_env(),
+            owner: String::new(),
         }
     }
 }
@@ -47,6 +51,14 @@ impl Observed {
 impl LaneSource for Observed {
     fn lanes(&self, keys: &[String]) -> Vec<Lane> {
         let mut lanes = run_lanes(&live_runs(&self.state));
+        lanes.extend(crate::lane_reservation::lanes(
+            &self.state,
+            keys,
+            &self.owner,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+        ));
         lanes.extend(branch_lanes(&self.repo, keys));
         if let Some(fetch) = &self.keeper {
             lanes.extend(crate::lane_keeper::lanes(
@@ -232,34 +244,61 @@ pub fn admit(
     refuse_held(&keys, &lanes, override_reason).map(|reason| (reason, keys))
 }
 
-/// What a launch was admitted with: its keys, and the reason of a deliberate second lane.
+/// What a launch was admitted with: its keys, the reason of a deliberate second lane and the
+/// owner token that holds the reservation of the keys.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Launched {
     pub keys: Vec<String>,
     pub lane_override: Option<String>,
+    pub reservation: Option<String>,
 }
 
-/// The one admission of a writer launch (native dispatch, the spawner CLI, the feeder): render
-/// the prompt, take the override from `explicit` or the typed input, and check the keys of the
-/// brief and of the card (`extra`) against the live runs, the remote lane branches of `repo`
-/// and the Keeper's open lanes.
-pub fn admit_launch(
-    prompt: &str,
-    extra: &[String],
-    state: &Path,
-    repo: &Path,
-    explicit: Option<&str>,
-) -> Result<Launched, String> {
-    let rendered = crate::batch_writer_brief::render_input(prompt)?;
-    let observed = Observed::new(state.to_owned(), repo.to_owned());
-    let reason = explicit.or(rendered.lane_override.as_deref());
-    admit(&rendered.brief, extra, &observed, reason).map(|(lane_override, keys)| Launched {
+/// One writer launch to admit.
+pub struct LaunchRequest<'a> {
+    pub prompt: &'a str,
+    /// Keys the launch card names besides the brief's own.
+    pub extra: &'a [String],
+    pub state: &'a Path,
+    pub repo: &'a Path,
+    /// The override reason of explicit launch metadata (card or launcher option).
+    pub explicit: Option<&'a str>,
+    /// The token of an earlier admission of this same launch, so it does not collide with itself.
+    pub owner: Option<&'a str>,
+    /// Reserve the admitted keys for this launch; a check-only caller leaves them free.
+    pub reserve: bool,
+}
+
+/// The one admission of a writer launch (native dispatch, the spawner CLI, the feeder, the
+/// Claude launcher): render the prompt, take the override from `explicit` or the typed input,
+/// and check the keys of the brief and of the card against the live runs, the remote lane
+/// branches of `repo`, the Keeper's open lanes and the reservations of launches that have no
+/// run record yet. The check and the reservation are one step under the state's lock, so two
+/// concurrent launches of a key cannot both be admitted.
+pub fn admit_launch(request: &LaunchRequest) -> Result<Launched, String> {
+    let rendered = crate::batch_writer_brief::render_input(request.prompt)?;
+    let owner = request
+        .owner
+        .map_or_else(crate::lane_reservation::new_owner, str::to_owned);
+    let mut observed = Observed::new(request.state.to_owned(), request.repo.to_owned());
+    observed.owner = owner.clone();
+    let reason = request.explicit.or(rendered.lane_override.as_deref());
+    let _lock = request
+        .reserve
+        .then(|| crate::lane_reservation::lock(request.state))
+        .transpose()?;
+    let (lane_override, keys) = admit(&rendered.brief, request.extra, &observed, reason)?;
+    if request.reserve {
+        crate::lane_reservation::reserve(request.state, &keys, &owner)
+            .map_err(|e| format!("lane reservation: {e}"))?;
+    }
+    Ok(Launched {
         keys,
         lane_override,
+        reservation: request.reserve.then_some(owner),
     })
 }
 
-/// `pg-spawnd lane-check [--state DIR] --repo DIR [--item KEY]... [--override REASON]` with the
+/// `pg-spawnd lane-check [--state DIR] --repo DIR [--item KEY]... [--override REASON] [--owner TOKEN] [--no-reserve 1]` with the
 /// prompt on stdin: prints `{"item_keys":[..],"lane_override":..}` and exits 0 when the launch
 /// is admitted; exits 2 with the refusal on stderr otherwise.
 pub fn execute(
@@ -267,7 +306,8 @@ pub fn execute(
     prompt: &mut dyn std::io::Read,
     out: &mut dyn std::io::Write,
 ) -> i32 {
-    let (mut state, mut repo, mut explicit) = (None, None, None);
+    let (mut state, mut repo, mut explicit, mut owner) = (None, None, None, None);
+    let mut reserve = true;
     let mut items = Vec::new();
     let mut it = args.into_iter();
     while let Some(flag) = it.next() {
@@ -276,8 +316,10 @@ pub fn execute(
             ("--repo", Some(v)) => repo = Some(PathBuf::from(v)),
             ("--item", Some(v)) => items.push(v),
             ("--override", Some(v)) => explicit = Some(v),
+            ("--owner", Some(v)) => owner = Some(v),
+            ("--no-reserve", Some(v)) if v == "1" => reserve = false,
             _ => {
-                eprintln!("lane-check: usage: [--state DIR] --repo DIR [--item KEY]... [--override REASON] < prompt");
+                eprintln!("lane-check: usage: [--state DIR] --repo DIR [--item KEY]... [--override REASON] [--owner TOKEN] [--no-reserve 1] < prompt");
                 return 2;
             }
         }
@@ -301,12 +343,22 @@ pub fn execute(
         eprintln!("lane-check: prompt unreadable: {error}");
         return 2;
     }
-    match admit_launch(&text, &items, &state, &repo, explicit.as_deref()) {
+    let request = LaunchRequest {
+        prompt: &text,
+        extra: &items,
+        state: &state,
+        repo: &repo,
+        explicit: explicit.as_deref(),
+        owner: owner.as_deref(),
+        reserve,
+    };
+    match admit_launch(&request) {
         Ok(admitted) => {
             let _ = writeln!(
                 out,
                 "{}",
-                serde_json::json!({"item_keys":admitted.keys,"lane_override":admitted.lane_override})
+                serde_json::json!({"item_keys":admitted.keys,"lane_override":admitted.lane_override,
+                    "lane_reservation":admitted.reservation})
             );
             0
         }
@@ -391,6 +443,7 @@ mod tests {
             state: repo.join("state"),
             repo: repo.to_owned(),
             keeper: Some(Box::new(move |_| Ok(show.clone()))),
+            owner: String::new(),
         };
         let error = check_brief(BRIEF, &observed, None).unwrap_err();
         assert!(

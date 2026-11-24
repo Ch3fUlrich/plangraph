@@ -54,6 +54,9 @@ pub struct Policy {
     pub estimate_tokens: u64,
     /// Related ready items one writer batch may hold; 1 keeps one item per run.
     pub batch_max_items: usize,
+    /// Why this feeder deliberately repeats an item another live lane holds; it travels with the
+    /// brief and the card to dispatch, which records it. Absent for ordinary runs.
+    pub lane_override: Option<String>,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -68,6 +71,7 @@ impl Default for Policy {
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
             batch_max_items: 1,
+            lane_override: None,
         }
     }
 }
@@ -208,8 +212,12 @@ pub fn brief(item: &Task, house_rules: &str) -> String {
 }
 
 pub fn card(item: &Task, repo: &str, review_dir: &str, policy: &Policy) -> Value {
-    json!({"run_kind":"native-codex", "repo":repo, "base_ref":"refs/heads/main",
-        "item_key":item.key, "review_dir":review_dir, "estimate_tokens":policy.estimate_tokens, "files":item.files})
+    let mut card = json!({"run_kind":"native-codex", "repo":repo, "base_ref":"refs/heads/main",
+        "item_key":item.key, "review_dir":review_dir, "estimate_tokens":policy.estimate_tokens, "files":item.files});
+    if let Some(reason) = &policy.lane_override {
+        card["lane_override_reason"] = json!(reason);
+    }
+    card
 }
 
 /// Registry aliases and short DNS names share one identity for policy and counting.
@@ -230,8 +238,13 @@ pub fn same_host(a: &str, b: &str, p: &Policy) -> bool {
 /// HTTP claim result carries its epoch through compensation; no priority writes.
 pub trait Launch {
     /// The live lane that already holds `key` (another writer run, an unmerged lane branch or a
-    /// lane Keeper reports), or none. The default has no lane registry to ask.
-    fn lane_holder(&mut self, _key: &str) -> Result<Option<String>, String> {
+    /// lane Keeper reports), or none; a nonblank `lane_override` admits a deliberate second lane.
+    /// The default has no lane registry to ask.
+    fn lane_holder(
+        &mut self,
+        _key: &str,
+        _lane_override: Option<&str>,
+    ) -> Result<Option<String>, String> {
         Ok(None)
     }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError>;

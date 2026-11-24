@@ -26,6 +26,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     borrow::Cow,
+    fs,
     io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -206,18 +207,22 @@ fn local(
     let supplied = || {
         read_admitted_prompt(
             prompt_path,
-            observed
-                .as_ref()
-                .map(|o| o as &dyn crate::lane_guard::LaneSource),
+            observed.as_ref().map(|observed| LaneAdmission {
+                lanes: observed as &dyn crate::lane_guard::LaneSource,
+                cwd: Path::new(&args.cwd),
+                explicit: args.option("lane-override"),
+                state: &paths.state,
+            }),
         )
     };
     let admitted = match request.restart.as_ref().map_or_else(supplied, |restart| {
-        Ok(Admitted {
-            text: restart.prompt.clone(),
-            items: Vec::new(),
-            lane_override: None,
-            base: None,
-        })
+        // A respawn continues its own lane: the batch reservations, the override and the base
+        // the completed head is gated against come from the launch it continues.
+        Ok(restart_admitted(
+            &paths.state,
+            &request.spec,
+            restart.prompt.clone(),
+        ))
     }) {
         Ok(admitted) => admitted,
         Err(error) => {
@@ -410,6 +415,15 @@ fn local(
     Ok(0)
 }
 
+/// The prompt a forwarded launch sends, and the typed override reason the target needs to
+/// admit and record a deliberate second lane (it only sees the rendered prompt).
+fn read_forwarded_prompt(path: &Path) -> io::Result<(String, Option<String>)> {
+    let typed = crate::batch_writer_brief::render_input(&read_text(path)?)
+        .map_err(io::Error::other)?
+        .lane_override;
+    read_admitted_prompt(path, None).map(|prompt| (prompt.text, typed))
+}
+
 fn read_writer_prompt(path: &Path) -> io::Result<String> {
     read_admitted_prompt(path, None).map(|prompt| prompt.text)
 }
@@ -421,29 +435,108 @@ struct Admitted {
     items: Vec<String>,
     /// The reason that admitted a deliberate second lane.
     lane_override: Option<String>,
-    /// The base the batch brief names; the completed head is gated against it.
+    /// The base the batch brief names, pinned to a commit; the completed head is gated against it.
     base: Option<String>,
 }
 
-/// The launch prompt of a writer. With `lanes` the item keys of its brief are admitted
-/// first: a key another live lane holds is refused with the lane name unless the brief
-/// carries a `LANE_OVERRIDE` reason, which is returned for the launch record.
-fn read_admitted_prompt(
-    path: &Path,
-    lanes: Option<&dyn crate::lane_guard::LaneSource>,
-) -> io::Result<Admitted> {
+/// What a fresh writer launch is admitted against.
+struct LaneAdmission<'a> {
+    lanes: &'a dyn crate::lane_guard::LaneSource,
+    /// The working directory the base is pinned in.
+    cwd: &'a Path,
+    /// The override reason of the launcher's own `--lane-override` option.
+    explicit: Option<&'a str>,
+    state: &'a Path,
+}
+
+/// The base of a typed batch brief as a full commit id; none can be pinned from a name that
+/// does not resolve in the launch's repository.
+fn pin_base(base: &str, cwd: &Path) -> Result<String, String> {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    let resolved = git(&[
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        &format!("{base}^{{commit}}"),
+    ]);
+    let full = base.len() == 40 && base.bytes().all(|b| b.is_ascii_hexdigit());
+    match resolved {
+        Some(sha) => Ok(sha),
+        // A full id is pinned already; only a repository that lacks it contradicts the brief.
+        None if full && git(&["rev-parse", "--git-dir"]).is_none() => Ok(base.to_ascii_lowercase()),
+        None => Err(format!(
+            "lane_base: the brief's BASE `{base}` does not name a commit of {}",
+            cwd.display()
+        )),
+    }
+}
+
+/// The launch of a respawn: its prompt with the item keys, override and base of the run it
+/// continues, read from that run's record.
+fn restart_admitted(state: &Path, spec: &Value, text: String) -> Admitted {
+    let record: Value = spec["run_id"]
+        .as_str()
+        .filter(|id| pg_worker_core::run::record::valid_run_id(id))
+        .and_then(|id| fs::read(state.join("runs").join(id).join("record.json")).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(Value::Null);
+    Admitted {
+        text,
+        items: record["item_keys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|key| key.as_str().map(str::to_owned))
+            .collect(),
+        lane_override: record["lane_override"].as_str().map(str::to_owned),
+        base: record["admitted_base"].as_str().map(str::to_owned),
+    }
+}
+
+fn read_admitted_prompt(path: &Path, admission: Option<LaneAdmission>) -> io::Result<Admitted> {
     let text = read_text(path)?;
     let crate::batch_writer_brief::Rendered {
         brief,
         lane_override,
+        base,
     } = crate::batch_writer_brief::render_input(&text).map_err(io::Error::other)?;
-    let reason = match lanes {
-        Some(lanes) => crate::lane_guard::check_brief(&brief, lanes, lane_override.as_deref())
-            .map_err(io::Error::other)?,
-        None => None,
+    let (reason, base) = match &admission {
+        Some(admission) => {
+            // Check and reservation are one step: two concurrent launches cannot both pass.
+            let _lock = crate::lane_reservation::lock(admission.state).map_err(io::Error::other)?;
+            let reason = crate::lane_guard::check_brief(
+                &brief,
+                admission.lanes,
+                admission.explicit.or(lane_override.as_deref()),
+            )
+            .map_err(io::Error::other)?;
+            let base = base
+                .map(|base| pin_base(&base, admission.cwd))
+                .transpose()
+                .map_err(io::Error::other)?;
+            let keys = crate::lane_guard::item_keys(&brief);
+            if !keys.is_empty() {
+                crate::lane_reservation::reserve(
+                    admission.state,
+                    &keys,
+                    &crate::lane_reservation::new_owner(),
+                )?;
+            }
+            (reason, base)
+        }
+        None => (None, base),
     };
     let items = crate::lane_guard::item_keys(&brief);
-    let base = crate::batch_writer_brief::admitted_base(&brief).map(str::to_owned);
     let text = match brief {
         Cow::Borrowed(_) => text,
         Cow::Owned(brief) => {

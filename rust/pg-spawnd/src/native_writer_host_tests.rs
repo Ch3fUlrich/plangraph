@@ -793,5 +793,8 @@ mod late_fixture;
 use late_fixture::*;
 
 #[cfg(target_os = "linux")]
+#[path = "native_writer_gate_tests.rs"]
+mod gate_tests;
+#[cfg(target_os = "linux")]
 #[path = "native_writer_policy_tests.rs"]
 mod policy_gate;

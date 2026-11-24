@@ -565,6 +565,9 @@ async def lane_admission(binary, state, card, prompt, repo):
         argv += ['--item', key]
     if reason is not None:
         argv += ['--override', reason]
+    token = card.get('lane_reservation')
+    if isinstance(token, str) and token:
+        argv += ['--owner', token]  # the MCP dispatch already reserved these keys for this launch
     process = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     out, error = await process.communicate((prompt or '').encode())

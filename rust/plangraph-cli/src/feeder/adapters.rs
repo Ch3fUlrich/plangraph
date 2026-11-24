@@ -193,12 +193,21 @@ pub(super) struct Adapters<'a, T> {
 impl<T: Transport> Launch for Adapters<'_, T> {
     /// Asks `pg-spawnd lane-check`, the guard of the spawner's own native dispatch, so the brief
     /// generator and the dispatch refuse by the same rule and name the same lane.
-    fn lane_holder(&mut self, key: &str) -> Result<Option<String>, String> {
+    fn lane_holder(
+        &mut self,
+        key: &str,
+        lane_override: Option<&str>,
+    ) -> Result<Option<String>, String> {
         let mut cmd = Command::new(self.env.get("PG_SPAWND_BIN").map_or("pg-spawnd", |s| s));
         cmd.arg("lane-check")
             .arg("--repo")
             .arg(&self.repo)
-            .args(["--item", key])
+            .args(["--item", key, "--no-reserve", "1"])
+            .args(
+                lane_override
+                    .iter()
+                    .flat_map(|reason| ["--override", *reason]),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -462,12 +471,12 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
             state: temp.path().into(),
             host: "dell".into(),
         };
-        assert_eq!(a.lane_holder("plangraph:FREE"), Ok(None));
+        assert_eq!(a.lane_holder("plangraph:FREE", None), Ok(None));
         assert_eq!(
-            a.lane_holder("plangraph:HELD").unwrap().as_deref(),
+            a.lane_holder("plangraph:HELD", None).unwrap().as_deref(),
             Some("lane_collision: plangraph:HELD is held by live lane writer-0673 (run)")
         );
-        assert!(a.lane_holder("plangraph:BROKEN").is_err());
+        assert!(a.lane_holder("plangraph:BROKEN", None).is_err());
     }
     struct Snapshot(Value);
     impl Transport for Snapshot {

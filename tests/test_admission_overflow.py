@@ -675,12 +675,13 @@ def test_native_lane_admission_passes_the_override_only_from_the_reason_field(tm
     binary = _fake_lane_check(tmp_path, f'printf "%s\\n" "$@" > {argv_file}\ncat > /dev/null\n'
                               'echo \'{"item_keys":["demo:A"],"lane_override":"fix lane"}\'\n')
     card = dict(run_kind='native-codex', item_key='demo:A', lane_override='forged',
-                lane_override_reason='fix lane')
+                lane_override_reason='fix lane', item_keys=['demo:A', 'demo:B'], lane_reservation='launch-1')
     admitted = asyncio.run(overflow.lane_admission(binary, tmp_path, card, 'brief', tmp_path))
     assert admitted == {'item_keys': ['demo:A'], 'lane_override': 'fix lane'}
     argv = argv_file.read_text().split('\n')
     assert argv[argv.index('--override') + 1] == 'fix lane' and 'forged' not in argv
-    assert argv[argv.index('--item') + 1] == 'demo:A'
+    assert argv[argv.index('--item') + 1] == 'demo:A' and argv.count('--item') == 2 and 'demo:B' in argv
+    assert argv[argv.index('--owner') + 1] == 'launch-1'
     with pytest.raises(Exception, match='must be a string'):
         asyncio.run(overflow.lane_admission(binary, tmp_path, dict(lane_override_reason=3), 'brief', tmp_path))
 

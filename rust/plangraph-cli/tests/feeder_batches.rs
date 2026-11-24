@@ -48,6 +48,8 @@ struct Host {
     queued: bool,
     /// The live lane that holds a key, by key.
     lanes: BTreeMap<String, String>,
+    /// The override each lane check was asked with.
+    overrides: Vec<Option<String>>,
     /// Held after the first claim until the other host has claimed as well.
     meet: Option<Arc<Barrier>>,
 }
@@ -71,13 +73,23 @@ impl Host {
             rival_error_at: None,
             queued: false,
             lanes: BTreeMap::new(),
+            overrides: Vec::new(),
             meet: None,
         }
     }
 }
 impl Launch for Host {
-    fn lane_holder(&mut self, key: &str) -> Result<Option<String>, String> {
-        Ok(self.lanes.get(key).cloned())
+    fn lane_holder(
+        &mut self,
+        key: &str,
+        lane_override: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        self.overrides.push(lane_override.map(str::to_owned));
+        Ok(self
+            .lanes
+            .get(key)
+            .cloned()
+            .filter(|_| lane_override.is_none()))
     }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError> {
         let mut registry = self.registry.lock().unwrap();
@@ -705,4 +717,50 @@ fn an_item_another_live_lane_holds_is_dropped_before_any_claim_and_the_next_is_l
     assert!(row["skipped"][0]["reason"].as_str().unwrap().starts_with(
         "lane_held_by:lane_collision: plangraph:HELD is held by live lane writer-0673"
     ));
+}
+
+#[test]
+fn a_dry_run_drops_a_held_item_like_a_live_tick_and_the_override_reaches_card_brief_and_check() {
+    let items = vec![item("HELD", 9, &["a.rs"]), item("FREE", 5, &["b.rs"])];
+    let registry = Arc::new(Mutex::new(Registry::default()));
+    let mut host = Host::new(&registry, &items);
+    host.lanes.insert(
+        "plangraph:HELD".into(),
+        "lane_collision: held by writer-0673".into(),
+    );
+    let row = drive(&ready(items.clone()), &mut host, "dell", 1, true);
+    assert_eq!(row["decision"], "would_spawn");
+    assert_eq!(row["item_key"], "plangraph:FREE");
+    assert_eq!(row["skipped"][0]["item_key"], "plangraph:HELD");
+    assert!(
+        registry.lock().unwrap().claimed.is_empty(),
+        "a dry run never claims"
+    );
+    // A deliberate second lane: the policy's reason admits the held item and rides on the card.
+    let mut policy = policy(2);
+    policy.lane_override = Some("fix lane on purpose".into());
+    let related = vec![item("HELD", 9, &["a.rs"]), item("FREE", 5, &["a.rs"])];
+    let row = tick(
+        &ready(related),
+        &[],
+        &facts("dell"),
+        &policy,
+        "rules",
+        "/repo",
+        "/reviews",
+        true,
+        &mut host,
+    );
+    assert_eq!(row["item_key"], "plangraph:HELD");
+    assert_eq!(row["card"]["lane_override_reason"], "fix lane on purpose");
+    assert!(
+        row["brief"]
+            .as_str()
+            .unwrap()
+            .contains("fix lane on purpose"),
+        "{row}"
+    );
+    assert!(host
+        .overrides
+        .contains(&Some("fix lane on purpose".to_owned())));
 }

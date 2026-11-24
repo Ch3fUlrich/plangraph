@@ -34,6 +34,7 @@ impl fmt::Display for SpawnError {
 /// when the batch fails.
 fn claim_batch(
     batch: &[Task],
+    lane_override: Option<&str>,
     launch: &mut impl Launch,
     dropped: &mut Vec<Value>,
 ) -> Result<Vec<(Task, u64)>, SpawnError> {
@@ -41,7 +42,7 @@ fn claim_batch(
     for item in batch {
         // An item another live lane carries is never written a second time: it is dropped from
         // this batch with the lane that holds it, before any claim.
-        match launch.lane_holder(&item.key) {
+        match launch.lane_holder(&item.key, lane_override) {
             Ok(None) => {}
             Ok(Some(lane)) => {
                 dropped.push(json!({"item_key":item.key,"reason":format!("lane_held_by:{lane}")}));
@@ -147,7 +148,7 @@ const WRITER_TRAILER: &str = "Writer: codex/gpt-6.2-sol-medium (native-codex spa
 /// The shared batch writer input (`PLANGRAPH-BATCH-INPUT-V1`) that pg-spawnd renders into the
 /// `# Items` and `# Run values` sections, so a batch gets the batch-writer skill. The native
 /// worker enforces its own fast-check and review policy; the values here are the brief's text.
-fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
+fn batch_brief(items: &[Task], rules: &str, reviews: &str, policy: &Policy) -> String {
     if items.len() == 1 {
         return brief(&items[0], rules);
     }
@@ -179,6 +180,10 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
             "python3 tools/preflight.py --base origin/main --head HEAD --lane"],
         "review_cmd":"the native worker starts the review of another family on the exact head",
         "review_wait_seconds":1800, "round_cap":8, "trailers":trailers}});
+    let mut input = input;
+    if let Some(reason) = &policy.lane_override {
+        input["lane_override"] = json!(reason);
+    }
     format!("PLANGRAPH-BATCH-INPUT-V1\n{input}")
 }
 /// One bounded tick. Refused claims are decisions about that item, not a reason
@@ -206,14 +211,40 @@ pub fn tick(
             return json!({"decision":"refused","item_key":seed.key,"reason":reason,"skipped":skipped});
         }
         if dry {
+            // A dry run shows what a live tick would start: held items are dropped the same way.
+            let mut held = Vec::new();
+            for item in &batch {
+                match launch.lane_holder(&item.key, policy.lane_override.as_deref()) {
+                    Ok(None) => {}
+                    Ok(Some(lane)) => held
+                        .push(json!({"item_key":item.key,"reason":format!("lane_held_by:{lane}")})),
+                    Err(e) => {
+                        return json!({"decision":"refused","item_key":seed.key,
+                            "reason":format!("lane check failed: {e}"),"skipped":skipped,"error":true})
+                    }
+                }
+            }
+            if !held.is_empty() {
+                ready["items"]
+                    .as_array_mut()
+                    .expect("validated items")
+                    .retain(|v| !held.iter().any(|row| v["key"] == row["item_key"]));
+                skipped.extend(held);
+                continue;
+            }
             let mut row = json!({"decision":"would_spawn",
-                "card":batch_card(&batch, repo, reviews, policy), "brief":batch_brief(&batch, rules, reviews)});
+                "card":batch_card(&batch, repo, reviews, policy), "brief":batch_brief(&batch, rules, reviews, policy)});
             row["item_key"] = json!(seed.key);
             row["skipped"] = json!(skipped);
             return row;
         }
         let mut dropped = Vec::new();
-        let claimed = claim_batch(&batch, launch, &mut dropped);
+        let claimed = claim_batch(
+            &batch,
+            policy.lane_override.as_deref(),
+            launch,
+            &mut dropped,
+        );
         for row in &dropped {
             ready["items"]
                 .as_array_mut()
@@ -232,7 +263,7 @@ pub fn tick(
         }
         let items: Vec<Task> = held.iter().map(|(t, _)| t.clone()).collect();
         let c = batch_card(&items, repo, reviews, policy);
-        let started = launch.start(&c, &batch_brief(&items, rules, reviews));
+        let started = launch.start(&c, &batch_brief(&items, rules, reviews, policy));
         match started {
             Ok(run) => {
                 let mut row = decided(run);

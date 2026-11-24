@@ -91,6 +91,8 @@ impl RunValues {
 pub struct Rendered<'a> {
     pub brief: Cow<'a, str>,
     pub lane_override: Option<String>,
+    /// The typed input's `run.base` (a plain brief has none); never scanned out of text.
+    pub base: Option<String>,
 }
 
 /// Render a versioned batch input in the prompt transport. Plain briefs pass through.
@@ -108,6 +110,7 @@ pub fn render_input(text: &str) -> Result<Rendered<'_>, String> {
         return Ok(Rendered {
             brief: Cow::Borrowed(text),
             lane_override: None,
+            base: None,
         });
     };
     let BatchInput {
@@ -134,6 +137,7 @@ pub fn render_input(text: &str) -> Result<Rendered<'_>, String> {
         .unwrap();
     }
     rendered.push('\n');
+    let base = run.base.trim().to_owned();
     run.render(&mut rendered)?;
     let lane_override = match lane_override {
         Some(reason) if !single_line(reason.trim()) => {
@@ -149,6 +153,7 @@ pub fn render_input(text: &str) -> Result<Rendered<'_>, String> {
     Ok(Rendered {
         brief: Cow::Owned(rendered),
         lane_override,
+        base: Some(base),
     })
 }
 
@@ -173,6 +178,7 @@ pub fn render_admitted<'a>(
     let Rendered {
         brief,
         lane_override,
+        ..
     } = render_input(text)?;
     let reason = crate::lane_guard::check_brief(
         &brief,

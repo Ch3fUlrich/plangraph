@@ -85,6 +85,10 @@ impl Host {
     /// The repository's seconds-fast gates on the completed head: `head_gate::run`, the one
     /// implementation shared with the Claude completion; the result is their combined output.
     pub(super) fn checks(&self) -> Result<String, String> {
+        self.checks_with(pg_spawnd::head_gate::scrub_words())
+    }
+    /// `checks` with the private scrub words file supplied.
+    pub(super) fn checks_with(&self, words: Option<PathBuf>) -> Result<String, String> {
         let pin = self.base_pin();
         let head = self.git(&["rev-parse", "HEAD"])?;
         pg_spawnd::head_gate::run(&pg_spawnd::head_gate::Gate {
@@ -92,7 +96,7 @@ impl Host {
             base: &pin,
             head: &head,
             brief: &self.brief,
-            words: pg_spawnd::head_gate::scrub_words(),
+            words,
             command: &|program| self.command(program),
         })
     }

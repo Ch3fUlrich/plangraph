@@ -206,7 +206,6 @@ pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
 /// Native cards share Python's existing RAM/SSH admission, then one Rust lifecycle.
 pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError> {
     crate::spawn::validate(args)?;
-    let args = &admit_lane(state, args)?;
     if !args["card"]
         .get("repo")
         .and_then(Value::as_str)
@@ -214,6 +213,7 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
     {
         return Err(parameter("native-codex requires an absolute card.repo"));
     }
+    let args = &admit_lane(state, args)?;
     if args.get("dry_run") == Some(&Value::Bool(true)) {
         return Err(parameter("native-codex dry_run is not supported"));
     }
@@ -256,8 +256,10 @@ pub(crate) fn admit_lane(state: &Path, args: &Args) -> Result<Args, ToolError> {
         Some(Value::String(reason)) => Some(reason.as_str()),
         Some(_) => return Err(parameter("lane_override_reason must be a string")),
     };
+    // Every key the card names is checked: the singular keys and each member of a batch card.
     let item: Vec<String> = [&card["item_key"], &card["item"]]
         .into_iter()
+        .chain(card["item_keys"].as_array().into_iter().flatten())
         .filter_map(Value::as_str)
         .filter(|item| crate::records::valid_item(item))
         .map(str::to_owned)
@@ -265,8 +267,17 @@ pub(crate) fn admit_lane(state: &Path, args: &Args) -> Result<Args, ToolError> {
     let pg_spawnd::lane_guard::Launched {
         keys,
         lane_override: reason,
-    } = pg_spawnd::lane_guard::admit_launch(prompt, &item, state, Path::new(repo), explicit)
-        .map_err(parameter)?;
+        reservation,
+    } = pg_spawnd::lane_guard::admit_launch(&pg_spawnd::lane_guard::LaunchRequest {
+        prompt,
+        extra: &item,
+        state,
+        repo: Path::new(repo),
+        explicit,
+        owner: card.get("lane_reservation").and_then(Value::as_str),
+        reserve: true,
+    })
+    .map_err(parameter)?;
     let mut admitted = args.clone();
     // Only this guard may record an override; a caller-supplied one is dropped.
     admitted["card"]
@@ -275,6 +286,8 @@ pub(crate) fn admit_lane(state: &Path, args: &Args) -> Result<Args, ToolError> {
         .remove("lane_override");
     // Batch members land on the run record through the card's `item_keys` (at most 50).
     admitted["card"]["item_keys"] = serde_json::json!(keys);
+    // The spawner's own check of the same launch presents this token and does not collide with it.
+    admitted["card"]["lane_reservation"] = serde_json::json!(reservation);
     if let Some(reason) = reason {
         admitted["card"]["lane_override"] = Value::String(reason);
     }

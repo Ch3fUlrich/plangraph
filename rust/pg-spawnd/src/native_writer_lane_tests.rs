@@ -79,3 +79,40 @@ fn native_dispatch_override_needs_a_reason_and_is_kept_on_the_card() {
         .unwrap();
     assert!(admitted["card"].get("lane_override").is_none());
 }
+
+#[test]
+fn a_key_listed_only_in_the_cards_item_keys_is_checked_and_kept() {
+    let state = lane_state("implement");
+    let mut args = lane_args(json!({"item_keys":["demo:OTHER","demo:HELD"]}));
+    // The brief names no held key: the card's batch members alone are refused.
+    args["prompt"] = json!("Brief\n### demo:OTHER | free\nWhy: x\n");
+    let error = crate::placement::admit_lane(state.path(), &args)
+        .expect_err("held member refused")
+        .into_error_data()
+        .message
+        .to_string();
+    assert!(
+        error.contains("demo:HELD is held by live lane run-held"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_second_dispatch_meets_the_reservation_of_the_first_unless_it_is_the_same_launch() {
+    let state = tempfile::tempdir().unwrap();
+    let first = crate::placement::admit_lane(state.path(), &lane_args(json!({})))
+        .ok()
+        .unwrap();
+    let token = first["card"]["lane_reservation"].clone();
+    assert!(token.is_string());
+    // Another launch of the key is refused naming the reservation.
+    let error = crate::placement::admit_lane(state.path(), &lane_args(json!({})))
+        .expect_err("reserved key refused")
+        .into_error_data()
+        .message
+        .to_string();
+    assert!(error.contains("held by live lane reservation"), "{error}");
+    // The same launch (the spawner's own check) presents its token and passes.
+    let same = lane_args(json!({"lane_reservation": token}));
+    assert!(crate::placement::admit_lane(state.path(), &same).is_ok());
+}

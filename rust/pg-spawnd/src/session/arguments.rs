@@ -40,7 +40,8 @@ impl Arguments {
                 _ => {
                     let key = arg.strip_prefix("--").filter(|key| {
                         METADATA.contains(key)
-                            || ["mcp", "parent", "ctx-guard", "session"].contains(key)
+                            || ["mcp", "parent", "ctx-guard", "session", "lane-override"]
+                                .contains(key)
                     });
                     match (key, iter.peek()) {
                         (Some(key), Some(_)) => {

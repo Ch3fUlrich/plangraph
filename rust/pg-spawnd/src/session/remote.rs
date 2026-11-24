@@ -2,7 +2,7 @@ use super::{
     paths::{basename, io_text, normalize, read_text, repr, resolve, shell_quote, Paths},
     placement::Host,
     process::capture,
-    read_writer_prompt,
+    read_forwarded_prompt,
     storage::{next_seq, record_path, register_child},
     Caps, Request,
 };
@@ -83,7 +83,12 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
         }
         restart.prompt.clone()
     } else {
-        read_writer_prompt(prompt).map_err(|e| io_text(&e, prompt))?
+        let (text, typed) = read_forwarded_prompt(prompt).map_err(|e| io_text(&e, prompt))?;
+        // The target sees only the rendered prompt: the typed override travels as launch metadata.
+        if let (Some(reason), None) = (typed, args.option("lane-override")) {
+            argv.extend(["--lane-override".into(), reason]);
+        }
+        text
     };
     let mcp = args
         .option("mcp")
