@@ -6,12 +6,7 @@ pub fn spec(paths: u16, parent: Option<PartId>) -> PartSpec {
 }
 
 pub fn policy(target: u8, bound: u8, cut_after: u8, order: Order) -> Policy {
-    Policy {
-        target,
-        bound,
-        cut_after,
-        order,
-    }
+    Policy::new(target, bound, cut_after, order)
 }
 
 pub fn ok(m: &mut Model, e: Event) -> Outcome {
@@ -50,4 +45,15 @@ pub fn start(m: &mut Model, train: TrainId) {
         },
     );
     ok(m, Event::StartCi { train });
+}
+
+pub fn disjoint(n: u8) -> Vec<PartSpec> {
+    (0..n).map(|i| spec(1 << i, None)).collect()
+}
+
+/// Land an open train as the builder and CI do.
+pub fn land(m: &mut Model, train: TrainId) {
+    start(m, train);
+    ok(m, Event::CiResult { train, green: true });
+    ok(m, Event::Settle { train });
 }
