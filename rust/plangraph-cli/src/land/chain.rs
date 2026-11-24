@@ -1,6 +1,6 @@
 //! First-parent train validation shared by the push gate and replay.
 use super::git;
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 pub(super) enum Step {
     Merge {
@@ -13,7 +13,17 @@ pub(super) enum Step {
         writer: String,
         harness: String,
     },
+    /// The new `origin/main` merged into an open train (rule 3.63 (3)): a two-parent commit whose second
+    /// parent is a first-parent commit of main. Replay recomputes it and records it for the remerge-diff review.
+    Remerge {
+        commit: String,
+        parent: String,
+        main: String,
+    },
 }
+
+/// The ref the push gate and replay read as main.
+pub(super) const MAIN_REF: &str = "refs/remotes/origin/main";
 
 fn full_sha(sha: &str) -> bool {
     sha.len() == 40
@@ -98,6 +108,7 @@ pub(super) fn validate(
     base: &str,
     tip: &str,
     heads: &[&str],
+    main: Option<&str>,
 ) -> Result<Vec<Step>, String> {
     if heads.is_empty()
         || ![base, tip]
@@ -120,9 +131,37 @@ pub(super) fn validate(
     let mut previous = base;
     let mut index = 0;
     let mut steps = Vec::new();
+    let mut main_line: Option<BTreeSet<String>> = None;
     for line in history.lines() {
         let row: Vec<&str> = line.split_whitespace().collect();
         let step = match row.as_slice() {
+            [commit, parent, landed] if *parent == previous && !heads.contains(landed) => {
+                // Only the remerge of main's own history is allowed; any other second parent could
+                // bring in a commit that is neither a part nor landed.
+                let Some(main) = main else {
+                    return Err(format!(
+                        "chain: train parent {} is outside its manifest",
+                        &landed[..12]
+                    ));
+                };
+                if main_line.is_none() {
+                    let line = git::out(repo, &["rev-list", "--first-parent", main])?;
+                    main_line = Some(line.lines().map(str::to_owned).collect());
+                }
+                if !main_line.as_ref().is_some_and(|l| l.contains(*landed))
+                    || git::is_ancestor(repo, landed, previous)?
+                {
+                    return Err(format!(
+                        "chain: train parent {} is outside its manifest and is not new first-parent history of main",
+                        &landed[..12]
+                    ));
+                }
+                Step::Remerge {
+                    commit: (*commit).into(),
+                    parent: (*parent).into(),
+                    main: (*landed).into(),
+                }
+            }
             [commit, parent, part] if *parent == previous => {
                 if !heads.contains(part) {
                     return Err(format!(
@@ -169,6 +208,21 @@ pub(super) fn validate(
     Ok(steps)
 }
 
+/// The commit the train's first-parent chain leaves main at. The merge-base cannot serve: after a remerge
+/// of the new main the train contains main, so its merge-base with main is main itself.
+fn train_base(repo: &Path, tip: &str) -> Result<String, String> {
+    let unavailable = |_| "train base unavailable (no origin/main first-parent base)".to_owned();
+    let own = git::out(
+        repo,
+        &["rev-list", "--first-parent", tip, "--not", MAIN_REF],
+    )
+    .map_err(unavailable)?;
+    let Some(last) = own.lines().last() else {
+        return Ok(tip.to_owned());
+    };
+    git::out(repo, &["rev-parse", &format!("{last}^")]).map_err(unavailable)
+}
+
 pub(super) fn check_push(repo: &Path, tip: &str, manifest: &Path) -> Result<(), String> {
     let manifest = std::fs::read_to_string(manifest)
         .map_err(|err| format!("train manifest unavailable: {err}"))?;
@@ -180,7 +234,6 @@ pub(super) fn check_push(repo: &Path, tip: &str, manifest: &Path) -> Result<(), 
     if !full_sha(tip) {
         return Err("train head must be a full lowercase SHA".into());
     }
-    let base = git::out(repo, &["merge-base", "refs/remotes/origin/main", tip])
-        .map_err(|_| "train base unavailable (no origin/main merge-base)".to_owned())?;
-    validate(repo, &base, tip, &heads).map(|_| ())
+    let base = train_base(repo, tip)?;
+    validate(repo, &base, tip, &heads, Some(MAIN_REF)).map(|_| ())
 }
