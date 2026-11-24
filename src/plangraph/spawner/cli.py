@@ -168,6 +168,7 @@ def _supervise():
             if record is None:
                 record = service.save_refusal(exc, payload.get('role', 'implement'))
             print(json.dumps(record), flush=True)
+            print(_status_line(record), file=sys.stderr, flush=True)
             return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()
@@ -177,7 +178,10 @@ def _supervise():
                 # The admission snapshot says 'running'; a refusal at launch (cargo cap,
                 # disk floor) lands in the saved record afterwards and must set the exit code.
                 run.update(service.result(run['run_id']))
-                print(_status_line(run), file=sys.stderr, flush=True)
+            elif run.get('status') in ('running', 'queued', 'dry_run'):
+                continue  # no local task and nothing final to report
+            # A refusal returned before any task exists carries its status in the record itself.
+            print(_status_line(run), file=sys.stderr, flush=True)
         return spawn_exit_code(record)
     return asyncio.run(run())
 

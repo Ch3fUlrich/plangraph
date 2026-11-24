@@ -151,7 +151,7 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
 
 
 def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
-                           worktree=None, review_target=None):
+                           worktree=None, review_target=None, leases=None):
     """Apply Sonnet's review profile and return the read-only fallback event, if any."""
     from plangraph.planner.legs import REVIEW_SONNET
 
@@ -174,7 +174,7 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     slot = None
     if target is None:
         from plangraph.spawner.host_ready import review_cargo_slot
-        slot = review_cargo_slot(job_id).resolve()
+        slot = review_cargo_slot(job_id, leases).resolve()
     scratch = Path(mkdtemp(prefix="plangraph-claude-review-",
                            dir=target.parent if target else slot)).resolve()
     # Removing the run directory removes the seat's slot and its build with it.

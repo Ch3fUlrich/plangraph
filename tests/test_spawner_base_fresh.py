@@ -879,3 +879,31 @@ def test_supervisor_reports_a_refusal_after_admission_as_refused(tmp_path, monke
     monkeypatch.setattr(cli.sys, 'stdout', _Out())
     assert cli.main(['--supervise']) == 2
     assert f'ALERT SPAWN run-one REFUSED: {reason}' in capsys.readouterr().err
+
+
+def test_supervisor_alerts_on_refusals_that_never_had_a_task(tmp_path, monkeypatch, capsys):
+    """A refusal returned before a task is registered, and one raised during admission, both alert."""
+    from types import SimpleNamespace
+    from plangraph.spawner import cli
+    reason = 'cargo_target_cap: measured 68.42 GB in /x, cap 64 GB; busy'
+    refused = dict(run_id='run-early', status='refused', exit_code=2, reason=reason)
+
+    async def admitted(service, payload):
+        return dict(refused)
+    service = SimpleNamespace(state=tmp_path, result=lambda run_id: refused, tasks={})
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    monkeypatch.setattr(cli, 'admitted_spawn', admitted)
+    monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps({'state': str(tmp_path)})))
+    monkeypatch.setattr(cli.sys, 'stdout', _Out())
+    assert cli.main(['--supervise']) == 2
+    assert f'ALERT SPAWN run-early REFUSED: {reason}' in capsys.readouterr().err
+
+    async def raising(service, payload):
+        raise RuntimeError('boom')
+    service = SimpleNamespace(state=tmp_path, ps=lambda: {'runs': [dict(refused, error='boom')]}, tasks={})
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    monkeypatch.setattr(cli, 'admitted_spawn', raising)
+    monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps({'state': str(tmp_path)})))
+    monkeypatch.setattr(cli.sys, 'stdout', _Out())
+    assert cli.main(['--supervise']) == 2
+    assert 'ALERT SPAWN run-early REFUSED' in capsys.readouterr().err
