@@ -10,8 +10,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import uuid
 
-from plangraph.planner.legs import REVIEW_HYDROGEN
+from plangraph.planner.legs import Leg, REVIEW_HYDROGEN
 from plangraph.routing_support import leg_state
 from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
@@ -82,6 +83,8 @@ def _leg_serving(runner, leg, previous=None):
                 current = next((l for l in record.get('plan', {}).get('legs', ()) if l['id'] not in tried), {})
             matches = (current.get('model') == leg.model and current.get('harness') == leg.harness
                        if isinstance(current, dict) else current == getattr(leg, 'id', None))
+            if matches and isinstance(current, dict) and current.get('id') and getattr(leg, 'id', None):
+                matches = current['id'] == leg.id
             last_growth = log.st_mtime  # first observation of an append log
             if previous is not None and path in previous:
                 old_record, old = previous[path]
@@ -165,6 +168,7 @@ class DispatchReader:
         self.enabled = getattr(reader, 'enabled', False)
         self.store = getattr(reader, 'store', None)
         self.last_probe_attempt_ts = getattr(reader, 'last_probe_attempt_ts', None)
+        self.review_probe_outages = leg_state.review_outages_reader(reader)
 
     def leg_status(self, model, **scope):
         return read_status(self.status, model, **scope)
@@ -212,7 +216,8 @@ def _missing_harness(harness, seconds_elapsed=0.0):
                 infra=True, seconds=seconds_elapsed)
 
 
-async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_reprobe=False):
+async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_reprobe=False,
+                scheduled=False, verify_answer=False):
     """One real commit task (or tiny OK prompt for reviews) in a disposable dir; infra failures book no leg state.
 
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
@@ -269,19 +274,25 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                     role='review' if review_mode else 'implement',
                     model_or_combo=leg.model,
                     client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
+                    chosen=leg if isinstance(leg, Leg) else None,
                     watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
                                   max_s=timeout + 60, interval=1))
             spawn_task = asyncio.ensure_future(launch())
             try:
                 job = await asyncio.wait_for(asyncio.shield(spawn_task), max(deadline - time.monotonic(), 0))
             except asyncio.TimeoutError:
-                ok, reason = False, 'timeout'
+                ok, reason, infra = False, 'timeout', scheduled
             except (ValueError, RuntimeError, OSError) as exc:
                 cause = redact_output(redact_env_values(str(exc), os.environ))
                 cause = ' '.join(leg_state._redact(cause, limit=400).splitlines())
                 ok, reason, infra = False, f'probe infra: spawn: {type(exc).__name__}', True
                 if cause:
                     reason += ': ' + cause
+        if ok is None and scheduled and getattr(job, 'status', None) == 'failed':
+            # The runner registers ownership before launch and installs the monitor
+            # only after admitting the process. A fast exit still has that monitor.
+            if job.job_id in owned_ids and job.job_id not in getattr(runner, '_tasks', {}):
+                ok, reason, infra = False, 'probe infra: launch', True
         if ok is None:
             try:
                 await _await_completion(runner, job, deadline)
@@ -292,7 +303,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 exhausted = any(e.get('event') == 'opencode_reasoning_exhausted'
                                 for e in (getattr(job, 'events', None) or ()))
                 answer = (getattr(job, 'stdout', None) or '').strip()
-                answered = answer == 'OK' if quota_reprobe or getattr(leg, 'id', None) == REVIEW_HYDROGEN else bool(answer)
+                strict = verify_answer or quota_reprobe or getattr(leg, 'id', None) == REVIEW_HYDROGEN
+                answered = answer == 'OK' if strict else bool(answer)
                 ok = (getattr(job, 'status', None) == 'completed'
                       and not getattr(job, 'exit_code', 0)
                       and answered and not exhausted)
@@ -318,7 +330,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             # Report the leak; NEVER auto-reset the caller's repo here.
             ok, reason, infra = False, 'probe leaked into caller repo', False
         excerpt, serving, quota = '', False, None
-        if not ok and not infra:
+        if not ok and not leaked:
             diagnostic = job or next((j for jid, j in getattr(runner, 'jobs', {}).items() if jid in owned_ids), None)
             stderr = getattr(diagnostic, 'stderr', '') or stderr
             if isinstance(stderr, bytes):
@@ -326,15 +338,15 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             env = dict(os.environ)
             env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
             excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
-            if not leaked and diagnostic is not None:
+            if not infra and diagnostic is not None:
                 quota = probe_quota_line(leg, review_mode, getattr(diagnostic, 'exit_code', None),
                                          getattr(diagnostic, 'stdout', '') or '', stderr)
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
-            if not quota:
+            if not infra and not quota:
                 serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
-        if not infra:
-            caller = 'review-probe' if review_mode else 'leg-probe'
+        if not infra and not leaked:
+            caller = 'review-probe' if scheduled else 'review-diagnostic' if review_mode else 'leg-probe'
             if ok:
                 state.record_probe_pass(key(leg), caller=caller)
             elif quota:
@@ -348,10 +360,14 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                                 reset_at=status['evidence']['reset_at'])
             else:
                 state.record_probe_fail(key(leg), reason, caller=caller, serving=serving, stderr_excerpt=excerpt)
-        reason += ': ' + excerpt if excerpt and not leaked else ''
+        reason += ': ' + excerpt if excerpt else ''
         result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
-        if serving:
+        if leaked:
+            result['state'] = 'caller-repo-leak'
+        elif serving:
             result['state'] = 'probe_failed_leg_serving'
+        elif quota:
+            result['state'] = 'quota'
         return result
     finally:
         from .probe_cleanup import cleanup
@@ -450,6 +466,8 @@ async def before_launch(runner, leg, role, dry_run, budget=None, *, route_state_
             return 'limited until ' + reset_iso((status.get('evidence') or {}).get('reset_at'))
     if booked := limit():
         return booked
+    if (read_outage := getattr(state, 'review_probe_outage', None)) and read_outage(getattr(leg, 'id', None)):
+        return 'down'
     skip = admission()
     if (skip or '').startswith('auth_refused:') or skip == 'not_listed':
         return skip  # An unlisted model has nothing to run; a probe cannot admit it.
@@ -514,7 +532,12 @@ def _check_manage_key(runner):
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_reviewers=False, role=None):
-    """Probe selected legs and report quota skips separately from probe failures."""
+    """Run liveness checks with outage tracking for the timer's pure review sweep.
+
+    A named leg from CLI or MCP can recover an existing outage by running a review
+    probe, including dual-role legs that normally use a commit probe. Doctor passes
+    an explicit review role and its diagnostics leave the scheduled episode alone.
+    """
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active, routed_review_legs, spawnable_legs
     SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
@@ -549,10 +572,13 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
     manage_key = await asyncio.to_thread(_check_manage_key, runner) if (all_reviewers or role == 'review') else None
     results = []
     state = _store_for(runner)
-    state = state.store if getattr(state, 'enabled', False) else state
     scheduled = all_reviewers and not all_writers and not ids
+    state = getattr(state, 'store', None) or state
+    sweep = (uuid.uuid4().hex, time.time())
     for leg in selected:
         model = key(leg)
+        named = leg.id in ids and not all_writers and role is None
+        outage = state.review_probe_outage(leg.id) if scheduled or named else None
         status = (state.agy_probe_status(model)
                   if scheduled and leg.harness == 'agy' else state.leg_status(model))
         evidence = status.get('evidence') or {}
@@ -572,13 +598,43 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
                                 skipped='limited',
                                 reset_at=evidence.get('reset_at')))
             continue
+        if scheduled and outage and time.time() < outage['retry_at']:
+            if shutil.which(leg.harness, path=path) is None:
+                results.append(dict(id=leg.id, **_missing_harness(leg.harness)))
+            else:
+                results.append(dict(id=leg.id, ok=False, reason='down', infra=False, seconds=0.0,
+                                    skipped='down', retry_at=outage['retry_at']))
+            continue
         # Honor the recorded review selection for dual-role legs.
-        probe_role = 'review' if quota_reprobe or role == 'review' or leg.id in review_ids else role
+        probe_role = 'review' if outage or quota_reprobe or role == 'review' or leg.id in review_ids else role
         probe_kwargs = {'role': probe_role} if probe_role is not None else {}
         if quota_reprobe:
             probe_kwargs['quota_reprobe'] = True
-        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)))
-    reply = dict(ok=all(row['ok'] for row in results if row.get('skipped') != 'limited'),
+        if scheduled:
+            probe_kwargs['scheduled'] = True
+        if outage:
+            probe_kwargs['verify_answer'] = True
+        row = await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)
+        hard_failure = row.get('infra') or row.get('state') == 'caller-repo-leak'
+        if scheduled:
+            if row['ok']:
+                outcome = 'passed'
+            elif hard_failure or row.get('skipped') == 'limited' or row.get('state') == 'quota':
+                outcome = 'inconclusive'
+            elif row.get('state') == 'probe_failed_leg_serving':
+                outcome = 'serving'
+            else:
+                outcome = 'failed'
+            row.update(state.record_review_probe(leg, sweep, outcome, row['reason']))
+        elif named and outage and row['ok']:
+            state.record_review_probe(leg, sweep, 'passed', '')
+        results.append(dict(id=leg.id, **row))
+    if scheduled:
+        ok = not any(row.get('infra') or row.get('new_failure') or row.get('state') == 'caller-repo-leak'
+                     for row in results)
+    else:
+        ok = all(row['ok'] for row in results if not row.get('skipped'))
+    reply = dict(ok=ok,
                  probes=results,
                  limited_legs=[row['id'] for row in results if row.get('skipped') == 'limited'])
     if manage_key is not None:

@@ -1,7 +1,7 @@
-"""Provider-response evidence, scoped to a serving leg/account/combo.
+"""Provider-response evidence and catalog-leg outages from scheduled review probes.
 
-Writers are transport adapters, never prompt parsers. No CLI or MCP writer is
-provided. Probe passes must be called only after an actual provider success.
+Provider quota is scoped to a serving model/account/combo. A review outage
+belongs to the catalog leg exercised by the probe.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from email.utils import parsedate_to_datetime
 from plangraph.routing_errors import CREDIT_AUTH_MARKER, busy_refusal
 
 REPROBE_MINUTES = 10
+REVIEW_FAILURE_THRESHOLD = 2
 
 #: D-3685/D-6082: cap flat fallback down_s at 24 h; provider-stated resets are uncapped.
 RESET_CAP_S = 86400
@@ -206,6 +207,73 @@ class LegStateStore:
             ts REAL, caller TEXT, source TEXT)""")
         return db
 
+    def record_review_probe(self, leg, sweep, outcome, reason):
+        """Apply a sweep once per leg. Only a completed review probe ends an outage.
+
+        A serving leg interrupts an unconfirmed streak. Quota and infrastructure
+        outcomes leave the streak in place, and any unsuccessful reprobe defers
+        the next scheduled attempt once the leg is already down.
+        """
+        sweep_id, started_at = sweep
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("""CREATE TABLE IF NOT EXISTS review_probe_state (
+                leg_id TEXT PRIMARY KEY, sweep_id TEXT NOT NULL, started_at REAL NOT NULL,
+                failures INTEGER NOT NULL, retry_at REAL, alert_id INTEGER REFERENCES leg_events(id))""")
+            old = db.execute("SELECT * FROM review_probe_state WHERE leg_id=?", (leg.id,)).fetchone()
+            if old and (old['sweep_id'] == sweep_id or old['started_at'] > started_at):
+                return {}
+            failures = old['failures'] if old else 0
+            alert_id = old['alert_id'] if old else None
+            retry_at = old['retry_at'] if old else None
+            result = {}
+            if outcome == 'passed':
+                failures, retry_at, alert_id = 0, None, None
+            elif alert_id is not None:
+                retry_at = time.time() + _down_seconds(None)
+                result['retry_at'] = retry_at
+            elif outcome == 'failed':
+                failures += 1
+                if failures == 1:
+                    result['new_failure'] = True
+                if failures == REVIEW_FAILURE_THRESHOLD:
+                    now = time.time()
+                    retry_at = now + _down_seconds(None)
+                    alert_id = db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
+                        (leg.id, None, None, 503, _redact(reason), None, None, now,
+                         'review-probe', 'review-probe-outage')).lastrowid
+                    result.update(outage_alert=True, retry_at=retry_at)
+            elif outcome == 'serving':
+                failures = 0
+            db.execute("""INSERT INTO review_probe_state VALUES (?,?,?,?,?,?)
+                ON CONFLICT(leg_id) DO UPDATE SET sweep_id=excluded.sweep_id,
+                started_at=excluded.started_at, failures=excluded.failures,
+                retry_at=excluded.retry_at, alert_id=excluded.alert_id""",
+                (leg.id, sweep_id, started_at, failures, retry_at, alert_id))
+        return result
+
+    def review_probe_outage(self, leg_id, now=None):
+        """Read the scheduled outage for this exact catalog row."""
+        return self.review_probe_outages((leg_id,), now=now).get(leg_id)
+
+    def review_probe_outages(self, leg_ids, now=None):
+        """Read active outages for a set of catalog IDs in one snapshot."""
+        ids = tuple(leg_ids)
+        if not ids or not self.path.exists():
+            return {}
+        now = time.time() if now is None else now
+        placeholders = ','.join('?' for _ in ids)
+        with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
+            db.row_factory = sqlite3.Row
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE name='review_probe_state'").fetchone():
+                return {}  # Databases created before scheduled outage tracking.
+            rows = db.execute(
+                "SELECT p.leg_id, p.retry_at, e.status, e.body_excerpt, e.ts, e.caller, e.id AS event_id "
+                "FROM review_probe_state p JOIN leg_events e ON e.id=p.alert_id "
+                f"WHERE p.leg_id IN ({placeholders}) AND e.ts<=?", (*ids, now),
+            )
+            return {row['leg_id']: dict(row) for row in rows}
+
     def record_provider_response(self, leg, status, body, headers, caller, now=None, account=None, combo=None):
         leg = quota_key(leg)
         now = time.time() if now is None else now
@@ -237,8 +305,8 @@ class LegStateStore:
         leg = quota_key(leg)
         now = time.time() if now is None else now
         down_s = None if serving else _down_seconds(down_s)  # capped at RESET_CAP_S
-        source = ('probe_failed_leg_serving' if serving
-                  else 'review-liveness-probe' if caller == 'review-probe'
+        source = ('review-liveness-probe' if caller in ('review-probe', 'review-diagnostic')
+                  else 'probe_failed_leg_serving' if serving
                   else 'liveness-probe')
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
@@ -291,6 +359,7 @@ class LegStateStore:
                         None if reset is None else reset - now, reset, now, caller, 'harness-stderr'))
 
     def leg_status(self, leg, now=None, account=None, combo=None, *, harness=None):
+        """Read model-scoped quota and writer evidence. Review outages use catalog IDs."""
         is_agy_harness = harness in (None, "agy")
         leg = quota_key(leg) if is_agy_harness else leg
         agy = is_agy_harness and isinstance(leg, str) and leg.startswith("agy:")
@@ -303,24 +372,26 @@ class LegStateStore:
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
                 rows = db.execute(
-                    "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
+                    "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE
+                    + " AND ts<=? AND COALESCE(source,'') NOT IN ('review-liveness-probe','review-probe-outage') "
+                    "ORDER BY ts DESC,id DESC",
                     (*keys, account, combo, now))
                 rows = list(rows)
                 # Serving evidence supersedes older probe failures, NEVER provider limits.
                 serving = next((i for i, r in enumerate(rows) if r['source'] == 'probe_failed_leg_serving'), len(rows))
                 rows = iter(r for i, r in enumerate(rows) if r['source'] != 'probe_failed_leg_serving'
-                            and (r['source'] not in ('liveness-probe', 'review-liveness-probe') or i < serving))
+                            and (r['source'] != 'liveness-probe' or i < serving))
                 row = next(rows, None)
                 if row is None or row["status"] == 200:
                     return {"state": "ok", "evidence": None}
                 evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                 evidence["event_id"] = row["id"]
-                if row['source'] in ('liveness-probe', 'review-liveness-probe'):
-                    # Two consecutive writer probe failures (or one scheduled review probe failure) book down; serving breaks the streak.
-                    streak = 2 if row['source'] == 'review-liveness-probe' else 1
+                if row['source'] == 'liveness-probe':
+                    # Writer probes use their own cooldown and serving breaks their streak.
+                    streak = 1
                     behind = None
                     for older in rows:
-                        if older['source'] in ('liveness-probe', 'review-liveness-probe') and older['status'] == 503:
+                        if older['source'] == 'liveness-probe' and older['status'] == 503:
                             # A live predecessor must exist when this failure books
                             # the streak; its later expiry cannot unbook that down window.
                             streak += int(row['ts'] < min(older['ts'] + ttl, older['reset_at'] or older['ts']))
@@ -427,6 +498,21 @@ def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, 
 
 def leg_status(leg, now=None, account=None, combo=None, *, harness=None):
     return _default_store().leg_status(leg, now, account, combo, harness=harness)
+
+
+def review_probe_outage(leg_id, now=None):
+    return _default_store().review_probe_outage(leg_id, now=now)
+
+
+def review_outages_reader(reader):
+    """Find the catalog-ID reader on the same boundary as model-scoped reads."""
+    if reader is None or reader is leg_status:
+        return _default_store().review_probe_outages
+    return getattr(getattr(reader, '__self__', reader), 'review_probe_outages', None)
+
+
+def record_review_probe(leg, sweep, outcome, reason):
+    return _default_store().record_review_probe(leg, sweep, outcome, reason)
 
 
 def agy_probe_status(leg, now=None):
@@ -577,9 +663,4 @@ class LegAdapter:
                 if reset is not None and reset > (time.time() if wall_now is None else wall_now):
                     return dict(state='limited', reason='rate_limited', evidence=dict(reset_at=reset))
             return dict(state='down', reason='provider_inactive', evidence=None)
-        if self.store is not None:
-            stored = self.store.leg_status(leg, **kwargs)
-            # Only a scheduled review-probe down booking overrides a healthy snapshot.
-            if stored.get('state') == 'down' and (stored.get('evidence') or {}).get('caller') == 'review-probe':
-                return dict(stored, reason=stored.get('reason') or 'down')
         return dict(state='ok', reason='ok', evidence=None)

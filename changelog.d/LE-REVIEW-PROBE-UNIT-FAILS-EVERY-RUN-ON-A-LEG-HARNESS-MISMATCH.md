@@ -1,0 +1,1 @@
+- Scheduled review probes launch the catalog harness for each leg and record one outage after two consecutive failures. A down leg stays out of routing until a verified review reprobe succeeds.

@@ -16,16 +16,20 @@ A provider rate-limit window produces `limited` while its reset is in the future
 `plangraph.spawner.leg_state` stores provider 429/402 responses in SQLite at
 `$XDG_STATE_HOME/plangraph/leg-state.sqlite` (default
 `~/.local/state/plangraph/leg-state.sqlite`). Tests inject a `LegStateStore(path)`.
-There is no manual state setter; the CLI/MCP probe runs an actual commit task.
+CLI and MCP probes run a disposable commit task for writers or an answer check
+for reviewers.
 
 Transport integrations call `record_provider_response` with the actual HTTP
 status, body, headers, and caller. `SpawnerRunner.provider_response` is the
-gateway-response callback: provider stops record evidence, real 2xx responses
-record probe passes. This callback must never be fed agent stdout, prompt text,
+gateway-response callback. Provider stops record evidence and real 2xx responses
+record probe passes that can clear quota evidence. Scheduled review outages require
+a successful review reprobe of the same catalog leg. This callback accepts only
+provider transport evidence, which excludes agent stdout, prompt text,
 exit-code guesses, or arbitrary MCP arguments. The current subprocess gateway
 does not expose HTTP responses to the parent, so its stdout monitor deliberately
 does not infer limits; a gateway adapter must deliver actual responses through
-the callback. A harness quota line (D-3257) or a failed liveness probe marks the leg limited/down with reason + time.
+the callback. A harness quota line (D-3257) can book a quota limit.
+Liveness probes record a reason and timestamp for failures.
 
 The exact `(provider/model, account, combo)` tuple defines scope; omitted
 dimensions are not wildcards. Retry-After seconds/date, x-ratelimit-reset epoch
@@ -36,7 +40,7 @@ real successful provider response clears it. Queries never update the database.
 Provider-stated resets (`reset_at` parsed from headers or response/stderr text)
 are booked and honoured uncapped until `reset_at` (including 49 h `opencode-go`
 and 97–135 h `agy` resets); flat `down_s` fallbacks remain capped at 24 hours,
-and liveness-probe or unparsed failure evidence still expires to `reprobe` after
+and writer liveness-probe or unparsed failure evidence expires to `reprobe` after
 six hours (24 hours for `agy` probe failures). Expired probe failures cannot
 complete a fresh down streak, and a later probe failure never hides an active
 provider reset.
@@ -67,10 +71,11 @@ skips, only static policy skips, or a request-size failure still refuses.
 
 ## Bounded writer liveness
 
-`plangraph-spawn probe --leg ID [--leg ID ...]` or `probe --all-writers`
-runs sequential tiny commit tasks in disposable local git repositories. Optional
-`--timeout S` bounds each task; `--json` prints structured results. Exit is 0
-only when every probe passes. MCP exposes `plangraph_agent_probe` with `leg`
+For writer legs, `plangraph-spawn probe --leg ID [--leg ID ...]` or
+`probe --all-writers` runs sequential tiny commit tasks in disposable git repositories. Optional
+`--timeout S` bounds each task and `--json` prints structured results. Exit is 0
+when every attempted probe passes. Quota skips are excluded from that calculation.
+MCP exposes `plangraph_agent_probe` with `leg`
 (an array of IDs), `all_writers`, `timeout`, and `json` inputs.
 
 A pass requires a changed HEAD with `ok.txt` in its tree. Failure records
@@ -125,14 +130,14 @@ state, no serving override is claimed. A first nonempty append-log observation
 uses its mtime; snapshots before and after the probe compare file identity and
 size. Touching an old log without adding bytes does not renew growth evidence;
 truncation, replacement, changing records and read races fail conservatively.
-The event source is `probe_failed_leg_serving`, with status 503, the diagnostic,
-and null `retry_after_s`/`reset_at`. It supersedes older probe failures without
+For writer probes, `probe_failed_leg_serving` events have status 503, a diagnostic,
+and null `retry_after_s`/`reset_at`. They supersede older probe failures without
 claiming a probe pass or refreshing the successful-probe TTL; dispatch continues.
 Missing, empty or older logs retain normal cooldown behaviour. Provider and
 `exit_outcome` quota/usage-limit events remain authoritative even when a later
 probe records serving evidence; this override applies only to probe failures.
-The probe result adds `state` only for serving failures (or `host-not-ready`);
-ordinary successes and failures omit the key, rather than returning null.
+Probe results expose serving evidence as `state: probe_failed_leg_serving`.
+Other exceptional results include `host-not-ready`, `quota` and `caller-repo-leak`.
 
 D-5966 / D-6310 agy quotas use agy:<model>, shared across effort variants of that model.
 Hydrogen, Argon, Neon and Sonnet limits are independent. Gateway aggregate antigravity
@@ -150,7 +155,33 @@ Explicit-leg admission and provider-stop booking/fallback use the same
 harness-aware quota key as dispatch. The helper lives in routing support;
 `leg_probe.key` remains its compatibility alias.
 
-Scheduled review probes (`--all-reviewers`, `caller='review-probe'`, source `review-liveness-probe`) probe every active leg the review route can offer (`planner.legs.routed_review_legs`, in `REVIEW_ORDER`) with a tiny `OK` prompt under `role='review'`; one failed review probe immediately books the leg `down` for `PLANGRAPH_LEG_DOWN_S` in the shared SQLite store, and `LegAdapter.leg_status` lets a stored booking beat a healthy gateway snapshot only when it is a `down` booking whose `evidence.caller` is `review-probe`, so failed review legs are not offered by the route until a passing probe restores them; `limited`/`expired` bookings and `down` bookings by other callers do not override the snapshot. While the leg is serving, `record_probe_fail` books `probe_failed_leg_serving` with no down window, so a failed probe then books nothing down. `pg-spawnd check-manage-key` checks key presence (`len > 0` without reading key bytes) and records one `missing_manage_key` alert under `state/alerts/manage-key.json` at probe time.
+## Scheduled review outages
+
+A standalone `probe --all-reviewers` sweeps the active catalog rows in
+`REVIEW_ORDER`. Each row uses its own harness with a short `OK` prompt.
+OpenCode review probes run with repository tools denied.
+
+The shared SQLite store tracks failure streaks by catalog leg ID and sweep.
+The first qualifying failure produces `new_failure` and exits 1. Two
+consecutive qualifying failures mark the leg `down` and record one
+`review-probe-outage` alert in the same transaction. The JSON row for that
+transition includes `outage_alert: true`. A serving observation resets a
+streak before it becomes an outage. Quota and infrastructure outcomes leave
+the streak in place.
+
+The sweep skips a down leg until its `retry_at` deadline, set with
+`PLANGRAPH_LEG_DOWN_S` (default 1800 seconds). A failed deadline reprobe
+reschedules the attempt. The leg stays excluded from routing, including when
+the gateway snapshot is healthy. A completed review reprobe of the same catalog
+leg with an `OK` answer clears the outage and rearms the alert. A named CLI or
+MCP probe can run that check before the deadline, subject to quota handling. Doctor
+review diagnostics and launch-admission probes leave the outage alone.
+
+Known outages and quota skips leave the scheduled sweep successful. Launch
+infrastructure failures and the caller-repository tripwire keep their failure
+exit status. If every selected harness is missing, the CLI exits 3.
+`pg-spawnd check-manage-key` checks key presence without reading key bytes and
+records one `missing_manage_key` alert under `state/alerts/manage-key.json`.
 
 ## AGY quota scope
 

@@ -216,6 +216,7 @@ class SpawnerRunner:
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
+        from .probe_cleanup import OWNED, register
         from .target import launch_model, resolve_launch_target
         model_or_combo, leg = resolve_launch_target(model_or_combo, chosen=chosen, client=client)
         if leg is not None:
@@ -348,7 +349,7 @@ class SpawnerRunner:
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
                     del child_env[name]
                 apply_review_permissions(child_env, _DENIED_TOOLS,
-                                         repository_tools=chosen is not None and opencode_repository_review(leg))
+                                         repository_tools=OWNED.get() is None and opencode_repository_review(chosen))
             if render_reason is None:
                 from .opencode_answer import configure_launch_output
                 render_reason = configure_launch_output(child_env, model_or_combo, role, reasoning_cap)
@@ -431,7 +432,6 @@ class SpawnerRunner:
                 writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
                 allow_shas=frozenset(allow_shas) if allow_shas is not None else await asyncio.to_thread(env_redact.allow_shas_for_run, work_dir, prompt),
             )
-            from .probe_cleanup import register
             self.jobs[job_id] = job; register(job_id)
             job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
             from .run_watchdog import thresholds, edit_signature, inline_review_limits

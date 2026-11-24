@@ -314,8 +314,11 @@ def main(argv=None):
                     if row.get('skipped') == 'limited':
                         # reset_iso guards legacy out-of-range reset_at values.
                         print(f"{row['id']} skipped=limited until {reset_iso(row.get('reset_at'))}")
+                    elif row.get('skipped') == 'down':
+                        print(f"{row['id']} skipped=down until reprobe at {reset_iso(row.get('retry_at'))}")
                     else:
-                        print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s")
+                        alert = ' outage=down' if row.get('outage_alert') else ''
+                        print(f"{row['id']} ok={row['ok']} {row['reason']} {row['seconds']:.2f}s{alert}")
             rows = result['probes']
             if rows and all(row.get('state') == 'host-not-ready' for row in rows):
                 return 3

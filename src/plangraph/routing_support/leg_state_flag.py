@@ -41,6 +41,7 @@ def initialize(service, reader, boundary):
 
 def service_plan(service, **kwargs):
     from plangraph.planner.routing import plan_spawn
+    from .leg_state import review_outages_reader
     reader = getattr(service, 'leg_reader', None)
     if not enabled() or not getattr(reader, 'enabled', False):
         return plan_spawn(**kwargs, leg_reader=reader)
@@ -53,6 +54,7 @@ def service_plan(service, **kwargs):
             return store.leg_status(model, **scope) if store is not None else status
         return status
     read.last_probe_attempt_ts = getattr(reader, 'last_probe_attempt_ts', None)
+    read.review_probe_outages = review_outages_reader(reader)
     plan = plan_spawn(**kwargs, leg_reader=read)
     by_id = {leg.id: leg.model for leg in plan.legs}
     details = tuple(dict(c, leg_state_reason=reasons[by_id[c['leg']]])

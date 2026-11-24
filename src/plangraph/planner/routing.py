@@ -505,7 +505,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
-    from plangraph.routing_support.leg_state import leg_key, quota_key, routing_status
+    from plangraph.routing_support.leg_state import leg_key, quota_key, review_outages_reader, routing_status
     def read_status(model, **scope):
         return routing_status(reader(model, now=now, account=card.get("account"),
                                      combo=card.get("combo"), **scope))
@@ -533,6 +533,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                    if probe_time is not None else {})
     quota_states = {model: dict(status, last_probe_at=probe_times[model])
                     if model in probe_times else status for model, status in quota_states.items()}
+    # A shared quota scope can cover several legs. Overlay outages by catalog ID
+    # after collecting the model-scoped quota explanations.
+    if read_outages := review_outages_reader(leg_reader):
+        for leg_id, outage in read_outages(states, now=now).items():
+            states[leg_id] = {'state': 'down', 'evidence': outage}
     blocked = {key for key, state in states.items() if unavailable(state)
                or (state["state"] == "unknown" and state.get("reason"))}
     def quota_limited(state):

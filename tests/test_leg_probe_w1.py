@@ -8,6 +8,7 @@ probe writes through the store the planner reads, and error-shaped/anchored
 stderr quota detection.
 """
 import asyncio
+import json
 import sqlite3
 import subprocess
 import sys
@@ -529,8 +530,10 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
 
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
     monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kwargs: None if name == 'pg-spawnd' else '/bin/' + name)
+    clock = [10_000]
+    monkeypatch.setattr(leg_state.time, 'time', lambda: clock[0])
     store = LegStateStore(tmp_path / 'legs.sqlite')
-    # Argon efforts share one agy quota key (D-5966): a failing argon probes down both.
+    # Each Argon effort has its own outage while the subscription quota is shared.
     failing = {'gemini-4-argon-low', 'gemini-4-argon-medium'}
     seen = []
 
@@ -560,7 +563,12 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     assert first['ok'] is False
     assert [row['id'] for row in first['probes']] == list(REVIEW_ORDER)
     assert all(role == 'review' and prompt == leg_probe.REVIEW_PROMPT for _, role, prompt in seen)
-    assert store.leg_status('agy/gemini-4-argon-low')['state'] == 'down'
+    assert store.review_probe_outage('agy-gemini-4-argon-low') is None
+    for _ in range(leg_state.REVIEW_FAILURE_THRESHOLD - 1):
+        clock[0] += 1
+        repeat = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+        assert repeat['ok']
+    assert store.review_probe_outage('agy-gemini-4-argon-low') is not None
 
     card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
     plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=store, catalog_rows=())
@@ -586,28 +594,100 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     assert [leg.id for leg in routed.legs[:3]] == ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-hydrogen-high']
 
     failing.clear()
+    clock[0] = store.review_probe_outage('agy-gemini-4-argon-low')['retry_at']
     recovered = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
     assert recovered['ok'] is True
-    assert store.leg_status('agy/gemini-4-argon-low')['state'] == 'ok'
+    assert store.review_probe_outage('agy-gemini-4-argon-low') is None
     after = svc.route(card, role='review', writer_families=('openai',), benchmark={})
     assert after.legs[2].id == 'agy-gemini-4-hydrogen-high'
     assert 'agy-gemini-4-argon-low' in [leg.id for leg in after.legs]
 
 
-def test_cli_probe_all_reviewers(tmp_path, monkeypatch, capsys):
-    import json
+def test_scheduled_probe_launches_native_sonnet_when_model_is_shared(tmp_path, monkeypatch, capsys):
+    from plangraph.planner import legs
+    from plangraph.routing_support import claude_seat, resolver
     from plangraph.spawner import cli, leg_probe
-    calls = []
+    from plangraph.spawner.runner import SpawnerRunner
 
-    async def fake(runner, legs, all_writers, timeout, *, all_reviewers=False):
-        calls.append((legs, all_writers, timeout, all_reviewers))
-        return dict(ok=True, probes=[dict(id='mimo-v2.6-pro', ok=True, reason='', seconds=0.1)])
+    rows = [leg for leg in legs.spawnable_legs() if leg.model == legs.REVIEW_SONNET]
+    assert [leg.harness for leg in rows] == ['agy', 'claude']
+    monkeypatch.setattr(legs, 'routed_review_legs', lambda: [rows[1]])
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kw: '/bin/' + name)
+    monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
+    monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: False)
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', _ready)
+    launched = []
 
-    monkeypatch.setattr(leg_probe, 'probe_many', fake)
-    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(runner=SimpleNamespace()))
-    assert cli.main(['--state', str(tmp_path), 'probe', '--all-reviewers', '--json']) == 0
-    assert calls == [([], False, None, True)]
-    assert json.loads(capsys.readouterr().out)['ok'] is True
+    async def process(exe, *argv, **kwargs):
+        launched.append((exe, argv))
+        return await asyncio.create_subprocess_exec(
+            sys.executable, '-c', 'print(\'{"type":"result","subtype":"success","result":"OK"}\')', **kwargs)
+
+    runner = SpawnerRunner(process_factory=process)
+    runner.leg_reader = LegStateStore(tmp_path / 'legs.sqlite')
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(runner=runner))
+    assert cli.main(['probe', '--all-reviewers', '--json']) == 0
+    row, = json.loads(capsys.readouterr().out)['probes']
+    assert row['ok'] and row['id'] == rows[1].id
+    (exe, argv), = launched
+    assert exe == '/bin/claude' and argv[argv.index('--model') + 1] == 'claude-sonnet-5-5'
+
+
+async def _ready(*args, **kwargs):
+    return None
+
+
+def test_scheduled_probe_denies_repository_tools_on_required_opencode_seat(tmp_path, monkeypatch, capsys):
+    from plangraph.planner import legs
+    from plangraph.routing_support import resolver
+    from plangraph.spawner import cli, leg_probe
+    from plangraph.spawner.runner import SpawnerRunner
+
+    leg = next(leg for leg in legs.routed_review_legs() if leg.id in legs.REVIEW_REQUIRED)
+    monkeypatch.setattr(legs, 'routed_review_legs', lambda: (leg,))
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, **kw: '/bin/' + name)
+    monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', _ready)
+    monkeypatch.setattr('plangraph.spawner.opencode_overlay.prepare_gateway_env',
+                        lambda env, model: (dict(env, OPENCODE_CONFIG_CONTENT='{}'), None))
+    monkeypatch.setattr('plangraph.spawner.opencode_isolation.review_credential_reason',
+                        lambda model, directory, env, reason: reason)
+    permissions = []
+    exit_code = 0
+
+    async def process(exe, *argv, **kwargs):
+        permissions.append(json.loads(kwargs['env']['OPENCODE_CONFIG_CONTENT'])['permission'])
+        events = [{'type': 'text', 'part': {'text': 'OK'}}, {'type': 'step_finish', 'part': {'reason': 'stop'}}]
+        output = '\n'.join(map(json.dumps, events))
+        return await asyncio.create_subprocess_exec(
+            sys.executable, '-c', f'print({output!r}); raise SystemExit({exit_code})', **kwargs)
+
+    runner = SpawnerRunner(process_factory=process)
+    runner.leg_reader = LegStateStore(tmp_path / 'legs.sqlite')
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(runner=runner))
+    assert cli.main(['probe', '--all-reviewers', '--json']) == 0
+    assert json.loads(capsys.readouterr().out)['probes'][0]['ok']
+    granted, = permissions
+    assert granted and set(granted.values()) == {'deny'}
+
+    async def unavailable(*args, **kwargs):
+        return 'fixture prelaunch refusal'
+
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', unavailable)
+    for _ in range(2):
+        assert cli.main(['probe', '--all-reviewers', '--json']) == 1
+        failure, = json.loads(capsys.readouterr().out)['probes']
+        assert failure['infra']
+        assert 'fixture prelaunch refusal' in failure['reason']
+    assert len(permissions) == 1
+    assert runner.leg_reader.review_probe_outage(leg.id) is None
+
+    monkeypatch.setattr(resolver, 'host_skip_reason_async', _ready)
+    exit_code = 1
+    assert cli.main(['probe', '--all-reviewers', '--json']) == 1
+    failure, = json.loads(capsys.readouterr().out)['probes']
+    assert failure['new_failure'] and not failure['infra']
+    assert len(permissions) == 2
 
 
 def test_review_probe_flags_caller_repo_leak(tmp_path, monkeypatch):

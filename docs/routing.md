@@ -57,6 +57,9 @@ The D-5696/D-5706 opt-in table originally listed Sol xhigh, Hydrogen high and
 non-Claude-Code Sonnet high. See [D-6310 and D-6667](#route-order-and-family-admission-d-6310--rule-353)
 for current registrations and implementation priority.
 The active review legs the route can offer come from `planner.legs.routed_review_legs` (also used by the scheduled review probe).
+Routing reads scheduled review outages by catalog leg ID. Model-scoped quota
+still applies across effort legs that share a subscription. A leg with an outage
+stays out of routing until its review reprobe succeeds. See [scheduled review outages](spawner-leg-state.md#scheduled-review-outages).
 Review excludes writer families, requires diff <100k for Haiku, and needs opposing
 eligible cheaper verdicts for Ember. Spec amendment: MiMo and both DeepSeek review
 legs retain null registered effort, as does Haiku; requested medium/xhigh efforts
