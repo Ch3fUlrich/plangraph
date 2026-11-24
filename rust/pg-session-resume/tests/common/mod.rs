@@ -37,6 +37,9 @@ pub struct Fake {
     /// Whether a live process carries the prompt in its arguments.
     pub holds_prompt: bool,
     pub launched: HashMap<u32, u64>,
+    /// When set the session's activity stamp never moves (a launcher that ignores its prompt).
+    pub mark_frozen: bool,
+    pub mark_reads: std::cell::Cell<u64>,
 }
 
 impl Fake {
@@ -67,6 +70,8 @@ impl Fake {
             spawn_dies: false,
             holds_prompt: true,
             launched: HashMap::new(),
+            mark_frozen: false,
+            mark_reads: Default::default(),
         }
     }
 }
@@ -120,6 +125,11 @@ impl Host for Fake {
     }
     fn launch_start(&self, pid: u32) -> Option<u64> {
         self.launched.get(&pid).copied()
+    }
+    fn activity_mark(&self, _: &Record) -> Option<u64> {
+        let n = self.mark_reads.get();
+        self.mark_reads.set(n + 1);
+        Some(if self.mark_frozen { 7 } else { 1000 + n })
     }
     fn find_process(&self, _: &str) -> Option<(u32, u64)> {
         self.find

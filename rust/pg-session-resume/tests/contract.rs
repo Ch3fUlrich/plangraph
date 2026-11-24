@@ -43,3 +43,18 @@ fn glob_star_matches_runs() {
     assert!(!glob_match("routing", "routing-1"));
     assert!(!glob_match("ab*ba", "aba"));
 }
+
+#[test]
+fn the_last_head_line_decides_and_a_malformed_one_clears_the_head() {
+    let good = "0123456789abcdef0123456789abcdef01234567";
+    assert_eq!(
+        parse_status("l", &format!("HEAD: {good}\nHEAD: 12345\n")).head,
+        None
+    );
+    assert_eq!(
+        parse_status("l", &format!("HEAD: 12345\nHEAD: {good}\n"))
+            .head
+            .as_deref(),
+        Some(good)
+    );
+}

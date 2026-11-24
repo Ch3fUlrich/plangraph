@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 /// How long a claim without a process may wait for the runtime's acknowledgement.
 pub const CLAIM_GRACE_S: u64 = 120;
 
-const CLAIM_KEYS: [&str; 5] = [
+const CLAIM_KEYS: [&str; 6] = [
     "claim_round",
     "claim_ts",
     "claim_offset",
+    "claim_mark",
     "claim_pid",
     "claim_start",
 ];
@@ -123,6 +124,17 @@ fn settle_claim(host: &mut dyn Host, cfg: &Config, rec: &mut Record, lane: &str)
         return;
     };
     let claimed_at = rec.resume_u64("claim_ts").unwrap_or(0);
+    // A tick that died between the spawn and saving the pid left the launch without an
+    // identity: find the process again from its command line first, so an acknowledgement
+    // carries it and a retry never starts a second writer beside the first.
+    if rec.resume_u64("claim_pid").is_none() && rec.agent() != crate::record::Agent::Claude {
+        let handle = rec.resume_str("handle").unwrap_or_default().to_owned();
+        if let Some((pid, start)) = host.find_process(&handle) {
+            rec.set_resume("claim_pid", json!(pid));
+            rec.set_resume("claim_start", json!(start));
+            save(host, rec);
+        }
+    }
     let proc = rec
         .resume_u64("claim_pid")
         .zip(rec.resume_u64("claim_start"));
@@ -136,10 +148,18 @@ fn settle_claim(host: &mut dyn Host, cfg: &Config, rec: &mut Record, lane: &str)
         Some(text) => host
             .transcript_contains(rec, rec.resume_u64("claim_offset").unwrap_or(0), text)
             .unwrap_or_else(|| {
-                // No transcript: the receipt is the prompt in the started process's own arguments.
-                proc.is_some_and(|(p, s)| {
-                    u32::try_from(p).is_ok_and(|p| host.process_holds_prompt(p, s, text))
-                })
+                // No transcript: the process this launch started must carry the prompt AND the
+                // session must have shown activity of its own since the claim; a live process
+                // that never read its arguments writes nothing.
+                let moved = match (host.activity_mark(rec), rec.resume_u64("claim_mark")) {
+                    (Some(now), Some(then)) => now > then,
+                    (Some(_), None) => true,
+                    _ => false,
+                };
+                moved
+                    && proc.is_some_and(|(p, s)| {
+                        u32::try_from(p).is_ok_and(|p| host.process_holds_prompt(p, s, text))
+                    })
             }),
         None => false,
     };
@@ -247,6 +267,10 @@ fn resume_one(
     rec.set_resume(
         "claim_offset",
         host.transcript_len(rec).map_or(Value::Null, |n| json!(n)),
+    );
+    rec.set_resume(
+        "claim_mark",
+        host.activity_mark(rec).map_or(Value::Null, |n| json!(n)),
     );
     if let Err(e) = rec.save() {
         host.log(&format!(

@@ -38,6 +38,8 @@ pub trait Host {
     /// Whether the live process `pid` (with this start time) was started with `text` as one
     /// of its arguments: the receipt of a prompt handed over on the command line.
     fn process_holds_prompt(&self, pid: u32, start: u64, text: &str) -> bool;
+    /// The session's own activity stamp (nanoseconds): it moves when the runtime writes.
+    fn activity_mark(&self, rec: &Record) -> Option<u64>;
     /// A live process whose command line resumes `handle`: (pid, start time).
     fn find_process(&self, handle: &str) -> Option<(u32, u64)>;
     /// The start time of a process this tick just spawned, read even when it has already

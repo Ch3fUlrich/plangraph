@@ -133,15 +133,22 @@ fn the_tick_unit_leaves_resumed_writers_running_when_it_exits() {
 }
 
 #[test]
-fn only_a_user_message_carrying_the_text_is_a_receipt() {
-    use pg_session_resume::system::jsonl_has_user_text;
+fn only_the_user_input_event_of_the_prompt_is_a_receipt() {
+    use pg_session_resume::system::jsonl_has_user_input;
     let text = "fix the thing\nsecond line";
     let user_claude =
         serde_json::json!({"type": "user", "message": {"role": "user", "content": text}});
+    let user_blocks = serde_json::json!({"type": "user", "message": {"role": "user",
+        "content": [{"type": "text", "text": text}]}});
     let user_codex = serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user",
         "content": [{"type": "input_text", "text": text}]}});
+    let codex_event = serde_json::json!({"type": "event_msg", "payload": {"type": "user_message", "message": text}});
     let assistant = serde_json::json!({"type": "assistant", "message": {"role": "assistant",
-        "content": [{"type": "text", "text": format!("you asked: {text}")}]}});
+        "content": [{"type": "text", "text": text}]}});
+    // Claude writes tool results as user lines, and a user may paste the findings among other text
+    let tool_result = serde_json::json!({"type": "user", "message": {"role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "t1", "content": text}]}});
+    let quoted = serde_json::json!({"type": "user", "message": {"role": "user", "content": format!("please look at: {text} ok?")}});
     let jsonl = |lines: &[&serde_json::Value]| {
         lines
             .iter()
@@ -150,14 +157,17 @@ fn only_a_user_message_carrying_the_text_is_a_receipt() {
             .join("\n")
             .into_bytes()
     };
-    assert!(jsonl_has_user_text(&jsonl(&[&user_claude]), text));
-    assert!(jsonl_has_user_text(
-        &jsonl(&[&assistant, &user_codex]),
+    for good in [&user_claude, &user_blocks, &user_codex, &codex_event] {
+        assert!(
+            jsonl_has_user_input(&jsonl(&[&assistant, good]), text),
+            "{good}"
+        );
+    }
+    for bad in [&assistant, &tool_result, &quoted] {
+        assert!(!jsonl_has_user_input(&jsonl(&[bad]), text), "{bad}");
+    }
+    assert!(!jsonl_has_user_input(
+        b"not json\n{\"type\":\"user\"}",
         text
     ));
-    assert!(
-        !jsonl_has_user_text(&jsonl(&[&assistant]), text),
-        "an assistant quoting the findings is no receipt"
-    );
-    assert!(!jsonl_has_user_text(b"not json\n{\"type\":\"user\"}", text));
 }

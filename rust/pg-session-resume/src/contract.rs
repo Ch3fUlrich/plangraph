@@ -27,10 +27,11 @@ pub fn parse_status(lane: &str, text: &str) -> StatusFacts {
         if line == done_line {
             facts.done = true;
         }
+        // The last HEAD line decides; a malformed one clears an earlier valid one, so a status
+        // that is half-rewritten never authorizes the old head.
         if let Some(sha) = line.strip_prefix("HEAD:").map(str::trim) {
-            if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-                facts.head = Some(sha.to_ascii_lowercase());
-            }
+            let valid = sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit());
+            facts.head = valid.then(|| sha.to_ascii_lowercase());
         }
     }
     facts

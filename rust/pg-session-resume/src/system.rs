@@ -125,19 +125,28 @@ impl Host for System {
         file.seek(SeekFrom::Start(from)).ok()?;
         let mut tail = Vec::new();
         file.read_to_end(&mut tail).ok()?;
-        Some(jsonl_has_user_text(&tail, text))
+        Some(jsonl_has_user_input(&tail, text))
     }
 
     fn find_process(&self, handle: &str) -> Option<(u32, u64)> {
         for entry in std::fs::read_dir("/proc").ok()?.flatten() {
-            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            // /proc also lists non-process entries (fb, sys, ...): skip them, never stop there
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
             let Ok(cmdline) = std::fs::read(entry.path().join("cmdline")) else {
                 continue;
             };
             let args: Vec<&[u8]> = cmdline.split(|b| *b == 0).collect();
             let has = |want: &str| args.contains(&want.as_bytes());
             if has(handle) && (has("resume") || has("--resume") || has("--session")) {
-                return Some((pid, self.proc_start(pid)?));
+                if let Some(start) = self.proc_start(pid) {
+                    return Some((pid, start));
+                }
             }
         }
         None
@@ -159,6 +168,10 @@ impl Host for System {
 
     fn activity_ts(&self, rec: &Record) -> Option<u64> {
         u64::try_from(self.activity_ns(rec)? / 1_000_000_000).ok()
+    }
+
+    fn activity_mark(&self, rec: &Record) -> Option<u64> {
+        u64::try_from(self.activity_ns(rec)?).ok()
     }
 
     fn process_holds_prompt(&self, pid: u32, start: u64, text: &str) -> bool {
@@ -221,28 +234,41 @@ fn mtime_ns(path: &Path) -> Option<u128> {
     Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos())
 }
 
-/// Whether one of the JSONL lines carries `text` inside a user message. An assistant
-/// message that quotes the text does not count.
-pub fn jsonl_has_user_text(jsonl: &[u8], text: &str) -> bool {
-    fn walk(v: &serde_json::Value, text: &str, user: bool) -> bool {
-        use serde_json::Value;
-        match v {
-            Value::Object(m) => {
-                let role = m.get("role").and_then(Value::as_str);
-                let kind = m.get("type").and_then(Value::as_str);
-                let user =
-                    user || role == Some("user") || matches!(kind, Some("user" | "user_message"));
-                m.values().any(|c| walk(c, text, user))
-            }
-            Value::Array(a) => a.iter().any(|c| walk(c, text, user)),
-            Value::String(s) => user && s.contains(text),
-            _ => false,
+/// Whether one of the JSONL lines is the user-input event of `text` itself: the whole
+/// message equals the prompt. A tool result, an assistant message or a user message that
+/// merely quotes the text is not that event.
+pub fn jsonl_has_user_input(jsonl: &[u8], text: &str) -> bool {
+    use serde_json::Value;
+    let same = |s: &Value| s.as_str().is_some_and(|s| s.trim_end() == text.trim_end());
+    // a content array: a text block (Claude "text", Codex "input_text") that is the prompt
+    let block = |content: &Value| {
+        content.as_array().is_some_and(|a| {
+            a.iter().any(|b| {
+                matches!(b["type"].as_str(), Some("text" | "input_text")) && same(&b["text"])
+            })
+        })
+    };
+    let is_input = |v: &Value| match v["type"].as_str() {
+        // Claude Code: {"type":"user","message":{"role":"user","content": "<text>" | [blocks]}}
+        Some("user") => {
+            v["message"]["role"] == "user"
+                && (same(&v["message"]["content"]) || block(&v["message"]["content"]))
         }
-    }
+        // Codex rollout: a user message item, or the user_message event
+        Some("response_item") => {
+            v["payload"]["type"] == "message"
+                && v["payload"]["role"] == "user"
+                && block(&v["payload"]["content"])
+        }
+        Some("event_msg") => {
+            v["payload"]["type"] == "user_message" && same(&v["payload"]["message"])
+        }
+        _ => false,
+    };
     jsonl
         .split(|b| *b == b'\n')
-        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
-        .any(|v| walk(&v, text, false))
+        .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+        .any(|v| is_input(&v))
 }
 
 /// The file the runtime appends the session's messages to.

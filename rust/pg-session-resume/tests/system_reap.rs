@@ -185,3 +185,29 @@ fn newer_activity_in_the_same_second_as_the_turn_end_marker_keeps_the_turn_open(
     at(&activity, 1_000_000_100);
     assert_eq!(h.turn_ended(&rec), Some(true));
 }
+
+#[test]
+fn a_resumed_process_is_found_from_its_command_line_among_the_non_process_proc_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = System {
+        log_file: dir.path().join("log"),
+        log_failed: false,
+    };
+    let handle = format!("T-find-{}", std::process::id());
+    let mut child = Command::new("sh")
+        .args(["-c", "sleep 30", "launch", "resume", &handle])
+        .spawn()
+        .unwrap();
+    let mut found = None;
+    for _ in 0..200 {
+        found = h.find_process(&handle);
+        if found.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(found.map(|(p, _)| p), Some(child.id()));
+    assert_eq!(h.find_process("T-nobody-has-this"), None);
+    child.kill().unwrap();
+    child.wait().unwrap();
+}

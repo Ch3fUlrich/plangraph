@@ -55,7 +55,8 @@ Stopping needs the runtime's own positive idle signal:
 A stop writes `state: "stopped"`, `stopped_ts` and `resume: {agent, handle, head (git HEAD at
 the stop), worktree (inode and git dir), status_head, round, stopped_ts, reason}`; head and
 worktree stay null when their lookup failed. `resume.handle` is the "resumable" mark a feeder
-reads (the feeder change belongs to the feeder lane; this tool publishes the mark in the record
+reads (the feeder change belongs to the feeder lane, keeper item
+`plangraph:SESSION-AUTO-CLOSE-S3-FEEDER-COUNTS-RESUMABLE`; this tool publishes the mark in the record
 and `<lane>.resume.json`). A session with a round for its current head that it has not
 acknowledged is not reaped. A session without a handle is never stopped.
 
@@ -63,9 +64,13 @@ Resume: only the newest stopped record of a lane resumes, never while another re
 is live. A kernel lock (flock on `<state>/launch/pg-session-resume.lock`) keeps two ticks
 apart. The round is claimed first (`resume.claim_round`, `claim_ts`, `claim_offset` = transcript
 length, `claim_pid`, `claim_start`), the launch runs, and the claim is settled against the
-runtime: delivered when the transcript holds the prompt after `claim_offset` (a user message after `claim_offset` holds the prompt; an assistant message quoting it does not
-count; a runtime without a transcript: the process this launch started is alive (a zombie is
-gone) and carries the prompt in its own arguments). A
+runtime: delivered when the transcript holds the prompt after `claim_offset` (the user-input event of the prompt, the whole message equal to it, after `claim_offset`: an
+assistant message, a tool result or a user message that only quotes it does not count; a runtime
+without a transcript: the process this launch started is alive (a zombie is gone), carries the
+prompt in its own arguments AND the session's activity stamp has moved since the claim
+(`claim_mark`), because a live process that never read its arguments writes nothing). A claim
+without a recorded process gets it back from the command line before anything is decided, so
+neither an acknowledgement nor a retry starts or misses a writer. A
 delivery sets `resume.round`, `state: "running"`, clears `stopped_ts` and the claim, keeps the
 verified launch identity (pid and start time, found again from its command line after a dead
 tick) even when the process already exited, so the next stop records it as gone and logs
@@ -99,10 +104,12 @@ process, is dropped, the record is stopped again and the round is sent again
   every minute (`systemctl --user enable --now pg-session-resume.timer`). The service uses
   `KillMode=process` and a resumed Codex/OpenCode writer starts in its own process group, so
   the oneshot's exit does not kill it.
-- Launcher (the session launcher that writes the launch records; a recorded slice): write `lane`,
+- Launcher (the session launcher that writes the launch records;
+  `plangraph:SESSION-AUTO-CLOSE-S1-FLEET-LAUNCH-RECORD-FIELDS`): write `lane`,
   `agent`, the Codex `thread_id` / OpenCode `opencode_session`, `pid`, `pid_start`, and for
   Codex/OpenCode `activity_path` and `turn_end_path`. Claude records already work as they are.
-- Orchestrator: hand a fix round over with `pg-session-resume deliver` (a recorded slice).
+- Orchestrator: hand a fix round over with `pg-session-resume deliver`
+  (`plangraph:SESSION-AUTO-CLOSE-S5-ORCHESTRATOR-DELIVER`).
 - Tests: `tests/systemd.rs` runs the deployed `tick` as a transient systemd user unit with the
   deployed `KillMode` and checks the resumed writer is still alive (not a zombie) afterwards and
   got the text; with `KillMode=control-group` it fails.
@@ -110,7 +117,8 @@ process, is dropped, the record is stopped again and the round is sent again
   on the Claude Code `Stop` event. Without it the timer stops a session about a minute
   after its DONE line.
 - Both are persistent services or permission settings: enabling them on a host needs a
-  routing D-id.
+  routing D-id (`plangraph:SESSION-AUTO-CLOSE-S2-STOP-HOOK-AND-TICK-TIMER`). A resumed writer must
+  not trip the pre-push writer-flow check (`plangraph:SESSION-AUTO-CLOSE-S4-PREPUSH-RESUMED-WRITER`).
 
 ## Log
 

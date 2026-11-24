@@ -63,37 +63,61 @@ fn a_resumed_writer_survives_the_tick_unit_and_receives_the_findings() {
     let fake = bin.join("codex");
     std::fs::write(
         &fake,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PG_TEST_OUT\"\nsleep 20\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PG_TEST_OUT\"\ntouch \"$PG_TEST_ACT\"\nsleep 20\n",
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let rec = json!({"name": "writer", "session_name": "writer-1", "cwd": wt, "agent": "codex", "thread_id": "T-1", "ts": 1,
-        "state": "stopped", "stopped_ts": 2,
+        "state": "stopped", "stopped_ts": 2, "activity_path": dir.path().join("activity"),
         "resume": {"agent": "codex", "handle": "T-1", "head": null, "status_head": HEAD, "round": 0, "stopped_ts": 2}});
     std::fs::write(state.join("launch/sessions/writer-1.json"), rec.to_string()).unwrap();
     std::fs::write(pr.join("lane-a.status"), format!("HEAD: {HEAD}\n")).unwrap();
     pg_session_resume::deliver::deliver(&pr, "lane-a", HEAD, "fix the thing\n").unwrap();
     let out = dir.path().join("args");
-
-    let run = Command::new("systemd-run")
-        .args(["--user", "--wait", "--collect", "-p", "Type=oneshot", "-p"])
-        .arg(format!("KillMode={}", unit_line("KillMode=")))
-        .arg(format!("--setenv=PATH={}:/usr/bin:/bin", bin.display()))
-        .arg(format!("--setenv=PG_TEST_OUT={}", out.display()))
-        .arg(format!("--setenv=HOME={}", dir.path().display()))
-        .arg(env!("CARGO_BIN_EXE_pg-session-resume"))
-        .args(deployed_tick_args()) // the deployed `tick`
-        .args(["--min-free-mb", "0", "--state"])
-        .arg(&state)
-        .arg("--pr-dir")
-        .arg(&pr)
-        .output()
-        .unwrap();
-    assert!(
-        run.status.success(),
-        "{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
+    std::fs::write(dir.path().join("activity"), "x").unwrap();
+    // two timer ticks: the first launches the writer, the second sees what it did
+    let tick = || {
+        Command::new("systemd-run")
+            .args(["--user", "--wait", "--collect", "-p", "Type=oneshot", "-p"])
+            .arg(format!("KillMode={}", unit_line("KillMode=")))
+            .arg(format!("--setenv=PATH={}:/usr/bin:/bin", bin.display()))
+            .arg(format!("--setenv=PG_TEST_OUT={}", out.display()))
+            .arg(format!(
+                "--setenv=PG_TEST_ACT={}",
+                dir.path().join("activity").display()
+            ))
+            .arg(format!("--setenv=HOME={}", dir.path().display()))
+            .arg(env!("CARGO_BIN_EXE_pg-session-resume"))
+            .args(deployed_tick_args()) // the deployed `tick`
+            .args(["--min-free-mb", "0", "--state"])
+            .arg(&state)
+            .arg("--pr-dir")
+            .arg(&pr)
+            .output()
+            .unwrap()
+    };
+    let ok = |run: std::process::Output| {
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    };
+    ok(tick());
+    for _ in 0..50 {
+        let touched = std::fs::metadata(dir.path().join("activity"))
+            .and_then(|m| m.modified())
+            .ok();
+        if out.exists()
+            && touched.is_some_and(|t| {
+                t > std::time::SystemTime::now() - std::time::Duration::from_secs(3)
+            })
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    ok(tick());
 
     // the unit is gone; the writer is not, and it got exactly the findings text
     let rec: Value = serde_json::from_slice(
