@@ -3,157 +3,48 @@
 //! A train that raises it cannot be started by a plain unit restart: the runtime role has no DDL and the
 //! keeper refuses a database behind its code. The GO must carry `MIGRATION <version>` and the deploy goes
 //! through `plangraph keeper-restart` (LE-KEEPER-SCHEMA-TRAIN-LANDS-WITHOUT-MIGRATION-FIELD).
+//!
+//! The registry is read by one reader, `plangraph.keeper.schema_pg.registry_version` (a Python AST read that
+//! never executes the file), the same function the batch land gate calls, so the two gates cannot disagree
+//! about what the registry is.
 use super::git;
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 /// The file whose `MIGRATIONS` registry defines the version.
 pub const SCHEMA_PATH: &str = "src/plangraph/keeper/schema_pg.py";
 
-/// The offset of the opening bracket of the one top-level `MIGRATIONS = (...)` assignment, whatever its
-/// spacing (`MIGRATIONS=(` too). Strings and comments are skipped from the start of the file, so an example in
-/// a docstring or a comment is not the registry. Like the AST reader of the batch land gate, a second
-/// top-level assignment, none, or a value that is not a tuple or list is an error.
-fn find_registry(text: &str) -> Result<usize, String> {
-    let (mut found, mut depth, mut i) = (None, 0u32, 0);
-    while i < text.len() {
-        let rest = &text[i..];
-        if depth == 0 && starts_statement(text, i) {
-            if let Some(open) = registry_assignment(rest)? {
-                if found.is_some() {
-                    return Err("more than one MIGRATIONS registry".into());
-                }
-                found = Some(i + open);
-            }
-        }
-        i += match rest.as_bytes()[0] {
-            b'#' | b'"' | b'\'' => literal_len(rest),
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                1
-            }
-            b')' | b']' | b'}' => {
-                depth = depth.saturating_sub(1);
-                1
-            }
-            _ => rest.chars().next().map_or(1, char::len_utf8),
-        };
-    }
-    found.ok_or_else(|| "no MIGRATIONS registry".into())
-}
+const READER: &str = "import sys\nfrom plangraph.keeper.schema_pg import registry_version\ntry:\n    print(registry_version(sys.stdin.read()))\nexcept ValueError as exc:\n    sys.exit(str(exc))\n";
 
-/// Whether a top-level statement starts at `i`: at column 0 of a line, or after a `;` on a line that itself
-/// starts at column 0 (`A = 1; MIGRATIONS = (...)`). An indented line is part of a block, not top level.
-fn starts_statement(text: &str, i: usize) -> bool {
-    let before = &text[..i];
-    if i == 0 || before.ends_with('\n') {
-        return true;
+/// The version of the registry in `text` (the contents of `SCHEMA_PATH`), asked of the shared Python reader.
+pub fn parse_latest(python: &dyn Fn() -> Command, text: &str) -> Result<u32, String> {
+    let mut child = python()
+        .args(["-c", READER])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("the keeper registry reader is unavailable: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or("no stdin for the registry reader")?
+        .write_all(text.as_bytes())
+        .map_err(|e| format!("the keeper registry reader: {e}"))?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
     }
-    let line = &before[before.rfind('\n').map_or(0, |n| n + 1)..];
-    !line.starts_with([' ', '\t']) && line.trim_end_matches([' ', '\t']).ends_with(';')
-}
-
-/// For a line start that reads `MIGRATIONS <spaces> = <spaces> VALUE`: the offset of the first byte of
-/// VALUE, an error unless it opens a tuple or a list. `None` for any other line (`==`, `MIGRATIONS_X`).
-fn registry_assignment(line: &str) -> Result<Option<usize>, String> {
-    let Some(rest) = line.strip_prefix("MIGRATIONS") else {
-        return Ok(None);
-    };
-    let blank = |c: char| c == ' ' || c == '\t';
-    let after_name = rest.trim_start_matches(blank);
-    let Some(value) = after_name.strip_prefix('=').filter(|v| !v.starts_with('=')) else {
-        return Ok(None);
-    };
-    let value = value.trim_start_matches(blank);
-    if value.starts_with(['(', '[']) {
-        Ok(Some(line.len() - value.len()))
-    } else {
-        Err("the MIGRATIONS registry is not a tuple or list of Migration(...) calls".into())
-    }
-}
-
-/// The version of the top-level `MIGRATIONS = (...)` registry: the numbers of its direct `Migration(N, ...)`
-/// entries, consecutive from 1. Strings, comments and the arguments of an entry are skipped, so a
-/// `Migration(` mention elsewhere in the file does not count. A missing or repeated registry, a gap, a
-/// repeat, an entry that is not a `Migration(N, ...)` call or an unclosed registry is an error, never a guess.
-pub fn parse_latest(text: &str) -> Result<u32, String> {
-    let start = find_registry(text)?;
-    let (mut versions, mut depth, mut i) = (Vec::new(), 0u32, start);
-    while i < text.len() {
-        let rest = &text[i..];
-        // Step by whole characters: a multi-byte one in a comment or string never splits.
-        let width = rest.chars().next().map_or(1, char::len_utf8);
-        i += match rest.as_bytes()[0] {
-            b'#' | b'"' | b'\'' => literal_len(rest),
-            b'(' if depth == 1 && entry_name(&text[..i]) => {
-                let args = &rest[1..];
-                let digits: String = args.chars().take_while(char::is_ascii_digit).collect();
-                if digits.is_empty() || !args[digits.len()..].trim_start().starts_with(',') {
-                    return Err("a registry entry is not Migration(N, ...)".into());
-                }
-                versions.push(digits.parse::<u32>().map_err(|e| e.to_string())?);
-                depth += 1;
-                1
-            }
-            b'(' | b'[' | b'{' if depth == 1 => {
-                return Err("a registry entry is not Migration(N, ...)".into())
-            }
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                1
-            }
-            b')' | b']' | b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    if versions.iter().zip(1u32..).any(|(v, n)| *v != n) {
-                        return Err("keeper migration versions must be consecutive from 1".into());
-                    }
-                    return Ok(versions.len() as u32);
-                }
-                1
-            }
-            _ => width,
-        };
-    }
-    Err("the MIGRATIONS registry is not closed".into())
-}
-
-/// Whether `before` ends in the bare name `Migration` (the call about to open).
-fn entry_name(before: &str) -> bool {
-    before.strip_suffix("Migration").is_some_and(|rest| {
-        !rest
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-    })
-}
-
-/// Bytes of the comment or string literal that starts `text`, triple quotes included.
-fn literal_len(text: &str) -> usize {
-    let bytes = text.as_bytes();
-    if bytes[0] == b'#' {
-        return text.find('\n').unwrap_or(text.len());
-    }
-    let q = bytes[0] as char;
-    let mark = if text.starts_with(&q.to_string().repeat(3)) {
-        q.to_string().repeat(3)
-    } else {
-        q.to_string()
-    };
-    let mut i = mark.len();
-    while i < text.len() && !text[i..].starts_with(&mark) {
-        let width = if bytes[i] == b'\\' {
-            1 + text[i + 1..].chars().next().map_or(0, char::len_utf8)
-        } else {
-            text[i..].chars().next().map_or(1, char::len_utf8)
-        };
-        i += width;
-    }
-    (i + mark.len()).min(text.len())
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<u32>()
+        .map_err(|e| format!("the keeper registry reader printed no version: {e}"))
 }
 
 /// The keeper schema version at `rev`; 0 when the revision exists and has no schema file. A revision that
 /// is not a commit of this repository is an error: a bad `--base` or `--head` must not read as version 0.
-pub fn at(repo: &Path, rev: &str) -> Result<u32, String> {
+pub fn at(repo: &Path, rev: &str, python: &dyn Fn() -> Command) -> Result<u32, String> {
     git::out(
         repo,
         &[
@@ -171,13 +62,19 @@ pub fn at(repo: &Path, rev: &str) -> Result<u32, String> {
     {
         return Ok(0);
     }
-    let text = git::out(repo, &["show", &spec])?;
-    parse_latest(&text).map_err(|e| format!("keeper migration version is unreadable at {rev}: {e}"))
+    let text = String::from_utf8_lossy(&git::bytes(repo, &["show", &spec])?).into_owned();
+    parse_latest(python, &text)
+        .map_err(|e| format!("keeper migration version is unreadable at {rev}: {e}"))
 }
 
 /// The head version when `head` is above `base`; `None` when it is equal. A lower head is an error.
-pub fn rise(repo: &Path, base: &str, head: &str) -> Result<Option<u32>, String> {
-    let (before, after) = (at(repo, base)?, at(repo, head)?);
+pub fn rise(
+    repo: &Path,
+    base: &str,
+    head: &str,
+    python: &dyn Fn() -> Command,
+) -> Result<Option<u32>, String> {
+    let (before, after) = (at(repo, base, python)?, at(repo, head, python)?);
     if after < before {
         return Err(format!(
             "keeper migration regressed from {before} to {after}"
@@ -192,11 +89,15 @@ pub fn rise(repo: &Path, base: &str, head: &str) -> Result<Option<u32>, String> 
 /// statement, which must name this exact pull request and head or the command refuses.
 pub(super) fn run_cli(
     flags: &std::collections::BTreeMap<String, String>,
+    python: &dyn Fn() -> Command,
 ) -> Result<Vec<String>, String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
     let repo = Path::new(need("repo")?);
     let head_rev = need("head")?;
-    let (base, head) = (at(repo, need("base")?)?, at(repo, head_rev)?);
+    let (base, head) = (
+        at(repo, need("base")?, python)?,
+        at(repo, head_rev, python)?,
+    );
     let migration = match flags.get("go-statement") {
         Some(text) => {
             let pr = need("pr")?
