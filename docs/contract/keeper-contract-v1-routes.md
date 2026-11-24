@@ -320,6 +320,6 @@ Router. `{key, kind:"question"|"operator_task"}` for an `open` `lane`; sets
 
 ### `POST /v1/lift_operator_gate`
 Router. `{key, decision_id:"D-<n>"}`: the decision row must be an OPERATOR row
-with a `Lifts-Gate: <key>` field and not superseded (naming alone does not count). Clears `operator`; `200 {key, operator:false,
+with a `Lifts-Gate: <key>` field (a list of keys only), not superseded, BY OPERATOR or with `Operator-Answer: D-n` naming a relayed operator answer that names the key (naming alone does not count). Clears `operator`; `200 {key, operator:false,
 waits_on_operator:false, decision_id}` [LiftOperatorGate]. `400 validation|
 evidence_unverified|bad_state`, `403 forbidden`.

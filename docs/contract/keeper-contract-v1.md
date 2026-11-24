@@ -343,7 +343,7 @@ ops:                          # applied in order
   - {op: cancel, key: "demo:A", reason: "..."}
   - {op: rehome, key: "demo:A", new_project: other, host: box1}
   - {op: set_kind, key: "demo:A", kind: question}                           # or operator_task
-  - {op: lift_operator_gate, key: "demo:A", decision_id: D-1}               # OPERATOR row D-1: `Lifts-Gate: demo:A`
+  - {op: lift_operator_gate, key: "demo:A", decision_id: D-1}               # row D-1: `Lifts-Gate: demo:A`, BY OPERATOR or `Operator-Answer: D-n`
   - {op: add_dep, key: "demo:A", dep: "demo:B"}                             # one dependency (bare id = own project)
   - {op: remove_dep, key: "demo:A", dep: "demo:B"}
 ```

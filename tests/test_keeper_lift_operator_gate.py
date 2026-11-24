@@ -15,6 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from apply_batch import BatchError, build_request, validate_op  # noqa: E402
 
 KEY = "demo:GATE"
+_RELAY = ("| D-{did} | demo | (06:xxZ, date -u 06:06Z at writing) OPERATOR 2026-11-24T05:59:56.804Z, relayed by "
+          "relay-session (cross-session message, human CLI turn, text pinned, sha256 ab12): \"why do I need to "
+          "do something for this?\" DECISION: the operator step of {key} (p9) is lifted: an agent applies it. "
+          "| {by} | evidence |\n")
 HEADER = "| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n"
 ROWS = (
     "| D-10 | demo | Gate lifted; Lifts-Gate: demo:GATE; apply now | OPERATOR | 2026-11-24 |\n"
@@ -25,7 +29,20 @@ ROWS = (
     "| D-15 | demo | Lifts-Gate: demo:OTHER demo:GATE; Note: both | OPERATOR | 2026-11-24 |\n"
     "| D-16 | demo | Do not add Lifts-Gate: demo:GATE yet | OPERATOR | 2026-11-24 |\n"
     "| D-17 | demo | Lifts-Gate: demo:GATE; apply now | OPERATOR | 2026-11-24 |\n"
-    "| D-18 | demo | Supersedes D-17; keep demo:GATE blocked | OPERATOR | 2026-11-25 |\n")
+    "| D-18 | demo | Supersedes D-17; keep demo:GATE blocked | OPERATOR | 2026-11-25 |\n"
+    # the recorded shape of a relayed operator answer: the router's row, the operator's words quoted
+    + _RELAY.format(did=20, key="demo:GATE", by="router (sonnet 5.5, rules 2.1A, 3.76)")
+    + _RELAY.format(did=21, key="demo:OTHER", by="router (sonnet 5.5, rules 2.1A, 3.76)")
+    + _RELAY.format(did=22, key="demo:GATE", by="router (sonnet 5.5, rules 2.1A, 3.76)")
+    + "| D-23 | demo | Supersedes D-22; the answer was withdrawn | router (sonnet 5.5) | e |\n"
+    + "| D-30 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-20 | router (sonnet 5.5) | e |\n"
+    "| D-31 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-21 | router (sonnet 5.5) | e |\n"
+    "| D-32 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-11 | router (sonnet 5.5) | e |\n"
+    "| D-33 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-22 | router (sonnet 5.5) | e |\n"
+    "| D-34 | demo | Lifts-Gate: demo:GATE | router (sonnet 5.5) | e |\n"
+    "| D-35 | demo | Lifts-Gate: Do not lift demo:GATE until reviewed | OPERATOR | 2026-11-24 |\n"
+    "| D-36 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-99 | router (sonnet 5.5) | e |\n"
+    "| D-37 | demo | Lifts-Gate: demo:GATE demo:NEW; apply now | OPERATOR | 2026-11-24 |\n")
 
 
 @pytest.fixture
@@ -66,6 +83,12 @@ def test_the_router_clears_the_flags_with_an_operator_decision_and_logs_it(w):
     ("D-11", "evidence_unverified"),      # a router row is no operator answer
     ("D-12", "evidence_unverified"),      # an operator row that names another item
     ("D-13", "evidence_unverified"),      # a longer key is not this key
+    ("D-35", "evidence_unverified"),      # prose inside the Lifts-Gate field value
+    ("D-34", "evidence_unverified"),      # a router row with no operator answer behind it
+    ("D-31", "evidence_unverified"),      # the relayed answer names another item
+    ("D-32", "evidence_unverified"),      # Operator-Answer names a router row that is no relay
+    ("D-33", "evidence_unverified"),      # the relayed answer was superseded
+    ("D-36", "evidence_unverified"),      # Operator-Answer names an absent row
     ("D-16", "evidence_unverified"),      # prose that mentions the token is no release field
     ("D-17", "evidence_unverified"),      # a release a later row supersedes
     ("D-14", "evidence_unverified"),      # an OPERATOR row that names the key but keeps it blocked
@@ -84,6 +107,13 @@ def test_only_the_router_may_lift(w, who):
         w.store.lift_operator_gate(w.p(who), KEY, "D-10")
     assert exc.value.code == "forbidden"
     assert _flags(w) == (True, True)
+
+
+def test_the_recorded_relay_format_lifts_through_a_structured_router_row(w):
+    out = w.store.lift_operator_gate(w.p("router"), KEY, "D-30")
+    assert out["decision_id"] == "D-30" and _flags(w) == (False, False)
+    (event,) = _lifted(w)
+    assert event["payload"] == {"decision_id": "D-30", "operator": False}
 
 
 def test_a_release_list_may_name_several_keys(w):
@@ -176,37 +206,55 @@ def test_the_batch_file_op_is_validated_and_sent_to_the_single_route():
             validate_op(bad)
 
 
-def test_the_decision_is_read_before_any_lock_once_per_lift_single_and_batch(w, monkeypatch):
-    path = w.store.ctx.decisions._path
-    path.write_text(path.read_text(encoding="utf-8")
-                    + "| D-19 | demo | Lifts-Gate: demo:GATE2 | OPERATOR | 2026-11-24 |\n", encoding="utf-8")
+def _watch_reads(w, monkeypatch):
     seen = []
-    real = w.store._lift_proof
+    real = w.store._read_lift_decisions
 
     def watch(*args, **kwargs):
         seen.append(w.conn.in_transaction)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(w.store, "_lift_proof", watch)
+    monkeypatch.setattr(w.store, "_read_lift_decisions", watch)
+    return seen
+
+
+def test_a_single_lift_reads_the_decision_before_any_lock(w, monkeypatch):
+    seen = _watch_reads(w, monkeypatch)
     w.store.lift_operator_gate(w.p("router"), KEY, "D-10")
     assert seen == [False]
+
+
+def test_a_create_then_lift_batch_reads_once_before_its_transaction(w, monkeypatch):
+    """The key an earlier op creates has no row before the batch; the read still precedes BEGIN."""
+    seen = _watch_reads(w, monkeypatch)
     w.store.apply_ops(w.p("router"), [
-        {"op": "lift_operator_gate", "key": "demo:GATE2", "decision_id": "D-19"},
-        {"op": "set_kind", "key": "demo:FREE", "kind": "question"}])
-    assert seen == [False, False]                  # one pre-lock read for the batch's lift, none in the lock
-    assert _flags(w, "demo:GATE2") == (False, False)
+        {"op": "create", "item": defn("NEW", operator=True)},
+        {"op": "edit", "key": "demo:G", "fields": {"depends_on": {"add": ["demo:NEW"]}}},
+        {"op": "lift_operator_gate", "key": "demo:NEW", "decision_id": "D-37"},
+        {"op": "lift_operator_gate", "key": KEY, "decision_id": "D-37"}])   # the same D-id: one read
+    assert seen == [False]
+    assert _flags(w, "demo:NEW") == (False, False) and _flags(w) == (False, False)
+    assert len(_lifted(w)) == 2
+
+
+def test_a_refused_lift_rolls_the_whole_batch_back(w):
+    with pytest.raises(Refused, match="Lifts-Gate"):
+        w.store.apply_ops(w.p("router"), [
+            {"op": "lift_operator_gate", "key": KEY, "decision_id": "D-10"},
+            {"op": "lift_operator_gate", "key": "demo:GATE2", "decision_id": "D-10"}])
+    assert _flags(w) == (True, True) and _lifted(w) == []
 
 
 def test_a_principal_revoked_before_the_write_lifts_nothing(w, monkeypatch):
     from plangraph.keeper import auth
-    real = w.store._lift_proof
+    real = w.store._read_lift_decisions
 
     def proof_then_revoke(*args, **kwargs):
         out = real(*args, **kwargs)
         auth.revoke(w.conn, "router")
         return out
 
-    monkeypatch.setattr(w.store, "_lift_proof", proof_then_revoke)
+    monkeypatch.setattr(w.store, "_read_lift_decisions", proof_then_revoke)
     with pytest.raises(Refused) as exc:
         w.store.lift_operator_gate(w.p("router"), KEY, "D-10")
     assert exc.value.code == "forbidden" and _flags(w) == (True, True) and _lifted(w) == []
