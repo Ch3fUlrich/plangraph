@@ -153,7 +153,8 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
     let row = state.join("runs/run-example");
     let queued = state.join("runs/run-queued");
     let live = state.join("runs/run-live");
-    for dir in [&config, &row, &queued, &live, &bin] {
+    let dead = state.join("runs/run-dead");
+    for dir in [&config, &row, &queued, &live, &dead, &bin] {
         fs::create_dir_all(dir).unwrap();
     }
     let host = |id: &str, transport: &str| {
@@ -166,7 +167,8 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
                 "root":"/srv/plangraph","worktrees_root":"/srv/worktrees",
                 "remote":"origin","import_roots":[],"cache_env":{}}},
             "env":{"PG_INSTALL_BINARY":"/opt/pg-spawnd","PG_INSTALL_STAMP":"/opt/pg-spawnd.stamp",
-                   "PLANGRAPH_WORK_MOUNTS":"/mnt/work"}
+                   "PLANGRAPH_WORK_MOUNTS":"/mnt/work",
+                   "PG_REJOIN_LEG_PROBES":"{\"codex\":[\"leg-probe\",\"codex\"]}"}
         })
     };
     fs::write(
@@ -189,6 +191,11 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
         r#"{"run_id":"run-live","host":"worker","status":"unknown","events":[]}"#,
     )
     .unwrap();
+    fs::write(
+        dead.join("record.json"),
+        r#"{"run_id":"run-dead","host":"worker","status":"running","events":[]}"#,
+    )
+    .unwrap();
     pg_worker_core::executable_test_support::write_private_executable(
         bin.join("ssh"),
         r#"#!/bin/sh
@@ -196,7 +203,9 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
 case "$*" in
 *check-install*) echo '{"event":"pg_spawnd_install","status":"stale","reason":"source_sha_mismatch"}';;
 *worker-active-runs*) echo '{"host":"worker","runs":["run-live"]}';;
-*--changed-since*) echo '{"rows":[{"run_id":"run-example","status":"completed","phase":"ended"},{"run_id":"run-queued","status":"limited","phase":"ended"}],"next_cursor":1,"more":false}';;
+*"env PLANGRAPH_SPAWN_STATE="*"--changed-since"*) echo '{"rows":[{"run_id":"run-example","status":"completed","phase":"ended","ended":123.5,"exit_code":0},{"run_id":"run-queued","status":"limited","phase":"ended"}],"next_cursor":1,"more":false}';;
+*"rev-parse origin/main"*) echo bbbb;;
+*"leg-probe codex"*) ;;
 *"rev-parse HEAD"*) if [ -f "$FIXTURE_ROOT/synced" ]; then echo bbbb; else echo aaaa; fi;;
 *"start plangraph-host-sync.service"*) : > "$FIXTURE_ROOT/synced";;
 *"start pg-worktree-sweep.service"*) ;;
@@ -218,7 +227,7 @@ esac
                 placed_runs: if ssh {
                     Default::default()
                 } else {
-                    ["run-example", "run-queued", "run-live"]
+                    ["run-example", "run-queued", "run-live", "run-dead"]
                         .map(String::from)
                         .into()
                 },
@@ -246,6 +255,7 @@ esac
     assert_eq!(
         record["runs"],
         json!([
+            {"run":"run-dead","fate":"dead"},
             {"run":"run-example","fate":"finished"},
             {"run":"run-live","fate":"live"},
             {"run":"run-queued","fate":"finished"}
@@ -262,6 +272,12 @@ esac
     let settled: Value =
         serde_json::from_slice(&fs::read(row.join("record.json")).unwrap()).unwrap();
     assert_eq!(settled["status"], "completed");
+    // The host's own result is kept: when it ended and its exit code.
+    assert_eq!(settled["ended"], 123.5);
+    assert_eq!(settled["exit_code"], 0);
+    // A run that vanished is failed so its claim and lane are released.
+    let gone: Value = serde_json::from_slice(&fs::read(dead.join("record.json")).unwrap()).unwrap();
+    assert_eq!(gone["status"], "failed");
     // A live run goes back to running with a re-attach event.
     let live: Value = serde_json::from_slice(&fs::read(live.join("record.json")).unwrap()).unwrap();
     assert_eq!(live["status"], "running");

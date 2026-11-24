@@ -3,7 +3,7 @@
 Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 `overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 5
 (GiB). With `work_drives` configured, an unnamed local run launches from the
-first configured path that is a Git checkout with enough free disk. Immediate
+configured path that is a Git checkout with enough free disk and the most free space. Immediate
 and queued admission both pass this checkout to the launcher. If no configured
 path is a launchable Git checkout, admission reports that configuration error.
 A run with `--cwd`, card `cwd`, `diff_ref.repo`, or `repo` is pinned, and its

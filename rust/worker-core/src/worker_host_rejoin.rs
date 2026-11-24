@@ -1,6 +1,6 @@
 //! The onboarding gate of a worker host that was unreachable: it stays `rejoining`
 //! until every step below has run and one rejoin record is written.
-use super::{Phase, Store};
+use super::{Phase, State, Store};
 use crate::run::record_io::{atomic_write_private, ensure_private_dir};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -138,6 +138,11 @@ impl Store {
         };
         let mut runs = Vec::new();
         let outcome = self.gate(host, &mut log, &mut runs);
+        // The commit runs under the probe loop's lock: a probe that landed during the
+        // gate is read here, so the receipt always agrees with the phase it commits.
+        let _guard = self.lock_wait()?;
+        let mut state = self.load()?;
+        let outcome = outcome.and_then(|()| Self::committable(&state, now));
         let result = match &outcome {
             Ok(()) => json!({"outcome": "ready"}),
             Err(RejoinError::Blocked { step, reason }) => {
@@ -161,8 +166,38 @@ impl Store {
             &serde_json::to_vec_pretty(&record).map_err(io::Error::from)?,
         )?;
         outcome?;
-        self.mark_ready(now)?;
+        state.needs_rejoin = false;
+        state.phase = Phase::Ready;
+        state.link.unknown_runs.clear();
+        state.link.maintenance_end = None;
+        self.save(&state)?;
         Ok(record)
+    }
+
+    /// The host may go ready only while it is still reachable, rejoining and outside
+    /// a maintenance window. A newer healthy probe does not stop it.
+    fn committable(state: &State, now: u64) -> Result<(), RejoinError> {
+        if state.phase != Phase::Rejoining || state.outage_since.is_some() {
+            return Err(RejoinError::NotRejoining(
+                "host left the rejoining state or went unreachable during the gate",
+            ));
+        }
+        if state.maintenance_until.is_some_and(|end| end > now) {
+            return Err(RejoinError::NotRejoining("host is in a maintenance window"));
+        }
+        Ok(())
+    }
+
+    fn lock_wait(&self) -> io::Result<crate::lockfile::LockGuard> {
+        for _ in 0..50 {
+            match self.lock("lock") {
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                other => return other,
+            }
+        }
+        self.lock("lock")
     }
 
     fn gate(
@@ -200,8 +235,10 @@ impl Store {
         let floors = host
             .check_floors()
             .map_err(|error| blocked("floors", error.to_string()))?;
-        for floor in &floors.unchecked {
-            log.flags.push(format!("floor unchecked: {floor}"));
+        if !floors.unchecked.is_empty() {
+            let reason = format!("floor not measured: {}", floors.unchecked.join("; "));
+            log.step("floors", "failed", json!(floors));
+            return Err(blocked("floors", reason));
         }
         if !(floors.disk_ok && floors.ram_ok) {
             let reason = floors.detail.clone();
@@ -213,8 +250,13 @@ impl Store {
             .probe_legs()
             .map_err(|error| blocked("legs", error.to_string()))?;
         if legs.working.is_empty() && legs.failed.is_empty() {
-            log.flags.push("legs: none configured to probe".into());
-        } else if legs.working.is_empty() {
+            log.step("legs", "failed", json!(legs));
+            return Err(blocked(
+                "legs",
+                "no leg probes are configured for this host",
+            ));
+        }
+        if legs.working.is_empty() {
             let reason = format!("no leg answered; failed: {}", legs.failed.join(", "));
             log.step("legs", "failed", json!(legs));
             return Err(blocked("legs", reason));
@@ -224,26 +266,6 @@ impl Store {
                 .push(format!("legs failing: {}", legs.failed.join(", ")));
         }
         log.step("legs", "ok", json!(legs));
-        Ok(())
-    }
-
-    fn mark_ready(&self, now: u64) -> Result<(), RejoinError> {
-        let _guard = self.lock("lock")?;
-        let mut state = self.load()?;
-        // The probe loop may have lost the host again while the gate ran.
-        if state.phase != Phase::Rejoining {
-            return Err(RejoinError::NotRejoining(
-                "host left the rejoining state during the gate",
-            ));
-        }
-        if now < state.observed_at {
-            return Err(io::Error::other("worker host observation clock moved backwards").into());
-        }
-        state.needs_rejoin = false;
-        state.phase = Phase::Ready;
-        state.link.unknown_runs.clear();
-        state.link.maintenance_end = None;
-        self.save(&state)?;
         Ok(())
     }
 

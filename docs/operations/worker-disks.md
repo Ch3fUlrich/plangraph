@@ -42,10 +42,12 @@ filesystem with the most free bytes. The default floor is 5 GiB and 10% free. Se
 disk to leave headroom on its backing Windows drive and check usage on both
 layers so neither reaches 100%.
 
-NOTE Workstation host session. `deploy/workstation/work-drives.json` lists the
-data drives D:, G: and F: as `work_drives` (checkout path and `disk_floor_gb` per
-drive: 20, 20 and 50 GiB to start). Set `PLANGRAPH_SETTINGS` to that path after the
-write speed of each mount is measured and the checkouts exist; `PLANGRAPH_WORK_DRIVES`
+NOTE Workstation host session. `deploy/workstation/work-drives.json` lists the writer
+checkout drives D: and F: as `work_drives` (checkout path and `disk_floor_gb`: 20 and
+50 GiB to start); admission picks the eligible one with the most free space. G: is
+listed as `build_drives`, reserved for rebuildable caches and build data, never
+for a writer checkout. Set `PLANGRAPH_SETTINGS` to that path after the write speed
+of each mount is measured and the checkouts exist; `PLANGRAPH_WORK_DRIVES`
 overrides it. The file changes no mount.
 
 NOTE Workstation host session. Point `PLANGRAPH_CARGO_TARGET_DIR` and package

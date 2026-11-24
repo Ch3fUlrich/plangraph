@@ -129,7 +129,11 @@ impl Placement {
                 Vec::new(),
             ));
         }
-        let pool: Vec<_> = self.hosts.iter().filter(|host| host.enabled()).collect();
+        let pool: Vec<_> = self
+            .hosts
+            .iter()
+            .filter(|host| host.enabled() && self.hold(host.name()).is_none())
+            .collect();
         if pool.is_empty() {
             return Err("no enabled host (no queue)".into());
         }
@@ -165,6 +169,12 @@ impl Placement {
             here.name()
         ));
         Ok((here.clone(), notices))
+    }
+
+    /// The coordinator's hold on a worker (unreachable or rejoining), read from its state.
+    fn hold(&self, name: &str) -> Option<&'static str> {
+        let state = crate::state::resolve_state(None, |key| std::env::var_os(key)).ok()?;
+        pg_worker_core::worker_host::placement_hold(&state, name)
     }
 
     pub fn local(&self, host: &Host) -> bool {
@@ -227,6 +237,13 @@ impl Placement {
             if explicit.is_none() && !host.enabled() {
                 continue;
             }
+            if let Some(reason) = self.hold(host.name()) {
+                eprintln!("skip {}: {reason}", host.name());
+                if explicit.is_some() {
+                    return Err(format!("refused host {}: {reason}", host.name()));
+                }
+                continue;
+            }
             if compare && host.last_resort() && best.is_some() {
                 break;
             }
@@ -265,6 +282,9 @@ impl Placement {
 
     fn named(&self, name: &str) -> Result<Host, String> {
         if let Some(host) = self.hosts.iter().find(|h| h.name() == name) {
+            if let Some(reason) = self.hold(name) {
+                return Err(format!("refused host {name}: {reason}"));
+            }
             if host.enabled() || host.0["explicit_enabled"].as_bool() == Some(true) {
                 return Ok(host.clone());
             }

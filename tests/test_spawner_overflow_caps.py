@@ -783,18 +783,18 @@ def test_cap_comes_from_the_host_config_file_and_the_environment_wins(tmp_path, 
         assert h.cargo_target_cap_gb() == h.DEFAULT_CARGO_TARGET_CAP_GB
 
 
-def test_workstation_data_drive_config_lists_d_g_and_f_with_floors(tmp_path, monkeypatch):
+def test_workstation_data_drive_config_reserves_g_for_rebuilds(monkeypatch):
     from plangraph.settings import _policy_data
     from plangraph.spawner import host_ready as h
-    root = Path(__file__).resolve().parents[1]
     monkeypatch.setenv('PLANGRAPH_SETTINGS', 'deploy/workstation/work-drives.json')
     monkeypatch.delenv('PLANGRAPH_WORK_DRIVES', raising=False)
-    policy = _policy_data(root)
-    assert h._configured_work_drives(policy) == [
-        ('/mnt/work-d/plangraph/checkout', 20.0),
-        ('/mnt/work-g/plangraph/checkout', 20.0),
-        ('/mnt/work-f/plangraph/checkout', 50.0)]
-    free = {'/mnt/work-d/plangraph/checkout': 19.0, '/mnt/work-g/plangraph/checkout': 30.0}
+    policy = _policy_data(Path(__file__).resolve().parents[1])
+    d, f = '/mnt/work-d/plangraph/checkout', '/mnt/work-f/plangraph/checkout'  # G: is build-only
+    assert h._configured_work_drives(policy) == [(d, 20.0), (f, 50.0)]
+    assert [x['path'] for x in policy['build_drives']] == ['/mnt/work-g/plangraph/build']
+    free = {d: 30.0, f: 900.0}
     monkeypatch.setattr(h, 'disk_free_gb', lambda path: free.get(path, 10.0))
     drives = h._configured_work_drives(policy)
-    assert h.select_work_drive(drives, lambda: None) == ('/mnt/work-g/plangraph/checkout', None)
+    assert h.select_work_drive(drives, lambda: None) == (f, None)
+    free[f] = 19.0
+    assert h.select_work_drive(drives, lambda: None) == (d, None)
