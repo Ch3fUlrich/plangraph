@@ -81,20 +81,22 @@ def scan(command):
 
 def scan_flow(command):
     """Like `scan`, plus how each command is joined to its neighbours: returns (commands, flow) where
-    ``flow[k] = (before, after, depth, entry)``: the operator before and after command k (``""`` at the start
+    ``flow[k] = (before, after, depth, chain)``: the operator before and after command k (``""`` at the start
     or end, ``"\\n"``, ``";"``, ``"&&"``, ``"||"``, ``"|"``, ``"&"``, ``"("``, ``")"``; a newline after
     `&&`, `||` or `|` does not replace that operator), how many ( ), $( ) or backtick scopes enclose it, and
-    whether it is the first command of the innermost one. Raises ParseError like `scan`."""
+    the ids of those scopes, outermost first (every scope has an id of its own, siblings never share one).
+    Raises ParseError like `scan`."""
     commands, flow = [], []
     _Scanner(command, commands, [], flow=flow).parse()
     return commands, flow
 
 
 class _Scanner:
-    def __init__(self, text, commands, heredocs, nest=0, flow=None):
+    def __init__(self, text, commands, heredocs, nest=0, flow=None, chain=(), ids=None):
         self.s, self.n, self.i = text, len(text), 0
         self.commands, self.heredocs, self.nest = commands, heredocs, nest
-        self.flow = flow  # when given, one (before, after, depth) per command
+        self.flow = flow  # when given, one (before, after, depth, scope chain) per command
+        self.chain, self.ids = chain, ids if ids is not None else [0]  # the ids of the enclosing scopes
         self.pending = []  # heredocs (delimiter, quoted, dash) whose body starts at the next newline
         self.shift = 0     # > 0 inside (( )) and $(( )): `<<` is a shift, not a heredoc
         if nest > _MAX_NEST:
@@ -109,18 +111,27 @@ class _Scanner:
     # ─── statement level ──────────────────────────────────────────────────
 
     def parse(self, closer=None):
-        """Read commands until the `closer` (")" or "))") or the end of text."""
+        """Read commands until the `closer` (")" or "))") or the end of text. Every nested list is a scope
+        of its own with a fresh id, appended to the chain of the enclosing ones."""
+        outer = self.chain
+        if self.nest > 0:
+            self.ids[0] += 1
+            self.chain = outer + (self.ids[0],)
+        try:
+            self._parse(closer)
+        finally:
+            self.chain = outer
+
+    def _parse(self, closer):
         s, n = self.s, self.n
         cmd, cases = [], []  # words of the current command; one state per open `case`
         before = [""]  # the operator that ended the previous command of this list
-        entry = [self.nest > 0]  # the next command is the first of a subshell, substitution or backtick scope
 
         def flush(after=""):
             if cmd:
                 self.commands.append(cmd[:])
                 if self.flow is not None:
-                    self.flow.append((before[0], after, self.nest, entry[0]))
-                entry[0] = False
+                    self.flow.append((before[0], after, self.nest, self.chain))
             # A newline after `&&`, `||` or `|` continues the list: the operator still joins the next command.
             if cmd or after != "\n" or before[0] not in ("&&", "||", "|", "|&"):
                 before[0] = after
@@ -400,7 +411,7 @@ class _Scanner:
             raise ParseError("unterminated backtick")
         text.append(s[self.i:j + 1])
         self.i = j + 1
-        _Scanner("".join(buf), self.commands, self.heredocs, self.nest + 1, self.flow).parse()
+        _Scanner("".join(buf), self.commands, self.heredocs, self.nest + 1, self.flow, self.chain, self.ids).parse()
 
     def dollar(self, text):
         """Read `$(...)` or `$((...))` at self.i; the source text stays in the word."""

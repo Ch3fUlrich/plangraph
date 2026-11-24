@@ -632,12 +632,78 @@ def test_chained_env_wrappers_and_chdir_apply_in_execution_order(repos, tmp_path
     ["env", "-iuV", "sh", "-c", 'echo "${V-unset}"'],
     ["env", "-C", "/", "sh", "-c", "pwd"],
     ["env", "-C", "/", "env", "-C", "tmp", "sh", "-c", "pwd"],
+    ["env", "-C", "/nonexistent-first", "-C", "/", "sh", "-c", "pwd"],
 ])
 def test_the_env_model_matches_gnu_env(argv):
     """The rows above rest on what the real env does."""
     run = subprocess.run(argv, capture_output=True, text=True, env={**os.environ, "V": "inherited"})
     out = run.stdout.strip()
     if "-C" in argv:
-        assert out == ("/tmp" if argv.count("-C") == 2 else "/"), (argv, run)
+        assert out == ("/tmp" if argv.count("-C") == 2 and "/nonexistent-first" not in argv else "/"), (argv, run)
     else:
         assert out == "unset", (argv, run)
+
+
+@pytest.mark.parametrize("command, expected", [
+    # Sibling subshells and groups never share state, however their first command is written.
+    ("(export CARGO_TARGET_DIR=/var/cache/shared); ( (cargo build) )", 2),
+    ("(export CARGO_TARGET_DIR=/var/cache/shared); ( echo $(cargo build) )", 2),
+    ("(export CARGO_TARGET_DIR=/var/cache/shared); (\n (cargo build)\n)", 2),
+    ("( (export CARGO_TARGET_DIR=/var/cache/shared) ); ( (cargo build) )", 2),
+    ("(export CARGO_TARGET_DIR=/var/cache/shared); echo `(cargo build)`", 2),
+    ("(export CARGO_TARGET_DIR=/var/cache/shared; (cargo build))", 0),
+    ("(export CARGO_TARGET_DIR=/var/cache/shared; ( (cargo build) ))", 0),
+    ("export CARGO_TARGET_DIR=/var/cache/shared; (export CARGO_TARGET_DIR=rust/target); ( (cargo build) )", 0),
+    ("export CARGO_TARGET_DIR=/var/cache/shared; ( (export CARGO_TARGET_DIR=rust/target; cargo build) )", 2),
+])
+def test_sibling_scopes_never_share_state(repos, command, expected):
+    main, _ = repos
+    assert hook(command, main).returncode == expected, command
+
+
+@pytest.mark.parametrize("nested", [
+    "bash -c 'cargo build'", "sh -c \"cargo build\"", "eval 'cargo build'", "bash -c \"eval 'cargo build'\"",
+    "env FOO=1 bash -c 'cargo build'",
+])
+def test_the_unknown_state_reaches_nested_shell_and_eval_scans(repos, nested):
+    main, _ = repos
+    shared = "export CARGO_TARGET_DIR=/var/cache/shared; "
+    many = shared + "".join(f"false && CARGO_TARGET_DIR=/var/cache/shared{n}; " for n in range(18))
+    result = hook(many + nested, main)
+    assert result.returncode == 2 and b"more conditional" in result.stderr, (nested, result.stderr)
+    assert hook(many + nested.replace("cargo build", "cargo --version"), main).returncode == 0
+    assert hook(shared + nested, main).returncode == 0
+
+
+def test_an_existing_config_file_wins_over_an_inline_reading_of_its_name(repos, tmp_path):
+    main, _ = repos
+    if not shutil.which("cargo"):
+        pytest.skip("cargo is not installed")
+    out = tmp_path / "elsewhere"
+    pkg = tmp_path / "pkg"
+    (pkg / "src").mkdir(parents=True)
+    (pkg / "Cargo.toml").write_text('[package]\nname = "p"\nversion = "0.1.0"\nedition = "2021"\n')
+    (pkg / "src" / "main.rs").write_text("fn main() {}\n")
+    out.mkdir()
+    name = 'build.target-dir="inline"'  # valid TOML as an inline setting, and a file in cwd
+    manifest = ["--manifest-path", str(pkg / "Cargo.toml")]
+    inside = f"{main}/rust/target"
+    for content, expected in ((f'[build]\ntarget-dir = "{inside}"\n', 2), ('[build]\ntarget-dir = "/var/cache/shared"\n', 0)):
+        (out / name).write_text(content)
+        resolved = _cargo_target(out, ["--config", name, *manifest], {})
+        assert resolved.startswith(str(main)) == (expected == 2), resolved
+        assert hook(f"cargo build --config '{name}' --manifest-path {pkg}/Cargo.toml", out).returncode == expected
+    (out / name).unlink()  # no such file: the inline reading applies, relative to cwd
+    assert hook(f"cargo build --config '{name}' --manifest-path {pkg}/Cargo.toml", out).returncode == 0
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("env -C /tmp -C rust cargo build", 2),  # the last -C resolves against the incoming directory
+    ("env -C rust -C . cargo build", 2),
+    ("env -C {main} -C /tmp cargo build", 0),
+    ("env --chdir=/tmp --chdir=rust cargo build", 2),
+    ("env -C /tmp env -C rust cargo build", 0),  # a second env starts from the first one's directory
+])
+def test_only_the_last_chdir_of_one_env_applies(repos, command, expected):
+    main, _ = repos
+    assert hook(command.format(main=main), main).returncode == expected, command

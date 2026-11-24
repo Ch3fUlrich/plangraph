@@ -272,16 +272,16 @@ def _configured_target(rest, cwd, envs, host_env):
                  else word.split("=", 1)[1] if word.startswith("--config=") else None)
         if given is None:
             continue
-        if _is_toml(given):  # `KEY=VALUE`, in any spelling of the key (`build . target-dir`, `"build"."target-dir"`)
+        file = _expand(given, cwd)
+        if file.is_file():  # an existing file wins, whatever its name looks like; relative to its directory's parent
+            try:
+                if (value := _toml_target(file.read_text())) is not None:
+                    found = (value, file.parent.parent)
+            except OSError:
+                pass
+        elif _is_toml(given):  # `KEY=VALUE`, in any spelling of the key (`build . target-dir`, `"build"."target-dir"`)
             if (value := _toml_target(given)) is not None:
                 found = (value, cwd)
-            continue
-        try:  # otherwise a config file, relative to its directory's parent
-            file = _expand(given, cwd)
-            if (value := _toml_target(file.read_text())) is not None:
-                found = (value, file.parent.parent)
-        except OSError:
-            pass
     if found[0] is not None:
         return found
     value = envs["CARGO_BUILD_TARGET_DIR"] if "CARGO_BUILD_TARGET_DIR" in envs else host_env.get("CARGO_BUILD_TARGET_DIR")
@@ -349,6 +349,7 @@ def _env_apply(words, base, cwd):
         n += 1
         if _basename(words[n - 1]) != "env":
             continue
+        incoming = cwd  # every -C of this env resolves against the directory it starts in; the last one wins
         while n < len(words) and words[n].startswith("-") and words[n] != "--":
             word, n = words[n], n + 1
             if word == "-" or word == "--ignore-environment":
@@ -358,13 +359,13 @@ def _env_apply(words, base, cwd):
                 if word == "--unset":
                     env[arg] = None
                 elif word == "--chdir":
-                    cwd = _expand(arg, cwd)
+                    cwd = _expand(arg, incoming)
             elif word.startswith(("--unset=", "--chdir=")):
                 name, arg = word.split("=", 1)
                 if name == "--unset":
                     env[arg] = None
                 else:
-                    cwd = _expand(arg, cwd)
+                    cwd = _expand(arg, incoming)
             elif not word.startswith("--"):
                 for pos, letter in enumerate(word[1:], 1):
                     if letter == "i":
@@ -376,7 +377,7 @@ def _env_apply(words, base, cwd):
                         if letter == "u":
                             env[arg] = None
                         elif letter == "C":
-                            cwd = _expand(arg, cwd)
+                            cwd = _expand(arg, incoming)
                         break
         n += n < len(words) and words[n] == "--"
         while n < len(words) and _ENV_ASSIGN_RE.match(words[n]):
@@ -458,36 +459,35 @@ _OPENERS = frozenset(("if", "while", "until", "for", "select", "case", "{", "fun
 _CLOSERS = frozenset(("fi", "done", "}", "esac"))
 
 
-def main_checkout_cargo(command, cwd, depth=0, inherited=None):
+def main_checkout_cargo(command, cwd, depth=0, inherited=None, unknown=False):
     """Deny message for a cargo build whose target dir is a main checkout's or agent worktree's own, wherever cwd, `cd`, `-C` or `--manifest-path` put it.
 
     The shell state (directory, exported variables) follows the command list: a `cd` or `export` reaches later
     commands only from the current shell (not a subshell, `$( )`, pipeline or background job); one that may not
     run (after `&&` or `||`, inside `if`, a loop, a group) leaves both possibilities open and a build is
-    refused when either would fill a checkout.
+    refused when either would fill a checkout. `unknown`: an enclosing list lost track of its states.
     """
     if depth > 3:
         return None
     from bash_guard_rules import _ENV_ASSIGN_RE, _SHELLS, _WRAPPERS, _basename, _shell_strings
     from bash_guard_rules2 import lead, scan_flow
     commands, flow = scan_flow(command)
-    levels = [[_Shell(Path(cwd or Path.cwd()), _ShellVars(inherited))]]  # the possible states at each scope depth
-    compound = [0]  # open `if` / loop / group constructs at each scope depth
-    for cmd, (before, after, level, entry) in zip(commands, flow):
-        if entry:  # the first command of a subshell or substitution starts from a copy of the enclosing state
-            del levels[level:], compound[level:]
-        while len(levels) <= level:
-            levels.append([shell.copy() for shell in levels[-1]])
-            compound.append(0)
-        del levels[level + 1:], compound[level + 1:]
-        shells = levels[level]
+    # The possible states and the open `if` / loop / group constructs of every scope, by its chain of scope ids:
+    # a subshell or substitution starts from a copy of its enclosing scope's states and never shares them.
+    scopes = {(): [[_Shell(Path(cwd or Path.cwd()), _ShellVars(inherited), unknown)], 0]}
+    for cmd, (before, after, level, chain) in zip(commands, flow):
+        for k in range(1, len(chain) + 1):
+            if chain[:k] not in scopes:
+                scopes[chain[:k]] = [[shell.copy() for shell in scopes[chain[:k - 1]][0]], 0]
+        scope = scopes[chain]
+        shells = scope[0]
         pos = [w for w in cmd if not w.redir]
         words = [w.text for w in pos]
         i = lead(pos)
         first = words[0] if words else ""
-        compound[level] += first in _OPENERS
+        scope[1] += first in _OPENERS
         pipelined = before in ("|", "|&") or after in ("|", "|&", "&")  # runs in a subshell of its own
-        conditional = before in ("&&", "||") or i > 0 or compound[level] > 0
+        conditional = before in ("&&", "||") or i > 0 or scope[1] > 0
         start = i
         while i < len(words) and _ENV_ASSIGN_RE.match(words[i]):
             i += 1
@@ -519,8 +519,8 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
             unique = list({shell.key(): shell for shell in kept}.values())
             if len(unique) > _MAX_SHELLS:
                 unique = [*unique[:_MAX_SHELLS - 1], _Shell(unique[0].cwd, _ShellVars(), unknown=True)]
-            levels[level] = unique
-        compound[level] = max(0, compound[level] - (first in _CLOSERS))
+            scope[0] = unique
+        scope[1] = max(0, scope[1] - (first in _CLOSERS))
     return None
 
 
@@ -544,7 +544,7 @@ def _check_run(words, pos, i, envs, shell, depth):
             continue
         wrapped_env = {**{var: None for var in _TRACKED}, **env} if cleared else env
         for string in nested:
-            reason = main_checkout_cargo(string, where, depth + 1, wrapped_env)
+            reason = main_checkout_cargo(string, where, depth + 1, wrapped_env, shell.unknown)
             if reason:
                 return reason
         if name != "cargo":
