@@ -1,0 +1,1 @@
+The automatic merge close accepts a pre-PR lane merge: a merge to the default branch without `(#N)` whose subject names `(D-xxx ...)` counts as a `lane_merge` proof when that decision row names the merge sha and the item. A merge whose named row does not vouch for it is listed as `lane_merge_unproven` instead of `merged_pr_missing`.
