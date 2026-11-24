@@ -1,4 +1,5 @@
 use crate::feeder::Transport;
+use crate::land::timeline;
 use chrono::NaiveDate;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, io};
@@ -103,7 +104,82 @@ fn batch(data: &Value) -> Result<Value, String> {
     }))
 }
 
+/// The critical-path report over the last `n` landed trains: per train the wall time, bottleneck and idle
+/// time, then the stage with the most critical-path time. `fixture` is `{"trains":[{"batch_key","timeline"}]}`
+/// in the shape the keeper returns; without it the trains come from the keeper's `recent` and `timeline`.
+fn last_trains(
+    keeper: &dyn Transport,
+    repo: &str,
+    n: &str,
+    fixture: bool,
+) -> Result<Value, String> {
+    let n: usize = n
+        .parse()
+        .ok()
+        .filter(|n| (1..=100).contains(n))
+        .ok_or("landing report --last needs a number from 1 to 100")?;
+    let trains: Vec<(String, Value)> = if fixture {
+        let data: Value = serde_json::from_reader(io::stdin().lock())
+            .map_err(|_| "invalid landing report fixture")?;
+        data["trains"]
+            .as_array()
+            .ok_or("fixture has no trains")?
+            .iter()
+            .map(|t| {
+                Ok((
+                    t["batch_key"]
+                        .as_str()
+                        .ok_or("train without batch_key")?
+                        .to_owned(),
+                    t["timeline"].clone(),
+                ))
+            })
+            .collect::<Result<_, &str>>()?
+    } else {
+        let recent = keeper.call(
+            "land",
+            Some(json!({"action":"recent","repo":repo,"limit":n})),
+        )?;
+        recent["trains"]
+            .as_array()
+            .ok_or("keeper reply has no trains")?
+            .iter()
+            .map(|t| {
+                let key = t["batch_key"].as_str().ok_or("train without batch_key")?;
+                let timeline = keeper.call(
+                    "land",
+                    Some(json!({"action":"timeline","repo":repo,"batch_key":key})),
+                )?;
+                Ok((key.to_owned(), timeline))
+            })
+            .collect::<Result<_, String>>()?
+    };
+    let stages: Vec<_> = trains
+        .iter()
+        .flat_map(|(key, timeline)| timeline::from_keeper(key, timeline))
+        .collect();
+    let report = timeline::report(&stages, n);
+    Ok(json!({
+        "trains": report.trains.iter().map(|t| json!({
+            "subject": t.subject, "wall_secs": t.wall_secs, "bottleneck": t.bottleneck,
+            "idle_secs": t.idle_secs, "critical_path": t.critical_path, "missing": t.missing,
+        })).collect::<Vec<_>>(),
+        "top_stages": report.top_stages,
+        "lines": timeline::render(&report),
+    }))
+}
+
 pub(super) fn run(keeper: &dyn Transport, args: &[String]) -> Result<Value, String> {
+    if let [repo, mode, n, flags @ ..] = args {
+        if mode == "--last" {
+            let fixture = match flags {
+                [] => false,
+                [flag] if flag == "--fixture" => true,
+                _ => return Err("unknown landing report option".into()),
+            };
+            return last_trains(keeper, repo, n, fixture);
+        }
+    }
     let (mut query, day, flags) = match args {
         [repo, mode, date, flags @ ..] if mode == "--day" => {
             let start = NaiveDate::parse_from_str(date, "%Y-%m-%d")
@@ -124,7 +200,7 @@ pub(super) fn run(keeper: &dyn Transport, args: &[String]) -> Result<Value, Stri
             flags,
         ),
         _ => {
-            return Err("usage: plangraph landing report OWNER/REPO BATCH|--day YYYY-MM-DD".into())
+            return Err("usage: plangraph landing report OWNER/REPO BATCH|--day YYYY-MM-DD|--last N [--fixture]".into())
         }
     };
     let data = match flags {
