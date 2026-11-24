@@ -202,6 +202,7 @@ fn a_patch_main_holds_only_up_to_whitespace_is_not_dropped() {
     assert!(git_in(&host.cwd, &["status", "--porcelain"]).is_empty());
 }
 
+#[cfg(unix)]
 #[test]
 fn conflict_paths_stay_distinct_when_their_bytes_are_not_utf8() {
     use std::os::unix::ffi::OsStrExt;
