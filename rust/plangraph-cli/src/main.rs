@@ -141,6 +141,9 @@ fn run() -> i32 {
             }
         };
     }
+    if args.first().is_some_and(|s| s == "baseline") {
+        return plangraph_cli::baseline::run(&effective, &args[1..]);
+    }
     if args.first().is_some_and(|s| s == "feed") {
         return feeder::run(&home, &effective, &args[1..]);
     }
@@ -189,7 +192,7 @@ fn run() -> i32 {
         ["setup", "check", "--component", name] => (setup::Mode::Check, Some(*name)),
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--component NAME] [--dry-run] | setup check [--component NAME] | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | keeper events [--since SEQ] [--limit N] | state wait --role ROLE [--once] | land-timeline | land-train | main-state | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | throughput | keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE | quota [--db PATH] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | host-link-deliver | install-router-liveness TARGET CONFIG | evidence <check|index> [EVIDENCE_DIR] | --version"
+                "usage: plangraph setup apply [--component NAME] [--dry-run] | setup check [--component NAME] | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | baseline --keeper-only [--since RFC3339] | keeper events [--since SEQ] [--limit N] | state wait --role ROLE [--once] | land-timeline | land-train | main-state | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | throughput | keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE | quota [--db PATH] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | host-link-deliver | install-router-liveness TARGET CONFIG | evidence <check|index> [EVIDENCE_DIR] | --version"
             );
             return 2;
         }
