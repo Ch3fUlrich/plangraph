@@ -120,12 +120,13 @@ live index on `run_id`, `payload_hash`, `generation`, `cancel_requested`).
 
 | Write | Receipt id / binding | Site | Takeover | Retry read | §3 |
 | --- | --- | --- | --- | --- | --- |
-| Job submit (`POST jobs`) | id: `(run_id, attempt_no)`; `Launch`; conflict `run_id`; payload hash bound once with `apply(Bind(payload))` | begin: not built yet: the broker submit route (table `spawner_jobs`, `schema_pg_spawner.py`); persists id, target and claim epoch before dispatch | a retry with the same payload hash returns the stored state; a different hash is `Conflict` (`begin`) | `read(id, submission credential, None)` | S1 |
+| Job submit (`POST jobs`) | id: `(run_id, attempt_no)`; `Launch`; conflict `run_id`; payload hash bound once with `apply(Bind(payload))` (a `Bind` of another payload is refused, O9b) | begin: not built yet: the broker submit route (table `spawner_jobs`, `schema_pg_spawner.py`); persists id, target and claim epoch before dispatch | a retry with the same spec returns the stored state through `begin`; a different payload hash is refused by `Bind` with `Refused::Guard`, not `Conflict`, and the retry's `read` settles the outcome | `read(id, submission credential, None)` | S1 |
 | Job claim by the daemon (`jobs/poll`) | the execution lease token is the `Ticket` of `apply(Dispatch)`; `generation` is the stamp | dispatch: not built yet: the atomic claim in the poll route. admit: not built yet: `rust/pg-spawnd/src/placement.rs`, in the step that reserves, before the subprocess (`native_spawn`) | a lease that is not admitted by its deadline is `Expire`d; only then may the run be re-placed (S3) | `read`; `obligations()` lists expired `Dispatching` and `Admitted` rows | S1, S2, S3 |
 | Job start effect and result (`status/record POST`, `wait`) | the finalization authority is bound to the submission: row `spawner_finalizations` (`finalizer_id`, `generation`, `expected_old`, `publication_state`) | effect: not built yet: the status/record route; the result publication reads `spawner_finalizations.publication_state` | a successor finalizer takes `generation + 1` through `takeover`; a `publishing` state with `expected_old` is settled by `Observe` | `read`, caller-scoped | S2 |
 | Conditional withdraw | a cancel of a job that is still `queued` | not built yet: the withdraw route. The model gives `apply(RequestCancel)` (class `Launch` only) then `Observe(FencedAbsent)` once the conditional update proves `queued` to `withdrawn` | the withdraw is one transaction under the run-row lock; no interval | `read` | S4, S5 (O9) |
 | Cancel (`cancel POST`) | its own receipt, `cancels` the job: `apply(RequestCancel(invocation))`; `spawner_jobs.cancel_requested` is the persisted flag | not built yet: the cancel route writes `cancel_requested` and the cancel row in one transaction before any kill; daemon side today: `rust/pg-spawnd/src/jobs.rs::cancel_run` kills through `supervisor.cancel` with no persisted request first | after the process exists the cancel stays open until `confirm_stopped`; a successor reads the cancel row | `read` of the cancel receipt | S4, S5, S6 (gap today) |
-| Re-place and resolve | lock the run row; one live attempt (`idx_spawner_jobs_live`); a replacement is a new `attempt_no` | not built yet: re-place in the broker, after `Expire` of the old attempt and `Resolve` of the unknown one | `takeover(generation, predecessor_fenced)` refuses while the old attempt is neither `Applied` nor `Fenced` | `obligations()` | S3 (O10) |
+| Re-place and resolve | lock the run row; one live attempt (`idx_spawner_jobs_live`); a replacement is a new `attempt_no` | not built yet: re-place in the broker, after `Expire` of the old attempt and `Resolve` of the unknown one | `takeover` does not refuse an `Admitted` `Launch` row (it refuses only a gated `Dispatching` row or an unsafe `Protected` row, `ledger.rs::takeover`), so the single live attempt rests on the `Expire` then `Resolve` order and on `idx_spawner_jobs_live`, not on `takeover` | `obligations()` | S3 (O10, O13) |
+| Host probe (`hosts probe POST`; GET is a read) | keeper-local upsert of `spawner_hosts` (`host_id`, `probe`, `updated_at`); id: `(host_id, probe digest)`; no external effect, not a receipt write | none: begin and effect are the one upsert transaction (`schema_pg_spawner.py`, table `spawner_hosts`); the route is not built yet | none: the upsert is idempotent per `host_id`; a later probe replaces the earlier | `read` is not needed; the GET returns the stored row | - (O14) |
 
 ## 7. SPAWN-LAUNCH-RECOVERY-DESIGN (done)
 
@@ -142,7 +143,7 @@ is class `Launch`, with `resends = 0` ("launch uncertain; do not retry",
 | Origin-side reservation before forwarding over ssh | the same id; `Reserved` to `Forwarded` in the model | not built yet as a receipt: `session/mod.rs::launch` before `session/remote.rs::launch` | the origin's `read` decides; a forward whose reply was lost is `Unknown`, never resent (`resends = 0`) | `read`, then the listing evidence at the target | S1, S2 |
 | Forward and run at the target (`remote.rs::send`, `transmit`) | the same id travels in the spec; the target `Receive`s once per digest | effect at the target: `session/mod.rs::local` through `remote.rs`; a stale or name-taken receive is refused | per-attempt staging of remote artifacts: a late session cannot pass the newer attempt | `Observe(Present)` or `FencedAbsent` from the listing, `Undecidable` leaves `Unknown` | S2 |
 | Mirror of remote records and close of the reservation | a manifest child of the launch (`MirrorAndClose`) | child of `begin`: `session/remote.rs::mirror` | due once the parent is `Ok`; `obligations()` lists it | `read` of the child | - |
-| Watchdog adoption or stop of a launch | linked to the launch; `apply(RequestCancel)` for a stop | not built yet in Rust: the watchdog on this protocol (`docs/liveness-watchdog.md` describes today's) | refused while the stop is unconfirmed; `confirm_stopped` after the process is gone | `read` of the cancel receipt | S4, S5 |
+| Watchdog adoption or stop of a launch | linked to the launch; `apply(RequestCancel)` for a stop | not built yet in Rust: the watchdog on this protocol (`docs/liveness-watchdog.md` describes today's) | the launch row stays re-stamped to the successor while the process is not stopped; `confirm_stopped` after the process is gone (`takeover` itself does not wait for it, O13) | `read` of the cancel receipt | S4, S5 |
 | Session stop and run cancel (`plangraph_session_stop`, `plangraph_agent_cancel`) | their own receipts linked to the launch | not built yet: the receipt before the kill; run cancel today: `rust/pg-spawnd/src/jobs.rs::cancel_run` | as the cancel row of section 6 | `read` of the cancel receipt | S4, S5, S6 |
 | Feeder claim and start (`claim`, `start`, `release`) | the claim epoch plus the invocation id, persisted before `start` | `rust/plangraph-cli/src/feeder/mod.rs::spawn` claims, starts, and on any start error calls `release` at once; `adapters.rs` `Launch::start` shells out to the spawner CLI with no key | a release or another target only after `Expire` committed | `read`, then `obligations()` | S1, S3 (gap today) |
 
@@ -172,7 +173,9 @@ Nothing below is decided here; each needs the design owner or the model owner.
   new one" map to `begin`, which returns the stored state for the same id?
 - **O9** Withdraw of a never-claimed job: `RequestCancel` exists only for class
   `Launch`, and `Observe(FencedAbsent)` on a `Pending` row requires a cancel, a
-  disposition or an attempt. Is this the intended reading?
+  disposition or an attempt. Is this the intended reading? **O9b**: payload binding is `Step::Bind`, which refuses
+  a different payload with `Guard`. Does the broker want `Conflict` (payload hash in
+  `Spec.binding`) instead?
 - **O10** `Ledger::takeover` is global (one ledger generation). The broker's `generation`
   is per job row, and re-place is per run. Does a per-run takeover exist, or does a
   broker restart take over all rows?
@@ -180,6 +183,11 @@ Nothing below is decided here; each needs the design owner or the model owner.
   model has no inert class. Confirm the reading, or name the class.
 - **O12** Receipt ids are `u32` in the model. The production id is a string invocation id
   or a digest. Where is the mapping fixed?
+- **O13** `Ledger::takeover` does not refuse an `Admitted` `Launch` row or wait for
+  `confirm_stopped`. If the broker needs that rule (single live attempt across a
+  takeover), it is a model change; the broker must not assume it.
+- **O14** The host probe write is read as a keeper-local, idempotent upsert that needs no
+  receipt. Confirm, or give it an id and a retention rule.
 
 ## 9. Requirement coverage
 
