@@ -530,8 +530,6 @@ class RunsMixin:
         return None
 
     def _merged_open_prs_checked(self, item, decision_id, head, now, require_each_go=False):
-        from . import context_sources
-        from .evidence_types import valid_commit_ref
         git = self._adapter("git")
         project = self._merge_project(item)
         default_head = item.get("_close_head")
@@ -556,7 +554,7 @@ class RunsMixin:
                   if named and named["pr"] else {})
         repo = git.repo_path(project)
         ref = default_head or git.repo_ref(project)
-        landed = {}
+        landed, merges = {}, {}
         for commit in commits or ():
             pr = (commit.get("merge") or {}).get("pr")
             merged = git.merge_commit_of(repo, commit["sha"], ref)
@@ -565,6 +563,7 @@ class RunsMixin:
             if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
                 raise Refused("evidence_unverified", "merged_pr_head_missing")
             landed[merged[0]] = (pr if type(pr) is int and pr > 0 else None, parents)
+            merges[merged[0]] = dict(commit.get("merge") or {}, sha=merged[0])
         if (not require_each_go and go_pr and go_head == head and _names_item(statement, item["key"])
                 and self._merged_go_scope_matches(decision_id, item, now)):
             for sha, (pr, parents) in landed.items():
@@ -580,8 +579,12 @@ class RunsMixin:
                     if proc.returncode != 0:
                         raise Refused("evidence_unverified", "merged_pr_go_not_final_delivery")
                 return [{"pr": go_pr, "head": head, "decision_id": decision_id}]
-        for pr, parents in landed.values():
+        for merge_sha, (pr, parents) in landed.items():
             has_subject_pr = pr is not None
+            if not has_subject_pr and (lane := self._lane_merge_proof(
+                    item, merges[merge_sha], parents, go_pr, go_head, now)):
+                proofs[parents[1]] = lane
+                continue
             if not has_subject_pr and (not go_pr or not valid_commit_ref(go_head)):
                 raise Refused("evidence_unverified", "merged_pr_missing")
             if has_subject_pr:
@@ -608,7 +611,7 @@ class RunsMixin:
             self._merged_scan_go_rows(item, proofs, now)
         if any("decision_id" not in p for p in proofs.values()):
             raise Refused("evidence_unverified", "merged_pr_go_missing")
-        return sorted(proofs.values(), key=lambda p: (p["pr"], p["head"]))
+        return sorted(proofs.values(), key=lambda p: (p["pr"] or 0, p["head"]))
 
     @staticmethod
     def _go_row_dated(decisions, did):

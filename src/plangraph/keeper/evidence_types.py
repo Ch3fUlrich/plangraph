@@ -6,6 +6,7 @@ one definition of :class:`Result` and :class:`Context`.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -99,3 +100,13 @@ def as_epoch(value: Any) -> float | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.timestamp()
+
+
+def repo_identity(path, ref):
+    """``(resolved path, ref)`` of a registered repository; an invalid or absent ref reads as ``main``.
+
+    One definition for every reader of the registry (merge-close, ``plangraph check``), so the
+    one-directory-counts-once rule has one source of truth.
+    """
+    from .evidence_git import valid_ref
+    return (os.path.realpath(path) if path else None), (ref if valid_ref(ref) else "main")

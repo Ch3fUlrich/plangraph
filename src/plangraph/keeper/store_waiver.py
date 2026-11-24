@@ -154,7 +154,8 @@ class WaiverMixin:
         """Projects to read for the item's merge: its own first, then every scanned repository."""
         scan = getattr(self._adapter("git"), "scan_projects", None)
         names = list(scan()) if callable(scan) else []
-        return [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
+        ordered = [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
+        return self._one_name_per_repository(ordered)
 
     def _merge_project(self, item):
         return self._merge_repository(item)[0]
@@ -466,6 +467,7 @@ class WaiverMixin:
             if not claude or json.loads(item.get("run_ids") or "[]") or re.search(r"\brun-", text):
                 witnessed.extend(self._adapter("spawner_records").review_seats(
                     item, heads, text, allow_cli_reported=not self._card_requires_non_anthropic_seats(item),
+                    allow_unwitnessed=not self._card_requires_non_anthropic_seats(item),
                     **({"allow_empty": True} if claude else {})))
             for bound in heads:
                 group = [s for s in witnessed if s["head"] == bound]
@@ -637,7 +639,7 @@ class WaiverMixin:
         seated = tier != "none"
         token, changes = self._auto_deploy_scan(item)
         pinned = dict(item, _close_head=token[0])
-        proofs = self._merged_auto_proofs(pinned)
+        proofs = self._merged_auto_proofs(pinned, now)
         pending = self._deploy_pending(pinned, changes, token)
         missing = list(pending)
         if self._live_evidence_missing(item, proofs):
@@ -669,7 +671,7 @@ class WaiverMixin:
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
             fresh.update({field: pinned[field] for field in ("_merge_project", "_close_head") if field in pinned})
-            if self._merged_auto_proofs(fresh) != proofs:
+            if self._merged_auto_proofs(fresh, now) != proofs:
                 raise Refused("conflict", "merged_on_default_changed")
             if seated and self._auto_seats(fresh, proofs, now, require_seats) != (witnessed, flags):
                 raise Refused("conflict", "review_witness_changed")
@@ -698,8 +700,12 @@ class WaiverMixin:
         return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
                        and (as_epoch(row["at"]) or 0) >= last_merge for row in self._evidence(item["key"]))
 
-    def _merged_auto_proofs(self, item):
-        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
+    def _merged_auto_proofs(self, item, now=None):
+        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open.
+
+        A merge without a PR number counts as a ``lane_merge`` proof when the decision row
+        named in its subject names the merge sha and the item.
+        """
         git, project = self._adapter("git"), self._merge_project(item)
         proofs = []
         # A Merge-Repo hint only names the repository: the item's own trailers and lanes decide.
@@ -710,6 +716,11 @@ class WaiverMixin:
             if pr is None and not merge and (squash := self._landing_for(project, commit.get("sha"))):
                 # A squash merge has no merge commit: the forge names its PR and the head that was reviewed.
                 pr, head, date, sha = squash["pr"], squash["head"], squash["merged_at"], commit["sha"]
+            if pr is None and now is not None and (did := self._lane_merge_decision(item, merge, now)):
+                if all(p["head"] != head for p in proofs):
+                    proofs.append({"pr": None, "head": head, "decision_id": did, "merge_sha": sha,
+                                   "merged_at": date, "kind": "lane_merge"})
+                continue
             if pr is None or not valid_commit_ref(sha) or not valid_commit_ref(head):
                 raise Refused("evidence_unverified", "merged_pr_missing")
             if all(p["head"] != head for p in proofs):
