@@ -1,0 +1,11 @@
+#!/bin/sh
+[ "$1 $2" = "fast-checks --owned-worktree" ] || exit 9
+head=$(git rev-parse HEAD)
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+mkdir -p "$common/plangraph-state/fast-checks"
+text=$(printf 'head %s\nresult green\ncheck fake-fast-checks rc=0 wall=0.100\n' "$head")
+printf '%s\n' "$text" > "$common/plangraph-state/fast-checks/$head"
+blob=$(printf '%s\n' "$text" | git hash-object -w --stdin)
+tree=$(printf '100644 blob %s\t%s\n' "$blob" "$head" | git mktree)
+commit=$(git -c user.name=t -c user.email=t@example.invalid commit-tree "$tree" -m receipt)
+git update-ref "refs/plangraph/receipts/$head" "$commit"

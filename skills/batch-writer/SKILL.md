@@ -59,7 +59,7 @@ Use grep for text that is not a symbol.
    the item's `Gate-Edit: D-id` trailer in the merge message, or the pre-push gate refuses it.
    When the Run values carry a `PUSH:` line, after every item commit run the one stamp
    command (`plangraph fast-checks --owned-worktree`), then run the PUSH command exactly as
-   printed: one atomic push of `lane/<NAME>` and its per-lane receipt ref, no pull request.
+   printed: one atomic push of `lane/<NAME>` and its designated receipt ref (one parentless receipt commit), no pull request.
    For a `lane/*` ref the pre-push hook runs the public scrub, the commit gate and the receipt
    gate only (seconds, no test, no worktree); it refuses a head whose green receipt is not in
    the same push, with no bypass. Without a `PUSH:` line the orchestrator or the host pushes.

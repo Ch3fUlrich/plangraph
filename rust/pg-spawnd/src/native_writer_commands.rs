@@ -28,7 +28,11 @@ fn mark_process(record: &mut Value) {
 }
 
 impl Host {
-    fn from_request(request: &Value, record: &Value, record_path: PathBuf) -> Result<Self, String> {
+    pub(super) fn from_request(
+        request: &Value,
+        record: &Value,
+        record_path: PathBuf,
+    ) -> Result<Self, String> {
         let state = record_path
             .ancestors()
             .nth(3)
@@ -66,7 +70,7 @@ impl Host {
         })
     }
 
-    fn configure(&mut self, request: &Value) -> Result<(), String> {
+    pub(super) fn configure(&mut self, request: &Value) -> Result<(), String> {
         if self
             .push_ref
             .as_ref()
@@ -76,7 +80,8 @@ impl Host {
         }
         self.brief = pg_spawnd::batch_writer_brief::render_in(
             request["prompt"].as_str().ok_or("prompt missing")?,
-            &self.cwd,
+            // A fresh launch renders before its worktree exists: the host repository is the checkout.
+            &self.repo,
         )?
         .into_owned();
         self.effort = writer_effort(&request["card"])?;

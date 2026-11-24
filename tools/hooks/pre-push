@@ -7,8 +7,9 @@ Missing preflight refuses main pushes; topic and tag pushes retain the other gat
 A push to refs/heads/lane/* runs the public scrub, the commit
 gate (with its open-PR query) and the stamp gate only (seconds, no worktree, no test): a lane head needs a green
 `plangraph fast-checks` receipt of exactly that head in the same push (no bypass), as a per-lane
-receipt notes ref (refs/notes/plangraph-fast-checks-<lane>) whose tree must hold nothing but well-formed
-receipts; that ref is validated and scrubbed like any pushed content but carries no trailers.
+receipt ref (refs/notes/plangraph-fast-checks-<lane>, the designated ref of that lane head) that is one
+parentless commit holding nothing but well-formed receipts, validated and scrubbed like any pushed content.
+A receipt ref without its lane head, or another lane's receipt ref, is refused.
 Train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
 cargo fmt) and no test; the affected tests run once, in CI. A push to refs/heads/land/train-* is a
 train: its first-parent chain must carry the merges listed in the manifest in order, with
@@ -178,9 +179,8 @@ RECEIPT_REF_PREFIX = "refs/notes/plangraph-fast-checks"
 
 
 def is_receipt_ref(remote_ref):
-    """The receipt notes ref of a lane push: the local ref or a per-lane `...-<lane>` ref."""
-    return remote_ref == RECEIPT_REF_PREFIX or (
-        remote_ref.startswith(RECEIPT_REF_PREFIX + "-") and len(remote_ref) > len(RECEIPT_REF_PREFIX) + 1)
+    """A published receipt ref: `refs/notes/plangraph-fast-checks-<lane>` (one parentless commit per head)."""
+    return remote_ref.startswith(RECEIPT_REF_PREFIX + "-") and len(remote_ref) > len(RECEIPT_REF_PREFIX) + 1
 
 
 def plangraph_fast_checks(*args):
@@ -207,21 +207,20 @@ def is_lane_ref(remote_ref):
     return remote_ref.startswith(LANE_REF_PREFIX) and len(remote_ref) > len(LANE_REF_PREFIX)
 
 
-def stamp_gate(head, receipt_commits):
-    """A lane head is pushed with a green receipt of exactly that head in the same push: a local
-    stamp alone does not publish anything another clone could read."""
-    reasons = []
-    for commit in receipt_commits:
-        ok, message = plangraph_fast_checks("--stamp-green", head, "--notes-commit", commit)
+def stamp_gate(head, lane_ref, receipts):
+    """A lane head is pushed with the green receipt of exactly that head in its designated receipt
+    ref, in the same push: a local stamp, or a receipt that belongs to another lane, publishes nothing."""
+    ok, designated = plangraph_fast_checks("--receipt-ref", lane_ref)
+    commit = receipts.get(designated.strip()) if ok else None
+    reason = designated if not ok else ""
+    if commit:
+        ok, reason = plangraph_fast_checks("--stamp-green", head, "--notes-commit", commit)
         if ok:
             return 0
-        reasons.append(message)
-    detail = f" ({reasons[-1]})" if reasons else ""
-    print(f"pre-push: no green fast-checks receipt of {head[:12]} in this push{detail}: run "
-          "`plangraph fast-checks --owned-worktree` on this head and push the head with its receipt "
-          "(`git push --atomic origin HEAD:refs/heads/lane/NAME "
-          "+refs/notes/plangraph-fast-checks:refs/notes/plangraph-fast-checks-lane-NAME`): push refused",
-          file=sys.stderr)
+    detail = f" ({reason})" if reason else ""
+    print(f"pre-push: no green fast-checks receipt of {head[:12]} in {designated.strip() or 'its receipt ref'} "
+          f"in this push{detail}: run `plangraph fast-checks --owned-worktree` on this head and push the head "
+          "with its receipt exactly as the brief's PUSH line prints it (atomic): push refused", file=sys.stderr)
     return 1
 
 
@@ -537,11 +536,22 @@ def push_main():
         return 0
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
     print(f"pre-push Python: {PYTHON}", flush=True)
-    receipt_commits = [rec[1] for rec in refs if is_receipt_ref(rec[2])]
-    # A receipt ref is not a branch (no commit trailers or file sizes): its tree is validated first
-    # and scrubbed below, before any lane head is judged by it.
+    receipts = {rec[2]: rec[1] for rec in refs if is_receipt_ref(rec[2])}
+    # A receipt ref is not a branch (no commit trailers or file sizes): its commit is validated first
+    # (one parentless commit of well-formed receipts) and scrubbed below, before any lane head is judged
+    # by it. A receipt travels only as the designated ref of a lane head in the same push.
     for _, local_sha, remote_ref, _ in refs:
         if is_receipt_ref(remote_ref) and receipt_ref_gate(local_sha, remote_ref):
+            return 1
+    designated = set()
+    for _, _, remote_ref, _ in refs:
+        if is_lane_ref(remote_ref):
+            ok, name = plangraph_fast_checks("--receipt-ref", remote_ref)
+            designated.add(name.strip() if ok else "")
+    for remote_ref in receipts:
+        if remote_ref not in designated:
+            print(f"pre-push: {remote_ref} is not the receipt ref of a lane head in this push: push refused",
+                  file=sys.stderr)
             return 1
     for _, local_sha, remote_ref, remote_sha in refs:
         if is_receipt_ref(remote_ref):
@@ -558,7 +568,7 @@ def push_main():
         open_prs = not train or not is_zero(remote_sha)
         if commit_gate(local_sha, remote_ref, remote_sha, open_prs=open_prs) or file_size_gate(local_sha):
             return 1
-        if is_lane_ref(remote_ref) and stamp_gate(local_sha, receipt_commits):
+        if is_lane_ref(remote_ref) and stamp_gate(local_sha, remote_ref, receipts):
             return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None

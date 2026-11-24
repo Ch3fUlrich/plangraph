@@ -121,8 +121,8 @@ def test_a_lane_push_runs_no_preflight_and_no_tests(repo, tmp_path):
     env = install_preflight(r, tmp_path / "argv")
     # a failing unit test in the pushed tree: the lane hook does not run it
     head = commit_file(r, "tests/test_broken.py", "def test_broken():\n    assert False\n")
-    add_receipt(r, head)
-    res = run_hook(r, [push_line("lane/x", head, base), receipt_line(r, "x")],
+    commit = add_receipt(r, head)
+    res = run_hook(r, [push_line("lane/x", head, base), receipt_line(commit, head, "x")],
                    {**env, **stub_plangraph(tmp_path, green=True)[0]})
     assert res.returncode == 0, res.stdout + res.stderr
     assert not (tmp_path / "argv").exists(), "preflight ran for a lane push"
@@ -281,8 +281,7 @@ def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, 
     line = f"{ref} {head} {ref} {base}" if ref != "refs/tags/v9" else f"{ref} {head} {ref} {'0' * 40}"
     lines = [line]
     if lane:
-        add_receipt(r, head)
-        lines.append(receipt_line(r, "x"))
+        lines.append(receipt_line(add_receipt(r, head), head, "x"))
     res = run_hook(r, lines, env)
     assert res.returncode == 0, res.stdout + res.stderr
     if lane:
@@ -338,12 +337,17 @@ BOUND_SECONDS = 20
 
 
 def stub_plangraph(tmp_path, green):
-    """A `plangraph` on PATH that answers the stamp question; the log shows what the hook asked."""
+    """A `plangraph` on PATH that answers the receipt questions; the log shows what the hook asked.
+    `--receipt-ref` answers like the real mapping for plain lane names; the others exit by `green`."""
     directory = tmp_path / "bin"
     directory.mkdir(exist_ok=True)
     log = tmp_path / "plangraph.log"
     tool = directory / "plangraph"
-    tool.write_text(f'#!/bin/sh\necho "$@" >> {log}\nexit {0 if green else 1}\n')
+    tool.write_text(
+        f'#!/bin/sh\necho "$@" >> {log}\n'
+        'if [ "$2" = "--receipt-ref" ]; then\n'
+        '  echo "refs/notes/plangraph-fast-checks-$(echo "${3#refs/heads/}" | sed \'s|/|%2f|g\')"; exit 0\n'
+        f'fi\nexit {0 if green else 1}\n')
     tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
     return {"PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"}, log
 
@@ -356,29 +360,46 @@ def receipt_text(head, verdict="green", rc=0, label="fmt"):
     return f"head {head}\nresult {verdict}\ncheck {label} rc={rc} wall=1.000\n"
 
 
-def receipt_line(repo, name="pr10"):
-    """The push record of the local receipt notes ref (what `git push` sends next to the lane head)."""
-    tip = git(repo, "rev-parse", "refs/notes/plangraph-fast-checks").strip()
-    ref = f"refs/notes/plangraph-fast-checks-lane-{name}"
-    return f"refs/notes/plangraph-fast-checks {tip} {ref} {ZERO}"
+def receipt_commit(repo, head, text=None, parent=None):
+    """The receipt of `head` as `fast-checks` publishes it: one parentless commit, one file named by the head."""
+    def plumbing(*args, stdin=None):
+        out = subprocess.run(["git", *args], cwd=str(repo), input=stdin, capture_output=True, text=True, check=True,
+                             env={**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
+        return out.stdout.strip()
+
+    blob = plumbing("hash-object", "-w", "--stdin", stdin=text or receipt_text(head))
+    tree = plumbing("mktree", stdin=f"100644 blob {blob}\t{head}\n")
+    parents = ["-p", parent] if parent else []
+    commit = plumbing("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", tree, *parents,
+                      "-m", "fast-checks receipt")
+    plumbing("update-ref", f"refs/plangraph/receipts/{head}", commit)
+    return commit
+
+
+def receipt_ref(name):
+    return f"refs/notes/plangraph-fast-checks-lane%2f{name}"
+
+
+def receipt_line(commit, head, name="pr10"):
+    """The push record of a lane's receipt ref (what `git push` sends next to the lane head)."""
+    return f"refs/plangraph/receipts/{head} {commit} {receipt_ref(name)} {ZERO}"
 
 
 def add_receipt(repo, head, text=None):
-    git(repo, "notes", "--ref=plangraph-fast-checks", "add", "-f", "-m", text or receipt_text(head), head)
+    return receipt_commit(repo, head, text)
 
 
 def lane_push(repo, head, name="pr10", text=None):
     """A lane head and its receipt ref, as one atomic push presents them to the hook."""
-    add_receipt(repo, head, text)
-    return [lane_line(head, name=name), receipt_line(repo, name)]
+    commit = receipt_commit(repo, head, text)
+    return [lane_line(head, name=name), receipt_line(commit, head, name)]
 
 
 def lane_extras(r, head, tmp_path, ref):
     """A lane ref needs a receipt ref in its push and a green reader on PATH; other refs need neither."""
     if not ref.startswith(("lane/", "refs/heads/lane/")):
         return {}, []
-    add_receipt(r, head)
-    return stub_plangraph(tmp_path, green=True)[0], [receipt_line(r, "x")]
+    return stub_plangraph(tmp_path, green=True)[0], [receipt_line(add_receipt(r, head), head, "x")]
 
 
 def with_tripwire_preflight(r):
@@ -399,6 +420,7 @@ def test_lane_push_with_a_green_receipt_runs_no_preflight_and_stays_fast(repo, t
     assert not mark.exists(), "preflight ran for a lane push"
     asked = log.read_text()
     assert "fast-checks --check-notes" in asked
+    assert "fast-checks --receipt-ref refs/heads/lane/pr10" in asked
     assert f"fast-checks --stamp-green {head} --notes-commit" in asked
     assert elapsed < BOUND_SECONDS, f"lane push took {elapsed:.1f}s"
     assert git(r, "worktree", "list").count("\n") == 1, "the hook left a worktree"
@@ -430,21 +452,44 @@ def test_the_old_unstamped_flag_no_longer_bypasses_the_receipt(repo, tmp_path):
 def test_the_real_receipt_reader_validates_what_a_receipt_ref_publishes(repo, tmp_path):
     r, _ = repo
     head = commit_file(r, "app/lane.txt", "clean\n")
-    # A valid green receipt of the pushed head passes.
+    # A valid green receipt of the pushed head, in the lane's designated ref, passes.
     assert run_hook(r, lane_push(r, head), {}).returncode == 0
     # An ordinary commit is not a receipt ref.
-    res = run_hook(r, [lane_line(head), f"refs/notes/plangraph-fast-checks-lane-pr10 {head} "
-                       f"refs/notes/plangraph-fast-checks-lane-pr10 {ZERO}"], {})
+    res = run_hook(r, [lane_line(head), f"refs/heads/x {head} {receipt_ref('pr10')} {ZERO}"], {})
     assert res.returncode == 1
     assert "not a receipt ref" in res.stderr
-    # A red receipt, and a receipt of another head, do not publish this head.
-    other = "b" * 40
+    # A red receipt does not publish the head.
     assert run_hook(r, lane_push(r, head, text=receipt_text(head, "red", 1)), {}).returncode == 1
-    git(r, "notes", "--ref=plangraph-fast-checks", "remove", head)
-    add_receipt(r, git(r, "rev-parse", "HEAD~1").strip())
-    res = run_hook(r, [lane_line(head), receipt_line(r)], {})
+    # A receipt of another head does not publish this one.
+    other = git(r, "rev-parse", "HEAD~1").strip()
+    res = run_hook(r, [lane_line(head), receipt_line(receipt_commit(r, other), other)], {})
     assert res.returncode == 1
-    assert other not in res.stderr
+    assert "no green fast-checks receipt" in res.stderr
+
+
+@pytest.mark.usefixtures("train_validator_on_path")
+def test_content_that_only_a_parent_of_the_receipt_commit_holds_is_never_published(repo, tmp_path):
+    r, _ = repo
+    head = commit_file(r, "app/lane.txt", "clean\n")
+    old = receipt_commit(r, head, receipt_text(head, label=fake_ip()))
+    child = receipt_commit(r, head, parent=old)  # the tip tree is clean; the parent is not
+    res = run_hook(r, [lane_line(head), receipt_line(child, head)], {})
+    assert res.returncode == 1
+    assert "has parents" in res.stderr
+
+
+@pytest.mark.usefixtures("train_validator_on_path")
+def test_a_receipt_ref_travels_only_as_the_designated_ref_of_a_lane_head_in_the_same_push(repo, tmp_path):
+    r, _ = repo
+    head = commit_file(r, "app/lane.txt", "clean\n")
+    commit = receipt_commit(r, head)
+    # A receipt-only push (no lane head with it) is refused.
+    res = run_hook(r, [receipt_line(commit, head)], {})
+    assert res.returncode == 1
+    assert "not the receipt ref of a lane head" in res.stderr
+    # Another lane's receipt ref does not publish this lane.
+    res = run_hook(r, [lane_line(head, name="pr10"), receipt_line(commit, head, name="other")], {})
+    assert res.returncode == 1
 
 
 @pytest.mark.usefixtures("train_validator_on_path")
