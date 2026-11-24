@@ -15,6 +15,7 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
         Event::Select,
         Event::StartRetry,
         Event::MainMove,
+        Event::Restart,
     ];
     for part in 0..PARTS {
         out.extend([
@@ -23,7 +24,7 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
             Event::Revert { part },
             Event::Readmit { part },
         ]);
-        for train in 0..trains {
+        for train in 0..trains.min(2) {
             out.extend([
                 Event::Join { part, train },
                 Event::Conflict { train, part },
@@ -65,6 +66,12 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
             Event::SettleLegacy { train },
             Event::VerifyOutcome { train },
             Event::Rebuild { train },
+            Event::Amend { train },
+            Event::FixInPlace { train },
+            Event::CiRedFix { train },
+            Event::Speculate { pred: train },
+            Event::Promote { train },
+            Event::VerifyComplete { train },
         ]);
     }
     out
@@ -81,11 +88,35 @@ fn model(policy: Policy) -> Model {
     Model::new(policy, specs)
 }
 
-fn explore(policy: Policy) -> (usize, [bool; 4]) {
+/// A train under test with a part waiting: the start of every speculative path.
+fn pipeline(policy: Policy) -> Model {
+    let mut m = model(policy);
+    for e in [
+        Event::Register { part: 3 },
+        Event::Tick,
+        Event::Select,
+        Event::Bind {
+            train: 0,
+            build: 0,
+            base: 0,
+            policy: POLICY,
+        },
+        Event::StartCi { train: 0 },
+        Event::Register { part: 0 },
+        Event::Tick,
+    ] {
+        m.apply(e).unwrap();
+    }
+    m
+}
+
+fn explore(policy: Policy) -> (usize, [bool; 5]) {
     let mut seen: HashSet<Model> = HashSet::new();
-    let mut frontier = vec![model(policy)];
-    seen.insert(frontier[0].clone());
-    let mut reached = [false; 4];
+    let mut frontier = vec![model(policy), pipeline(policy)];
+    frontier.iter().for_each(|m| {
+        seen.insert(m.clone());
+    });
+    let mut reached = [false; 5];
     for _ in 0..DEPTH {
         let mut next = Vec::new();
         for m in &frontier {
@@ -104,6 +135,7 @@ fn explore(policy: Policy) -> (usize, [bool; 4]) {
                 reached[0] |= (0..PARTS).any(|p| n.status(p) == Status::Landed);
                 reached[1] |= (0..PARTS).any(|p| n.status(p) == Status::Held);
                 reached[2] |= n.escalated_lineages() > 0;
+                reached[4] |= n.promoted() > 0;
                 reached[3] |= (0..PARTS).any(|p| n.status(p) == Status::Dropped);
                 if seen.insert(n.clone()) {
                     next.push(n);
@@ -126,7 +158,7 @@ fn every_interleaving_keeps_the_invariants_under_each_policy() {
         let (states, reached) = explore(p);
         assert!(states > 10_000, "only {states} states");
         assert_eq!(
-            reached, [true; 4],
+            reached, [true; 5],
             "a state class was never reached under {p:?}"
         );
     }
