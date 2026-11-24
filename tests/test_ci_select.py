@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from test_ci_job_names import DRAFT_LANE_SKIP
 import json
 import subprocess
 
@@ -113,7 +114,9 @@ def test_workflow_gate_needs_every_always_job():
     needs = wf["jobs"]["ci-gate"]["needs"]
     for job in ci_select.ALWAYS:
         assert job in needs
-        assert "if" not in wf["jobs"][job] and "needs" not in wf["jobs"][job]
+        assert "needs" not in wf["jobs"][job]
+        # the only condition an always-job carries is the draft lane/* part skip
+        assert wf["jobs"][job]["if"] == "${{ " + DRAFT_LANE_SKIP + " }}"
     # the ratchet base per event: push -> the pushed-over sha (never the zero
     # sha), PR -> origin/main, schedule/dispatch -> HEAD~1
     base = [s for s in wf["jobs"]["file-size"]["steps"] if "env" in s][0]["env"]
