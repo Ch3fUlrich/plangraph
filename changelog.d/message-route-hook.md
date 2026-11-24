@@ -1,1 +1,1 @@
-Add the `pg-hook message-route` SendMessage hook: ACK, DONE, FILED, MERGED and STATUS lines to routing go to the inbox file the router heartbeat reads, with a per-day diversion log, only on a host whose heartbeat already tracks that file.
+Add the `pg-hook message-route` SendMessage hook: ACK, DONE, FILED, MERGED and STATUS lines to routing go to the inbox file the router heartbeat reads (`ROUTER_INBOX_DIR`, else the XDG state home), with a per-day diversion log, only while the heartbeat holds a usable offset for it and the time guard accepts the message.

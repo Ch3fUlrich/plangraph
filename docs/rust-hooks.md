@@ -103,15 +103,19 @@ transcript format.
 routing role (`routing` or `routing-NNNN`) whose first word is `ACK`, `DONE`,
 `FILED`, `MERGED` or `STATUS` (upper case) is refused with exit 2 and appended as
 one line `- <UTC time> <sender>: <text>` to `L0.md` in the inbox directory the router
-heartbeat reads: `$ROUTER_INBOX_DIR`, else `$ROUTING_STATE_DIR/inbox` (default
-`~/.local/state/routing/inbox`). Routing reads it at its heartbeat instead of waking.
+heartbeat reads: `$ROUTER_INBOX_DIR`, else `$XDG_STATE_HOME/routing/inbox` (default
+`~/.local/state/routing/inbox`), whatever `ROUTING_STATE_DIR` says. Routing reads it at its
+heartbeat instead of waking.
 `BLOCKED`, `GO-REQ`, `FAIL`, `INCIDENT` and operator relays are delivered. The sender is
 the `session_name` of the launch record whose `session_id` matches.
 
 The hook diverts only on a host that feeds the router: the inbox directory must hold the
-heartbeat's `offsets.json` with an entry for `L0.md`. Without that file the message is
-sent; with `offsets.json` but no `L0.md` entry the hook creates an empty `L0.md` and
-sends the message, so the heartbeat records its offset and skips no later line. Each
+heartbeat's `offsets.json` with a usable offset for `L0.md` (a number up to the file size).
+Without that file the message is sent; with `offsets.json` but no `L0.md` entry the hook
+creates an empty `L0.md` and sends the message, so the heartbeat records its offset and
+skips no later line; an offset beyond the file size (the heartbeat restarts such a file at
+its end and skips what was filed) also sends the message. A message the time guard below
+refuses is never filed. Each
 diversion adds a row `{ts, day, sender, to, word}` to `diversions.jsonl` beside it; count
 per day and sender with `jq -r '[.day,.sender]|@tsv' diversions.jsonl | sort | uniq -c`.
 If that row cannot be written the line is still filed and the send is still refused.
@@ -119,7 +123,9 @@ The hook reads files only (under 50 ms) and fails open on any error.
 
 Refusing a message to an old counter name and forwarding it to the live session needs the
 confirmed live name that `fleet-name` reads (`claude agents --json`, seconds); it is not
-done in a hook and is carried by the fleet-bus slice.
+done in a hook and stays open as `plangraph:LE-PEER-MESSAGES-ADDRESSED-BY-STALE-SESSION-NAME`
+(slice `LE-PEER-MESSAGES-ROLE-ADDRESS-AND-FORWARD`). The routing wake by the state-shadow
+digest waits on `plangraph:SSA-A2-SHADOW-DIGEST` (slice `LE-ROUTINE-MESSAGES-DIGEST-WAKE`).
 
 ### Agent message timestamps
 
@@ -131,17 +137,19 @@ default installed binary automatically. Set `PG_MESSAGE_TIME_HOOK` to an
 absolute executable path for a custom install.
 
 The guard checks `HH:MMZ` and `HH:MM:SSZ` against the current UTC time and refuses one that is
-more than two minutes from it either way (around midnight too). An ISO instant carries its
-own date and offset and is refused when more than two minutes in the future. A placeholder
-such as `05:4xZ` is always refused: state the real time. A refusal identifies the
-timestamp and exits 2.
+more than two minutes from it either way (around midnight too). A dated ISO instant carries its
+own date and offset and must be within two minutes of the clock the same way, so a message
+cannot cite an earlier instant: say "earlier" or give the date alone. A placeholder such as
+`05:4xZ` or `2026-11-24T05:4xZ` is always refused: state the real time. A refusal identifies
+the timestamp and exits 2.
 
 `.claude/settings.json` registers `message-time` and `message-route` on `PreToolUse` for
 `SendMessage`, each through the guarded form `sh -c 'test -x "$1" || exit 1; exec "$1" <mode>'
 _ "$HOME/.local/share/plangraph/hooks/pg-hook"`, so a host without the installed
 `pg-hook` sends as before (exit 1 is not a block). The registration covers sessions whose
-working directory is in this repository; a session elsewhere needs the same entries in its
-settings. `rust/pg-hook/tests/settings_registration.rs` runs the registered commands. The
+working directory is in this repository; a session elsewhere (plan-order, plan-roadmap) needs
+the same entries in the fleet launch settings of the data repository
+(slice `LE-SENDMESSAGE-HOOKS-REGISTERED-ON-FLEET-HOSTS`). `rust/pg-hook/tests/settings_registration.rs` runs the registered commands. The
 fleet client and `fleet_msg_send` check the text themselves.
 
 Read git times as UTC: `git log --date=iso-strict` or `TZ=UTC git log --date=format-local:%H:%MZ`.
