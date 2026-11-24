@@ -149,13 +149,21 @@ impl RejoinHost for Ssh<'_> {
             ],
             60,
         )?;
+        // check-install exits 0 for any valid invocation and names the verdict on stdout.
+        let row: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+        let detail = row["reason"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                String::from_utf8_lossy(&output.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("pg-spawnd or hooks differ from main")
+                    .to_owned()
+            });
         Ok(InstallReport {
-            current: output.status.success(),
-            detail: String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .next()
-                .unwrap_or("pg-spawnd or hooks differ from main")
-                .to_owned(),
+            current: output.status.success() && row["status"] == "current",
+            detail,
         })
     }
 
@@ -189,12 +197,26 @@ impl RejoinHost for Ssh<'_> {
         if record.status().is_none_or(Status::is_terminal) {
             return Ok(());
         }
+        // A queued run walks queued -> running first; only the statuses that can end a
+        // running run are kept, and refused, limited or dry-run ends count as failed.
+        if record.status() == Some(Status::Queued) {
+            record.set("status", json!("running"));
+        }
         let to = match fate {
             RunFate::Finished => self
                 .ended
                 .get(run)
                 .and_then(|status| Status::parse(status))
-                .filter(|status| status.is_terminal())
+                .filter(|status| {
+                    !matches!(
+                        status,
+                        Status::Queued
+                            | Status::Running
+                            | Status::Refused
+                            | Status::Limited
+                            | Status::DryRun
+                    )
+                })
                 .unwrap_or(Status::Failed),
             _ => Status::Failed,
         };
