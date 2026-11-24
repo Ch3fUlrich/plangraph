@@ -20,7 +20,8 @@
       "tool_mode": "tools",
       "disabled": null,
       "effort": null,
-      "web_access": false
+      "web_access": false,
+      "vision": null
     },
     "expected": "agy/sample-model"
   },
@@ -45,7 +46,8 @@
       "tool_mode": "tools",
       "disabled": null,
       "effort": null,
-      "web_access": false
+      "web_access": false,
+      "vision": null
     },
     "expected": "provider/sample-model"
   },
@@ -70,7 +72,8 @@
       "tool_mode": "tools",
       "disabled": null,
       "effort": null,
-      "web_access": false
+      "web_access": false,
+      "vision": null
     },
     "expected": "sample-model"
   }
