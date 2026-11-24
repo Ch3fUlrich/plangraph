@@ -258,12 +258,13 @@ async def _diagnose(probe, checks, memory_probe=False):
     from .leg_probe import probe_many
     plans = {}
     def source_checks():
-        from .remote_ps import configured_hosts, MAX_WORKERS, TIMEOUT as probe_timeout
+        from .remote_ps import configured_hosts, host_timeout, MAX_WORKERS
         try:
-            count = len(configured_hosts())
+            hosts = configured_hosts()
         except (OSError, ValueError, KeyError, TypeError):
-            count = 0
-        timeout = max(TIMEOUT, ((count + MAX_WORKERS - 1) // MAX_WORKERS) * probe_timeout + TIMEOUT)
+            hosts = []
+        probe_timeout = max([host_timeout(host) for host in hosts], default=0)
+        timeout = max(TIMEOUT, ((len(hosts) + MAX_WORKERS - 1) // MAX_WORKERS) * probe_timeout + TIMEOUT)
         binary = shutil.which('pg-spawnd') or 'pg-spawnd'
         detail = 'host query failed'
         try:

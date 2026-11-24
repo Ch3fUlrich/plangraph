@@ -119,7 +119,7 @@ or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
 Local identity is `PLANGRAPH_HOST_NAME` when set, otherwise registry `self`;
 IDs and aliases resolve case-insensitively. The registry also supplies SSH
 routes, eligible roles, and the `public_repos` list of approved repository
-IDs. Missing registry caps exclude a host from overflow. Local admission uses
+IDs (default `plangraph`). A host takes remote work only with `remote_placement: true`. Missing registry caps exclude a host from overflow. Local admission uses
 conservative defaults of floor 3000 MB and role 2048 MB when the registry is
 unavailable. The independent OOM guard (D-5057/D-5075) still applies.
 
