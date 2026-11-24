@@ -6,7 +6,7 @@ fn no_fixes() -> BTreeSet<(String, RedClass)> {
 
 #[test]
 fn rust_fmt_diff_is_fmt() {
-    let log = "Diff in /home/runner/work/x/src/lib.rs:12:\n-fn a( ){}\n+fn a() {}\nError: Process completed with exit code 1.";
+    let log = "Diff in src/lib.rs:12:\n-fn a( ){}\n+fn a() {}\nError: Process completed with exit code 1.";
     assert_eq!(
         classify_job("Rust workspace on Linux: fmt, clippy, tests", log, false),
         RedClass::Fmt
