@@ -12,36 +12,39 @@ def route(*writers):
     return [leg.id for leg in plan_spawn(CARD, role="review", writer_families=writers, leg_reader=UP).legs]
 
 
-def test_review_order_names_gpt_first_then_mimo_deepseek_and_argon_late():
-    assert REVIEW_ORDER[:6] == ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",   # D-6652 required seats
-                                "agy-gemini-4-hydrogen-high", "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free")
-    assert REVIEW_ORDER[-2:] == ("agy-gemini-4-argon-low", "agy-gemini-4-argon-medium")
+def test_review_order_names_the_smart_legs_then_the_weak_pair_gpt_mimo_and_deepseek():
+    assert REVIEW_ORDER[:9] == ("agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",
+                                "claude-sonnet-5-5-high",   # rule 3.66 (f10) smart legs
+                                "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",   # the weak pair
+                                "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free")
 
 
 def test_claude_written_diff_routes_gpt_first_in_codex():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",), leg_reader=UP)
     ids = [leg.id for leg in plan.legs]
-    assert ids[:5] == ["opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "agy-gemini-4-hydrogen-high",
-                       "gpt-6.2-sol-medium", "mimo-v2.6-pro"]
-    assert plan.legs[3].harness == "codex" and plan.legs[3].family == "gpt"
+    assert ids[:7] == ["agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",
+                       "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "gpt-6.2-sol-medium",
+                       "mimo-v2.6-pro"]
+    assert plan.legs[5].harness == "codex" and plan.legs[5].family == "gpt"
     assert "codex" in HARNESSES
-    assert ids == ["opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "agy-gemini-4-hydrogen-high",
+    assert ids == ["agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",
+                   "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",
                    "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free", "agy-gemini-4-neon-medium",
-                   "mimo-v2.6-flash", "cx-gpt-6-luna", "agy-gpt-oss-120b",
-                   "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]   # argon last
+                   "mimo-v2.6-flash", "cx-gpt-6-luna", "agy-gpt-oss-120b"]
 
 
 def test_gpt_written_diff_skips_the_gpt_leg():
     for writer in ("gpt", "openai"):
         ids = route(writer)
-        assert "gpt-6.2-sol-medium" not in ids and ids[:3] == [
-            "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "agy-gemini-4-hydrogen-high"]
+        assert "gpt-6.2-sol-medium" not in ids and ids[:5] == [
+            "agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",
+            "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash"]
 
 
-def test_argon_is_the_end_of_the_whole_eligible_route():
+def test_argon_follows_hydrogen_ahead_of_the_weak_pair_and_the_rest_of_the_route():
     ids = route("claude")
-    assert ids[-2:] == ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
-    assert ids.index("cx-gpt-6-luna") < ids.index("agy-gemini-4-argon-low")
+    assert ids[:3] == ["agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
+    assert ids.index("agy-gemini-4-argon-medium") < ids.index("cx-gpt-6-luna")
 
 
 def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):

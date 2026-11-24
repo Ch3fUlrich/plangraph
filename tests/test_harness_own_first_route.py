@@ -107,9 +107,10 @@ def review_diff_ref(tmp_path):
 
 def test_service_route_review_for_claude_diff_runs_gpt_in_codex(tmp_path, review_diff_ref):
     plan = review_route(tmp_path, ALL, review_diff_ref)
-    assert [(leg.id, leg.harness) for leg in plan.legs[:4]] == [
-        ("opencode-go-deepseek-v4-flash", "opencode"), ("opencode-go-glm-5.3-flash", "opencode"),
-        ("agy-gemini-4-hydrogen-high", "agy"), ("gpt-6.2-sol-medium", "codex")]
+    assert [(leg.id, leg.harness) for leg in plan.legs[:6]] == [
+        ("agy-gemini-4-hydrogen-high", "agy"), ("agy-gemini-4-argon-low", "agy"),
+        ("agy-gemini-4-argon-medium", "agy"), ("opencode-go-deepseek-v4-flash", "opencode"),
+        ("opencode-go-glm-5.3-flash", "opencode"), ("gpt-6.2-sol-medium", "codex")]
 
 
 @pytest.mark.parametrize('foreign_harness', [True, False], ids=['foreign', 'native'])
