@@ -46,25 +46,65 @@ def _refuses(w, key):
     return exc.value.msg
 
 
+_GOALS = iter(range(1000))
+
+
+def _mk(w, *lanes):
+    """Create *lanes* in one batch under a fresh goal (a batch without a goal is refused)."""
+    goal = f"GOAL{next(_GOALS)}"
+    w.store.create_items(w.p("router"), [*lanes, defn(goal, [d["id"] for d in lanes], kind="goal")])
+
+
+def _created(w, key):
+    return next(e["payload"] for e in keeper_events.read_events(w.conn)
+                if e["key"] == key and e["type"] == "item_created")
+
+
 def test_a_session_id_on_one_item_does_not_move_the_watermark_of_another(w, decisions):
-    w.store.create_items(w.p("router"), [
-        defn("B", description="per D-5800"),
-        defn("A", description="per D-5800", session="D-999999"),
-        defn("GOAL", ["A", "B"], kind="goal")])
+    # C cites D-5800; A carries a session; B cites nothing and is defined after A, so B's
+    # watermark is the clock at its own definition and no session id may be in it.
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("A", session="D-999999"))
+    _mk(w, defn("B"))
+    assert _created(w, "demo:A")["session"] == "D-999999"      # the metadata is on the event
+    assert "D-999999" not in (w.store._item("demo:A")["note"] or "")
+    assert w.store._decision_clock()["marks"][-1] == 5800
     _decide(decisions, 5900, "demo:B now also covers the web; supersedes the old scope")
     assert "D-5900" in _refuses(w, "demo:B")
     assert _newer(w, "demo:B") == ["D-5900"]
+    # the claimed item itself: its own session never counts as a citation either
+    _decide(decisions, 5901, "demo:A scope changed")
+    assert "D-5901" in _refuses(w, "demo:A")
 
 
-def test_metadata_fields_never_carry_an_id_into_the_clock(w, decisions):
-    w.store.create_items(w.p("router"), [
-        defn("B", description="per D-5800"),
-        defn("A", description="per D-5800", similar=["D-999999"], category="D-999999",
-             supersedes="D-999999"),
-        defn("GOAL", ["A", "B"], kind="goal")])
+def test_a_session_must_be_a_one_line_string(w):
+    for bad in (7, "", "a\nb", "x" * 201):
+        with pytest.raises(Refused) as exc:
+            _mk(w, defn("A", session=bad))
+        assert "session must be a one-line string" in exc.value.msg
+    _mk(w, defn("OK", session="sess-1"))       # the same batch shape passes with a good one
+
+
+@pytest.mark.parametrize("field", ["title", "description", "done_criteria", "note", "source"])
+def test_every_premise_field_of_a_definition_moves_the_clock(w, decisions, field):
+    _mk(w, defn("X", **{field: "per D-5800"}))
+    _mk(w, defn("B"))
+    assert _created(w, "demo:X")[field] == "per D-5800"
+    assert not {"title", "done_criteria", "note", "source"} & set(_created(w, "demo:B"))   # no cite, no key
     assert w.store._decision_clock()["marks"][-1] == 5800
     _decide(decisions, 5900, "demo:B scope changed")
-    assert _newer(w, "demo:B") == ["D-5900"]
+    assert _newer(w, "demo:B") == ["D-5900"]            # the event-derived fallback
+
+
+@pytest.mark.parametrize("field", ["title", "description", "done_criteria", "note"])
+def test_an_edit_of_a_premise_field_moves_the_clock(w, decisions, field):
+    _mk(w, defn("X"))
+    assert w.store._decision_clock()["marks"][-1] == -1
+    edit = {field: "per D-5900"}
+    if field == "done_criteria":      # the criteria ledger wants a reason; it is not premise text
+        edit.update(criteria_reason="clarify", criteria_evidence="ledger entry")
+    w.store.edit_definition(w.p("router"), "demo:X", edit)
+    assert w.store._decision_clock()["marks"][-1] == 5900
 
 
 def test_an_edited_premise_moves_the_watermark_through_its_fields(w, decisions):
@@ -77,9 +117,10 @@ def test_an_edited_premise_moves_the_watermark_through_its_fields(w, decisions):
 
 
 def test_the_items_own_source_decision_claims_without_force(w, decisions):
-    w.store.create_items(w.p("router"), [defn("A", source="D-5862"),
-                                         defn("B", description="per D-5800", source="D-5850"),
-                                         defn("GOAL", ["A", "B"], kind="goal")])
+    # a definition that cites D-5800 comes first, so A's fallback watermark is 5800 and
+    # only its own source citation can keep D-5862 from being newer
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("A", source="D-5862"), defn("B", description="per D-5800", source="D-5850"))
     _decide(decisions, 5862, "demo:A discussion of the rollout")
     assert _newer(w, "demo:A") == []
     assert w.store.claim(w.p("l1main"), "demo:A")["epoch"] == 1
@@ -148,6 +189,22 @@ def test_a_system_lease_reads_the_same_floor(w, decisions):
     assert w.store.worker_claim_lease(w.p("system"), "demo:PREM")["epoch"] == 1
 
 
+def test_a_system_lease_refuses_a_newer_decision_until_reconfirmed_and_again_after_a_later_one(w, decisions):
+    w.store.create_items(w.p("router"), [defn("A", description="per D-5800"),
+                                         defn("GOAL", ["A"], kind="goal")])
+    _decide(decisions, 5900, "demo:A scope changed")
+    with pytest.raises(Refused) as exc:                      # refused before the reconfirm
+        w.store.worker_claim_lease(w.p("system"), "demo:A")
+    assert "premise outdated: D-5900" in exc.value.msg
+    w.store.reconfirm(w.p("router"), "demo:A", "D-5900")
+    assert w.store.worker_claim_lease(w.p("system"), "demo:A")["epoch"] == 1
+    w.store.release(w.p("router"), "demo:A", 1)
+    _decide(decisions, 5950, "demo:A changes again")
+    with pytest.raises(Refused) as exc:                      # and again after a later decision
+        w.store.worker_claim_lease(w.p("system"), "demo:A")
+    assert "premise outdated: D-5950" in exc.value.msg
+
+
 def test_ready_reads_the_same_floor(w, decisions):
     w.store.create_items(w.p("router"), [defn("A", description="per D-5800"),
                                          defn("GOAL", ["A"], kind="goal")])
@@ -168,6 +225,8 @@ def test_reconfirm_refuses_an_unknown_decision_a_bad_id_and_a_stranger(w, decisi
         w.store.reconfirm(w.p("router"), "demo:A", "D-77777")
     with pytest.raises(Refused):
         w.store.reconfirm(w.p("l1other"), "demo:A", "D-5900")
+    with pytest.raises(Refused):                    # the router records it, not the claimant's L1
+        w.store.reconfirm(w.p("l1main"), "demo:A", "D-5900")
     with pytest.raises(Refused):
         w.store.reconfirm(w.p("router"), "demo:A", "not-a-decision")
     assert _newer(w, "demo:A") == ["D-5900"]

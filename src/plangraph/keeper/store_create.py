@@ -20,7 +20,7 @@ from .credential_guard import guard
 from .item_fixes import check_fix_limit
 from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_definition_inputs, check_kg_refs, check_model_fields
 from .note_fold import fold_checked
-from .store_input import _defined_payload
+from .store_input import _defined_payload, citing_premise
 from .store_tiers import (
     REVIEW_TIERS,
     _REVIEW_KEYWORD,
@@ -65,7 +65,7 @@ KNOWN_ITEM_FIELDS = frozenset(
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
      "estimate_h", "estimate_src", "depends_on", "under", "slice_parent", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note", "design_ref",
-     "state"))
+     "state", "session"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
                  "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner",
                  "owner_family",
@@ -369,6 +369,9 @@ class CreateMixin:
         for name in SMALL_FIELDS:
             if row[name] is not None:
                 created[name] = row[name]
+        created.update(citing_premise(row, ("title", "done_criteria", "note", "source")))
+        if definition.get("session"):
+            created["session"] = definition["session"]
         if parent := definition.get("slice_parent"):
             created["slice_parent"] = parent
         if definition.get("rehomed_from"):
