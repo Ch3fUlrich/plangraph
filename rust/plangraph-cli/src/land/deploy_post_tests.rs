@@ -3,11 +3,11 @@ use super::deploy_post::*;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-fn set(v: &[&str]) -> BTreeSet<String> {
+pub(super) fn set(v: &[&str]) -> BTreeSet<String> {
     v.iter().map(|s| s.to_string()).collect()
 }
 
-fn target(family: &str, host: &str, items: &[&str]) -> Target {
+pub(super) fn target(family: &str, host: &str, items: &[&str]) -> Target {
     Target {
         family: family.into(),
         host: host.into(),
@@ -16,7 +16,7 @@ fn target(family: &str, host: &str, items: &[&str]) -> Target {
     }
 }
 
-fn active() -> RunRead {
+pub(super) fn active() -> RunRead {
     RunRead {
         is_active: "active".into(),
         result: None,
@@ -25,7 +25,7 @@ fn active() -> RunRead {
     }
 }
 
-fn oneshot_ok() -> RunRead {
+pub(super) fn oneshot_ok() -> RunRead {
     RunRead {
         is_active: "inactive".into(),
         result: Some("success".into()),
@@ -35,9 +35,9 @@ fn oneshot_ok() -> RunRead {
 }
 
 #[derive(Default)]
-struct Host {
-    runs: BTreeMap<String, RunRead>,
-    calls: RefCell<Vec<String>>,
+pub(super) struct Host {
+    pub(super) runs: BTreeMap<String, RunRead>,
+    pub(super) calls: RefCell<Vec<String>>,
 }
 
 impl Installer for Host {
@@ -65,7 +65,7 @@ impl Installer for Host {
 }
 
 #[derive(Default)]
-struct Rows(RefCell<Vec<DeployRow>>);
+pub(super) struct Rows(pub(super) RefCell<Vec<DeployRow>>);
 
 impl RowSink for Rows {
     fn write(&self, row: &DeployRow) -> Result<(), String> {
@@ -74,13 +74,22 @@ impl RowSink for Rows {
     }
 }
 
-fn run(
+/// Landed head at epoch 1e9; the oneshot fixture exited on 2026-11-24; "now" is far later.
+pub(super) fn gate() -> Gate {
+    Gate {
+        fresh_after: 1_000_000_000,
+        now: 4_000_000_000,
+        excluded: BTreeSet::new(),
+    }
+}
+
+pub(super) fn run(
     targets: &[Target],
     host: &Host,
     rows: &Rows,
     state: &mut PostState,
 ) -> Result<PostReport, String> {
-    apply(targets, host, rows, state, &mut |_| Ok(()))
+    apply(targets, &gate(), host, rows, state, &mut |_| Ok(()))
 }
 
 #[test]
@@ -167,6 +176,7 @@ fn an_install_failure_is_a_failed_first_run() {
     let mut state = PostState::default();
     let r = apply(
         &[target("a.timer", "alpha", &["demo:A"])],
+        &gate(),
         &Broken,
         &rows,
         &mut state,
@@ -188,8 +198,8 @@ fn a_binary_needs_installed_and_has_no_timer_to_disable() {
         exec_main_exit_timestamp: None,
         oneshot: false,
     };
-    assert!(ok.good("bin:tool"));
-    assert!(!ok.good("a.service"));
+    assert!(ok.good("bin:tool", &gate()));
+    assert!(!ok.good("a.service", &gate()));
 }
 
 #[test]
@@ -206,7 +216,7 @@ fn a_rerun_skips_finished_targets_and_a_recorded_failure_blocks_it() {
         target("b.service", "alpha", &["demo:B"]),
     ];
     let mut saved = vec![];
-    let r = apply(&targets, &host, &rows, &mut state, &mut |s| {
+    let r = apply(&targets, &gate(), &host, &rows, &mut state, &mut |s| {
         saved.push(s.clone());
         Ok(())
     })
@@ -241,6 +251,7 @@ fn fixture_plan() -> DeployPlan {
         families: set(families),
         items: set(&[item]),
         trailer_hosts: set(&["alpha"]),
+        shipped: BTreeMap::new(),
     };
     deploy_plan(
         &[
@@ -322,146 +333,6 @@ fn a_shipped_timer_goes_first_and_is_not_written_twice() {
     assert_eq!(units, ["a.timer", "a.service"]);
 }
 
-#[cfg(unix)]
-fn sh(script: &str) -> Vec<String> {
-    vec!["sh".into(), "-c".into(), script.into()]
-}
-
-#[cfg(unix)]
-#[test]
-fn the_command_installer_runs_install_read_and_disable_with_host_and_name() {
-    let log = tempfile::tempdir().unwrap();
-    let path = log.path().join("calls");
-    let script = format!(
-        "echo \"$0 $1 $2\" >> {}; [ \"$0\" = read ] && echo '{{\"is_active\":\"active\"}}'; exit 0",
-        path.display()
-    );
-    let inst = CommandInstaller { argv: sh(&script) };
-    inst.install("alpha", "a.service").unwrap();
-    assert_eq!(
-        inst.read_run("alpha", "a.timer").unwrap().is_active,
-        "active"
-    );
-    inst.disable("alpha", "a.timer").unwrap();
-    assert_eq!(
-        std::fs::read_to_string(path).unwrap(),
-        "install alpha a.service\nread alpha a.timer\ndisable alpha a.timer\n"
-    );
-    let bad = CommandInstaller { argv: sh("exit 3") };
-    assert!(bad
-        .install("alpha", "a.service")
-        .unwrap_err()
-        .contains("exited"));
-    let junk = CommandInstaller {
-        argv: sh("echo nope"),
-    };
-    assert!(junk
-        .read_run("alpha", "a.service")
-        .unwrap_err()
-        .contains("unreadable"));
-    assert!(CommandInstaller { argv: vec![] }.install("h", "f").is_err());
-}
-
-#[cfg(unix)]
-#[test]
-fn the_command_rows_pass_the_row_as_json_on_stdin_with_the_key_as_argument() {
-    let dir = tempfile::tempdir().unwrap();
-    let rows = CommandRows {
-        argv: sh(&format!("cat > {}/\"$0\"", dir.path().display())),
-    };
-    rows.write(&DeployRow {
-        key: "demo-B".into(),
-        host: "alpha".into(),
-        unit: "a.timer".into(),
-        is_active: "active".into(),
-        kind: None,
-        result: None,
-        exec_main_exit_timestamp: None,
-    })
-    .unwrap();
-    let got: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(dir.path().join("demo-B")).unwrap()).unwrap();
-    assert_eq!(got["unit"], "a.timer");
-    assert_eq!(got["host"], "alpha");
-    assert!(CommandRows { argv: sh("exit 1") }
-        .write(&DeployRow {
-            key: "k".into(),
-            host: "h".into(),
-            unit: "u".into(),
-            is_active: "active".into(),
-            kind: None,
-            result: None,
-            exec_main_exit_timestamp: None,
-        })
-        .is_err());
-}
-
-#[cfg(unix)]
-fn script(dir: &std::path::Path, name: &str, body: &str) -> String {
-    pg_worker_core::executable_test_support::write_script(
-        dir,
-        name,
-        &format!("#!/bin/sh\n{body}\n"),
-    )
-    .display()
-    .to_string()
-}
-
-#[cfg(unix)]
-#[test]
-fn deploy_apply_end_to_end_writes_rows_then_resumes_and_a_failure_blocks_the_rerun() {
-    let dir = tempfile::tempdir().unwrap();
-    let d = dir.path();
-    let plan = DeployPlan {
-        targets: vec![target("a.service", "alpha", &["demo:B"])],
-        blockers: vec![],
-    };
-    std::fs::write(d.join("plan.json"), serde_json::to_vec(&plan).unwrap()).unwrap();
-    let rows_dir = d.join("rows");
-    std::fs::create_dir(&rows_dir).unwrap();
-    let install = script(
-        d,
-        "install.sh",
-        r#"if [ "$1" = read ]; then
-  if [ "$3" = a.timer ]; then echo '{"is_active":"active"}'; else echo '{"is_active":"inactive","result":"success","exec_main_exit_timestamp":"t","oneshot":true}'; fi
-fi
-exit 0"#,
-    );
-    let row_cmd = script(
-        d,
-        "row.sh",
-        &format!("cat >> {}/\"$1\"", rows_dir.display()),
-    );
-    let mut flags: BTreeMap<String, String> = BTreeMap::new();
-    for (k, v) in [
-        ("plan", d.join("plan.json").display().to_string()),
-        ("go", "deploy: a.service@alpha".to_string()),
-        ("state", d.join("state.json").display().to_string()),
-        ("install-cmd", install),
-        ("row-cmd", row_cmd),
-    ] {
-        flags.insert(k.into(), v);
-    }
-    let lines = super::deploy_post::run_cli(&flags).unwrap();
-    assert_eq!(lines, ["deployed a.service@alpha"]);
-    let written = std::fs::read_to_string(rows_dir.join("demo:B")).unwrap();
-    assert_eq!(written.matches("\"unit\"").count(), 2, "{written}");
-    // A rerun resumes: the target is done and nothing is written again.
-    let again = super::deploy_post::run_cli(&flags).unwrap();
-    assert_eq!(again, ["already done a.service@alpha"]);
-    assert_eq!(
-        std::fs::read_to_string(rows_dir.join("demo:B")).unwrap(),
-        written
-    );
-    // A failed first run is an error, saved in the state, and blocks the next run.
-    std::fs::remove_file(d.join("state.json")).unwrap();
-    flags.insert("install-cmd".into(), script(d, "bad.sh", "exit 1"));
-    let e = super::deploy_post::run_cli(&flags).unwrap_err();
-    assert!(e.contains("stop: a.service@alpha"), "{e}");
-    let blocked = super::deploy_post::run_cli(&flags).unwrap_err();
-    assert!(blocked.contains("earlier first run failed"), "{blocked}");
-}
-
 #[test]
 fn a_timer_shipped_for_other_items_still_gets_a_row_for_every_service_item() {
     let mut host = Host::default();
@@ -497,9 +368,9 @@ fn the_documented_read_json_is_judged_good() {
         r#"{"is_active":"inactive","oneshot":true,"result":"success","exec_main_exit_timestamp":"2026-11-24T01:00:00Z"}"#,
     )
     .unwrap();
-    assert!(oneshot.good("a.service"));
+    assert!(oneshot.good("a.service", &gate()));
     let bin: RunRead = serde_json::from_str(r#"{"is_active":"installed"}"#).unwrap();
-    assert!(bin.good("bin:tool"));
+    assert!(bin.good("bin:tool", &gate()));
     let svc: RunRead = serde_json::from_str(r#"{"is_active":"active"}"#).unwrap();
-    assert!(svc.good("a.service") && svc.good("a.timer"));
+    assert!(svc.good("a.service", &gate()) && svc.good("a.timer", &gate()));
 }

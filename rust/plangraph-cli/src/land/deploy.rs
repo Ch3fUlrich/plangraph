@@ -6,8 +6,9 @@
 //! `Deploy:` trailers of the part's own commits, and every host must be authorized. Each (family, host)
 //! target is probed by the host install dry run before the GO-REQ names it; a refused target is left out
 //! and gets a blocker item.
+pub use super::deploy_derive::{derive, derive_part};
 pub use super::deploy_probe::{CommandProbe, Finding, Probe};
-use super::train::{Manifest, Part};
+use super::train::Manifest;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -21,6 +22,17 @@ pub struct PartDeploy {
     /// `Plan-Item` keys of the part's own commits.
     pub items: BTreeSet<String>,
     /// Hosts of the `Deploy:` trailers of the part's own commits.
+    pub trailer_hosts: BTreeSet<String>,
+    /// Per family: the items and `Deploy:` hosts of the commits that touch it. A family without an entry
+    /// falls back to the part's `items` and `trailer_hosts`.
+    #[serde(default)]
+    pub shipped: BTreeMap<String, Shipped>,
+}
+
+/// The items and `Deploy:` trailer hosts of the commits that ship one family.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Shipped {
+    pub items: BTreeSet<String>,
     pub trailer_hosts: BTreeSet<String>,
 }
 
@@ -50,6 +62,9 @@ pub struct DeployPlan {
     /// Probed and passed: exactly what the GO-REQ names.
     pub targets: Vec<Target>,
     pub blockers: Vec<Blocker>,
+    /// The built train this plan belongs to (the manifest's `train_sha`); `deploy-apply` binds to it.
+    #[serde(default)]
+    pub train_sha: String,
 }
 
 impl DeployPlan {
@@ -106,123 +121,43 @@ fn blocker_key(family: &str, host: Option<&str>) -> String {
     format!("plangraph:LE-DEPLOY-BLOCKED-{}", clean.trim_matches('-'))
 }
 
-/// The family each changed path ships: a unit file, or `bin:<name>` for an added binary entry point.
-pub(super) fn family_of(status: &str, path: &str) -> Option<String> {
-    let rest = path.strip_prefix("deploy/systemd/")?;
-    let unit = [".service", ".timer", ".socket", ".path"]
-        .iter()
-        .any(|s| rest.ends_with(s) && !rest.contains('/'));
-    if unit && status != "D" {
-        return Some(rest.to_owned());
-    }
-    None
-}
-
-fn binary_of(status: &str, path: &str) -> Option<String> {
-    if status != "A" {
-        return None;
-    }
-    let rest = path.strip_prefix("rust/")?;
-    let (krate, tail) = rest.split_once('/')?;
-    if tail == "src/main.rs" {
-        return Some(format!("bin:{krate}"));
-    }
-    let bin = tail.strip_prefix("src/bin/")?.strip_suffix(".rs")?;
-    (!bin.contains('/')).then(|| format!("bin:{bin}"))
-}
-
-fn trailers(message: &str, name: &str) -> Vec<String> {
-    let want = format!("{}:", name.to_ascii_lowercase());
-    message
-        .lines()
-        .filter(|l| l.to_ascii_lowercase().starts_with(&want))
-        .flat_map(|l| l[want.len()..].split(','))
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
-        .collect()
-}
-
-/// What one part ships, read from its own commits and its own diff only.
-pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, String> {
-    use super::{build::part_base, git};
-    let from = part_base(repo, base, part.parent.as_ref());
-    let log = git::bytes(
-        repo,
-        &[
-            "log",
-            "--no-merges",
-            "--format=%B%x00",
-            &format!("{from}..{}", part.head),
-        ],
-    )?;
-    let (mut items, mut hosts) = (BTreeSet::new(), BTreeSet::new());
-    for message in String::from_utf8_lossy(&log).split('\0') {
-        items.extend(trailers(message, "Plan-Item"));
-        hosts.extend(trailers(message, "Deploy"));
-    }
-    let diff = git::bytes(
-        repo,
-        &[
-            "diff",
-            "--merge-base",
-            "--no-ext-diff",
-            "--no-renames",
-            "--name-status",
-            "-z",
-            from,
-            &part.head,
-            "--",
-        ],
-    )?;
-    let fields: Vec<String> = diff
-        .split(|&b| b == 0)
-        .filter(|f| !f.is_empty())
-        .map(|f| String::from_utf8_lossy(f).into_owned())
-        .collect();
-    let families = fields
-        .chunks(2)
-        .filter_map(|c| match c {
-            [status, path] => family_of(status, path).or_else(|| binary_of(status, path)),
-            _ => None,
-        })
-        .collect();
-    Ok(PartDeploy {
-        pr: part.pr,
-        families,
-        items,
-        trailer_hosts: hosts,
-    })
-}
-
-/// Every part of the manifest, attributed on its own.
-pub fn derive(repo: &Path, manifest: &Manifest) -> Result<Vec<PartDeploy>, String> {
-    manifest
-        .parts
-        .iter()
-        .map(|p| derive_part(repo, &manifest.base, p))
-        .collect()
-}
-
-/// The hosts a part may deploy to: item-level `Deploy-Hosts:` first, else its commits' `Deploy:` trailers.
-/// A host outside `authorized` is returned in the second list.
+/// The hosts of one family, per item: item-level `Deploy-Hosts:` first, else the `Deploy:` trailers of the
+/// commits that ship the family. Returns authorized host -> the items that name it, and the unauthorized
+/// hosts. A family with no item is placed by the trailers alone.
 fn hosts_of(
-    part: &PartDeploy,
+    items: &BTreeSet<String>,
+    trailer_hosts: &BTreeSet<String>,
     declared: &BTreeMap<String, Vec<String>>,
     authorized: &BTreeSet<String>,
-) -> (BTreeSet<String>, BTreeSet<String>) {
-    let item_level: BTreeSet<String> = part
-        .items
-        .iter()
-        .filter_map(|k| declared.get(k))
-        .flatten()
-        .cloned()
-        .collect();
-    let named = if item_level.is_empty() {
-        part.trailer_hosts.clone()
-    } else {
-        item_level
+) -> (BTreeMap<String, BTreeSet<String>>, BTreeSet<String>) {
+    let (mut allowed, mut denied): (BTreeMap<String, BTreeSet<String>>, BTreeSet<String>) =
+        Default::default();
+    let mut place = |named: &BTreeSet<String>, item: Option<&String>| {
+        for host in named {
+            if authorized.contains(host) {
+                let e = allowed.entry(host.clone()).or_default();
+                e.extend(item.cloned());
+            } else {
+                denied.insert(host.clone());
+            }
+        }
     };
-    named.into_iter().partition(|h| authorized.contains(h))
+    if items.is_empty() {
+        place(trailer_hosts, None);
+    }
+    for item in items {
+        let item_level: BTreeSet<String> =
+            declared.get(item).into_iter().flatten().cloned().collect();
+        place(
+            if item_level.is_empty() {
+                trailer_hosts
+            } else {
+                &item_level
+            },
+            Some(item),
+        );
+    }
+    (allowed, denied)
 }
 
 /// The plan: probe each (family, host) of each part that ships one. Unitless parts contribute nothing.
@@ -242,8 +177,12 @@ pub fn deploy_plan(
         e.1.push(why);
     };
     for part in parts.iter().filter(|p| !p.families.is_empty()) {
-        let (allowed, denied) = hosts_of(part, declared, authorized);
         for family in &part.families {
+            let (items, trailer_hosts) = match part.shipped.get(family) {
+                Some(s) => (&s.items, &s.trailer_hosts),
+                None => (&part.items, &part.trailer_hosts),
+            };
+            let (allowed, denied) = hosts_of(items, trailer_hosts, declared, authorized);
             for host in &denied {
                 refuse(
                     family,
@@ -260,12 +199,12 @@ pub fn deploy_plan(
                     "no Deploy-Hosts or Deploy trailer names a host".into(),
                 );
             }
-            for host in &allowed {
+            for (host, host_items) in &allowed {
                 match probe.probe(host, family) {
                     Ok(()) => {
                         let e = ok.entry((family.clone(), host.clone())).or_default();
                         e.0.push(part.pr);
-                        e.1.extend(part.items.iter().cloned());
+                        e.1.extend(host_items.iter().cloned());
                     }
                     Err(found) => {
                         let why: Vec<_> = found
@@ -298,6 +237,7 @@ pub fn deploy_plan(
                 reasons,
             })
             .collect(),
+        train_sha: String::new(),
     }
 }
 
@@ -325,7 +265,8 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
             .collect(),
     };
     let parts = derive(Path::new(need("repo")?), &manifest)?;
-    let plan = deploy_plan(&parts, &declared, &authorized, &probe);
+    let mut plan = deploy_plan(&parts, &declared, &authorized, &probe);
+    plan.train_sha = manifest.train_sha.clone();
     if let Some(out) = flags.get("plan-out") {
         let text = serde_json::to_vec_pretty(&plan).map_err(|e| e.to_string())?;
         std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;

@@ -66,17 +66,23 @@ authorized. `CMD HOST FAMILY` is the host install dry run: exit 0 with no output
 the GO-REQ (only passing targets) and one `blocker` line per refused target; `--blockers-out` writes a
 `pg define` file with a blocker item for each.
 
-`plangraph land-train deploy-apply --plan FILE --go ROW --state FILE --install-cmd CMD --row-cmd CMD` is the
-post-merge step. `--plan` is the `--plan-out` file; `--go` is the GO row's `deploy:` line, and only the
-passing targets it names are installed. `CMD install|read|disable HOST NAME` installs a family, prints one
-run of it as JSON (`is_active`: `active`, or `installed` for a `bin:` family; a oneshot service adds
-`"oneshot": true`, `result` and `exec_main_exit_timestamp`, and its `.timer` is read the same way) or disables a
-unit; `CMD KEY` receives the keeper `deploy` row as JSON on stdin. A row is written for each item of the
-family's parts only after the first run is good; a good oneshot service also needs its `.timer` active
-(the keeper gate), so the step reads it, writes its row, and runs shipped timers first. A failed first run disables the unit's timer, writes no
-row and stops the step; later targets are listed as not attempted. `--state` records finished targets, so
-a rerun after an interruption skips them (the hook LAND-RESUMABLE-AFTER-MERGE builds on); a recorded
-failure refuses the rerun until the state file is cleared.
+`plangraph land-train deploy-apply --plan FILE --go ROW --repo DIR --landed-head SHA [--main-ref REF] --state FILE
+--install-cmd CMD --row-cmd CMD` is the post-merge step. `--plan` is the `--plan-out` file, which names its
+train; `--go` must be that plan's own `deploy:` line; `--landed-head` is the verified merge on main
+(`--main-ref`, default `origin/main`). Nothing is installed unless the plan's train is merged into the landed
+head and the head is on main, and a state file saved for another train is refused. `CMD install|read|disable
+HOST NAME` installs a family, prints one run of it as JSON (`is_active`: `active`, or `installed` for a `bin:`
+family; a oneshot service adds `"oneshot": true`, `result` and `exec_main_exit_timestamp`, and its `.timer` is
+read the same way) or disables a unit; `CMD KEY` receives the keeper `deploy` row as JSON on stdin. A row is
+written for the items that ship the family (the items of the commits that touch it, not every item of the
+part) only after the first run is good: a oneshot must report `success` with a valid exit time after the
+landed head's commit time and not in the future, and its `.timer` must be active, with a row for each item of
+the service that the timer's own target does not cover. A timer that failed the preflight is not in the GO, so
+a service whose timer was refused gets no row. Shipped timers run first. A failed first run disables the
+unit's timer, writes no row and stops the step; later targets are listed as not attempted. `--state` records
+finished targets, so a rerun after an interruption skips them (the hook LAND-RESUMABLE-AFTER-MERGE builds on);
+a recorded failure refuses the rerun until the state file is cleared. Train settlement does not call this
+step yet.
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this

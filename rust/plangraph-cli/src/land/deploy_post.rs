@@ -8,9 +8,6 @@
 use super::deploy::{DeployPlan, Target};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
 
 /// What one read of the first run of a target reports, in the fields the keeper `deploy` evidence checks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,13 +23,39 @@ pub struct RunRead {
     pub oneshot: bool,
 }
 
+/// What the step verifies a first run against: the commit time of the verified landed head (a oneshot must
+/// have exited after it, and not in the future), and the (family, host) targets the preflight refused.
+#[derive(Clone, Debug, Default)]
+pub struct Gate {
+    pub fresh_after: i64,
+    pub now: i64,
+    pub excluded: BTreeSet<(String, String)>,
+}
+
+/// Epoch seconds of a systemd exit timestamp: RFC 3339, or the `Sun 2026-11-01 12:01:00 UTC` form.
+pub fn exit_epoch(text: &str) -> Option<i64> {
+    use chrono::{DateTime, NaiveDateTime};
+    let text = text.trim();
+    DateTime::parse_from_rfc3339(text)
+        .map(|d| d.timestamp())
+        .or_else(|_| {
+            NaiveDateTime::parse_from_str(text.trim_end_matches(" UTC"), "%a %Y-%m-%d %H:%M:%S")
+                .map(|d| d.and_utc().timestamp())
+        })
+        .ok()
+}
+
 impl RunRead {
-    /// Whether the first run counts as good: a oneshot reports `success` with an exit time, a binary is
-    /// `installed`, anything else is `active`.
-    pub fn good(&self, family: &str) -> bool {
+    /// Whether the first run counts as good: a oneshot reports `success` and a valid exit time after the
+    /// landed head and not in the future, a binary is `installed`, anything else is `active`.
+    pub fn good(&self, family: &str, gate: &Gate) -> bool {
         if self.oneshot {
+            let exited = self
+                .exec_main_exit_timestamp
+                .as_deref()
+                .and_then(exit_epoch);
             return self.result.as_deref() == Some("success")
-                && self.exec_main_exit_timestamp.is_some();
+                && exited.is_some_and(|e| e > gate.fresh_after && e <= gate.now);
         }
         let want = if family.starts_with("bin:") {
             "installed"
@@ -96,6 +119,9 @@ pub struct PostState {
     /// The first failed target: the step stopped there and does not run again until it is cleared.
     #[serde(default)]
     pub failed: Option<String>,
+    /// The train this progress belongs to (`DeployPlan::train_sha`); another train's state is refused.
+    #[serde(default)]
+    pub train: String,
 }
 
 fn name(t: &Target) -> String {
@@ -168,10 +194,17 @@ fn paired_timer_row(
     t: &Target,
     run: &RunRead,
     targets: &[Target],
+    gate: &Gate,
 ) -> Result<Option<(String, BTreeSet<String>)>, String> {
     let Some(timer) = run.oneshot.then(|| paired_timer(&t.family)).flatten() else {
         return Ok(None);
     };
+    if gate.excluded.contains(&(timer.clone(), t.host.clone())) {
+        return Err(format!(
+            "paired timer {timer} on {} was refused at preflight and is not in the GO",
+            t.host
+        ));
+    }
     let own: BTreeSet<&String> = targets
         .iter()
         .filter(|o| o.host == t.host && o.family == timer)
@@ -198,6 +231,7 @@ fn paired_timer_row(
 /// Installs `targets` (timers first). `checkpoint` is called after every state change so the caller can save it.
 pub fn apply(
     targets: &[Target],
+    gate: &Gate,
     installer: &dyn Installer,
     rows: &dyn RowSink,
     state: &mut PostState,
@@ -227,15 +261,16 @@ pub fn apply(
                     .map_err(|e| format!("first run: {e}"))
             })
             .and_then(|run| {
-                if run.good(&t.family) {
-                    paired_timer_row(installer, t, &run, targets).map(|timer| (run, timer))
+                if run.good(&t.family, gate) {
+                    paired_timer_row(installer, t, &run, targets, gate).map(|timer| (run, timer))
                 } else {
                     Err(format!(
-                        "first run of {} on {} is not good (is_active={}, result={})",
+                        "first run of {} on {} is not good (is_active={}, result={}, exited={})",
                         t.family,
                         t.host,
                         run.is_active,
-                        run.result.as_deref().unwrap_or("-")
+                        run.result.as_deref().unwrap_or("-"),
+                        run.exec_main_exit_timestamp.as_deref().unwrap_or("-")
                     ))
                 }
             });
@@ -299,111 +334,4 @@ pub fn apply(
         }
     }
     Ok(report)
-}
-
-/// Runs `argv... ACTION HOST NAME`: `install HOST FAMILY`, `read HOST FAMILY` (prints a [`RunRead`] as
-/// JSON) and `disable HOST UNIT`. Exit 0 is success.
-pub struct CommandInstaller {
-    pub argv: Vec<String>,
-}
-
-impl CommandInstaller {
-    fn run(&self, action: &str, host: &str, what: &str) -> Result<Vec<u8>, String> {
-        let (cmd, args) = self
-            .argv
-            .split_first()
-            .ok_or("no install command configured")?;
-        let out = Command::new(cmd)
-            .args(args)
-            .args([action, host, what])
-            .output()
-            .map_err(|e| format!("{cmd} did not start: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("{action} {what} on {host} exited {}", out.status));
-        }
-        Ok(out.stdout)
-    }
-}
-
-impl Installer for CommandInstaller {
-    fn install(&self, host: &str, family: &str) -> Result<(), String> {
-        self.run("install", host, family).map(|_| ())
-    }
-    fn read_run(&self, host: &str, family: &str) -> Result<RunRead, String> {
-        let out = self.run("read", host, family)?;
-        serde_json::from_slice(&out).map_err(|e| format!("unreadable run report: {e}"))
-    }
-    fn disable(&self, host: &str, unit: &str) -> Result<(), String> {
-        self.run("disable", host, unit).map(|_| ())
-    }
-}
-
-/// Runs `argv... KEY` with the row as JSON on stdin; exit 0 means the keeper holds the row.
-pub struct CommandRows {
-    pub argv: Vec<String>,
-}
-
-impl RowSink for CommandRows {
-    fn write(&self, row: &DeployRow) -> Result<(), String> {
-        let (cmd, args) = self.argv.split_first().ok_or("no row command configured")?;
-        let mut child = Command::new(cmd)
-            .args(args)
-            .arg(&row.key)
-            .stdin(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("{cmd} did not start: {e}"))?;
-        let body = serde_json::to_vec(row).map_err(|e| e.to_string())?;
-        child
-            .stdin
-            .take()
-            .ok_or("no stdin")?
-            .write_all(&body)
-            .map_err(|e| e.to_string())?;
-        let status = child.wait().map_err(|e| e.to_string())?;
-        status
-            .success()
-            .then_some(())
-            .ok_or_else(|| format!("exited {status}"))
-    }
-}
-
-/// `land-train deploy-apply --plan FILE --go "deploy: ..." --state FILE --install-cmd CMD --row-cmd CMD`:
-/// the post-merge step. `--plan` is the `--plan-out` file of `deploy-plan`; `--state` is created or resumed.
-pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
-    let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
-    let words = |k: &str| -> Result<Vec<String>, String> {
-        Ok(need(k)?.split_whitespace().map(str::to_owned).collect())
-    };
-    let plan_path = need("plan")?;
-    let plan: DeployPlan =
-        serde_json::from_slice(&std::fs::read(plan_path).map_err(|e| format!("{plan_path}: {e}"))?)
-            .map_err(|e| format!("{plan_path}: {e}"))?;
-    let targets = named_targets(&plan, need("go")?)?;
-    let state_path = Path::new(need("state")?);
-    let mut state: PostState = match std::fs::read(state_path) {
-        Ok(b) => {
-            serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", state_path.display()))?
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PostState::default(),
-        Err(e) => return Err(format!("{}: {e}", state_path.display())),
-    };
-    let installer = CommandInstaller {
-        argv: words("install-cmd")?,
-    };
-    let rows = CommandRows {
-        argv: words("row-cmd")?,
-    };
-    let mut save = |s: &PostState| {
-        let text = serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?;
-        std::fs::write(state_path, text).map_err(|e| format!("{}: {e}", state_path.display()))
-    };
-    let report = apply(&targets, &installer, &rows, &mut state, &mut save)?;
-    let mut lines = report.lines();
-    if let Some((t, why)) = report.failed {
-        return Err(format!("{}\nstop: {t}: {why}", lines.join("\n")));
-    }
-    if lines.is_empty() {
-        lines.push("deploy: nothing to install".into());
-    }
-    Ok(lines)
 }
