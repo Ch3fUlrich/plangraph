@@ -1,10 +1,13 @@
 use super::build_tests::{g, Fx};
 use super::deploy::{DeployPlan, Target};
+use super::deploy_bind::Approved;
 use super::deploy_cmd::*;
 use super::deploy_post::*;
-use std::collections::{BTreeMap, BTreeSet};
+use super::go_verify::Evidence;
+use super::go_verify_tests::green;
+use std::collections::BTreeMap;
 
-fn target(family: &str, host: &str, items: &[&str]) -> Target {
+pub(super) fn target(family: &str, host: &str, items: &[&str]) -> Target {
     Target {
         family: family.into(),
         host: host.into(),
@@ -99,7 +102,7 @@ fn script(dir: &std::path::Path, name: &str, body: &str) -> String {
 }
 
 /// A commit on main made at `epoch` with `files` written and `message`; returns its sha.
-fn commit_at(fx: &Fx, epoch: i64, files: &[(&str, &str)], message: &str) -> String {
+pub(super) fn commit_at(fx: &Fx, epoch: i64, files: &[(&str, &str)], message: &str) -> String {
     let p = fx.path();
     for (name, text) in files {
         let path = p.join(name);
@@ -125,19 +128,25 @@ fn commit_at(fx: &Fx, epoch: i64, files: &[(&str, &str)], message: &str) -> Stri
 }
 
 /// base -> train (ships `a.service` for demo:B, 2025) -> landed (a later commit on main, 2026-01-01).
-struct Landed {
-    base: String,
-    train: String,
-    landed: String,
+pub(super) struct Landed {
+    pub(super) base: String,
+    pub(super) train: String,
+    pub(super) landed: String,
 }
 
-fn landed(fx: &Fx) -> Landed {
+pub(super) fn landed(fx: &Fx) -> Landed {
     let base = fx.base();
-    let train = commit_at(
+    commit_at(
         fx,
         1_700_000_000,
         &[("deploy/systemd/a.service", "[Service]\n")],
         "unit\n\nPlan-Item: demo:B",
+    );
+    let train = commit_at(
+        fx,
+        1_700_000_100,
+        &[("docs/c.md", "c\n")],
+        "docs\n\nPlan-Item: demo:C",
     );
     let landed = commit_at(fx, 1_767_225_600, &[("landed.txt", "x\n")], "landed");
     Landed {
@@ -147,7 +156,7 @@ fn landed(fx: &Fx) -> Landed {
     }
 }
 
-fn plan_of(l: &Landed) -> DeployPlan {
+pub(super) fn plan_of(l: &Landed) -> DeployPlan {
     DeployPlan {
         targets: vec![target("a.service", "alpha", &["demo:B"])],
         blockers: vec![],
@@ -156,89 +165,31 @@ fn plan_of(l: &Landed) -> DeployPlan {
     }
 }
 
-const GO: &str = "deploy: a.service@alpha";
+pub(super) const GO: &str = "deploy: a.service@alpha";
 
-fn bind_it(
-    fx: &Fx,
-    plan: &DeployPlan,
-    go: &str,
-    head: &str,
-) -> Result<(Vec<Target>, Gate), String> {
-    bind(plan, go, fx.path(), head, "main", &plan.digest())
+pub(super) fn approved(l: &Landed) -> Approved {
+    Approved {
+        train_sha: l.train.clone(),
+        base: l.base.clone(),
+    }
 }
 
-#[test]
-fn bind_accepts_a_plan_the_landed_train_really_ships() {
-    let fx = Fx::new();
-    let l = landed(&fx);
-    let (targets, gate) = bind_it(&fx, &plan_of(&l), GO, &l.landed).unwrap();
-    assert_eq!(targets.len(), 1);
-    assert_eq!(gate.fresh_after, 1_767_225_600);
-}
-
-#[test]
-fn bind_refuses_a_foreign_go_a_foreign_train_a_head_off_main_and_an_edited_plan() {
-    let fx = Fx::new();
-    let l = landed(&fx);
-    let off_main = fx.commit(&l.train, "other.txt", "x\n");
-    let plan = plan_of(&l);
-    let e = bind_it(&fx, &plan, "deploy: a.service@beta", &l.landed).unwrap_err();
-    assert!(e.contains("is not this plan's"), "{e}");
-    let mut nameless = plan_of(&l);
-    nameless.train_sha.clear();
-    assert!(bind_it(&fx, &nameless, GO, &l.landed)
-        .unwrap_err()
-        .contains("names no train"));
-    // A train that is not merged into the landed head (the landed head predates it).
-    let e = bind_it(&fx, &plan, GO, &l.base).unwrap_err();
-    assert!(e.contains("is not merged into landed head"), "{e}");
-    let e = bind_it(&fx, &plan, GO, &off_main).unwrap_err();
-    assert!(e.contains("is not on main"), "{e}");
-    // Item keys are part of the approved digest: an edited plan keeps its GO line but not its digest.
-    let mut edited = plan_of(&l);
-    edited.targets[0].items = ["demo:Z".to_string()].into();
-    let e = bind(&edited, GO, fx.path(), &l.landed, "main", &plan.digest()).unwrap_err();
-    assert!(e.contains("approved plan digest"), "{e}");
-}
-
-#[test]
-fn bind_refuses_a_target_the_landed_train_does_not_ship() {
-    let fx = Fx::new();
-    let l = landed(&fx);
-    // A unit absent from the train, with a matching plan, GO line and digest.
-    let mut ghost = plan_of(&l);
-    ghost.targets[0].family = "ghost.service".into();
-    let e = bind_it(&fx, &ghost, "deploy: ghost.service@alpha", &l.landed).unwrap_err();
-    assert!(e.contains("is not shipped by train"), "{e}");
-    // An item key no commit of the train carries.
-    let mut foreign = plan_of(&l);
-    foreign.targets[0].items = ["demo:Z".to_string()].into();
-    let e = bind_it(&fx, &foreign, GO, &l.landed).unwrap_err();
-    assert!(e.contains("is not a Plan-Item of train"), "{e}");
-    // A unit the landed tree no longer has.
-    g(fx.path(), &["rm", "-q", "deploy/systemd/a.service"]);
-    let gone = commit_at(&fx, 1_767_225_700, &[], "remove unit");
-    let e = bind_it(&fx, &plan_of(&l), GO, &gone).unwrap_err();
-    assert!(e.contains("absent from the landed tree"), "{e}");
-}
-
-#[test]
-fn bind_withholds_a_preflight_refused_timer_in_the_gate() {
-    let fx = Fx::new();
-    let l = landed(&fx);
-    let mut plan = plan_of(&l);
-    plan.blockers.push(super::deploy::Blocker {
-        key: "plangraph:LE-DEPLOY-BLOCKED-A-TIMER-ALPHA".into(),
-        family: "a.timer".into(),
-        host: Some("alpha".into()),
-        parts: vec![1],
-        reasons: vec!["missing env X".into()],
-    });
-    let (_, gate) = bind_it(&fx, &plan, GO, &l.landed).unwrap();
-    assert_eq!(
-        gate.excluded,
-        BTreeSet::from([("a.timer".to_string(), "alpha".to_string())])
-    );
+/// Green GO evidence of the fixture train.
+fn evidence_of(l: &Landed) -> Evidence {
+    let mut e = green();
+    e.base = l.base.clone();
+    e.head = l.train.clone();
+    e.observed.pr_head = l.train.clone();
+    e.observed.pr_base = l.base.clone();
+    e.observed.main_tip = l.base.clone();
+    e.replay.base = l.base.clone();
+    e.replay.train_sha = l.train.clone();
+    e.ci.head = l.train.clone();
+    e.approvals[0].head = l.train.clone();
+    if let Some(d) = e.delta.as_mut() {
+        d.head = l.train.clone();
+    }
+    e
 }
 
 #[cfg(unix)]
@@ -249,16 +200,31 @@ fn deploy_apply_end_to_end_writes_rows_then_resumes_and_a_failure_blocks_the_rer
     let plan = plan_of(&l);
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
+    std::fs::write(
+        d.join("go.json"),
+        serde_json::to_vec(&evidence_of(&l)).unwrap(),
+    )
+    .unwrap();
     std::fs::write(d.join("plan.json"), serde_json::to_vec(&plan).unwrap()).unwrap();
     let rows_dir = d.join("rows");
     std::fs::create_dir(&rows_dir).unwrap();
+    let marker = d.join("installed");
     let install = script(
         d,
         "install.sh",
-        r#"if [ "$1" = read ]; then
-  if [ "$3" = a.timer ]; then echo '{"is_active":"active"}'; else echo '{"is_active":"inactive","result":"success","exec_main_exit_timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","oneshot":true}'; fi
+        &format!(
+            r#"M={m}
+[ "$1" = install ] && touch "$M"
+if [ "$1" = read ]; then
+  if [ "$3" = a.timer ]; then echo '{{"is_active":"active"}}'
+  else
+    [ -e "$M" ] || exit 1
+    echo '{{"is_active":"inactive","result":"success","exec_main_exit_timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","oneshot":true}}'
+  fi
 fi
 exit 0"#,
+            m = marker.display()
+        ),
     );
     let row_cmd = script(
         d,
@@ -270,6 +236,7 @@ exit 0"#,
         ("plan", d.join("plan.json").display().to_string()),
         ("go", GO.to_string()),
         ("plan-digest", plan.digest()),
+        ("evidence", d.join("go.json").display().to_string()),
         ("repo", fx.path().display().to_string()),
         ("landed-head", l.landed.clone()),
         ("main-ref", "main".to_string()),
@@ -279,6 +246,31 @@ exit 0"#,
     ] {
         flags.insert(k.into(), v);
     }
+    // Evidence of another train, or one the verifier refuses, installs nothing.
+    let mut other = evidence_of(&l);
+    other.head = l.base.clone();
+    other.replay.train_sha = l.base.clone();
+    other.observed.pr_head = l.base.clone();
+    other.ci.head = l.base.clone();
+    other.approvals[0].head = l.base.clone();
+    other.delta.as_mut().unwrap().head = l.base.clone();
+    let mut foreign = flags.clone();
+    std::fs::write(d.join("other.json"), serde_json::to_vec(&other).unwrap()).unwrap();
+    foreign.insert(
+        "evidence".into(),
+        d.join("other.json").display().to_string(),
+    );
+    assert!(run_cli(&foreign)
+        .unwrap_err()
+        .contains("the approved GO is for"));
+    let mut red = evidence_of(&l);
+    red.ci.jobs.clear();
+    std::fs::write(d.join("red.json"), serde_json::to_vec(&red).unwrap()).unwrap();
+    foreign.insert("evidence".into(), d.join("red.json").display().to_string());
+    assert!(run_cli(&foreign)
+        .unwrap_err()
+        .contains("the GO evidence is refused"));
+    assert!(!d.join("state.json").exists());
     let lines = run_cli(&flags).unwrap();
     assert_eq!(lines, ["deployed a.service@alpha"]);
     let written = std::fs::read_to_string(rows_dir.join("demo:B")).unwrap();

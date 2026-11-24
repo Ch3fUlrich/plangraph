@@ -17,12 +17,8 @@ pub struct RunRead {
     pub oneshot: bool,
 }
 
-/// Seconds of clock difference tolerated between this machine and the host that reports an exit time.
-pub const SKEW: i64 = 5;
-
-/// What the step verifies a first run against: the commit time of the verified landed head, the clock read
-/// before an install and after its read (a oneshot must have exited after the landed head, within the
-/// install window), and the (family, host) targets the preflight refused.
+/// What the step verifies a first run against: the commit time of the verified landed head, the clock
+/// (read after a target's first run is read), and the (family, host) targets the preflight refused.
 #[derive(Clone, Debug)]
 pub struct Gate {
     pub fresh_after: i64,
@@ -44,10 +40,11 @@ pub fn exit_epoch(text: &str) -> Option<i64> {
 }
 
 impl RunRead {
-    /// Whether the first run counts as good: a oneshot reports `success` and a valid exit time after the
-    /// landed head and inside the install window (`started` before the install, `now` after the read, both
-    /// with [`SKEW`]), a binary is `installed`, anything else is `active`.
-    pub fn good(&self, family: &str, gate: &Gate, started: i64, now: i64) -> bool {
+    /// Whether the first run counts as good: a oneshot reports `success` and an exit time after the landed
+    /// head, strictly after the exit time it showed before this install (`before`: the run is a new one, not
+    /// the previous deploy's) and not after `now`, as the keeper requires; a binary is `installed`, anything
+    /// else is `active`.
+    pub fn good(&self, family: &str, gate: &Gate, before: Option<i64>, now: i64) -> bool {
         if self.oneshot {
             let exited = self
                 .exec_main_exit_timestamp
@@ -55,7 +52,7 @@ impl RunRead {
                 .and_then(exit_epoch);
             return self.result.as_deref() == Some("success")
                 && exited.is_some_and(|e| {
-                    e > gate.fresh_after && e >= started - SKEW && e <= now + SKEW
+                    e > gate.fresh_after && before.is_none_or(|b| e > b) && e <= now
                 });
         }
         let want = if family.starts_with("bin:") {

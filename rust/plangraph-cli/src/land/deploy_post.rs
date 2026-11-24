@@ -242,7 +242,11 @@ pub fn apply(
             release(&mut held, &id, rows, state, &mut report, checkpoint)?;
             continue;
         }
-        let started = (gate.clock)();
+        // The exit time the unit shows before this install, if it runs at all yet.
+        let before = installer
+            .read_run(&t.host, &t.family)
+            .ok()
+            .and_then(|r| r.exec_main_exit_timestamp.as_deref().and_then(exit_epoch));
         let outcome = installer
             .install(&t.host, &t.family)
             .map_err(|e| format!("install: {e}"))
@@ -253,7 +257,7 @@ pub fn apply(
             })
             .and_then(|run| {
                 let now = (gate.clock)();
-                if run.good(&t.family, gate, started, now) {
+                if run.good(&t.family, gate, before, now) {
                     paired_timer_row(installer, t, &run, targets, gate).map(|timer| (run, timer))
                 } else {
                     Err(format!(

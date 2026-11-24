@@ -6,10 +6,15 @@ mod chain;
 pub mod cli;
 pub mod delta;
 pub mod deploy;
+mod deploy_bind;
+#[cfg(test)]
+mod deploy_bind_tests;
 mod deploy_cmd;
 #[cfg(test)]
 mod deploy_cmd_tests;
 mod deploy_derive;
+#[cfg(test)]
+mod deploy_derive_tests;
 mod deploy_post;
 #[cfg(test)]
 mod deploy_post_gate_tests;

@@ -5,7 +5,7 @@ use super::deploy_probe::parse_findings;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One commit on a new branch from main: writes `files`, with `message`; returns the head.
-fn commit(fx: &Fx, files: &[(&str, &str)], message: &str) -> String {
+pub(super) fn commit(fx: &Fx, files: &[(&str, &str)], message: &str) -> String {
     let p = fx.path();
     g(p, &["checkout", "-q", "--detach", &fx.base()]);
     for (name, text) in files {
@@ -20,7 +20,7 @@ fn commit(fx: &Fx, files: &[(&str, &str)], message: &str) -> String {
     head
 }
 
-struct Dry(BTreeMap<(&'static str, &'static str), Vec<Finding>>);
+pub(super) struct Dry(BTreeMap<(&'static str, &'static str), Vec<Finding>>);
 
 impl Probe for Dry {
     fn probe(&self, host: &str, family: &str) -> Result<(), Vec<Finding>> {
@@ -31,11 +31,11 @@ impl Probe for Dry {
     }
 }
 
-fn pass() -> Dry {
+pub(super) fn pass() -> Dry {
     Dry(BTreeMap::new())
 }
 
-fn hosts(names: &[&str]) -> BTreeSet<String> {
+pub(super) fn hosts(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|s| s.to_string()).collect()
 }
 

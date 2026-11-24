@@ -45,28 +45,30 @@ fn trailers(message: &str, name: &str) -> Vec<String> {
         .collect()
 }
 
-fn name_status_families(raw: &[u8]) -> BTreeSet<String> {
+/// The families of a net `--name-status -z` diff, each with the paths that ship it.
+fn net_families(raw: &[u8]) -> BTreeMap<String, BTreeSet<String>> {
     let fields: Vec<String> = raw
         .split(|&b| b == 0)
         .filter(|f| !f.is_empty())
         .map(|f| String::from_utf8_lossy(f).into_owned())
         .collect();
-    fields
-        .chunks(2)
-        .filter_map(|c| match c {
-            [status, path] => family_at(status, path),
-            _ => None,
-        })
-        .collect()
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for c in fields.chunks(2) {
+        if let [status, path] = c {
+            if let Some(f) = family_at(status, path) {
+                out.entry(f).or_default().insert(path.clone());
+            }
+        }
+    }
+    out
 }
 
-/// The families the net diff `from..to` ships, and the `Plan-Item` keys its commits carry: what a landed
-/// train really contains, for checking a deploy plan against it.
-pub(super) fn shipped_between(
+/// The families the net diff `from..to` ships, each with its paths.
+pub(super) fn families_between(
     repo: &Path,
     from: &str,
     to: &str,
-) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
+) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
     use super::git;
     let diff = git::bytes(
         repo,
@@ -81,34 +83,29 @@ pub(super) fn shipped_between(
             "--",
         ],
     )?;
-    let log = git::bytes(
-        repo,
-        &[
-            "log",
-            "--no-merges",
-            "--format=%B%x00",
-            &format!("{from}..{to}"),
-        ],
-    )?;
-    let items = String::from_utf8_lossy(&log)
-        .split('\0')
-        .flat_map(|m| trailers(m, "Plan-Item"))
-        .collect();
-    Ok((name_status_families(&diff), items))
+    Ok(net_families(&diff))
 }
 
-/// What one part ships, read from its own commits and its own diff only. A family is shipped by the net
-/// diff; the items and hosts of a family come from the commits whose own change touches it (an untagged
-/// follow-up counts for all the part's items), so a docs-only key of the same part inherits neither the
-/// family nor its hosts.
-pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, String> {
-    use super::{build::part_base, git};
-    let from = part_base(repo, base, part.parent.as_ref());
-    let range = format!("{from}..{}", part.head);
-    let shas = git::bytes(repo, &["rev-list", "--no-merges", "--reverse", &range])?;
-    let (mut items, mut hosts) = (BTreeSet::new(), BTreeSet::new());
-    let mut touched: BTreeMap<String, Shipped> = BTreeMap::new();
-    let mut untagged_families: BTreeSet<String> = BTreeSet::new();
+/// What the commits of a range touch, attributed to items: per net family the items and `Deploy:` hosts of
+/// the commits that touch one of its paths (whatever their per-commit status: an untagged edit of a binary
+/// added earlier still counts), the families touched by a commit without `Plan-Item`, and every item and
+/// host of the range.
+#[derive(Default)]
+pub(super) struct Touched {
+    pub by_family: BTreeMap<String, Shipped>,
+    pub untagged: BTreeSet<String>,
+    pub items: BTreeSet<String>,
+    pub hosts: BTreeSet<String>,
+}
+
+pub(super) fn touched_in(
+    repo: &Path,
+    range: &str,
+    net: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<Touched, String> {
+    use super::git;
+    let shas = git::bytes(repo, &["rev-list", "--no-merges", "--reverse", range])?;
+    let mut out = Touched::default();
     for sha in String::from_utf8_lossy(&shas).split_whitespace() {
         let message = git::bytes(repo, &["show", "-s", "--format=%B", sha])?;
         let message = String::from_utf8_lossy(&message).into_owned();
@@ -116,8 +113,8 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
             trailers(&message, "Plan-Item"),
             trailers(&message, "Deploy"),
         );
-        items.extend(commit_items.iter().cloned());
-        hosts.extend(commit_hosts.iter().cloned());
+        out.items.extend(commit_items.iter().cloned());
+        out.hosts.extend(commit_hosts.iter().cloned());
         let changed = git::bytes(
             repo,
             &[
@@ -125,21 +122,63 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
                 "--root",
                 "--no-commit-id",
                 "--no-renames",
-                "--name-status",
+                "--name-only",
                 "-z",
                 "-r",
                 sha,
             ],
         )?;
-        for family in name_status_families(&changed) {
-            let e = touched.entry(family.clone()).or_default();
+        let paths: BTreeSet<String> = changed
+            .split(|&b| b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect();
+        for (family, family_paths) in net {
+            if family_paths.is_disjoint(&paths) {
+                continue;
+            }
+            let e = out.by_family.entry(family.clone()).or_default();
             e.items.extend(commit_items.iter().cloned());
             e.trailer_hosts.extend(commit_hosts.iter().cloned());
             if commit_items.is_empty() {
-                untagged_families.insert(family);
+                out.untagged.insert(family.clone());
             }
         }
     }
+    Ok(out)
+}
+
+/// What one part ships, read from its own commits and its own diff only. A family is shipped by the net
+/// diff; the items and hosts of a family come from the commits that touch it (an untagged follow-up counts
+/// for all the part's items), so a docs-only key of the same part inherits neither the family nor its hosts.
+pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, String> {
+    use super::build::part_base;
+    let from = part_base(repo, base, part.parent.as_ref());
+    let net = families_between_merge_base(repo, from, &part.head)?;
+    let touched = touched_in(repo, &format!("{from}..{}", part.head), &net)?;
+    let mut shipped = touched.by_family;
+    // The keeper's rule (`part_changes`): an untagged follow-up belongs to every item the part has own
+    // work for, so a family it touches goes to all the part's items.
+    for family in &touched.untagged {
+        if let Some(e) = shipped.get_mut(family) {
+            e.items.extend(touched.items.iter().cloned());
+        }
+    }
+    Ok(PartDeploy {
+        pr: part.pr,
+        families: net.into_keys().collect(),
+        items: touched.items,
+        trailer_hosts: touched.hosts,
+        shipped,
+    })
+}
+
+fn families_between_merge_base(
+    repo: &Path,
+    from: &str,
+    head: &str,
+) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
+    use super::git;
     let diff = git::bytes(
         repo,
         &[
@@ -150,33 +189,25 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
             "--name-status",
             "-z",
             from,
-            &part.head,
+            head,
             "--",
         ],
     )?;
-    let families = name_status_families(&diff);
-    touched.retain(|f, _| families.contains(f));
-    // The keeper's rule (`part_changes`): an untagged follow-up belongs to every item the part has own
-    // work for, so a family it adds goes to all the part's items.
-    for family in &untagged_families {
-        if let Some(e) = touched.get_mut(family) {
-            e.items.extend(items.iter().cloned());
-        }
-    }
-    Ok(PartDeploy {
-        pr: part.pr,
-        families,
-        items,
-        trailer_hosts: hosts,
-        shipped: touched,
-    })
+    Ok(net_families(&diff))
 }
 
-/// Every part of the manifest, attributed on its own.
+/// Every part of the manifest, attributed on its own, then reduced to what the whole train nets out to: a
+/// unit one part adds and a later part removes is no deploy target.
 pub fn derive(repo: &Path, manifest: &Manifest) -> Result<Vec<PartDeploy>, String> {
-    manifest
+    let net = families_between(repo, &manifest.base, &manifest.train_sha)?;
+    let mut parts: Vec<PartDeploy> = manifest
         .parts
         .iter()
         .map(|p| derive_part(repo, &manifest.base, p))
-        .collect()
+        .collect::<Result<_, _>>()?;
+    for p in &mut parts {
+        p.families.retain(|f| net.contains_key(f));
+        p.shipped.retain(|f, _| net.contains_key(f));
+    }
+    Ok(parts)
 }

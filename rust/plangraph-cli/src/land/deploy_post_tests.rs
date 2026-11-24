@@ -53,6 +53,9 @@ pub(super) struct Host {
     pub(super) install_takes: i64,
     /// Targets whose read fails.
     pub(super) unreadable: BTreeSet<String>,
+    /// What a oneshot shows before its install (it is absent before it unless listed here).
+    pub(super) before: BTreeMap<String, RunRead>,
+    pub(super) installed: RefCell<BTreeSet<String>>,
 }
 
 impl Installer for Host {
@@ -61,6 +64,7 @@ impl Installer for Host {
             .borrow_mut()
             .push(format!("install {family}@{host}"));
         NOW.with(|n| n.set(n.get() + self.install_takes));
+        self.installed.borrow_mut().insert(family.to_owned());
         Ok(())
     }
     fn read_run(&self, host: &str, family: &str) -> Result<RunRead, String> {
@@ -69,6 +73,14 @@ impl Installer for Host {
             .push(format!("read {family}@{host}"));
         if self.unreadable.contains(family) {
             return Err("unreadable".into());
+        }
+        let oneshot = self.runs.get(family).is_some_and(|r| r.oneshot);
+        if oneshot && !self.installed.borrow().contains(family) {
+            return self
+                .before
+                .get(family)
+                .cloned()
+                .ok_or_else(|| "not installed yet".into());
         }
         self.runs
             .get(family)
@@ -186,7 +198,7 @@ fn an_install_failure_is_a_failed_first_run() {
             Err("no space".into())
         }
         fn read_run(&self, _: &str, _: &str) -> Result<RunRead, String> {
-            unreachable!("nothing to read after a failed install")
+            Err("not installed".into())
         }
         fn disable(&self, _: &str, _: &str) -> Result<(), String> {
             Ok(())
@@ -218,8 +230,8 @@ fn a_binary_needs_installed_and_has_no_timer_to_disable() {
         exec_main_exit_timestamp: None,
         oneshot: false,
     };
-    assert!(ok.good("bin:tool", &gate(), T0, T0));
-    assert!(!ok.good("a.service", &gate(), T0, T0));
+    assert!(ok.good("bin:tool", &gate(), None, T0));
+    assert!(!ok.good("a.service", &gate(), None, T0));
 }
 
 #[test]
@@ -339,9 +351,9 @@ fn the_documented_read_json_is_judged_good() {
         r#"{"is_active":"inactive","oneshot":true,"result":"success","exec_main_exit_timestamp":"2026-11-24T01:00:00Z"}"#,
     )
     .unwrap();
-    assert!(oneshot.good("a.service", &gate(), T0, T0));
+    assert!(oneshot.good("a.service", &gate(), None, T0));
     let bin: RunRead = serde_json::from_str(r#"{"is_active":"installed"}"#).unwrap();
-    assert!(bin.good("bin:tool", &gate(), T0, T0));
+    assert!(bin.good("bin:tool", &gate(), None, T0));
     let svc: RunRead = serde_json::from_str(r#"{"is_active":"active"}"#).unwrap();
-    assert!(svc.good("a.service", &gate(), T0, T0) && svc.good("a.timer", &gate(), T0, T0));
+    assert!(svc.good("a.service", &gate(), None, T0) && svc.good("a.timer", &gate(), None, T0));
 }

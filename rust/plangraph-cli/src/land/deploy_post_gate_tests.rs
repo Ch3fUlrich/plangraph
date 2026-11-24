@@ -107,8 +107,10 @@ fn a_slow_install_does_not_make_its_own_result_future_dated() {
 
 #[test]
 fn a_result_from_before_this_install_is_not_this_installs_first_run() {
-    // The oneshot's last exit is older than the install window (a run from before this deploy).
-    let host = ran_at("2026-11-24T00:00:00Z"); // an hour before the clock at T0
+    // The unit already showed this exit time before the install: the install did not run it again.
+    let mut host = ran_at("2026-11-24T00:59:00Z");
+    host.before
+        .insert("a.service".into(), host.runs["a.service"].clone());
     let (rows, mut state) = (Rows::default(), PostState::default());
     let r = run(
         &[target("a.service", "alpha", &["demo:A"])],
@@ -119,6 +121,24 @@ fn a_result_from_before_this_install_is_not_this_installs_first_run() {
     .unwrap();
     assert!(r.failed.is_some());
     assert!(rows.0.borrow().is_empty());
+    assert!(host
+        .calls
+        .borrow()
+        .contains(&"disable a.timer@alpha".to_string()));
+    // A later exit time is a new run, even a minute before the clock: no clock skew is needed to tell.
+    let mut host = ran_at("2026-11-24T00:59:30Z");
+    let mut old = host.runs["a.service"].clone();
+    old.exec_main_exit_timestamp = Some("2026-11-24T00:59:00Z".into());
+    host.before.insert("a.service".into(), old);
+    let (rows, mut state) = (Rows::default(), PostState::default());
+    let r = run(
+        &[target("a.service", "alpha", &["demo:A"])],
+        &host,
+        &rows,
+        &mut state,
+    )
+    .unwrap();
+    assert_eq!(r.deployed, ["a.service@alpha"], "{:?}", r.failed);
     assert_eq!(T0, exit_epoch("2026-11-24T01:00:00Z").unwrap());
 }
 

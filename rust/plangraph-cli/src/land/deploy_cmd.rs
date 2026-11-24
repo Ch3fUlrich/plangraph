@@ -1,12 +1,10 @@
 //! The command boundary of the post-merge deploy step: the host and keeper commands it runs, and
 //! `land-train deploy-apply`, which binds the step to the approved GO and the verified landed head.
-use super::deploy::{DeployPlan, Target};
-use super::deploy_derive::shipped_between;
-use super::deploy_post::{
-    apply, named_targets, DeployRow, Gate, Installer, PostState, RowSink, RunRead,
-};
-use super::git;
-use std::collections::{BTreeMap, BTreeSet};
+use super::deploy::DeployPlan;
+use super::deploy_bind::{bind, Approved};
+use super::deploy_post::{apply, DeployRow, Installer, PostState, RowSink, RunRead};
+use super::go_verify::{verify, Evidence, Pins};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -77,109 +75,31 @@ impl RowSink for CommandRows {
     }
 }
 
-fn wall_clock() -> i64 {
-    chrono::Utc::now().timestamp()
-}
-
-/// Every target must be something the plan's train really ships: its family is in the net diff
-/// `base..train`, a unit still exists in the landed tree, and each item key is a `Plan-Item` of the
-/// train's commits.
-fn check_in_tree(plan: &DeployPlan, repo: &Path, landed_head: &str) -> Result<(), String> {
-    if plan.base.is_empty() {
-        return Err("the deploy plan names no base (rerun deploy-plan --plan-out)".into());
+/// The train the protected GO evidence approved: the evidence must verify with no refusal, and its head
+/// is the train.
+fn approved_train(path: &Path) -> Result<Approved, String> {
+    let e: Evidence = serde_json::from_slice(
+        &std::fs::read(path).map_err(|x| format!("{}: {x}", path.display()))?,
+    )
+    .map_err(|x| format!("{}: {x}", path.display()))?;
+    let refusals = verify(&e, &Pins::protected()?);
+    if !refusals.is_empty() {
+        let lines: Vec<_> = refusals
+            .iter()
+            .map(|r| format!("{}: {}", r.code, r.detail))
+            .collect();
+        return Err(format!("the GO evidence is refused:\n{}", lines.join("\n")));
     }
-    let (families, items) = shipped_between(repo, &plan.base, &plan.train_sha)?;
-    for t in &plan.targets {
-        if !families.contains(&t.family) {
-            return Err(format!(
-                "{} is not shipped by train {}",
-                t.family, plan.train_sha
-            ));
-        }
-        if !t.family.starts_with("bin:")
-            && git::out(
-                repo,
-                &[
-                    "cat-file",
-                    "-t",
-                    &format!("{landed_head}:deploy/systemd/{}", t.family),
-                ],
-            )
-            .is_err()
-        {
-            return Err(format!(
-                "{} is absent from the landed tree {landed_head}",
-                t.family
-            ));
-        }
-        if let Some(k) = t.items.iter().find(|k| !items.contains(*k)) {
-            return Err(format!(
-                "item {k} of {} is not a Plan-Item of train {}",
-                name_of(t),
-                plan.train_sha
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn name_of(t: &Target) -> String {
-    format!("{}@{}", t.family, t.host)
-}
-
-/// The GO row, the landed head and the plan must belong together before anything is installed: the GO row
-/// is the plan's own `deploy:` line, the plan's train is merged into the landed head, and the landed head is
-/// on main. Returns the targets and the gate their first runs are verified against.
-pub fn bind(
-    plan: &DeployPlan,
-    go_row: &str,
-    repo: &Path,
-    landed_head: &str,
-    main_ref: &str,
-    plan_digest: &str,
-) -> Result<(Vec<Target>, Gate), String> {
-    if plan.train_sha.is_empty() {
-        return Err("the deploy plan names no train (rerun deploy-plan --plan-out)".into());
-    }
-    if plan.digest() != plan_digest.trim() {
-        return Err("the plan does not match the approved plan digest".into());
-    }
-    if go_row.trim() != plan.go_req() {
-        return Err(format!(
-            "GO row {go_row:?} is not this plan's {:?}",
-            plan.go_req()
-        ));
-    }
-    if !git::is_ancestor(repo, &plan.train_sha, landed_head)? {
-        return Err(format!(
-            "train {} is not merged into landed head {landed_head}",
-            plan.train_sha
-        ));
-    }
-    if !git::is_ancestor(repo, landed_head, main_ref)? {
-        return Err(format!("landed head {landed_head} is not on {main_ref}"));
-    }
-    check_in_tree(plan, repo, landed_head)?;
-    let fresh_after = git::out(repo, &["show", "-s", "--format=%ct", landed_head])?
-        .trim()
-        .parse::<i64>()
-        .map_err(|e| format!("commit time of {landed_head}: {e}"))?;
-    let excluded: BTreeSet<(String, String)> = plan
-        .blockers
-        .iter()
-        .filter_map(|b| Some((b.family.clone(), b.host.clone()?)))
-        .collect();
-    let gate = Gate {
-        fresh_after,
-        clock: wall_clock,
-        excluded,
-    };
-    Ok((named_targets(plan, go_row)?, gate))
+    Ok(Approved {
+        train_sha: e.head,
+        base: e.base,
+    })
 }
 
 /// `land-train deploy-apply --plan FILE --go ROW --repo DIR --landed-head SHA [--main-ref REF] --plan-digest HEX
-/// --state FILE --install-cmd CMD --row-cmd CMD`: the post-merge step. `--plan` is the `--plan-out` file of `deploy-plan`;
-/// `--go` is the plan's `deploy:` line as approved; `--landed-head` is the verified merge on main; `--state`
+/// --evidence FILE --state FILE --install-cmd CMD --row-cmd CMD`: the post-merge step. `--plan` is the `--plan-out` file of `deploy-plan`;
+/// `--evidence` is the protected GO evidence of the approved train (it must verify, and its head and base
+/// must be the plan's); `--go` is the plan's `deploy:` line as approved; `--landed-head` is the verified merge on main; `--state`
 /// is created or resumed and belongs to the plan's train.
 pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
@@ -191,8 +111,10 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
         serde_json::from_slice(&std::fs::read(plan_path).map_err(|e| format!("{plan_path}: {e}"))?)
             .map_err(|e| format!("{plan_path}: {e}"))?;
     let main_ref = flags.get("main-ref").map_or("origin/main", String::as_str);
+    let approved = approved_train(Path::new(need("evidence")?))?;
     let (targets, gate) = bind(
         &plan,
+        &approved,
         need("go")?,
         Path::new(need("repo")?),
         need("landed-head")?,

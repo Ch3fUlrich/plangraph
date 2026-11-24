@@ -66,28 +66,34 @@ authorized. `CMD HOST FAMILY` is the host install dry run: exit 0 with no output
 the GO-REQ (only passing targets) and one `blocker` line per refused target; `--blockers-out` writes a
 `pg define` file with a blocker item for each.
 
-`plangraph land-train deploy-apply --plan FILE --go ROW --plan-digest HEX --repo DIR --landed-head SHA
-[--main-ref REF] --state FILE --install-cmd CMD --row-cmd CMD` is the post-merge step. `--plan` is the
-`--plan-out` file; `--plan-digest` is the `plan-digest:` line `deploy-plan` printed and the approved GO carries,
-so a plan edited after approval (item keys included) is refused; `--go` must be that plan's own `deploy:` line;
-`--landed-head` is the verified merge on main (`--main-ref`, default `origin/main`). Before anything is
-installed the plan is checked against git: its train is merged into the landed head, the head is on main, each
-family is in the net diff `base..train`, a unit still exists in the landed tree, each item key is a
-`Plan-Item` of the train's commits, and a state file saved for another train is refused. `CMD
+`plangraph land-train deploy-apply --plan FILE --go ROW --plan-digest HEX --evidence FILE --repo DIR
+--landed-head SHA [--main-ref REF] --state FILE --install-cmd CMD --row-cmd CMD` is the post-merge step.
+`--plan` is the `--plan-out` file, generated from the net train (a unit one part adds and a later part removes is
+no target). `--evidence` is the protected GO evidence of the approved train: it must verify with no refusal,
+and its head and base must be the plan's train and base. `--plan-digest` is the `plan-digest:` line
+`deploy-plan` printed (SHA-256 of the whole plan, item keys included); it only guards against edits as long as
+the approved GO is where the caller reads it from (the GO evidence does not carry it yet: see the keeper item
+below). `--go` must be that plan's own `deploy:` line; `--landed-head` is the verified merge on main
+(`--main-ref`, default `origin/main`). Before anything is installed the plan is checked against git: its train
+is merged into the landed head, the head is on main, each family is in the net diff `base..train`, a unit still
+exists in the landed tree, each item key belongs to a commit that touches the family (or, for a family an
+untagged commit touches, to the train), and a state file saved for another train is refused. `CMD
 install|read|disable HOST NAME` installs a family, prints one run of it as JSON (`is_active`: `active`, or
 `installed` for a `bin:` family; a oneshot service adds `"oneshot": true`, `result` and
 `exec_main_exit_timestamp`, and its `.timer` is read the same way) or disables a unit; `CMD KEY` receives the
-keeper `deploy` row as JSON on stdin. The clock is read before each install and after its read: a oneshot must
-report `success` with a valid exit time after the landed head's commit time and inside that window (5 s of
-skew allowed), and its `.timer` must be active, with a row for each item of the service that the timer's own
-target does not cover. Rows go to the items that ship the family: the items of the commits that touch it, and
-for a commit without `Plan-Item` every item of its part (the keeper's rule), not every item of a shared part.
-A timer that failed the preflight is not in the GO, so a service whose timer was refused gets no row. A shipped
-timer is installed first but recorded (rows, checkpoint) only after the service it triggers has passed; if the
-service fails, the timer is disabled and leaves no evidence. A failed first run disables the unit's timer,
-writes no row and stops the step; later targets are listed as not attempted. `--state` records finished
-targets, so a rerun after an interruption skips them (the hook LAND-RESUMABLE-AFTER-MERGE builds on); a
-recorded failure refuses the rerun until the state file is cleared. Train settlement does not call this step
+keeper `deploy` row as JSON on stdin. A oneshot is read before and after its install: its first run counts only
+with `result=success` and an exit time after the landed head's commit time, strictly after the exit time it
+showed before the install (a new run, not the last deploy's) and not after the clock read following the read
+(the keeper rejects later times), and its `.timer` must be active, with a row for each item of the service
+that the timer's own target does not cover. Rows go to the items that ship the family: the items of the commits
+that touch one of its paths (whatever the per-commit status), and for a commit without `Plan-Item` every item of
+its part (the keeper's rule), not every item of a shared part. A timer that failed the preflight is not in the
+GO, so a service whose timer was refused gets no row. A shipped timer is installed first but recorded (rows,
+checkpoint) only after the service it triggers has passed; if the service fails, the timer is disabled and
+leaves no evidence. A failed first run disables the unit's timer, writes no row and stops the step; later
+targets are listed as not attempted. `--state` records finished targets, so a rerun after an interruption skips
+them (the hook LAND-RESUMABLE-AFTER-MERGE builds on); a recorded failure refuses the rerun until the state
+file is cleared. Train settlement does not call this step yet, and the plan digest is not in the GO evidence
 yet (keeper item `plangraph:TRAIN-SETTLE-RUNS-DEPLOY-APPLY`).
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
