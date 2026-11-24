@@ -47,13 +47,6 @@ def test_the_highest_dependent_wins_and_ties_keep_the_smallest_key():
     assert eff["d:X"]["effective"] == 10 and eff["d:X"]["via"] == "d:P10A"
 
 
-
-def test_the_highest_dependent_wins_and_ties_keep_the_smallest_key():
-    items = [_it("X", 1), _it("P9", 9, ["X"]), _it("P10B", 10, ["X"]), _it("P10A", 10, ["X"])]
-    eff, _ = views.effective_priorities(items)
-    assert eff["d:X"]["effective"] == 10 and eff["d:X"]["via"] == "d:P10A"
-
-
 def test_inheritance_stats_count_raised_items_and_the_longest_chain():
     items = [_it("A", 1), _it("B", 2, ["A"]), _it("TOP", 10, ["B"]), _it("FREE", 5)]
     eff, _ = views.effective_priorities(items)
