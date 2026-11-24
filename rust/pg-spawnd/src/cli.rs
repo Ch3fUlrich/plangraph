@@ -219,6 +219,9 @@ pub(crate) fn execute(
         return crate::agent_view::execute(rest, out);
     }
     if verb.as_deref() == Some("health") {
+        if rest.first().is_some_and(|a| a == "review-order") {
+            return crate::review_order::execute(rest[1..].to_vec(), out);
+        }
         return crate::health_cli::execute(rest, out);
     }
     if verb.as_deref() == Some("land-go") {
