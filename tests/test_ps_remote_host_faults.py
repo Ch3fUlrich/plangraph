@@ -77,13 +77,24 @@ def test_failing_host_is_listed_and_others_still_print(config, fault, reason):
 def test_hung_transport_cannot_hold_ps(config, monkeypatch):
     monkeypatch.setattr(remote_ps, 'TIMEOUT', 0.1)
     write(config, [dict(name='bad', target='bad', src='/s/src'),
-                   dict(name='good', target='good', src='/s/src')])
+                   dict(name='good', target='good', src='/s/src'),
+                   dict(name='late', target='late', src='/s/src')])
     release = threading.Event()
+    result = []
+    worker = threading.Thread(target=lambda: result.append(remote_ps.list_runs(
+        [], transport=fake(None, lambda h, t: release.wait(30)))), daemon=True)
+    worker.start()
     try:
-        rows = remote_ps.list_runs([], transport=fake(None, lambda h, t: release.wait(30)))
+        # list_runs must return while the hung host is still blocked: the event is set only after.
+        worker.join(10)
+        returned = not worker.is_alive()
     finally:
         release.set()
-    assert [(r['host'], r['status']) for r in rows] == [('bad', 'unknown'), ('good', 'running')]
+        worker.join(40)
+    assert returned, 'a hung host held the whole listing'
+    rows = result[0]
+    assert [(r['host'], r['status']) for r in rows] == [
+        ('bad', 'unknown'), ('good', 'running'), ('late', 'running')]
     assert rows[0]['reason'] == 'host query failed'
 
 
