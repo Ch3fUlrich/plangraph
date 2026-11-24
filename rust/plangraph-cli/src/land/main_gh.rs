@@ -28,7 +28,7 @@ fn epoch(value: &Value, field: &str) -> i64 {
 
 /// The tier an attempt ran on: `fast` when it listed jobs but none of the full suite (a landed tip's own
 /// run), otherwise the SQLite job count tells the self-hosted tier (four shards) from the fallback.
-fn tier_of(jobs: &[Job]) -> String {
+pub(super) fn tier_of(jobs: &[Job]) -> String {
     let full_only = |j: &Job| {
         j.name.starts_with("Python tests")
             || j.name.starts_with("Rust workspace")
