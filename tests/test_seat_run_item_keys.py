@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from plangraph.spawner.item_key import annotate_item, part_keys
+from plangraph.spawner.item_key import annotate_item, batch_members
 
 A, B = 'plangraph:LE-ONE', 'plangraph:LE-TWO'
 HEAD = 'a' * 40
@@ -24,12 +24,13 @@ def test_a_two_key_part_records_both_keys_and_the_head():
 
 def test_a_named_item_key_stays_first_and_keys_are_not_repeated():
     record = seat_record({'item_key': B, 'item_keys': [A, B, A]})
-    assert record['item_key'] == B and record['item_keys'] == [B, A]
+    assert record['item_key'] == B and record['item_keys'] == [A, B]
 
 
 def test_invalid_part_keys_are_dropped_and_a_single_key_adds_no_list():
-    assert part_keys({'item_keys': [A, 'garbage', 12, B]}) == [A, B]
-    assert part_keys({'item_keys': 'x'}) == [] and part_keys({}) == []
+    assert batch_members({'item_keys': [A, 'garbage', 12, B]}) == []   # one invalid key drops the list
+    assert batch_members({'item_keys': 'x'}) == [] and batch_members({}) == []
+    assert batch_members({'item_keys': [A, B, A]}) == [A, B]
     assert 'item_keys' not in seat_record({'item_key': A})
 
 
