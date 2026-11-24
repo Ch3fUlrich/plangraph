@@ -16,6 +16,7 @@ from plangraph.routing_support import leg_state
 from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
+from plangraph.routing_support.clients import resolve_harness_binary
 from .host_ready import harness_path
 from .env_redact import harness_limit_line
 from .exit_outcome import quota_models
@@ -227,7 +228,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
     start = time.monotonic()
     # Missing executables describe this host, not the remote leg. Check each
     # harness independently, before creating a repo or attempting any leg.
-    if shutil.which(leg.harness, path=harness_path(os.environ)) is None:
+    if resolve_harness_binary(leg.harness, os.environ, search=harness_path(os.environ)).path is None:
         return _missing_harness(leg.harness, time.monotonic() - start)
     deadline = start + timeout
     previous = await asyncio.to_thread(_run_logs, runner)
@@ -543,7 +544,7 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
         for leg in routed_review_legs():
             add(leg, review=True)
     path = harness_path(os.environ)
-    if selected and not any(shutil.which(harness, path=path) for harness in {leg.harness for leg in selected}):
+    if selected and not any(resolve_harness_binary(harness, os.environ, search=path).path for harness in {leg.harness for leg in selected}):
         return dict(ok=False, probes=[dict(id=leg.id, **_missing_harness(leg.harness)) for leg in selected],
                     limited_legs=[])
     manage_key = await asyncio.to_thread(_check_manage_key, runner) if (all_reviewers or role == 'review') else None

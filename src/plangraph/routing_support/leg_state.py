@@ -502,17 +502,22 @@ class LegAdapter:
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
         self._quarantined = set()
+        self._harness_missing = False
     def __getattr__(self, name):
         return getattr(self.store, name)
     @staticmethod
     def standalone_models():
         """Standalone model ids; a failed discovery is an empty :class:`DiscoveryFailed`."""
         import subprocess
+        from .clients import resolve_harness_binary
         from .opencode_render import drop_parent_only_env
+        env = drop_parent_only_env(dict(os.environ))
+        binary = resolve_harness_binary('opencode', env)
+        if binary.path is None:   # a unit PATH without the harness dir is a host fault, not a failed listing
+            return DiscoveryFailed(binary.refusal)
         try:
-            result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
-                                    text=True, timeout=8, shell=False, check=True,
-                                    env=drop_parent_only_env(dict(os.environ)))
+            result = subprocess.run([binary.path, 'models', '--standalone'], capture_output=True,
+                                    text=True, timeout=8, shell=False, check=True, env=env)
         except (OSError, subprocess.SubprocessError) as exc:
             return DiscoveryFailed(type(exc).__name__)
         return result.stdout.splitlines()
@@ -538,10 +543,13 @@ class LegAdapter:
         if self._at is None or now - self._at >= self.ttl_s:
             from .quota_snapshots import OmniRouteAuthRefused
             self._auth_error = None
+            self._harness_missing = False
             try:
                 states = self.provider.snapshot()
                 listed = self.models() if callable(self.models) else self.models
                 if isinstance(listed, DiscoveryFailed):
+                    if listed.reason.startswith('harness_not_found'):
+                        self._harness_missing = True
                     # Not "every model is unlisted": keep the snapshot-error retry and probe.
                     raise RuntimeError(f'model discovery failed: {listed.reason}')
                 served = {self.identity(mid) for mid in listed}
@@ -554,6 +562,9 @@ class LegAdapter:
             except Exception as exc:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
+        if self._error and self._harness_missing:
+            return dict(state='down', reason='harness_missing: ' + self._error.rpartition('harness_not_found ')[2],
+                        evidence=None)
         if self._error:
             return dict(state='down' if self._auth_error else 'unknown', reason=self._error,
                         evidence=dict(self._auth_error) if self._auth_error else None)

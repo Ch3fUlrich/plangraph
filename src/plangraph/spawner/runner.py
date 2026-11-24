@@ -464,8 +464,8 @@ class SpawnerRunner:
             if admitted_by_render(model_or_combo):  # trace a later launch failure to D-2869
                 job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
-            import shutil
-            resolved_exe = codex or shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            from plangraph.routing_support.clients import resolve_harness_binary
+            resolved_exe = codex or resolve_harness_binary(cmd[0], child_env).path or cmd[0]
             try:
                 payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             except PromptTransportError as exc:
@@ -880,6 +880,11 @@ def spawn_service(*args, **kwargs):
                     record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                 super()._save(record)
             if terminal:
+                try:
+                    from .run_watchdog import note_no_verdict
+                    note_no_verdict(self.state, record)
+                except OSError:
+                    pass   # an alert that cannot be booked never blocks the result
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')
@@ -979,13 +984,13 @@ def spawn_service(*args, **kwargs):
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
             annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
-                if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
+                if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing', 'harness_not_found')):
                     record.setdefault('skipped', []).append(skipped)
                     record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
                         skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
             self._save(record)
             if not plan.legs or plan.error:
-                host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
+                host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing', 'harness_not_found'))]
                 from plangraph.routing_support.liveness import provider_exhausted
                 exhausted = not plan.legs and (not plan.error or provider_exhausted(plan.skipped))
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
@@ -1106,7 +1111,7 @@ def spawn_service(*args, **kwargs):
                         if hasattr(current, '__dataclass_fields__'):
                             current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run), tried)
                         for skipped in current.to_dict()['skipped']:
-                            if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
+                            if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing', 'harness_not_found')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)
                                 record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
                                     skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
@@ -1117,7 +1122,7 @@ def spawn_service(*args, **kwargs):
                     if not any(a.get('status') != 'skipped' for a in record['attempts']):
                         record.update(status='failed', exit_code=1, error='; '.join(
                             a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')) or 'no leg launched')
-                    elif any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts']):
+                    elif any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing', 'harness_not_found')) for a in record['attempts']):
                         record.update(status='failed', exit_code=1,
                             error='; '.join(a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')))
                     elif record['attempts'] and all(l.id in tried for l in current.legs) and current.legs:
