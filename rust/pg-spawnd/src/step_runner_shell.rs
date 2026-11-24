@@ -49,8 +49,6 @@ pub struct ShellConfig {
     pub branch: String,
     /// Fast checks, run in order inside the worktree; each is one argv.
     pub checks: Vec<Vec<String>>,
-    /// Directory of the fast-check stamps, one file per head.
-    pub stamp_dir: PathBuf,
     pub pr_title: String,
     pub pr_body: String,
 }
@@ -65,22 +63,40 @@ fn argv(parts: &[&str]) -> Vec<String> {
 }
 
 impl<R: CommandRunner> ShellSteps<R> {
-    fn stamp_path(&self, head: &str) -> PathBuf {
-        self.config.stamp_dir.join(head)
+    /// The stamp the review gate reads: the shared receipt of the worktree for this head.
+    fn stamp_path(&self, head: &str) -> Result<PathBuf, String> {
+        pg_worker_core::worktree::fast_check_stamp(&self.config.worktree_dir, head)
+            .map_err(|err| err.to_string())
     }
 
+    /// Create the worktree on a new lane branch at `base`. A failed add can leave a registered
+    /// worktree (a failing post-checkout hook does), so it is removed and the branch is dropped
+    /// when it still sits at `base`; the retry then starts clean.
     pub fn worktree(&mut self, base: &str) -> Result<Worktree, String> {
         let dir = self.config.worktree_dir.to_string_lossy().into_owned();
-        let cmd = argv(&[
-            "git",
-            "worktree",
-            "add",
-            "-b",
-            &self.config.branch,
-            &dir,
-            base,
-        ]);
-        self.runner.run(&self.config.repo_dir, &cmd)?;
+        let repo = self.config.repo_dir.clone();
+        let branch = self.config.branch.clone();
+        let prune = argv(&["git", "worktree", "prune"]);
+        self.runner.run(&repo, &prune)?;
+        let add = argv(&["git", "worktree", "add", "-b", &branch, &dir, base]);
+        if let Err(err) = self.runner.run(&repo, &add) {
+            // Cleanup is best effort; the add error is the one to report.
+            let _ = self.runner.run(
+                &repo,
+                &argv(&["git", "worktree", "remove", "--force", &dir]),
+            );
+            let _ = self.runner.run(&repo, &prune);
+            let at = self.runner.run(
+                &repo,
+                &argv(&["git", "rev-parse", &format!("refs/heads/{branch}")]),
+            );
+            if at.is_ok_and(|sha| sha.trim() == base) {
+                let _ = self
+                    .runner
+                    .run(&repo, &argv(&["git", "branch", "-D", &branch]));
+            }
+            return Err(err);
+        }
         Ok(Worktree { worktree: dir })
     }
 
@@ -93,11 +109,20 @@ impl<R: CommandRunner> ShellSteps<R> {
         if at.trim() != head {
             return Err(format!("worktree is at {}, not {head}", at.trim()));
         }
+        // The checks run on the files of the worktree, so they only speak for `head` when the
+        // worktree holds nothing else.
+        let dirty = self
+            .runner
+            .run(&dir, &argv(&["git", "status", "--porcelain"]))?;
+        if !dirty.trim().is_empty() {
+            return Err("worktree has uncommitted or untracked files".into());
+        }
         for check in self.config.checks.clone() {
             self.runner.run(&dir, &check)?;
         }
-        let stamp = self.stamp_path(head);
-        std::fs::create_dir_all(&self.config.stamp_dir).map_err(|err| err.to_string())?;
+        let stamp = self.stamp_path(head)?;
+        std::fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
+            .map_err(|err| err.to_string())?;
         std::fs::write(&stamp, "green\n").map_err(|err| err.to_string())?;
         Ok(FastChecks {
             stamp: stamp.to_string_lossy().into_owned(),
@@ -106,7 +131,8 @@ impl<R: CommandRunner> ShellSteps<R> {
 
     /// Push the accepted head as a fast-forward and return the draft pull request of the branch.
     pub fn push(&mut self, head: &str, stamp: &str) -> Result<Push, String> {
-        if !self.stamp_path(head).is_file() || Path::new(stamp) != self.stamp_path(head) {
+        let expected = self.stamp_path(head)?;
+        if !expected.is_file() || Path::new(stamp) != expected {
             return Err(format!("no fast-checks stamp for {head}"));
         }
         let dir = self.config.worktree_dir.clone();

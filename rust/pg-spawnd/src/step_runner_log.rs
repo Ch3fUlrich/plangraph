@@ -11,6 +11,9 @@ pub struct StepLog {
     pub path: PathBuf,
     /// `OWNER/NAME` of the landing journal, or `None` to skip the journal.
     pub journal_repo: Option<String>,
+    /// Item keys the journal rows are written under: the keeper matches a train part's rows by
+    /// item key, as the native writer keys its own rows.
+    pub item_keys: Vec<String>,
     /// Head of the rows of steps that have none yet (claim, worktree, a failed write).
     pub base: String,
 }
@@ -52,37 +55,37 @@ fn head<'a>(step: &'a Step, base: &'a str) -> &'a str {
 /// the same stage.
 pub fn journal_row(
     repo: &str,
-    batch: &str,
+    item: &str,
     base: &str,
     ordinal: usize,
     row: &StepAttempt,
 ) -> Option<Value> {
     let stage = keeper_stage(&row.step)?;
     Some(json!({
-        "action": "stage", "repo": repo, "batch_key": batch, "stage": stage,
+        "action": "stage", "repo": repo, "batch_key": item, "stage": stage,
         "head": head(&row.step, base), "attempt": ordinal,
         "started_at_ms": row.stage.started_at_ms, "ended_at_ms": row.stage.ended_at_ms,
     }))
 }
 
 impl StageSink for StepLog {
-    fn record(&mut self, steps: &BatchSteps) {
+    fn record(&mut self, steps: &BatchSteps) -> Result<(), String> {
         // Write beside the target and rename, so a crash never leaves half a list.
         let tmp = self.path.with_extension("tmp");
-        let saved = serde_json::to_vec_pretty(steps)
-            .map_err(|err| err.to_string())
-            .and_then(|bytes| std::fs::write(&tmp, bytes).map_err(|err| err.to_string()))
-            .and_then(|()| std::fs::rename(&tmp, &self.path).map_err(|err| err.to_string()));
-        if let Err(err) = saved {
-            eprintln!("step list not saved: {err}");
-        }
+        let bytes = serde_json::to_vec_pretty(steps).map_err(|err| err.to_string())?;
+        std::fs::write(&tmp, bytes).map_err(|err| format!("step list not saved: {err}"))?;
+        std::fs::rename(&tmp, &self.path).map_err(|err| format!("step list not saved: {err}"))?;
         let (Some(repo), Some(last)) = (&self.journal_repo, steps.rows.last()) else {
-            return;
+            return Ok(());
         };
-        if let Some(row) = journal_row(repo, &steps.batch_key, &self.base, steps.rows.len(), last) {
-            if landing_journal::deliver(&row).is_err() {
-                eprintln!("landing stage {} pending keeper delivery", row["stage"]);
+        // A journal row that cannot be delivered stays pending; the saved list is the record.
+        for item in &self.item_keys {
+            if let Some(row) = journal_row(repo, item, &self.base, steps.rows.len(), last) {
+                if landing_journal::deliver(&row).is_err() {
+                    eprintln!("landing stage {} pending keeper delivery", row["stage"]);
+                }
             }
         }
+        Ok(())
     }
 }

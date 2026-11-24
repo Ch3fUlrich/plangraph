@@ -30,9 +30,10 @@ pub trait StepActions {
     ) -> Result<TrainJoin, String>;
 }
 
-/// Receives the whole list after every recorded attempt; the last row is the new one.
+/// Receives the whole list after every recorded attempt; the last row is the new one. An
+/// error means the list could not be kept, and the run stops there.
 pub trait StageSink {
-    fn record(&mut self, steps: &BatchSteps);
+    fn record(&mut self, steps: &BatchSteps) -> Result<(), String>;
 }
 
 /// What the batch starts from. All of it is data from the caller.
@@ -80,6 +81,11 @@ pub enum Outcome {
     },
     FixRoundsExhausted {
         rounds: u32,
+    },
+    /// The sink could not keep the list; resuming would lose the rows after the last save.
+    NotSaved {
+        step_index: usize,
+        reason: String,
     },
     /// An action returned output the contract refuses; nothing was recorded for it.
     Invalid {
@@ -499,7 +505,12 @@ impl Runner {
                     reason,
                 };
             }
-            sink.record(&self.steps);
+            if let Err(reason) = sink.record(&self.steps) {
+                return Outcome::NotSaved {
+                    step_index: index,
+                    reason,
+                };
+            }
             self.last_end = ended;
             let step = &self.steps.rows.last().expect("row just pushed").step;
             let reason = failure(step).unwrap_or_default().to_owned();

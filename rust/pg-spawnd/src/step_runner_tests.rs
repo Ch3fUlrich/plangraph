@@ -123,8 +123,9 @@ impl StepActions for Script {
 struct Rows(Vec<usize>);
 
 impl StageSink for Rows {
-    fn record(&mut self, steps: &BatchSteps) {
+    fn record(&mut self, steps: &BatchSteps) -> Result<(), String> {
         self.0.push(steps.rows.len());
+        Ok(())
     }
 }
 
@@ -353,7 +354,7 @@ fn journal_rows_cover_the_keeper_stages_with_a_unique_attempt() {
     let journal: Vec<_> = rows
         .iter()
         .enumerate()
-        .filter_map(|(at, row)| journal_row("demo/repo", "batch-1", BASE, at + 1, row))
+        .filter_map(|(at, row)| journal_row("demo/repo", "demo:ITEM", BASE, at + 1, row))
         .collect();
     let stages: Vec<_> = journal
         .iter()
@@ -398,6 +399,7 @@ fn the_step_log_holds_the_whole_list_after_every_attempt() {
     let mut log = StepLog {
         path: path.clone(),
         journal_repo: None,
+        item_keys: vec!["demo:ITEM".into()],
         base: BASE.into(),
     };
     let mut runner = Runner::new(inputs(), Limits::default());
@@ -414,6 +416,8 @@ struct Fake {
     head: String,
     fail_on: Option<&'static str>,
     pr_exists: bool,
+    dirty: bool,
+    branch_at: String,
 }
 
 impl CommandRunner for Fake {
@@ -427,6 +431,8 @@ impl CommandRunner for Fake {
         }
         match argv[..argv.len().min(3)].join(" ").as_str() {
             "git rev-parse HEAD" => Ok(format!("{}\n", self.head)),
+            "git rev-parse refs/heads/lane/x" => Ok(format!("{}\n", self.branch_at)),
+            "git status --porcelain" if self.dirty => Ok(" M src/lib.rs\n".into()),
             "gh pr view" if !self.pr_exists => {
                 self.pr_exists = true;
                 Err("no pull request".into())
@@ -437,13 +443,21 @@ impl CommandRunner for Fake {
     }
 }
 
+/// Shell steps over a real git directory, so the stamp path is the one the review gate reads.
 fn shell(dir: &Path, fake: Fake) -> ShellSteps<Fake> {
+    let worktree_dir = dir.join("wt");
+    std::fs::create_dir_all(&worktree_dir).unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&worktree_dir)
+        .status()
+        .unwrap();
+    assert!(init.success());
     let config = ShellConfig {
         repo_dir: dir.join("repo"),
-        worktree_dir: dir.join("wt"),
+        worktree_dir,
         branch: "lane/x".into(),
         checks: vec![vec!["check-a".into()], vec!["check-b".into()]],
-        stamp_dir: dir.join("stamps"),
         pr_title: "title".into(),
         pr_body: "body".into(),
     };
@@ -451,6 +465,10 @@ fn shell(dir: &Path, fake: Fake) -> ShellSteps<Fake> {
         config,
         runner: fake,
     }
+}
+
+fn stamp_of(steps: &ShellSteps<Fake>, head: &str) -> std::path::PathBuf {
+    pg_worker_core::worktree::fast_check_stamp(&steps.config.worktree_dir, head).unwrap()
 }
 
 #[test]
@@ -465,8 +483,17 @@ fn shell_steps_create_the_worktree_check_the_exact_head_and_push_a_draft_pr() {
     );
     let created = steps.worktree(BASE).unwrap();
     assert_eq!(created.worktree, dir.path().join("wt").to_string_lossy());
-    assert!(steps.runner.log[0].starts_with("git worktree add -b lane/x "));
+    assert!(steps
+        .runner
+        .log
+        .iter()
+        .any(|line| line.starts_with("git worktree add -b lane/x ")));
     let checked = steps.fast_checks(HEAD).unwrap();
+    assert_eq!(
+        Path::new(&checked.stamp),
+        stamp_of(&steps, HEAD),
+        "the stamp is the review gate's receipt"
+    );
     assert!(Path::new(&checked.stamp).is_file());
     let pushed = steps.push(HEAD, &checked.stamp).unwrap();
     assert_eq!(pushed.pr, 42);
@@ -480,32 +507,94 @@ fn shell_steps_create_the_worktree_check_the_exact_head_and_push_a_draft_pr() {
 }
 
 #[test]
-fn a_stale_head_or_a_failing_check_leaves_no_stamp_and_blocks_the_push() {
+fn a_stale_head_a_dirty_tree_or_a_failing_check_leaves_no_stamp_and_blocks_the_push() {
     let dir = tempfile::tempdir().unwrap();
-    let mut stale = shell(
-        dir.path(),
-        Fake {
-            head: FIXED.into(),
-            ..Fake::default()
-        },
-    );
+    let fake = |head: &str, dirty, fail_on| Fake {
+        head: head.into(),
+        dirty,
+        fail_on,
+        ..Fake::default()
+    };
+    let mut stale = shell(dir.path(), fake(FIXED, false, None));
     assert!(stale.fast_checks(HEAD).unwrap_err().contains("not"));
-    let mut red = shell(
-        dir.path(),
-        Fake {
-            head: HEAD.into(),
-            fail_on: Some("check-b"),
-            ..Fake::default()
-        },
+    let mut dirty = shell(dir.path(), fake(HEAD, true, None));
+    assert!(dirty.fast_checks(HEAD).unwrap_err().contains("uncommitted"));
+    assert!(
+        dirty
+            .runner
+            .log
+            .iter()
+            .all(|line| !line.starts_with("check-")),
+        "no check runs on a dirty tree"
     );
+    let mut red = shell(dir.path(), fake(HEAD, false, Some("check-b")));
     assert!(red.fast_checks(HEAD).is_err());
-    assert!(!dir.path().join("stamps").join(HEAD).exists());
-    let err = red
-        .push(
-            HEAD,
-            &dir.path().join("stamps").join(HEAD).to_string_lossy(),
-        )
-        .unwrap_err();
+    let stamp = stamp_of(&red, HEAD);
+    assert!(!stamp.exists());
+    let err = red.push(HEAD, &stamp.to_string_lossy()).unwrap_err();
     assert!(err.contains("no fast-checks stamp"));
     assert!(red.runner.log.iter().all(|line| !line.contains("push")));
+}
+
+#[test]
+fn a_failed_worktree_add_is_cleaned_so_the_retry_starts_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = shell(
+        dir.path(),
+        Fake {
+            fail_on: Some("add"),
+            branch_at: BASE.into(),
+            ..Fake::default()
+        },
+    );
+    assert_eq!(steps.worktree(BASE).unwrap_err(), "boom");
+    let log = steps.runner.log.join("\n");
+    assert!(log.contains("git worktree remove --force"));
+    assert!(
+        log.contains("git branch -D lane/x"),
+        "a branch still at the base is dropped"
+    );
+    // A branch that moved on holds work and is kept.
+    let mut moved = shell(
+        dir.path(),
+        Fake {
+            fail_on: Some("add"),
+            branch_at: HEAD.into(),
+            ..Fake::default()
+        },
+    );
+    moved.worktree(BASE).unwrap_err();
+    assert!(!moved.runner.log.join("\n").contains("branch -D"));
+}
+
+struct Unsaved;
+
+impl StageSink for Unsaved {
+    fn record(&mut self, _: &BatchSteps) -> Result<(), String> {
+        Err("disk full".into())
+    }
+}
+
+#[test]
+fn a_list_that_cannot_be_saved_stops_the_run() {
+    let mut actions = Script::new(&[]);
+    let mut runner = Runner::new(inputs(), Limits::default());
+    let outcome = runner.run(&mut actions, &mut Unsaved, &mut tick());
+    assert_eq!(
+        outcome,
+        Outcome::NotSaved {
+            step_index: 0,
+            reason: "disk full".into()
+        }
+    );
+    assert_eq!(actions.calls, ["claim"], "no step runs after a save failed");
+}
+
+#[test]
+fn journal_rows_are_written_per_item_key() {
+    let mut runner = Runner::new(inputs(), Limits::default());
+    runner.run(&mut Script::new(&[]), &mut Rows::default(), &mut tick());
+    let row = &runner.steps().rows[2];
+    let journal = journal_row("demo/repo", "demo:ITEM", BASE, 3, row).unwrap();
+    assert_eq!(journal["batch_key"], "demo:ITEM");
 }
