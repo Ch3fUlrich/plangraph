@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 import pytest
 
@@ -492,6 +493,70 @@ def test_pytest_deadline_reports_hang_and_keeps_running(tmp_path, parallel, phas
         if command.poll() is None:
             os.killpg(command.pid, signal.SIGKILL)
             command.wait(timeout=5)
+
+
+def _run_deadline_session(tmp_path, tests, *worker_args):
+    import signal
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text('pytest_plugins = ("_split_ci_environment",)\n')
+    (tmp_path / 'test_hang.py').write_text(tests)
+    (tmp_path / 'test_other_scope.py').write_text('def test_other_scope(): pass\n')
+    command = subprocess.Popen(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-o', 'test_deadline=2',
+         *worker_args, str(tmp_path)],
+        cwd=tmp_path, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    try:
+        output, _ = command.communicate(timeout=30)
+    finally:
+        if command.poll() is None:
+            os.killpg(command.pid, signal.SIGKILL)
+            command.wait(timeout=5)
+    return command.returncode, output
+
+
+@pytest.mark.parametrize('strict', [True, False])
+def test_pytest_deadline_fails_a_hung_test_marked_xfail(tmp_path, strict):
+    returncode, output = _run_deadline_session(
+        tmp_path,
+        'import pytest\nfrom threading import Event\n\n'
+        f'@pytest.mark.xfail(strict={strict}, reason="known flake")\n'
+        'def test_blocked():\n    Event().wait()\n',
+    )
+    assert returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert 'HUNG test_hang.py::test_blocked' in output and '1 failed' in output, output
+    assert 'xfailed' not in output and 'xpassed' not in output, output
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='reads Linux process tables')
+def test_pytest_deadline_kills_a_reparented_child_in_a_shared_process_group(tmp_path):
+    pytest.importorskip('xdist')
+    from plangraph.spawner.proc_kill import alive
+
+    returncode, output = _run_deadline_session(
+        tmp_path,
+        'from pathlib import Path\nimport subprocess, sys, time\nfrom threading import Event\n\n'
+        'GRANDCHILD = "import subprocess, sys; p = subprocess.Popen([sys.executable, \'-c\', \'import time; time.sleep(600)\'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL);"\n'
+        'GRANDCHILD += " print(p.pid, flush=True)"\n\n'
+        'def test_blocked():\n'
+        '    # The middle process exits at once, so the sleeper is reparented away from this worker\n'
+        '    # but stays in the worker\'s process group, which xdist shares with its controller.\n'
+        '    out = subprocess.run([sys.executable, "-c", GRANDCHILD], capture_output=True, text=True)\n'
+        '    Path("grandchild.pid").write_text(out.stdout.strip())\n'
+        '    Event().wait()\n',
+        '-p', 'xdist.plugin', '-n', '2', '--dist', 'loadscope',
+    )
+    assert returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert 'HUNG test_hang.py::test_blocked' in output, output
+    pid = int((tmp_path / 'grandchild.pid').read_text())
+    deadline = time.monotonic() + 5
+    while alive(pid, None) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not alive(pid, None)
 
 
 def _run_without_pthread_kill(tmp_path, body, deadline_signal):

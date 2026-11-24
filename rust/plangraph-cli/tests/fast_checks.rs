@@ -563,3 +563,22 @@ esac
     assert!(log.contains("check exceeded 3 second timeout"), "{log}");
     assert_child_stopped(&pidfile);
 }
+
+#[test]
+fn fast_checks_plan_for_the_nextest_config_tests_the_replay_spike() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(&root)
+        .args([
+            "fast-checks",
+            "--plan",
+            "--files",
+            "rust/.config/nextest.toml",
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let plan = String::from_utf8(result.stdout).unwrap();
+    assert!(plan.contains("rust-spike=true"), "{plan}");
+    assert!(plan.contains("temporal-spike/test: cargo "), "{plan}");
+}

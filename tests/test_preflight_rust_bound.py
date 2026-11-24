@@ -103,3 +103,27 @@ def test_running_binary_is_the_last_running_line():
     assert preflight.running_test_binary(out) == "tests/b.rs"
     assert preflight.running_test_binary(b"nothing") is None
     assert preflight.running_test_binary(None) is None
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads Linux process tables")
+def test_a_cargo_test_timeout_kills_the_test_binaries_it_started(tmp_path, monkeypatch):
+    import os
+    import time
+
+    from plangraph.spawner.proc_kill import alive
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pid_file = tmp_path / "binary.pid"
+    fake = bin_dir / "cargo"
+    fake.write_text(f"#!/bin/sh\nsleep 600 &\necho $! > {pid_file}\nsleep 600\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(preflight, "check_timeout", lambda *a, **k: 1)
+    env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    code, text = preflight.run(["cargo", "test"], tmp_path, env)
+    assert code == 1 and "exceeded 1 second timeout" in text
+    pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while alive(pid, None) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not alive(pid, None)

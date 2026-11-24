@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from contextlib import contextmanager
 from threading import get_ident
@@ -306,6 +307,25 @@ class _TeardownHung(_TestHung, pytest.fail.Exception):
     """Let pytest collect this teardown failure and run remaining finalizers."""
 
 
+_TOKEN_ENV = 'PLANGRAPH_TEST_DEADLINE_TOKEN'
+
+
+def _tagged_processes(token, table):
+    """Pids whose environment carries this test's token, even after reparenting."""
+    if not token:
+        return set()
+    needle = f'{_TOKEN_ENV}={token}'.encode()
+    found = set()
+    for pid in table:
+        try:
+            with open(f'/proc/{pid}/environ', 'rb') as stream:
+                if needle in stream.read().split(b'\0'):
+                    found.add(pid)
+        except OSError:
+            continue
+    return found
+
+
 def _stop_hung_test(item, started, teardown):
     pid = os.getpid()
     message = f'HUNG {_ci_nodeid(item.nodeid)}'
@@ -318,9 +338,13 @@ def _stop_hung_test(item, started, teardown):
 
         table = proc_kill._scan()
         isolated_group = os.getpgrp() == pid
-        # Shared fixtures can own children that predate this test.
+        # Shared fixtures can own children that predate this test. A child whose parent
+        # exited was reparented away from this worker, and under xdist the worker shares
+        # its group with the controller and other workers, so those are found by the
+        # token every process of this test inherits.
+        tagged = _tagged_processes(os.environ.get(_TOKEN_ENV), table)
         roots = {child for child, entry in table.items() if child != pid and
-                 (entry[1] == pid or (isolated_group and entry[2] == pid)) and
+                 (entry[1] == pid or (isolated_group and entry[2] == pid) or child in tagged) and
                  entry[4] >= started}
         children = proc_kill.descendants(table, roots)
         try:
@@ -349,7 +373,15 @@ def pytest_runtest_protocol(item):
     started = (int(time.clock_gettime(time.CLOCK_BOOTTIME) * os.sysconf('SC_CLK_TCK'))
                if sys.platform == 'linux' else None)
     item.stash[_DEADLINE] = (monotonic() + seconds, seconds, started)
-    return (yield)
+    previous = os.environ.get(_TOKEN_ENV)
+    os.environ[_TOKEN_ENV] = uuid.uuid4().hex
+    try:
+        return (yield)
+    finally:
+        if previous is None:
+            os.environ.pop(_TOKEN_ENV, None)
+        else:
+            os.environ[_TOKEN_ENV] = previous
 
 
 def _watch_test_phase(item, teardown=False):
@@ -408,5 +440,8 @@ def pytest_runtest_teardown(item):
 def pytest_runtest_makereport(item, call):
     report = yield
     if call.excinfo is not None and call.excinfo.errisinstance(_TestHung):
+        # A hang is a failure even under xfail, which would otherwise report it as expected.
+        report.outcome = 'failed'
         report.longrepr = str(call.excinfo.value)
+        report.__dict__.pop('wasxfail', None)
     return report

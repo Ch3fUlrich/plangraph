@@ -249,7 +249,8 @@ def select(paths: list[str]) -> dict[str, bool]:
         elif p.startswith("rust/"):
             res["pytest"] = True
             res["pytest-postgres"] = True
-            if p.startswith("rust/spikes/"):
+            if p.startswith("rust/spikes/") or p == "rust/.config/nextest.toml":
+                # Local replay of the spike runs under the shared nextest config.
                 res["rust-spike"] = True
             if (p.startswith(("rust/worker/", "rust/worker-core/", "rust/pg-spawnd/"))
                     or fnmatchcase(p, "rust/Cargo.*") or p == "rust/.config/nextest.toml"):

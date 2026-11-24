@@ -5,12 +5,18 @@ use pg_worker_core::cargo_pool::{LockWaitSample, LockWaitTracker};
 use pg_worker_core::executable_test_support;
 use pg_worker_core::stall::spawn_retrying;
 use std::io::{self, BufRead, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SLOT_WAIT_LIMIT: Duration = Duration::from_secs(30);
 const SLOT_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+/// Bound of one plain `cargo test` step, the same cap preflight puts on a Rust step.
+/// Nextest carries per-test deadlines instead; this covers the fallback without it.
+const CARGO_TEST_DEADLINE: Duration = Duration::from_secs(3600);
 
 pub(super) fn jail_binary(target: &Path) -> PathBuf {
     target
@@ -41,7 +47,43 @@ pub(super) fn run_step(
     command: &mut Command,
     program: &str,
     lease: &cargo_pool::SlotLease,
-) -> std::io::Result<std::process::ExitStatus> {
+) -> std::io::Result<ExitStatus> {
+    run_step_bounded(command, program, lease, CARGO_TEST_DEADLINE)
+}
+
+/// Wait for `child`; past `deadline` kill its whole process group, test binaries included.
+fn wait_bounded(child: &mut Child, deadline: Duration) -> io::Result<ExitStatus> {
+    let (done, finished) = mpsc::channel::<()>();
+    #[cfg(unix)]
+    let group = child.id() as libc::pid_t;
+    let watchdog = std::thread::spawn(move || {
+        if matches!(
+            finished.recv_timeout(deadline),
+            Err(RecvTimeoutError::Timeout)
+        ) {
+            eprintln!(
+                "fast-checks: cargo test exceeded its {} second bound; killing its process group",
+                deadline.as_secs()
+            );
+            #[cfg(unix)]
+            // SAFETY: the group id is the spawned child's own process group.
+            unsafe {
+                libc::killpg(group, libc::SIGKILL);
+            }
+        }
+    });
+    let status = child.wait();
+    drop(done);
+    let _ = watchdog.join();
+    status
+}
+
+fn run_step_bounded(
+    command: &mut Command,
+    program: &str,
+    lease: &cargo_pool::SlotLease,
+    deadline: Duration,
+) -> std::io::Result<ExitStatus> {
     if Path::new(program).file_name().and_then(|n| n.to_str()) != Some("cargo") {
         return spawn_retrying(command)?.wait();
     }
@@ -49,6 +91,11 @@ pub(super) fn run_step(
         .get_args()
         .zip(command.get_args().skip(1))
         .any(|(first, second)| first == "nextest" && second == "run");
+    let bounded = !nextest && command.get_args().any(|arg| arg == "test");
+    #[cfg(unix)]
+    if bounded {
+        command.process_group(0);
+    }
     let started = Instant::now();
     let mut child = spawn_retrying(command.stderr(Stdio::piped()))?;
     let stderr = child.stderr.take().expect("piped stderr");
@@ -70,7 +117,11 @@ pub(super) fn run_step(
         }
         tracker
     });
-    let status = child.wait()?;
+    let status = if bounded {
+        wait_bounded(&mut child, deadline)?
+    } else {
+        child.wait()?
+    };
     let build_ms = (started.elapsed().as_millis() as u64).max(1);
     let (blocking_events, lock_wait_ms) = reader
         .join()
@@ -277,6 +328,51 @@ fn run_step_records_lock_wait_sample_only_for_cargo_steps() {
     run_step(&mut other, "true", &lease).unwrap();
     let after = cargo_pool::summarize_lock_waits(&state).unwrap();
     assert_eq!(after.values().next().unwrap().builds, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn cargo_test_fallback_kills_its_whole_process_group_at_the_deadline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let lease =
+        resolve_cargo_target(&worktree, &tmp.path().join("c/cargo-target"), "fc-hang").unwrap();
+    let pid_file = tmp.path().join("test-binary.pid");
+    let fake = executable_test_support::write_script(
+        tmp.path(),
+        "cargo",
+        "#!/bin/sh\nsleep 600 &\necho $! > \"$2\"\nsleep 600\n",
+    );
+    let mut command = Command::new(&fake);
+    command.arg("test").arg(&pid_file);
+
+    let started = Instant::now();
+    let status = run_step_bounded(
+        &mut command,
+        fake.to_str().unwrap(),
+        &lease,
+        Duration::from_millis(500),
+    )
+    .unwrap();
+
+    assert!(!status.success());
+    assert!(started.elapsed() < Duration::from_secs(30));
+    let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let mut alive = true;
+    for _ in 0..100 {
+        // SAFETY: signal 0 only checks that the pid exists.
+        alive = unsafe { libc::kill(pid, 0) } == 0;
+        if !alive {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!alive, "the test binary of the hung step survived");
 }
 
 #[cfg(unix)]

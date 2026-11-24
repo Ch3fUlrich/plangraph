@@ -30,6 +30,11 @@ def test_docs_only_change():
     assert res["rust-spike"] is False
 
 
+def test_nextest_config_change_selects_every_rust_job_that_runs_under_it():
+    res = select(["rust/.config/nextest.toml"])
+    assert (res["rust"], res["rust-worker"], res["rust-spike"]) == (True, True, True)
+
+
 def test_rust_worker_change():
     res = select(["rust/worker/src/x.rs"])
     assert res["pytest"] is True

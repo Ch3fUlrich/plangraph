@@ -115,7 +115,10 @@ def run_test_process(command, **kwargs):
 def run(command, cwd, env):
     timeout = check_timeout(command, cwd, env)
     try:
-        runner = run_test_process if is_affected_step(command) or is_nextest(command) else subprocess.run
+        # Test commands run in their own session so a timeout kills the test binaries too;
+        # nextest and the plain `cargo test` fallback share that bound.
+        bounded = is_affected_step(command) or is_nextest(command) or command[:2] == ["cargo", "test"]
+        runner = run_test_process if bounded else subprocess.run
         result = runner(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=timeout)
