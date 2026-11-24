@@ -371,7 +371,8 @@ def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
         dispositions = [ci_select.attempt_key(a) for a in done[:-1]] if FLAKE_LABEL in pr["labels"] else []
         found = ci_select.ready_problems({
             "fast_checks": green, "entry_set": green, "windows_required": rust, "windows": green if rust else None,
-            "attempts": attempts, "flake_dispositions": dispositions})
+            "attempts": attempts, "flake_dispositions": dispositions, "head": pr["head"], "files": pr["files"],
+            "truncated": pr["truncated"], "replay": ci_select.replay_receipt(pr["head"])})
         problems += [f"PR #{num}: {p}" for p in found]
     return problems
 

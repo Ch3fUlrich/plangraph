@@ -65,22 +65,29 @@ Audit of what a full run executes (no job was merged or re-wired; that needs a r
 ## Reusing the green run of a reworded train commit (rule 3.42)
 
 Rule 3.42 a runs the full suite once on the merge candidate; a reword that leaves the Git tree unchanged does not change what was tested.
-On a `pull_request` run the select job passes the previous head (`github.event.before`), its commit statuses, its tree and the Actions run
-record of the run its `ci-full` status names to `tools/ci_select.py select` (`--old-head --old-tree --old-run --statuses`). `reword_evidence`
-reuses that run only when both commits have the same non-empty tree, the newest `ci-full` of the old head is success for that tree, and the run
-record shows the same run id, the old head as its commit, this workflow on a pull request, the latest attempt, concluded success. It prints
-`tested=true` and `evidence=run R attempt A tree T reused from <old> for <new>`; the gate accepts `tested=true` like a landing record and the
-new head gets its own `ci-full` status with the same run and tree, so a second reword chains. A different tree, a missing or unverified run, or
-a newer or red attempt runs the suite again. Branch protection and the required-check list are unchanged.
+On a `pull_request` run the select job passes the previous head (`github.event.before`), its commit statuses, its tree, the Actions run
+record of the run its `ci-full` status names and that run's jobs of the same attempt to `tools/ci_select.py select` (`--old-head --old-tree
+--old-run --old-jobs --statuses`). `reword_evidence` reuses that run only when both commits have the same non-empty tree, the newest `ci-full`
+of the old head is a success for that tree published by `github-actions[bot]`, the run record shows the same run id, the old head, this
+workflow on a pull request, the latest attempt, concluded success, and the jobs of that attempt are the full matrix, every job and shard
+green (`merge_batch_land.full_job_problems`), so a green affected-only run never qualifies. It prints `tested=true` and `evidence=run R
+attempt A tree T reused from <old> for <new>` and keeps `full=true` with every suite off: `ci-gate` accepts that like a landing record, and
+its `Verify computed GO` step still runs. A GO evidence file is bound to the head of the run, so for the reworded head the verifier refuses it
+(`ci_unbound`) until a granted change of `go_verify.rs` binds the two heads; reuse never skips the verifier. The reworded head gets its own
+`ci-full` status with the same run and tree; the run did not test a suite, so `Post ci-full evidence` is skipped for it. A different tree, a
+missing or unverified run, or a newer or red attempt runs the suite again.
 
 ## Entry replay of changed tests (LE-CI-FLAKE-ENTRY-REPLAY)
 
 `tools/ci_select.py entry-set --run` also replays the tests a part changed: every `tests/**/test_*.py` it added or changed (not `tests/browser`) and
-every Rust `#[test]` fn it added or touched, five runs each on the part's own head. The Python files run four times serially and once with
-`-n auto` (the full-worker run); each Rust test runs four times with `--test-threads=1` and once with the default threads. Every log is kept under
-`--replay-dir` (`python-run-N.log`, `cargo-run-N.log`) with `replay.json`. A test that passed and failed among the runs is printed as
+every Rust `#[test]` fn whose lines it touched, a body-only edit included, five runs each on the part's own head. The Python files run four
+times serially and once with `-n auto` (the full-worker run); each Rust test runs four times with `--test-threads=1` and once with the default
+threads. Every log is kept with `replay.json` (`python-run-N.log`, `cargo-run-N.log`) under `--replay-dir`, by default
+`<telemetry>/entry-replay/<head>` (`PLANGRAPH_TELEMETRY_DIR`). A test that passed and failed among the runs is printed as
 `entry-set: FLAKY: <test id> (logs <failing log> and <passing log>)`; a test that fails every run, or a run with no test outcome, is `FAIL`.
-Either one makes the entry run fail, so the part is not READY. A stable test clears the entry.
+Either one makes the entry run fail. `replay.json` is the receipt bound to the head: `merge_batch build` readiness (`ready_problems`) needs a
+passing five-run receipt for the exact head of every part that changes a test or Rust file, and names `FLAKY: <test id> (logs ...)` from it.
+Green CI alone never stands for the replay.
 
 ## CI speed and flake handling (tests.yml)
 
@@ -93,10 +100,10 @@ Either one makes the entry run fail, so the part is not READY. A stable test cle
   `PYTEST_SHARD_DURATIONS_OUT` and uploads `durations-<suite>-<shard>`. On a full run `ci-gate` merges them per suite (`ci-flake
   combine-durations`) into the `pytest-durations-combined` artifact; committing that file is the pin for the next train.
 - **Same-SHA retry.** A red pytest or `cargo test` step stays red. A step after it reruns the failed test ids once on the same SHA
-  (`.github/actions/pytest-retry`, the Rust step) and `ci-flake classify` writes `flake-record.json` (runner, run, attempt, SHA, test ids, both
+  (`.github/actions/pytest-retry`, the Rust step; the affected path of a pull request has its own rerun and is not retried twice) and `ci-flake classify` writes `flake-record.json` (runner, run, attempt, SHA, test ids, both
   logs) and `flake-items.json` (a priority-10 Keeper item definition per fail-then-pass test) into the `flake-*` artifact and the job summary.
-  Fail-pass and fail-fail are both red; more than 50 failures are not retried.
+  Fail-pass and fail-fail are both red; more than 50 failures are not retried. A test whose retry reports a pass and a teardown error is a failure; an xdist `@group` suffix is not part of the test id. The Rust blocking run excludes an active entry by package and test (that package runs alone with `--skip`).
 - **Quarantine.** Every run pins one UTC timestamp (`select` output `as-of`) and the ledger `.github/pytest-quarantine.json` of the pull
-  request's base (`.github/actions/quarantine-ledger`). The blocking pytest and `cargo test` steps leave out the active entries; shard 0
-  (and the `rust` job) runs only them in a reporting step that never blocks; `ci-gate` publishes the owner and expiry of every entry in its
+  request's base (`.github/actions/quarantine-ledger`; a shallow checkout fetches the base, and a base that cannot be read fails the job, only a base without a ledger file means none). The blocking pytest and `cargo test` steps leave out the active entries; shard 0
+  (and the `rust` job) runs only them in a reporting step that never blocks (bounded like every pytest step); `ci-gate` publishes the owner and expiry of every entry in its
   summary. An entry past its expiry blocks again. A Rust entry is `cargo:<package>:<test path>`.
