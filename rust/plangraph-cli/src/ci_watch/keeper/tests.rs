@@ -35,6 +35,7 @@ fn task() -> Task {
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        sha: None,
     }
 }
 #[test]
