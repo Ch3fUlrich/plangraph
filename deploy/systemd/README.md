@@ -165,8 +165,17 @@ ended in a failed state), `stale(..)` (the installed release is not the checkout
 `not_deployed`). A not-live entry shows its age in hours and its first-run check; the last line is
 `deploy-not-live<TAB>N`, and the exit status is 1 while N > 0. The age starts when the unit file reached the
 checkout, not at the first status run. The run rewrites `$XDG_STATE_HOME/plangraph/deploy-live/<host>.json`,
-the ledger the landing GO check reads. `plangraph merge-close --deploy-status` prints the same lines after
+the ledger the landing GO check reads; `pg-deploy-status.timer` reruns it every 15 minutes so the ledger is fresh. `plangraph merge-close --deploy-status` prints the same lines after
 the keeper's list of merged items with no deploy evidence.
+
+## GO check
+
+`plangraph land-train go-verify` adds the deploy part to every GO: it reads the ledgers in
+`$XDG_STATE_HOME/plangraph/deploy-live/` (or `--deploy-ledgers DIR`; copy the ledgers of other hosts there) and
+refuses `deploy_not_live` for a manifest entry not live for more than 24 hours on any host, `deploy_ledger_stale`
+for a ledger older than 6 hours and `deploy_ledger_missing` when no host has reported. The only way past
+`deploy_not_live` is a dated routing exception in `deploy/exceptions.toml` (entry, last day, D-id, reason); the
+file is compiled into the verifier, so an exception takes effect through a reviewed change and a rebuild.
 
 ## Host release binaries
 

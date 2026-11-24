@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the deploy-status ledger the GO check reads, every fifteen minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=10s
+Persistent=true
+Unit=pg-deploy-status.service
+
+[Install]
+WantedBy=timers.target
