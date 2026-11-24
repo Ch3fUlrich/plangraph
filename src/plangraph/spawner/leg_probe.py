@@ -212,6 +212,17 @@ def _missing_harness(harness, seconds_elapsed=0.0):
                 infra=True, seconds=seconds_elapsed)
 
 
+SANDBOX_MARKERS = ('read-only file system', 'read-only sandbox', 'operation not permitted')
+
+
+def _sandbox_refused(job, root, changed):
+    """True when a Codex probe wrote ok.txt but its sandbox kept it from committing (or said so)."""
+    if changed:
+        return False
+    text = ' '.join(str(getattr(job, name, '') or '') for name in ('stderr', 'stdout')).lower()
+    return any(m in text for m in SANDBOX_MARKERS) or (Path(root) / 'ok.txt').exists()
+
+
 async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_reprobe=False):
     """One real commit task (or tiny OK prompt for reviews) in a disposable dir; infra failures book no leg state.
 
@@ -269,6 +280,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                     role='review' if review_mode else 'implement',
                     model_or_combo=leg.model,
                     client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
+                    # A Codex writer commits only where its sandbox may write the git dir (as pg-spawnd grants it).
+                    writable_dirs=[str(Path(root) / '.git')] if leg.harness == 'codex' and not review_mode else (),
                     watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
                                   max_s=timeout + 60, interval=1))
             spawn_task = asyncio.ensure_future(launch())
@@ -311,6 +324,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 else:
                     ok = changed and 'ok.txt' in files
                     reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
+                    if not ok and leg.harness == 'codex' and _sandbox_refused(job, root, changed):
+                        # The leg answered; the probe's own sandbox blocked the commit: never a leg failure.
+                        ok, reason, infra = False, 'probe infra: sandbox refused the commit', True
         # Tripwire (D-3465): the writer must never touch the caller's repo.
         caller_after = await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
