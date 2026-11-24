@@ -9,6 +9,14 @@ from plangraph.keeper import api_routes, mcp
 from plangraph.keeper.api import KeeperHandler  # noqa: F401 - import smoke
 from test_keeper_run_tokens import FakeRuns
 
+# The session fixture native_client_binary runs `cargo build` in the setup of whichever
+# native test reaches it first on a shard.
+pytestmark = pytest.mark.long_test_deadline(
+    360, reason="Hosted CI run for PR 1154 reported HUNG at the 120 s default in the setup of "
+    "test_native_queue_acknowledges_receipt_quota, which builds the plangraph CLI; a local "
+    "warm-cache run measured 80 s setup and 0.03 s call, so the test is slow, not stuck.",
+)
+
 
 @pytest.fixture
 def d(tmp_path):

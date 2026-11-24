@@ -12,6 +12,13 @@ from _spawnd import built_rust_binary
 from plangraph.keeper import placement_rules_bridge as bridge
 from plangraph.keeper.errors import Refused
 
+# The session fixture rules_binary runs `cargo build -p pg-worker-core --bin pg-placement-rules`
+# under a file lock: the first test of a shard (or a worker waiting on the lock) pays the build.
+pytestmark = pytest.mark.long_test_deadline(
+    600, reason="A cold runner builds the pg-placement-rules helper in the rules_binary session "
+    "fixture, which exceeds the 120 s default in the setup of the first test that uses it.",
+)
+
 
 @pytest.fixture
 def helper(monkeypatch, rules_binary):
