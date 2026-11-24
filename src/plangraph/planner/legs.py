@@ -86,6 +86,13 @@ def _codex_context(model):
 _NO_REGISTRY_REQUEST_TOKENS = 100_000
 
 
+#: Routing policy: a request bound below the registry window, one reason each.
+#: ``deepseek``: the paid pay-as-you-go leg, used only if really needed.
+POLICY_REQUEST_CAPS = {"deepseek": 100_000}
+#: Research requests keep headroom under a 1M window on every research leg.
+RESEARCH_REQUEST_CAP = 900_000
+
+
 def _registry_request_tokens(provider, model):
     """Largest request an opencode leg takes: the registry context minus its output reserve.
 
@@ -217,7 +224,8 @@ DEFAULT_LEGS = (
     Leg("opencode-go-beam-free", "free", "opencode", "opencode-go/beam-free",
         "beam", ("128k",), 100000, False, roles=("implement", "review")),
     Leg("opencode-go-glm-5.3-flash", "subscription", "opencode",
-        "opencode-go/glm-5.3-flash", "glm", ("128k", "256k", "1m"), 900000, False,
+        "opencode-go/glm-5.3-flash", "glm", ("128k", "256k", "1m"),
+        _registry_request_tokens("omniroute", "opencode-go/glm-5.3-flash"), False,
         roles=("review", "implement", "research"), web_access=True),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
@@ -235,7 +243,9 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k", "256k", "1m"), 900000,
         False, roles=("review", "implement", "research"), web_access=True),
-    _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
+    _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",),
+             max_request_tokens=min(_registry_request_tokens("omniroute", "deepseek-direct-flash"),
+                                    POLICY_REQUEST_CAPS["deepseek"])),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
         tool_mode="prompt-only",
@@ -384,11 +394,10 @@ def review_route_pool(base=None) -> tuple[Leg, ...]:
 
 
 def research_route_pool(legs) -> tuple[Leg, ...]:
-    """Research uses declared legs and reserves headroom on the default Sol leg."""
+    """Research uses declared legs and reserves headroom (RESEARCH_REQUEST_CAP) on every research leg."""
     if legs is not DEFAULT_LEGS:
         return tuple(leg for leg in legs if "research" in leg.roles)
-    return tuple(_replace(leg, max_request_tokens=min(leg.max_request_tokens, 900_000))
-                 if leg.id == LEAD_WRITER else leg
+    return tuple(_replace(leg, max_request_tokens=min(leg.max_request_tokens, RESEARCH_REQUEST_CAP))
                  for leg in review_route_pool(legs) if "research" in leg.roles)
 
 
