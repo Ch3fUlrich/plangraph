@@ -175,9 +175,10 @@ fn a_train_failure_reaches_its_recorded_writer_and_defines_no_fix_lane() {
     )
     .unwrap();
     let script = dir.path().join("deliver.sh");
-    std::fs::write(&script, "#!/bin/sh\necho \"$1\" > \"$2.sent\"\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &script,
+        "#!/bin/sh\necho \"$1\" > \"$2.sent\"\n",
+    );
     let _env = ENV.lock().unwrap();
     std::env::set_var("CI_WATCH_DELIVER_CMD", &script);
     let mut task = Task {

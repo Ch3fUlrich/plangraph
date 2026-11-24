@@ -235,7 +235,6 @@ fn malformed_prompt_transport_records_named_reason() {
 
 #[test]
 fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
-    use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new("touch should_not_run", json!("review"), &[]);
     let repo = f.state.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
@@ -275,14 +274,13 @@ fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
         "max_request_tokens": 10
     });
     let plan = json!({"legs": [leg.clone()], "first_leg": leg, "skipped": []});
-    std::fs::write(
+    pg_worker_core::executable_test_support::write_executable(
         f.state.path().join("route"),
         format!(
             "#!/bin/sh\nprintf '%s' '{}'\n",
             plan.to_string().replace('\'', "'\\''")
         ),
-    )
-    .unwrap();
+    );
     let cfg_dir = f.state.path().join("xdg/plangraph");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     let hosts = json!({
@@ -321,11 +319,6 @@ fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
         .env("XDG_CONFIG_HOME", f.state.path().join("xdg"))
         .env("PG_SPAWND_ADAPTER", f.state.path().join("route"))
         .env("PG_SPAWND_LAUNCH_CMD", f.state.path().join("launch"));
-    std::fs::set_permissions(
-        f.state.path().join("route"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
     let child = cmd.spawn().unwrap();
     let _guard2 = common::ChildGuard { child };
     let mut client = common::McpClient::connect(&socket2);

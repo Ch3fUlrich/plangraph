@@ -245,15 +245,12 @@ fn merged_sweep_cli_refuses_conflicting_flags() {
 #[test]
 #[serial_test::serial]
 fn sha_shaped_branches_keep_branch_pr_authority() {
-    use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     let gh = tmp.path().join("gh");
-    fs::write(
+    pg_worker_core::executable_test_support::write_private_executable(
         &gh,
         format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\nprintf '%s\\n' '[{{\"number\":1,\"state\":\"OPEN\",\"headRefOid\":\"{}\"}},{{\"number\":2,\"state\":\"OPEN\",\"headRefOid\":\"{}\"}}]'\n", "a".repeat(40), "b".repeat(40)),
-    )
-    .unwrap();
-    fs::set_permissions(&gh, fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let original = std::env::var_os("PATH");
     let mut paths = vec![tmp.path().to_path_buf()];
     paths.extend(std::env::split_paths(

@@ -167,7 +167,10 @@ def test_detached_cli_later_worktree_refusal_is_reported_by_status(repository, d
     service = dispatch[0](True)
     monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
     start = cli._start_supervisor
+    # Keep the harness running until the parent has checked that the CLI detached.
+    release = repo.parent / 'finish-harness'
     script = f'''import asyncio
+from pathlib import Path
 from plangraph.spawner import cli, seat_spawn
 seat_spawn.resources = lambda service: (0, 1000000)
 from plangraph.spawner.runner import JobInfo
@@ -175,8 +178,11 @@ from plangraph.spawner.service import SpawnService
 from plangraph.planner.routing import SpawnPlan
 from plangraph.planner.legs import DEFAULT_LEGS
 from types import SimpleNamespace
+async def released():
+    while not Path({str(release)!r}).exists():
+        await asyncio.sleep(0.05)
 async def factory(**kwargs):
-    await asyncio.sleep(3)
+    await asyncio.wait_for(released(), timeout=10)
     return JobInfo('job-test', 'completed', kwargs['prompt'], kwargs['model_or_combo'], exit_code=0)
 service = SpawnService(runner=SimpleNamespace(default_cwd={str(repo)!r}, spawn=factory, _tasks={{}}, _processes={{}}, provider_responses={{}}), state={str(service.state)!r})
 service._route = lambda *a, **k: SpawnPlan((next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.2-sol-medium'),), (), 'test', (), ())
@@ -189,17 +195,17 @@ raise SystemExit(cli.main(['--supervise']))
         return children[-1]
     monkeypatch.setattr(cli, '_start_supervisor', supervisor)
     card = dict(estimate_tokens=100, lane_branch='lane/resume', continuation=True)
-    started = time.monotonic()
     try:
         assert cli.main(['spawn', '--card', json.dumps(card), '--run-worktree', 'Implement a tested change']) == (2 if stale else 0)
-        assert time.monotonic() - started < 2.5
         record = json.loads(capsys.readouterr().out)
         assert record['status'] == ('refused' if stale else 'running')
         if stale:
             assert record['reason'] == 'base_stale: worktree_base_behind_origin'
         else:
             assert record['base_admitted'] is True
+            assert len(children) == 1 and children[0].poll() is None
     finally:
+        release.touch()
         for child in children:
             child.wait(timeout=10)
 class _Out(io.StringIO):
@@ -628,24 +634,34 @@ def test_same_checkout_review_reuses_the_resolved_default_branch(repository, tmp
 
 def test_stuck_initiating_probe_is_a_leg_skip_not_an_admission_timeout(repository, dispatch, monkeypatch):
     """A probe stuck in its own setup fails the leg inside the admission window."""
+    from functools import partial
+    from types import SimpleNamespace
     from plangraph.spawner import base_fresh, leg_probe
     monkeypatch.setattr(leg_probe, 'before_launch', _REAL_BEFORE_LAUNCH)
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
-    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.8)  # 0.6 s per probe, 0.9 s in all
-    async def stuck(runner, leg, **kwargs):
-        await asyncio.sleep(30)  # e.g. delayed log scanning before the probe's own deadline
-        return dict(ok=True, reason='', seconds=0)
+    monkeypatch.setattr(leg_probe, 'ProbeBudget', partial(leg_probe.ProbeBudget, window=1.8))
+    now = 100.0
+    clock = SimpleNamespace(monotonic=lambda: now, time=lambda: 0.0, sleep=time.sleep)
+    monkeypatch.setattr(base_fresh, 'time', clock)
+    monkeypatch.setattr(leg_probe, 'time', clock)
+    probe_timeouts = []
+
+    async def stuck(runner, leg, *, timeout_s, **kwargs):
+        nonlocal now
+        probe_timeouts.append(timeout_s)
+        now += 0.7  # The owner uses its 0.6 s share and 0.1 s of grace.
+        await asyncio.Future()  # Stuck before the probe can enforce its own deadline.
+
     monkeypatch.setattr(leg_probe, 'probe', stuck)
     # The hardened service runs the leg loop that probes.
     service, calls = dispatch[0](True), dispatch[1]
     async def main():
-        started = time.monotonic()
         record = await base_fresh.admitted_spawn(service, dict(
             card=dict(estimate_tokens=100), prompt='Implement a tested change', role='implement'))
         await asyncio.gather(*service.tasks.values(), return_exceptions=True)
-        return record, time.monotonic() - started
-    record, elapsed = asyncio.run(main())
-    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+        return record
+    record = asyncio.run(main())
+    assert probe_timeouts == pytest.approx([0.6])
     assert 'base_admission_timeout' not in json.dumps(record), record
     attempts = service.result(record['run_id'])['attempts']
     assert [a['skip_reason'] for a in attempts] == ['probe_budget_exhausted'], attempts
@@ -653,28 +669,39 @@ def test_stuck_initiating_probe_is_a_leg_skip_not_an_admission_timeout(repositor
 
 
 def test_probe_budget_counts_routing_time_spent_before_the_run_record(repository, dispatch, monkeypatch):
-    """Slow routing eats the admission window: the probe gets what is left, not a fresh budget."""
+    """Routing before run record creation consumes the probe budget."""
+    from functools import partial
+    from types import SimpleNamespace
     from plangraph.spawner import base_fresh, leg_probe
     monkeypatch.setattr(leg_probe, 'before_launch', _REAL_BEFORE_LAUNCH)
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
-    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.8)
-    async def stuck(runner, leg, **kwargs):
-        await asyncio.sleep(30)
-        return dict(ok=True, reason='', seconds=0)
-    monkeypatch.setattr(leg_probe, 'probe', stuck)
+    # Shorten the synthetic probe window while leaving the real admission watchdog alone.
+    monkeypatch.setattr(leg_probe, 'ProbeBudget', partial(leg_probe.ProbeBudget, window=1.8))
+    now = 100.0
+    clock = SimpleNamespace(monotonic=lambda: now, time=lambda: 0.0)
+    monkeypatch.setattr(base_fresh, 'time', clock)
+    monkeypatch.setattr(leg_probe, 'time', clock)
+
+    async def unexpected_probe(*args, **kwargs):
+        pytest.fail('routing already exhausted the probe budget')
+
+    monkeypatch.setattr(leg_probe, 'probe', unexpected_probe)
     service, calls = dispatch[0](True), dispatch[1]
+
     async def slow_plan(plan, **kwargs):
-        await asyncio.sleep(1.35)  # routing, before the run record exists
+        nonlocal now
+        now += 1.9  # Before the run record exists.
         return plan
+
     monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', slow_plan)
+
     async def main():
-        started = time.monotonic()
         record = await base_fresh.admitted_spawn(service, dict(
             card=dict(estimate_tokens=100), prompt='Implement a tested change', role='implement'))
         await asyncio.gather(*service.tasks.values(), return_exceptions=True)
-        return record, time.monotonic() - started
-    record, elapsed = asyncio.run(main())
-    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+        return record
+
+    record = asyncio.run(main())
     assert 'base_admission_timeout' not in json.dumps(record), record
     attempts = service.result(record['run_id'])['attempts']
     assert [a['skip_reason'] for a in attempts] == ['probe_budget_exhausted'], attempts
@@ -690,3 +717,143 @@ def test_admitted_spawn_leaves_the_callers_admission_clock_unset(repository, dis
         await asyncio.gather(*service.tasks.values(), return_exceptions=True)
         return base_fresh.ADMISSION_STARTED.get()
     assert asyncio.run(main()) is None
+
+
+def _wall_clock_bounds(source, path):
+    import ast
+    import operator
+    from collections import defaultdict
+
+    arithmetic = {ast.Add: operator.add, ast.Sub: operator.sub,
+                  ast.Mult: operator.mul, ast.Div: operator.truediv}
+
+    def constant_seconds(expr):
+        if isinstance(expr, ast.Constant) and type(expr.value) in (float, int):
+            return expr.value
+        if isinstance(expr, ast.UnaryOp):
+            operation = {ast.UAdd: operator.pos, ast.USub: operator.neg}.get(type(expr.op))
+            if operation and (operand := constant_seconds(expr.operand)) is not None:
+                return operation(operand)
+        if isinstance(expr, ast.BinOp) and (operation := arithmetic.get(type(expr.op))):
+            left, right = constant_seconds(expr.left), constant_seconds(expr.right)
+            if left is not None and right is not None:
+                try:
+                    return operation(left, right)
+                except ArithmeticError:
+                    return None
+        return None
+
+    def expression_name(expr):
+        if isinstance(expr, ast.Name):
+            return expr.id
+        if isinstance(expr, ast.Attribute):
+            return expr.attr
+        if isinstance(expr, ast.Subscript) and isinstance(expr.slice, ast.Constant):
+            return expr.slice.value
+        return None
+
+    def measures_elapsed(expr):
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Sub):
+            # Timestamp differences can start with a recorded sample rather than a clock call.
+            if (isinstance(expr.left, (ast.Name, ast.Attribute, ast.Subscript))
+                    and expression_name(expr.right) in {'start', 'started', 'start_time', 't0'}):
+                return True
+            expr = expr.left
+        if isinstance(expr, ast.Call):
+            return expression_name(expr.func) in {'monotonic', 'perf_counter', 'time'}
+        return expression_name(expr) in {'elapsed', 'waited', 'duration', 'elapsed_s', 'duration_s'}
+
+    def is_short_bound(comparison):
+        operands = [comparison.left, *comparison.comparators]
+        for left, op, right in zip(operands, comparison.ops, operands[1:]):
+            if isinstance(op, (ast.Gt, ast.GtE)):
+                left, right = right, left
+            elif not isinstance(op, (ast.Lt, ast.LtE)):
+                continue
+            seconds = constant_seconds(right)
+            if seconds is not None and 0 < seconds < 5 and measures_elapsed(left):
+                return True
+        return False
+
+    class FindBounds(ast.NodeVisitor):
+        def __init__(self, path):
+            self.path = path
+            self.scope = []
+
+        def visit_FunctionDef(self, node):
+            self.scope.append(node.name)
+            self.generic_visit(node)
+            self.scope.pop()
+
+        visit_AsyncFunctionDef = visit_ClassDef = visit_FunctionDef
+
+        def visit_Assert(self, node):
+            for expr in ast.walk(node.test):
+                if isinstance(expr, ast.Compare) and is_short_bound(expr):
+                    depth = next((i + 1 for i, part in enumerate(self.scope)
+                                  if part.startswith('test_')), len(self.scope))
+                    name = '::'.join(self.scope[:depth]) or '<module>'
+                    matches[f'{self.path}::{name}'].append(expr.lineno)
+
+    matches = defaultdict(list)
+    FindBounds(path).visit(ast.parse(source, filename=path))
+    return matches
+
+
+@pytest.mark.parametrize('bound, matched', [
+    ('end - start < 2.5', True),
+    ('fake.builds[0] - t0 < 0.5 + 0.3', True),
+    ('0.5 + 0.3 > fake.builds[0] - t0', True),
+    ('total - count < 2.5', False),
+    ('end - start < 4 + 1', False),
+])
+def test_wall_clock_ratchet_detects_subtracted_timestamps(bound, matched):
+    source = f'def test_example():\n    assert {bound}\n'
+    expected = {'tests/example.py::test_example': [2]} if matched else {}
+    assert _wall_clock_bounds(source, 'tests/example.py') == expected
+
+
+def test_no_sub_five_second_wall_clock_assertions():
+    """Ratchet short upper bounds on elapsed time in Python tests."""
+    from pathlib import Path
+
+    tests = Path(__file__).resolve().parent
+    matches = {}
+    for path in sorted(tests.rglob('*.py')):
+        relative = path.relative_to(tests.parent).as_posix()
+        matches.update(_wall_clock_bounds(path.read_bytes(), relative))
+
+    # Each entry is a known flake risk to convert to a deterministic assertion.
+    allowed = set('''\
+tests/hooks/test_redact_common.py::test_scans_stay_linear_on_hostile_lines
+tests/test_devstack_sh.py::test_dying_start_dev_child_fails_fast
+tests/test_e2e_teardown_reap.py::test_term_ignorer
+tests/test_fleet_msg.py::test_prober_answers_unreachable_peers_within_budget
+tests/test_jev_attempt_thread.py::test_hanging_jev_does_not_delay_production_decisions
+tests/test_jev_client.py::test_timeout_is_recorded_and_bounded
+tests/test_keeper_bus_fatal.py::test_fatal_before_on_fatal_wiring_exits_75
+tests/test_keeper_ready_scale.py::test_cold_read_builds_in_the_request_expired_read_serves_the_old_index
+tests/test_keeper_review_jev_shadow.py::test_a_failing_jev_never_changes_the_verdict_result
+tests/test_keeper_seat_clause_tier.py::test_adversarial_length
+tests/test_keeper_snapshot_writer.py::test_a_steady_stream_cannot_starve_the_file
+tests/test_keeper_snapshot_writer.py::test_show_answers_during_a_fleet_build_of_7000_records
+tests/test_kg_export.py::test_slow_drip_response_hits_total_budget
+tests/test_m2b_anchor.py::test_silent_service_times_out_quickly
+tests/test_planner_jev_shadow.py::test_guarded_ok_timeout_and_error
+tests/test_planner_jev_shadow.py::test_timeout_is_bounded_and_reported_for_every_kind
+tests/test_prod_audit_detached.py::test_stalled_log_runtime_count_is_capped
+tests/test_prod_audit_safety.py::test_interpreter_startup_is_inside_deadline
+tests/test_prod_audit_safety.py::test_stalled_audit_is_bounded
+tests/test_redact_output_rules.py::test_unterminated_pem_scan_is_linear
+tests/test_review_jev_hook.py::test_a_bad_jev_never_blocks_plan_actions_or_changes_the_plan
+tests/test_spawn_cli.py::test_cli_wait_returns_after_the_dispatcher_died
+tests/test_spawner_quota_failfast.py::test_call_log_poll_is_time_bounded
+tests/test_spawner_remote_ps.py::test_wsl_query_deadline_holds_when_the_reader_never_drains_the_plan
+'''.splitlines())
+    unexpected = [f'{name} at lines {lines}' for name, lines in matches.items()
+                  if name not in allowed or len(lines) > 1]
+    stale = sorted(allowed - matches.keys())
+    assert not (unexpected or stale), (
+        f'Unexpected sub-five-second wall-clock assertions: {unexpected}\n'
+        f'Stale wall-clock allowlist entries: {stale}'
+    )

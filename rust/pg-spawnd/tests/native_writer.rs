@@ -8,7 +8,7 @@ mod test_python;
 mod binary;
 #[path = "native_writer_fixture/codex.rs"]
 mod codex_fixture;
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = pg_worker_core::git_test_support::command(repo)
         .args(args)
@@ -162,15 +162,20 @@ for tool in ('cargo', 'git', 'codex'):
         let node_bin = home.join(".nvm/versions/node/v24.19.0/bin");
         fs::create_dir_all(&node_bin).unwrap();
         let node = node_bin.join("node");
-        fs::write(&node, "#!/bin/sh\nexec /usr/bin/env python3 \"$@\"\n").unwrap();
-        fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(
+            &node,
+            "#!/bin/sh\nexec /usr/bin/env python3 \"$@\"\n",
+        );
         let codex = node_bin.join("codex");
         let (_, script) = codex_fixture::CODEX.split_once('\n').unwrap();
-        fs::write(&codex, format!("#!/usr/bin/env node\n{script}")).unwrap();
+        pg_worker_core::executable_test_support::write_executable(
+            &codex,
+            format!("#!/usr/bin/env node\n{script}"),
+        );
         codex
     } else {
         let codex = bin.join("codex");
-        fs::write(&codex, codex_fixture::CODEX).unwrap();
+        pg_worker_core::executable_test_support::write_executable(&codex, codex_fixture::CODEX);
         codex
     };
     let spawnd = if systemd_path {
@@ -179,7 +184,6 @@ for tool in ('cargo', 'git', 'codex'):
         binary::spawnd()
     };
     std::os::unix::fs::symlink(spawnd, bin.join("fixture-spawnd")).unwrap();
-    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
     let review_cli = dir.join("review-cli.py");
     fs::write(&review_cli, r#"import json, pathlib, subprocess, sys, time, uuid
@@ -220,13 +224,17 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
 "#).unwrap();
     fs::create_dir_all(dir.join("supervisor-bin")).unwrap();
     // The fixture does not depend on free space on the host's /tmp mount.
-    let df = bin.join("df");
-    fs::write(&df, "#!/bin/sh\nprintf 'fixture 0 0 10485760 0%% /\\n'\n").unwrap();
-    fs::set_permissions(&df, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::copy(&df, dir.join("supervisor-bin/df")).unwrap();
+    let df_script = "#!/bin/sh\nprintf 'fixture 0 0 10485760 0%% /\\n'\n";
+    pg_worker_core::executable_test_support::write_executable(bin.join("df"), df_script);
+    pg_worker_core::executable_test_support::write_executable(
+        dir.join("supervisor-bin/df"),
+        df_script,
+    );
     let cargo = bin.join("cargo");
-    fs::write(&cargo, "#!/bin/sh\necho 'fixture cargo'\n").unwrap();
-    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &cargo,
+        "#!/bin/sh\necho 'fixture cargo'\n",
+    );
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let runtime = home.join("runtime");
     fs::create_dir_all(&runtime).unwrap();

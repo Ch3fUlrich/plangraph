@@ -23,8 +23,10 @@ fn scratch_commit_is_isolated_from_inherited_git_metadata() {
     let marker = root.path().join("hook-ran");
     std::fs::create_dir(&hooks).unwrap();
     let hook = hooks.join("pre-commit");
-    std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
-    std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &hook,
+        format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+    );
     let global = root.path().join("gitconfig");
     std::fs::write(
         &global,

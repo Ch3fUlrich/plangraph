@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -50,8 +50,6 @@ impl Launcher {
             ] {
                 install_pinned_file(checkout, &router, file);
             }
-            let path = router.join("bin/fleet-launch");
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         } else {
             fs::write(
                 router.join("ops/fleet-launch-policy.json"),
@@ -82,7 +80,14 @@ pub fn install_pinned_file(checkout: &Path, router: &Path, file: &str) {
         "reading pinned {object}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    fs::write(router.join(file), out.stdout).unwrap();
+    if file == "bin/fleet-launch" {
+        pg_worker_core::executable_test_support::write_private_executable(
+            router.join(file),
+            out.stdout,
+        );
+    } else {
+        fs::write(router.join(file), out.stdout).unwrap();
+    }
 }
 
 pub fn reference_checkout() -> Option<PathBuf> {
