@@ -285,8 +285,8 @@ ten completed reviews under `review_health_alerts` and puts them after healthier
 
 - Card needs: `card.needs` (`tools`, `shell`, `long_context`, `vision`) and `card.tool_mode` (the weakest tool mode accepted) filter every candidate leg, fallback legs included; the skip reason is `needs_<need>`.
 - Effort: a requested `card.effort` the row's `effort_channel` cannot pass (`none`; `fixed` at another effort; `parameter` when the model would clamp it lower) skips the leg as `effort_channel`; the effort is never lowered.
-- Score: quality is the own `p_hat` (`score`) at n >= 20 runs, else `coding_index`, else the AA index. An imputed row ranks at its mean minus one standard deviation (`score_se`, default 3.0) and always behind a measured row inside a utility band.
-- Eligibility for `high` and `critical` cards: a row older than 45 days, or measured under another `index_version`, price or served model, skips as `stale_row` (the evidence names which); a new own row below 5 runs skips as `canary_pending`.
+- Score: quality is the own `p_hat` (`score`) at n >= 20 runs, else `coding_index`, else the AA index. An imputed row ranks at its mean minus one standard deviation (`score_se`, default 3.0 only when absent; a zero is a zero) and always behind a measured row inside a utility band.
+- Eligibility for `high` and `critical` cards: a row older than 45 days, or measured under another `index_version`, price or served model, skips as `stale_row` (the evidence names which; the catalog supplies the current price as `cost_per_task_usd` and the served model as `upstream_id`, and a measurement records its own as `{"price", "served_model"}` in `source_record`); a new own row below 5 runs skips as `canary_pending`.
 
 ## Codex usage limit
 
