@@ -203,3 +203,16 @@ def test_native_review_cli_preview_reports_empty_route_with_causes(tmp_path, mon
     reasons = {row["leg"]: row["reason"] for row in plan["skipped"]}
     assert reasons["agy-gemini-4-hydrogen-high"] == "client_missing"
     assert reasons["opencode-go-deepseek-v4-flash"] == "repository_review_tools_unavailable"
+
+
+def test_card_that_asks_for_danger_full_access_is_refused_with_a_named_reason():
+    import pytest
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    from plangraph.routing_errors import SpawnRefused
+
+    with pytest.raises(SpawnRefused, match="^sandbox_refused: danger-full-access"):
+        refuse_card_sandbox({"sandbox": "danger-full-access"})
+    with pytest.raises(SpawnRefused, match="^sandbox_refused:"):
+        refuse_card_sandbox({"sandbox": "read-only"})
+    for fine in ({}, {"sandbox": None}, {"sandbox": "workspace-write"}):
+        refuse_card_sandbox(fine)

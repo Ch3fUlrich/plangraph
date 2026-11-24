@@ -29,6 +29,13 @@ _FAST_CHECKS = "plangraph fast-checks --base"
 _SANDBOX_CACHE_SECONDS = 600
 
 
+def secret_paths():
+    """Home-relative secret paths of the one deny list the Rust sandbox also reads."""
+    data = json.loads(files("plangraph").joinpath("config/secret_paths.json").read_text())
+    return ([f"~/{rel}" for rel in data["home_relative"]]
+            + [f"~/.config/{rel}" for rel in data["config_home_relative"]])
+
+
 def _review_command(command, worktree):
     if not re.fullmatch(r"[A-Za-z0-9_./: =+-]+", command):
         return False
@@ -189,8 +196,7 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     checkout = Path(worktree or Path.cwd()).resolve()
     hook = shlex.join([sys.executable, "-I", str(Path(__file__).resolve()),
                        "--review-bash", str(checkout)])
-    credentials = ["~/.aws", "~/.ssh", "~/.gnupg", "~/.config", "~/.claude",
-                   "~/.claude.json", "~/.git-credentials", "~/.netrc"]
+    credentials = [*secret_paths(), "~/.config", "~/.claude"]
     if config := env.get("CLAUDE_CONFIG_DIR"):
         credentials.append(str(Path(config).resolve()))
     writable = [str(scratch)]
