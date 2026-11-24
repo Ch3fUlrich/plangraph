@@ -603,6 +603,21 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     assert 'agy-gemini-4-argon-low' in [leg.id for leg in after.legs]
 
 
+def test_cli_probe_all_reviewers(tmp_path, monkeypatch, capsys):
+    from plangraph.spawner import cli, leg_probe
+    calls = []
+
+    async def fake(runner, legs, all_writers, timeout, *, all_reviewers=False):
+        calls.append((legs, all_writers, timeout, all_reviewers))
+        return dict(ok=True, probes=[dict(id='mimo-v2.6-pro', ok=True, reason='', seconds=0.1)])
+
+    monkeypatch.setattr(leg_probe, 'probe_many', fake)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(runner=SimpleNamespace()))
+    assert cli.main(['--state', str(tmp_path), 'probe', '--all-reviewers', '--json']) == 0
+    assert calls == [([], False, None, True)]
+    assert json.loads(capsys.readouterr().out)['ok'] is True
+
+
 def test_scheduled_probe_launches_native_sonnet_when_model_is_shared(tmp_path, monkeypatch, capsys):
     from plangraph.planner import legs
     from plangraph.routing_support import claude_seat, resolver

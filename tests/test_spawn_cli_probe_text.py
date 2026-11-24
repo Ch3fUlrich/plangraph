@@ -85,21 +85,6 @@ def test_scheduled_probe_exit_status(tmp_path, monkeypatch, capsys, probe_ok, ex
     assert probed == [leg.id for leg in selected if leg not in limited]
 
 
-def test_cli_probe_all_reviewers(tmp_path, monkeypatch, capsys):
-    from plangraph.spawner import cli, leg_probe
-    calls = []
-
-    async def fake(runner, legs, all_writers, timeout, *, all_reviewers=False):
-        calls.append((legs, all_writers, timeout, all_reviewers))
-        return dict(ok=True, probes=[dict(id='mimo-v2.6-pro', ok=True, reason='', seconds=0.1)])
-
-    monkeypatch.setattr(leg_probe, 'probe_many', fake)
-    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(runner=SimpleNamespace()))
-    assert cli.main(['--state', str(tmp_path), 'probe', '--all-reviewers', '--json']) == 0
-    assert calls == [([], False, None, True)]
-    assert json.loads(capsys.readouterr().out)['ok'] is True
-
-
 def test_scheduled_probe_reports_one_outage_and_rearms_after_recovery(tmp_path, monkeypatch, capsys):
     from plangraph.planner import legs
     from plangraph.planner.routing import plan_spawn
