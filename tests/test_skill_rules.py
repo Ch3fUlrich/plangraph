@@ -181,3 +181,11 @@ def test_batch_writer_result_format_has_a_lesson_line():
     text = (ROOT / "skills" / "batch-writer" / "SKILL.md").read_text(encoding="utf-8")
     end = text.split("\n## End\n", 1)[1]
     assert "`LESSON <what happened> <evidence" in end
+
+
+def test_batch_writer_names_the_bare_python_rule_for_rust_tests():
+    text = (ROOT / "skills" / "batch-writer" / "SKILL.md").read_text(encoding="utf-8")
+    for needle in ("test_python::command()", "test_no_bare_python_subprocesses",
+                   "tools/affected_tests.py --base origin/main --head HEAD --local --files-only --run",
+                   "every pytest batch\n   summary line"):
+        assert needle in text, needle
