@@ -32,6 +32,9 @@ MAX_BATCH_KEYS = 50
 
 def annotate_item(record, card, *, inherit=False):
     value = card.get('item_key') if isinstance(card, dict) else None
+    keys = batch_members(card)
+    if keys and not value:
+        value = keys[0]   # a seat of a part is bound to the part's first item
     if value is None or value == '':
         value = card.get('item') if isinstance(card, dict) else None
     if (value is None or value == '') and not inherit:
@@ -45,9 +48,8 @@ def annotate_item(record, card, *, inherit=False):
             item = item[len(project) + 1:]
         value = project + ':' + item
     record['item_key'] = value
-    members = batch_members(card)
-    if members:
-        record['item_keys'] = members
+    if keys:
+        record['item_keys'] = keys
     if record.get('role') == 'review' and (writer_run := native_writer_review(card)):
         record['native_writer_run'] = writer_run
     if value and record.get('role') == 'review' and not inherit:
