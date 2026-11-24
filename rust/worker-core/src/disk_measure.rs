@@ -41,7 +41,7 @@ mod tests {
         fs::hard_link(tmp.path().join("one"), tmp.path().join("again")).unwrap();
         std::os::unix::fs::symlink(tmp.path(), tmp.path().join("loop")).unwrap();
         let bytes = allocated_bytes(tmp.path()).unwrap();
-        assert!(bytes >= 512 && bytes < 1_000_000, "{bytes}");
+        assert!((512..1_000_000).contains(&bytes), "{bytes}");
         assert_eq!(
             bytes,
             fs::metadata(tmp.path().join("one")).unwrap().blocks() * 512
