@@ -768,3 +768,33 @@ def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
     assert result["closed"] == []
     assert any(row["key"] == "demo:A" and "merged_pr_missing" in row["reason"]
                for row in result["listed"])
+
+
+def test_the_router_close_needs_a_deploy_row_from_after_the_merge(env):
+    """The router GO close applies the same merge-time floor as the automatic close (D-6790)."""
+    from plangraph.keeper.evidence import VERIFIERS
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    from plangraph.keeper.evidence_types import as_epoch
+
+    env.store.require_live_evidence = True  # the keeper test worlds switch the rule off
+    set_states(env)
+    router, key = env.p("router"), "demo:C"
+    env.store.edit_definition(router, key, {"done_criteria": "Live: observe the service in use.",
+                                            "criteria_reason": "Require a live service observation",
+                                            "criteria_evidence": "Service deployment fixture"})
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    head = env.repo.land("w1", f"Plan-Item: {key}", 400)
+    merged = as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main"))
+    env.store.record_run(env.p("spawner"), key, {"run_id": "fixture-seats", "phase": "finished", "rc": 0,
+                                                 "seats": [{"model": "gemini-test", "verdict": "pass"}]})
+    path = env.repo.root.parent / "DECISIONS.md"
+    path.write_text(f"| D-1 | demo | GO {head} |\n", encoding="utf-8")
+    env.store.ctx["decisions"] = DecisionsAdapter(path)
+    proof = {"host": "fixture", "unit": "test.service", "is_active": "active"}
+    env.clock.t = merged - 60
+    assert env.store.add_evidence_router(router, key, "deploy", proof)["verified"]
+    env.clock.t = merged + 60
+    assert "live_evidence_missing" in str(env.store.close_merged(router, key, "D-1", ["google"]))
+    assert state(env, key)["state"] == "in_review", "a row older than the merge proves nothing"
+    assert env.store.add_evidence_router(router, key, "deploy", proof)["verified"]
+    assert env.store.close_merged(router, key, "D-1", ["google"])["state"] == "done"
