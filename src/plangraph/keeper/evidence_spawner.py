@@ -40,6 +40,41 @@ def _required_seat(record):
     return isinstance(leg, dict) and leg.get("id") in REVIEW_REQUIRED
 
 
+def _tests_reported(text):
+    """True when the last standalone ``TESTS:`` line of a review reports tests that ran."""
+    fence, body = None, None
+    for raw in (text or "").splitlines():
+        line = raw.lstrip(" ")
+        if marker := re.match(r"(`{3,}|~{3,})", line):
+            fence = None if fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) else fence or marker[1]
+        elif fence is None and line.startswith("TESTS:"):
+            body = line[6:].strip().lower()
+    zero = re.search(r"\b0\s+(?:passed|failed|selected|collected|ran|tests?)\b|\bno tests\b", body or "")
+    return bool(body) and not re.search(r"requires approval|not permitted|denied|disallowed", body) \
+        and not re.match(r"(?:none|no|not|n/a|skipped|could not|cannot|can not|did not)\b", body) \
+        and not (zero and not re.search(r"\b[1-9][0-9]*\s+(?:passed|failed|selected|collected|ran|tests?)\b", body))
+
+
+def _recorded_harness_seat(record, completion, text, head):
+    """The countable seat of an unwitnessed run (rule 3.26), or ``None``.
+
+    D-6762: the verdict names the exact head, FILES READ names a file, the record carries a
+    harness and the chosen leg's family, and an opencode run reports tests that ran.
+    """
+    from ..review.family import model_family
+    from ..review.verdict import has_files_read
+    leg = record.get("chosen_leg")
+    model = leg.get("model") if isinstance(leg, dict) else None
+    harness = record.get("harness") or (leg.get("harness") if isinstance(leg, dict) else None)
+    if (not isinstance(harness, str) or harness in ("", "unknown") or not isinstance(model, str)
+            or leg.get("harness") not in (None, harness) or not leg.get("family") or not model_family(model)
+            or not isinstance(text, str) or not has_files_read(text)
+            or not re.search(rf"(?<![0-9a-fA-F]){re.escape(head)}(?![0-9a-fA-F])", text, re.I)
+            or (harness == "opencode" and not _tests_reported(text))):
+        return None
+    return {"model": model, "harness": harness, "witness": "recorded-harness"}
+
+
 def _quota_refusal(text):
     """Read only provider-shaped quota evidence; keeper never imports runtime."""
     text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text).replace('\r', '\n')
@@ -110,7 +145,8 @@ class SpawnerRecordAdapter:
             raise ValueError("record exceeds size limit")
 
     def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False,
-                     require_diff_head=False, require_explicit_accept=False, train_delta=None):
+                     require_diff_head=False, require_explicit_accept=False, train_delta=None,
+                     allow_unwitnessed=False):
         """Read cited review witnesses without inferring a served model."""
         from ..review.family import model_family
         from ..review.verdict import has_files_read
@@ -199,7 +235,11 @@ class SpawnerRecordAdapter:
                          or serving.get("witness_kind") != "cli_reported"
                          or serving.get("served_model") != model)):
                 raise ValueError(f"{run_id}: CLI seat is not permitted or complete")
-            if (not family or model == "unwitnessed" or pinned or record.get("override_reason")
+            recorded = (_recorded_harness_seat(record, completion, text, completion.get("head_sha"))
+                        if allow_unwitnessed and model == "unwitnessed" and isinstance(completion, dict) else None)
+            if recorded:
+                family = model_family(recorded["model"])
+            if (not family or (model == "unwitnessed" and not recorded) or pinned or record.get("override_reason")
                     or isinstance(record.get("plan"), dict) and record["plan"].get("p_source") == "override"
                     or record.get("status") != "completed"
                     or type(record.get("exit_code")) is not int or record["exit_code"] != 0
@@ -210,10 +250,11 @@ class SpawnerRecordAdapter:
                     or not _one_serving_attempt(attempts, model)
                     or not _passing_review(text, require_explicit_accept=require_explicit_accept)
                     or (_required_seat(record) and not has_files_read(text))
-                    or record.get("served_family", family) != family):
+                    or (not recorded and record.get("served_family", family) != family)):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")
-            seats.append({"model": model, "verdict": "pass", "run_id": run_id,
-                          "head": completion["head_sha"]})
+            seats.append({"model": recorded["model"] if recorded else model, "verdict": "pass", "run_id": run_id,
+                          "head": completion["head_sha"], **({"harness": recorded["harness"],
+                                                                "witness": recorded["witness"]} if recorded else {})})
         if not seats and not allow_empty:
             raise ValueError("no cited review witnesses")
         return seats

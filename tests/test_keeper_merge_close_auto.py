@@ -25,14 +25,14 @@ class Repo:
         git(root, "commit", "--allow-empty", "-q", "-m", "base")
         self.heads = {}
 
-    def land(self, name, trailers, pr, *, merge=True):
+    def land(self, name, trailers, pr, *, merge=True, subject=None):
         """Commit ``trailers`` on a branch and merge it as PR ``pr`` (no-ff)."""
         git(self.root, "checkout", "-q", "-b", name, "main")
         git(self.root, "commit", "--allow-empty", "-q", "-m", f"work {name}\n\n{trailers}\n")
         head = git(self.root, "rev-parse", "HEAD")
         git(self.root, "checkout", "-q", "main")
         if merge:
-            git(self.root, "merge", "--no-ff", "-q", "-m", f"Merge pull request #{pr} from x/{name}", name)
+            git(self.root, "merge", "--no-ff", "-q", "-m", subject or f"Merge pull request #{pr} from x/{name}", name)
             git(self.root, "branch", "-q", "-D", name)
         self.heads[name] = head
         return head
@@ -768,3 +768,4 @@ def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
     assert result["closed"] == []
     assert any(row["key"] == "demo:A" and "merged_pr_missing" in row["reason"]
                for row in result["listed"])
+

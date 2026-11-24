@@ -11,6 +11,8 @@ Findings, printed as one line each:
 * ``NAMED-REVIEW-MODEL <key> <field> <model>`` — a review pins a catalog model.
 * ``MERGED-OPEN <key> <sha>`` — a commit on the project repo's main already
   carries ``Plan-Item: <key>`` while the item is still open.
+* ``DUPLICATE-REPO <path> <names>`` — keeper.json registers one directory under
+  several names (informational; merge-close reads it once).
 
 Exit 0 ok; 1 with ``--strict`` and findings; 3 (``EXIT_UNREACHABLE``) when the
 plan snapshot or keeper is unreachable (nothing is checked).
@@ -24,6 +26,7 @@ import sys
 
 from .cli_verbs import EXIT_OK, EXIT_UNREACHABLE, Unreachable
 from .brief import missing_why_how
+from .evidence_types import repo_identity
 from .store_tiers import review_model_findings
 from ..views import cancelled_gate_dependencies
 
@@ -105,6 +108,20 @@ def _repo_path(entry):
     return None, "main"
 
 
+def _repo_identity(entry):
+    return repo_identity(*_repo_path(entry))
+
+
+def duplicate_repos(repos):
+    """``(path, [names])`` for every directory and ref registered under more than one name."""
+    by_repo = {}
+    for name, entry in sorted((repos or {}).items()):
+        identity = _repo_identity(entry)
+        if identity[0]:
+            by_repo.setdefault(identity, []).append(name)
+    return [(path, names) for (path, _ref), names in by_repo.items() if len(names) > 1]
+
+
 def _valid_ref(ref):
     return isinstance(ref, str) and bool(ref) and not ref.startswith("-") \
         and ".." not in ref and re.fullmatch(r"[A-Za-z0-9._/-]+", ref)
@@ -140,8 +157,7 @@ def merged_but_open(items, repos):
     open_keys = {i["key"] for i in items
                  if i.get("key") and i.get("state") not in _CLOSED_STATES}
     findings = []
-    for entry in (repos or {}).values():
-        repo, ref = _repo_path(entry)
+    for repo, ref in dict.fromkeys(_repo_identity(e) for e in (repos or {}).values()):
         for sha, value in plan_item_trailers(repo, ref):
             if value in open_keys:
                 findings.append((value, sha))
@@ -160,6 +176,7 @@ def cmd_check(args, session):
         return EXIT_UNREACHABLE
     config = getattr(session, "config", None)
     order_only, merged_open = findings(items, getattr(config, "repos", None))
+    duplicates = duplicate_repos(getattr(config, "repos", None))
     cancelled_deps = cancelled_gate_dependencies(items)
     missing = missing_why_how(items)
     named_models = review_model_findings(items)
@@ -167,6 +184,7 @@ def cmd_check(args, session):
         print(json.dumps({
             "order_only": [{"src": src, "dst": dst} for src, dst in order_only],
             "merged_open": [{"key": key, "commit": sha} for key, sha in merged_open],
+            "duplicate_repos": [{"path": path, "names": names} for path, names in duplicates],
             "missing_why_how": missing,
             "named_review_models": [{"key": key, "field": field, "model": model}
                                     for key, field, model in named_models],
@@ -184,6 +202,8 @@ def cmd_check(args, session):
             print(f"ORDER-ONLY {src} -> {dst}")
         for key, sha in merged_open:
             print(f"MERGED-OPEN {key} {sha}")
+        for path, names in duplicates:
+            print(f"DUPLICATE-REPO {path} {', '.join(names)}")
     if getattr(args, "strict", False) and (order_only or merged_open or cancelled_deps or named_models):
         return 1
     return EXIT_OK
