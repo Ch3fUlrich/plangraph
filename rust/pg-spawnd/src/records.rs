@@ -24,13 +24,22 @@ pub(crate) fn valid_item(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
 }
 
-/// Every valid key of `card.item_keys` (the items of one part), each once, in card order.
+/// The keys of `card.item_keys` (the items of one batch or part), each once, in card order: none when
+/// the list is longer than `MAX_BATCH_KEYS` or holds an invalid key (as `batch_members` in item_key.py).
 pub(crate) fn part_keys(card: &Value) -> Vec<String> {
+    const MAX_BATCH_KEYS: usize = 50;
+    let Some(list) = card["item_keys"]
+        .as_array()
+        .filter(|l| l.len() <= MAX_BATCH_KEYS)
+    else {
+        return Vec::new();
+    };
     let mut keys: Vec<String> = Vec::new();
-    for key in card["item_keys"].as_array().into_iter().flatten() {
-        match key.as_str() {
-            Some(key) if valid_item(key) && !keys.iter().any(|k| k == key) => keys.push(key.into()),
-            _ => {}
+    for key in list {
+        match key.as_str().filter(|k| valid_item(k)) {
+            Some(key) if !keys.iter().any(|k| k == key) => keys.push(key.into()),
+            Some(_) => {}
+            None => return Vec::new(),
         }
     }
     keys
@@ -63,14 +72,8 @@ pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Val
         }
         None => Value::Null,
     };
-    if let Some(first) = base["item_key"]
-        .as_str()
-        .map(str::to_owned)
-        .filter(|_| !keys.is_empty())
-    {
-        let mut all = vec![first.clone()];
-        all.extend(keys.into_iter().filter(|k| *k != first));
-        base["item_keys"] = json!(all);
+    if !keys.is_empty() {
+        base["item_keys"] = json!(keys);
     }
     let missing = json!({"event":"seat_item_missing","level":"warning"});
     if base["item_key"].is_null()
@@ -87,11 +90,18 @@ mod tests {
 
     #[test]
     fn a_two_key_part_records_every_key_with_the_first_as_item_key() {
-        let card = json!({"item_keys":["p:A", "bad", "p:B", "p:A", 7]});
+        let card = json!({"item_keys":["p:A", "p:B", "p:A"]});
         let mut base = json!({"role":"review"});
         annotate_item(&mut base, &card, &mut vec![]);
         assert_eq!(base["item_key"], "p:A");
         assert_eq!(base["item_keys"], json!(["p:A", "p:B"]));
+        let mut bad = json!({"role":"review"});
+        annotate_item(
+            &mut bad,
+            &json!({"item_keys":["p:A", "bad", 7]}),
+            &mut vec![],
+        );
+        assert!(bad.get("item_keys").is_none());
         let mut named = json!({"role":"review"});
         annotate_item(
             &mut named,
@@ -100,7 +110,7 @@ mod tests {
         );
         assert_eq!(
             (&named["item_key"], &named["item_keys"]),
-            (&json!("p:B"), &json!(["p:B", "p:A"]))
+            (&json!("p:B"), &json!(["p:A", "p:B"]))
         );
         let mut single = json!({"role":"review"});
         annotate_item(&mut single, &json!({"item_key":"p:A"}), &mut vec![]);
