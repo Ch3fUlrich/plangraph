@@ -110,3 +110,27 @@ fn a_container_that_is_itself_a_target_and_a_missing_one_are_handled() {
     let report = run(&[missing, whole.clone()], &Guards::default(), true, false);
     assert!(report.freed_bytes > 0 && !whole.exists());
 }
+
+#[test]
+fn a_home_reached_through_a_symlinked_ancestor_is_still_swept_but_a_linked_target_is_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    let container = real.join("cargo-target");
+    let old = target(&container, "batch23", Duration::from_secs(3 * 86400));
+    let outside = target(
+        &tmp.path().join("elsewhere"),
+        "kept",
+        Duration::from_secs(3 * 86400),
+    );
+    std::os::unix::fs::symlink(&outside, container.join("linked")).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let report = run(
+        &[link.join("cargo-target")],
+        &Guards::default(),
+        true,
+        false,
+    );
+    assert!(report.freed_bytes > 0 && !old.exists());
+    assert!(outside.exists() && container.join("linked").exists());
+}
