@@ -1,0 +1,1 @@
+A merged close no longer raises on a spawner seat record without a head, flags no `go_row_missing` for a pre-PR lane merge (it has a decision row, not a PR), and reads a zero-padded `(D-0123 ...)` merge subject as `D-123` in a frozen close too.
