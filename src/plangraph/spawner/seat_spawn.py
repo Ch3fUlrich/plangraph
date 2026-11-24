@@ -16,8 +16,8 @@ from pathlib import Path
 
 from plangraph.routing_errors import SpawnRefused
 
-from .seat_artifact import reserve_seat_families, save_seat_group, seat_reasons, sync_seat, sync_seat_group
-from .seat_pair import weak_pair_after_smart
+from .seat_artifact import (reserve_seat_families, save_seat_group, seat_reasons, sync_seat, sync_seat_group,
+                            weak_pair_after_smart)
 
 def live_runner(runner):
     """Default-equivalent runners use fresh code; injected transports stay local."""
