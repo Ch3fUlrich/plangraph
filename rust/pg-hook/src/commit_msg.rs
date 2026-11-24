@@ -95,11 +95,35 @@ fn scissors_marker<'a>(
         })
 }
 
-/// Refusals for every Class-Search line of the message file, below a scissors line too: Git cuts
-/// there only for an editor message (a `-m` message keeps it under any cleanup), and the hook cannot
-/// tell the cases apart. The lines are read before whitespace cleanup, because `--cleanup=verbatim`
-/// keeps trailing whitespace that the range check then refuses.
-fn class_search_violations(kept: &[u8]) -> Vec<String> {
+/// Where Git discards the message tail: the scissors line it generated for `--verbose` or an editor
+/// message, which it always follows with its own two-line hint. A literal look-alike in a `-m`
+/// message has no hint and is kept (also under commit.cleanup=scissors), so it is not a cut.
+fn generated_scissors_offset(raw: &[u8]) -> Option<usize> {
+    let hint = b" Do not modify or remove the line above.";
+    let mut lines = raw
+        .split_inclusive(|b| *b == b'\n')
+        .scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len();
+            Some((start, line.strip_suffix(b"\n").unwrap_or(line)))
+        });
+    let mut previous = lines.next()?;
+    for current in lines {
+        if let Some(prefix) = previous.1.strip_suffix(SCISSORS).filter(|p| !p.is_empty()) {
+            if current.1.strip_prefix(prefix) == Some(hint) {
+                return Some(previous.0);
+            }
+        }
+        previous = current;
+    }
+    None
+}
+
+/// Refusals for the Class-Search lines Git can keep: the whole message file except the tail below the
+/// scissors line Git generated. The lines are read before whitespace cleanup, because
+/// `--cleanup=verbatim` keeps trailing whitespace that the range check then refuses.
+fn class_search_violations(raw: &[u8]) -> Vec<String> {
+    let kept = &raw[..generated_scissors_offset(raw).unwrap_or(raw.len())];
     let mut violations = Vec::new();
     for (index, line) in kept.split(|b| *b == b'\n').enumerate() {
         let line = String::from_utf8_lossy(line.strip_suffix(b"\r").unwrap_or(line));

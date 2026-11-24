@@ -384,3 +384,49 @@ fn a_literal_scissors_look_alike_does_not_hide_a_class_search_line() {
         String::from_utf8_lossy(&body.stdout).contains("Class-Search: fixture -> 1 hit, 1 changed")
     );
 }
+
+#[test]
+fn class_search_below_the_scissors_line_git_generated_is_not_checked_and_the_saved_body_agrees() {
+    let dir = repo();
+    let root = dir.path();
+    std::fs::write(root.join("staged.txt"), "x").unwrap();
+    assert!(git(root, &["add", "staged.txt"]).status.success());
+    // The editor appends a malformed line to the file: it lands below Git's own scissors line.
+    let editor =
+        "sh -c 'printf \"Class-Search: fixture -> 1 hit, 1 changed (prose)\\n\" >> \"$1\"' --";
+    let output = pg_worker_core::git_test_support::command(root)
+        .args([
+            "commit",
+            "--edit",
+            "--verbose",
+            "-m",
+            "editor tail\n\nWriter: codex",
+        ])
+        .env("GIT_EDITOR", editor)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let body = String::from_utf8(git(root, &["log", "-1", "--format=%B"]).stdout).unwrap();
+    assert!(
+        !body.contains("Class-Search"),
+        "Git kept the discarded tail: {body}"
+    );
+    // A line Git keeps (above the marker) is still refused.
+    std::fs::write(root.join("staged.txt"), "y").unwrap();
+    assert!(git(root, &["add", "staged.txt"]).status.success());
+    let output = git(
+        root,
+        &[
+            "commit",
+            "-m",
+            "kept\n\nClass-Search: fixture -> 1 hit, 1 changed (prose)\n\nWriter: codex",
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+}
