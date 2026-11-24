@@ -61,7 +61,9 @@ def code_copy(tmp_path, monkeypatch):
 def published_row(tmp_path):
     from test_keeper_daemon import free_port, make_db_and_config, spawn, stop_daemon, wait_health
     port = free_port()
-    db, cfg = make_db_and_config(tmp_path / 'run', port)
+    run = tmp_path / 'run'
+    run.mkdir()  # the Postgres backend does not create it; keeper.json is written into it
+    db, cfg = make_db_and_config(run, port)
     path = db.with_name(db.name + '.loaded.json')
     process = spawn(cfg)
     try:
