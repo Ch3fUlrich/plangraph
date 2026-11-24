@@ -127,7 +127,7 @@ critical path (parallel jobs count once), idle time between stages and the bottl
 critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
 them into a keeper table needs a keeper schema step that is not part of this change.
 
-## Merge body, part CI and the published GO row
+## Merge body, writer gate and the published GO row
 
 `plangraph land-train merge-body --repo DIR --manifest FILE` prints the body of the train's merge commit: one
 `Plan-Item: <key>` per item of every part (read from the part's own commits) and one
@@ -135,12 +135,12 @@ them into a keeper table needs a keeper schema step that is not part of this cha
 receipt. These are the lines the close reads (`store_runs._REVIEW_RUN`). `--check BODYFILE` refuses a body that
 lacks any of them, and a part without a `Plan-Item` has no body.
 
-`land-train build` also requires `--part-ci FILE` (a JSON array of `{pr, head, run_id, base, workflow,
-conclusion}`, the full `tests.yml` run of each part's lane) and `--previous-train SHA` (the merge commit of the
-last train on main). It refuses before it reads main when a part has no run for its exact head, a run of another
-workflow, a run that did not conclude `success` (the part goes back to its writer with the run's job log), or a run
-whose base does not contain the previous train or is not under the part head. The accepted runs are written to `<out>/<name>.part-ci.json` beside the manifest, so every part's full-CI run id can be
-read. The train run stays the integration check.
+`land-train build` also requires `--writer-receipts FILE` (a JSON array of `{pr, head, review_head, review_verdict,
+checks: [{command, exit_code}]}`): no full CI runs per part, and full CI runs once, on the train head. It refuses before
+it reads main when a part has no receipt for its exact head, the review judged another head or did not `ACCEPT`, the
+receipt holds no run of `python3 tools/affected_tests.py` or `python3 tools/preflight.py`, or any recorded check exited
+nonzero (the part goes back to its writer). The accepted receipts are written to `<out>/<name>.writer-receipts.json`
+beside the manifest. The train run stays the integration check.
 
 `land::go_publish` publishes a computed GO as one row of the protected decisions branch. It never pushes to that
 branch: it reads the fresh tip, runs the staleness check, allocates the next D-id, submits tip text plus one row on a
