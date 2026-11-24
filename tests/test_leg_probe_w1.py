@@ -682,8 +682,12 @@ def test_scheduled_codex_probe_clears_a_booked_usage_limit_before_its_reset(tmp_
     monkeypatch.setattr(leg_probe.time, 'time', lambda: clock[0])
     store = LegStateStore(tmp_path / 'legs.sqlite')
     model = leg_probe.key(leg)
-    store.record_harness_limit(model, "HTTP 429: You've hit your usage limit, resets in 72h",
-                               'spawner:harness', now=clock[0], harness='codex')
+    from plangraph.spawner.exit_outcome import quota_models
+    booked = quota_models(model, 'codex')   # production books every routed Codex key at once
+    assert 'omniroute/cx-gpt-6.2-astra' in booked and len(booked) > 1
+    for key_ in booked:
+        store.record_harness_limit(key_, "HTTP 429: You've hit your usage limit, resets in 72h",
+                                   'spawner:harness', now=clock[0], harness='codex')
     failed_at = clock[0] + 1
     store.record_probe_fail(model, 'still limited', 'review-probe', now=failed_at)
     assert store.leg_status(model, now=failed_at)['state'] == 'limited'
@@ -704,4 +708,5 @@ def test_scheduled_codex_probe_clears_a_booked_usage_limit_before_its_reset(tmp_
         assert store.leg_status(model, now=clock[0])['state'] == 'limited'
         return
     assert calls == [leg.model] and result['probes'][0]['ok'] and result['limited_legs'] == []
-    assert store.leg_status(model, now=clock[0])['state'] == 'ok'   # long before the 72 h reset
+    for key_ in booked:   # the writer legs of the same account serve again too, long before the 72 h reset
+        assert store.leg_status(key_, now=clock[0], harness='codex')['state'] == 'ok', key_

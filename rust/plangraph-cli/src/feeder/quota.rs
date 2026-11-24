@@ -157,12 +157,14 @@ pub(crate) fn pool_use_samples(rows: &Value, target: &str, now: i64, max_age: i6
         .into_iter()
         .filter_map(|(w, accounts)| {
             let length = window_seconds(&w)?;
-            let reset = accounts
+            // Use and reset come from the same observations: an account whose window already
+            // ended (or states no reset) counts in neither.
+            let active: Vec<_> = accounts
                 .iter()
-                .filter_map(|a| a.1)
-                .filter(|r| *r > now)
-                .min()?;
-            let used = accounts.iter().map(|a| a.0).sum::<f64>() / accounts.len() as f64;
+                .filter(|a| a.1.is_some_and(|r| r > now))
+                .collect();
+            let reset = active.iter().filter_map(|a| a.1).min()?;
+            let used = active.iter().map(|a| a.0).sum::<f64>() / active.len() as f64;
             Some(serde_json::json!({"pool":target,"window":w,"now":now,
                 "window_start":reset - length,"reset_at":reset,"used_pct":used}))
         })
@@ -331,5 +333,14 @@ mod tests {
         assert_eq!(by("5h").unwrap()["used_pct"], 0.0);
         assert!(by("odd").is_none() && by("daily").is_none() && got.len() == 2);
         assert!(pool_use_samples(&rows, "codex", now + 20_000, 10_800).is_empty());
+        // An expired 100 %-used account never lifts the sample of the account still in its window.
+        let mixed = json!([
+            row("a", "weekly", 0, now - 5),
+            row("b", "weekly", 80, now + 86_400)
+        ]);
+        assert_eq!(
+            pool_use_samples(&mixed, "codex", now, 10_800)[0]["used_pct"],
+            20.0
+        );
     }
 }
