@@ -319,9 +319,9 @@ Router. `{key, kind:"question"|"operator_task"}` for an `open` `lane`; sets
 [SetKind]. `400 validation|bad_state`.
 
 ### `POST /v1/lift_operator_gate`
-Router. `{key, decision_id:"D-<n>", decision:"release"}`: `decision` is the structured
-release the caller sets (anything else, or absent, is `400 validation` and lifts nothing);
-`decision_id` must be recorded in the decisions file (`400 evidence_unverified`), whose text
-is stored and never read to decide. Clears `operator`; `200 {key, operator:false,
-waits_on_operator:false, decision_id, decision:"release"}` [LiftOperatorGate]. `400
-validation|evidence_unverified|bad_state`, `403 forbidden`.
+Router. `{key, decision_id:"D-<n>", decision:"release"}`: `decision` is exactly `release`
+(else `400 validation`); the recorded row `decision_id` must carry the whole fields
+`Decision-Kind: release; Item: <key>; Gate: operator` once each and no later row may retire it
+(`400 evidence_unverified`); nothing else in its text is read. Clears `operator`;
+`200 {key, operator:false, waits_on_operator:false, decision_id, decision:"release"}`
+[LiftOperatorGate]. `400 validation|evidence_unverified|bad_state`, `403 forbidden`.

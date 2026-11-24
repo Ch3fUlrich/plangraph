@@ -167,6 +167,18 @@ KIND_DEFAULTS = {"question": (True, "answer"), "decision": (True, "answer"),
                  "operator_task": (True, "task")}
 
 
+#: the one value of the request's ``decision`` that asks a gate to be lifted (keeper verb and batch preflight)
+RELEASE = "release"
+
+
+def check_release_value(decision):
+    """Refuse ``validation`` unless *decision* is exactly ``"release"`` (``lift_operator_gate``)."""
+    if decision != RELEASE:
+        raise Refused("validation", f"lift_operator_gate lifts a gate only with decision={RELEASE!r} set by the"
+                      " caller, and only for a recorded decision row that releases this item's operator gate")
+    return decision
+
+
 def check_kind(value, key=None):
     """Return *value* if it is one of ``KINDS``, else refuse ``validation``."""
     if not isinstance(value, str) or value not in KINDS:

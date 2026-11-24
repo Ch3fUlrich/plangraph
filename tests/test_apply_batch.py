@@ -197,6 +197,18 @@ def test_dry_run_makes_no_calls_and_checks_shape(world, srv, token_file,
     assert item_count(world) == 0
 
 
+def test_dry_run_refuses_a_lift_without_the_release_value(world, srv, token_file, tmp_path):
+    """The keeper always refuses another value, so the offline preflight does too (the same check function)."""
+    op = {"op": "lift_operator_gate", "key": "demo:B", "decision_id": "D-9", "decision": "approve"}
+    bad = write_batch(tmp_path, name="lift-bad", ops=[op])
+    rc, out, errtxt = run(bad, srv.base_url, token_file, extra=["--dry-run"])
+    assert rc == 1 and "decision='release'" in out + errtxt
+    good = write_batch(tmp_path, name="lift-good", ops=[dict(op, decision="release")])
+    rc, out, errtxt = run(good, srv.base_url, token_file, extra=["--dry-run"])
+    assert rc == 0, out + errtxt
+    assert "plan 1 lift_operator_gate demo:B" in out and item_count(world) == 0
+
+
 def test_from_skips_earlier_ops(world, srv, token_file, tmp_path):
     world.store.create_items(world.p("router"), [
         defn("B", [], evidence_kinds=["decision"], review_tier="none"),

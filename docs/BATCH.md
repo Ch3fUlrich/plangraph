@@ -27,7 +27,7 @@ ops:                       # applied in order
   - {op: priority, key: project:ID, priority: <int>}   # router set_priority, same transaction
   - {op: rehome, key: project:ID, new_project: <project>, host: <host or omit>}
   - {op: set_kind, key: project:ID, kind: question|operator_task}   # router: open lane -> operator item
-  - {op: lift_operator_gate, key: project:ID, decision_id: D-n, decision: release}   # router: D-n is recorded; `decision: release` is the whole release (the text of D-n is never read); clears operator
+  - {op: lift_operator_gate, key: project:ID, decision_id: D-n, decision: release}   # router: row D-n has the fields `Decision-Kind: release; Item: project:ID; Gate: operator` and is not retired; clears operator
   - {op: add_dep, key: project:ID, dep: <key or bare id>}           # link one dependency (router)
   - {op: remove_dep, key: project:ID, dep: <key or bare id>}        # unlink one dependency (router)
 ```

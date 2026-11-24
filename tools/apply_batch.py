@@ -11,6 +11,8 @@ import urllib.request
 from collections import Counter
 
 import yaml
+from plangraph.keeper.errors import Refused
+from plangraph.keeper.item_fields import check_release_value
 
 import apply_batch_atomic as atomic
 import apply_batch_transport as transport
@@ -140,6 +142,11 @@ def validate_op(op):
         if field in types and not isinstance(op[field], types[field]):
             raise BatchError(f"{name}: {field!r} must be "
                              f"{types[field].__name__}")
+    if name == "lift_operator_gate":
+        try:
+            check_release_value(op["decision"])      # the keeper's own check, not a copy
+        except Refused as exc:
+            raise BatchError(f"lift_operator_gate: {exc.msg}") from None
     if name == "create":
         item = op["item"]
         if isinstance(item, list):

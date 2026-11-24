@@ -1,7 +1,8 @@
-"""LE-KEEPER-OPERATOR-FLAGS-NOT-CLEARABLE: the router lifts an operator gate with a structured release.
+"""LE-KEEPER-OPERATOR-FLAGS-NOT-CLEARABLE: the router lifts an operator gate with a recorded release.
 
-The release is the value ``decision="release"`` the caller sets beside the item key and a decision id
-recorded in the decisions file.  The text of the decision is stored and never read to decide.
+The release is ONE structured fact: the request says ``decision="release"`` and names a decision row whose
+whole fields read ``Decision-Kind: release; Item: <this key>; Gate: operator`` and which no later row
+retires.  Every other row lifts nothing; the rest of a row's text is stored and never read.
 """
 import sys
 from pathlib import Path
@@ -21,19 +22,33 @@ from apply_batch import BatchError, build_request, validate_op  # noqa: E402
 
 KEY = "demo:GATE"
 HEADER = "| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n"
+FACT = "Decision-Kind: release; Item: {key}; Gate: operator"
 _ATTEST = "(06:xxZ) OPERATOR 2026-11-24T05:59:56.804Z, relayed by relay-session"
-#: every phrasing the earlier rounds found wrongly passing or failing: prose that alone lifts nothing
-PROSE = {
-    "plain release": "the operator step of demo:GATE is lifted",
-    "quoted release in a denial": _ATTEST + ': "the operator step of demo:GATE is lifted" DECISION: keep demo:GATE blocked',
+#: rows that are NOT the release of demo:GATE (each is linked by its position below); a head that read
+#: the caller's value alone lifted every one of them
+NOT_RELEASES = {
     "conditional approval": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE is lifted only after review',
-    "condition after a colon": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE is lifted: only if review passes',
-    "condition inside the qualifier": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE (p9, only if review passes) is lifted',
-    "withdrawal after punctuation": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE is lifted. Withdrawn: keep it blocked',
-    "release phrase after other text": _ATTEST + ': "ok" DECISION: after review the operator step of demo:GATE is lifted',
+    "conditional approval after a colon": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE is lifted: only if review passes',
+    "release phrase and a withdrawal": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE is lifted. Withdrawn: keep it blocked',
     "denial": "Keep demo:GATE blocked until the review is done",
+    "unrelated decision": "Rotate the review seats on Monday; nothing about gates",
+    "another item": FACT.format(key="demo:GATEWAY"),
+    "another gate": "Decision-Kind: release; Item: demo:GATE; Gate: review",
+    "another kind": "Decision-Kind: keep; Item: demo:GATE; Gate: operator",
+    "item with trailing words": "Decision-Kind: release; Item: demo:GATE until reviewed; Gate: operator",
+    "fields inside prose": "Do not add Decision-Kind: release; Item: demo:GATE; Gate: operator",
+    "field missing": "Decision-Kind: release; Item: demo:GATE",
+    "field twice": FACT.format(key="demo:GATE") + "; Item: demo:GATEWAY",
+    "release in the quoted words": _ATTEST + ': "Decision-Kind: release; Item: demo:GATE; Gate: operator" DECISION: no',
 }
-ROWS = "".join(f"| D-{100 + n} | demo | {text} | OPERATOR | 2026-11-24 |\n" for n, text in enumerate(PROSE.values()))
+ROWS = (
+    "| D-10 | demo | " + FACT.format(key=KEY) + "; Note: the rest is never read | router (sonnet 5.5) | e |\n"
+    "| D-11 | demo | " + FACT.format(key="demo:GATE2") + " | router (sonnet 5.5) | e |\n"
+    "| D-12 | demo | " + FACT.format(key="demo:GATE2") + " | router (sonnet 5.5) | e |\n"
+    "| D-13 | demo | Supersedes D-12; keep demo:GATE2 blocked | router (sonnet 5.5) | e |\n"
+    "| D-14 | demo | " + FACT.format(key="demo:NEW") + " | router (sonnet 5.5) | e |\n"
+    + "".join(f"| D-{100 + n} | demo | {text} | OPERATOR | 2026-11-24 |\n"
+              for n, text in enumerate(NOT_RELEASES.values())))
 
 
 @pytest.fixture
@@ -43,7 +58,7 @@ def w(tmp_path):
         defn("GATE", operator=True), defn("GATE2", operator=True), defn("FREE"),
         defn("G", ["GATE", "GATE2", "FREE"], kind="goal")])
     path = tmp_path / "DECISIONS.md"
-    path.write_text(HEADER + ROWS + "| D-10 | demo | any text at all | router | 2026-11-24 |\n", encoding="utf-8")
+    path.write_text(HEADER + ROWS, encoding="utf-8")
     world.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(path))
     yield world
     world.close()
@@ -82,19 +97,33 @@ def test_the_router_clears_the_flags_with_the_release_value_and_logs_it(w):
     assert verify_integrity(w.conn) == []
 
 
-@pytest.mark.parametrize("n", range(len(PROSE)), ids=list(PROSE))
-def test_no_prose_lifts_a_gate_without_the_structured_value(w, n):
-    """Whatever the answer says, a request without decision=release lifts nothing."""
-    for decision in (None, "", "approve", "RELEASE", "released"):
-        with pytest.raises(Refused, match="decision='release'") as exc:
-            _lift(w, f"D-{100 + n}", decision)
-        assert exc.value.code == "validation"
+@pytest.mark.parametrize("decision", [None, "", "approve", "RELEASE", "released", True])
+def test_a_request_without_the_release_value_lifts_nothing(w, decision):
+    with pytest.raises(Refused, match="decision='release'") as exc:
+        _lift(w, "D-10", decision)
+    assert exc.value.code == "validation"
     assert _flags(w) == (True, True) and _lifted(w) == []
 
 
-def test_the_text_of_the_decision_is_stored_not_read(w):
-    """With the value set the recorded id is all that is checked: even a denying text lifts."""
-    assert _lift(w, f"D-{100 + len(PROSE) - 1}")["decision"] == "release"
+@pytest.mark.parametrize("n", range(len(NOT_RELEASES)), ids=list(NOT_RELEASES))
+def test_a_row_that_is_not_the_release_of_this_item_lifts_nothing(w, n):
+    """Conditional approval, withdrawal, unrelated decision, another item/gate/kind: refused with the value set."""
+    with pytest.raises(Refused, match="records no release") as exc:
+        _lift(w, f"D-{100 + n}")
+    assert exc.value.code == "evidence_unverified"
+    assert _flags(w) == (True, True) and _lifted(w) == []
+
+
+def test_a_release_a_later_row_retires_lifts_nothing(w):
+    with pytest.raises(Refused, match="retired by D-13"):
+        _lift(w, "D-12", key="demo:GATE2")
+    assert _flags(w, "demo:GATE2") == (True, True) and _lifted(w) == []
+    assert _lift(w, "D-11", key="demo:GATE2")["decision_id"] == "D-11"    # the unretired twin lifts
+
+
+def test_only_the_whole_fields_are_read(w):
+    """D-10 carries a free Note field: the lift reads Decision-Kind, Item and Gate and nothing else."""
+    assert _lift(w, "D-10")["decision"] == "release"
     assert _flags(w) == (False, False)
 
 
@@ -139,11 +168,14 @@ def test_a_key_the_keeper_accepts_lifts_whatever_follows_it(w):
     """Item keys are the keeper's own: a qualified id with a qualifier is just a key."""
     w.store.create_items(w.p("router"), [defn("GATE(A)", operator=True),
                                          defn("G2", ["GATE(A)"], kind="goal")])
-    assert _lift(w, key="demo:GATE(A)")["key"] == "demo:GATE(A)"
+    path = w.store.ctx.decisions._path
+    path.write_text(path.read_text(encoding="utf-8") + "| D-20 | demo | " + FACT.format(key="demo:GATE(A)")
+                    + " | router | e |\n", encoding="utf-8")
+    assert _lift(w, "D-20", key="demo:GATE(A)")["key"] == "demo:GATE(A)"
     assert _flags(w, "demo:GATE(A)") == (False, False)
     with pytest.raises(Refused) as exc:
-        _lift(w, key="demo:GATE(B)")
-    assert exc.value.code == "not_found"
+        _lift(w, "D-20", key="demo:GATE(B)")
+    assert exc.value.code in ("evidence_unverified", "not_found")
 
 
 def test_the_recorded_d6753_row_is_prose_that_alone_lifts_nothing(tmp_path):
@@ -157,13 +189,15 @@ def test_the_recorded_d6753_row_is_prose_that_alone_lifts_nothing(tmp_path):
             defn("OG-MEM-SCHEMA-APPLY", project="plangraph", operator=True),
             defn("G", ["OG-MEM-SCHEMA-APPLY"], project="plangraph", kind="goal")])
         log = tmp_path / "decisions-log.md"
-        log.write_text("| id | project | decision | by | why / evidence |\n|---|---|---|---|---|\n" + recorded,
+        log.write_text("| id | project | decision | by | why / evidence |\n|---|---|---|---|---|\n" + recorded
+                       + f"| D-9000 | plangraph | {FACT.format(key=key)}; Relays: D-6753 | router (sonnet 5.5) | e |\n",
                        encoding="utf-8")
         world.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(log))
-        with pytest.raises(Refused, match="decision='release'"):
-            world.store.lift_operator_gate(world.p("router"), key, "D-6753", None)
+        for decision in (None, "release"):    # the recorded prose alone: no value, or the value with prose behind it
+            with pytest.raises(Refused):
+                world.store.lift_operator_gate(world.p("router"), key, "D-6753", decision)
         assert world.store._item(key)["operator"] == 1
-        assert world.store.lift_operator_gate(world.p("router"), key, "D-6753", "release")["operator"] is False
+        assert world.store.lift_operator_gate(world.p("router"), key, "D-9000", "release")["operator"] is False
         assert world.store._item(key)["operator"] == 0
     finally:
         world.close()
@@ -193,9 +227,9 @@ def test_a_create_then_lift_batch_reads_once_before_its_transaction(w, monkeypat
     w.store.apply_ops(w.p("router"), [
         {"op": "create", "item": defn("NEW", operator=True)},
         {"op": "edit", "key": "demo:G", "fields": {"depends_on": {"add": ["demo:NEW"]}}},
-        {"op": "lift_operator_gate", "key": "demo:NEW", "decision_id": "D-10", "decision": "release"},
+        {"op": "lift_operator_gate", "key": "demo:NEW", "decision_id": "D-14", "decision": "release"},
         {"op": "lift_operator_gate", "key": KEY, "decision_id": "D-10", "decision": "release"}])
-    assert seen == [False]                          # the same D-id twice: one read, before the transaction
+    assert seen == [False]                          # both ids in one read, before the transaction
     assert _flags(w, "demo:NEW") == (False, False) and _flags(w) == (False, False)
     assert len(_lifted(w)) == 2
 

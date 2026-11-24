@@ -50,6 +50,8 @@ _KEYWORD_RE = re.compile(r"(?<![^\s(])[A-Za-z-]+:(?=\s|$)")
 # behaviour), but capture stops at the next _KEYWORD_RE boundary.
 # FU-X7-LOWS: not after a letter, digit, ``-`` or ``_`` (``X-Waives:``,
 # ``Pre-closes:`` are other words, not the keyword).
+#: the fields of a recorded gate release (``DecisionsAdapter.release``)
+RELEASE_FIELDS = ("Decision-Kind", "Item", "Gate")
 _WAIVES_RE = re.compile(r"(?i)(?<![\w-])waives\s*:")
 _CLOSES_RE = re.compile(r"(?i)(?<![\w-])closes\s*:")
 _TOKEN_SPLIT_RE = re.compile(r"[,\s]+")
@@ -447,6 +449,26 @@ class DecisionsAdapter:
         if canonical is not None:
             for row in self._rows().get(canonical, ()):
                 yield from _listed_tokens(_decision_cell(row), pattern)
+
+    def release(self, decision_id: str) -> dict[str, str]:
+        """The gate release a decision records, as whole ``;``-separated fields of its DECISION cell.
+
+        ``Decision-Kind: <kind>; Item: <key>; Gate: <gate>``: ``{"kind", "item", "gate"}`` only when the
+        decision has one row and each of the three fields appears exactly once; otherwise ``{}``.  Nothing
+        else in the cell is read, and an unreadable document raises (the caller fails closed).
+        """
+        canonical = self._canonical(decision_id)
+        rows = self._rows(_strict=True).get(canonical, ()) if canonical else ()
+        if len(rows) != 1:
+            return {}
+        seen: dict[str, list[str]] = {}
+        for field in _decision_cell(rows[0]).split(";"):
+            name, sep, value = field.partition(":")
+            if sep and name.strip() in RELEASE_FIELDS:
+                seen.setdefault(name.strip(), []).append(value.strip())
+        if set(seen) != set(RELEASE_FIELDS) or any(len(values) != 1 for values in seen.values()):
+            return {}
+        return {"kind": seen["Decision-Kind"][0], "item": seen["Item"][0], "gate": seen["Gate"][0]}
 
     def waives(self, decision_id: str, key: str) -> bool:
         """Does the DECISION cell of *decision_id*'s row name *key* as a whole ``Waives:`` token?"""
