@@ -145,3 +145,17 @@ fn wsl_values_with_shell_metacharacters_are_refused() {
         );
     }
 }
+
+#[test]
+fn wsl_values_may_hold_non_ascii_letters_but_not_non_ascii_syntax() {
+    let mut place = host(Some("worker-a"), Some("Ubuntu"));
+    place.cwd = "/srv/dépôt 日本".into();
+    let command = remote_command(&place, &words(&["echo", "é"]), true).unwrap();
+    assert!(args(&command).contains(&"\"/srv/dépôt 日本\"".to_string()));
+    for bad in ["a＆b", "a\u{a0}b", "a\u{2028}b"] {
+        assert!(
+            remote_command(&place, &words(&["x", bad]), true).is_err(),
+            "{bad:?}"
+        );
+    }
+}
