@@ -57,3 +57,34 @@ fn multibyte_characters_in_comments_and_strings_do_not_panic_the_scan() {
     assert_eq!(parse_latest(text), Ok(2));
     assert!(parse_latest("MIGRATIONS = (Migration(1, \"é\"),\n").is_err());
 }
+
+#[test]
+fn a_revision_that_is_not_a_commit_is_refused_not_read_as_version_zero() {
+    let fx = Fx::new();
+    let good = commit(&fx, Some(ONE));
+    let bad = "f".repeat(40);
+    assert!(at(fx.path(), &bad).unwrap_err().contains("not a commit"));
+    assert!(rise(fx.path(), &bad, &good).is_err());
+    assert!(rise(fx.path(), &good, &bad).is_err());
+}
+
+#[test]
+fn the_keeper_schema_command_prints_both_versions_and_refuses_a_bad_revision() {
+    let fx = Fx::new();
+    let two = commit(&fx, Some(ONE));
+    let three = commit(&fx, Some(THREE));
+    let flags = |base: &str, head: &str| {
+        std::collections::BTreeMap::from([
+            ("repo".to_string(), fx.path().display().to_string()),
+            ("base".to_string(), base.to_string()),
+            ("head".to_string(), head.to_string()),
+        ])
+    };
+    assert_eq!(
+        run_cli(&flags(&two, &three)).unwrap(),
+        ["keeper-schema base 2 head 3"]
+    );
+    assert!(run_cli(&flags(&two, &"0".repeat(40))).is_err());
+    let missing = std::collections::BTreeMap::from([("repo".to_string(), ".".to_string())]);
+    assert!(run_cli(&missing).unwrap_err().contains("missing --base"));
+}
