@@ -269,3 +269,11 @@ def test_from_env_management_401_403_raises_auth_refused(status):
 
 def test_valid_empty_connection_list_is_an_empty_snapshot_not_bad_data():
     assert Harness(payload()).reader.snapshot() == {}
+
+
+def test_failed_refresh_after_a_cached_empty_snapshot_is_not_an_empty_answer():
+    h = Harness(payload(), RuntimeError('boom'))
+    assert h.reader.snapshot() == {}
+    h.now = 11   # past the ttl: the refresh runs and fails
+    with pytest.raises(OmniRouteUnreachable):
+        h.reader.snapshot()

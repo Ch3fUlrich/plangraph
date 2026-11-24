@@ -458,6 +458,8 @@ def gateway(tmp_path, listed, snapshot, **kw):
 UPSTREAM = {'deepseek': SimpleNamespace(available=True, stale=False, reason='', until=''),
             'opencode-go': SimpleNamespace(available=True, stale=False, reason='', until='')}
 
+UPSTREAM_MIMO = dict(UPSTREAM, **{'xiaomi-mimo': SimpleNamespace(available=True, stale=False, reason='', until='')})
+
 
 def test_gateway_prefixed_leg_resolves_its_upstream_pool(tmp_path):
     reader = gateway(tmp_path, ('omniroute/deepseek-v4.1-flash',), UPSTREAM)
@@ -470,10 +472,17 @@ def test_gateway_leg_follows_the_pool_of_its_model(tmp_path):
     assert reader('omniroute/deepseek-v4.1-flash')['reason'] == 'provider_inactive'
 
 
-def test_gateway_leg_without_a_named_pool_uses_any_available_row(tmp_path):
-    pools = dict(UPSTREAM, deepseek=SimpleNamespace(available=False, stale=False, reason='inactive', until=''))
-    reader = gateway(tmp_path, ('omniroute/spark-1.3-contributor',), pools)
-    assert reader('omniroute/spark-1.3-contributor')['state'] == 'ok'
+@pytest.mark.parametrize('model', ['omniroute/deepseek-v4.1-flash', 'omniroute/deepseek-direct-flash'])
+def test_gateway_leg_never_borrows_an_unrelated_pool(tmp_path, model):
+    only_go = {'opencode-go': UPSTREAM['opencode-go']}
+    assert gateway(tmp_path, (model,), only_go)(model)['reason'] == 'unreachable'
+
+
+def test_gateway_leg_without_a_named_pool_falls_back_only_to_an_explicit_gateway_row(tmp_path):
+    model = 'omniroute/spark-1.3-contributor'
+    assert gateway(tmp_path, (model,), UPSTREAM)(model)['reason'] == 'unreachable'
+    pools = dict(UPSTREAM, omniroute=SimpleNamespace(available=True, stale=False, reason='', until=''))
+    assert gateway(tmp_path, (model,), pools)(model)['state'] == 'ok'
 
 
 def test_gateway_leg_empty_snapshot_stays_unreachable(tmp_path):
@@ -493,7 +502,7 @@ def test_leg_without_a_gateway_listener_is_down_before_spawn(tmp_path, listener,
     def probe(url):
         seen.append(url)
         return listener
-    reader = gateway(tmp_path, ('omniroute/mimo-v2.6-pro',), UPSTREAM, gateway_probe=probe,
+    reader = gateway(tmp_path, ('omniroute/mimo-v2.6-pro',), UPSTREAM_MIMO, gateway_probe=probe,
                      gateway_url=lambda leg: 'http://127.0.0.1:8080/v1' if leg.startswith('mimo/') else None)
     status = reader('mimo/mimo-v2.6-pro')
     assert status['state'] == state
@@ -553,7 +562,7 @@ def test_route_admits_mimo_when_the_launch_endpoint_listens(tmp_path, launch_env
     from plangraph.planner.routing import plan_spawn
     launch_env.setenv('PLANGRAPH_GATEWAY_URL', 'http://host-a.example:9000')
     seen = []
-    reader = gateway(tmp_path, ('omniroute/mimo-v2.6-pro',), UPSTREAM,
+    reader = gateway(tmp_path, ('omniroute/mimo-v2.6-pro',), UPSTREAM_MIMO,
                      gateway_probe=lambda url: seen.append(url) or url.startswith('http://host-a.example:'))
     card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
     plan = plan_spawn(card, role='review', writer_families=('gpt',), leg_reader=reader.leg_status)
@@ -595,3 +604,37 @@ def test_valid_empty_provider_list_wins_over_a_failed_model_discovery(tmp_path):
     reader = gateway(tmp_path, DiscoveryFailed('TimeoutExpired'), {})
     status = reader('omniroute/deepseek-v4.1-flash')
     assert (status['state'], status['reason']) == ('down', 'unreachable')
+
+
+def test_gateway_url_reads_an_options_base_url_like_the_renderer(tmp_path, launch_env):
+    use_providers(launch_env, tmp_path, '{"providers": {"mimo": {"options": {"baseURL": "http://127.0.0.1:8081"}}}}')
+    assert leg_state.gateway_url('mimo/mimo-v2.6-flash') == 'http://127.0.0.1:8081/v1'
+
+
+def route_card(tmp_path):
+    return dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
+
+
+def test_route_skips_mimo_flash_whose_options_endpoint_has_no_listener(tmp_path, launch_env):
+    from plangraph.planner.routing import plan_spawn
+    use_providers(launch_env, tmp_path, '{"providers": {"mimo": {"options": {"baseURL": "http://127.0.0.1:8081"}}}}')
+    seen = []
+    reader = gateway(tmp_path, ('omniroute/mimo-v2.6-flash',), UPSTREAM, gateway_probe=lambda url: seen.append(url) or False)
+    plan = plan_spawn(route_card(tmp_path), role='review', writer_families=('gpt',), leg_reader=reader.leg_status)
+    assert seen == ['http://127.0.0.1:8081/v1']
+    assert {s['leg']: s['reason'] for s in plan.skipped}.get('mimo-v2.6-flash') == 'gateway_unreachable'
+
+
+def test_route_serves_both_gateway_models_from_upstream_keyed_provider_data(tmp_path, launch_env):
+    from plangraph.planner.routing import plan_spawn
+    upstream = UPSTREAM_MIMO
+    listed = ('omniroute/deepseek-v4.1-flash', 'omniroute/mimo-v2.6-flash')
+    reader = gateway(tmp_path, listed, upstream)
+    plan = plan_spawn(route_card(tmp_path), role='review', writer_families=('gpt',), leg_reader=reader.leg_status)
+    ids = [leg.id for leg in plan.legs]
+    assert 'omniroute-deepseek-flash' in ids and 'mimo-v2.6-flash' in ids
+    # Only the gateway's opencode-go pool answering admits neither DeepSeek nor MiMo.
+    only_go = gateway(tmp_path, listed, {'opencode-go': UPSTREAM['opencode-go']})
+    plan = plan_spawn(route_card(tmp_path), role='review', writer_families=('gpt',), leg_reader=only_go.leg_status)
+    reasons = {s['leg']: s['reason'] for s in plan.skipped}
+    assert reasons.get('omniroute-deepseek-flash') == 'unreachable' and reasons.get('mimo-v2.6-flash') == 'unreachable'

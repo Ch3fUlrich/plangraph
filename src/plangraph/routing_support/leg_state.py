@@ -507,11 +507,13 @@ def gateway_url(leg):
     if prefix == 'mimo':
         from .opencode_overlay import review_child_env
         try:
-            config = json.loads(review_child_env(leg)['OPENCODE_CONFIG_CONTENT'])
-            settings = config['providers'][prefix]['settings']
-            url = settings['baseURL']
+            block = json.loads(review_child_env(leg)['OPENCODE_CONFIG_CONTENT'])['providers'][prefix]
         except Exception:   # no endpoint: a refused render, a missing key or unreadable config
             return None
+        # The renderer writes the endpoint to settings and to an existing options section.
+        url = next((section['baseURL'] for name in ('settings', 'options')
+                    if isinstance(section := block.get(name), dict)
+                    and isinstance(section.get('baseURL'), str)), None)
         return url if isinstance(url, str) and _is_valid_url(url) else None
     providers = load_root_providers()
     if not isinstance(providers, dict) or not isinstance(providers.get(prefix), dict):
@@ -540,8 +542,8 @@ def _gateway_pool(states, leg):
     """State of the upstream pool serving a gateway-routed model.
 
     The snapshot is keyed by upstream provider, not by the gateway prefix: take the pool
-    whose name starts the model name, else any row of the answering gateway. An available
-    row wins over an unavailable one.
+    whose name starts the model name, else the gateway's own ``omniroute`` row. No other
+    pool stands in for a model it does not serve; an available row wins over an unavailable one.
     """
     from .quota_snapshots import pool_of
     if (pool := pool_of(identity_model(leg))) is not None:
@@ -549,7 +551,7 @@ def _gateway_pool(states, leg):
     name = identity_model(leg).split('/', 1)[-1]
     named = [row for key, row in states.items()
              if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-'))]
-    rows = named or list(states.values())
+    rows = named or ([states['omniroute']] if 'omniroute' in states else [])
     return next((row for row in rows if row.available and not row.stale), rows[0] if rows else None)
 
 

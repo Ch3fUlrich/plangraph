@@ -311,7 +311,8 @@ class OmniRouteState:
                 self._good = None
                 raise
             except OmniRouteUnreachable:
-                if self._good is not None and self._clock() - self._good_at <= 2 * self._ttl_s:
+                # A cached empty list is no answer to stand in for a failed refresh.
+                if self._good and self._clock() - self._good_at <= 2 * self._ttl_s:
                     return {name: replace(state, stale=True)
                             for name, state in self._good.items()}
                 self._good = None
