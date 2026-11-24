@@ -55,7 +55,7 @@ fn install(home: &Path) {
 }
 
 #[test]
-fn both_guards_are_registered_on_sendmessage_and_refuse_through_the_registration() {
+fn the_guard_is_registered_on_sendmessage_and_refuses_through_the_registration() {
     let home = tempfile::tempdir().unwrap();
     install(home.path());
     let state = tempfile::tempdir().unwrap();
@@ -68,8 +68,9 @@ fn both_guards_are_registered_on_sendmessage_and_refuse_through_the_registration
         json!({key.to_str().unwrap(): 0}).to_string(),
     )
     .unwrap();
-    assert_eq!(registered_commands().len(), 2);
-    // message-time then message-route: a guessed stamp is refused by the first only.
+    // One command decides the time check and the filing on a single clock reading.
+    assert_eq!(registered_commands().len(), 1);
+    assert!(registered_commands()[0].contains("message-route"));
     assert_eq!(
         run_registered(
             home.path(),
@@ -77,22 +78,22 @@ fn both_guards_are_registered_on_sendmessage_and_refuse_through_the_registration
             "peer",
             "Created at 2099-01-01T04:02:00Z"
         ),
-        [Some(2), Some(0)]
+        [Some(2)]
     );
     assert_eq!(
         run_registered(home.path(), state.path(), "routing", "DONE train 29"),
-        [Some(0), Some(2)]
+        [Some(2)]
     );
     assert_eq!(
         run_registered(home.path(), state.path(), "routing", "BLOCKED review"),
-        [Some(0), Some(0)]
+        [Some(0)]
     );
-    // A routine line with a placeholder time is refused by the time guard and never filed.
+    // A routine line with a placeholder time is refused and never filed.
     let filed = std::fs::read_to_string(&key).unwrap();
     assert_eq!(filed.lines().count(), 1, "{filed}");
     assert_eq!(
         run_registered(home.path(), state.path(), "routing", "DONE at 05:4xZ"),
-        [Some(2), Some(0)]
+        [Some(2)]
     );
     assert_eq!(std::fs::read_to_string(&key).unwrap(), filed);
     let rows = std::fs::read_to_string(inbox.join("diversions.jsonl")).unwrap();
@@ -105,6 +106,6 @@ fn a_host_without_the_installed_binary_sends_the_message() {
     let state = tempfile::tempdir().unwrap();
     assert_eq!(
         run_registered(home.path(), state.path(), "routing", "DONE x"),
-        [Some(1), Some(1)]
+        [Some(1)]
     );
 }

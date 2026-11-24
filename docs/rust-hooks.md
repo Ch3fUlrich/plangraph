@@ -129,9 +129,10 @@ digest waits on `plangraph:SSA-A2-SHADOW-DIGEST` (slice `LE-ROUTINE-MESSAGES-DIG
 
 ### Agent message timestamps
 
-Register `pg-hook message-time` for `PreToolUse` on `SendMessage` and the
-shell tool. It checks the message field or a literal `fleet-msg send`
-invocation. The fleet client also checks the resulting message before it loads
+Register `pg-hook message-time` for `PreToolUse` on the shell tool; it checks a literal
+`fleet-msg send` invocation. On `SendMessage` register `pg-hook message-route` instead of
+`message-time`: it runs the same check on the message field and files a routine line on one
+clock reading, so no second hook can refuse a message it has already filed. The fleet client also checks the resulting message before it loads
 the transport for CLI sends and MCP `fleet_msg_send`. It finds the
 default installed binary automatically. Set `PG_MESSAGE_TIME_HOOK` to an
 absolute executable path for a custom install.
@@ -143,8 +144,8 @@ cannot cite an earlier instant: say "earlier" or give the date alone. A placehol
 `05:4xZ` or `2026-11-24T05:4xZ` is always refused: state the real time. A refusal identifies
 the timestamp and exits 2.
 
-`.claude/settings.json` registers `message-time` and `message-route` on `PreToolUse` for
-`SendMessage`, each through the guarded form `sh -c 'test -x "$1" || exit 1; exec "$1" <mode>'
+`.claude/settings.json` registers `message-route` on `PreToolUse` for `SendMessage`
+through the guarded form `sh -c 'test -x "$1" || exit 1; exec "$1" <mode>'
 _ "$HOME/.local/share/plangraph/hooks/pg-hook"`, so a host without the installed
 `pg-hook` sends as before (exit 1 is not a block). The registration covers sessions whose
 working directory is in this repository; a session elsewhere (plan-order, plan-roadmap) needs

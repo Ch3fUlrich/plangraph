@@ -1,1 +1,1 @@
-Register the message-time and message-route hooks on SendMessage in the project Claude settings, refuse a stated clock time or dated instant more than two minutes from UTC either way and every placeholder time, and say to read git times with iso-strict or TZ=UTC.
+Register the message-route hook (which runs the message-time check on the same clock reading) on SendMessage in the project Claude settings, refuse a stated clock time or dated instant more than two minutes from UTC either way and every placeholder time, and say to read git times with iso-strict or TZ=UTC.

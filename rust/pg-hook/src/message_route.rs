@@ -1,5 +1,6 @@
-//! PreToolUse routing for `SendMessage`: routine status lines to the routing role go to the
-//! inbox file the router reads instead of waking it. Every error fails open (exit 0).
+//! PreToolUse for `SendMessage`: refuses a message that states a time other than the current UTC
+//! time, and sends routine status lines to the routing role into the inbox file the router reads
+//! instead of waking it, both on one clock reading. Every error fails open (exit 0).
 use crate::message_time;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
@@ -160,16 +161,19 @@ pub fn hook_in(
     ) else {
         return 0;
     };
+    // One clock reading decides the time check and the filing: a refused message writes nothing,
+    // and a message that passes is filed with the same `now`. Registered alone on SendMessage,
+    // this hook cannot disagree with a second hook that read the clock a moment later.
+    if let Some((token, reason)) = message_time::refusal(message, now) {
+        let _ = writeln!(diagnostic, "message-time: {token} {reason}");
+        return 2;
+    }
     if role_of(to) != ROUTING_ROLE {
         return 0;
     }
     let Some(word) = routine_word(message) else {
         return 0;
     };
-    // A message the time guard refuses is never filed: it would reach routing later by hand.
-    if message_time::refusal(message, now).is_some() {
-        return 0;
-    }
     let Some(inbox) = router_inbox(inbox_dir) else {
         return 0;
     };
@@ -223,5 +227,78 @@ mod tests {
         ] {
             assert!(routine_word(no).is_none(), "{no}");
         }
+    }
+
+    /// An inbox directory the router tracks: `L0.md` empty with a saved offset of 0.
+    fn tracked_inbox() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("L0.md");
+        fs::write(&file, "").unwrap();
+        let offsets = json!({ file.to_str().unwrap(): 0 });
+        fs::write(dir.path().join("offsets.json"), offsets.to_string()).unwrap();
+        dir
+    }
+
+    /// Run the hook once at `now`: the exit code, its diagnostic, and the inbox text.
+    fn send(inbox: &Path, now: &str, to: &str, message: &str) -> (i32, String, String) {
+        let payload = json!({
+            "hook_event_name": "PreToolUse", "session_id": "s", "tool_name": "SendMessage",
+            "tool_input": {"to": to, "message": message},
+        });
+        let mut diagnostic = Vec::new();
+        let state = tempfile::tempdir().unwrap();
+        let code = hook_in(
+            payload.to_string().as_bytes(),
+            &mut diagnostic,
+            state.path(),
+            inbox,
+            now.parse().unwrap(),
+        );
+        let filed = fs::read_to_string(inbox.join("L0.md")).unwrap();
+        (code, String::from_utf8(diagnostic).unwrap(), filed)
+    }
+
+    #[test]
+    fn the_two_minute_boundary_is_one_decision_before_any_write() {
+        let inbox = tracked_inbox();
+        let dir = inbox.path();
+        // A stamp exactly 120 s old, then 119.5 s old: filed, once each.
+        for now in ["2026-11-22T04:06:00Z", "2026-11-22T04:05:59.500Z"] {
+            let (code, diagnostic, _) = send(dir, now, "routing", "DONE at 04:04:00Z");
+            assert_eq!(code, 2, "{now}");
+            assert!(diagnostic.contains("written to"), "{now}: {diagnostic}");
+        }
+        let filed = fs::read_to_string(dir.join("L0.md")).unwrap();
+        assert_eq!(filed.lines().count(), 2, "{filed}");
+        let rows = fs::read_to_string(dir.join("diversions.jsonl")).unwrap();
+        assert_eq!(rows.lines().count(), 2, "{rows}");
+        // 120.001 s old: refused by this hook, nothing filed or counted.
+        let (code, diagnostic, after) = send(
+            dir,
+            "2026-11-22T04:06:00.001Z",
+            "routing",
+            "DONE at 04:04:00Z",
+        );
+        assert_eq!(code, 2);
+        assert!(
+            diagnostic.starts_with("message-time: 04:04:00Z"),
+            "{diagnostic}"
+        );
+        assert_eq!(after, filed);
+        let rows_after = fs::read_to_string(dir.join("diversions.jsonl")).unwrap();
+        assert_eq!(rows_after, rows);
+    }
+
+    #[test]
+    fn the_time_check_covers_every_recipient_and_a_current_stamp_passes() {
+        let inbox = tracked_inbox();
+        let now = "2026-11-24T05:27:25Z";
+        let (code, diagnostic, _) = send(inbox.path(), now, "peer", "Done at 05:4xZ");
+        assert_eq!(code, 2, "{diagnostic}");
+        assert!(diagnostic.contains("placeholder"), "{diagnostic}");
+        let (code, diagnostic, filed) = send(inbox.path(), now, "peer", "Done at 05:27Z");
+        assert_eq!((code, diagnostic.as_str(), filed.as_str()), (0, "", ""));
+        let (code, _, filed) = send(inbox.path(), now, "routing", "BLOCKED at 05:27Z");
+        assert_eq!((code, filed.as_str()), (0, ""));
     }
 }

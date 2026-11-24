@@ -334,7 +334,8 @@ fn a_message_the_time_guard_refuses_is_not_filed() {
         "DONE at 2099-01-01T04:02:00Z",
     ] {
         let output = run(state.path(), "s", "routing", text);
-        assert_eq!(output.status.code(), Some(0), "{text}");
+        assert_eq!(output.status.code(), Some(2), "{text}");
+        assert!(stderr(&output).starts_with("message-time: "), "{text}");
     }
     assert_eq!(fs::read_to_string(dir.join("L0.md")).unwrap(), "");
     assert!(!dir.join("diversions.jsonl").exists());
