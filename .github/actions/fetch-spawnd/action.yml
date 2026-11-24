@@ -1,0 +1,13 @@
+name: Fetch the run's pg-spawnd build
+description: Download the pg-spawnd and ci-flake binaries the build-spawnd job of this run built, into rust/target/release
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: pg-spawnd-bin
+        path: ${{ github.workspace }}/rust/target/release
+    - name: Make the binaries executable
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: chmod +x rust/target/release/pg-spawnd rust/target/release/ci-flake

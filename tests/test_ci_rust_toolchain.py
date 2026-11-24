@@ -57,7 +57,7 @@ def test_ci_rust_installers_read_shared_pin():
         if path.suffix in {".yml", ".yaml"}:
             installers[path.name] = assert_workflow_uses_pin(yaml.safe_load(path.read_text()))
     assert installers["tests.yml"] == {
-        "new-code-lang", "pytest", "pytest-postgres", "rust", "rust-windows",
+        "build-spawnd", "new-code-lang", "pytest", "pytest-postgres", "rust", "rust-windows",
         "rust-worker", "rust-spike",
     }
     for path in sorted((ROOT / ".github/actions").rglob("*")):
@@ -277,9 +277,17 @@ def test_self_hosted_rust_jobs_use_local_target_and_skip_cache(job):
     hosted = next(s for s in steps if s.get("name") == "Hosted cargo build settings")
     assert hosted["if"] == "env.CI_SELF_HOSTED_RUN != '1'"
     assert "CARGO_BUILD_JOBS=4" in hosted["run"]
+    # Self-hosted runs never touch the Actions cache; hosted runs restore it (main's build through restore-keys)
+    # and only a push to the default branch saves one.
     caches = [s for s in steps if str(s.get("uses", "")).startswith("actions/cache")]
-    assert len(caches) == 1 and caches[0]["if"] == "env.CI_SELF_HOSTED_RUN != '1'"
-    assert SELF_HOSTED_JOBS[job][1] in caches[0]["with"]["path"]
+    restores = [s for s in caches if s["uses"].startswith("actions/cache/restore@")]
+    saves = [s for s in caches if s["uses"].startswith("actions/cache/save@")]
+    assert len(caches) == 2 == len(restores) + len(saves) and len(restores) == 1 == len(saves)
+    assert restores[0]["if"] == "env.CI_SELF_HOSTED_RUN != '1'" and restores[0]["with"]["restore-keys"]
+    assert "env.CI_SELF_HOSTED_RUN != '1'" in saves[0]["if"] and "default_branch" in saves[0]["if"]
+    assert "github.event_name == 'push'" in saves[0]["if"] and saves[0]["with"]["key"] == restores[0]["with"]["key"]
+    for cache in (restores[0], saves[0]):
+        assert SELF_HOSTED_JOBS[job][1] in cache["with"]["path"]
 
 
 def _rust_prep_script():
