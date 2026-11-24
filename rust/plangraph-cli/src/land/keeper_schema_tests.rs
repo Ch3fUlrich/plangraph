@@ -114,3 +114,16 @@ fn the_registry_is_found_whatever_its_spacing_and_a_duplicate_is_refused() {
     assert!(parse_latest("MIGRATIONS == (Migration(1, a),)\nOTHER = 1\n").is_err());
     assert!(parse_latest("MIGRATIONS = (Migration(1, a), [Migration(2, b)])\n").is_err());
 }
+
+#[test]
+fn a_second_assignment_after_a_semicolon_is_seen_and_an_indented_one_is_not() {
+    let semi =
+        "MIGRATIONS = (Migration(1, a),)\nX = 1; MIGRATIONS=(Migration(1, a), Migration(2, b))\n";
+    assert!(parse_latest(semi).is_err());
+    let first = "X = 1; MIGRATIONS = (Migration(1, a), Migration(2, b))\n";
+    assert_eq!(parse_latest(first), Ok(2));
+    let nested = "MIGRATIONS = (Migration(1, a),)\nif X:\n    Y = 1; MIGRATIONS = (Migration(1, a), Migration(2, b))\n";
+    assert_eq!(parse_latest(nested), Ok(1));
+    let spaced = "MIGRATIONS = (Migration(1, a),)\nX = 1 ;   MIGRATIONS = (Migration(1, a), Migration(2, b))\n";
+    assert!(parse_latest(spaced).is_err());
+}
