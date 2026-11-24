@@ -142,3 +142,15 @@ its writer has commits outside the landed tree; a pull request is read, closed a
 open when a push arrived in between; a writer is stopped only when its head is in the landed tree and its pull request is
 closed. Ownership, READY time, CI, eviction and host-sync facts are recorded as events. `hold_released` in the state file
 turns true when every step is done and the hosts are current, which ends the hold on new batches (rule 3.64).
+
+## Documentation fragments
+
+A change writes its documentation as `docs/<area>/<ITEM>.md` (areas `contributing`, `keeper`, `spawner`, which the docs-map
+checks accept for CONTRIBUTING.md, docs/KEEPER.md and docs/SPAWNER.md), so two branches never edit the same reference.
+`plangraph land-train fold-docs --repo-dir DIR` (rust/plangraph-cli/src/land/docs_fold.rs) runs once per train on main: it
+appends each fragment, by area and name, as a `<!-- fragment:ITEM -->` block at the end of its reference, splits folded
+lines over 600 characters at sentence ends, and removes only the fragments whose block is in the reference. Existing
+reference text is never rewritten and a repeated run changes nothing. A fragment that would take its reference past the line
+cap of tools/check_file_size.py (cap minus headroom) stays unfolded and is listed. `--check 1` prints what it would fold.
+`--measure BASE..HEAD` counts the commits of a range that edit a shared reference directly; after the fold it should be
+the one fold commit per train.
