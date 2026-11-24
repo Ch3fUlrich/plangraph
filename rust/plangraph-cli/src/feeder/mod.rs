@@ -46,6 +46,8 @@ pub struct Policy {
     pub max_writers: BTreeMap<String, usize>,
     pub host_aliases: BTreeMap<String, String>,
     pub quota_max_age_seconds: i64,
+    /// Longest age of the center's quota snapshot a host without its own quota reader accepts.
+    pub quota_facts_max_age_seconds: i64,
     pub ram_per_run_bytes: u64,
     pub ram_floor_bytes: u64,
     pub disk_floor_bytes: u64,
@@ -61,6 +63,7 @@ impl Default for Policy {
             max_writers: BTreeMap::from([("coding".into(), 3), ("dell".into(), 5)]),
             host_aliases: BTreeMap::new(),
             quota_max_age_seconds: 10_800,
+            quota_facts_max_age_seconds: 900,
             ram_per_run_bytes: 4_000_000_000,
             ram_floor_bytes: 3_000_000_000,
             disk_floor_bytes: 10_000_000_000,
@@ -151,6 +154,7 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         || !(0.0..100.0).contains(&p.quota_floor_percent)
         || p.facts_max_age_seconds < 0
         || p.quota_max_age_seconds < 0
+        || p.quota_facts_max_age_seconds < 0
         || p.ram_per_run_bytes == 0
         || p.disk_floor_bytes == 0
         || p.estimate_tokens == 0

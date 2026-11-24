@@ -83,7 +83,7 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
             .map_err(|_| "invalid host facts")?;
         (sample, None)
     };
-    let mut facts = sources::facts(
+    let mut facts = match sources::facts(
         env,
         &o.repo,
         sample,
@@ -91,7 +91,14 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
         home,
         &policy,
         local.as_deref(),
-    )?;
+    ) {
+        Ok(facts) => facts,
+        // A stale center snapshot is a routine refusal that names its age, not a fault.
+        Err(reason) if reason.starts_with("quota_stale") => {
+            return Ok(json!({"decision":"refused","reason":reason}))
+        }
+        Err(e) => return Err(e),
+    };
     let measurement = if let Some((cpus, load)) = load {
         let free_ram_bytes = facts.free_ram_bytes;
         let budget = capacity::apply(&mut facts, &mut policy, cpus, load)?;
@@ -284,6 +291,7 @@ mod tests {
             "ram",
             "disk",
             "provider_quota",
+            "quota_stale: center quota snapshot is 5400s old (limit 900s)",
             "kill_switch",
         ] {
             assert_eq!(exit_code(&json!({"decision":"refused","reason":reason})), 0);

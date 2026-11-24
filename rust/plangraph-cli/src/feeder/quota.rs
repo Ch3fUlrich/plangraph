@@ -1,6 +1,7 @@
 use super::adapters::{quota_snapshots, Env};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 fn field<'a>(r: &'a Value, names: &[&str]) -> Option<&'a Value> {
     names.iter().find_map(|n| r.get(n).filter(|v| !v.is_null()))
 }
@@ -103,6 +104,64 @@ pub(crate) fn remaining_for(rows: &Value, target: &str, now: i64, max_age: i64) 
         .reduce(f64::max)
 }
 
+/// Whether the rows hold any observation of the codex provider (any account).
+fn has_codex_rows(rows: &Value) -> bool {
+    rows.as_array().is_some_and(|rows| {
+        rows.iter()
+            .any(|r| identity(r).is_some_and(|(provider, _)| provider == "codex"))
+    })
+}
+
+/// Parse the center's quota snapshot file (`{"observed_at":<unix s>,"rows":[..]}`, the rows in
+/// the reader's own format) and accept it only while it is at most `max_age` seconds old.
+/// A missing, unreadable or stale file refuses as `quota_stale` and names its age.
+fn center_rows(text: Option<&str>, now: i64, max_age: i64) -> Result<Value, String> {
+    let doc: Value = text
+        .and_then(|t| serde_json::from_str(t).ok())
+        .ok_or("quota_stale: no readable center quota snapshot (age unknown)")?;
+    let at = doc["observed_at"]
+        .as_i64()
+        .ok_or("quota_stale: center quota snapshot has no observed_at (age unknown)")?;
+    let age = now.saturating_sub(at);
+    if at > now || age > max_age {
+        return Err(format!(
+            "quota_stale: center quota snapshot is {age}s old (limit {max_age}s)"
+        ));
+    }
+    doc.get("rows")
+        .filter(|rows| rows.is_array())
+        .cloned()
+        .ok_or_else(|| "quota_stale: center quota snapshot has no rows (age unknown)".into())
+}
+
+/// The quota rows admission reads. A host with its own codex observations (the center) uses
+/// them. A host with none, and no quota supplied with its facts, reads the center's snapshot
+/// file instead, so quota is never silently null there.
+pub(super) fn rows_for_host(
+    local: Option<Value>,
+    supplied: Option<f64>,
+    center: &Path,
+    now: i64,
+    max_age: i64,
+) -> Result<Option<Value>, String> {
+    if supplied.is_some() || local.as_ref().is_some_and(has_codex_rows) {
+        return Ok(local);
+    }
+    center_rows(
+        std::fs::read_to_string(center).ok().as_deref(),
+        now,
+        max_age,
+    )
+    .map(Some)
+}
+
+/// Write the quota rows the center reads, for hosts without a quota reader; atomic replace.
+fn export(rows: &Value, path: &Path, now: i64) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, json!({"observed_at":now,"rows":rows}).to_string())?;
+    std::fs::rename(tmp, path)
+}
+
 /// Print the most recent available observation for each provider, account and window.
 pub fn run_status(env: &Env, args: &[String]) -> i32 {
     let mut effective = env.clone();
@@ -111,8 +170,23 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
         [flag, path] if flag == "--db" && !path.is_empty() => {
             effective.insert("QUOTA_SNAPSHOT_DB".into(), path.clone());
         }
+        [flag, path] if flag == "--export" && !path.is_empty() => {
+            let rows = std::env::current_dir()
+                .ok()
+                .and_then(|repo| quota_snapshots(&effective, &repo).ok())
+                .filter(|rows| rows.is_array());
+            let Some(rows) = rows else {
+                eprintln!("quota export: reader unavailable");
+                return 2;
+            };
+            if export(&rows, Path::new(path), chrono::Utc::now().timestamp()).is_err() {
+                eprintln!("quota export: cannot write the snapshot file");
+                return 2;
+            }
+            return 0;
+        }
         _ => {
-            eprintln!("usage: plangraph quota [--db PATH]");
+            eprintln!("usage: plangraph quota [--db PATH | --export PATH]");
             return 2;
         }
     }
@@ -169,6 +243,70 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
 mod tests {
     use super::*;
     use serde_json::json;
+    fn doc(at: i64) -> String {
+        json!({"observed_at":at,"rows":[{"provider":"codex:a","windowKey":"5h","timestamp":at,"remainingPct":70}]}).to_string()
+    }
+    #[test]
+    fn center_snapshot_is_used_while_fresh_and_names_its_age_when_stale() {
+        let now = 1_800_000_000;
+        let rows = center_rows(Some(&doc(now - 600)), now, 900).unwrap();
+        assert_eq!(remaining(&rows, now, 10_800), Some(70.0));
+        let stale = center_rows(Some(&doc(now - 5_400)), now, 900).unwrap_err();
+        assert_eq!(
+            stale,
+            "quota_stale: center quota snapshot is 5400s old (limit 900s)"
+        );
+        for bad in [
+            None,
+            Some("not json"),
+            Some("{\"rows\":[]}"),
+            Some("{\"observed_at\":1}"),
+        ] {
+            assert!(center_rows(bad, now, 900)
+                .unwrap_err()
+                .starts_with("quota_stale:"));
+        }
+        assert!(center_rows(Some(&doc(now + 5)), now, 900).is_err());
+    }
+    #[test]
+    fn a_host_without_codex_rows_reads_the_center_file_and_never_gets_null_quota() {
+        let now = 1_800_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("quota-facts.json");
+        let local = Some(json!([]));
+        let err = rows_for_host(local.clone(), None, &file, now, 900).unwrap_err();
+        assert!(err.starts_with("quota_stale:"), "{err}");
+        std::fs::write(&file, doc(now - 60)).unwrap();
+        let rows = rows_for_host(local.clone(), None, &file, now, 900)
+            .unwrap()
+            .unwrap();
+        assert_eq!(remaining(&rows, now, 10_800), Some(70.0));
+        // Own codex rows (the center) and supplied facts quota both skip the file.
+        let own = Some(
+            json!([{"provider":"codex:b","windowKey":"5h","timestamp":now,"remainingPct":40}]),
+        );
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(
+            rows_for_host(own.clone(), None, &file, now, 900).unwrap(),
+            own
+        );
+        assert_eq!(
+            rows_for_host(None, Some(50.0), &file, now, 900).unwrap(),
+            None
+        );
+    }
+    #[test]
+    fn export_writes_the_snapshot_the_center_file_reader_accepts() {
+        let now = 1_800_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("quota-facts.json");
+        let rows =
+            json!([{"provider":"codex:a","windowKey":"5h","timestamp":now,"remainingPct":55}]);
+        export(&rows, &file, now).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        let back = center_rows(Some(&text), now + 30, 900).unwrap();
+        assert_eq!(remaining(&back, now + 30, 10_800), Some(55.0));
+    }
     #[test]
     fn aliases_exhaustion_freshness_and_account_isolation() {
         let now = 1_800_000_000;

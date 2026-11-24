@@ -173,6 +173,15 @@ A successful reader returning no valid fresh codex account refuses; an unavailab
 the explicitly supplied facts quota. Missing, invalid, or exhausted quota refuses.
 The fallback quota has the same freshness bound as the other supplied facts.
 
+A host with no codex observation of its own (everything but the quota center) and no
+quota in its supplied facts reads the center's snapshot file instead,
+`~/.config/plangraph/quota-facts.json` (`PLANGRAPH_QUOTA_FACTS` selects another path):
+`{"observed_at": <unix seconds>, "rows": [...]}` with the reader's own row format.
+`plangraph quota --export PATH` writes it atomically on the center; the host-sync timer
+copies it to the other hosts. A missing or unreadable file, or one older than
+`quota_facts_max_age_seconds` (default 900), refuses the tick as `quota_stale` and names
+the snapshot's age; quota is never null on such a host.
+
 Policy `batch_max_items` (default 1, range 1..=50; any other value refuses every tick as `invalid_policy`) lets one writer run hold related ready items: the
 first eligible item in launch order plus later eligible items of its family or sharing its
 files, in launch order. Every item is claimed on its own, then checked against the claimed

@@ -5,6 +5,7 @@ disk_floor_bytes = 10000000000
 quota_floor_percent = 10.0
 facts_max_age_seconds = 300
 quota_max_age_seconds = 10800
+quota_facts_max_age_seconds = 900
 estimate_tokens = 100000
 
 # Match full configured host names first, then their first DNS label.

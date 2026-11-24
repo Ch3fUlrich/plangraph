@@ -219,12 +219,23 @@ pub(super) fn facts(
             work_disks::mounted_space,
         ),
     )?;
-    let rows = quota_snapshots(env, repo).ok();
+    let now = chrono::Utc::now().timestamp();
+    let center = env.get("PLANGRAPH_QUOTA_FACTS").map_or_else(
+        || home.join(".config/plangraph/quota-facts.json"),
+        PathBuf::from,
+    );
+    let rows = super::quota::rows_for_host(
+        quota_snapshots(env, repo).ok(),
+        f.quota_remaining_percent,
+        &center,
+        now,
+        p.quota_facts_max_age_seconds,
+    )?;
     apply_facts(
         f,
         runs,
         p,
-        chrono::Utc::now().timestamp(),
+        now,
         home.join(".config/plangraph/feeder.off").exists(),
         env.get("PLANGRAPH_HOST_NAME").map(String::as_str).or(local),
         rows.as_ref(),
