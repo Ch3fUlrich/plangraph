@@ -81,6 +81,13 @@ pub fn unit_to_disable(family: &str) -> Option<String> {
     })
 }
 
+/// The timer the keeper's deploy gate wants active beside a oneshot service.
+fn paired_timer(family: &str) -> Option<String> {
+    family
+        .strip_suffix(".service")
+        .map(|b| format!("{b}.timer"))
+}
+
 /// Progress of the step, saved after each target: `family@host` of every finished target.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostState {
@@ -153,7 +160,33 @@ pub fn named_targets(plan: &DeployPlan, go_row: &str) -> Result<Vec<Target>, Str
         .collect()
 }
 
-/// Installs `targets` in order. `checkpoint` is called after every state change so the caller can save it.
+/// A good oneshot run counts only with its timer active (the keeper gate). Returns the timer to write a row
+/// for, or `None` when the family is no oneshot or the timer is itself a target with its own row.
+fn paired_timer_row(
+    installer: &dyn Installer,
+    t: &Target,
+    run: &RunRead,
+    targets: &[Target],
+) -> Result<Option<String>, String> {
+    let Some(timer) = run.oneshot.then(|| paired_timer(&t.family)).flatten() else {
+        return Ok(None);
+    };
+    let own = targets
+        .iter()
+        .any(|o| o.host == t.host && o.family == timer);
+    let state = installer
+        .read_run(&t.host, &timer)
+        .map_err(|e| format!("paired timer {timer}: {e}"))?;
+    if state.is_active != "active" {
+        return Err(format!(
+            "paired timer {timer} on {} is not active ({})",
+            t.host, state.is_active
+        ));
+    }
+    Ok((!own).then_some(timer))
+}
+
+/// Installs `targets` (timers first). `checkpoint` is called after every state change so the caller can save it.
 pub fn apply(
     targets: &[Target],
     installer: &dyn Installer,
@@ -167,7 +200,10 @@ pub fn apply(
         ));
     }
     let mut report = PostReport::default();
-    for (i, t) in targets.iter().enumerate() {
+    // A shipped timer comes up before the oneshot service it triggers, whose gate reads that timer.
+    let mut ordered: Vec<&Target> = targets.iter().collect();
+    ordered.sort_by_key(|t| !t.family.ends_with(".timer"));
+    for (i, t) in ordered.iter().copied().enumerate() {
         let id = name(t);
         if state.done.contains(&id) {
             report.skipped_done.push(id);
@@ -183,7 +219,7 @@ pub fn apply(
             })
             .and_then(|run| {
                 if run.good(&t.family) {
-                    Ok(run)
+                    paired_timer_row(installer, t, &run, targets).map(|timer| (run, timer))
                 } else {
                     Err(format!(
                         "first run of {} on {} is not good (is_active={}, result={})",
@@ -195,8 +231,20 @@ pub fn apply(
                 }
             });
         match outcome {
-            Ok(run) => {
+            Ok((run, timer)) => {
                 for key in &t.items {
+                    if let Some(timer) = &timer {
+                        rows.write(&DeployRow {
+                            key: key.clone(),
+                            host: t.host.clone(),
+                            unit: timer.clone(),
+                            is_active: "active".into(),
+                            kind: None,
+                            result: None,
+                            exec_main_exit_timestamp: None,
+                        })
+                        .map_err(|e| format!("deploy row {key} for {timer}: {e}"))?;
+                    }
                     rows.write(&DeployRow {
                         key: key.clone(),
                         host: t.host.clone(),
@@ -227,9 +275,9 @@ pub fn apply(
                 }
                 state.failed = Some(id.clone());
                 checkpoint(state)?;
-                report.not_attempted = targets[i + 1..]
+                report.not_attempted = ordered[i + 1..]
                     .iter()
-                    .map(name)
+                    .map(|t| name(t))
                     .filter(|n| !state.done.contains(n))
                     .collect();
                 report.failed = Some((id, why));
