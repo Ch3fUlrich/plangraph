@@ -20,10 +20,19 @@ fn pass_in(
     host: serde_json::Value,
     env: &[(&str, &std::path::Path)],
 ) -> (String, Vec<String>) {
+    pass_hosts_in(dir, vec![host], env)
+}
+
+/// As `pass_in` with any host list, including none (a missing sample).
+fn pass_hosts_in(
+    dir: &std::path::Path,
+    hosts: Vec<serde_json::Value>,
+    env: &[(&str, &std::path::Path)],
+) -> (String, Vec<String>) {
     let snapshot = serde_json::json!({"pace":66,"budget":66,"ci_failed":0,
         "ci_total":10,"infra_failed":0,"review_age_hours":0,"review_rounds":0,
         "critical_idle_hours":0,"coding_vm_runs":0,"worker_idle":false,
-        "host_drift":false,"closes_recent":4,"closes_previous":4,"hosts":[host]});
+        "host_drift":false,"closes_recent":4,"closes_previous":4,"hosts":hosts});
     let input = dir.join("input.json");
     fs::write(&input, snapshot.to_string()).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_flow-watchdog"))
@@ -247,4 +256,42 @@ fn a_crossing_queues_at_most_one_bare_and_one_measured_alert_however_the_measure
         "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
     let (active, _) = pass_in(again.path(), calm, &env);
     assert!(active.trim().is_empty(), "{active}");
+}
+
+#[test]
+fn a_missing_host_sample_keeps_the_crossing_active_and_only_a_sample_ends_it() {
+    let state = tempfile::tempdir().unwrap();
+    let watch = tempfile::tempdir().unwrap();
+    let marks = state.path().join("disk-watermarks.json");
+    let env = [("PLANGRAPH_DISK_WATERMARKS", marks.as_path())];
+    let rows = serde_json::json!([{"path": "/data/big", "bytes": 900}]);
+    fs::write(
+        &marks,
+        serde_json::json!({"1": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+    )
+    .unwrap();
+    let hot = serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":87,
+        "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
+    let calm = serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":10,
+        "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
+    let (_, queued) = pass_hosts_in(watch.path(), vec![hot.clone()], &env);
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    // The collector missed this host once: the crossing is still the same crossing.
+    let (active, queued) = pass_hosts_in(watch.path(), vec![], &env);
+    assert!(
+        active.contains("host-disk"),
+        "kept through the missing sample: {active}"
+    );
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    let (_, queued) = pass_hosts_in(watch.path(), vec![hot.clone()], &env);
+    assert_eq!(
+        queued.len(),
+        1,
+        "no duplicate for the same crossing: {queued:?}"
+    );
+    // A sample that shows recovery ends it; the next crossing alerts again.
+    let (active, _) = pass_hosts_in(watch.path(), vec![calm], &env);
+    assert!(!active.contains("host-disk"), "{active}");
+    let (_, queued) = pass_hosts_in(watch.path(), vec![hot], &env);
+    assert_eq!(queued.len(), 2, "{queued:?}");
 }

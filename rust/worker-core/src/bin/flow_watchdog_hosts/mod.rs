@@ -97,6 +97,27 @@ fn consumers(host: &Host) -> String {
 
 /// Pairs of (dedupe key, message): the key is stable while the consumer sizes move.
 /// `previous_active` is the watchdog's `active` file from the last pass.
+/// An `active` line of a host alert whose host is absent from this snapshot: a missing sample
+/// is not a recovery, so the line stays until a sample of that host says the condition is gone.
+pub fn retained(line: &str, hosts: &[Host]) -> bool {
+    let Some(rest) = ["host-disk: host=", "host-code: host="]
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix))
+    else {
+        return false;
+    };
+    let name = serde_json::Deserializer::from_str(rest)
+        .into_iter::<String>()
+        .next()
+        .and_then(Result::ok);
+    name.is_some_and(|name| hosts.iter().all(|host| host.host != name))
+}
+
+/// Whether `line` belongs to a host alert (kept as a whole when the snapshot is unusable).
+pub fn is_host_line(line: &str) -> bool {
+    line.starts_with("host-disk: host=") || line.starts_with("host-code: host=")
+}
+
 pub fn messages(hosts: &[Host], previous_active: &str) -> Vec<(String, String)> {
     let mut messages = Vec::new();
     for host in hosts {
