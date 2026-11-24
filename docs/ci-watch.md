@@ -79,3 +79,14 @@ until `plangraph ci-watch --ack=<id>`, and escalated to plan-order after 15 minu
 The handler tracks the full runs of main's current tip by run id, whatever ref they ran on and whether or not the train
 pull request is still open. It creates the fix task of rule 3.46 when main reads red and cancels it in the keeper when main
 reads green again (a failed cancel stays open and is retried on the next pass).
+
+## Red classes
+
+Every red job is classified from its name and scrubbed log (`ci_watch/classify.rs`): fmt, clippy (only lints
+`cargo clippy --fix` applies), file-size, missing-trailer, missing-module (a non-Python job importing a module),
+flake, code, infrastructure, configuration, unknown; a run whose red jobs differ is mixed. The task row and
+the keeper definition carry the job class, the run class, the failed job id and where the fix starts (an
+infrastructure or configuration red starts at the runner, workflow or setting, not the batch's code). The class
+changes the brief, never whether a task is made. `decide` gives the first action: a flake is rerun once; fmt and
+clippy get one automatic fix per head and class, committed with `Hand-Edit: ci-watch <class> fix of failed job <id>`;
+all else goes to a narrow fix writer. The commit and push of an automatic fix are not part of the scan.
