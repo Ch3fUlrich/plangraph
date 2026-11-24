@@ -285,9 +285,8 @@ fn advance(
         record.set(key, val.clone());
     }
     // The attempt's slot rides on the record, so the leg it now runs on counts it once.
-    if let Some(slot) = slot {
+    if let Some(slot) = &slot {
         record.set(crate::seat_admission::TOKEN_FIELD, json!(slot.token()));
-        slot.keep();
     }
     let mut attempts = value["attempts"].as_array().unwrap().clone();
     attempts.push(json!({"leg":leg,"status":"running"}));
@@ -329,6 +328,10 @@ fn advance(
     record.save().map_err(|_| {
         crate::errors::ToolError::Internal("could not save review fallthrough".into())
     })?;
+    // The record names the slot now; a failed save above frees it instead (the guard drops).
+    if let Some(slot) = slot {
+        slot.keep();
+    }
     Ok(RunSpec {
         run_id: run_id.into(),
         job_id,
@@ -515,6 +518,82 @@ mod tests {
                 .ok()
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    /// Runs `advance` into a leg bounded to one seat, holding that seat; `break_save` makes the save fail.
+    fn advance_with_slot(break_save: bool) -> (tempfile::TempDir, Value, bool) {
+        let state = tempfile::tempdir().unwrap();
+        let run_id = new_run_id();
+        let previous = json!({"id":"first","harness":"opencode"});
+        let leg = json!({"id":"fixture-fallback","harness":"opencode"});
+        let policy = json!({"legs":{"fixture-fallback":1},"queue_wait_seconds":0.0});
+        let mut record = runs::create(
+            state.path(),
+            &run_id,
+            "fixture",
+            json!({"role":"review","cwd":state.path(),
+                "plan":{"first_leg":previous,"legs":[previous,leg],"seat_admission":policy},
+                "attempts":[{"leg":previous,"status":"failed","skip_reason":"quota"}]}),
+            Status::Failed,
+        )
+        .ok()
+        .unwrap();
+        let args = json!({"role":"review","card":{}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut launch = crate::launch::LaunchSpec {
+            argv: vec!["opencode".into()],
+            cwd: state.path().into(),
+            env: Default::default(),
+            stdin: Some("review".into()),
+            prompt: Some("review".into()),
+            events: None,
+            warnings: None,
+        };
+        let review = crate::prompt::prepare_launch(&args, &leg, &mut launch, false)
+            .ok()
+            .unwrap();
+        let slot = crate::seat_admission::reserve_now(state.path(), &leg, &policy)
+            .ok()
+            .unwrap();
+        let slot_file = state
+            .path()
+            .join("seat-slots/fixture-fallback")
+            .join(slot.as_ref().unwrap().token());
+        if break_save {
+            // A non-empty directory where the record file goes: the atomic save cannot replace it.
+            let file = record.path().to_owned();
+            std::fs::remove_file(&file).unwrap();
+            std::fs::create_dir_all(file.join("blocker")).unwrap();
+        }
+        let advanced = advance(
+            &mut record,
+            args,
+            &previous,
+            1,
+            leg.clone(),
+            (new_job_id(), launch, review),
+            None,
+            slot,
+        )
+        .is_ok();
+        let held = slot_file.exists();
+        (state, json!(held), advanced)
+    }
+
+    #[test]
+    fn a_saved_retry_keeps_its_slot_and_a_failed_save_frees_it() {
+        let (_state, held, advanced) = advance_with_slot(false);
+        assert!(advanced);
+        assert_eq!(held, json!(true), "the saved record holds the slot");
+        let (_state, held, advanced) = advance_with_slot(true);
+        assert!(!advanced, "the save failed");
+        assert_eq!(
+            held,
+            json!(false),
+            "a failed save must not leave the slot occupied"
         );
     }
 }

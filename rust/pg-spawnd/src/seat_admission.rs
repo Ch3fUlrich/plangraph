@@ -270,12 +270,14 @@ pub(crate) fn admit(
         let Some(limit) = policy.limits.get(&id).copied() else {
             return Ok((plan, None));
         };
-        let waited = ports.monotonic() - began;
         let lock = lock_leg(state, &id)?;
         let (count, stale) = occupied(state, &crate::records::list_runs(state), &id, ports.now());
         stale.iter().for_each(|p| {
             let _ = std::fs::remove_file(p);
         });
+        // Read after the lock and the occupancy scan, which can take long: the budget is checked
+        // against the time the slot would actually be taken.
+        let waited = ports.monotonic() - began;
         // A seat that queued past its budget goes to the fallback even when a slot just freed.
         let expired = queued.is_some() && waited >= policy.wait.as_secs_f64();
         if count < limit && !expired {

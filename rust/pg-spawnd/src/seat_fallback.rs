@@ -49,6 +49,18 @@ fn run_ids(answer: &Value) -> Result<Vec<String>, ToolError> {
     Ok(ids)
 }
 
+/// A seat group answer that did not start every group leaves paths unreviewed: that is a failure of
+/// the seat, whatever the runs it did start say.
+fn uncovered(answer: &Value) -> Result<(), ToolError> {
+    match answer["unstarted_groups"].as_u64() {
+        Some(n) if n > 0 => Err(refused(format!(
+            "seat_fallback_incomplete: a fallback seat left {n} group(s) unstarted: {}",
+            answer["reason"].as_str().unwrap_or("no reason")
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// What a fallback start left running: every started run id, and the failure that stopped the rest.
 pub(crate) struct Started {
     pub ids: Vec<String>,
@@ -67,23 +79,80 @@ pub(crate) fn start_seats(
         failure: None,
     };
     for plan in seat_plans(open_route)? {
-        match start(plan).and_then(|answer| run_ids(&answer)) {
+        let answer = match start(plan) {
+            Ok(answer) => answer,
+            Err(error) => {
+                started.failure = Some(error);
+                break;
+            }
+        };
+        // A seat that split keeps every run it started, and its own failure to start the rest.
+        match run_ids(&answer) {
             Ok(ids) => started.ids.extend(ids),
             Err(error) => {
                 started.failure = Some(error);
                 break;
             }
         }
+        if let Err(error) = uncovered(&answer) {
+            started.failure = Some(error);
+            break;
+        }
     }
     Ok(started)
 }
 
-/// The request for a fallback seat: no leg selector, and no waiting (the group waits once).
-pub(crate) fn seat_args(args: &Args) -> Args {
+/// The request for a fallback seat: no leg selector, no reservation claim, and (for a split review)
+/// only the paths that no started group covers.
+pub(crate) fn seat_args(args: &Args, paths: Option<&[String]>) -> Args {
     let mut open = args.clone();
     open.remove("leg");
     open.remove(crate::seat_admission::TOKEN_FIELD);
+    if let Some(paths) = paths {
+        if let Some(diff_ref) = open
+            .get_mut("card")
+            .and_then(|card| card.get_mut("diff_ref"))
+            .and_then(Value::as_object_mut)
+        {
+            diff_ref.insert("paths".into(), json!(paths));
+        }
+    }
     open
+}
+
+/// Both fallback seats review `paths` (the whole request when `None`) next to the runs already
+/// `started`; every run id stays in one seat group, and any failure to start or to cover the paths
+/// fails that group instead of dropping it. `route` answers the open route of the request and `start`
+/// launches one seat without waiting.
+pub(crate) fn cover(
+    state: &std::path::Path,
+    args: &Args,
+    started: &[String],
+    total: usize,
+    paths: Option<&[String]>,
+    route: impl FnOnce(&Args) -> Result<Value, ToolError>,
+    mut start: impl FnMut(&Args, Value) -> Result<Value, ToolError>,
+) -> Result<Value, ToolError> {
+    let group = format!(
+        "seats-{}",
+        &pg_worker_core::run::record::new_run_id()["run-".len()..]
+    );
+    let open = seat_args(args, paths);
+    let mut seat = open.clone();
+    seat.insert("wait_seconds".into(), json!(0));
+    let mut ids = started.to_vec();
+    let begun = route(&open).and_then(|route| start_seats(&route, |plan| start(&seat, plan)));
+    let failure = match begun {
+        Ok(begun) => {
+            ids.extend(begun.ids);
+            begun.failure
+        }
+        Err(error) => Some(error),
+    };
+    if let Some(error) = failure {
+        return crate::review_split::unstarted_groups(state, &group, &ids, total, error);
+    }
+    crate::review_split::finish_group_seats(state, &group, &ids, args.get("wait_seconds"), false)
 }
 
 #[cfg(test)]

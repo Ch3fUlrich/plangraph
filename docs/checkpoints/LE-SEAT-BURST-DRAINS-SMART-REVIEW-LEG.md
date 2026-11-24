@@ -24,3 +24,10 @@ A split group that waits routes again each poll and is refused `seat_leg_limited
 route; the groups already started stay in a failed seat group that keeps their run ids. A fallback seat that
 itself split answers with every run it started, and a second seat that fails to launch leaves the first in
 a failed seat group.
+
+A split group that cannot start (admission refused, its leg left the route, or its launch failed) sends its
+paths and every later group's to both fallback seats, each reviewing all of those paths; the started runs
+and the fallback runs stay in one seat group. A fallback seat that itself leaves groups unstarted fails the
+group (`seat_fallback_incomplete`), and a group that cannot start the pair at all fails with every started
+run id, so a partial review never reads as a pass. The budget is read after the slot lock and occupancy
+scan, and a retry's slot stays held until its record is saved.

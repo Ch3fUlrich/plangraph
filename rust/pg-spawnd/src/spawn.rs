@@ -134,34 +134,32 @@ fn fallback_seats(
     runs: &crate::runs::Runs,
     role: &Value,
 ) -> Result<Value, ToolError> {
-    let open = crate::seat_fallback::seat_args(args);
-    let route: Value = serde_json::from_str(&placement::route(state, &open)?)
-        .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
-    let mut seat = open;
-    seat.insert("wait_seconds".into(), json!(0));
-    let started = crate::seat_fallback::start_seats(&route, |plan| {
-        runs.spawn(state, &seat, host, role.clone(), plan)
-    })?;
-    let group = format!(
-        "seats-{}",
-        &pg_worker_core::run::record::new_run_id()["run-".len()..]
-    );
-    if let Some(error) = started.failure {
-        // A seat is running already: its run id is kept in a failed seat group, never dropped.
-        return crate::review_split::unstarted_groups(
-            state,
-            &group,
-            &started.ids,
-            crate::seat_fallback::LEGS.len(),
-            error,
-        );
-    }
-    crate::review_split::finish_group_seats(
+    cover_with_fallback(state, args, host, runs, role, &[], 0, None)
+}
+
+/// The fallback pair over `paths` next to the runs already `started` (see `seat_fallback::cover`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cover_with_fallback(
+    state: &Path,
+    args: &Args,
+    host: &str,
+    runs: &crate::runs::Runs,
+    role: &Value,
+    started: &[String],
+    total: usize,
+    paths: Option<&[String]>,
+) -> Result<Value, ToolError> {
+    crate::seat_fallback::cover(
         state,
-        &group,
-        &started.ids,
-        args.get("wait_seconds"),
-        false,
+        args,
+        started,
+        total.max(crate::seat_fallback::LEGS.len()),
+        paths,
+        |open| {
+            serde_json::from_str(&placement::route(state, open)?)
+                .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))
+        },
+        |seat, plan| runs.spawn(state, seat, host, role.clone(), plan),
     )
 }
 pub(crate) fn spawn(

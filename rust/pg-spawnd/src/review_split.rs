@@ -303,52 +303,69 @@ pub(crate) fn spawn_rust_split_groups(
     let mut held = Vec::new();
     for (idx, group_paths) in groups.iter().enumerate() {
         let index = idx + 1;
-        let group_args = match admit_group(
-            state,
-            plan,
-            index,
-            dry,
-            args,
-            &mut held,
-            &mut crate::seat_admission::Live { state, args },
-        ) {
-            Ok(group_args) => group_args,
-            Err(error) => return unstarted_groups(state, &seat_group_id, &run_ids, total, error),
-        };
-        let args = &group_args;
-        let (run_id, job_id) = (new_run_id(), new_job_id());
-        let mut spec = launch(
-            state,
-            &json!({
-                "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
-                "writer_families":args.get("writer_families").cloned().unwrap_or(json!([])),
-                "review_of":args.get("review_of"),
-                "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
-            }),
-        )?;
-        let review = crate::prompt::prepare_launch_group(
-            args,
-            leg,
-            &mut spec,
-            dry,
-            Some((index, total, group_paths)),
-        )?;
-        runs.start_prepared(
-            state,
-            args,
-            host,
-            role,
-            plan,
-            leg,
-            &run_id,
-            &job_id,
-            spec,
-            review.as_ref(),
-            &json!({}),
-            dry,
-            Some((&seat_group_id, index, total, group_paths)),
-        )?;
-        run_ids.push(run_id);
+        let started = (|| -> Result<String, ToolError> {
+            let group_args = admit_group(
+                state,
+                plan,
+                index,
+                dry,
+                args,
+                &mut held,
+                &mut crate::seat_admission::Live { state, args },
+            )?;
+            let args = &group_args;
+            let (run_id, job_id) = (new_run_id(), new_job_id());
+            let mut spec = launch(
+                state,
+                &json!({
+                    "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
+                    "writer_families":args.get("writer_families").cloned().unwrap_or(json!([])),
+                    "review_of":args.get("review_of"),
+                    "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
+                }),
+            )?;
+            let review = crate::prompt::prepare_launch_group(
+                args,
+                leg,
+                &mut spec,
+                dry,
+                Some((index, total, group_paths)),
+            )?;
+            runs.start_prepared(
+                state,
+                args,
+                host,
+                role,
+                plan,
+                leg,
+                &run_id,
+                &job_id,
+                spec,
+                review.as_ref(),
+                &json!({}),
+                dry,
+                Some((&seat_group_id, index, total, group_paths)),
+            )?;
+            Ok(run_id)
+        })();
+        match started {
+            Ok(run_id) => run_ids.push(run_id),
+            Err(error) if dry => return Err(error),
+            // The group could not start: this and every later group's paths go to both fallback
+            // seats, and the runs already started keep their ids in the same seat group.
+            Err(_) => {
+                return crate::spawn::cover_with_fallback(
+                    state,
+                    args,
+                    host,
+                    runs,
+                    role,
+                    &run_ids,
+                    total,
+                    Some(&groups[idx..].concat()),
+                )
+            }
+        }
     }
     finish_group_seats(
         state,
@@ -433,48 +450,63 @@ pub(crate) fn spawn_adapter_split_groups(
     let mut held = Vec::new();
     for (idx, group_paths) in groups.iter().enumerate() {
         let index = idx + 1;
-        let (run_id, job_id) = (new_run_id(), new_job_id());
-        let mut child_args = match admit_group(
-            state,
-            plan,
-            index,
-            dry,
-            args,
-            &mut held,
-            &mut crate::seat_admission::Live { state, args },
-        ) {
-            Ok(group_args) => group_args,
-            Err(error) => return unstarted_groups(state, &seat_group_id, &run_ids, total, error),
-        };
-        child_args["card"]["diff_ref"]["paths"] = json!(group_paths);
-        let group_prompt = format!("{}{}", group_banner(index, total, group_paths), prompt);
-        child_args["prompt"] = json!(group_prompt);
-        let mut spec = launch(
-            state,
-            &json!({
-                "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
-                "writer_families":child_args.get("writer_families").cloned().unwrap_or(json!([])),
-                "review_of":child_args.get("review_of"),
-                "prompt":child_args["prompt"],"card":child_args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
-            }),
-        )?;
-        let review = crate::prompt::prepare_launch(&child_args, leg, &mut spec, dry)?;
-        runs.start_prepared(
-            state,
-            &child_args,
-            host,
-            role,
-            plan,
-            leg,
-            &run_id,
-            &job_id,
-            spec,
-            review.as_ref(),
-            &json!({}),
-            dry,
-            Some((&seat_group_id, index, total, group_paths)),
-        )?;
-        run_ids.push(run_id);
+        let started = (|| -> Result<String, ToolError> {
+            let (run_id, job_id) = (new_run_id(), new_job_id());
+            let mut child_args = admit_group(
+                state,
+                plan,
+                index,
+                dry,
+                args,
+                &mut held,
+                &mut crate::seat_admission::Live { state, args },
+            )?;
+            child_args["card"]["diff_ref"]["paths"] = json!(group_paths);
+            let group_prompt = format!("{}{}", group_banner(index, total, group_paths), prompt);
+            child_args["prompt"] = json!(group_prompt);
+            let mut spec = launch(
+                state,
+                &json!({
+                    "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
+                    "writer_families":child_args.get("writer_families").cloned().unwrap_or(json!([])),
+                    "review_of":child_args.get("review_of"),
+                    "prompt":child_args["prompt"],"card":child_args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
+                }),
+            )?;
+            let review = crate::prompt::prepare_launch(&child_args, leg, &mut spec, dry)?;
+            runs.start_prepared(
+                state,
+                &child_args,
+                host,
+                role,
+                plan,
+                leg,
+                &run_id,
+                &job_id,
+                spec,
+                review.as_ref(),
+                &json!({}),
+                dry,
+                Some((&seat_group_id, index, total, group_paths)),
+            )?;
+            Ok(run_id)
+        })();
+        match started {
+            Ok(run_id) => run_ids.push(run_id),
+            Err(error) if dry => return Err(error),
+            Err(_) => {
+                return crate::spawn::cover_with_fallback(
+                    state,
+                    args,
+                    host,
+                    runs,
+                    role,
+                    &run_ids,
+                    total,
+                    Some(&groups[idx..].concat()),
+                )
+            }
+        }
     }
     finish_group_seats(
         state,

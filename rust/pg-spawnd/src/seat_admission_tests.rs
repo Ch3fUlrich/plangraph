@@ -541,3 +541,78 @@ fn a_retried_run_counts_on_the_leg_it_runs_on() {
     .unwrap()
     .is_some());
 }
+
+/// The budget is read after the lock and the occupancy scan: a scan that takes the seat past its budget
+/// does not take the slot.
+#[test]
+fn a_slow_occupancy_scan_that_passes_the_budget_does_not_take_the_slot() {
+    use std::cell::Cell;
+    struct Slow {
+        mono: Cell<f64>,
+        armed: Cell<bool>,
+    }
+    impl Ports for Slow {
+        fn route(&mut self) -> Result<Value, ToolError> {
+            Ok(short_polls())
+        }
+        fn now(&self) -> f64 {
+            // The scan after the first sleep takes 1.1 s of monotonic time.
+            if self.armed.replace(false) {
+                self.mono.set(self.mono.get() + 1.1);
+            }
+            1000.0
+        }
+        fn monotonic(&self) -> f64 {
+            self.mono.get()
+        }
+        fn sleep(&mut self, d: Duration) {
+            self.mono.set(self.mono.get() + d.as_secs_f64());
+            self.armed.set(true);
+        }
+    }
+    let state = tempfile::tempdir().unwrap();
+    // One seat fills the leg; the second seat queues with a 1 s budget and the slot frees at its first poll.
+    let held = RefCell::new(vec![ok(admit(
+        state.path(),
+        plan(&[HYDROGEN], 1, 1.0),
+        &mut quiet(),
+    ))
+    .1
+    .unwrap()]);
+    struct Freeing<'a>(Slow, &'a RefCell<Vec<Reservation>>);
+    impl Ports for Freeing<'_> {
+        fn route(&mut self) -> Result<Value, ToolError> {
+            self.0.route()
+        }
+        fn now(&self) -> f64 {
+            self.0.now()
+        }
+        fn monotonic(&self) -> f64 {
+            self.0.monotonic()
+        }
+        fn sleep(&mut self, d: Duration) {
+            self.0.sleep(d);
+            self.1.borrow_mut().clear();
+        }
+    }
+    let mut ports = Freeing(
+        Slow {
+            mono: Cell::new(0.0),
+            armed: Cell::new(false),
+        },
+        &held,
+    );
+    match admit(state.path(), short_polls(), &mut ports) {
+        Err(ToolError::Refused { message, .. }) => {
+            assert!(message.starts_with("seat_queue_timeout:"), "{message}")
+        }
+        _ => panic!("the slot must not be taken after the budget passed"),
+    }
+}
+
+/// A 1 s budget polled every half second.
+fn short_polls() -> Value {
+    let mut bounded = plan(&[HYDROGEN], 1, 1.0);
+    bounded["seat_admission"]["poll_seconds"] = json!(0.5);
+    bounded
+}

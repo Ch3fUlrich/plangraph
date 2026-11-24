@@ -121,7 +121,7 @@ fn the_fallback_request_drops_the_selector_and_any_reservation_claim() {
         json!({"leg": "agy-cli", "seat_reservation": "forged", "role": "review"}),
     )
     .unwrap();
-    let open = seat_args(&args);
+    let open = seat_args(&args, None);
     assert!(open.get("leg").is_none() && open.get("seat_reservation").is_none());
     assert_eq!(open["role"], "review");
 }
@@ -171,4 +171,138 @@ fn a_second_launch_that_fails_keeps_the_run_that_started() {
     .ok()
     .unwrap();
     assert_eq!((started.ids.len(), started.failure.is_some()), (1, true));
+}
+
+/// A run record the group can read back.
+fn record(state: &std::path::Path, id: &str, status: &str) {
+    let dir = state.join("runs").join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("record.json"),
+        json!({"run_id": id, "role": "review", "status": status, "verdict": "PASS",
+            "exit_code": 0, "plan": {"first_leg": {"id": "x"}}})
+        .to_string(),
+    )
+    .unwrap();
+}
+fn split_request() -> Args {
+    serde_json::from_value(
+        json!({"role": "review", "leg": "agy-cli", "wait_seconds": 0,
+        "card": {"diff_ref": {"repo": "/r", "base": "a", "head": "b"}}}),
+    )
+    .unwrap()
+}
+
+/// The groups that could not start are reviewed by both weak seats, each over all their paths, in one
+/// seat group with the runs that did start.
+#[test]
+fn unstarted_groups_go_to_both_fallback_seats_over_their_paths() {
+    let state = tempfile::tempdir().unwrap();
+    record(state.path(), "run-g1", "completed");
+    let paths = vec!["b/x.rs".to_owned(), "c/y.rs".to_owned()];
+    let mut seen = Vec::new();
+    let answer = cover(
+        state.path(),
+        &split_request(),
+        &["run-g1".to_owned()],
+        3,
+        Some(&paths),
+        |open| {
+            assert!(open.get("leg").is_none());
+            Ok(route(&[HYDROGEN, LEGS[0], LEGS[1]]))
+        },
+        |seat, plan| {
+            let id = format!("run-f{}", seen.len() + 1);
+            seen.push((
+                plan["first_leg"]["id"].clone(),
+                seat["card"]["diff_ref"]["paths"].clone(),
+            ));
+            record(state.path(), &id, "completed");
+            Ok(json!({"run_id": id}))
+        },
+    )
+    .ok()
+    .unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen.iter().all(|(_, p)| *p == json!(paths)), "{seen:?}");
+    let runs: Vec<_> = answer["seats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["run_id"].clone())
+        .collect();
+    assert_eq!(runs, [json!("run-g1"), json!("run-f1"), json!("run-f2")]);
+    assert_eq!(answer["verdict"], "PASS");
+}
+
+#[test]
+fn a_second_fallback_seat_that_cannot_start_fails_the_group_and_keeps_the_ids() {
+    let state = tempfile::tempdir().unwrap();
+    record(state.path(), "run-g1", "completed");
+    record(state.path(), "run-f1", "completed");
+    let mut n = 0;
+    let answer = cover(
+        state.path(),
+        &split_request(),
+        &["run-g1".to_owned()],
+        3,
+        Some(&["c/y.rs".to_owned()]),
+        |_| Ok(route(&[LEGS[0], LEGS[1]])),
+        |_, _| {
+            n += 1;
+            if n == 1 {
+                Ok(json!({"run_id": "run-f1"}))
+            } else {
+                Err(ToolError::Internal("quota".into()))
+            }
+        },
+    )
+    .ok()
+    .unwrap();
+    assert_eq!(
+        (answer["status"].as_str(), answer["passed"].as_bool()),
+        (Some("failed"), Some(false))
+    );
+    assert_ne!(answer["verdict"], "PASS");
+    assert_eq!(answer["seats"].as_array().unwrap().len(), 2);
+}
+
+/// A fallback seat that itself split and left groups unstarted never reads as a pass, even when every
+/// run it did start passes.
+#[test]
+fn a_fallback_seat_that_left_groups_unstarted_fails_the_group() {
+    let state = tempfile::tempdir().unwrap();
+    record(state.path(), "run-s1", "completed");
+    record(state.path(), "run-s2", "completed");
+    let mut n = 0;
+    let answer = cover(
+        state.path(),
+        &split_request(),
+        &[],
+        2,
+        None,
+        |_| Ok(route(&[LEGS[0], LEGS[1]])),
+        |_, _| {
+            n += 1;
+            Ok(if n == 1 {
+                json!({"seat_group": "seats-aa", "status": "failed", "unstarted_groups": 1,
+                    "reason": "seat_queue_timeout: x", "seats": [{"run_id": "run-s1"}]})
+            } else {
+                json!({"run_id": "run-s2"})
+            })
+        },
+    )
+    .ok()
+    .unwrap();
+    assert_eq!(
+        n, 1,
+        "the second seat is not started after the first left paths unreviewed"
+    );
+    assert_eq!(answer["passed"], false);
+    assert_eq!(answer["status"], "failed");
+    assert!(answer["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("seat_fallback_incomplete:"));
+    assert_eq!(answer["seats"][0]["run_id"], "run-s1");
 }

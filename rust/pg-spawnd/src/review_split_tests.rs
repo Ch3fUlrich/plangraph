@@ -121,3 +121,68 @@ fn aggregate_fails_the_review_when_any_group_does_not_pass() {
         (Some("failed"), Some(false))
     );
 }
+
+/// A later group whose launch is refused leaves the started group's run id in a failed seat group, and
+/// its paths go to the fallback seats (which cannot be routed here, so the group fails, never passes).
+#[cfg(unix)]
+#[test]
+fn a_refused_later_group_keeps_the_started_run_ids_and_never_reads_as_a_pass() {
+    use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
+    let work = tempfile::tempdir().unwrap();
+    let state = work.path().join("state");
+    let runs = crate::runs::Runs::new(std::sync::Arc::new(
+        pg_worker_core::run::supervisor::Supervisor::new(SupervisorCfg::new(Config {
+            state_dir: state.clone(),
+            confinement: Confinement::Plain,
+            ..Config::default()
+        }))
+        .unwrap(),
+    ));
+    let leg = json!({"id":"fixture-leg","harness":"opencode","model":"m","family":"f"});
+    let plan = json!({"first_leg": leg, "legs": [leg]});
+    let args = json!({"role":"review","prompt":"review","wait_seconds":0,"card":{}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let groups = vec![vec!["a/x".to_string()], vec!["b/y".to_string()]];
+    let mut launched = 0;
+    let mut launch = |_: &Path, _: &Value| {
+        launched += 1;
+        if launched == 2 {
+            return Err(ToolError::Refused {
+                kind: crate::errors::RefusalKind::Spawn,
+                message: "quota".into(),
+                legs: vec![],
+            });
+        }
+        Ok(LaunchSpec {
+            argv: vec!["/bin/sh".into(), "-c".into(), "cat >/dev/null".into()],
+            cwd: work.path().into(),
+            env: Default::default(),
+            stdin: Some("review".into()),
+            prompt: Some("review".into()),
+            events: None,
+            warnings: None,
+        })
+    };
+    let answer = spawn_rust_split_groups(
+        &runs,
+        &state,
+        &args,
+        "local",
+        &json!("review"),
+        &plan,
+        &leg,
+        work.path(),
+        false,
+        &groups,
+        &mut launch,
+    )
+    .ok()
+    .unwrap();
+    assert_eq!(answer["status"], "failed");
+    assert_eq!(answer["passed"], false);
+    assert_ne!(answer["verdict"], "PASS");
+    assert_eq!(answer["seats"].as_array().unwrap().len(), 1, "{answer}");
+    assert_eq!(answer["unstarted_groups"], 1);
+}
