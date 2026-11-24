@@ -73,9 +73,11 @@ pub(crate) struct Evt {
     /// Its deadline holds in every mode: it occurred while active, or the role was switched on
     /// with it pending. Rollback and a lost GO do not release it.
     pub binding: bool,
-    /// Age, in ticks, at which the first reader (the session, or the operator by the alarm)
-    /// held it. Kept as evidence of a late receipt.
-    pub reader: Option<u8>,
+    /// Age, in ticks, at which the session received it. Kept as evidence of a late receipt.
+    pub session_at: Option<u8>,
+    /// Age, in ticks, at which the operator was told. Tracked apart from the session's receipt:
+    /// the alarm never stands in for it.
+    pub operator_at: Option<u8>,
 }
 
 impl Evt {
@@ -102,6 +104,8 @@ pub enum Event {
     Crash,
     Escalate(u8),
     Alarm(u8),
+    /// The supervisor ends a live session that has not read a pending urgent event in time.
+    Kill,
     Nudge,
     StartShadow,
     SignOffShadow,
@@ -134,11 +138,13 @@ pub enum Denied {
 pub enum Invariant {
     /// Req 7a: an active role has fence, recovery, a live GO and a passed shadow.
     ActivationGate,
-    /// Req 1: no binding urgent event is unheld past its class bound, in any mode; a woken
-    /// session that keeps working and a dead role are not exempt.
+    /// Req 1: the operator is told of a binding urgent event by its class bound, in any mode
+    /// (or a session has received it); a dead role and a hung source are not exempt.
     UrgentBound,
-    /// Req 1: the first reader of a binding event held it by the bound; a late receipt stays
-    /// visible after it happened.
+    /// Req 1: a live session has received a binding event by its class bound. An alarm to the
+    /// operator does not count: the supervisor ends a session that has not.
+    SessionUnread,
+    /// Req 1: a session's receipt after the bound stays visible after it happened, alarm or not.
     LateReceipt,
     /// An event is received only by a session's receipt, never by a scan or an alarm.
     ReceivedUnread,

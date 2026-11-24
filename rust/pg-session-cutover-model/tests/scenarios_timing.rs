@@ -63,7 +63,7 @@ fn each_urgent_class_has_its_own_budget_and_none_may_exceed_the_ruling() {
     assert_eq!(m.apply(Event::Alarm(1)), Err(Denied::Guard));
     run(&mut m, &[Event::Alarm(0)]);
     assert_eq!(
-        (m.alarmed(0), m.reader_secs(0)),
+        (m.alarmed(0), m.operator_secs(0)),
         (true, Some(40)),
         "go row held by the operator at its alarm age"
     );
@@ -127,18 +127,26 @@ fn a_woken_session_that_keeps_working_does_not_freeze_time_and_the_alarm_holds_t
     );
     run(&mut m, &[Event::Escalate(0)]);
     pass(&mut m, 20);
-    // At 60 s the session has still not read it: the operator is told, which is a reader.
+    // At 60 s the session has still not read it: the operator is told. That is tracked apart
+    // from the session's receipt, and does not stand in for it.
     run(&mut m, &[Event::Alarm(0)]);
-    assert_eq!((m.alarmed(0), m.reader_secs(0)), (true, Some(60)));
-    assert_eq!(
-        m.stage(0),
-        Stage::Detected,
-        "the alarm leaves it pending for the session"
-    );
-    pass(&mut m, 40);
-    // The session reads it at 100 s: late for the session, but the operator held it at 60 s.
+    assert_eq!((m.alarmed(0), m.operator_secs(0)), (true, Some(60)));
+    assert_eq!((m.stage(0), m.session_secs(0)), (Stage::Detected, None));
+    let mut ignoring = m.clone();
+    pass(&mut m, 20);
     run(&mut m, &[Event::Receive]);
-    assert_eq!((m.stage(0), m.reader_secs(0)), (Stage::Received, Some(60)));
+    assert_eq!(
+        (m.stage(0), m.session_secs(0), m.operator_secs(0)),
+        (Stage::Received, Some(80), Some(60))
+    );
+    // A session that ignores it up to the bound is ended by the supervisor: no receipt at 100 s.
+    pass(&mut ignoring, 30);
+    assert_eq!(ignoring.apply(Event::Tick), Err(Denied::Deadline));
+    run(&mut ignoring, &[Event::Kill]);
+    assert_eq!(
+        (ignoring.life(), ignoring.stage(0)),
+        (Life::Stopped, Stage::Detected)
+    );
     // A session that reads in time closes the event itself and the alarm has nothing to do.
     let mut m = armed_idle(params(vec![go(0)]));
     run(
@@ -155,7 +163,9 @@ fn a_woken_session_that_keeps_working_does_not_freeze_time_and_the_alarm_holds_t
     assert_eq!((m.stage(0), m.alarmed(0)), (Stage::Received, false));
     pass(&mut m, 120);
     // Without the alarm the same session passes the bound unread.
-    let mut late = armed_idle(params(vec![go(0)])).with_defect(Defect::NoAlarm);
+    let mut late = armed_idle(params(vec![go(0)]))
+        .with_defect(Defect::NoAlarm)
+        .with_defect(Defect::NoKill);
     run(
         &mut late,
         &[
@@ -168,7 +178,10 @@ fn a_woken_session_that_keeps_working_does_not_freeze_time_and_the_alarm_holds_t
     pass(&mut late, 40);
     run(&mut late, &[Event::Escalate(0)]);
     pass(&mut late, 60);
-    assert_eq!(late.violations(), vec![Invariant::UrgentBound]);
+    assert_eq!(
+        late.violations(),
+        vec![Invariant::UrgentBound, Invariant::SessionUnread]
+    );
 }
 
 #[test]
@@ -180,7 +193,7 @@ fn a_dead_role_hands_the_event_to_the_operator_by_the_bound_not_at_recovery() {
     run(&mut m, &[Event::Escalate(0)]);
     pass(&mut m, 20);
     run(&mut m, &[Event::Alarm(0)]);
-    assert_eq!((m.alarmed(0), m.reader_secs(0)), (true, Some(60)));
+    assert_eq!((m.alarmed(0), m.operator_secs(0)), (true, Some(60)));
     assert_eq!(
         m.stage(0),
         Stage::Detected,
@@ -270,17 +283,32 @@ fn rollback_and_a_lost_go_keep_the_deadline_of_an_event_that_occurred_while_acti
         // Off, with the session working unread: the deadline still runs and the alarm still comes.
         ticks(&mut m, 60);
         run(&mut m, &[Event::Alarm(0)]);
-        assert_eq!((m.alarmed(0), m.reader_secs(0)), (true, Some(60)));
-        ticks(&mut m, 40);
+        assert_eq!((m.alarmed(0), m.operator_secs(0)), (true, Some(60)));
+        ticks(&mut m, 20);
         run(&mut m, &[Event::Receive]);
-        assert_eq!((m.stage(0), m.reader_secs(0)), (Stage::Received, Some(60)));
-        // With no alarm the receipt at 100 s is visible as late, after it happened too.
-        let mut late = armed_idle(params(vec![go(0)])).with_defect(Defect::NoAlarm);
+        assert_eq!((m.stage(0), m.session_secs(0)), (Stage::Received, Some(80)));
+        // Without the alarm and the supervisor's kill the session reads at 100 s, and that stays
+        // visible after it happened, although the operator might have been told.
+        let mut late = armed_idle(params(vec![go(0)]))
+            .with_defect(Defect::NoAlarm)
+            .with_defect(Defect::NoKill);
         run(&mut late, &[Event::Occur(0), off, Event::BeginTurn]);
         ticks(&mut late, 100);
-        assert_eq!(late.violations(), vec![Invariant::UrgentBound]);
+        assert_eq!(
+            late.violations(),
+            vec![Invariant::UrgentBound, Invariant::SessionUnread]
+        );
         assert_eq!(late.apply(Event::Receive), Ok(Outcome::Applied));
         assert_eq!(late.violations(), vec![Invariant::LateReceipt]);
+        // With the alarm but no kill, a receipt at 100 s is still a late receipt.
+        let mut slow = armed_idle(params(vec![go(0)])).with_defect(Defect::NoKill);
+        run(&mut slow, &[Event::Occur(0), off, Event::BeginTurn]);
+        ticks(&mut slow, 60);
+        run(&mut slow, &[Event::Alarm(0)]);
+        ticks(&mut slow, 40);
+        assert_eq!(slow.violations(), vec![Invariant::SessionUnread]);
+        assert_eq!(slow.apply(Event::Receive), Ok(Outcome::Applied));
+        assert_eq!(slow.violations(), vec![Invariant::LateReceipt]);
     }
 }
 
@@ -311,10 +339,52 @@ fn a_delayed_or_lost_wake_does_not_stop_time_and_the_fallback_keeps_the_original
     scan_all(&mut m);
     run(&mut m, &[Event::Alarm(0), Event::Nudge]);
     assert_eq!(
-        (m.alarmed(0), m.reader_secs(0), m.age_secs(0)),
+        (m.alarmed(0), m.operator_secs(0), m.age_secs(0)),
         (true, Some(60), 60)
     );
     // The last wake arrives late: the session begins its turn and receives.
     run(&mut m, &[Event::BeginTurn, Event::Receive]);
-    assert_eq!((m.stage(0), m.reader_secs(0)), (Stage::Received, Some(60)));
+    assert_eq!((m.stage(0), m.session_secs(0)), (Stage::Received, Some(60)));
+}
+
+#[test]
+fn a_hung_source_with_a_lost_fallback_wake_still_gets_a_nudge_and_ends_at_the_bound() {
+    // time.rs:106 (round 5): an armed wait that cannot fire must not stop the supervisor.
+    let mut m = armed_idle(params(vec![go(0)]));
+    run(&mut m, &[Event::Hang(0), Event::Occur(0)]);
+    ticks(&mut m, 40);
+    // t=40 s: the armed wait cannot fire (nothing was read); the fallback wake is lost.
+    run(&mut m, &[Event::Escalate(0), Event::WakeLost]);
+    ticks(&mut m, 10);
+    assert_eq!(
+        m.apply(Event::Tick),
+        Err(Denied::Deadline),
+        "an armed wait is not attendance"
+    );
+    run(&mut m, &[Event::Nudge]);
+    ticks(&mut m, 10);
+    scan_all(&mut m);
+    run(&mut m, &[Event::Alarm(0), Event::Nudge]);
+    // One branch: the nudge is delivered and the session reads it at 60 s.
+    let mut delivered = m.clone();
+    run(&mut delivered, &[Event::BeginTurn, Event::Receive]);
+    assert_eq!(
+        (delivered.stage(0), delivered.session_secs(0)),
+        (Stage::Received, Some(60))
+    );
+    // Another: every wake is lost; recovery stays eligible until the bound, then the session ends.
+    run(&mut m, &[Event::WakeLost]);
+    ticks(&mut m, 20);
+    run(&mut m, &[Event::Nudge, Event::WakeLost]);
+    ticks(&mut m, 10);
+    assert_eq!(
+        m.apply(Event::Tick),
+        Err(Denied::Deadline),
+        "the bound is reached unread"
+    );
+    run(&mut m, &[Event::Kill]);
+    assert_eq!(
+        (m.life(), m.stage(0), m.operator_secs(0)),
+        (Life::Stopped, Stage::Occurred, Some(60))
+    );
 }
