@@ -202,6 +202,10 @@ print(json.dumps(record))
         );
         if conflict {
             assert_eq!(record["review_base"]["mode"], "conflict");
+            assert_eq!(
+                record["review_base"]["conflict_files"],
+                json!(["writer.txt"])
+            );
             assert_eq!(record["review_base"]["main"], record["admitted_base_sha"]);
             assert_eq!(head, driver.original_head);
             assert!(git_in(&driver.host.cwd, &["status", "--porcelain"]).is_empty());

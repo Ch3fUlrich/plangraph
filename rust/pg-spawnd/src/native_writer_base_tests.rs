@@ -1,3 +1,4 @@
+use super::base::Integrated;
 use super::*;
 
 fn git_in(dir: &Path, args: &[&str]) -> String {
@@ -297,7 +298,7 @@ fn part_with_upstream_first_patch(dir: &Path) -> (Host, String, String) {
 fn rebase_drops_a_commit_whose_patch_is_already_on_main() {
     let dir = tempfile::tempdir().unwrap();
     let (host, old_main, new_main) = part_with_upstream_first_patch(dir.path());
-    assert!(host.rebase(&new_main, &old_main).unwrap());
+    assert_eq!(host.rebase(&new_main, &old_main).unwrap(), Integrated::Done);
     let own = git_in(
         &host.cwd,
         &["log", "--format=%s", &format!("{new_main}..HEAD")],
@@ -321,7 +322,10 @@ fn rebase_names_a_conflict_only_when_a_path_is_unmerged() {
     let main = git_in(&host.cwd, &["rev-parse", "HEAD"]);
     git_in(&host.cwd, &["checkout", "-q", "part"]);
     let head = git_in(&host.cwd, &["rev-parse", "HEAD"]);
-    assert!(!host.rebase(&main, &old_main).unwrap());
+    assert_eq!(
+        host.rebase(&main, &old_main).unwrap(),
+        Integrated::Conflict(vec!["b.txt".to_owned()])
+    );
     assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD"]), head);
     assert!(git_in(&host.cwd, &["status", "--porcelain"]).is_empty());
     let _ = new_main;
