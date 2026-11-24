@@ -8,8 +8,8 @@ const HELP: &str = "health review-order [--state PATH] --before-since T --before
 const MAX_LOG: u64 = 8 * 1024 * 1024;
 
 /// `(total input tokens, cached input tokens)` summed over the usage frames of a live log.
-/// Opencode `step_finish` frames count `tokens.input` without the cache, so the cache read is
-/// added to the total; Codex `turn.completed` frames already include `cached_input_tokens`.
+/// Opencode `step_finish` frames count `tokens.input` without the cache, so the cache read and
+/// write are added to the total (only the read counts as cached, as in `governor.metrics`); Codex `turn.completed` frames already include `cached_input_tokens`.
 pub(crate) fn usage(log: &str) -> Option<(u64, u64)> {
     let mut seen = None;
     for frame in log
@@ -20,10 +20,11 @@ pub(crate) fn usage(log: &str) -> Option<(u64, u64)> {
             Some("step_finish") => {
                 let t = &frame["part"]["tokens"];
                 let cached = t["cache"]["read"].as_u64().unwrap_or(0);
-                (
-                    t["input"].as_u64().map(|i| i.saturating_add(cached)),
-                    cached,
-                )
+                let written = t["cache"]["write"].as_u64().unwrap_or(0);
+                let total = t["input"]
+                    .as_u64()
+                    .map(|i| i.saturating_add(cached).saturating_add(written));
+                (total, cached)
             }
             Some("turn.completed") => (
                 frame["usage"]["input_tokens"].as_u64(),

@@ -13,6 +13,12 @@ fn step(input: u64, read: u64) -> String {
 }
 
 #[test]
+fn usage_counts_cache_writes_in_the_input_total_but_not_as_cached() {
+    let frame = "{\"type\":\"step_finish\",\"part\":{\"tokens\":{\"input\":10,\"output\":1,\"cache\":{\"read\":60,\"write\":30}}}}\n";
+    assert_eq!(usage(frame), Some((100, 60)));
+}
+
+#[test]
 fn usage_adds_cache_read_to_opencode_input_and_keeps_codex_input() {
     assert_eq!(usage(&(step(10, 90) + &step(5, 0))), Some((105, 90)));
     let codex = "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":120,\"cached_input_tokens\":100}}\n";
