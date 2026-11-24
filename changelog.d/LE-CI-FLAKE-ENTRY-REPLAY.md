@@ -1,3 +1,4 @@
 Part entry (`tools/ci_select.py entry-set --run`) replays the Python test files and Rust `#[test]` fns a part changed five times on its head, one run with every worker, keeps the logs and fails the entry with `FLAKY: <test id>` and both logs when a result differs between runs. See `docs/ci-gate.md`.
 A body-only edit of a Rust test selects that test; `entry-set --run` writes a `replay.json` receipt bound to the head, and `merge_batch build` readiness requires it (and names `FLAKY` with both logs) for every part that changes a test or Rust file.
 The replay runs in a clean detached checkout of the requested head and reports `incomplete` when a run has no outcome for a changed test, so a receipt cannot pass on invocations that skipped it.
+The replay needs an outcome for every collected test id of a changed file on every run, so a passing sibling cannot stand in for a changed test.

@@ -105,6 +105,37 @@ def test_five_invocations_that_never_ran_the_changed_test_are_not_a_passing_rece
     assert plan.replay(root, {}, tmp_path / "logs2", head=head)["ok"] is True   # the name is the last path segment
 
 
+def test_a_passing_sibling_cannot_stand_in_for_a_changed_test_that_never_reported(tmp_path, monkeypatch):
+    """Every collected test id of a changed file needs an outcome on every run, not only one id of the file."""
+    two = """import pytest
+
+
+def test_a():
+    pass
+
+
+def test_b():
+    pass
+
+
+@pytest.mark.parametrize('x', ['p q', 'r'])
+def test_c(x):
+    pass
+"""
+    root, base, head = tree(tmp_path, {"tests/test_two.py": two}, BASE)
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
+    only_a = [([sys.executable, "-c", "print('PASSED tests/test_two.py::test_a')"], ["tests/test_two.py::"]) for _ in range(5)]
+    monkeypatch.setattr(plan, "replay_commands", lambda *_a, **_kw: only_a)
+    result = plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs", head=head)
+    assert result["ok"] is False
+    assert {i.split(" (run")[0] for i in result["incomplete"]} == {"tests/test_two.py::test_b", "tests/test_two.py::test_c[p q]", "tests/test_two.py::test_c[r]"}
+    assert len(result["incomplete"]) == 15   # three ids on each of five runs
+    everything = [([sys.executable, "-c", "print('PASSED tests/test_two.py::test_a');print('PASSED tests/test_two.py::test_b');"
+                    "print('PASSED tests/test_two.py::test_c[p q]');print('PASSED tests/test_two.py::test_c[r]')"], []) for _ in range(5)]
+    monkeypatch.setattr(plan, "replay_commands", lambda *_a, **_kw: everything)
+    assert plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs2", head=head)["ok"] is True
+
+
 def test_the_replay_runs_the_requested_head_in_a_clean_checkout_not_the_working_tree(tmp_path, monkeypatch):
     """A passing working tree and a failing requested commit: the receipt follows the commit, never the checkout."""
     monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
