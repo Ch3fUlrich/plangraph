@@ -1,0 +1,1 @@
+- **SKILL-WRITER-AND-SKILLS-REWORK:** New `skills/skill-writer` (rules for writing a skill and a rewrite method that loses no rule: inventory, disposition, mechanical check, other-family review); `coding-principles` and `review` reworked with every rule kept, detail moved to `references/` with load conditions, Principle 6 corrected to the current truth order, neutral ADR example.
