@@ -116,6 +116,7 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
                 .as_ref()
                 .is_some_and(|t| t.keeper_defined && t.run_id == run),
             keeper_key: old.and_then(|t| t.keeper_key),
+            ..Default::default()
         };
         let mut output = Vec::new();
         let pending =
