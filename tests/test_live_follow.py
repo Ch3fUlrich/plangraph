@@ -795,9 +795,9 @@ def test_red_exact_pr_not_rescued_by_green_unrelated_open_pr(tmp_path):
              state="open", merged_at=None),
     ]))
     fake.script(("gh", "api", runs_endpoint(PH_RED)),
-                gh_json(runs_payload(run_entry(conclusion="failure"))))
+                gh_json(runs_payload(run_entry(head_sha=PH_RED, conclusion="failure", pr=7))))
     fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
-                gh_json(runs_payload(run_entry())))
+                gh_json(runs_payload(run_entry(head_sha=PH_GREEN, pr=8))))
 
     assert is_green(fake, cfg, HEAD) is False
 
@@ -846,7 +846,7 @@ def test_rebase_merge_fallback_rejects_open_pr(tmp_path):
              state="open", merged_at=None),
     ]))
     fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
-                gh_json(runs_payload(run_entry())))
+                gh_json(runs_payload(run_entry(head_sha=PH_GREEN, pr=9))))
     assert is_green(fake, cfg, HEAD) is False
 
 
