@@ -201,6 +201,17 @@ impl Checkout {
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
+    /// Fetches the objects of `commit` (made in this checkout) into the repository and names no ref: nothing
+    /// there can collide with another run, and the caller makes the one ref it wants (an atomic create).
+    pub fn adopt_objects(&self, commit: &str) -> Result<(), String> {
+        let source = self.dir.path().to_string_lossy().into_owned();
+        out(
+            &self.repo,
+            &["fetch", "-q", "--no-write-fetch-head", &source, commit],
+        )
+        .map(|_| ())
+    }
+
     /// Fetches `commit` (made in this checkout) into the repository under the ref `hold`.
     pub fn adopt(&self, commit: &str, hold: &str) -> Result<(), String> {
         let source = self.dir.path().to_string_lossy().into_owned();

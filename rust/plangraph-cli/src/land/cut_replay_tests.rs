@@ -233,49 +233,58 @@ fn a_relative_repo_path_works_for_cut_and_for_a_granted_cut_check() {
 }
 
 #[test]
-fn a_cut_leaves_fetch_head_and_foreign_hold_refs_alone() {
+fn a_cut_leaves_fetch_head_alone_and_makes_no_ref_but_its_branch() {
     let fx = fx_with_base_gate(&std::fs::read_to_string(gate()).unwrap());
     let src = fx.source("a.txt", TRAILERS);
     let fetch_head = fx.p().join(".git/FETCH_HEAD");
     std::fs::write(&fetch_head, "marker\n").unwrap();
-    // A hold ref of another run that happens to carry this process id's name must survive a failed cut.
-    let foreign = format!("refs/plangraph/cut-hold/{}", std::process::id());
-    g(fx.p(), &["update-ref", &foreign, &fx.base]);
+    // Refs another run holds under the names an earlier version used must survive, failed cut or good one.
+    let pid = std::process::id();
+    let head_of = |n: &str| g(fx.p(), &["rev-parse", n]);
+    let foreign = [
+        format!("refs/plangraph/cut-hold/{pid}"),
+        format!("refs/plangraph/cut-hold/{pid}-{}", "1".repeat(40)),
+    ];
+    for r in &foreign {
+        g(fx.p(), &["update-ref", r, &fx.base]);
+    }
     let flow = fx.source(".github/workflows/w.yml", TRAILERS);
-    let a = args(&[
-        "cut",
-        "--repo",
-        fx.p().to_str().unwrap(),
-        "--base",
-        &fx.base,
-        "--branch",
-        "slice/bad",
-        "--commits",
-        &flow,
-    ]);
-    super::cli::run_inner(fx.p(), &a, &python).unwrap_err();
-    assert_eq!(g(fx.p(), &["rev-parse", &foreign]), fx.base);
-    // A good cut adopts the head without touching FETCH_HEAD and leaves no hold ref of its own.
-    let a = args(&[
-        "cut",
-        "--repo",
-        fx.p().to_str().unwrap(),
-        "--base",
-        &fx.base,
-        "--branch",
-        "slice/ok",
-        "--commits",
-        &src,
-    ]);
-    super::cli::run_inner(fx.p(), &a, &python).unwrap();
+    let run = |branch: &str, commit: &str| {
+        let a = args(&[
+            "cut",
+            "--repo",
+            fx.p().to_str().unwrap(),
+            "--base",
+            &fx.base,
+            "--branch",
+            branch,
+            "--commits",
+            commit,
+        ]);
+        super::cli::run_inner(fx.p(), &a, &python)
+    };
+    run("slice/bad", &flow).unwrap_err();
+    run("slice/ok", &src).unwrap();
     assert_eq!(std::fs::read_to_string(&fetch_head).unwrap(), "marker\n");
-    let holds = g(
+    for r in &foreign {
+        assert_eq!(head_of(r), fx.base);
+    }
+    // The only ref the cut made is its branch.
+    let refs = g(
         fx.p(),
         &[
             "for-each-ref",
             "--format=%(refname)",
-            "refs/plangraph/cut-hold",
+            "refs/plangraph",
+            "refs/heads/slice",
         ],
     );
-    assert_eq!(holds, foreign, "{holds}");
+    let mut want: Vec<String> = foreign.to_vec();
+    want.push("refs/heads/slice/ok".into());
+    want.sort();
+    assert_eq!(
+        refs.lines().map(str::to_owned).collect::<Vec<_>>(),
+        want,
+        "{refs}"
+    );
 }
