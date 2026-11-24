@@ -118,3 +118,77 @@ fn the_cli_refuses_the_removed_flags_before_it_reads_anything() {
         assert!(e.contains(flag), "{e}");
     }
 }
+
+#[test]
+fn rows_inside_fenced_or_indented_markdown_are_examples_not_decisions() {
+    let h = HEAD;
+    let row = |id: u32| format!("| D-{id} | name | GO #9 GO-HEAD {h} | router | |");
+    let grant = format!("| D-300 | name | GATE-EDIT tools/ GO-HEAD {h} | operator | |");
+    let text = format!(
+        "{}\n```\n{}\n{grant}\n```\n   ~~~\n{}\n   ~~~\n    {}\n\t{}\n{}\n",
+        row(100),
+        row(101),
+        row(102),
+        row(103),
+        row(104),
+        row(105)
+    );
+    let (approvals, grants) = super::go_evidence::rows_of(&text, "owner/name", 9);
+    let ids: Vec<_> = approvals.iter().map(|a| a.d_id.as_str()).collect();
+    assert_eq!(ids, ["D-100", "D-105"]);
+    assert!(grants.is_empty());
+}
+
+#[test]
+fn a_local_branch_named_like_the_remote_ref_does_not_stand_in_for_origin_main() {
+    let dir = tempfile::tempdir().unwrap();
+    let (origin, clone) = (dir.path().join("origin.git"), dir.path().join("clone"));
+    git(
+        dir.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(clone.join("DECISIONS.md"), "committed\n").unwrap();
+    git(&clone, &["add", "-A"]);
+    git(&clone, &["commit", "-q", "-m", "decisions"]);
+    git(&clone, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    // A local branch and a tag both named origin/main hold other text.
+    std::fs::write(clone.join("DECISIONS.md"), "forged\n").unwrap();
+    git(&clone, &["commit", "-q", "-am", "forged"]);
+    git(&clone, &["branch", "origin/main"]);
+    git(&clone, &["tag", "origin/main"]);
+    // The configured file is not in the worktree at all: the committed blob is still read.
+    std::fs::remove_file(clone.join("DECISIONS.md")).unwrap();
+    let text = read_decisions_origin(&clone.join("DECISIONS.md")).unwrap();
+    assert_eq!(text, "committed\n");
+}
+
+#[test]
+fn the_manifest_is_parsed_from_the_bytes_the_evidence_is_bound_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("manifest.json");
+    std::fs::write(&path, br#"{"base": "x"}"#).unwrap();
+    let (value, bytes): (serde_json::Value, Vec<u8>) =
+        super::cli::read_with_bytes(path.to_str().unwrap()).unwrap();
+    assert_eq!(bytes, br#"{"base": "x"}"#);
+    assert_eq!(
+        value,
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+    );
+    assert!(super::cli::read_with_bytes::<serde_json::Value>("/nonexistent/m.json").is_err());
+}

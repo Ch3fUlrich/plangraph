@@ -82,12 +82,28 @@ fn go_binding(statement: &str, project: &str) -> Option<(u64, String)> {
     Some((named[1].parse().ok()?, one[1].to_ascii_lowercase()))
 }
 
+/// The lines outside fenced and indented code blocks, as the Keeper reads its decisions
+/// (`evidence_decisions._prose_lines`): a fence line toggles, a line of four spaces or a tab is code.
+fn prose_lines(text: &str) -> Vec<&str> {
+    let fence = Regex::new(r"^ {0,3}(?:`{3,}|~{3,})").unwrap();
+    let mut fenced = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if fence.is_match(line) {
+            fenced = !fenced;
+        } else if !fenced && !line.starts_with("    ") && !line.starts_with('\t') {
+            out.push(line);
+        }
+    }
+    out
+}
+
 /// The approvals and Gate-Edit grants of the decisions log for this repository and pull request.
-pub(super) fn rows(text: &str, repo: &str, pr: u64) -> (Vec<Approval>, Vec<Grant>) {
+pub(in crate::land) fn rows(text: &str, repo: &str, pr: u64) -> (Vec<Approval>, Vec<Grant>) {
     let name = repo.rsplit('/').next().unwrap_or(repo);
     let grant = Regex::new(r"^GATE-EDIT\s+(\S+)\s+GO-HEAD\s+([0-9a-fA-F]{40})\s*$").unwrap();
     let (mut approvals, mut grants) = (Vec::new(), Vec::new());
-    for line in text.lines() {
+    for line in prose_lines(text) {
         let cells: Vec<&str> = line.trim().split('|').map(str::trim).collect();
         let [_, d_id, project, decision, by, ..] = cells[..] else {
             continue;
@@ -125,25 +141,39 @@ pub(super) fn rows(text: &str, repo: &str, pr: u64) -> (Vec<Approval>, Vec<Grant
 fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let mut command = Command::new("git");
     pg_worker_core::host_command::isolate_git(&mut command);
-    command.arg("-C").arg(dir).args(args);
-    let out =
-        pg_worker_core::host_command::output(&mut command, std::time::Duration::from_secs(60))
-            .map_err(|_| format!("git {} failed", args[0]))?;
-    Ok(out)
+    // Replacement refs would let a local object stand in for a committed one.
+    command
+        .arg("--no-replace-objects")
+        .arg("-C")
+        .arg(dir)
+        .args(args);
+    pg_worker_core::host_command::output(&mut command, std::time::Duration::from_secs(60))
+        .map_err(|_| format!("git {} failed", args[0]))
 }
 
-/// The decisions document as committed on `origin/main` of its repository: fetched, then read as a blob. A
-/// failed fetch or read is an error; the local file never stands in for it.
+/// The decisions document as committed on `origin/main` of its repository: the branch is fetched into
+/// `refs/remotes/origin/main`, resolved to one commit, and the blob is read from that commit. A failed fetch or
+/// read is an error; the local file, a local branch or tag of the same name, never stands in for it, and the
+/// file need not exist in the worktree.
 pub(in crate::land) fn read_decisions_origin(path: &Path) -> Result<String, String> {
     let unreadable = || "the decisions document is not readable on origin/main".to_owned();
-    let path = path.canonicalize().map_err(|_| unreadable())?;
-    let parent = path.parent().ok_or_else(unreadable)?;
-    let root = String::from_utf8(git(parent, &["rev-parse", "--show-toplevel"])?)
+    let name = path.file_name().ok_or_else(unreadable)?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .canonicalize()
+        .map_err(|_| unreadable())?;
+    let root = String::from_utf8(git(&parent, &["rev-parse", "--show-toplevel"])?)
         .map_err(|_| unreadable())?;
     let root = Path::new(root.trim())
         .canonicalize()
         .map_err(|_| unreadable())?;
-    let relative = path.strip_prefix(&root).map_err(|_| unreadable())?;
+    let relative = parent
+        .join(name)
+        .strip_prefix(&root)
+        .map_err(|_| unreadable())?
+        .to_owned();
     git(
         &root,
         &[
@@ -152,6 +182,11 @@ pub(in crate::land) fn read_decisions_origin(path: &Path) -> Result<String, Stri
             "+refs/heads/main:refs/remotes/origin/main",
         ],
     )?;
-    let blob = format!("origin/main:{}", relative.to_string_lossy());
+    let commit = String::from_utf8(git(
+        &root,
+        &["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
+    )?)
+    .map_err(|_| unreadable())?;
+    let blob = format!("{}:{}", commit.trim(), relative.to_string_lossy());
     String::from_utf8(git(&root, &["cat-file", "blob", &blob])?).map_err(|_| unreadable())
 }
