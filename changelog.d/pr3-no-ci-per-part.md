@@ -1,0 +1,1 @@
+The tests workflow runs no job for a draft pull request from a `lane/*` branch (a batch part); land/train-*, main, merge_group, dispatch, schedule and every other pull request run as before, and the required `ci-gate` is skipped, which reports success.
