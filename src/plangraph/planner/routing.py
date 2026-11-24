@@ -541,7 +541,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped = list(harness_skipped)
     from plangraph.routing_support.resolver import score_model
     from .route_policy import has_repository_review_tools
-    from plangraph.routing_support.liveness import agy_limit_reason
+    from plangraph.routing_support.liveness import agy_limit_reason, codex_limit_reason
     from plangraph.routing_support.quota_snapshots import skip_reason as quota_skip_reason
     candidate_details = []
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
@@ -564,6 +564,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = agy_limit_reason(leg_key(leg), states[leg.id]) or reason
         if reason == 'limited':
             reason = quota_skip_reason(states[leg.id]) or reason
+        if reason == 'limited' and leg.harness == 'codex':
+            reason = codex_limit_reason(leg, states[leg.id]) or reason
         if reason:
             pass
         elif leg.family in excluded:

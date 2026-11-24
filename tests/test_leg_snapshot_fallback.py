@@ -146,7 +146,7 @@ def test_service_route_requires_real_codex_quota_for_claude(tmp_path, monkeypatc
     assert skips[unreachable] == 'unreachable'
     assert skips[unlisted] == 'not_listed'
     if evidence == '429':
-        assert skips[LEAD_WRITER] == 'limited'
+        assert skips[LEAD_WRITER].startswith('limited_until ')   # a Codex limit keeps its reset time
         assert fallback in {leg['id'] for leg in plan['legs']}
     elif evidence not in (None, 'expired'):
         assert skips[LEAD_WRITER] == evidence
