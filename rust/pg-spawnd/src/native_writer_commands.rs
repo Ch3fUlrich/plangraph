@@ -147,12 +147,8 @@ pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
     }
     let _supervisor = crate::writer_control::supervisor_guard(record)?;
     let mut resumed = crate::writer_control::take_resume(record)?;
-    let fields = resumed
-        .as_object_mut()
-        .ok_or("invalid saved writer record")?;
-    for obsolete in ["ended", "exit_code", "reason", "result"] {
-        fields.remove(obsolete);
-    }
+    resumed.as_object().ok_or("invalid saved writer record")?;
+    native_writer::clear_ended(&mut resumed, native_writer::SAVED_REOPEN_FIELDS);
     resumed["status"] = json!("running");
     execute_request(&request, resumed)
 }
@@ -260,22 +256,7 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
     record["status"] = json!("running");
     record["started"] = json!(chrono::Utc::now().timestamp_millis() as f64 / 1000.0);
     record["review_rounds"] = json!(0);
-    let fields = record.as_object_mut().unwrap();
-    for key in [
-        "ended",
-        "exit_code",
-        "reason",
-        "result",
-        "round_stop",
-        "round_counts",
-        "status_line",
-        "review_test_status",
-        "push_failures",
-        "pushed",
-        "ledger_error",
-    ] {
-        fields.remove(key);
-    }
+    native_writer::clear_ended(&mut record, native_writer::RESUME_REOPEN_FIELDS);
     mark_process(&mut record);
     host.save(&record)?;
     Ok(native_writer::run_resume(

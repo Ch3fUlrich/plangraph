@@ -36,6 +36,9 @@ struct Fake {
     fail_first_review: bool,
     pushed: Vec<String>,
     push_failures: usize,
+    /// Turns from this call number on return the Codex usage-limit error.
+    quota_from: Option<usize>,
+    quota_booked: Vec<crate::native_writer::quota::Limit>,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
@@ -66,6 +69,13 @@ impl Driver for Fake {
         self.prompts.push(prompt.into());
         if self.calls.len() <= self.failures {
             return Err("codex killed: SIGKILL".into());
+        }
+        if self.quota_from.is_some_and(|from| self.calls.len() >= from) {
+            return Err(crate::native_writer::quota::classify(
+                "You've hit your usage limit. Or try again at Nov 27th, 2026 8:24 PM.",
+            )
+            .unwrap()
+            .error());
         }
         Ok("same-session".into())
     }
@@ -152,6 +162,10 @@ impl Driver for Fake {
             return Err("pre-push: fixture scrub hit".into());
         }
         Ok(Some("refs/heads/lane/fixture".into()))
+    }
+    fn record_quota(&mut self, limit: &crate::native_writer::quota::Limit) -> Result<(), String> {
+        self.quota_booked.push(limit.clone());
+        Ok(())
     }
     fn save(&mut self, _: &serde_json::Value) -> Result<(), String> {
         Ok(())
@@ -759,3 +773,6 @@ mod idle;
 mod placement;
 #[path = "native_writer_push_tests.rs"]
 mod push;
+#[cfg(test)]
+#[path = "native_writer_quota_tests.rs"]
+mod quota_tests;
