@@ -44,7 +44,7 @@ fn readings() -> Value {
         {"key":"other:C","state":"open","owner":"plan","updated_at":iso(7200.0),"depends_on":"[\"demo:D\"]"},
         {"key":"demo:D","state":"done","updated_at":iso(9000.0)},
         {"key":"demo:E","state":"claimed","owner":"build","claimed_by":"writer-1",
-         "lease_until":iso(1800.0),"updated_at":iso(4000.0)},
+         "lease_until":iso(1800.0),"updated_at":iso(4000.0),"last_activity_at":iso(5400.0)},
         {"key":"demo:F","state":"in_review","owner":"build","merged":true,"updated_at":iso(7200.0)}],
       "activity": [
         {"ts":iso(3600.0),"key":"demo:D","type":"review_passed"},
@@ -124,7 +124,7 @@ fn derived_values_follow_the_documented_windows() {
         (json!(2), json!(true))
     );
     assert_eq!(s["host_drift"], false);
-    assert!((s["critical_idle_hours"].as_f64().unwrap() - 600.0 / 3600.0).abs() < 1e-9);
+    assert!((s["critical_idle_hours"].as_f64().unwrap() - 1.5).abs() < 1e-9);
     assert_eq!(
         s["ready_families"],
         json!({"build":["demo"],"plan":["other"]})
@@ -190,4 +190,26 @@ fn a_failed_reading_leaves_its_fields_out_and_the_checker_flags_it() {
         }
         assert!(!check(&snapshot).0, "{reading} failure was accepted");
     }
+}
+
+#[test]
+fn critical_idle_follows_the_stall_rule_in_both_directions() {
+    // An unstarted open item waiting for 100 hours is not a stall.
+    let mut waiting = readings();
+    waiting["items"][0]["updated_at"] = json!(iso(100.0 * 3600.0));
+    waiting["items"][4]["last_activity_at"] = json!(iso(60.0));
+    assert!(collect(waiting).0["critical_idle_hours"].as_f64().unwrap() < 0.02);
+    // A claimed item under a live lease that has been silent for 20 hours is one.
+    let mut silent = readings();
+    silent["items"][4]["lease_until"] = json!(iso(-3600.0));
+    silent["items"][4]["last_activity_at"] = json!(iso(20.0 * 3600.0));
+    assert_eq!(collect(silent).0["critical_idle_hours"], 20.0);
+    // Missing keeper activity is a failed reading, never a healthy zero.
+    let mut unread = readings();
+    unread["items"][4]
+        .as_object_mut()
+        .unwrap()
+        .remove("last_activity_at");
+    let (snapshot, gaps) = collect(unread);
+    assert!(snapshot.get("critical_idle_hours").is_none() && !gaps.is_empty());
 }
