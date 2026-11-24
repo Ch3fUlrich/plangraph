@@ -540,6 +540,10 @@ def test_the_guard_resolves_cargo_configuration_the_way_cargo_does(repos, tmp_pa
         (None, None, ["--config", f'build.target-dir="{inside}"'], {"CARGO_BUILD_TARGET_DIR": shared}),
         (None, None, ["--config", f'build.target-dir="{shared}"'], {"CARGO_BUILD_TARGET_DIR": inside}),
         (None, None, ["--config", f'build.target-dir="{inside}"'], {"CARGO_TARGET_DIR": shared}),
+        (None, None, ["--config", f'build . target-dir="{inside}"'], {"CARGO_BUILD_TARGET_DIR": shared}),
+        (None, None, ["--config", f'"build"."target-dir"="{inside}"'], {"CARGO_BUILD_TARGET_DIR": shared}),
+        (None, None, ["--config", f"build.'target-dir'='{inside}'"], {"CARGO_BUILD_TARGET_DIR": shared}),
+        (None, None, ["--config", f'build.target-dir="{shared}"', "--config", f'build . target-dir="{inside}"'], {}),
         (None, None, ["--config", str(file_config)], {}),
         (None, None, ["--config", str(file_config), "--config", f'build.target-dir="{shared}"'], {}),
         (f'target-dir = "{inside}"', None, [], {"CARGO_BUILD_TARGET_DIR": shared}),
@@ -559,3 +563,81 @@ def test_the_guard_resolves_cargo_configuration_the_way_cargo_does(repos, tmp_pa
         prefix = "".join(f"{k}={shlex.quote(v)} " for k, v in env.items())
         command = f"{prefix}cargo build {' '.join(shlex.quote(a) for a in [*args, *manifest])}"
         assert hook(command, work).returncode == want, (command, toml, plain, resolved)
+
+
+@pytest.mark.parametrize("command, expected", [
+    # A newline after && or | continues the list: the export is conditional or in a pipeline stage.
+    ("true &&\nexport CARGO_TARGET_DIR=/var/cache/shared\ncargo build", 2),
+    ("true &&\n\n  export CARGO_TARGET_DIR=/var/cache/shared; cargo build", 2),
+    ("echo |\nexport CARGO_TARGET_DIR=/var/cache/shared\ncargo build", 2),
+    ("true ||\nexport CARGO_TARGET_DIR=/var/cache/shared\ncargo build", 2),
+    ("export CARGO_TARGET_DIR=/var/cache/shared\ncargo build", 0),
+    # A leading newline, blank lines, multiline and nested subshells are ordinary commands.
+    ("\ncargo --version", 0),
+    ("\n\n(\n  cargo --version\n)\n", 0),
+    ("(\n (cargo --version)\n)", 0),
+    ("( (export CARGO_TARGET_DIR=/var/cache/shared; cargo build) )", 0),
+    ("( (export CARGO_TARGET_DIR=/var/cache/shared) ); cargo build", 2),
+    ("echo $(\n  echo $(cargo --version)\n)", 0),
+    ("(\ncd /\ncargo build\n)", 0),
+    ("{\n  (cd /; cargo --version)\n}", 0),
+])
+def test_newline_continuations_and_nested_scopes(repos, command, expected):
+    main, _ = repos
+    assert hook(command, main).returncode == expected, command
+
+
+def test_more_conditional_states_than_the_guard_keeps_never_hide_the_checkout_target(repos):
+    main, _ = repos
+    shared = "export CARGO_TARGET_DIR=/var/cache/shared; "
+    many = shared + "".join(f"false && CARGO_TARGET_DIR=/var/cache/shared{n}; " for n in range(18))
+    # Every kept state is allowed; the one that targets the checkout is past the limit and still refuses the build.
+    result = hook(many + "false && CARGO_TARGET_DIR=rust/target; cargo build", main)
+    assert result.returncode == 2 and b"more conditional" in result.stderr
+    assert hook(many + "cargo --version", main).returncode == 0
+    few = shared + "".join(f"false && CARGO_TARGET_DIR=/var/cache/shared{n}; " for n in range(5))
+    assert hook(few + "cargo build", main).returncode == 0
+    result = hook(few + "false && CARGO_TARGET_DIR=rust/target; cargo build", main)
+    assert result.returncode == 2 and b"more conditional" not in result.stderr
+
+
+@pytest.mark.parametrize("command, expected", [
+    # Every env in the chain applies, in order, to the environment and the directory.
+    ("env -u CARGO_TARGET_DIR env FOO=1 cargo build", 2),
+    ("env CARGO_TARGET_DIR=rust/target env -u CARGO_TARGET_DIR cargo build", 2),
+    ("env -u CARGO_TARGET_DIR env CARGO_TARGET_DIR=/var/cache/shared cargo build", 0),
+    ("env CARGO_TARGET_DIR=/var/cache/shared nice env -u CARGO_TARGET_DIR cargo build", 2),
+    ("env -C {main} cargo build", 2),
+    ("env -C{main} cargo build", 2),
+    ("env --chdir={main} cargo build", 2),
+    ("env --chdir {main} cargo build", 2),
+    ("env -C {main} env -C /tmp cargo build", 0),
+    ("env -C {main} CARGO_TARGET_DIR=/var/cache/shared cargo build", 0),
+    ("env -C /tmp cargo build", 0),
+    ("env -C {main} bash -c 'cargo build'", 2),
+])
+def test_chained_env_wrappers_and_chdir_apply_in_execution_order(repos, tmp_path, command, expected):
+    main, _ = repos
+    out = tmp_path / "elsewhere"
+    out.mkdir()
+    cwd = out if "{main}" in command else main
+    assert hook(command.format(main=main), cwd).returncode == expected, command
+
+
+@pytest.mark.skipif(shutil.which("env") is None or shutil.which("sh") is None, reason="needs env and sh")
+@pytest.mark.parametrize("argv", [
+    ["env", "-u", "V", "env", "W=1", "sh", "-c", 'echo "${V-unset}"'],
+    ["env", "V=a", "env", "-u", "V", "sh", "-c", 'echo "${V-unset}"'],
+    ["env", "-uV", "sh", "-c", 'echo "${V-unset}"'],
+    ["env", "-iuV", "sh", "-c", 'echo "${V-unset}"'],
+    ["env", "-C", "/", "sh", "-c", "pwd"],
+    ["env", "-C", "/", "env", "-C", "tmp", "sh", "-c", "pwd"],
+])
+def test_the_env_model_matches_gnu_env(argv):
+    """The rows above rest on what the real env does."""
+    run = subprocess.run(argv, capture_output=True, text=True, env={**os.environ, "V": "inherited"})
+    out = run.stdout.strip()
+    if "-C" in argv:
+        assert out == ("/tmp" if argv.count("-C") == 2 else "/"), (argv, run)
+    else:
+        assert out == "unset", (argv, run)
