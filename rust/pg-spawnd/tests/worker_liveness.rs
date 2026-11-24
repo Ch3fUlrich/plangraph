@@ -283,7 +283,11 @@ esac
     fs::write(root.join("stuck"), "malformed").unwrap();
     let malformed = rejoin();
     assert!(!malformed.status.success());
-    assert!(String::from_utf8_lossy(&malformed.stderr).contains("no receipt"), "{}", String::from_utf8_lossy(&malformed.stderr));
+    assert!(
+        String::from_utf8_lossy(&malformed.stderr).contains("no receipt"),
+        "{}",
+        String::from_utf8_lossy(&malformed.stderr)
+    );
     fs::remove_file(root.join("stuck")).unwrap();
     fs::remove_file(root.join("synced")).unwrap();
     let result = rejoin();
