@@ -60,7 +60,7 @@ if 'resume' in sys.argv:
     if 'external fix' in prompt:
         import os
         record = json.loads((pathlib.Path.cwd().parent/'record.json').read_text())
-        assert os.environ['PATH'] == record['tool_path']
+        assert os.environ['PATH'] == str(pathlib.Path.cwd().parent / 'cargo-shim') + ':' + record['tool_path']
         assert 'sandbox_mode="workspace-write"' in sys.argv
     else:
         assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt

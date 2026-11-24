@@ -89,6 +89,18 @@ mod writer_ledger;
 use pg_worker_core::host_probe::probe;
 
 fn main() {
+    // The writer sandbox's `cargo` is a link to this executable: run Cargo under the shared lease.
+    #[cfg(target_os = "linux")]
+    if std::env::args_os()
+        .next()
+        .as_deref()
+        .and_then(|arg0| std::path::Path::new(arg0).file_name())
+        == Some(std::ffi::OsStr::new("cargo"))
+    {
+        std::process::exit(pg_worker_core::cargo_command_lease::shim_main(
+            std::env::args_os().skip(1),
+        ));
+    }
     #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("session")) {
         let ops = std::env::var_os("PLANGRAPH_FLEET_OPS")
