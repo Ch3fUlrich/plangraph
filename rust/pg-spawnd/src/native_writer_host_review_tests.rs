@@ -232,3 +232,40 @@ fn native_sonnet_pass_requires_reported_tests() {
         assert_eq!(verdict["verdict"], expected, "{verdict}");
     }
 }
+
+/// The fast-check receipt is the shared producer's (structured, in the shared state and as a
+/// note), and the push sends the head and its per-lane receipt ref in one atomic push.
+pub(super) fn assert_shared_receipt_and_push(host: &mut Host, dir: &Path, head: &str) {
+    let cwd = host.cwd.clone();
+    // The receipt is the shared producer's: structured, in the shared state and as a note, and
+    // the push sends the head and its receipt ref in one atomic push.
+    let receipt = fs::read_to_string(host.stamp(head).unwrap()).unwrap();
+    assert!(
+        receipt.starts_with(&format!(
+            "head {head}\nresult green\ncheck head-pinned rc=0 "
+        )),
+        "{receipt}"
+    );
+    assert!(pg_worker_core::fast_check_stamp::green(&cwd, head));
+    let remote = dir.join("receipts-remote.git");
+    host.git(&["init", "-q", "--bare", remote.to_str().unwrap()])
+        .unwrap();
+    host.git(&["remote", "set-url", "origin", remote.to_str().unwrap()])
+        .unwrap();
+    host.push_ref = Some("refs/heads/lane/h".into());
+    host.push(head).unwrap();
+    let tip = pg_worker_core::git::git(
+        &remote,
+        &["rev-parse", "refs/notes/plangraph-fast-checks-lane-h"],
+    )
+    .unwrap();
+    assert_eq!(
+        pg_worker_core::fast_check_stamp::notes_commit_green(&remote, &tip, Some(head)),
+        Ok(())
+    );
+    assert_eq!(
+        pg_worker_core::git::git(&remote, &["rev-parse", "refs/heads/lane/h"]).unwrap(),
+        head
+    );
+    host.push_ref = None;
+}

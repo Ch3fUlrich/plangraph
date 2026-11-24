@@ -86,7 +86,14 @@ impl Host {
     /// language, changelog/docs, commit trailers and, with a words file, the private scrub;
     /// the result is their combined output.
     pub(super) fn checks(&self) -> Result<String, String> {
+        self.checks_run().map(|(log, _)| log)
+    }
+    /// The gates' output and one receipt check per gate that ran (a failing gate is an error).
+    pub(super) fn checks_run(
+        &self,
+    ) -> Result<(String, Vec<pg_worker_core::fast_check_stamp::Check>), String> {
         let mut log = String::new();
+        let mut ran = Vec::new();
         let pin = self.base_pin();
         self.check_item_trailers(&pin)?;
         let range = |extra: &[&str]| {
@@ -135,6 +142,7 @@ impl Host {
                 };
             // Both streams of a passing gate are evidence too (a skipped check is reported
             // on stderr).
+            let started = std::time::Instant::now();
             let result = command.output().map_err(|e| format!("{gate}: {e}"))?;
             let both = format!(
                 "{}{}",
@@ -150,8 +158,13 @@ impl Host {
                 ));
             }
             log.push_str(&format!("== {gate} ({})\n{both}\n", result.status));
+            ran.push(pg_worker_core::fast_check_stamp::Check {
+                label: gate.trim_end_matches(".py").replace('_', "-"),
+                rc: 0,
+                seconds: started.elapsed().as_secs_f64(),
+            });
         }
-        Ok(log)
+        Ok((log, ran))
     }
     fn check_item_trailers(&self, pin: &str) -> Result<(), String> {
         let assigned = context::item_keys(&self.brief);

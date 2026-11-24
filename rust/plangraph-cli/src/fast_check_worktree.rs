@@ -1,6 +1,6 @@
 use super::{output, Result};
 use pg_worker_core::{fast_check_stamp as receipt, git::git, worktree};
-use std::{fs, io::Write, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 /// The child writes one `check` line per executed step into the file this variable names.
 pub(super) const RESULTS_ENV: &str = "PG_FAST_CHECK_RESULTS";
@@ -74,16 +74,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         });
     }
     // The receipt is written for every outcome: a red one makes the push and review refuse this head.
-    let text = receipt::render(&head, &checks);
-    let mut file = tempfile::NamedTempFile::new_in(state).map_err(|error| error.to_string())?;
-    file.write_all(text.as_bytes())
-        .map_err(|error| error.to_string())?;
-    file.persist(stamp).map_err(|error| error.to_string())?;
-    // The receipt travels with the head: a note any host can fetch next to the lane branch.
-    let notes = format!("--ref={}", receipt::NOTES_REF);
-    if let Err(error) = git(root, &["notes", &notes, "add", "-f", "-m", &text, &head]) {
-        eprintln!("fast-checks: receipt note not written: {error}");
-    }
+    receipt::publish(root, &head, &checks)?;
     if !status.success() {
         return Err(format!("owned worktree checks failed ({status})"));
     }

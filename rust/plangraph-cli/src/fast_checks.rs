@@ -259,9 +259,19 @@ fn execute(args: &[String]) -> Result<()> {
     if args.first().map(String::as_str) == Some("--dispatch") {
         return fleet::run(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("--check-notes") {
+        // The pre-push hook asks this of every receipt ref a push would publish.
+        let commit = args.get(1).ok_or("--check-notes requires a commit")?;
+        return stamp::notes_commit_green(Path::new("."), commit, None);
+    }
     if args.first().map(String::as_str) == Some("--stamp-green") {
         // The push gate asks this of a lane head: exit 0 only for a green receipt of exactly that head.
         let head = args.get(1).ok_or("--stamp-green requires a head sha")?;
+        if args.get(2).map(String::as_str) == Some("--notes-commit") {
+            // A push's receipt ref: only a tree of well-formed receipts with a green one of `head`.
+            let commit = args.get(3).ok_or("--notes-commit requires a commit")?;
+            return stamp::notes_commit_green(Path::new("."), commit, Some(head));
+        }
         return if stamp::green(Path::new("."), head) {
             Ok(())
         } else {

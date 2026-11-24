@@ -5,10 +5,12 @@
 
 use crate::git::git;
 use crate::worktree::fast_check_stamp;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Git notes ref that carries the receipt with a pushed head.
 pub const NOTES_REF: &str = "plangraph-fast-checks";
+/// Prefix of every published receipt ref: the local one and the per-lane refs a push creates.
+const RECEIPT_REF_PREFIX: &str = "refs/notes/plangraph-fast-checks";
 
 /// One executed check: its label, exit code and wall seconds.
 #[derive(Debug, Clone, PartialEq)]
@@ -86,20 +88,176 @@ fn valid_check_line(line: &str) -> bool {
             .is_some_and(|s| s.parse::<f64>().is_ok())
 }
 
-/// Whether the shared receipt of `head` exists and is green; a clone that fetched the receipt
-/// note with the pushed head has no stamp file and is judged by the note.
+/// Whether `ref_name` is a receipt ref: the local notes ref or a per-lane `...-<lane>` ref.
+pub fn is_receipt_ref(ref_name: &str) -> bool {
+    ref_name == RECEIPT_REF_PREFIX
+        || ref_name
+            .strip_prefix(RECEIPT_REF_PREFIX)
+            .is_some_and(|rest| rest.starts_with('-') && rest.len() > 1)
+}
+
+/// The receipt ref a lane publishes: one ref per lane, so two writers never share a notes
+/// history (and a divergent history cannot reject another lane's push).
+pub fn receipt_ref_for(target: &str) -> String {
+    let lane: String = target
+        .trim_start_matches("refs/heads/")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("{RECEIPT_REF_PREFIX}-{lane}")
+}
+
+/// The one push of a lane head and its receipt: atomic, so a lane update never lands without
+/// the receipt (the pre-push hook refuses a lane head whose receipt is not in the same push).
+pub fn push_argv(head: &str, target: &str) -> Vec<String> {
+    let target = if target.starts_with("refs/") {
+        target.to_owned()
+    } else {
+        format!("refs/heads/{target}")
+    };
+    vec![
+        "push".into(),
+        "--atomic".into(),
+        "origin".into(),
+        format!("{head}:{target}"),
+        // Forced: the per-lane receipt ref has one writer and only its tree is read.
+        format!("+refs/notes/{NOTES_REF}:{}", receipt_ref_for(&target)),
+    ]
+}
+
+/// Write the receipt of `head` once, for every producer: the shared state file (atomically) and
+/// the note that travels with the push. Returns the state file.
+pub fn publish(repo: &Path, head: &str, checks: &[Check]) -> Result<PathBuf, String> {
+    let stamp = fast_check_stamp(repo, head).map_err(|e| e.to_string())?;
+    let state = stamp.parent().ok_or("stamp directory missing")?;
+    std::fs::create_dir_all(state).map_err(|e| e.to_string())?;
+    let text = render(head, checks);
+    let mut file = tempfile::NamedTempFile::new_in(state).map_err(|e| e.to_string())?;
+    std::io::Write::write_all(&mut file, text.as_bytes()).map_err(|e| e.to_string())?;
+    file.persist(&stamp).map_err(|e| e.to_string())?;
+    // A head that is not a commit of this repository has nothing to annotate; the push of its
+    // receipt ref then fails loudly instead of the receipt silently missing.
+    if git(repo, &["cat-file", "-e", &format!("{head}^{{commit}}")]).is_err() {
+        return Ok(stamp);
+    }
+    let notes = format!("--ref={NOTES_REF}");
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=plangraph",
+            "-c",
+            "user.email=plangraph@localhost",
+            "notes",
+            &notes,
+            "add",
+            "-f",
+            "-m",
+            &text,
+            head,
+        ],
+    )
+    .map_err(|e| format!("receipt note not written: {e}"))?;
+    Ok(stamp)
+}
+
+/// A receipt text that is well formed for the note named `name`, whatever its verdict.
+fn well_formed(text: &str, name: &str) -> bool {
+    let (mut heads, mut verdicts, mut checks) = (0, 0, 0);
+    for line in text.lines() {
+        if let Some(found) = line.strip_prefix("head ") {
+            if found.trim() != name {
+                return false;
+            }
+            heads += 1;
+        } else if let Some(found) = line.strip_prefix("result ") {
+            if !matches!(found.trim(), "green" | "red") {
+                return false;
+            }
+            verdicts += 1;
+        } else if let Some(rest) = line.strip_prefix("check ") {
+            let mut words = rest.split_whitespace();
+            let ok = matches!(
+                (words.next(), words.next(), words.next(), words.next()),
+                (Some(label), Some(rc), Some(wall), None)
+                    if label.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+                        && rc.strip_prefix("rc=").is_some_and(|n| n.parse::<i32>().is_ok())
+                        && wall.strip_prefix("wall=").is_some_and(|n| n.parse::<f64>().is_ok())
+            );
+            if !ok {
+                return false;
+            }
+            checks += 1;
+        } else {
+            return false;
+        }
+    }
+    heads == 1 && verdicts == 1 && checks > 0
+}
+
+/// What a push may publish as a receipt ref: a notes tree of nothing but well-formed receipts
+/// (each file named by the head it is for); with `head`, one of them a green receipt of it.
+pub fn notes_commit_green(repo: &Path, commit: &str, head: Option<&str>) -> Result<(), String> {
+    crate::git::check_rev(commit).map_err(|e| e.to_string())?;
+    let listing =
+        git(repo, &["ls-tree", "-r", "-z", "--full-tree", commit]).map_err(|e| e.to_string())?;
+    let mut found = false;
+    for entry in listing.split('\0').filter(|e| !e.is_empty()) {
+        let (meta, path) = entry.split_once('\t').ok_or("malformed tree entry")?;
+        let mut fields = meta.split_whitespace();
+        let (_mode, kind, sha) = (fields.next(), fields.next(), fields.next());
+        let name = path.replace('/', "");
+        if kind != Some("blob")
+            || !matches!(name.len(), 40 | 64)
+            || !name.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(format!("not a receipt note: {path}"));
+        }
+        let text = git(
+            repo,
+            &["cat-file", "blob", sha.ok_or("malformed tree entry")?],
+        )
+        .map_err(|e| e.to_string())?;
+        if !well_formed(&text, &name) {
+            return Err(format!("malformed receipt for {name}"));
+        }
+        if let Some(head) = head.filter(|head| *head == name) {
+            if !text_is_green(&text, head) {
+                return Err(format!("receipt of {head} is not green"));
+            }
+            found = true;
+        }
+    }
+    match head {
+        Some(head) if !found => Err(format!("no receipt of {head} in {commit}")),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the shared receipt of `head` exists and is green; a clone that fetched a receipt
+/// ref with the pushed head has no stamp file and is judged by the notes it carries.
 pub fn green(repo: &Path, head: &str) -> bool {
     let file = fast_check_stamp(repo, head)
         .ok()
         .and_then(|path| std::fs::read_to_string(path).ok());
-    match file {
-        Some(text) => text_is_green(&text, head),
-        None => git(
-            repo,
-            &["notes", &format!("--ref={NOTES_REF}"), "show", head],
-        )
-        .is_ok_and(|text| text_is_green(&text, head)),
+    if let Some(text) = file {
+        return text_is_green(&text, head);
     }
+    let refs = git(
+        repo,
+        &["for-each-ref", "--format=%(refname)", "refs/notes/"],
+    )
+    .unwrap_or_default();
+    refs.lines().filter(|r| is_receipt_ref(r)).any(|r| {
+        git(repo, &["notes", &format!("--ref={r}"), "show", head])
+            .is_ok_and(|text| text_is_green(&text, head))
+    })
 }
 
 #[cfg(test)]
@@ -213,6 +371,98 @@ mod tests {
         std::fs::write(&stamp, render(&head, &[check("fmt", 2)])).unwrap();
         assert!(!green(dir.path(), &head), "a red receipt");
         std::fs::write(&stamp, render(&head, &[check("fmt", 0)])).unwrap();
+        assert!(green(dir.path(), &head));
+    }
+
+    #[test]
+    fn the_lane_push_is_atomic_and_carries_one_receipt_ref_per_lane() {
+        let argv = push_argv(&"a".repeat(40), "lane/pr10");
+        assert_eq!(argv[..3], ["push", "--atomic", "origin"]);
+        assert_eq!(argv[3], format!("{}:refs/heads/lane/pr10", "a".repeat(40)));
+        assert_eq!(
+            argv[4],
+            "+refs/notes/plangraph-fast-checks:refs/notes/plangraph-fast-checks-lane-pr10"
+        );
+        assert!(is_receipt_ref("refs/notes/plangraph-fast-checks"));
+        assert!(is_receipt_ref(&receipt_ref_for("refs/heads/lane/x")));
+        assert!(!is_receipt_ref("refs/notes/plangraph-fast-checks-"));
+        assert!(!is_receipt_ref("refs/notes/commits"));
+        assert!(!is_receipt_ref("refs/heads/plangraph-fast-checks-x"));
+    }
+
+    #[test]
+    fn a_published_receipt_is_a_state_file_and_a_note_and_validates_as_a_receipt_commit() {
+        let (dir, head) = repo();
+        publish(dir.path(), &head, &[check("fmt", 0), check("tests", 0)]).unwrap();
+        assert!(green(dir.path(), &head));
+        let tip = git(
+            dir.path(),
+            &["rev-parse", "refs/notes/plangraph-fast-checks"],
+        )
+        .unwrap();
+        assert_eq!(notes_commit_green(dir.path(), &tip, Some(&head)), Ok(()));
+        // An ordinary commit is not a receipt ref.
+        assert!(notes_commit_green(dir.path(), &head, Some(&head)).is_err());
+        // Another head asked for: no receipt of it in the commit.
+        assert!(notes_commit_green(dir.path(), &tip, Some(&"b".repeat(40))).is_err());
+    }
+
+    #[test]
+    fn a_red_or_tampered_receipt_note_is_not_publishable() {
+        let (dir, head) = repo();
+        publish(dir.path(), &head, &[check("fmt", 1)]).unwrap();
+        let tip = git(
+            dir.path(),
+            &["rev-parse", "refs/notes/plangraph-fast-checks"],
+        )
+        .unwrap();
+        assert!(notes_commit_green(dir.path(), &tip, Some(&head))
+            .unwrap_err()
+            .contains("not green"));
+        // A note whose text is not a receipt at all.
+        git(
+            dir.path(),
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "notes",
+                "--ref=plangraph-fast-checks",
+                "add",
+                "-f",
+                "-m",
+                "ip 10.0.0.1 secret",
+                &head,
+            ],
+        )
+        .unwrap();
+        let tip = git(
+            dir.path(),
+            &["rev-parse", "refs/notes/plangraph-fast-checks"],
+        )
+        .unwrap();
+        assert!(notes_commit_green(dir.path(), &tip, Some(&head))
+            .unwrap_err()
+            .contains("malformed"));
+    }
+
+    #[test]
+    fn a_receipt_ref_named_for_a_lane_is_read_like_the_local_one() {
+        let (dir, head) = repo();
+        publish(dir.path(), &head, &[check("fmt", 0)]).unwrap();
+        let lane = receipt_ref_for("lane/x");
+        git(
+            dir.path(),
+            &["update-ref", &lane, "refs/notes/plangraph-fast-checks"],
+        )
+        .unwrap();
+        git(
+            dir.path(),
+            &["update-ref", "-d", "refs/notes/plangraph-fast-checks"],
+        )
+        .unwrap();
+        std::fs::remove_file(fast_check_stamp(dir.path(), &head).unwrap()).unwrap();
         assert!(green(dir.path(), &head));
     }
 }
