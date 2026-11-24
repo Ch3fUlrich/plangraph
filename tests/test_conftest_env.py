@@ -408,6 +408,37 @@ def test_pytest_deadline_sigint_fallback_keeps_a_real_ctrl_c(tmp_path):
     assert 'KeyboardInterrupt' in output and 'HUNG' not in output, output
 
 
+def test_long_test_deadline_covers_a_slow_session_fixture_only_where_marked(tmp_path):
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'conftest.py').write_text(
+        'import pytest, time\n'
+        'pytest_plugins = ("_split_ci_environment",)\n\n'
+        '@pytest.fixture(scope="session")\n'
+        'def slow_build():\n    time.sleep(4)\n',
+    )
+    (tmp_path / 'test_marked.py').write_text(
+        'import pytest\n\n'
+        'pytestmark = pytest.mark.long_test_deadline(30, reason="builds a binary in its fixture")\n\n'
+        'def test_marked(slow_build):\n    pass\n',
+    )
+    (tmp_path / 'test_unmarked.py').write_text(
+        'import time\n\n'
+        'def test_unmarked_slow():\n    time.sleep(4)\n',
+    )
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-o', 'test_deadline=2', str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
+    assert 'HUNG test_unmarked.py::test_unmarked_slow' in output, output
+    assert 'HUNG test_marked.py' not in output and '1 failed, 1 passed' in output, output
+
+
 @pytest.mark.skipif(sys.platform != 'linux', reason='checks the thread-directed deadline signal')
 @pytest.mark.parametrize('parallel', [False, True])
 @pytest.mark.parametrize('patch', [
