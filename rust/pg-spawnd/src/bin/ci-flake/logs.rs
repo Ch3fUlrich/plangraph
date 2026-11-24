@@ -15,6 +15,15 @@ fn pytest_id(rest: &str) -> &str {
     rest
 }
 
+/// The id without xdist's `@group` suffix, which follows the last `]` or `::` (the test id's own `@` stays).
+fn canonical(id: &str) -> &str {
+    let floor = id.rfind(']').max(id.rfind("::")).map_or(0, |at| at + 1);
+    match id.rfind('@') {
+        Some(at) if at >= floor => &id[..at],
+        _ => id,
+    }
+}
+
 fn ids(log: &str, pytest: &[&str], cargo: &str) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     for line in log.lines() {
@@ -23,7 +32,7 @@ fn ids(log: &str, pytest: &[&str], cargo: &str) -> BTreeSet<String> {
             .iter()
             .find_map(|word| line.strip_prefix(&format!("{word} ")))
         {
-            let id = pytest_id(rest);
+            let id = canonical(pytest_id(rest));
             if id.contains("::") || id.ends_with(".py") {
                 found.insert(id.to_string());
             }
@@ -60,6 +69,21 @@ mod tests {
         assert_eq!(
             passed_ids(log).into_iter().collect::<Vec<_>>(),
             ["tests/test_c.py::test_z"]
+        );
+    }
+
+    #[test]
+    fn an_xdist_group_suffix_is_not_part_of_the_canonical_test_id() {
+        let log = "FAILED tests/t.py::test_red@keeper - x\nFAILED tests/t.py::test_p[a@b] - y\nFAILED tests/t.py::test_q[a]@grp\n";
+        let failed: Vec<_> = failed_ids(log).into_iter().collect();
+        // Only an @ after the last `]` or `::` is a group suffix; one inside a parameter id stays.
+        assert_eq!(
+            failed,
+            [
+                "tests/t.py::test_p[a@b]",
+                "tests/t.py::test_q[a]",
+                "tests/t.py::test_red"
+            ]
         );
     }
 
