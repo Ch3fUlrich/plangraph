@@ -11,14 +11,17 @@ page every 5 minutes. Three steps, in order:
 
 1. `ExecStartPre` — `python3 -m plangraph.live_follow follow`: fast-forward the live tree
    (`$PLANGRAPH_LIVE_TREE`) to the head that is allowed to be published. Prefixed with `-`, so a follow
-   failure still renders the page from whatever the tree already holds.
-2. `ExecStart` — render `plangraph.keeper.cli render --cdn` into a temp file under `$PLANGRAPH_OUT`, then
+   failure does not abort the unit; step 2 then still renders only if the checkout is the head the gate
+   recorded as green, otherwise the previous page stays up.
+2. `ExecStart` — `live_follow export` copies exactly the recorded green commit to `render-tree` beside the
+   state file and prints its short sha (it fails, and nothing renders, when the checkout is not that head).
+   Then render `plangraph.keeper.cli render --cdn` from that copy (`PYTHONPATH=<render-tree>/src`) into a temp file under `$PLANGRAPH_OUT`, then
    publish it with `cat "$T" > plan-cdn.html`. Two properties matter: the page is only published when the
    temp file is non-empty and contains `</html>`, so a failed render leaves the previous page served; and
    `cat >` overwrites in place, keeping the destination inode, because the web server bind-mounts that
    single file (a `mv` would swap the inode and the container would keep exposing the old one).
-   The build stamp is not passed in: `render.py` falls back to `git rev-parse --short=10 HEAD` in the live
-   tree, which is exactly the head step 1 fast-forwarded to.
+   The build stamp is passed in: `PLANGRAPH_BUILD_SHA` is the short sha `live_follow export` printed, because
+   the exported copy has no `.git` for `render.py` to ask.
 3. `ExecStopPost` — `python3 -m plangraph.live_follow check`: compares the published page's stamp against
    the followed head. It is `ExecStopPost`, not `ExecStartPost`, because a `Type=oneshot` unit skips
    `ExecStartPost` when `ExecStart` fails and the staleness alert exists exactly for that case:

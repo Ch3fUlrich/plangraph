@@ -68,7 +68,7 @@ def test_every_python_module_run_ignores_the_working_directory():
     assert runs == 4, "follow, export, render and check all run with -P"
 
 
-def run_service_script(tmp_path, sha_out="abcdef0123", export_rc=0):
+def run_service_script(tmp_path, sha_out="abcdef0123", export_rc=0, state=True, xdg=True):
     """Run the real ExecStart script with a fake python3, under a path containing spaces."""
     root = tmp_path / "a dir with spaces"
     (root / "state").mkdir(parents=True)
@@ -93,9 +93,13 @@ def run_service_script(tmp_path, sha_out="abcdef0123", export_rc=0):
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "PLANGRAPH_TRUSTED_SRC": str(root / "trusted src"),
         "PLANGRAPH_LIVE_TREE": str(root / "live"),
-        "PLANGRAPH_STATE": str(root / "state" / "s.json"),
         "PLANGRAPH_OUT": str(out),
     }
+    if state:
+        env["PLANGRAPH_STATE"] = str(root / "state" / "s.json")
+    else:
+        # live_follow's default: $XDG_STATE_HOME/plangraph/live-follow.json.
+        env["XDG_STATE_HOME" if xdg else "HOME"] = str(root / ("xdg" if xdg else "home"))
     argv = shlex.split(exec_start())
     done = subprocess.run(argv, env=env, capture_output=True, text=True)
     return done, root, out, log
@@ -118,7 +122,24 @@ def test_service_keeps_the_old_page_when_export_fails(tmp_path):
 
 
 def test_service_requires_the_state_path(tmp_path):
-    assert "PLANGRAPH_STATE:?" in exec_start() or 'PLANGRAPH_STATE"' in exec_start()
+    """The render-tree directory is derived from the state path, which is set or defaulted, never empty."""
+    start = exec_start()
+    assert 'dirname "${PLANGRAPH_STATE:-' in start and "PLANGRAPH_STATE:?" not in start
+
+
+def test_service_without_state_uses_the_default_state_directory_of_live_follow(tmp_path):
+    """README, render.env.example and live_follow all promise a default for an unset PLANGRAPH_STATE."""
+    done, root, out, log = run_service_script(tmp_path, state=False)
+    assert done.returncode == 0, done.stderr
+    calls = log.read_text().splitlines()
+    assert calls[1] == f"render PYTHONPATH={root / 'xdg' / 'plangraph' / 'render-tree' / 'src'} SHA=abcdef0123"
+
+
+def test_service_default_state_falls_back_to_home(tmp_path):
+    done, root, out, log = run_service_script(tmp_path, state=False, xdg=False)
+    assert done.returncode == 0, done.stderr
+    expected = root / "home" / ".local" / "state" / "plangraph" / "render-tree" / "src"
+    assert log.read_text().splitlines()[1] == f"render PYTHONPATH={expected} SHA=abcdef0123"
 
 
 def test_live_tree_dropin_sets_a_private_state_path_outside_the_output_dir():
