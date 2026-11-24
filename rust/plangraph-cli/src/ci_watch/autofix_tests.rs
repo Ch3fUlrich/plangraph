@@ -195,7 +195,57 @@ fn a_moved_head_makes_no_fix_and_keeps_the_class_open_for_the_next_red() {
         panic!("a stale head is never fixed")
     };
     let rows = pass(dir.path(), &tasks, lookup, fix).unwrap();
-    assert!(rows[0].contains("head moved"), "{rows:?}");
-    let ledger = std::fs::read_to_string(dir.path().join("autofix.json")).unwrap();
-    assert!(!ledger.contains("pr-9:fmt"), "{ledger}");
+    assert!(rows.is_empty(), "{rows:?}");
+    let ledger = std::fs::read_to_string(dir.path().join("autofix.json")).unwrap_or_default();
+    assert!(!ledger.contains("pr-9:fmt"), "nothing reserved: {ledger}");
+}
+
+struct Recorded(serde_json::Value, usize);
+impl super::github::Github for Recorded {
+    fn pages(&mut self, _: &str, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+        unreachable!()
+    }
+    fn page(&mut self, _: &str, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+        unreachable!()
+    }
+    fn log(&mut self, _: u64) -> Result<String, String> {
+        unreachable!()
+    }
+    fn rerun(&mut self, _: u64) -> Result<(), String> {
+        unreachable!()
+    }
+    fn value(&mut self, _: &str) -> Result<serde_json::Value, String> {
+        self.1 += 1;
+        Ok(self.0.clone())
+    }
+}
+
+#[test]
+fn a_closed_pull_request_is_never_cloned_and_is_read_once() {
+    let pull = |state: &str| serde_json::json!({"state": state, "head": {"ref": "b", "sha": "abc", "repo": {"full_name": "o/r"}}});
+    let mut open = Recorded(pull("open"), 0);
+    assert_eq!(pr_head(&mut open, "o/r", 9).unwrap().sha, "abc");
+    let mut closed = Recorded(pull("closed"), 0);
+    assert_eq!(pr_head(&mut closed, "o/r", 9).err().unwrap(), NOT_OPEN);
+    let dir = tempfile::tempdir().unwrap();
+    let tasks: BTreeMap<_, _> = [
+        task("pr-9", 9, "fmt", 1, "abc"),
+        task("pr-9", 9, "clippy", 2, "abc"),
+    ]
+    .into_iter()
+    .map(|t| (t.key.clone(), t))
+    .collect();
+    let fix = |_: &Request, _: &Path| -> Result<Outcome, String> {
+        panic!("a closed pull request is never fixed")
+    };
+    let lookups = std::cell::Cell::new(0);
+    let lookup = |pr| {
+        lookups.set(lookups.get() + 1);
+        pr_head(&mut closed, "o/r", pr)
+    };
+    assert!(pass(dir.path(), &tasks, lookup, fix).unwrap().is_empty());
+    assert!(pass(dir.path(), &tasks, |_| panic!("read again"), fix)
+        .unwrap()
+        .is_empty());
+    assert_eq!(lookups.get(), 1, "one read for both tasks");
 }
