@@ -74,3 +74,35 @@ def test_operational_escalation_preserved(kwargs):
     result = evaluate_risk(["schema/items.sql"], **kwargs)
     assert result.risk == "critical"
     assert result.reviewer_count >= 2
+
+
+# Rule 3.3 classes: a one-file S0 card with tests and no risk tags is at least high.
+@pytest.mark.parametrize("cls,path", [
+    ("keeper-service-api", "src/plangraph/keeper/api_routes.py"),
+    ("gate-files", "tools/ci_commit_gate.py"),
+    ("gate-files", "rust/plangraph-cli/src/land/go_verify.rs"),
+    ("gate-files", "src/plangraph/spawner/git_guard.py"),
+    ("gateway", "src/plangraph/gateway/proxy.py"),
+    ("deploy-config", "deployment/stack.yml"),
+    ("installer", "setup/install-agent.sh"),
+    ("privileged-lane", "src/plangraph/spawner/sandbox_home.py"),
+    ("auth", "src/plangraph/auth/tokens.py"),
+])
+def test_rule_33_class_is_at_least_high_for_trivial_s0(cls, path):
+    result = evaluate_risk([path], bucket="S0", has_tests=True, fanout=0, risk_tags=())
+    assert result.risk in ("high", "critical"), (cls, path, result.risk)
+    assert result.reviewer_count >= 2
+
+
+def test_rule_33_table_has_a_test_per_class():
+    classes = {name for name, _, _ in risk.RULE_33_CLASSES}
+    assert classes == {"keeper-service-api", "gate-files", "gateway", "deploy-config",
+                       "installer", "privileged-lane"}
+
+
+@pytest.mark.parametrize("path", [
+    "docs/KEEPER.md", "docs/deployment/notes.md", "tests/test_keeper_api.py",
+    "src/plangraph/planner/cards.py",
+])
+def test_rule_33_table_leaves_docs_tests_and_unplaced_paths_low(path):
+    assert evaluate_risk([path], bucket="S0", has_tests=True).risk == "low"

@@ -92,6 +92,27 @@ _TOKEN_RULES = (
     ({"migration", "migrations"}, "high", ("migration",)),
     ({"live", "systemd", "deploy"}, "high", ("live-step",)),
 )
+# Rule 3.3 classes that are HIGH by place: one table of (class, path regex,
+# proposed tags). The table is read by _path_rules before any size shortcut in
+# evaluate_risk, so a one-file S0 change on these paths is still at least high.
+# Docs and tests on these paths stay out (non_code in _path_rules). A path the
+# table cannot place keeps the token and structural rules above.
+RULE_33_CLASSES: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = tuple(
+    (name, re.compile(pattern), tags) for name, pattern, tags in (
+        ("keeper-service-api", r"^(?:.*/)?src/plangraph/keeper/", ()),
+        ("keeper-service-api", r"^(?:.*/)?keeper[^/]*/(?:api|server|service)[^/]*$", ()),
+        ("gate-files",
+         r"^(?:tools/(?:ci_commit_[^/]*|gate_wiring_check|check_[^/]*|preflight[^/]*"
+         r"|merge_gate[^/]*|bench_gate|hooks/[^/]*)|\.githooks/.*"
+         r"|rust/plangraph-cli/src/land/(?:go_verify|registrar|resolve)[^/]*"
+         r"|\.gitattributes|(?:.*/)?\.gitattributes)$", ()),
+        ("gate-files", r"^(?:.*/)?[^/]*(?:guard|validator|hook)s?[^/]*\.(?:py|rs|sh|toml)$", ()),
+        ("gateway", r"(?:^|/)[^/]*gateway[^/]*(?:/|\.[a-z]+$)", ()),
+        ("deploy-config", r"^(?:.*/)?(?:deployment|deploy|deployments)/[^/]+$", ("live-step",)),
+        ("installer", r"^(?:.*/)?setup/[^/]+\.(?:sh|ps1|py|toml|ya?ml)$", ("live-step",)),
+        ("privileged-lane", r"^(?:.*/)?(?:sandbox|privileged)[^/]*\.(?:py|rs|sh)$", ()),
+    )
+)
 _DOC_EXTENSIONS = {"md", "rst", "txt", "adoc"}
 _UNIT_EXTENSIONS = {"service", "socket", "timer", "target", "mount", "automount",
                     "path", "slice", "scope", "swap"}
@@ -128,6 +149,8 @@ def _path_rules(path: str, *, include_non_code: bool = False) -> list[tuple[str,
         (extension in _UNIT_EXTENSIONS, ("live-step",)),
     )
     matches.extend(("high", tags) for matched, tags in structural_rules if matched)
+    if include_non_code or not non_code:
+        matches.extend(("high", tags) for _, rx, tags in RULE_33_CLASSES if rx.search(norm))
     return matches
 
 
