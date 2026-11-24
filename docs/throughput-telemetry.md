@@ -50,3 +50,16 @@ forge repository, keeper project and keeper snapshot in
 values from `PLANGRAPH_THROUGHPUT_REPO`, `PLANGRAPH_THROUGHPUT_PROJECT` and
 `PLANGRAPH_THROUGHPUT_SNAPSHOT`. The main ref and published keeper snapshot
 need to be refreshed by their owners.
+
+## Parts, landing rows and quota windows
+
+An arrival joins one acceptance per verified included part: every ACCEPT of a writer's final head that is a commit
+the arrival made reachable (a train of six parts gives six rows in `throughput_accept_part`, keyed by landed SHA
+and part head). Each row counts the commits only that part brought, oldest part first; the train's own merge
+commits belong to no part. The report's `trains` rows give `accepted_parts`, the mean wait, `attempts`
+(1 + `ci_reruns`), `drops` (`left_out`), `fix_tasks` and `minutes_per_merged_batch`; `hours` gives commits, closed
+items, items landed and batches merged per UTC hour. A landing database without one of those lander columns
+reports it null. Red runs, one row per batch and fix rounds by cause are not in the landing row and stay unread.
+Quota rows (`throughput_quota_window`) hold provider, account, window, the percent and the reset the snapshot
+names; a missing reset or a stale snapshot is null. Rows an earlier collector wrote to `throughput_quota_hourly`
+and `throughput_accept` are no longer read.
