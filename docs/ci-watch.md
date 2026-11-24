@@ -79,3 +79,21 @@ until `plangraph ci-watch --ack=<id>`, and escalated to plan-order after 15 minu
 The handler tracks the full runs of main's current tip by run id, whatever ref they ran on and whether or not the train
 pull request is still open. It creates the fix task of rule 3.46 when main reads red and cancels it in the keeper when main
 reads green again (a failed cancel stays open and is retried on the next pass).
+
+## Red classes
+
+Every red job is classified from its name and scrubbed log (`ci_watch/classify.rs`): fmt, clippy (only lints
+`cargo clippy --fix` applies), file-size, missing-trailer, missing-module (a non-Python job importing a module),
+flake, code, infrastructure, configuration, unknown; a run whose red jobs differ is mixed. A log that names failing
+tests and also an infrastructure or configuration phrase is mixed; a known flake is classed per test, so it never hides a real failure of the same job. The task row, the
+keeper definition, the record delivered to a batch's writer and the fix task of a red main carry the job class, the
+run class, the failed job id and where the fix starts (`classify::brief_lines`; an infrastructure or configuration
+red starts at the runner, workflow or setting, not the batch's code). The class changes the brief, never whether a
+task is made.
+
+`decide` gives the first action: a flake is rerun once; fmt and clippy get one automatic fix per pull request and
+class; all else goes to a narrow fix writer. `plangraph ci-watch --autofix` runs the automatic fix after the scan
+(`ci_watch/autofix.rs`): a scratch clone of the pull request head (a fork or a moved head is refused), the command
+in `rust/`, one commit `Hand-Edit: ci-watch <class> fix of failed job <id>` and one plain push. A fix of more than 50
+lines, one that touches a path the commit gate protects for Hand-Edit commits (its `AUTH_DOOR_PATHS` and `GATE_PATHS`, held equal by a test) or one that changes nothing is dropped and left to the writer, whose task
+stays. The (pull request, class) is reserved in `autofix.json` before the fix runs, with the job id and result. A closed or merged pull request is read once, recorded in the same file and never touched again.
