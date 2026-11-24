@@ -119,3 +119,41 @@ fn a_launch_failure_after_a_started_batch_still_lists_the_started_one() {
     assert_eq!(row["started"].as_array().unwrap().len(), 1);
     assert_eq!(registry.lock().unwrap().released, ["plangraph:BBB-1"]);
 }
+
+#[test]
+fn a_live_tick_past_its_budget_claims_no_further_batch() {
+    let items = vec![
+        item("AAA-1", 9, &["src/a.rs"]),
+        item("BBB-1", 8, &["src/b.rs"]),
+        item("CCC-1", 7, &["src/c.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    // Budget zero: the first batch always runs, every later one would pass the budget.
+    let spent = Policy {
+        tick_budget_seconds: 0,
+        ..policy(1)
+    };
+    let row = tick(
+        &ready(items.clone()),
+        &[],
+        &facts("dell"),
+        &spent,
+        "rules",
+        "/repo",
+        "/reviews",
+        false,
+        &mut host,
+    );
+    assert_eq!(registry.lock().unwrap().started, [vec!["plangraph:AAA-1"]]);
+    assert_eq!(row["stopped"], "tick_budget");
+    assert_eq!(row["decision"], "spawned");
+    // Only the started batch holds a claim; the next ones were never claimed.
+    let claimed = registry.lock().unwrap().claimed.len();
+    assert_eq!(claimed, 1);
+    // The default budget fills both slots of the host's RAM.
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    let row = drive(&ready(items), &mut host, "dell", 1, false);
+    assert_eq!(row["slots"], 2);
+}

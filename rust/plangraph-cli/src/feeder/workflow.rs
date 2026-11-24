@@ -162,6 +162,21 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
         "review_wait_seconds":1800, "round_cap":8, "trailers":trailers}});
     format!("PLANGRAPH-BATCH-INPUT-V1\n{input}")
 }
+/// Longest a claim and its reservation check can take (each call is bounded at 20 seconds):
+/// the least time left a live tick needs to begin another batch safely.
+const MIN_BATCH_SECONDS: u64 = 20;
+
+/// Whether a live tick that has run `elapsed` may claim another batch after one that took
+/// `last`: the next batch is assumed to take as long as the last one, and at least a claim.
+fn another_batch_fits(
+    elapsed: std::time::Duration,
+    last: std::time::Duration,
+    budget_seconds: u64,
+) -> bool {
+    elapsed + last.max(std::time::Duration::from_secs(MIN_BATCH_SECONDS))
+        <= std::time::Duration::from_secs(budget_seconds)
+}
+
 /// One bounded tick. Refused claims are decisions about that item, not a reason
 /// to starve the rest of the order. Infrastructure/start failures stop the tick.
 #[allow(clippy::too_many_arguments)]
@@ -195,7 +210,19 @@ pub fn tick(
         }
         row
     };
+    let tick_start = std::time::Instant::now();
+    let mut last_batch = std::time::Duration::ZERO;
     loop {
+        // The service kills a tick at its timeout, possibly between a claim and its launch:
+        // past the budget no further batch is claimed, and the next tick takes over.
+        if !dry
+            && !rows.is_empty()
+            && !another_batch_fits(tick_start.elapsed(), last_batch, policy.tick_budget_seconds)
+        {
+            stopped = "tick_budget".into();
+            break;
+        }
+        let batch_start = std::time::Instant::now();
         let batch = pick_batch(&ready, &sim_runs, policy);
         let Some(seed) = batch.first() else { break };
         if let Admission::Refuse(reason) = admit(&sim_facts, policy) {
@@ -277,6 +304,7 @@ pub fn tick(
         sim_facts.free_ram_bytes = sim_facts
             .free_ram_bytes
             .saturating_sub(policy.ram_per_run_bytes);
+        last_batch = batch_start.elapsed();
     }
     if let Some(first) = rows.first() {
         let mut row = first.clone();
@@ -290,4 +318,23 @@ pub fn tick(
         return row;
     }
     json!({"decision":"idle","reason":"no_eligible_item","skipped":skipped})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn another_batch_needs_the_time_the_last_one_took_and_at_least_one_claim() {
+        let s = Duration::from_secs;
+        // 90 s budget: 70 s used leaves exactly the 20 s a claim needs; 71 s does not.
+        assert!(another_batch_fits(s(70), s(0), 90));
+        assert!(!another_batch_fits(s(71), s(0), 90));
+        // A slow last batch is assumed to repeat.
+        assert!(another_batch_fits(s(40), s(50), 90));
+        assert!(!another_batch_fits(s(41), s(50), 90));
+        // Budget zero allows no second batch whatever happened.
+        assert!(!another_batch_fits(s(0), s(0), 0));
+    }
 }

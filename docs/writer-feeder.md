@@ -18,7 +18,7 @@ additional caller module paths are preserved.
 creates feeder state, or appends an event. Normal ticks append one JSON line to
 `~/.local/state/plangraph/feeder/events.jsonl`, including refusals and adapter
 errors. A live tick starts every batch its slots allow, one after the other, by the same loop (`started`
-lists them, with `slots` and `stopped`); a failed start reports the batches already started. A
+lists them, with `slots` and `stopped`); a failed start reports the batches already started. Policy `tick_budget_seconds` (default 90, the service stops at 110) bounds the tick: once a live tick has used the budget less the time the last batch took (at least 20 s, one claim), it claims no further batch and reports `stopped` as `tick_budget`. A
 dry run plays the same loop without claiming: `would_start` lists every batch (item key,
 card, brief) the tick would start, each taking one slot and one run's RAM and avoiding
 the files of the batches before it; `slots` counts them and `stopped` says why the list

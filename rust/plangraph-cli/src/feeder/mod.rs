@@ -62,6 +62,8 @@ pub struct Policy {
     pub estimate_tokens: u64,
     /// Related ready items one writer batch may hold; 1 keeps one item per run.
     pub batch_max_items: usize,
+    /// Seconds of one live tick after which no further batch is claimed (the service stops at 110).
+    pub tick_budget_seconds: u64,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -79,6 +81,7 @@ impl Default for Policy {
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
             batch_max_items: 1,
+            tick_budget_seconds: 90,
         }
     }
 }
