@@ -421,8 +421,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, card: 
 mod isolation_tests;
 #[cfg(test)]
 #[path = "cli_review_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 #[path = "cli_review_weak_tests.rs"]
 mod weak_tests;
+
+#[cfg(all(test, unix))]
+#[path = "cli_review_train_tests.rs"]
+mod train_tests;

@@ -48,16 +48,26 @@ fn batch_members(card: &Value) -> Vec<Value> {
 }
 
 pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Value>) {
+    annotate_item_from(
+        base,
+        card,
+        std::env::var("PLANGRAPH_SPAWN_ITEM").ok(),
+        events,
+    );
+}
+
+/// `annotate_item` with the `PLANGRAPH_SPAWN_ITEM` fallback passed in, so a fixture never reads the runner's.
+pub(crate) fn annotate_item_from(
+    base: &mut Value,
+    card: &Value,
+    spawn_item: Option<String>,
+    events: &mut Vec<Value>,
+) {
     let item = [&card["item_key"], &card["item"]]
         .into_iter()
         .find(|v| !v.is_null() && v.as_str() != Some(""))
         .cloned()
-        .or_else(|| {
-            std::env::var("PLANGRAPH_SPAWN_ITEM")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .map(Value::String)
-        });
+        .or_else(|| spawn_item.filter(|s| !s.is_empty()).map(Value::String));
     base["item_key"] = match item {
         Some(Value::String(s)) if valid_item(&s) => json!(s),
         Some(_) => {

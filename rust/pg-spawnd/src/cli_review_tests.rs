@@ -95,7 +95,45 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
     )
     .is_err());
 }
-/// A completed agy review of a one-commit repository that answered `answer`, finished through the real run path.
+/// A completed agy review of `head` checked out in `cwd`, run state under `state`, finished through the
+/// real run path. The record is annotated from `card` without reading the runner's `PLANGRAPH_SPAWN_ITEM`.
+pub(super) fn finish_agy_review(
+    state: &Path,
+    cwd: &Path,
+    head: &str,
+    answer: &str,
+    card: &Value,
+) -> (RunRecord, String) {
+    let id = new_run_id();
+    let leg = json!({"id":"agy-gemini-4-hydrogen-high", "harness":"agy", "model":"gemini-4-hydrogen-high", "family":"gemini"});
+    let mut metadata = json!({
+        "role":"review", "cwd":cwd, "exit_code":0,
+        "attempts":[{"leg":leg,"status":"running"}]
+    });
+    crate::records::annotate_item_from(&mut metadata, card, None, &mut Vec::new());
+    Dispatch::new(cwd, head.to_owned(), &json!({"base":"HEAD"}))
+        .ok()
+        .unwrap()
+        .apply(&mut metadata);
+    let mut record = crate::runs::create(state, &id, "fixture", metadata, Status::Completed)
+        .ok()
+        .unwrap();
+    let log = record.path().with_file_name("live.log");
+    let answer = answer.replace("{head}", head);
+    std::fs::write(
+        &log,
+        format!(
+            "{}\n",
+            json!({"event":"result", "result":{"status":"SUCCESS", "response":answer}})
+        ),
+    )
+    .unwrap();
+    record.set("live_log", json!(log));
+    crate::runs::finish(&mut record, Status::Completed, &leg, 1);
+    (record, id)
+}
+
+/// A completed agy review of a one-commit repository that answered `answer`.
 fn finished_agy_review(
     answer: &str,
     card: Value,
@@ -116,32 +154,7 @@ fn finished_agy_review(
         ],
     );
     let head = git(dir.path(), &["rev-parse", "HEAD"]).ok().unwrap();
-    let id = new_run_id();
-    let leg = json!({"id":"agy-gemini-4-hydrogen-high", "harness":"agy", "model":"gemini-4-hydrogen-high", "family":"gemini"});
-    let mut metadata = json!({
-        "role":"review", "cwd":dir.path(), "exit_code":0,
-        "attempts":[{"leg":leg,"status":"running"}]
-    });
-    crate::records::annotate_item(&mut metadata, &card, &mut Vec::new());
-    Dispatch::new(dir.path(), head.clone(), &json!({"base":"HEAD"}))
-        .ok()
-        .unwrap()
-        .apply(&mut metadata);
-    let mut record = crate::runs::create(dir.path(), &id, "fixture", metadata, Status::Completed)
-        .ok()
-        .unwrap();
-    let log = record.path().with_file_name("live.log");
-    let answer = answer.replace("{head}", &head);
-    std::fs::write(
-        &log,
-        format!(
-            "{}\n",
-            json!({"event":"result", "result":{"status":"SUCCESS", "response":answer}})
-        ),
-    )
-    .unwrap();
-    record.set("live_log", json!(log));
-    crate::runs::finish(&mut record, Status::Completed, &leg, 1);
+    let (record, id) = finish_agy_review(dir.path(), dir.path(), &head, answer, &card);
     (dir, record, head, id)
 }
 
