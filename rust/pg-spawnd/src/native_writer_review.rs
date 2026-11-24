@@ -58,6 +58,12 @@ fn skipped_items(brief: &str, log: &str) -> Vec<String> {
     skipped.into_values().collect()
 }
 
+/// A rebase-conflict review validates against the base only the owning host's writer record
+/// holds: it stays on the owner, any other review may be placed on an eligible worker.
+fn pins_review_to_owner(writer: &Value) -> bool {
+    writer["review_base"]["mode"].as_str() == Some("conflict")
+}
+
 impl Host {
     fn review_delta_base<'a>(
         &self,
@@ -369,12 +375,15 @@ impl Host {
         let serialized_card = card.to_string();
         let mut command = self.command(&self.review_cli[0]);
         if let Some(host) = writer["host"].as_str().filter(|host| !host.is_empty()) {
-            // The owning host names itself; the review is not pinned to it, so placement may
-            // send it to an eligible remote host (a writer placed remotely carries the pin).
             command
                 .env("PLANGRAPH_HOST_NAME", host)
-                .env("PLANGRAPH_HOST", host)
-                .env_remove("PLANGRAPH_PLACED_HOST");
+                .env("PLANGRAPH_HOST", host);
+            if pins_review_to_owner(&writer) {
+                command.env("PLANGRAPH_PLACED_HOST", host);
+            } else {
+                // A writer placed remotely carries the pin; the review may go to an eligible host.
+                command.env_remove("PLANGRAPH_PLACED_HOST");
+            }
         }
         command
             .args(&self.review_cli[1..])
@@ -610,5 +619,23 @@ pub(crate) fn review_run_text(state: &Path, record: &Value) -> Result<String, St
             crate::review_artifacts::with_sandbox_test_status(record, tail.to_owned()),
         ),
         _ => Ok(rendered),
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::pins_review_to_owner;
+    use serde_json::json;
+
+    #[test]
+    fn only_a_conflict_review_stays_on_the_owning_host() {
+        for (mode, pinned) in [("conflict", true), ("current", false), ("rebased", false)] {
+            assert_eq!(
+                pins_review_to_owner(&json!({"review_base": {"mode": mode}})),
+                pinned,
+                "{mode}"
+            );
+        }
+        assert!(!pins_review_to_owner(&json!({})));
     }
 }

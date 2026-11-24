@@ -294,8 +294,30 @@ def configured_hosts():
     return validated
 
 
-_ACTIVE = {}
-_ACTIVE_LOCK = threading.Lock()
+# Transports in flight (a caller is waiting on them) take a slot, at most MAX_WORKERS across every
+# caller. A transport whose caller gave up is "stuck": it keeps running (a thread cannot be
+# cancelled) but frees its slot, so it cannot starve healthy hosts; one per host, at most
+# STUCK_FACTOR * MAX_WORKERS in total, so a long-lived caller never piles up threads.
+STUCK_FACTOR = 4
+_SLOTS = threading.Condition()
+_state = dict(in_flight=0, stuck={})
+
+
+def _claim(name, budget):
+    """Reserve a slot under the lock; False means refused (stuck host, stuck limit, no slot in time)."""
+    deadline = time.monotonic() + budget + 1
+    with _SLOTS:
+        stuck = _state['stuck']
+        for key in [key for key, thread in stuck.items() if not thread.is_alive()]:
+            del stuck[key]
+        if name in stuck or len(stuck) >= STUCK_FACTOR * MAX_WORKERS:
+            return False
+        while _state['in_flight'] >= MAX_WORKERS:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not _SLOTS.wait(remaining):
+                return False
+        _state['in_flight'] += 1
+        return True
 
 
 def _bounded(host, transport):
@@ -303,9 +325,6 @@ def _bounded(host, transport):
 
     A transport that never returns must not outlive the call: executor workers are joined at
     interpreter exit, a daemon thread is not, so `ps` prints and exits while it stays blocked.
-    A thread cannot be cancelled, so a long-lived caller (the MCP server) never starts a second
-    transport for a host whose last one is still running, nor more than MAX_WORKERS at once:
-    those hosts are listed as failed until the blocked transport ends.
     """
     budget = host_timeout(host)
     outcome = []
@@ -317,20 +336,23 @@ def _bounded(host, transport):
         except BaseException as exc:  # handed to the caller, which classifies it
             outcome.append((False, exc))
         finally:
-            with _ACTIVE_LOCK:
-                if _ACTIVE.get(name) is threading.current_thread():
-                    del _ACTIVE[name]
+            with _SLOTS:
+                if _state['stuck'].get(name) is threading.current_thread():
+                    del _state['stuck'][name]
+                _SLOTS.notify_all()
 
     thread = threading.Thread(target=run, daemon=True, name='ps-transport-' + name)
-    with _ACTIVE_LOCK:
-        for key, running in list(_ACTIVE.items()):
-            if not running.is_alive():
-                del _ACTIVE[key]
-        if name in _ACTIVE or len(_ACTIVE) >= MAX_WORKERS:
-            raise TimeoutError('host query failed')
-        _ACTIVE[name] = thread
-    thread.start()
-    thread.join(budget + 1)  # the transport's own deadline answers first when it holds
+    if not _claim(name, budget):
+        raise TimeoutError('host query failed')
+    try:
+        thread.start()
+        thread.join(budget + 1)  # the transport's own deadline answers first when it holds
+    finally:
+        with _SLOTS:
+            _state['in_flight'] -= 1
+            if thread.is_alive():
+                _state['stuck'][name] = thread
+            _SLOTS.notify_all()
     if not outcome:
         raise TimeoutError('host query failed')
     done, value = outcome[0]

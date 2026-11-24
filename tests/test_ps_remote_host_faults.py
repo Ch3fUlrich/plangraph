@@ -208,27 +208,66 @@ def test_doctor_probe_gets_the_registry_resolved_hosts_and_slow_budget(config, m
     assert seen['timeout'] == remote_ps.host_timeout(host) + doctor.TIMEOUT
 
 
-def test_repeated_calls_keep_the_transport_cap_while_hosts_stay_blocked(config, monkeypatch):
-    monkeypatch.setattr(remote_ps, 'MAX_WORKERS', 2)
-    monkeypatch.setattr(remote_ps, 'TIMEOUT', 0.05)
-    write(config, [dict(name=f'h{i}', target=f'h{i}', src='/s/src') for i in range(3)])
-    release = threading.Event()
+def alive_transports():
+    return [t for t in threading.enumerate() if t.name.startswith('ps-transport-')]
 
-    def alive():
-        return [t for t in threading.enumerate() if t.name.startswith('ps-transport-')]
+
+def test_repeated_calls_start_no_second_transport_for_a_blocked_host(config, monkeypatch):
+    monkeypatch.setattr(remote_ps, 'TIMEOUT', 0.05)
+    write(config, [dict(name='stuck', target='stuck', src='/s/src')])
+    release = threading.Event()
     try:
         for _ in range(3):
             rows = remote_ps.list_runs([], transport=lambda h, t: release.wait(30))
-            assert [r['status'] for r in rows] == ['unknown'] * 3
-            assert len(alive()) <= 2
+            assert [r['status'] for r in rows] == ['unknown']
+            assert len(alive_transports()) == 1
     finally:
         release.set()
-        for thread in alive():
+        for thread in alive_transports():
             thread.join(5)
-    # Once the blocked transports end, hosts are queried again.
     rows = remote_ps.list_runs([], transport=lambda h, t: json.dumps(
         {'runs': [dict(run_id='r', host='x', status='running')]}))
-    assert [r['status'] for r in rows] == ['running'] * 3
+    assert [r['status'] for r in rows] == ['running']
+
+
+def test_healthy_host_behind_a_blocked_one_is_still_queried(config, monkeypatch):
+    monkeypatch.setattr(remote_ps, 'MAX_WORKERS', 1)
+    monkeypatch.setattr(remote_ps, 'TIMEOUT', 0.05)
+    write(config, [dict(name='bad', target='bad', src='/s/src'),
+                   dict(name='good', target='good', src='/s/src')])
+    release = threading.Event()
+    try:
+        rows = remote_ps.list_runs([], transport=fake(None, lambda h, t: release.wait(30)))
+    finally:
+        release.set()
+        for thread in alive_transports():
+            thread.join(5)
+    assert [(r['host'], r['status']) for r in rows] == [('bad', 'unknown'), ('good', 'running')]
+
+
+def test_overlapping_calls_never_run_more_transports_than_the_cap(config, monkeypatch):
+    monkeypatch.setattr(remote_ps, 'MAX_WORKERS', 1)
+    write(config, [dict(name=f'h{i}', target=f'h{i}', src='/s/src') for i in range(2)])
+    lock, state = threading.Lock(), dict(now=0, most=0)
+
+    def transport(host, timeout):
+        with lock:
+            state['now'] += 1
+            state['most'] = max(state['most'], state['now'])
+        time.sleep(0.2)
+        with lock:
+            state['now'] -= 1
+        return json.dumps({'runs': [dict(run_id='r', host='x', status='running')]})
+    results = []
+    callers = [threading.Thread(target=lambda: results.append(
+        remote_ps.list_runs([], transport=transport))) for _ in range(3)]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(30)
+    assert state['most'] == 1
+    assert all([r['status'] for r in rows] == ['running'] * 2 for rows in results) and len(results) == 3
+
 
 
 @pytest.mark.parametrize('reverse', [False, True])
