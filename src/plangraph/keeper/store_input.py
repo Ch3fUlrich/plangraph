@@ -65,15 +65,14 @@ def _defined_payload(fields, before=None):
     for name in SMALL_FIELDS:
         if name in fields:
             payload[name] = fields[name]
-    payload.update(citing_premise(fields, ("title", "note")))   # done_criteria rides in before/after
     named = [name for name in ("title", "note", "description") if name in fields]
-    if named and before is not None:
-        # An edit that lists a field is not a change of it: the clock moves the anchor of the
-        # item's fallback watermark only for the premise fields whose text really changed.  An
-        # edit that changed every field it lists keeps the payload (and hash) it always had.
-        same = [name for name in named if fields[name] == before.get(name)]
-        if same:
-            payload["premise_unchanged"] = same
+    same = [name for name in named if before is not None and fields[name] == before.get(name)]
+    # A listed field that kept its text is no evidence for the decision clock.  An edit that
+    # changed every field it lists keeps the payload (and hash) it always had.
+    payload.update(citing_premise({k: v for k, v in fields.items() if k not in same},
+                                  ("title", "note")))     # done_criteria rides in before/after
+    if same:
+        payload["premise_unchanged"] = same
     for name in ("estimate_h", "estimate_src"):
         if name in fields:
             payload[name] = fields[name]
