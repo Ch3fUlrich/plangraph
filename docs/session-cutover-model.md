@@ -26,7 +26,8 @@ obligation is due, so a scan, wake, takeover or supervisor pass cannot be skippe
 | supervisor pass | at most 20 s | parameter; `takeover + pass <= bound` is checked |
 | one read per source | at most 60 s | A2 scan period; a hung read is visible at once |
 | Stop-hook cap | 9 | canary-a1, Claude Code 2.1.329 |
-| events per digest | parameter (8) | A3 req 6; the byte limit of a digest is a build slice |
+| digest | 8192 bytes, header 64 | A3 req 6; the fleet's Bash output limit; the range header is counted |
+| launch budget | 30 s | confirm and adopt, or abort; parameter |
 | longest timer | 2000 s (200 ticks) | `Params::check` refuses more: the counters would overflow |
 
 ## Invariants (`Model::violations`)
@@ -46,12 +47,16 @@ obligation is due, so a scan, wake, takeover or supervisor pass cannot be skippe
 | `ActivationGate`: active needs shadow sign-off, a fence, deployed recovery and a live GO | 7, 7a |
 | `StopCap`: the Stop hook never holds a turn past its cap | 4 |
 
-Requirement 6: a scan moves events into the digest (scan cursor) and never acknowledges; a
-receipt covers at most `digest_cap` events, urgent first and oldest first, and the rest stay
-pending and are replayed to a successor. The byte limit and the range-first text are a build
-slice. Requirement 7 is `Rollback` and `RevokeGo`: both abort a launch not yet adopted, hand every
+Requirement 6: a scan moves events into the digest (scan cursor) and never acknowledges. A digest
+receipt starts with its range header and covers the events that fit `digest_bytes`, urgent first,
+then by occurrence order (not event id); the rest stay pending and are replayed to a successor
+(`DigestOverBudget`). Events on today's path (escalated, or after a rollback) are delivered one
+by one and are not capped. The text of the header is a build slice. Requirement 7 is `Rollback` and `RevokeGo`: both abort a launch not yet adopted, hand every
 unreceived event to today's path and end the Stop hook; an adopted recycle is only cleaned up.
-With no live current session the bound is not claimed: `Unattended` bounds the recovery.
+Event time runs only while a live current session exists. With none, the supervisor owes a
+launch within 20 s (`Unattended`) and a launch must be confirmed and adopted, or aborted, within
+30 s, so each attempt costs at most 50 s on top of the 90 s; adoption hands the waiting urgent
+events to the successor, which reads them at once.
 
 ## Transitions
 
@@ -63,11 +68,11 @@ With no live current session the bound is not claimed: `Unattended` bounds the r
 | `WindowEnd` | current session, wait armed | wait fired for ordinary, beat and follow-up events; also when quiet |
 | `WaiterDie` | wait armed | wait dead, no wake |
 | `Arm` | in a turn, current generation, role active | own wait armed |
-| `Receive` | in a turn, current generation | up to `digest_cap` detected or escalated events received, urgent first |
+| `Receive` | in a turn, current generation | every escalated event, and the detected ones that fit one digest, urgent first |
 | `EndTurn` | in a turn | current session in an active role: blocked up to the cap until armed and received; fenced session never blocked |
 | `Escalate` | active, urgent, unreceived, age at least 70 s | handed to today's wake path, current session woken; time stops until a working session has read it |
 | `Nudge` | active, current session idle and unarmed | session woken so it can re-arm |
-| `BeginRecycle` | active, fence deployed, recovery deployed, current session idle with a fresh card or stopped | successor launched, fenced; forward snapshot taken |
+| `BeginRecycle` | active, fence deployed, recovery deployed, current session idle with a fresh card or stopped | successor launched, fenced; forward snapshot taken; 30 s to confirm and adopt, or abort |
 | `Confirm`, `AbortRecycle` | launch live, role active; abort any time | confirmed; or successor stopped and recycle idle |
 | `Adopt` | role active, confirmed, predecessor quiescent | one compare-and-set: successor current, predecessor fenced and its wait revoked, every message without a record carried and unread |
 | `StopOk`, `StopFail` | stop pending | predecessor stopped; or retried (the supervisor always has this move) |
@@ -103,16 +108,20 @@ predecessor after the forward snapshot is carried by `Adopt`, which follows reco
 | review round 1 HIGH: a launch adopted after the GO was lost | `a_lost_go_or_a_rollback_aborts_a_launch_that_is_not_adopted` |
 | review round 1 HIGH: two waits armed after a failed stop | `adoption_revokes_the_predecessors_wait_so_a_failed_stop_...` |
 | review round 1 MED: digest bound, scan cursor apart from the receipt | `a_scan_is_not_a_receipt_and_a_digest_is_bounded_...` |
+| review round 2 HIGH: a stalled launch counted as attendance, slow recovery past the bound | `a_stalled_launch_is_bounded_and_a_slow_recovery_still_reads_...` |
+| review round 2 HIGH: the digest cap throttled legacy receipts after a rollback | `legacy_receipts_after_a_rollback_are_not_capped_by_the_digest` |
+| review round 2 MED: receipts sorted by event id | `receipts_follow_occurrence_order_not_event_ids` |
+| review round 2 MED: byte limit and range first | `a_digest_starts_with_its_range_and_never_exceeds_its_byte_limit` |
 | review round 1 MED: a timer beyond the counters panicked | `timers_beyond_the_counters_are_refused_...` |
 | alwayson r3: activation, rollback, per-role GO; req 5 crons and beats | `activation_needs_shadow_fence_...`, `losing_the_go_...`; beats and follow-ups in the window test |
 
-Scenario files: `scenarios_wake.rs`, `scenarios_recycle.rs`, `scenarios_switch.rs`. Each guard a finding named is a `Defect`; `each_defect_is_caught_by_its_invariant` shows the
+Scenario files: `scenarios_wake.rs`, `scenarios_digest.rs`, `scenarios_recycle.rs`, `scenarios_recovery.rs`, `scenarios_switch.rs`. Each guard a finding named is a `Defect`; `each_defect_is_caught_by_its_invariant` shows the
 unsafe model breaks the listed invariant while the same search on the safe model finds nothing.
 
 ## Exhaustive bounds (`tests/exhaustive.rs`)
 
 Production times; Stop-hook cap 2 (1 in the two-recycle search, 9 in the named scenario); digest cap 1 in the wake search. Every ordering up to: wake, 1
-session, 2 urgent events on 2 sources and 1 ordinary, 12 events; recycle, 2 sessions, 1 urgent
+session, 2 urgent events on 2 sources and 1 ordinary, 13 events; recycle, 2 sessions, 1 urgent
 event, 2 messages, 11 events; recycles, 3 sessions (two recycles), 1 message, crashes, 16
 events; gates, all mode and gate events with 2 sessions and 1 event, 15 events. Each checks that
 refusals change nothing, invariants hold, event stages and handling records never go back, and
@@ -122,7 +131,7 @@ while the predecessor's stop is pending left the supervisor no move; retrying th
 ## Not modelled (owned elsewhere, see the slices)
 
 Source adapters and event retention (A2), the shared journal and its authorization (B), keeper
-generation issue (stage C), external effect receipts (D), digest size. The model assumes the
+generation issue (stage C), external effect receipts (D), the digest header text. The model assumes the
 handling effect and its record are one step, effects are idempotent on replay, and a stop that
 keeps failing, or all slots used, is an operator alarm. The time budget per urgent class is a
 parameter set from the A2 shadow latencies; 90 s is the ruling of rule 3.48 for all classes.

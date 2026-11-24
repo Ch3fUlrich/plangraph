@@ -10,6 +10,6 @@ mod time;
 mod transition;
 mod types;
 
-pub use model::Model;
+pub use model::{Digest, Model};
 pub use params::*;
 pub use types::*;

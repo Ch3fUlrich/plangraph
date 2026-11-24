@@ -56,6 +56,12 @@ impl Model {
         {
             out.push(Invariant::ReceivedUnread);
         }
+        if self
+            .last_digest
+            .is_some_and(|d| d.bytes > self.p.digest_bytes)
+        {
+            out.push(Invariant::DigestOverBudget);
+        }
         let sup = Params::ticks(self.p.supervisor_secs);
         if active && self.asleep_age > sup && self.supervisor_can_act() {
             out.push(Invariant::Unattended);

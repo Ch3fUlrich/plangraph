@@ -108,6 +108,13 @@ impl Model {
         }
         self.adopted_over_active |= working;
         self.adopted = succ;
+        // Whatever urgent events wait go to the successor at once, with its card.
+        let mut waiting = false;
+        for e in &mut self.events {
+            if e.class == Class::Urgent && matches!(e.stage, Stage::Occurred | Stage::Detected) {
+                (e.escalated, waiting) = (true, true);
+            }
+        }
         self.sessions[usize::from(succ)].fenced = false;
         if !self.has(Defect::NoFence) {
             let old = &mut self.sessions[usize::from(pred)];
@@ -122,6 +129,9 @@ impl Model {
             if here && !m.record && (!snapshot_only || m.snap) {
                 (m.home, m.read) = (Home::Session(succ), false);
             }
+        }
+        if waiting {
+            self.wake_adopted();
         }
         self.recycle = if self.sessions[usize::from(pred)].life == Life::Stopped {
             Recycle::Idle

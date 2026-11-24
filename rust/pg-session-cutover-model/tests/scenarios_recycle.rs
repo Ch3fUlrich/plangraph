@@ -268,54 +268,6 @@ fn an_unread_go_from_before_the_card_stamp_is_not_hidden_by_the_card() {
 }
 
 #[test]
-fn a_crashed_current_session_is_recovered_and_its_messages_are_replayed() {
-    // state-gpt-r2 H3-H4: a live-looking role with nothing behind it; the inbox is durable.
-    let mut m = armed_ready(params(vec![URGENT(0)], 2));
-    run(
-        &mut m,
-        &[
-            Event::SendMsg(0),
-            Event::Occur(0),
-            Event::Scan(0),
-            Event::Crash(0),
-            Event::SendMsg(1),
-        ],
-    );
-    assert_eq!(
-        m.home(1),
-        Home::Inbox,
-        "no live session: the durable inbox holds it"
-    );
-    ticks(&mut m, 20);
-    assert_eq!(
-        m.apply(Event::Tick),
-        Err(Denied::Deadline),
-        "recovery is due"
-    );
-    run(&mut m, &[Event::BeginRecycle, Event::Confirm, Event::Adopt]);
-    assert_eq!(
-        (m.home(0), m.home(1), m.recycle()),
-        (Home::Session(1), Home::Session(1), Recycle::Idle)
-    );
-    assert_eq!(
-        m.stage(0),
-        Stage::Detected,
-        "the event waited in the digest"
-    );
-    run(&mut m, &[Event::Receive(1)]);
-    assert_eq!(m.stage(0), Stage::Received);
-}
-
-#[test]
-fn a_session_without_a_fresh_card_cannot_be_replaced_only_woken() {
-    // state-gpt-r2 H4: the supervised path validates the handoff before it replaces a live session.
-    let mut m = model(params(vec![], 0));
-    activate(&mut m);
-    assert_eq!(m.apply(Event::BeginRecycle), Err(Denied::Guard));
-    run(&mut m, &[Event::Nudge]);
-}
-
-#[test]
 fn a_lost_go_or_a_rollback_aborts_a_launch_that_is_not_adopted() {
     // gpt-6.2-sol-high round 1 HIGH: Confirm, RevokeGo, Adopt switched a role that was off.
     for (name, off, confirm) in [
