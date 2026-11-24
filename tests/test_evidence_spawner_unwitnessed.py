@@ -50,12 +50,21 @@ def test_an_agy_seat_with_a_recorded_harness_counts(tmp_path):
     {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}\n", f"```\nHEAD: {HEAD}\n```\n")},                  # only a fenced HEAD line
     {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}\n", f"HEAD: {HEAD}\nHEAD: unknown\n")},            # a malformed second declaration
     {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}\n", f"HEAD: {HEAD}\nHEAD: {'0' * 40}\n")},         # a conflicting second declaration
+    # a fence marker with trailing text does not close the block: the HEAD line is still inside it
+    {"stdout_tail": TEXT.replace(f"HEAD: {HEAD}\n", f"```\n``` still code\nHEAD: {HEAD}\n```\n")},
     {"completion": {}},                                 # no head_sha: a refusal, never a TypeError
     {"completion": {"head_sha": None}},
 ])
 def test_an_agy_seat_without_its_recorded_facts_is_refused(tmp_path, changes):
     with pytest.raises(ValueError, match="not a passing witnessed seat"):
         seats(mirror(tmp_path, **changes), allow_unwitnessed=True)
+
+
+def test_a_tests_line_inside_a_fence_the_trailing_marker_did_not_close_is_not_a_test_run(tmp_path):
+    text = TEXT.replace("TESTS: pytest -q tests/test_fixture.py: 3 passed\n",
+                        "```\n``` still code\nTESTS: pytest -q: 3 passed\n```\n")
+    with pytest.raises(ValueError, match="not a passing witnessed seat"):
+        seats(mirror(tmp_path, leg=OPENCODE, harness="opencode", text=text), allow_unwitnessed=True)
 
 
 def test_a_pg_spawnd_record_names_its_harness_only_on_the_chosen_leg(tmp_path):

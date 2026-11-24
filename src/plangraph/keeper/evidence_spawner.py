@@ -41,14 +41,12 @@ def _required_seat(record):
 
 
 def _unfenced_lines(text):
-    """The lines of *text* outside code fences, left-stripped of spaces."""
-    fence = None
-    for raw in (text or "").splitlines():
-        line = raw.lstrip(" ")
-        if marker := re.match(r"(`{3,}|~{3,})", line):
-            fence = None if fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) else fence or marker[1]
-        elif fence is None:
-            yield line
+    """The lines of *text* outside code fences and ``>`` quotes, left-stripped of spaces.
+
+    Uses the one review fence parser (a closing fence carries no text after its marker).
+    """
+    from ..review.verdict import _unquoted_lines
+    return (raw.lstrip(" ") for raw in _unquoted_lines(text))
 
 
 def _tests_reported(text):
