@@ -79,4 +79,22 @@ mod tests {
             2
         );
     }
+
+    #[test]
+    fn an_unresolvable_user_home_is_an_error_not_a_target() {
+        let home = Path::new("/srv/fixture-home");
+        let cwd = Path::new("/work/tree");
+        let error = target_env(None, Some(OsStr::new("~nouser-fixture-zz/x")), home, cwd)
+            .expect_err("a ~user that does not exist must not resolve");
+        assert!(error.starts_with("shared cargo target:"), "{error}");
+        // A caller's CARGO_TARGET_DIR is kept before the setting is read at all.
+        assert!(target_env(
+            Some(OsStr::new("/already/set")),
+            Some(OsStr::new("~nouser-fixture-zz/x")),
+            home,
+            cwd
+        )
+        .unwrap()
+        .is_empty());
+    }
 }
