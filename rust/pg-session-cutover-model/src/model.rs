@@ -30,6 +30,8 @@ impl Model {
                 escalated: false,
                 alarmed: false,
                 seen: false,
+                binding: false,
+                reader: None,
             })
             .collect();
         Ok(Self {
@@ -92,9 +94,16 @@ impl Model {
         self.events[usize::from(event)].escalated
     }
 
-    /// The operator was told about the event: it is held by a reader other than the session.
+    /// The operator was told about the event; it stays pending for the session.
     pub fn alarmed(&self, event: u8) -> bool {
         self.events[usize::from(event)].alarmed
+    }
+
+    /// Age in seconds at which the first reader held the event, if one has.
+    pub fn reader_secs(&self, event: u8) -> Option<u16> {
+        self.events[usize::from(event)]
+            .reader
+            .map(|a| u16::from(a) * TICK_SECS)
     }
 
     pub fn event_count(&self) -> u8 {
@@ -126,6 +135,7 @@ impl Model {
         out.extend([
             Event::WaiterFire,
             Event::WaiterDie,
+            Event::WakeLost,
             Event::BeginTurn,
             Event::EndTurn,
             Event::Arm,

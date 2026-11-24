@@ -30,6 +30,12 @@ impl Model {
                 }
                 self.session.waiter = Waiter::Dead;
             }
+            Event::WakeLost => {
+                if !self.session.notify {
+                    return Err(Denied::Guard);
+                }
+                self.session.notify = false;
+            }
             Event::BeginTurn => {
                 let s = &mut self.session;
                 if s.life != Life::Idle || !s.notify {
@@ -74,7 +80,8 @@ impl Model {
                 {
                     return Err(Denied::Guard);
                 }
-                self.session.notify = true;
+                // Each nudge gives the wake one more supervisor pass.
+                (self.session.notify, self.asleep_age) = (true, 0);
             }
             Event::StartShadow if self.mode == Mode::Off => self.mode = Mode::Shadow,
             Event::SignOffShadow if self.mode == Mode::Shadow => self.gates.shadow_ok = true,
@@ -106,12 +113,15 @@ impl Model {
         {
             return Err(Denied::Gate);
         }
-        let overdue = self
-            .events
-            .iter()
-            .any(|e| e.open() && e.age >= Params::ticks(self.p.budget(e.class).alarm_secs));
+        let overdue = self.events.iter().any(|e| {
+            e.open() && !e.alarmed && e.age >= Params::ticks(self.p.budget(e.class).alarm_secs)
+        });
         if overdue && !self.has(Defect::ActivateOverdue) {
             return Err(Denied::Overdue);
+        }
+        // What is pending now is held to its deadline from here on, in every mode.
+        for e in self.events.iter_mut().filter(|e| e.open()) {
+            e.binding = true;
         }
         self.mode = Mode::Active;
         Ok(())
