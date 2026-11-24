@@ -329,3 +329,30 @@ fn orphan_review_slot_locks_go_only_when_old_and_without_their_slot() {
         assert!(lock(kept).exists(), "{kept}");
     }
 }
+
+#[test]
+fn a_symlinked_temp_root_is_followed_for_a_target_that_does_not_exist_yet() {
+    use pg_worker_core::cargo_cache::under_roots;
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().canonicalize().unwrap().join("real");
+    fs::create_dir(&real).unwrap();
+    let link = tmp.path().canonicalize().unwrap().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    // TMPDIR names the link; the configured target (absent) is under the real directory, and the
+    // other way round. Resolving only paths that exist would answer false for one of them.
+    assert!(under_roots(
+        &link.join("absent/cargo-target"),
+        &[real.as_path()]
+    ));
+    assert!(under_roots(
+        &real.join("absent/cargo-target"),
+        &[link.as_path()]
+    ));
+    assert!(!under_roots(
+        &tmp.path()
+            .canonicalize()
+            .unwrap()
+            .join("elsewhere/cargo-target"),
+        &[link.as_path()]
+    ));
+}

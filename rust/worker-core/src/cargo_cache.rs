@@ -19,17 +19,25 @@ pub fn shared_cache_roots() -> io::Result<Vec<PathBuf>> {
 
 /// Whether `path` lies under the system temporary directory (`/tmp`, `/var/tmp`, `TMPDIR`).
 pub fn under_system_temp(path: &Path) -> bool {
-    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    [
-        Path::new("/tmp"),
-        Path::new("/var/tmp"),
-        env::temp_dir().as_path(),
-    ]
-    .into_iter()
-    .any(|root| {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        resolved.starts_with(root)
-    })
+    under_roots(
+        path,
+        &[
+            Path::new("/tmp"),
+            Path::new("/var/tmp"),
+            env::temp_dir().as_path(),
+        ],
+    )
+}
+
+/// `path` and every root are resolved through their existing ancestors (a target that does not
+/// exist yet still has its symlinked `TMPDIR` followed), the same way the Python placement
+/// resolves them, so seat and hygiene agree on the pool.
+pub fn under_roots(path: &Path, roots: &[&Path]) -> bool {
+    let resolve = |path: &Path| {
+        crate::workspace_launch::resolved(path).unwrap_or_else(|_| path.to_path_buf())
+    };
+    let resolved = resolve(path);
+    roots.iter().any(|root| resolved.starts_with(resolve(root)))
 }
 
 /// The shared target review seats use in place of one configured under the system temp
