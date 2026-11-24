@@ -1,7 +1,7 @@
 //! The admission of one writer launch: the check of its keys and their reservation as one step
 //! under the state's lock, and the guard that releases the reservation when the launch ends.
 
-use crate::lane_guard::{admit, Observed};
+use crate::lane_guard::{admit, launch_keys, Observed};
 use std::path::{Path, PathBuf};
 
 /// What a launch was admitted with: its keys and the reason of a deliberate second lane. While
@@ -91,21 +91,30 @@ pub fn admit_launch(request: &LaunchRequest) -> Result<Launched, String> {
         state: request.state.to_owned(),
         repo: request.repo.to_owned(),
         owner: owner.clone(),
-        at,
+        claims: crate::lane_reservation::Snapshot::take(
+            request.state,
+            &launch_keys(&rendered.brief, request.extra),
+            at,
+        ),
     };
     let (lane_override, keys) = admit(&rendered.brief, request.extra, &observed, request.explicit)?;
     if keys.len() > MAX_KEYS {
         return Err(format!("a launch holds at most {MAX_KEYS} item keys"));
     }
     let reservation = if request.reserve {
-        // The admission passed over any claim that lapsed: take those away for good.
-        crate::lane_reservation::sweep_expired(request.state, &keys, at)
+        // The admission passed over any claim that lapsed: take those away for good. The claims the scan judged are the ones swept; any claim that cannot be read or removed
+        // refuses the admission before the replacement is published.
+        observed
+            .claims
+            .sweep()
             .map_err(|error| format!("lane reservation: {error}"))?;
         if let Err(error) = crate::lane_reservation::reserve(request.state, &keys, &owner, at) {
             // Still under the lock: drop what was written before the failure.
             crate::lane_reservation::release(request.state, &keys, &owner);
             crate::lane_reservation::prune(request.state, &keys);
-            return Err(format!("lane reservation: {error}"));
+            return Err(format!(
+                "lane reservation: claim cannot be published: {error}"
+            ));
         }
         Some(Reservation {
             state: request.state.to_owned(),

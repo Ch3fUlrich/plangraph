@@ -101,7 +101,8 @@ fn only_queued_or_running_records_are_live() {
         )
         .unwrap();
     }
-    let ids: Vec<_> = live_runs(dir.path())
+    let ids: Vec<_> = scan_runs(dir.path())
+        .records
         .iter()
         .map(|r| r["run_id"].as_str().unwrap().to_owned())
         .collect();

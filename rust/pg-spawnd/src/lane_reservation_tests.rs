@@ -168,17 +168,17 @@ fn sweep_reports_a_lapsed_claim_it_cannot_remove_and_removes_only_lapsed_ones() 
     let claim_dir = key_dir(dir.path(), "demo:K");
     fs::set_permissions(&claim_dir, fs::Permissions::from_mode(0o555)).unwrap();
     let removable = fs::File::create(claim_dir.join("probe")).is_ok();
-    let stuck = sweep_expired(dir.path(), &keys, at);
+    let stuck = Snapshot::take(dir.path(), &keys, at).sweep();
     fs::set_permissions(&claim_dir, fs::Permissions::from_mode(0o755)).unwrap();
     if !removable {
         assert!(
-            stuck.is_err(),
+            matches!(stuck, Err(SweepError::Remove(_))),
             "a claim left in place must not be reported swept"
         );
         assert_eq!(claim_files(dir.path()), 2);
     }
     let _ = fs::remove_file(claim_dir.join("probe"));
-    sweep_expired(dir.path(), &keys, at).unwrap();
+    Snapshot::take(dir.path(), &keys, at).sweep().unwrap();
     assert_eq!(claim_files(dir.path()), 1);
     let held = lanes(dir.path(), &keys, "launch-b", at);
     assert_eq!(held[0].name, "reservation launch-live");

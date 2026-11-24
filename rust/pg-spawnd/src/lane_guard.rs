@@ -36,8 +36,9 @@ pub struct Observed {
     pub repo: PathBuf,
     /// The launch asking: its own reservations are not lanes of another launch.
     pub owner: String,
-    /// The one reading of the claim clock this observation decides with.
-    pub at: u64,
+    /// The claims on the launch's keys, read once with the launch's one clock reading. The sweep
+    /// of the lapsed ones works from the same snapshot.
+    pub claims: crate::lane_reservation::Snapshot,
 }
 
 impl LaneSource for Observed {
@@ -51,9 +52,16 @@ impl Observed {
     /// run and only then releases its claim, so a reader that finds no claim reads the runs after
     /// that registration and finds the run: no order of the two steps lets a key through.
     pub fn lanes_between(&self, keys: &[String], between: &dyn Fn()) -> Vec<Lane> {
-        let mut lanes = crate::lane_reservation::lanes(&self.state, keys, &self.owner, self.at);
+        let mut lanes = self.claims.lanes(&self.owner);
         between();
-        lanes.extend(run_lanes(&live_runs(&self.state)));
+        let runs = scan_runs(&self.state);
+        lanes.extend(run_lanes(&runs.records));
+        // A run record that cannot be read may hold any key: dispatch refuses until it can.
+        lanes.extend(runs.unreadable.iter().map(|name| Lane {
+            name: format!("unreadable run record {name}"),
+            keys: keys.to_vec(),
+            source: "run",
+        }));
         lanes.extend(branch_lanes(&self.repo, keys));
         lanes
     }
@@ -81,6 +89,18 @@ pub fn valid_key(value: &str) -> bool {
 /// The key a record or card holds: validated by the key grammar alone, as the spawner stores it.
 fn record_key(value: &str) -> Option<String> {
     valid_key(value).then(|| normalize(value))
+}
+
+/// The keys one launch asks for: those of its brief, then the normalized extra keys of its card.
+pub fn launch_keys(brief: &str, extra: &[String]) -> Vec<String> {
+    let mut keys = item_keys(brief);
+    for key in extra {
+        let key = normalize(key);
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 /// The plan-item keys a writer brief names, one fixed statement form per line: `## key`,
@@ -130,26 +150,59 @@ pub fn normalize(key: &str) -> String {
     format!("{project}:{id}")
 }
 
-/// Records of the runs that are queued or running.
-pub fn live_runs(state: &Path) -> Vec<Value> {
-    let Ok(entries) = fs::read_dir(state.join("runs")) else {
-        return Vec::new();
+/// The run records of a state directory: those that are queued or running, and the names of those
+/// that exist but cannot be read (an I/O error other than a record that vanished). A record that
+/// parses as nothing is skipped as everywhere else in the spawner: it names no key.
+pub struct RunScan {
+    pub records: Vec<Value>,
+    pub unreadable: Vec<String>,
+}
+
+pub fn scan_runs(state: &Path) -> RunScan {
+    let mut scan = RunScan {
+        records: Vec::new(),
+        unreadable: Vec::new(),
     };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("run-"))
-        .map(|entry| entry.path().join("record.json"))
-        .collect();
+    let entries = match fs::read_dir(state.join("runs")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return scan,
+        Err(_) => {
+            scan.unreadable.push("runs directory".into());
+            return scan;
+        }
+    };
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) if entry.file_name().to_string_lossy().starts_with("run-") => {
+                paths.push(entry.path().join("record.json"));
+            }
+            Ok(_) => {}
+            Err(_) => scan.unreadable.push("runs directory entry".into()),
+        }
+    }
     paths.sort();
-    paths
-        .iter()
-        .filter_map(|path| serde_json::from_slice::<Value>(&fs::read(path).ok()?).ok())
-        .filter(|record| {
-            record["status"]
-                .as_str()
-                .is_some_and(|status| matches!(status, "queued" | "running"))
-        })
-        .collect()
+    for path in paths {
+        match fs::read(&path) {
+            Ok(bytes) => {
+                let live = serde_json::from_slice::<Value>(&bytes)
+                    .ok()
+                    .filter(|record| {
+                        record["status"]
+                            .as_str()
+                            .is_some_and(|status| matches!(status, "queued" | "running"))
+                    });
+                scan.records.extend(live);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => scan.unreadable.push(
+                path.parent()
+                    .and_then(Path::file_name)
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+            ),
+        }
+    }
+    scan
 }
 
 /// A live writer run holds its `item_key`, the keys of its brief and the keys a fleet
@@ -290,13 +343,7 @@ pub fn admit(
     source: &dyn LaneSource,
     override_reason: Option<&str>,
 ) -> Result<(Option<String>, Vec<String>), String> {
-    let mut keys = item_keys(brief);
-    for key in extra {
-        let key = normalize(key);
-        if !keys.contains(&key) {
-            keys.push(key);
-        }
-    }
+    let keys = launch_keys(brief, extra);
     let lanes = if keys.is_empty() {
         Vec::new()
     } else {
@@ -310,6 +357,9 @@ pub use crate::lane_launch::{admit_launch, LaunchRequest, Launched, MAX_KEYS};
 #[cfg(test)]
 #[path = "lane_guard_branch_tests.rs"]
 mod branch_tests;
+#[cfg(test)]
+#[path = "lane_guard_claim_tests.rs"]
+mod claim_tests;
 #[cfg(test)]
 #[path = "lane_guard_launch_tests.rs"]
 mod launch_tests;
