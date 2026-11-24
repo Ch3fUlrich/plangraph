@@ -26,6 +26,12 @@ struct World {
 }
 
 fn world() -> World {
+    world_with(&format!(
+        "{HEADER}| D-1 | demo | first | op | |\n| D-2 | demo | second | op | |\n"
+    ))
+}
+
+fn world_with(decisions: &str) -> World {
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let seed = dir.path().join("seed");
@@ -42,11 +48,7 @@ fn world() -> World {
         ],
     );
     g(&seed, &["init", "-q", "-b", "main"]);
-    std::fs::write(
-        seed.join("DECISIONS.md"),
-        format!("{HEADER}| D-1 | demo | first | op | |\n| D-2 | demo | second | op | |\n"),
-    )
-    .unwrap();
+    std::fs::write(seed.join("DECISIONS.md"), decisions).unwrap();
     g(&seed, &["add", "-A"]);
     g(&seed, &["commit", "-q", "-m", "seed"]);
     g(&seed, &["push", "-q", origin.to_str().unwrap(), "main"]);
@@ -370,4 +372,61 @@ fn an_uppercase_head_is_written_lowercase_and_a_short_head_is_refused() {
 fn the_published_decision_cell_is_the_one_the_batch_row_uses() {
     let cell = crate::router_batch::go_decision_cell(1234, HEAD);
     assert!(go().line("D-9").contains(&format!("| {cell} |")));
+}
+
+#[test]
+fn a_decisions_file_without_a_final_newline_gets_the_row_on_its_own_line() {
+    let w = world_with(&format!("{HEADER}| D-1 | demo | first | op | |"));
+    let p = principal(&w, None);
+    let branch = GitDecisions {
+        repo: &w.work,
+        remote: "origin",
+        branch: "main",
+        path: "DECISIONS.md",
+        principal: &p,
+    };
+    let reader = KeeperReader {
+        python: &keeper_python,
+    };
+    let done = publish(&branch, &reader, &go(), &fresh, 1).unwrap();
+    assert_eq!(done.d_id, "D-2");
+    assert_eq!(
+        main_text(&w),
+        format!(
+            "{HEADER}| D-1 | demo | first | op | |\n{}\n",
+            go().line("D-2")
+        )
+    );
+}
+
+#[test]
+fn a_failed_push_is_refused_with_gits_message_and_not_retried_as_a_collision() {
+    let w = world();
+    g(
+        &w.work,
+        &[
+            "config",
+            "remote.origin.pushurl",
+            "/nonexistent/decisions.git",
+        ],
+    );
+    let p = principal(&w, None);
+    let branch = GitDecisions {
+        repo: &w.work,
+        remote: "origin",
+        branch: "main",
+        path: "DECISIONS.md",
+        principal: &p,
+    };
+    let reader = KeeperReader {
+        python: &keeper_python,
+    };
+    let err = publish(&branch, &reader, &go(), &fresh, 3).unwrap_err();
+    assert!(
+        err.starts_with("row refused: pushing the row branch"),
+        "{err}"
+    );
+    assert!(err.contains("nonexistent"), "{err}");
+    assert!(!err.contains("kept moving"), "{err}");
+    assert_eq!(p.merges.get(), 0);
 }

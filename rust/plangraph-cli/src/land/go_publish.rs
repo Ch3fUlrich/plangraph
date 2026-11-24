@@ -273,7 +273,15 @@ impl Decisions for GitDecisions<'_> {
         // Row-only: the text is the tip's text plus exactly one line, nothing else changes.
         let old = git::bytes(self.repo, &["show", &format!("{tip}:{}", self.path)])
             .map_err(Submit::Refused)?;
-        let added = text.strip_prefix(String::from_utf8_lossy(&old).as_ref());
+        let old = String::from_utf8_lossy(&old);
+        // A file without a final newline gets the separator newline in front of the row, nothing else.
+        let added = text.strip_prefix(old.as_ref()).and_then(|a| {
+            if old.is_empty() || old.ends_with('\n') {
+                Some(a)
+            } else {
+                a.strip_prefix('\n')
+            }
+        });
         if added.is_none_or(|a| a.lines().count() != 1 || !a.ends_with('\n')) {
             return Err(Submit::Refused("the change is not one appended row".into()));
         }
@@ -291,8 +299,12 @@ impl Decisions for GitDecisions<'_> {
             ],
         )
         .map_err(Submit::Refused)?;
+        // A failed push (credentials, rejected ref, unreachable remote) is no tip change: say what git said.
         if !pushed.status.success() {
-            return Err(Submit::Moved);
+            return Err(Submit::Refused(format!(
+                "pushing the row branch {pr_ref} failed: {}",
+                String::from_utf8_lossy(&pushed.stderr).trim()
+            )));
         }
         self.principal.merge(&pr_ref, tip)
     }
