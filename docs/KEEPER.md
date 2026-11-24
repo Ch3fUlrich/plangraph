@@ -158,7 +158,7 @@ worker that is not the recorded owner, a card whose observed state fails the liv
 | `grant_apply(p, name, project)` / `revoke_apply` / `apply_grants(p)` | router (`apply_grants`: router, or an l1 for its own) | KEEPER-PROJECT-SCOPED-L1-APPLY: the `apply_grants` table (principal, project) says which projects a role-l1 principal may batch-apply in; `pg grant-apply NAME PROJECT [--revoke\|--list]`. One key outside the granted projects (item, `depends_on`, `under`, `corrects`, `fixes`, target) refuses the whole batch naming it with `forbidden`; `rehome`/`set_kind`/dep ops stay router-only; every applied batch posts one `granted_apply` line (batch, source, sha256, ops_sha256, op count) to `routing` |
 | `close_on_decision(p, key, batch_ref)` | router only | **`review_tier='none'` items only (X7b)** — see "Legacy and decision closes" |
 | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
-| `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
+| `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`), except an item with a verified `commit`/`commit+ci` merge proof, whose claim waits for the close pass; `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
 | `audit_meta(p, project=None, stale_days=3)` | router (any project); l1 (own projects) | read-only plan-metadata audit: missing `description`/`estimate_h`/`done_criteria`/`owner` + stale claims. See "Plan metadata audit" |
 
 `python3 tools/names_backfill_dryrun.py SNAPSHOT.json [--json]` is the MODEL-NAMES dry run: it reads a plan snapshot
