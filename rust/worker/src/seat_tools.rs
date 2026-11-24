@@ -7,6 +7,7 @@
 //! `plugin`) refuses the seat instead of being ignored.
 
 use crate::opencode_events;
+use pg_worker_core::hosts::HostRegistry;
 use serde_json::{Map, Value, json};
 
 /// Every tool key the OpenCode config schema knows; all start denied.
@@ -44,7 +45,7 @@ pub const CHECKOUT_COMMANDS: [&str; 9] = [
     "python3 -m pytest *",
 ];
 
-/// Whether the reviewed repository may be seen outside the host.
+/// Whether the reviewed repository is public, by the hosts registry's `public_repos`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Privacy {
     Public,
@@ -52,16 +53,10 @@ pub enum Privacy {
 }
 
 impl Privacy {
-    /// Private unless the remote's host is one of `public_hosts`; an unparsable remote is private.
-    pub fn of_remote(remote: &str, public_hosts: &[&str]) -> Privacy {
-        let host = remote
-            .split_once("://")
-            .map(|(_, rest)| rest)
-            .or_else(|| remote.split_once('@').map(|(_, rest)| rest))
-            .map(|rest| rest.rsplit_once('@').map_or(rest, |(_, host)| host))
-            .and_then(|rest| rest.split(['/', ':']).next())
-            .unwrap_or("");
-        if !host.is_empty() && public_hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+    /// Public only for a repo id the hosts registry lists in `public_repos`; any other id,
+    /// including one the registry does not know, is private, so sharing stays disabled.
+    pub fn of_repo(registry: &HostRegistry, repo_id: &str) -> Privacy {
+        if registry.public_repos.contains(repo_id) {
             Privacy::Public
         } else {
             Privacy::Private

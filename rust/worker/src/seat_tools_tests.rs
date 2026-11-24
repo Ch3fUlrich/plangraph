@@ -1,5 +1,7 @@
 use super::*;
 
+const HOSTS_EXAMPLE: &str = include_str!("../../../docs/schemas/examples/hosts.example.json");
+
 const DENIED_EXTERNAL: &str =
     include_str!("../tests/fixtures/opencode/real-permission-denied-external.jsonl");
 
@@ -103,38 +105,16 @@ fn mcp_plugin_and_sharing_are_checked() {
 }
 
 #[test]
-fn privacy_comes_from_the_remote_host() {
-    let public = ["forge.test"];
-    // The user-at-host forms are built at run time so no literal looks like an address.
-    let at = '@';
-    let public_remotes = [
-        "https://forge.test/o/r.git".to_owned(),
-        format!("git{at}forge.test:o/r.git"),
-        format!("ssh://git{at}FORGE.test/o/r"),
-    ];
-    for remote in &public_remotes {
-        assert_eq!(
-            Privacy::of_remote(remote, &public),
-            Privacy::Public,
-            "{remote}"
-        );
-    }
-    for remote in [
-        "https://other.test/o/r",
-        "/srv/repos/r",
-        "",
-        "https://forge.test.other.test/o/r",
-    ] {
-        assert_eq!(
-            Privacy::of_remote(remote, &public),
-            Privacy::Private,
-            "{remote}"
-        );
-    }
-    assert_eq!(
-        Privacy::of_remote("https://forge.test/o/r", &[]),
-        Privacy::Private
-    );
+fn privacy_comes_from_the_registry_public_repos() {
+    let registry = HostRegistry::from_json_str(HOSTS_EXAMPLE).unwrap();
+    assert_eq!(Privacy::of_repo(&registry, "plangraph"), Privacy::Public);
+    // A repo the registry does not list, or does not know, is private: sharing stays off.
+    assert_eq!(Privacy::of_repo(&registry, "unlisted"), Privacy::Private);
+    assert_eq!(Privacy::of_repo(&registry, ""), Privacy::Private);
+    let mut unlisted: Value = serde_json::from_str(HOSTS_EXAMPLE).unwrap();
+    unlisted.as_object_mut().unwrap().remove("public_repos");
+    let registry = HostRegistry::from_json_str(&unlisted.to_string()).unwrap();
+    assert_eq!(Privacy::of_repo(&registry, "plangraph"), Privacy::Private);
 }
 
 #[test]
