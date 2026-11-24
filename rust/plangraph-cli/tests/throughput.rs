@@ -110,7 +110,11 @@ fn throughput_persists_both_baseline_days_in_landing_database() {
         &quota,
         json!([{
             "provider":"fixture","connection_id":"sample","window_key":"daily",
-            "created_at":"2026-11-21T11:00:00Z","remaining_percentage":70
+            "created_at":"2026-11-21T11:00:00Z","remaining_percentage":70,
+            "next_reset_at":"2026-11-22T00:00:00Z"
+        },{
+            "provider":"fixture:other","window_key":"weekly",
+            "created_at":"2026-11-21T11:30:00Z","remaining_percentage":40
         }])
         .to_string(),
     )
@@ -171,7 +175,16 @@ fn throughput_persists_both_baseline_days_in_landing_database() {
     assert_eq!(days[1]["accept_to_main_seconds"], 900.0);
     assert_eq!(report["writers"][1]["writer_active_share"], 0.5);
     assert_eq!(report["models"][0]["tokens_per_landed_commit"], 1200.0);
-    assert_eq!(report["quota"][0]["quota_headroom_percent"], 70.0);
+    let quota = report["quota"].as_array().unwrap();
+    let row = |account: &str| quota.iter().find(|r| r["account"] == account).unwrap();
+    assert_eq!(row("sample")["quota_headroom_percent"], 70.0);
+    assert_eq!(row("sample")["window"], "daily");
+    assert_eq!(row("sample")["reset_at"], "2026-11-22T00:00:00Z");
+    assert_eq!(row("other")["quota_headroom_percent"], 40.0);
+    assert!(
+        row("other")["reset_at"].is_null(),
+        "an unnamed reset stays unknown"
+    );
     let rows: (i64, i64) = connection
         .query_row(
             "SELECT (SELECT COUNT(*) FROM throughput_hourly), (SELECT COUNT(*) FROM landing)",
@@ -198,4 +211,135 @@ fn throughput_report_does_not_create_a_missing_landing_database() {
     assert_eq!(result.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&result.stderr).contains("landing database unavailable"));
     assert!(!db.exists());
+}
+
+fn dated(repo: &Path, date: &str) -> Command {
+    let mut command = git_command(repo);
+    command
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date);
+    command
+}
+
+#[test]
+fn a_train_of_six_parts_joins_six_part_heads() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path();
+    let bin = repo.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let git_path = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join("git"))
+        .find(|path| path.is_file())
+        .expect("git on PATH");
+    std::os::unix::fs::symlink(git_path.canonicalize().unwrap(), bin.join("git")).unwrap();
+    git(repo, &["init", "-q", "-b", "main"]);
+    let at = "2026-11-21T10:00:00Z";
+    output(dated(repo, at).args(["commit", "-q", "--allow-empty", "-m", "base"]));
+    git(repo, &["checkout", "-q", "-b", "train"]);
+    let mut heads = Vec::new();
+    for part in 1..=6 {
+        git(
+            repo,
+            &["checkout", "-q", "-b", &format!("part{part}"), "main"],
+        );
+        for step in 1..=2 {
+            output(dated(repo, at).args([
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &format!("part {part} step {step}"),
+            ]));
+        }
+        heads.push(git(repo, &["rev-parse", "HEAD"]).trim().to_owned());
+        git(repo, &["checkout", "-q", "train"]);
+        output(dated(repo, at).args([
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            &format!("train takes {part}"),
+            &format!("part{part}"),
+        ]));
+    }
+    git(repo, &["checkout", "-q", "main"]);
+    output(dated(repo, "2026-11-21T12:00:00Z").args([
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "land train",
+        "train",
+    ]));
+    let landed = git(repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    let db = repo.join("landing.sqlite3");
+    let connection = Connection::open(&db).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE landing(repo TEXT,landed_sha TEXT,train TEXT,parts TEXT,
+         build_started_at TEXT,landed_at TEXT,PRIMARY KEY(repo,landed_sha));",
+        )
+        .unwrap();
+    connection.execute(
+        "INSERT INTO landing VALUES('fixture/repo',?1,'t','[1,2,3,4,5,6]','2026-11-21T11:00:00Z','2026-11-21T12:00:00Z')",
+        [&landed],
+    ).unwrap();
+    let snapshot = repo.join("keeper.json");
+    fs::write(&snapshot, json!({"items":[]}).to_string()).unwrap();
+    let runs = repo.join("runs");
+    for (n, head) in heads.iter().enumerate() {
+        let dir = runs.join(format!("run-{n}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("record.json"), json!({
+            "run_id":format!("run-{n}"),"run_kind":"native-codex","host":"fixture","status":"completed",
+            "started":"2026-11-21T10:00:00Z","ended":"2026-11-21T11:00:00Z","final_head":head,
+            "review":{"verdict":"ACCEPT","head":head,"accepted_at":"2026-11-21T11:00:00Z"}
+        }).to_string()).unwrap();
+        fs::write(
+            dir.join("ledger.jsonl"),
+            "{\"model\":\"fixture-model\",\"tokens\":100}\n",
+        )
+        .unwrap();
+    }
+    let cli = |args: &[&str]| {
+        output(
+            Command::new(env!("CARGO_BIN_EXE_plangraph"))
+                .current_dir(repo)
+                .env("HOME", repo)
+                .env("PATH", &bin)
+                .env_remove("PLANGRAPH_ENV_FILE")
+                .env("PLANGRAPH_LANDING_DB", &db)
+                .env("PLANGRAPH_THROUGHPUT_RUNS", &runs)
+                .args(args),
+        )
+    };
+    cli(&[
+        "throughput",
+        "collect",
+        "fixture/repo",
+        "fixture",
+        "HEAD",
+        snapshot.to_str().unwrap(),
+        "2026-11-21T00:00:00Z",
+        "2026-11-22T00:00:00Z",
+    ]);
+    let rows: Vec<(String, i64, i64)> = connection
+        .prepare(
+            "SELECT head,commits,seconds FROM throughput_accept_part WHERE sha=?1 ORDER BY head",
+        )
+        .unwrap()
+        .query_map([&landed], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut expected: Vec<_> = heads.iter().map(|h| (h.clone(), 2, 3600)).collect();
+    expected.sort();
+    assert_eq!(rows, expected);
+    let report: Value =
+        serde_json::from_str(&cli(&["throughput", "report", "fixture/repo"])).unwrap();
+    assert_eq!(report["trains"][0]["accepted_parts"], 6, "{report}");
+    assert_eq!(
+        report["models"][0]["tokens_per_landed_commit"], 50.0,
+        "{report}"
+    );
 }
