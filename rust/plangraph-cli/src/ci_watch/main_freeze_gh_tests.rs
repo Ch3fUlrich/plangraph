@@ -91,6 +91,10 @@ fn the_effects_read_the_recorded_attempt_and_request_one_failed_job_rerun() {
     let d: Diagnosis = fx.diagnose(5, 1);
     assert_eq!(d.tests, vec!["flaky::test".to_owned()]);
     assert!(!d.incomplete);
+    assert_eq!(d.red.len(), 1);
+    assert_eq!((d.red[0].0.as_str(), d.red[0].1), ("rust", 11));
+    assert_eq!(d.red[0].2, super::classify::RedClass::Code);
+    assert!(d.excerpt.contains("flaky::test"));
     fx.request(5, Kind::RerunFailed).unwrap();
     assert_eq!(gh.verbs, vec![(5, "rerun-failed".to_owned())]);
 }
@@ -240,6 +244,7 @@ fn two_blocking_runs_with_the_same_diagnosis_have_distinct_fix_task_keys() {
     let d = Diagnosis {
         tests: vec!["same::test".into()],
         incomplete: false,
+        ..Default::default()
     };
     let (a, b) = (fx.fix_task_key(5, 0, &d), fx.fix_task_key(6, 0, &d));
     assert_ne!(a, b);
@@ -312,4 +317,34 @@ fn two_passes_never_send_the_same_record_twice() {
     );
     let r = &load_failures(dir.path()).unwrap()[0];
     assert!(r.claim.is_none() && r.delivered_to.as_deref() == Some("w1"));
+}
+
+#[test]
+fn the_main_fix_task_carries_the_class_job_and_log_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut gh = Recorded {
+        verbs: vec![],
+        latest: 1,
+    };
+    let mut fx = GhEffects {
+        gh: &mut gh,
+        repo: "o/r".into(),
+        dir: dir.path(),
+        define: |_: &mut Task| Ok(true),
+        close: |_: &str| Ok(()),
+    };
+    let d = fx.diagnose(5, 1);
+    fx.fix_task(5, 0, &d).unwrap();
+    let tasks = super::load_tasks(&dir.path().join("tasks.jsonl")).unwrap();
+    let task = tasks.values().next().unwrap();
+    assert_eq!((task.job.as_str(), task.job_id), ("rust", 11));
+    assert_eq!(
+        (task.class.as_str(), task.run_class.as_str()),
+        ("code", "code")
+    );
+    assert!(
+        task.excerpt.contains("flaky::test ... FAILED"),
+        "{}",
+        task.excerpt
+    );
 }
