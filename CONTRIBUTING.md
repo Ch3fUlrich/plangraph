@@ -278,11 +278,13 @@ Only the shared setup may use actions whose names contain `rust` or `toolchain`.
 Its upstream action is commit-pinned with an action-version comment; update that
 SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
-The UI job (`UI tests in headless Chromium`) installs the Chromium system packages in
-their own step with at most 3 tries and its own timeout, before the timed browser tests, and
-its job timeout covers every step running to its own limit.
-`python3 -m pytest -q tests/test_ci_ui_browser_deps.py` checks the step order, the retry bound and
-the job timeout; a workflow-only change selects it with the other CI regression tests.
+The UI job (`UI tests in headless Chromium`) installs the Chromium system packages before the
+timed browser tests: the package list comes from `playwright install-deps --dry-run`, the .deb
+files are cached by that list (`actions/cache`), and apt runs as root with at most 3 tries, each
+killed as a whole process group on its timeout, with `dpkg --configure -a` before each try. The
+third failure fails the job, and the job timeout covers every step running to its own limit.
+`python3 -m pytest -q tests/test_ci_ui_browser_deps.py` checks the step order, the cache key, the
+retry bound and the job timeout; a workflow-only change selects it with the other CI regression tests.
 
 ## Lanes
 
