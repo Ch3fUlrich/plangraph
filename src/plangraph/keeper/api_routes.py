@@ -416,7 +416,7 @@ def _close_merged_auto(store, principal, body, need):
         report = store.close_merged_auto(
             principal, project, require_seats=body.get("require_seats"),
             apply=apply, repos_only=repos_only, frozen=True,
-            limit=limit, after=after)
+            limit=limit, after=after, inventory=body.get("inventory", False))
         if watch:
             if report["scan_errors"] or report["next_after"] is not None:
                 raise Refused("evidence_unverified", "merged-open watcher scan incomplete")

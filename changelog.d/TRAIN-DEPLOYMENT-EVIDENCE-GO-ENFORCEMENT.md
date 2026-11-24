@@ -1,0 +1,1 @@
+- `plangraph deploy-evidence report|gate` joins the keeper's merged-not-deployed inventory, now also for completed items (`close_merged_auto` field `inventory`, keeper setting `deploy_inventory_done`), with the live unit and binary state of each host; `gate` blocks GO on a deployment pending for more than 24 hours unless a valid dated routing exception names its key.
