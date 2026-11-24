@@ -135,14 +135,14 @@ def install_go_credential(job_dir, source=None):
                 Path(str(temporary) + suffix).unlink(missing_ok=True)
 
 
-def review_seat_home(env, job_dir):
+def review_seat_home(env, job_dir, cwd=None):
     """Give a review seat its own HOME and config dir under ``job_dir``.
 
     The seat's HOME hides the user's profile, so cargo and the repository's pytest are put
     on its PATH first, from the launching user's home.
     """
     from plangraph.routing_support.claude_seat import review_tool_path
-    env['PATH'] = review_tool_path(env.get('PATH'), env.get('HOME'))
+    env['PATH'] = review_tool_path(env.get('PATH'), env.get('HOME'), cwd)
     env['HOME'] = job_dir
     config = os.path.join(job_dir, 'config')
     os.mkdir(config, 0o700)
