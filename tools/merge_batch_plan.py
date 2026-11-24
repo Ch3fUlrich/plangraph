@@ -411,7 +411,10 @@ def declared_hosts(active):
         try:
             if proc.returncode:
                 raise ValueError((proc.stderr.strip().splitlines() or ["refused"])[-1])
-            hosts = deploy_hosts(json.loads(proc.stdout))
+            item = json.loads(proc.stdout)
+            if not isinstance(item, dict) or not isinstance(item.get("key"), str) or not item["key"]:
+                raise ValueError("the reply is not the item")
+            hosts = deploy_hosts(item)
         except ValueError as exc:
             # A lookup that failed is not an absent declaration: a commit trailer must not stand in for it.
             raise MergeBatchError(f"deploy-plan failed: the Deploy-Hosts of {key} could not be read from the "
