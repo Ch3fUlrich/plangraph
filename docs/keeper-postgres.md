@@ -218,3 +218,18 @@ or env `PG_DSN` / `PG_SCHEMA`; the DSN is never printed or put in an error messa
 * Copy a snapshot, never a live database: stop the keeper (or copy the file with the SQLite backup API) first. Writes made
   to the source after the copy are not carried over.
 * The report is plain text (table, source rows, target rows, head); it holds no paths, hosts or secrets.
+
+## Keeper planning baseline
+
+Install the `pg-telemetry` binary alongside `plangraph`, then run
+`plangraph baseline --keeper-only [--since RFC3339]` on the keeper host.
+Set `PG_TELEMETRY_DSN_FILE` to the private reader DSN file and `PG_SCHEMA`
+to the keeper schema if it differs from `keeper`. The reader needs SELECT
+on the report columns of items, edges and events. The reports share one
+repeatable-read, read-only transaction and a single timestamp. The optional
+window applies to event counts. Readiness and fanout use the full graph.
+
+The PostgreSQL fixture runs with
+`cargo test -p pg-telemetry --features postgres-tests` from `rust`.
+Set `PG_TELEMETRY_TEST_DSN` to a disposable PostgreSQL database for fixture
+setup. The fixture switches to a restricted reader to run the report.
