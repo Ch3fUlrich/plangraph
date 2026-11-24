@@ -138,6 +138,8 @@ fn decode_runs(
             let member = find(&key).ok_or("writer_item_missing")?;
             run.files.extend(decode_task(member)?.files);
         }
+        let mut seen = std::collections::BTreeSet::new();
+        run.files.retain(|file| seen.insert(file.clone()));
     }
     Ok(runs)
 }
@@ -359,6 +361,41 @@ mod tests {
         let ready =
             json!({"items":[{"key":"plangraph:OTHER","note":"files: [\"src/shared.rs\"]"}]});
         assert!(pick(&ready, &rs, &Policy::default()).is_none());
+    }
+    #[test]
+    fn a_batch_run_holds_the_files_and_keys_of_every_member() {
+        let data = json!({"runs":[{"run_id":"run-b","item_key":null,"host":"dell","status":"running","role":"implement"}]});
+        let snapshot = json!({"items":[
+            {"key":"plangraph:ALPHA-1","state":"claimed","note":"files: [\"src/a.rs\"]"},
+            {"key":"plangraph:GAMMA-1","state":"claimed","note":"files: [\"src/g.rs\"]"}]});
+        let receipts = vec![json!({"run_id":"run-b","item_key":"plangraph:ALPHA-1",
+            "item_keys":["plangraph:ALPHA-1","plangraph:GAMMA-1"],"files":["src/a.rs","src/g.rs"]})];
+        let runs = decode_runs(&data, &json!({"items":[]}), &snapshot, &receipts).unwrap();
+        assert_eq!(
+            runs[0].item_keys,
+            ["plangraph:ALPHA-1", "plangraph:GAMMA-1"]
+        );
+        assert_eq!(runs[0].files, ["src/a.rs", "src/g.rs"]);
+        let by_card = json!({"runs":[{"run_id":"run-c","item_key":null,"host":"dell","status":"running",
+            "role":"implement","card":{"item_key":"plangraph:ALPHA-1","item_keys":["plangraph:ALPHA-1","plangraph:GAMMA-1"]}}]});
+        let from_card = decode_runs(&by_card, &json!({"items":[]}), &snapshot, &[]).unwrap();
+        assert_eq!(from_card[0].files, ["src/a.rs", "src/g.rs"]);
+        // A member's file, and the member itself, are both excluded; unrelated work is not.
+        let shares_member_file = json!({"key":"plangraph:DELTA-1","note":"files: [\"src/g.rs\"]"});
+        let is_member = json!({"key":"plangraph:GAMMA-1","note":"files: [\"src/other.rs\"]"});
+        let free = json!({"key":"plangraph:EPSILON-1","note":"files: [\"src/e.rs\"]"});
+        for excluded in [shares_member_file, is_member] {
+            let ready = json!({"items":[excluded]});
+            assert!(
+                pick(&ready, &runs, &Policy::default()).is_none(),
+                "{excluded}"
+            );
+        }
+        let ready = json!({"items":[free]});
+        assert_eq!(
+            pick(&ready, &runs, &Policy::default()).unwrap().key,
+            "plangraph:EPSILON-1"
+        );
     }
     #[test]
     fn corrupt_receipts_do_not_stall_and_only_live_ticks_prune_terminal_receipts() {

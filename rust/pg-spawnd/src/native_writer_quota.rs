@@ -77,6 +77,16 @@ pub(crate) fn from_error(error: &str) -> Option<Limit> {
     error.strip_prefix(PREFIX).and_then(classify)
 }
 
+/// Drop the fields a quota stop wrote, before the run is reopened: a resumed run reports its
+/// own outcome, never the stop it resumed from.
+pub(crate) fn clear(record: &mut Value) {
+    if let Some(fields) = record.as_object_mut() {
+        for key in ["quota_limited", "quota_record_error"] {
+            fields.remove(key);
+        }
+    }
+}
+
 /// "Nov 27th, 2026 8:24 PM" in the host's local zone.
 fn epoch(text: &str) -> Option<i64> {
     let words: Vec<String> = text

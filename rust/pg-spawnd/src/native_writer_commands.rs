@@ -150,9 +150,10 @@ pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
     let fields = resumed
         .as_object_mut()
         .ok_or("invalid saved writer record")?;
-    for obsolete in ["ended", "exit_code", "reason", "result"] {
+    for obsolete in ["ended", "exit_code", "reason", "result", "status_line"] {
         fields.remove(obsolete);
     }
+    native_writer::quota::clear(&mut resumed);
     resumed["status"] = json!("running");
     execute_request(&request, resumed)
 }
@@ -276,6 +277,7 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
     ] {
         fields.remove(key);
     }
+    native_writer::quota::clear(&mut record);
     mark_process(&mut record);
     host.save(&record)?;
     Ok(native_writer::run_resume(

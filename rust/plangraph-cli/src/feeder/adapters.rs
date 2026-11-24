@@ -233,7 +233,9 @@ impl<T: Transport> Launch for Adapters<'_, T> {
                 .as_str()
                 .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
                 .is_some_and(|at| at < now);
-            if name == key
+            let project = |k: &str| k.split_once(':').map(|(p, _)| p.to_owned());
+            if project(name) != project(key)
+                || name == key
                 || batch.iter().any(|k| k == name)
                 || other["state"] != "claimed"
                 || lapsed
@@ -431,6 +433,7 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
             {"key":"plangraph:LAPSED","state":"claimed","lease_until":past,"note":"files: [\"src/a.rs\"]"},
             {"key":"plangraph:OPEN","state":"open","note":"files: [\"src/a.rs\"]"},
             {"key":"plangraph:ELSEWHERE","state":"claimed","lease_until":future,"note":"files: [\"src/z.rs\"]"},
+            {"key":"autoos:FOREIGN","state":"claimed","lease_until":future,"note":"files: [\"src/a.rs\"]"},
             {"key":"plangraph:THEIRS","state":"claimed","lease_until":future,"note":"files: [\"src/a.rs\"]"}]});
         let mut a = Adapters {
             keeper: Snapshot(snapshot),
