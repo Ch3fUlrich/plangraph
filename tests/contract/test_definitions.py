@@ -153,7 +153,8 @@ def test_lift_operator_gate_is_router_only_and_needs_the_release_value(kp):
     err(kp.post("lift_operator_gate", "router", dict(body, decision="approve")), 400, "validation")
     err(kp.post("lift_operator_gate", "router", dict(body, decision_id="x")), 400, "validation")
     err(kp.post("lift_operator_gate", "router", dict(body, extra=1)), 400, "validation")
-    err(kp.post("lift_operator_gate", "router", body), 400, "evidence_unverified")
+    err(kp.post("lift_operator_gate", "router", dict(body, decision_id="D-999999")), 400, "evidence_unverified")
+    err(kp.post("lift_operator_gate", "router", body), 400, "bad_state")   # D-1 is recorded; a lane has no gate
 
 
 def test_rehome_moves_an_open_item_and_leaves_an_alias(kp):
