@@ -17,6 +17,7 @@ piped text format (name, bucket, elapsed, url) and refuses --json.
 import json
 import shutil
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -423,7 +424,9 @@ args = sys.argv[1:]
 if args[:2] != ["land-train", "deploy-plan"]:
     sys.exit(subprocess.call([os.environ["MAIN_STATE_STUB"], *args]))
 flags = dict(zip(args[slice(2, None, 2)], args[slice(3, None, 2)]))
-record = dict(argv=args, spans=json.load(open(flags["--spans"])))
+units_dir = flags["--probe-cmd"].split()[-1]
+record = dict(argv=args, spans=json.load(open(flags["--spans"])), declared=json.load(open(flags["--declared"])),
+              units={n: open(os.path.join(units_dir, n)).read() for n in os.listdir(units_dir)})
 open(os.environ["DEPLOY_PLAN_CALL"], "w").write(json.dumps(record))
 if os.path.exists(os.environ["DEPLOY_PLAN_FAIL"]):
     print("plan exploded", file=sys.stderr)
@@ -461,7 +464,9 @@ def test_go_req_carries_the_deploy_plan_of_the_train_parts(env):
     flags = dict(zip(argv[slice(2, None, 2)], argv[slice(3, None, 2)]))
     assert flags["--registry"] == str(registry) and flags["--repo"] == st["worktree"]
     probe = flags["--probe-cmd"].split()
-    assert probe[1:] == ["host-sync", "--install-dry-run", "--registry", str(registry), "--repo", st["worktree"]]
+    assert probe[1:-1] == ["host-sync", "--install-dry-run", "--registry", str(registry), "--repo", st["worktree"],
+                           "--units"]
+    assert probe[-1].endswith("/deploy/systemd")
     # Each part is the range of its own commits: the merge's first parent to the part head.
     spans = {row["pr"]: row for row in call["spans"]}
     for rec in st["merged"]:
@@ -518,6 +523,8 @@ def test_go_req_runs_the_real_deploy_plan_for_a_unit_part_and_a_unitless_part(en
     unit = "[Service]\nEnvironmentFile=%h/.config/p/t.env\nExecStart=%h/.local/bin/train --pins ${PG_PINS}\n"
     st = go_ready(env, first_files={"deploy/systemd/train.service": unit}, first_trailer="\nDeploy: code", prs="1,2")
     assert [rec["pr"] for rec in st["merged"]] == [1, 2]  # PR 2 is the unitless part
+    # An uncommitted edit of the unit in the worktree must not change what the reported head needs.
+    (Path(st["worktree"]) / "deploy/systemd/train.service").write_text("[Service]\nExecStart=/bin/true\n")
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 0, result.stderr
     assert ("; deploy: none; NOT READY train.service@code parts #1 blocker plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-CODE "
@@ -548,3 +555,32 @@ def test_go_req_finds_the_hosts_registry_through_xdg_config_home(env):
     assert "; deploy: none; PLAN" in result.stdout and "unchecked" not in result.stdout
     call = json.loads((env.tmp / "call.json").read_text())["argv"]
     assert str(registry) in call
+
+
+def test_go_req_passes_the_item_declared_hosts_and_the_unit_sources_of_the_head(env, monkeypatch):
+    from test_merge_batch_land import go_ready
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import merge_batch_plan
+    from merge_batch_util import active_train
+
+    deploy_fixture(env, "deploy: none\n")
+    unit = "[Service]\nExecStart=%h/.local/bin/train\n"
+    st = go_ready(env, first_files={"deploy/systemd/train.service": unit}, prs="1")
+    # An uncommitted edit and an untracked unit are not part of the reported head.
+    (Path(st["worktree"]) / "deploy/systemd/train.service").write_text("edited\n")
+    (Path(st["worktree"]) / "deploy/systemd/extra.service").write_text("untracked\n")
+    for key, value in env.env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: True)
+    monkeypatch.setattr(merge_batch_plan, "file_deploy_blockers", lambda path: None)
+    item = {"description": "Why: x\nDeploy-Hosts: alpha, beta"}
+    monkeypatch.setattr(merge_batch_plan, "keeper_cli", lambda *a: types.SimpleNamespace(
+        returncode=0, stdout=json.dumps(item), stderr=""))
+    monkeypatch.setattr(merge_batch_plan, "git", lambda *a, cwd=None, **k: types.SimpleNamespace(
+        stdout=env.git(*a, cwd=cwd) + "\n"))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    assert merge_batch_plan.deploy_report(st, active_train(st, st["head"])).startswith("deploy: none")
+    call = json.loads((env.tmp / "call.json").read_text())
+    assert call["declared"] == {"plangraph:ITEM-A": ["alpha", "beta"]}
+    assert call["units"] == {"train.service": unit}

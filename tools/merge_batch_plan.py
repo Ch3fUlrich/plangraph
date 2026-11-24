@@ -388,26 +388,79 @@ def plangraph_binary():
     return os.environ.get("PLANGRAPH_BIN") or shutil.which("plangraph")
 
 
+def keeper_cli(*args):
+    """Run ``python -m plangraph.keeper.cli ARGS`` against this checkout's sources; returns the completed process."""
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[1] / "src"),
+                                                                      os.environ.get("PYTHONPATH")])))
+    return subprocess.run([sys.executable, "-m", "plangraph.keeper.cli", *args], capture_output=True, text=True,
+                          timeout=120, check=False, env=env)
+
+
+def declared_hosts(active):
+    """``{item key: [hosts]}`` from the ``Deploy-Hosts:`` lines of the keeper items the active parts carry.
+
+    Without a keeper, or for an item it does not know, nothing is declared and the commits' ``Deploy:`` trailers
+    name the hosts."""
+    if not keeper_landing_configured():
+        return {}
+    from plangraph.keeper.evidence import deploy_hosts
+
+    declared = {}
+    for key in sorted({key for rec in active["merged"] for key in rec.get("items", [])}):
+        proc = keeper_cli("show", key, "--json")
+        if proc.returncode:
+            continue
+        try:
+            hosts = deploy_hosts(json.loads(proc.stdout))
+        except ValueError:
+            continue
+        if hosts:
+            declared[key] = hosts
+    return declared
+
+
+def export_units(wt, head, into):
+    """Write ``deploy/systemd`` of the commit ``head`` below ``into``: the unit sources of the reported head,
+    not the files that happen to be in the worktree."""
+    import io
+    import tarfile
+
+    archive = subprocess.run(["git", "archive", "--format=tar", head, "deploy/systemd"], cwd=wt,
+                             capture_output=True, check=False)
+    if archive.returncode:
+        raise MergeBatchError("deploy-plan failed: cannot read deploy/systemd of the batch head")
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+        for member in tar.getmembers():
+            if member.isfile() and member.name.startswith("deploy/systemd/") and ".." not in member.name:
+                target = Path(into) / member.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(tar.extractfile(member).read())
+    return Path(into) / "deploy" / "systemd"
+
+
 def deploy_report(st, active):
     """The deploy part of the GO-REQ: ``plangraph land-train deploy-plan`` over the train parts, with the host
     install dry run as the probe. A refused target is listed with its blocker item key and its MISSING lines; the
-    blocker items are filed with ``pg define --file`` when the keeper is configured."""
+    blocker items are filed with ``pg define --file`` when the keeper is configured. The unit sources are those
+    of the reported head, and the hosts are the items' ``Deploy-Hosts:`` declarations before the commit trailers."""
     registry = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph" / "hosts.json"
     if not registry.is_file():
         return "deploy: unchecked (no hosts registry)"
     binary, wt = plangraph_binary(), st["worktree"]
     if not binary:
         raise MergeBatchError("deploy-plan failed: the plangraph binary is not on PATH (set PLANGRAPH_BIN)")
-    if any(re.search(r"\s", str(value)) for value in (binary, registry, wt)):
-        raise MergeBatchError("deploy-plan failed: the binary, registry and worktree paths must not hold spaces")
     spans = [{"pr": rec["pr"], "from": git("rev-parse", f"{rec['merge']}^1", cwd=wt).stdout.strip(),
               "head": rec["head"]} for rec in active["merged"]]
     with tempfile.TemporaryDirectory() as tmp:
-        spans_file, blockers = Path(tmp) / "spans.json", Path(tmp) / "blockers.json"
+        units = export_units(wt, active["head"], tmp)
+        if any(re.search(r"\s", str(value)) for value in (binary, registry, wt, units)):
+            raise MergeBatchError("deploy-plan failed: the binary, registry, worktree and temp paths must not hold spaces")
+        spans_file, blockers, declared = Path(tmp) / "spans.json", Path(tmp) / "blockers.json", Path(tmp) / "declared.json"
         spans_file.write_text(json.dumps(spans))
-        probe = f"{binary} host-sync --install-dry-run --registry {registry} --repo {wt}"
+        declared.write_text(json.dumps(declared_hosts(active)))
+        probe = f"{binary} host-sync --install-dry-run --registry {registry} --repo {wt} --units {units}"
         argv = [binary, "land-train", "deploy-plan", "--repo", wt, "--spans", str(spans_file), "--registry",
-                str(registry), "--probe-cmd", probe, "--blockers-out", str(blockers)]
+                str(registry), "--probe-cmd", probe, "--declared", str(declared), "--blockers-out", str(blockers)]
         try:
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=600, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -431,14 +484,18 @@ def deploy_report(st, active):
 
 
 def file_deploy_blockers(path):
-    """File the blocker items of refused deploy targets with ``pg define --file``; a failure is reported, not fatal."""
+    """File the blocker items of refused deploy targets with ``pg define --file``, one item at a time so that a
+    blocker the keeper already holds (a retry of the same GO-REQ) never rejects a new one. A failure is reported,
+    not fatal."""
     if not keeper_landing_configured():
         print("deploy blocker items not filed: the keeper is not configured", file=sys.stderr)
         return
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[1] / "src"),
-                                                                      os.environ.get("PYTHONPATH")])))
-    proc = subprocess.run([sys.executable, "-m", "plangraph.keeper.cli", "define", "--file", str(path)],
-                          capture_output=True, text=True, timeout=120, check=False, env=env)
-    if proc.returncode:
-        print(f"deploy blocker items not filed: {(proc.stderr.strip().splitlines() or ['no output'])[-1]}",
-              file=sys.stderr)
+    items = json.loads(Path(path).read_text()).get("items", [])
+    with tempfile.TemporaryDirectory() as tmp:
+        for index, item in enumerate(items):
+            one = Path(tmp) / f"item-{index}.json"
+            one.write_text(json.dumps({"items": [item]}))
+            proc = keeper_cli("define", "--file", str(one))
+            reason = (proc.stderr.strip().splitlines() or ["no output"])[-1]
+            if proc.returncode and "already exists" not in proc.stderr:
+                print(f"deploy blocker item {item.get('key')} not filed: {reason}", file=sys.stderr)
