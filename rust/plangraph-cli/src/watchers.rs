@@ -236,6 +236,8 @@ pub fn cli(args: &[String]) -> Option<i32> {
             for row in rows {
                 println!("{row}");
             }
+            // The orchestrator reads what is not in production on the same page as its watchers.
+            println!("{}", crate::deploy_manifest::report::digest_line_local());
             0
         }),
         _ => Err(io::Error::other(
