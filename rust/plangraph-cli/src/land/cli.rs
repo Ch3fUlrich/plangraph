@@ -10,6 +10,7 @@ use std::process::Command;
 
 const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
+  plangraph land-train plan --main SHA --trains FILE | combine --manifests A,B,... --out FILE | remerge --repo DIR --manifest FILE --main SHA --parts FILE --out FILE [--branch NAME]\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
@@ -132,7 +133,7 @@ pub fn adopted_from_log(path: &str, build: &str) -> Result<Vec<Adopted>, String>
     Ok(ledger.adopted(build))
 }
 
-fn write(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
+pub(super) fn write(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     std::fs::write(
         path,
         serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?,
@@ -140,7 +141,7 @@ fn write(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
+pub(super) fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
     serde_json::from_slice(&std::fs::read(path).map_err(|e| format!("{path}: {e}"))?)
         .map_err(|e| format!("{path}: {e}"))
 }
@@ -200,6 +201,9 @@ pub(super) fn run_inner(
             Path::new(&need("heads")?),
         )?;
         return Ok(Vec::new());
+    }
+    if let "plan" | "combine" | "remerge" = cmd.as_str() {
+        return super::driver_cli::run(cmd, &flags);
     }
     let parts: Vec<PartIn> = read(&need("parts")?)?;
     let protected: Vec<String> = flags
