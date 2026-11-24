@@ -88,6 +88,8 @@ class VerbsMixin:
     def _claimant_evidence(self, principal, key, epoch, kind, ref, now, receipt):
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
+        if item["state"] == "open" and kind == "deploy":
+            return self._merged_open_deploy_evidence(principal, item, epoch, ref, now)
         if item["state"] != "claimed":
             raise Refused("bad_state", f"{key} is {item['state']}, not claimed")
         self._actor_or_delegate(principal, item)
@@ -112,7 +114,41 @@ class VerbsMixin:
             record({"result": "ok", "reply": reply})
             return reply
 
-    def _record_evidence(self, principal, item, kind, ref, now, result):
+    def _merged_open_deploy_evidence(self, principal, item, epoch, ref, now):
+        """Deploy evidence on an open item whose Plan-Item commit is on the default branch.
+
+        The item's code is merged, so a claim is refused as stale; this door lets the
+        principal that could claim it attach the deploy proof without ``force_stale``.
+        The ``evidence_added`` event carries ``merged_open`` (the commit) as the audit; claim and staleness are untouched.
+        """
+        key = item["key"]
+        self._require_role(principal, "l1", "worker", "phase-worker")
+        if isinstance(principal, auth.RunPrincipal):
+            raise Refused("forbidden", "a run token is bound to a claim; an open item has none")
+        self._require_project(principal, item["project"])
+        self._epoch_ok(item, epoch)
+        # The claim guard's trailer lookup (qualified trailers of other scanned repositories
+        # count); a decision-only delivery names no Plan-Item commit, so it does not.
+        with timing.outside_request_lock():
+            indexes = self._work_indexes({item["project"]}, fresh=True)
+        commits = self._indexed_trailer_work(indexes, key, item["project"], trailers_only=True)["commits"]
+        if not commits:
+            raise Refused("bad_state", f"{key} is open, not claimed, and has no"
+                          " Plan-Item commit on the default branch")
+        result = self._verify_evidence(item, "deploy", ref, now)
+        with self._write():
+            # The lookups above ran unlocked: a revoke or a scope change meanwhile ends this door.
+            self._check_principal(principal)
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            self._epoch_ok(fresh, epoch)
+            if fresh["state"] != "open":
+                raise Refused("conflict", f"{key} is {fresh['state']}, not open")
+            self._guarded_touch(key, ("open",), epoch)
+            return self._record_evidence(principal, fresh, "deploy", ref, now, result,
+                                         merged_open=commits[0]["sha"])
+
+    def _record_evidence(self, principal, item, kind, ref, now, result, *, merged_open=None):
         self.conn.execute(
             "INSERT INTO evidence(key,epoch,kind,ref,verified,detail,at)"
             " VALUES(?,?,?,?,?,?,?)",
@@ -120,7 +156,8 @@ class VerbsMixin:
              1 if result.ok else 0, result.detail, self._iso(now)))
         self._append(principal, item["key"], "evidence_added",
                      {"kind": kind, "ref": result.ref or ref or {},
-                      "verified": bool(result.ok), "detail": result.detail}, now)
+                      "verified": bool(result.ok), "detail": result.detail,
+                      **({"merged_open": merged_open} if merged_open else {})}, now)
         return {"key": item["key"], "kind": kind, "verified": bool(result.ok),
                 "detail": result.detail, "ref": result.ref or ref or {}}
 
