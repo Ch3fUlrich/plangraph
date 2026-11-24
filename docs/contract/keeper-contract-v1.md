@@ -36,7 +36,8 @@ must not rely on it and a new implementation need not copy it.
   letters, digits, periods, underscores, or hyphens. Repeating the same keyed
   request with the same credential returns its committed result. Using that key
   for a different request returns `409 conflict`.
-* `GET /v1/health` is the only open route: `200 {"status":"ok"}`.
+* `GET /v1/health` is the only open route: `200 {"status":"ok","claim_preflight_s":N}`;
+  `claim_preflight_s` (seconds) is the keeper's claim budget, which the CLI adds a margin to for claims.
 * Timestamps are UTC ISO-8601 with second resolution and a `Z` suffix
   (`2030-01-31T12:00:00Z`). Keys are `project:ID`.
 

@@ -10,7 +10,9 @@ from contract_world import err, make_plan, need, ok, uid
 
 def test_health_is_open_and_get_only(kp):
     body = ok(kp.get("/v1/health"), "Health")
-    assert body == {"status": "ok"}
+    assert body["status"] == "ok"
+    assert set(body) <= {"status", "claim_preflight_s"}
+    assert body.get("claim_preflight_s", 1) > 0
 
 
 def test_missing_or_unknown_token_is_401_forbidden(kp):
