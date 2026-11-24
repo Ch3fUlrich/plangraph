@@ -218,3 +218,55 @@ fn an_overlap_reason_is_refused_once_the_part_has_waited_its_bound_whatever_was_
     record(&mut m, 1, Disposition::Overlap { with: 0, waited: 0 });
     assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
 }
+
+#[test]
+fn an_overlap_reason_must_carry_the_wait_the_selection_captured() {
+    let specs = vec![spec(1, None), spec(1, None)];
+    let mut m = Model::new(policy(9, 5, 0, Order::Oldest), specs);
+    register_all(&mut m, [0, 1]);
+    ok(&mut m, Event::Tick);
+    ok(&mut m, Event::Select);
+    assert_eq!(
+        m.left_out(0),
+        [(1, Disposition::Overlap { with: 0, waited: 1 })]
+    );
+    assert_eq!(verify(&mut m, 1), Ok(Outcome::Accepted));
+    // The part had waited 1 when the train was cut: a record of 0 is not what the selection saw.
+    record(&mut m, 1, Disposition::Overlap { with: 0, waited: 0 });
+    assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
+    record(&mut m, 1, Disposition::Overlap { with: 0, waited: 1 });
+    assert_eq!(verify(&mut m, 1), Ok(Outcome::Accepted));
+}
+
+#[test]
+fn under_policy_a_an_overlap_reason_is_refused_for_a_part_that_was_already_due_at_the_cut() {
+    // Parts 1 and 2 overlap; a part left out once is due. At the second cut part 2 is left out at the
+    // target, not for overlap, so a record that says it was deferred for overlap is not true.
+    let specs = vec![spec(1, None), spec(2, None), spec(2, None)];
+    let mut p = policy(1, 200, 0, Order::Count);
+    p.due_after = 1;
+    let mut m = Model::new(p, specs);
+    register_all(&mut m, 0..3);
+    ok(&mut m, Event::Select);
+    assert_eq!(m.train_parts(0), [0]);
+    land(&mut m, 0);
+    ok(&mut m, Event::Select);
+    assert_eq!(m.train_parts(1), [1]);
+    assert_eq!(m.left_out(1), [(2, Disposition::Target)]);
+    assert_eq!(
+        ok(&mut m, Event::VerifyLeftOut { train: 1, part: 2 }),
+        Outcome::Accepted
+    );
+    ok(
+        &mut m,
+        Event::RecordLeftOut {
+            train: 1,
+            part: 2,
+            disposition: Disposition::Overlap { with: 1, waited: 0 },
+        },
+    );
+    assert_eq!(
+        m.apply(Event::VerifyLeftOut { train: 1, part: 2 }),
+        Err(Denied::Disposition)
+    );
+}

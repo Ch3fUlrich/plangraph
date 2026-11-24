@@ -19,7 +19,8 @@ impl Model {
     }
 
     /// Main moved by anything but the landing of the predecessor: no candidate is on main's tip any more.
-    pub(crate) fn bump_main(&mut self) {
+    pub(crate) fn bump_main(&mut self, paths: u16) {
+        self.moves.push(paths);
         self.main += 1;
         self.discard_specs(None);
     }

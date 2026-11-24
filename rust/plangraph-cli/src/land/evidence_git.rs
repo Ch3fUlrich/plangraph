@@ -17,8 +17,9 @@ fn paths_between(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, S
 }
 
 /// Paths any commit of `from..to` touched: every commit that brought a change in, and a merge by what it
-/// changed against its first parent (main as it was). A path touched and reverted still counts, which two
-/// endpoint trees would miss, and what main already held before `from` does not.
+/// changed against all its parents (a conflict resolution, an evil merge): what a merge merely carries over
+/// from one side, main's own history or a side branch that synced main, is not a touch of its own. A path
+/// touched and reverted still counts, which two endpoint trees would miss.
 fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, String> {
     let range = format!("{from}..{to}");
     let list = |kind: &str, diff: &str| {
@@ -38,7 +39,7 @@ fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<Stri
         )
     };
     let commits = list("--no-merges", "--diff-merges=off")?;
-    let merges = list("--merges", "--diff-merges=first-parent")?;
+    let merges = list("--merges", "--diff-merges=dense-combined")?;
     Ok(commits
         .lines()
         .chain(merges.lines())
@@ -47,10 +48,16 @@ fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<Stri
         .collect())
 }
 
-/// Whether `new_head` is a rewrite of `old_head`: a different commit that does not contain it. A commit on
-/// top of the old head, or a merge of main into it, is not a rebase.
-pub fn was_rebased(dir: &Path, old_head: &str, new_head: &str) -> Result<bool, String> {
-    Ok(old_head != new_head && !git::is_ancestor(dir, old_head, new_head)?)
+/// Whether `new_head` is a rebase of the evidence's head: history rewritten (it does not contain the old
+/// head) onto a different base than the one the old head sat on. A commit on top of the old head, a merge
+/// of main into it and an amendment on the same base are not rebases.
+pub fn was_rebased(dir: &Path, old: &Evidence, main: &str, new_head: &str) -> Result<bool, String> {
+    if old.head == new_head || git::is_ancestor(dir, &old.head, new_head)? {
+        return Ok(false);
+    }
+    let was = git::out(dir, &["merge-base", &old.head, &old.base])?;
+    let now = git::out(dir, &["merge-base", new_head, main])?;
+    Ok(was != now)
 }
 
 /// The identity of the diff `from..to` that keeps every byte of content, whitespace included (`git

@@ -34,6 +34,8 @@ pub struct Model {
     pub(crate) main: u8,
     pub(crate) order: Vec<PartId>,
     pub(crate) lineages: u8,
+    /// The paths each move of main changed: entry `v` is the move from version `v` to `v + 1`.
+    pub(crate) moves: Vec<u16>,
     pub(crate) escalated: BTreeSet<u8>,
     /// Per lineage: retry runs started and the part count of its red train.
     pub(crate) runs: Vec<(u8, u8, u8)>,
@@ -59,6 +61,7 @@ impl Model {
             main: 0,
             order: Vec::new(),
             lineages: 0,
+            moves: Vec::new(),
             escalated: BTreeSet::new(),
             runs: Vec::new(),
         }

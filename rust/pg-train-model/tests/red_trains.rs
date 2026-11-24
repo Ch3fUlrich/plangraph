@@ -224,7 +224,7 @@ fn with_the_plain_per_group_bound_main_moves_restart_a_retry_train_without_end_w
     register_all(&mut m, [3]);
     assert_eq!(ok(&mut m, Event::StartRetry), Outcome::Train(1));
     for _ in 0..3 {
-        ok(&mut m, Event::MainMove);
+        ok(&mut m, Event::MainMove { paths: 0 });
         ok(&mut m, Event::Rebuild { train: 1 });
         start(&mut m, 1);
     }
