@@ -23,6 +23,8 @@ pub mod disk_runtime;
 #[cfg(target_os = "linux")]
 pub mod disk_watermark;
 pub mod events;
+#[cfg(all(unix, any(test, feature = "test-support")))]
+pub mod executable_test_support;
 pub mod exit_class;
 pub mod exports;
 pub mod finalize;

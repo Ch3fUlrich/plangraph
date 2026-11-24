@@ -63,8 +63,6 @@ fn local_base_fixture(dir: &Path) -> Host {
 #[cfg(unix)]
 #[test]
 fn host_reaps_a_writer_when_disk_crosses_the_stop_floor() {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempfile::tempdir().unwrap();
     let mut host = local_base_fixture(dir.path());
     host.cwd = host.repo.clone();
@@ -76,8 +74,7 @@ fn host_reaps_a_writer_when_disk_crosses_the_stop_floor() {
         ),
     ] {
         let path = dir.path().join(name);
-        fs::write(&path, script).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        pg_worker_core::executable_test_support::write_private_executable(&path, script);
     }
     let path = std::env::var_os("PATH").unwrap();
     host.tool_path = std::env::join_paths(

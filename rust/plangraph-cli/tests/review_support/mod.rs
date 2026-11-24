@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
@@ -218,10 +217,7 @@ while not (run / "release").exists() and time.monotonic() < deadline:
         log = log_path.display().to_string(),
         mode = mode
     );
-    fs::write(&script, body).unwrap();
-    let mut perms = fs::metadata(&script).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script, perms).unwrap();
+    pg_worker_core::executable_test_support::write_executable(&script, body);
     script
 }
 

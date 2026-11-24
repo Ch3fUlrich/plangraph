@@ -2369,6 +2369,7 @@ dependencies = [
 name = "pg-keeper-backup"
 version = "0.1.0"
 dependencies = [
+ "pg-worker-core",
  "sha2 0.10.9",
  "tempfile",
 ]

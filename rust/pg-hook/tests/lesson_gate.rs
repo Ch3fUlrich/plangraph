@@ -92,7 +92,7 @@ fn session_installer_builds_copies_and_checksums_the_hook() {
     let target = fixture.path().join("mock-build");
     fs::create_dir(&bin).unwrap();
     let cargo = bin.join("cargo");
-    fs::write(
+    pg_worker_core::executable_test_support::write_executable(
         &cargo,
         concat!(
             "#!/bin/sh\nset -eu\n",
@@ -100,9 +100,7 @@ fn session_installer_builds_copies_and_checksums_the_hook() {
             "mkdir \"$CARGO_TARGET_DIR/debug\"\n",
             "printf 'fixture binary' > \"$CARGO_TARGET_DIR/debug/pg-hook\"\n"
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let path = std::env::join_paths(
         std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
