@@ -43,9 +43,9 @@ import re
 
 from . import context_sources, timing
 from .errors import Refused
-from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets, live_evidence_missing
+from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
-from .evidence_types import valid_commit_ref
+from .evidence_types import live_evidence_missing, valid_commit_ref
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
