@@ -11,7 +11,8 @@ import pytest
 from plangraph.planner import legs as legs_module
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnRefused, plan_spawn
-from plangraph.routing_support.resolver import IMPUTED_DEFAULT_SD, rank_candidates, score_model
+from plangraph.planner.benchmarks import IMPUTED_DEFAULT_SD
+from plangraph.routing_support.resolver import rank_candidates, score_model
 
 NOW = 1_800_000_000.0
 DAY = 86400
