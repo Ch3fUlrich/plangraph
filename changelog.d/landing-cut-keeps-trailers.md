@@ -1,0 +1,1 @@
+Add `plangraph land-train cut` and `cut-check`: slices and landing branches are cut without `cherry-pick -x`, with `Picked-From:` and the router-granted `Gate-Edit:` inside the trailer block, and the commit gate must accept the range before the branch exists.
