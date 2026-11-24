@@ -195,3 +195,5 @@ requiring `pgrep`. Positive keeper detection takes precedence over a prior unit
 error in the HELD diagnostic. Headless user-bus failures and unavailable process
 tools remain inconclusive and HELD; no-process alone does not prove an unreadable
 user unit absent. See the state contract for the verified launch inventory.
+
+The hosts registry lookup of one host by id or alias is `fleet_sync.genconfig.host_config`; the spawner (`overflow`) and the harness resolver (`routing_support.clients`, `harness_bins` of the host) both read it there, so routing code never imports the spawner package.
