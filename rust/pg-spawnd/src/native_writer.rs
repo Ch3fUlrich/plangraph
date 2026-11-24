@@ -24,6 +24,11 @@ pub(crate) trait Driver {
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String>;
     /// Final gates on the accepted head, the commit-trailer gate included.
     fn gates(&mut self) -> Result<(), String>;
+    /// Reclaim the shared Cargo target from the host before the protected push. An `Err` is a
+    /// receipt for the operator, not a push refusal: the writer is never asked to fix it.
+    fn reclaim_target(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     /// Push the accepted head; returns the pushed ref, or None when no push is configured.
     fn push(&mut self, _head: &str) -> Result<Option<String>, String> {
         Ok(None)
@@ -77,7 +82,10 @@ pub(crate) fn run_resume(
     session: &str,
     prompt: &str,
 ) -> Value {
-    let result = writer_attempt(driver, &mut record, prompt, Some(session));
+    let result = match push_only(driver, &mut record) {
+        Some(result) => result,
+        None => writer_attempt(driver, &mut record, prompt, Some(session)),
+    };
     finish(driver, record, result)
 }
 
@@ -139,6 +147,9 @@ fn lifecycle(
     record: &mut Value,
     brief: &str,
 ) -> Result<i32, (i32, String)> {
+    if let Some(result) = push_only(driver, record) {
+        return result;
+    }
     admit_disk(driver)?;
     let mut saved_session = if record["landing_resume"] == true {
         Some(
@@ -313,6 +324,55 @@ fn final_gates(driver: &mut impl Driver, head: &str) -> Result<(), (i32, String)
     }
     Ok(())
 }
+/// Reclaim the shared target before the push. A refusal keeps the accepted head as `push_pending`
+/// with its receipt: a retry runs [`push_only`], never another writer turn or review.
+fn reclaim_for_push(
+    driver: &mut impl Driver,
+    record: &mut Value,
+    head: &str,
+) -> Result<(), (i32, String)> {
+    match driver.reclaim_target() {
+        Ok(()) => Ok(()),
+        Err(receipt) => {
+            record["push_pending"] = json!({
+                "head":head, "receipt":receipt, "at":chrono::Utc::now().to_rfc3339()
+            });
+            Err((
+                7,
+                format!("push_blocked_by_host: accepted head {head} kept for a push-only retry: {receipt}"),
+            ))
+        }
+    }
+}
+
+/// Retry of an accepted head whose push the host blocked: the same gates, reclaim and push, with
+/// no writer turn and no review. `None` when the record holds no pending push.
+fn push_only(driver: &mut impl Driver, record: &mut Value) -> Option<Result<i32, (i32, String)>> {
+    let head = record["push_pending"]["head"].as_str()?.to_owned();
+    Some((|| {
+        if driver.head().map_err(|e| (7, e))? != head {
+            return Err((
+                7,
+                format!("push_pending: HEAD is no longer the accepted head {head}"),
+            ));
+        }
+        final_gates(driver, &head)?;
+        reclaim_for_push(driver, record, &head)?;
+        let started = stage::now();
+        let pushed = driver.push(&head);
+        stage::record(record, "push", &head, started);
+        let target = pushed.map_err(|failure| {
+            push_failure(record, &head, &failure);
+            (7, format!("push failed on {head}: {failure}"))
+        })?;
+        record["pushed"] = json!(target);
+        record["status_line"] = json!("DONE");
+        record.as_object_mut().unwrap().remove("push_pending");
+        record["final_head"] = json!(head);
+        Ok(0)
+    })())
+}
+
 fn writer_attempt(
     driver: &mut impl Driver,
     record: &mut Value,
@@ -414,6 +474,7 @@ fn writer_attempt(
                 }
             }
             final_gates(driver, &head)?;
+            reclaim_for_push(driver, record, &head)?;
             let started = stage::now();
             let pushed = driver.push(&head);
             if !matches!(pushed, Ok(None)) {
@@ -423,6 +484,7 @@ fn writer_attempt(
                 Ok(target) => {
                     record["pushed"] = json!(target);
                     record["status_line"] = json!("DONE");
+                    record.as_object_mut().unwrap().remove("push_pending");
                     return Ok(0);
                 }
                 Err(failure) => {

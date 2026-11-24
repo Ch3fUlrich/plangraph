@@ -187,6 +187,59 @@ pub fn post_run_cargo(checkout: &Path) -> io::Result<Report> {
     )
 }
 
+/// Reclaim the shared target from the host before the protected push, under the exclusive lease.
+///
+/// `Ok` when the target is under `cap` or was brought under it. `Err` carries an actionable
+/// receipt when something blocks the reclaim: a target that holds a real `.git` entry or no cargo
+/// marker, a lease held by live pids, or a running build. The caller keeps the accepted head and
+/// retries only the push after the cause is gone.
+#[cfg(target_os = "linux")]
+pub fn reclaim_before_push(checkout: &Path, target: &Path, cap: u64) -> Result<Report, String> {
+    reclaim_before_push_using(checkout, target, cap, process_references)
+}
+
+#[cfg(target_os = "linux")]
+fn reclaim_before_push_using(
+    checkout: &Path,
+    target: &Path,
+    cap: u64,
+    processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
+) -> Result<Report, String> {
+    let fail = |error: io::Error| format!("shared cargo target {}: {error}", target.display());
+    let size = |path: &Path| match crate::disk_hygiene::scan(path) {
+        Ok((bytes, _)) => Ok(bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(fail(error)),
+    };
+    let before = size(target)?;
+    if before <= cap {
+        return Ok(Report::default());
+    }
+    let over = |bytes: u64| format!("{bytes} bytes against the cap of {cap} bytes");
+    if !crate::shared_target::identified(target) {
+        return Err(format!(
+            "cargo_target_not_reclaimed: {} holds {} but is not identified as a cargo target \
+             (a .git entry or no cargo marker): remove or move what is not cargo output, then retry \
+             the push of the accepted head",
+            target.display(),
+            over(before)
+        ));
+    }
+    let report = post_run_cargo_using(checkout, target, cap, processes).map_err(fail)?;
+    let after = size(target)?;
+    if after > cap {
+        let blockers = crate::cargo_cache::describe_holders(target);
+        return Err(format!(
+            "cargo_target_not_reclaimed: {} still holds {}{blockers}; skipped: [{}]: wait for the \
+             running build or the holder to finish, then retry the push of the accepted head",
+            target.display(),
+            over(after),
+            report.skipped.join("; ")
+        ));
+    }
+    Ok(report)
+}
+
 fn post_run_cargo_using(
     checkout: &Path,
     target: &Path,

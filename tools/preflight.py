@@ -20,7 +20,7 @@ from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_bi
 from pgtest import run_test_process as run_bounded_test, selected_count, test_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb,
+from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb, lease_holder_note,
                                           disk_free_gb, reclaim_cargo_target,
                                           running_disk_refusal, shared_cargo_target)
 from plangraph.spawner.overflow import available_memory_mb
@@ -536,7 +536,7 @@ def trim_shared_target(root):
             reclaim_cargo_target(target, cargo_target_cap_gb(), root,
                                  wait=TRIM_WAIT_SECONDS, identified=True)
     except (OSError, ValueError) as exc:
-        print(f"cargo target trim skipped: {exc}", flush=True)
+        print(f"cargo target trim skipped: {exc}{lease_holder_note(target)}", flush=True)
 
 
 def main(argv=None, root=None):
@@ -585,6 +585,8 @@ def _main(argv, root, cleanup):
         refusal = running_disk_refusal(root)
         if refusal:
             return 1, refusal + '\n'
+        # Every Cargo command here runs under this process's lease: a cargo shim on PATH reuses it.
+        command_env = dict(command_env, PLANGRAPH_CARGO_LEASE_HELD=command_env.get('CARGO_TARGET_DIR', ''))
         code, output = run(command, cwd, command_env)
         refusal = running_disk_refusal(root)
         return (1, output + refusal + '\n') if refusal else (code, output)

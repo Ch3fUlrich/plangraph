@@ -126,6 +126,18 @@ impl Host {
         );
         let mut command = self.command(codex);
         crate::native_writer_sandbox::apply_env(&mut command, std::env::vars_os(), &self.tool_path);
+        #[cfg(target_os = "linux")]
+        {
+            // `cargo` resolves to a link to this executable: one shared lease per Cargo command.
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let shim = pg_worker_core::cargo_command_lease::install_shim(
+                &directory.join("cargo-shim"),
+                &exe,
+            )
+            .map_err(|e| format!("cargo shim: {e}"))?;
+            let dir = shim.parent().unwrap_or(directory);
+            command.env("PATH", format!("{}:{}", dir.display(), self.tool_path));
+        }
         // Exec-level flags apply to fresh and resumed turns, including saved sessions
         // whose sandbox permissions were built from an earlier invocation.
         command
@@ -352,6 +364,24 @@ impl Driver for Host {
         let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
         self.checks().map(|_| ())
+    }
+    #[cfg(target_os = "linux")]
+    fn reclaim_target(&mut self) -> Result<(), String> {
+        if self.push_ref.is_none() {
+            return Ok(());
+        }
+        // The supervisor runs on the host outside the writer sandbox: the real Git directory of the
+        // target is visible here, and no per-command lease of the writer is held any more.
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
+        let target = pg_worker_core::cargo_cache::shared_cache_roots()
+            .map_err(|e| e.to_string())?
+            .remove(0);
+        pg_worker_core::disk_runtime::reclaim_before_push(
+            &self.cwd,
+            &target,
+            pg_worker_core::cargo_pool::configured_cap_bytes(),
+        )
+        .map(|_| ())
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         let Some(target) = self.push_ref.clone() else {

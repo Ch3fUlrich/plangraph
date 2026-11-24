@@ -88,6 +88,26 @@ fn writer_command_is_workspace_write_and_never_danger_full_access() {
                 "{roots:?} lacks {named:?}"
             );
         }
+        // `cargo` resolves to the lease shim first; the admitted tool path follows unchanged.
+        #[cfg(target_os = "linux")]
+        {
+            let path = command
+                .get_envs()
+                .find_map(|(key, value)| (key == "PATH").then_some(value).flatten())
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let shim = dir.path().join("run/cargo-shim");
+            assert_eq!(
+                path,
+                format!("{}:{}", shim.display(), host.tool_path),
+                "{path}"
+            );
+            assert_eq!(
+                std::fs::read_link(shim.join("cargo")).unwrap(),
+                std::env::current_exe().unwrap()
+            );
+        }
         assert_eq!(args.contains(&"resume".to_owned()), session.is_some());
         let global = &args[..args
             .iter()

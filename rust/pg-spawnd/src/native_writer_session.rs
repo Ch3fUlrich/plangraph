@@ -57,10 +57,9 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         .find_map(|(key, value)| (key == "CARGO_TARGET_DIR").then_some(value).flatten());
     let target = pg_worker_core::cargo_cache::require_writer_target(&host.cwd, configured)
         .map_err(|error| error.to_string())?;
+    // The `cargo` link on the child's PATH holds the shared lease per command, so the host can
+    // reclaim the target between commands and before the push.
     command.env("CARGO_TARGET_DIR", &target);
-    #[cfg(target_os = "linux")]
-    let cargo_lease =
-        pg_worker_core::cargo_cache::writer_lease(&target).map_err(|error| error.to_string())?;
     command
         .stdout(log.try_clone().map_err(|e| e.to_string())?)
         .stderr(log);
@@ -139,8 +138,6 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         let _ = child.kill();
         let _ = child.wait();
     }
-    #[cfg(target_os = "linux")]
-    drop(cargo_lease);
     #[cfg(target_os = "linux")]
     if let Ok(mut log) = fs::OpenOptions::new().append(true).open(&log_path) {
         let trim = pg_worker_core::disk_runtime::post_run_cargo(&host.cwd)
