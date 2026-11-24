@@ -8,9 +8,10 @@ use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest,
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID and writes the go-evidence receipt to --receipt-out FILE\n\
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR (--manifest FILE | --spans FILE) (--authorized-hosts A,B | --registry FILE) --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
+  plangraph land-train go-evidence --repo DIR --pr N --manifest FILE --receipt FILE --rows FILE --out FILE\n\
   plangraph land-train go-verify --evidence FILE\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
@@ -190,6 +191,9 @@ pub(super) fn run_inner(
     if cmd == "deploy-plan" {
         return super::deploy::run_cli(&flags);
     }
+    if cmd == "go-evidence" {
+        return super::go_evidence::run_cli(home, &flags);
+    }
     if cmd == "go-verify" {
         return super::go_verify::run_cli(&flags);
     }
@@ -290,7 +294,20 @@ pub(super) fn run_inner(
                         .map(PathBuf::from)
                         .unwrap_or_else(|| home.join(".config"))
                         .join("plangraph/keeper.json");
-                    packet.require_review(&config, &need("item")?, &need("review-run")?, python)?;
+                    let run_id = need("review-run")?;
+                    packet.require_review(&config, &need("item")?, &run_id, python)?;
+                    if let Some(path) = flags.get("receipt-out") {
+                        let digest = super::go_evidence::manifest_digest(
+                            &std::fs::read(need("manifest")?).map_err(|e| e.to_string())?,
+                        );
+                        let receipt = super::go_evidence::admit_receipt(
+                            &manifest.base,
+                            &manifest.train_sha,
+                            &digest,
+                            &run_id,
+                        );
+                        write(Path::new(path), &receipt)?;
+                    }
                 }
                 if cmd == "review" {
                     let run_id = packet.dispatch(&repo, &need("item")?, python)?;
