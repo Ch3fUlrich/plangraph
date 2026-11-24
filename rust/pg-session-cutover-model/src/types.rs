@@ -87,6 +87,9 @@ pub(crate) struct Evt {
     pub source: u8,
     pub stage: Stage,
     pub age: u8,
+    /// Occurrence order, from 1; receipts follow it, not the event's index.
+    pub order: u8,
+    pub bytes: u16,
     /// Also handed to today's wake path (takeover, rollback, or a role not yet switched).
     pub escalated: bool,
     /// A session's receipt covered it; only a receipt sets this.
@@ -210,6 +213,8 @@ pub enum Invariant {
     HandledWithoutAction,
     /// Req 1: with a live current session, no urgent event stays unreceived past the bound.
     UrgentBound,
+    /// Req 6: a digest, range header included, never exceeds its byte limit.
+    DigestOverBudget,
     /// Req 6: an event is received only by a session's receipt, never by a scan.
     ReceivedUnread,
     /// Req 4: no active role stays asleep with nothing armed or woken beyond one supervisor pass.

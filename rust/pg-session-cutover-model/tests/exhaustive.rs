@@ -3,7 +3,7 @@
 //! Bounds (also in docs/session-cutover-model.md): one role; Stop-hook cap 2 (1 in the
 //! two-recycle search, 9 in a named scenario); times are the production ones (scan 60 s, takeover 70 s, supervisor 20 s,
 //! bound 90 s, tick 10 s).
-//!   wake:     1 session, 3 events (2 urgent on 2 sources, 1 ordinary), no messages, 12 events deep (no heal, tool use or ready marker).
+//!   wake:     1 session, 3 events (2 urgent on 2 sources, 1 ordinary), no messages, 13 events deep (no heal, crash, tool use or ready marker).
 //!   recycle:  2 sessions (one recycle), 1 urgent event, 2 direct messages, 11 events deep.
 //!   recycles: 3 sessions (two recycles), 1 direct message, crashes, 16 events deep.
 //!   gates:    all gate and mode events with 1 urgent event and 2 sessions, 15 events deep.
@@ -36,7 +36,7 @@ fn wake_orderings_keep_every_invariant() {
     let mut p = params(vec![URGENT(0), URGENT(1), ORDINARY(0)], 0);
     p.sessions = 1;
     p.stop_cap = 2;
-    p.digest_cap = 1;
+    digest_of(&mut p, 1);
     let mut m = model(p);
     activate(&mut m);
     let alpha = alphabet_without(&m, |e| {
@@ -44,10 +44,13 @@ fn wake_orderings_keep_every_invariant() {
             || is_recycle(e)
             || is_message(e)
             || skip_cron_and_window(e)
-            || matches!(e, Event::Heal(_) | Event::ToolUse(_) | Event::MarkReady(_))
+            || matches!(
+                e,
+                Event::Heal(_) | Event::ToolUse(_) | Event::MarkReady(_) | Event::Crash(_)
+            )
     });
     let mut seen = [false; 8];
-    search(m, alpha, 12, |a, e, r, b| {
+    search(m, alpha, 13, |a, e, r, b| {
         let ok = r.is_ok();
         seen[0] |= ok && matches!(e, Event::WaiterFire(_));
         seen[1] |= ok && matches!(e, Event::Escalate(_));
@@ -242,6 +245,12 @@ fn each_defect_is_caught_by_its_invariant() {
         3
     )
     .contains(&Invariant::ReceivedUnread));
+    let mut digest = params(vec![URGENT(0), URGENT(0), URGENT(0)], 0);
+    digest_of(&mut digest, 2);
+    let reads =
+        |e: &Event| matches!(e, Event::Occur(_) | Event::Scan(_) | Event::Receive(_)) || is_turn(e);
+    assert!(finds(Defect::DigestUnbounded, digest, true, reads, 8)
+        .contains(&Invariant::DigestOverBudget));
     let cycle = |e: &Event| is_turn(e) || is_cycle(e);
     let recycle = || params(vec![], 0);
     assert!(

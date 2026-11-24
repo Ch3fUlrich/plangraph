@@ -8,6 +8,8 @@ impl Model {
             return Err(Denied::Guard);
         }
         ev.stage = Stage::Occurred;
+        self.occurred = self.occurred.saturating_add(1);
+        ev.order = self.occurred;
         // A role that is not switched keeps today's wake path, which carries it at once.
         ev.escalated = mode != Mode::Active;
         if mode != Mode::Active {
@@ -45,21 +47,40 @@ impl Model {
         Ok(())
     }
 
-    /// One receipt covers at most `digest_cap` receivable events, urgent first, oldest first;
-    /// the rest stay pending for the next receipt.
+    /// A receipt hands over every event of today's wake path (escalated: each one is its own
+    /// message), and of the digest as many as fit its byte limit after the range header, urgent
+    /// first and oldest first by occurrence; the rest stay pending for the next receipt.
     pub(crate) fn receive(&mut self) {
         let active = self.mode == Mode::Active;
+        let open = |e: &Evt| matches!(e.stage, Stage::Occurred | Stage::Detected);
+        for e in self.events.iter_mut().filter(|e| open(e) && e.escalated) {
+            (e.stage, e.seen) = (Stage::Received, true);
+        }
         let mut ids: Vec<usize> = (0..self.events.len())
-            .filter(|&i| {
-                let e = &self.events[i];
-                let open = matches!(e.stage, Stage::Occurred | Stage::Detected);
-                open && (e.escalated || (active && e.stage == Stage::Detected))
-            })
+            .filter(|&i| active && self.events[i].stage == Stage::Detected)
             .collect();
-        ids.sort_by_key(|&i| (self.events[i].class != Class::Urgent, i));
-        for i in ids.into_iter().take(usize::from(self.p.digest_cap)) {
-            self.events[i].stage = Stage::Received;
-            self.events[i].seen = true;
+        ids.sort_by_key(|&i| (self.events[i].class != Class::Urgent, self.events[i].order));
+        let (mut used, mut taken) = (HEADER_BYTES, Vec::new());
+        for i in ids {
+            let fits = used + self.events[i].bytes <= self.p.digest_bytes;
+            if !fits && !self.has(Defect::DigestUnbounded) {
+                break;
+            }
+            used += self.events[i].bytes;
+            taken.push(i);
+        }
+        if let (Some(first), Some(last)) = (
+            taken.iter().map(|&i| self.events[i].order).min(),
+            taken.iter().map(|&i| self.events[i].order).max(),
+        ) {
+            self.last_digest = Some(Digest {
+                events: taken.len() as u8,
+                bytes: used,
+                range: (first, last),
+            });
+        }
+        for i in taken {
+            (self.events[i].stage, self.events[i].seen) = (Stage::Received, true);
         }
     }
 
@@ -171,7 +192,13 @@ impl Model {
             && self.unattended()
             && self.supervisor_can_act()
             && u16::from(self.asleep_age) + 1 > u16::from(sup);
-        instant || self.receipt_due() || overdue || scans || asleep
+        let launching = matches!(
+            self.recycle,
+            Recycle::Launching { .. } | Recycle::Confirmed { .. }
+        );
+        let stalled = launching
+            && u16::from(self.recycle_age) + 1 > u16::from(Params::ticks(self.p.recycle_secs));
+        instant || self.receipt_due() || overdue || scans || asleep || stalled
     }
 
     pub(crate) fn tick(&mut self) -> Result<(), Denied> {
@@ -179,10 +206,20 @@ impl Model {
             return Err(Denied::Deadline);
         }
         let bound = Params::ticks(self.p.bound_secs).saturating_add(1);
+        // Event time runs while a live current session could read it. A role with none is
+        // bounded by its recovery (supervisor pass, then the launch budget), not by this clock.
+        let live = self.live_current() > 0;
         for e in &mut self.events {
-            if matches!(e.stage, Stage::Occurred | Stage::Detected) {
+            if live && matches!(e.stage, Stage::Occurred | Stage::Detected) {
                 e.age = e.age.saturating_add(1).min(bound);
             }
+        }
+        if matches!(
+            self.recycle,
+            Recycle::Launching { .. } | Recycle::Confirmed { .. }
+        ) {
+            let cap = Params::ticks(self.p.recycle_secs).saturating_add(1);
+            self.recycle_age = self.recycle_age.saturating_add(1).min(cap);
         }
         if self.mode != Mode::Off {
             let cap = Params::ticks(self.p.scan_secs).saturating_add(1);
@@ -201,6 +238,12 @@ impl Model {
         }
         if self.mode == Mode::Off {
             self.since_scan = [0; MAX_SOURCES];
+        }
+        if !matches!(
+            self.recycle,
+            Recycle::Launching { .. } | Recycle::Confirmed { .. }
+        ) {
+            self.recycle_age = 0;
         }
     }
 }

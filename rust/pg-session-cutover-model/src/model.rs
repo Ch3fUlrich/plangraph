@@ -17,6 +17,18 @@ pub struct Model {
     pub(crate) since_scan: [u8; MAX_SOURCES],
     pub(crate) asleep_age: u8,
     pub(crate) adopted_over_active: bool,
+    pub(crate) recycle_age: u8,
+    pub(crate) occurred: u8,
+    pub(crate) last_digest: Option<Digest>,
+}
+
+/// What the last digest receipt covered: events and bytes, header included.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Digest {
+    pub events: u8,
+    pub bytes: u16,
+    /// Occurrence order of the first and last event covered.
+    pub range: (u8, u8),
 }
 
 impl Model {
@@ -36,6 +48,8 @@ impl Model {
                 source: e.source,
                 stage: Stage::Future,
                 age: 0,
+                order: 0,
+                bytes: e.bytes,
                 escalated: false,
                 seen: false,
             })
@@ -70,6 +84,9 @@ impl Model {
             since_scan: [0; MAX_SOURCES],
             asleep_age: 0,
             adopted_over_active: false,
+            recycle_age: 0,
+            occurred: 0,
+            last_digest: None,
         })
     }
 
@@ -153,6 +170,10 @@ impl Model {
 
     pub fn asleep_secs(&self) -> u16 {
         u16::from(self.asleep_age) * TICK_SECS
+    }
+
+    pub fn last_digest(&self) -> Option<Digest> {
+        self.last_digest
     }
 
     pub fn live_current(&self) -> usize {
