@@ -179,3 +179,5 @@ runs in the Unix hook test suite.
 
 The hook test suite publishes fake executables with the shared Rust fixture
 writer so parallel process launches cannot race a direct script write.
+The installed `commit-msg` binary and the copied hook scripts of the install tests go through the same
+writer (`fs::copy` into a fixture directory is refused by the workspace guard).
