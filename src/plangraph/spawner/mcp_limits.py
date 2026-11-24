@@ -78,21 +78,26 @@ def _fingerprint(root):
     return digest.hexdigest()
 
 
-def current_source_identity(source=None):
-    """Identify the ``plangraph`` package tree real runs import: Git HEAD (when
-    available, ignoring cwd and inherited GIT_*) combined with a file fingerprint."""
+def checkout_head(source=None):
+    """Git HEAD of the checkout holding the ``plangraph`` tree ('' when unavailable); ignores cwd and GIT_*."""
     source = Path(source) if source is not None else Path(__file__).resolve().parents[1]
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-    head = ''
     try:
         out = subprocess.run(['git', '-C', str(source), 'rev-parse', '--verify', 'HEAD'],
                              env=env, capture_output=True, text=True, encoding='utf-8',
                              errors='replace', check=True, timeout=2).stdout.strip()
         if re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', out):
-            head = out
+            return out
     except (OSError, subprocess.SubprocessError):
         pass
-    return hashlib.sha256((head + _fingerprint(source)).encode()).hexdigest()[:12]
+    return ''
+
+
+def current_source_identity(source=None):
+    """Identify the ``plangraph`` package tree real runs import: Git HEAD (when
+    available, ignoring cwd and inherited GIT_*) combined with a file fingerprint."""
+    source = Path(source) if source is not None else Path(__file__).resolve().parents[1]
+    return hashlib.sha256((checkout_head(source) + _fingerprint(source)).encode()).hexdigest()[:12]
 
 
 def _spawn_modules(root=None, entries=('plangraph.spawner.mcp',), sources=None):
@@ -155,6 +160,58 @@ class _FrozenSpawnImports:
 
 
 sys.meta_path.insert(0, _FrozenSpawnImports())
+
+
+#: Modules a reload keeps: the packages, this server and the shared error classes (identity of caught exceptions).
+RELOAD_KEEP = frozenset(('plangraph', 'plangraph.spawner', 'plangraph.spawner.mcp',
+                         'plangraph.spawner.mcp_limits', 'plangraph.routing_errors'))
+
+
+def _rebind(namespace, purged):
+    """Point every name in ``namespace`` that was bound to a purged module (or one of its top-level
+    classes and functions) at the freshly imported one."""
+    for key, value in list(namespace.items()):
+        if isinstance(value, type(sys)) and value.__name__ in purged:
+            namespace[key] = importlib.import_module(value.__name__)
+        elif getattr(value, '__module__', None) in purged and getattr(value, '__qualname__', None) == getattr(value, '__name__', 0):
+            fresh = getattr(importlib.import_module(value.__module__), value.__name__, None)
+            if fresh is not None:
+                namespace[key] = fresh
+
+
+def reload_spawn_sources(namespace, root=None):
+    """Re-read the spawn import closure from disk and import it fresh, without a process restart.
+
+    Sources are read and parsed before any module is dropped. If the fresh import fails, the previous
+    modules and snapshot are restored and the error propagates. Returns the reloaded module names."""
+    global SPAWN_MODULES
+    fresh = {}
+    modules = _spawn_modules(root=root, sources=fresh)
+    purged = {name for name in set(modules) | set(SPAWN_MODULES) if name not in RELOAD_KEEP}
+    saved_modules = {name: sys.modules[name] for name in purged if name in sys.modules}
+    saved_sources, saved_names, saved_namespace = dict(_SPAWN_SOURCES), SPAWN_MODULES, dict(namespace)
+    _SPAWN_SOURCES.clear()
+    _SPAWN_SOURCES.update(fresh)
+    SPAWN_MODULES = modules
+    try:
+        for name in saved_modules:
+            del sys.modules[name]
+        for name in sorted(purged):
+            if name in _SPAWN_SOURCES and name in saved_modules:
+                importlib.import_module(name)
+        _rebind(namespace, purged)
+    except BaseException:
+        for name in purged:
+            sys.modules.pop(name, None)
+        sys.modules.update(saved_modules)
+        _SPAWN_SOURCES.clear()
+        _SPAWN_SOURCES.update(saved_sources)
+        SPAWN_MODULES = saved_names
+        namespace.update(saved_namespace)
+        raise
+    return tuple(sorted(purged))
+
+
 GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_agent_probe',
                  'plangraph_session_launch', 'plangraph_session_relaunch')
 

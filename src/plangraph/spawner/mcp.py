@@ -23,7 +23,7 @@ from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefuse
 from plangraph.spawner import bench_entry, leg_probe, remote_ps
 from plangraph.spawner.clients import effective_child_base_url
 from plangraph.spawner.leg_state import leg_status
-from plangraph.spawner.mcp_limits import SourceGuard, encode_reply, ps_reply
+from plangraph.spawner.mcp_limits import SourceGuard, checkout_head, encode_reply, ps_reply, reload_spawn_sources
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
@@ -169,13 +169,42 @@ class MCPSpawnerServer:
     def __init__(self, runner: SpawnerRunner | None = None, *, state=None,
                  session_run=None, session_sleep=None, source_identity=None):
         self._source_guard = SourceGuard(source_identity)
+        self._default_runner = runner is None
         self.runner = runner or SpawnerRunner()
         self._session_run = session_run
         self._session_sleep = session_sleep
+        self._build_service(state)
+        # Route code of this process: the identity it was imported at, until a reload moves it.
+        self._served_identity = self._source_guard.started
+        self._served_head = checkout_head()
+        self._reload_error = None
+
+    def _build_service(self, state):
         self.service = spawn_service(self.runner, state=state)
         # An explicitly supplied default-equivalent runner is still a live path.
         from .seat_spawn import live_runner
         self.service.fresh_tree = live_runner(self.runner)
+
+    def refresh_route_code(self):
+        """Serve the checkout's current planner/routing code when its head moved, without a restart.
+
+        Deferred while a job runs (its runner keeps the code it started with); a failed reload keeps
+        the previous modules and is reported by ``plangraph_agent_health``."""
+        current = self._source_guard.identity()
+        if current == self._served_identity:
+            return
+        if any(job.status == 'running' for job in self.runner.jobs.values()):
+            return
+        state = self.service.state
+        try:
+            reload_spawn_sources(globals())
+            if self._default_runner:
+                self.runner = SpawnerRunner()
+            self._build_service(state)
+        except Exception as exc:
+            self._reload_error = f'{type(exc).__name__}: {exc}'[:300]
+            return
+        self._served_identity, self._served_head, self._reload_error = current, checkout_head(), None
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""
@@ -208,6 +237,7 @@ class MCPSpawnerServer:
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
             raise
         if name == 'plangraph_agent_route':
+            self.refresh_route_code()
             return self.service.route(arguments['card'], arguments.get('role', 'implement'),
                 arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
         if name == 'plangraph_agent_ps':
@@ -275,6 +305,7 @@ class MCPSpawnerServer:
             return {"count": len(matched), "models": matched}
 
         if name == "plangraph_agent_health":
+            self.refresh_route_code()
             restart = self._source_guard.restart_required()
             all_models = get_catalog_models()
             active_jobs = [j for j in self.runner.jobs.values() if j.status == "running"]
@@ -282,6 +313,10 @@ class MCPSpawnerServer:
                 "status": "stale" if restart else "healthy",
                 **({'error': restart} if restart else {}),
                 "spawner_version": "2.0.0",
+                # The checkout head the route code serves; spawn and probe still need a reconnect when stale.
+                "served_sha": self._served_head,
+                "checkout_sha": checkout_head(),
+                **({'route_reload_error': self._reload_error} if self._reload_error else {}),
                 "runner_jobs_total": len(self.runner.jobs),
                 "active_jobs_count": len(active_jobs),
                 "catalog_models_count": len(all_models),

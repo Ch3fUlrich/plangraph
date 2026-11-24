@@ -1,0 +1,1 @@
+- The spawner MCP reloads the planner/routing code when the checkout head moves (route and health calls, deferred while a job runs); `plangraph_agent_health` prints `served_sha` and `checkout_sha`.
