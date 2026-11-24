@@ -33,7 +33,7 @@ pub fn relane_all(
     specs: &[Spec],
 ) -> Result<Vec<String>, String> {
     let mut lines = Vec::new();
-    let mut failed = false;
+    let (mut failed, mut retry) = (false, false);
     let mut heads: BTreeMap<&str, String> = BTreeMap::new();
     for s in specs {
         let outcome = match &s.parent {
@@ -50,11 +50,15 @@ pub fn relane_all(
             Outcome::Current(r) | Outcome::Rebased(r) => {
                 heads.insert(&s.branch, r.new_head.clone());
             }
+            Outcome::Retry { .. } => retry = true,
             _ => failed = true,
         }
         lines.push(outcome.line());
     }
-    if failed {
+    if retry {
+        // Exit code 4: an environment failure the settlement must run again; the lines say which lanes.
+        Err(format!("retry: {}", lines.join("\n")))
+    } else if failed {
         Err(lines.join("\n"))
     } else {
         Ok(lines)
@@ -80,7 +84,7 @@ fn run_one(
         parent_head,
         push,
     })
-    .unwrap_or_else(|reason| Outcome::Refused {
+    .unwrap_or_else(|reason| Outcome::Retry {
         lane: s.branch.clone(),
         reason,
     })
@@ -126,19 +130,36 @@ struct PrCommit {
     message_body: String,
 }
 
-/// The `Writer` trailer value of the lane's newest commit: the writer the lane was recorded with.
-fn writer_of(pr: &Pr) -> Option<String> {
-    let body = &pr.commits.last()?.message_body;
-    body.lines()
+/// `lane/x-r4` -> `x`: the name every writer of the lane carries in its `Writer` trailer.
+fn lane_stem(branch: &str) -> &str {
+    let name = branch.strip_prefix("lane/").unwrap_or(branch);
+    match name.rsplit_once("-r") {
+        Some((stem, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => stem,
+        _ => name,
+    }
+}
+
+/// The `Writer` trailer value of the lane's newest commit that has one (a merge of main has none), when it
+/// names the lane. The lane's name comes from the branch, not from its history, so a lane that holds only
+/// another lane's commits cannot vouch for them; an empty value is refused by `relane`.
+fn writer_of(pr: &Pr) -> String {
+    pr.commits
+        .iter()
         .rev()
-        .find_map(|l| l.strip_prefix("Writer: "))
-        .map(|w| w.trim().to_owned())
-        .filter(|w| !w.is_empty())
+        .find_map(|c| {
+            c.message_body
+                .lines()
+                .rev()
+                .find_map(|l| l.strip_prefix("Writer: "))
+        })
+        .map(str::trim)
+        .filter(|w| w.contains(lane_stem(&pr.head_ref_name)))
+        .unwrap_or("")
+        .to_owned()
 }
 
 /// The open `lane/` pull requests (from `gh pr list --json headRefName,headRefOid,baseRefName,commits`) as
-/// specs, parents first. A lane without a `Writer` trailer on its newest commit is left out: it has no
-/// recorded identity to check.
+/// specs, parents first. A lane whose writer does not name it gets an empty writer: `relane` refuses it by name.
 pub fn specs_from_prs(json: &str) -> Result<Vec<Spec>, String> {
     let prs: Vec<Pr> = serde_json::from_str(json).map_err(|e| format!("gh pr list: {e}"))?;
     let open: BTreeMap<&str, &Pr> = prs
@@ -161,40 +182,62 @@ pub fn specs_from_prs(json: &str) -> Result<Vec<Spec>, String> {
     lanes.sort_by_key(|p| (depth(p), p.head_ref_name.clone()));
     Ok(lanes
         .into_iter()
-        .filter_map(|p| {
-            Some(Spec {
-                branch: p.head_ref_name.clone(),
-                head: p.head_ref_oid.clone(),
-                writer: writer_of(p)?,
-                parent: open.get(p.base_ref_name.as_str()).map(|q| ParentSpec {
-                    branch: q.head_ref_name.clone(),
-                    head: q.head_ref_oid.clone(),
-                }),
-            })
+        .map(|p| Spec {
+            branch: p.head_ref_name.clone(),
+            head: p.head_ref_oid.clone(),
+            writer: writer_of(p),
+            parent: open.get(p.base_ref_name.as_str()).map(|q| ParentSpec {
+                branch: q.head_ref_name.clone(),
+                head: q.head_ref_oid.clone(),
+            }),
         })
         .collect())
 }
 
-/// `relane-open --repo DIR --github OWNER/NAME --remote NAME --onto SHA [--push true]`: relanes every open
-/// `lane/` pull request after a train merge; the post-merge settlement step calls it.
+/// `relane-open --repo DIR --github OWNER/NAME --remote NAME --merge SHA [--push true]`: relanes every open
+/// `lane/` pull request onto the current tip of main, which must hold the train merge; the settlement step
+/// `relane` calls it. Exit 4 (`retry:`) is a failure to run again, 3 a lane that cannot be relaned.
 pub fn run_open_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
+    let (repo, remote, merge) = (
+        PathBuf::from(need(flags, "repo")?),
+        need(flags, "remote")?,
+        need(flags, "merge")?,
+    );
+    let retry = |e: String| format!("retry: {e}");
+    super::relane_git::plain_run(
+        &repo,
+        &[
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            &remote,
+            "+refs/heads/main:refs/po/main",
+        ],
+    )
+    .map_err(retry)?;
+    let tip = super::git::out(&repo, &["rev-parse", "--verify", "refs/po/main^{commit}"])
+        .map_err(retry)?;
+    // A merge the fetch of main did not bring is not on main.
+    if !super::git::is_ancestor(&repo, &merge, &tip).unwrap_or(false) {
+        return Err(retry(format!("train merge {merge} is not on main {tip}")));
+    }
     let out = Command::new("gh")
         .args(["pr", "list", "--repo", &need(flags, "github")?])
         .args(["--state", "open", "--limit", "200"])
         .args(["--json", "headRefName,headRefOid,baseRefName,commits"])
         .output()
-        .map_err(|e| format!("gh: {e}"))?;
+        .map_err(|e| retry(format!("gh: {e}")))?;
     if !out.status.success() {
-        return Err(format!(
+        return Err(retry(format!(
             "gh pr list failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        )));
     }
     let specs = specs_from_prs(&String::from_utf8_lossy(&out.stdout))?;
     relane_all(
-        &PathBuf::from(need(flags, "repo")?),
-        &need(flags, "remote")?,
-        &need(flags, "onto")?,
+        &repo,
+        &remote,
+        &tip,
         flags.get("push").is_some_and(|v| v == "true"),
         &specs,
     )

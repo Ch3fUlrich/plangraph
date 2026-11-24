@@ -611,6 +611,12 @@ def seats_acknowledged():
     return os.environ.get("PG_MERGE_CLOSE_REQUIRE_SEATS", "").strip().lower() in ("0", "false", "off")
 
 
+def relane_open(repo, merge):  # rc 3: a lane was refused (final); any other failure raises, so the step stays open
+    r = run(["plangraph", "land-train", "relane-open", "--repo", ".", "--github", repo, "--remote", REMOTE,
+             "--merge", merge, "--push", "true"], ok=(0, 3), timeout=1800)
+    sys.stderr.write(r.stdout + r.stderr)
+
+
 def frozen_landing(st):
     """Read the saved landing attempt only for the currently pushed head."""
     attempt = st.get("landing_attempt") or {}

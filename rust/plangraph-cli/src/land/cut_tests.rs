@@ -255,3 +255,21 @@ fn a_branch_created_while_the_gate_runs_is_not_overwritten() {
     assert!(err.contains("already exists"), "{err}");
     assert_eq!(g(fx.p(), &["rev-parse", "slice/a"]), rival);
 }
+
+#[test]
+fn a_gate_edit_the_source_already_carries_must_be_granted_too() {
+    let fx = Fx::new();
+    let flow = fx.source(
+        ".github/workflows/w.yml",
+        &format!("{TRAILERS}\nGate-Edit: D-77"),
+    );
+    let err = fx
+        .cut_granted(std::slice::from_ref(&flow), &[], &["D-1".to_string()])
+        .unwrap_err();
+    assert!(
+        err.contains("D-77") && err.contains("does not grant"),
+        "{err}"
+    );
+    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
+    fx.cut_granted(&[flow], &[], &["D-77".to_string()]).unwrap();
+}

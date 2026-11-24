@@ -611,7 +611,11 @@ def test_land_runs_the_merge_close_job_once_and_never_fails_on_it(env, exit_code
     args = _merge_close_stub(env, exit_code)
     res = land(env, pushed(env))
     assert res.returncode == 0, res.stderr
-    assert args.read_text() == "merge-close\n"
+    calls = args.read_text().splitlines()
+    assert calls.count("merge-close") == 1 and calls[0] == "merge-close"
+    # The landing without the keeper journal relanes the open lanes once, after the close job.
+    (relane,) = [c for c in calls if c.startswith("land-train relane-open ")]
+    assert "--merge " in relane and "--push true" in relane
     assert "listed demo:X in_review forbidden" in res.stderr
     assert "listed" not in res.stdout
 

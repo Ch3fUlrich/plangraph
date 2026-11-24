@@ -107,6 +107,24 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
         if parents.split_whitespace().count() != 2 {
             return Err(format!("cut: {src} is not a single-parent commit"));
         }
+        // A Gate-Edit the source already carries survives the pick: it counts only when the GO row grants it.
+        let carried = git::out(
+            repo,
+            &[
+                "log",
+                "-1",
+                "--format=%(trailers:key=Gate-Edit,valueonly,separator=%x20)",
+                src,
+            ],
+        )?;
+        if let Some(d) = carried
+            .split_whitespace()
+            .find(|d| !c.grants.iter().any(|g| g == d))
+        {
+            return Err(format!(
+                "cut: {src} carries Gate-Edit {d}, which the GO row does not grant"
+            ));
+        }
     }
     let common = git::out(
         repo,

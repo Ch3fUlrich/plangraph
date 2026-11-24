@@ -209,3 +209,40 @@ pub(super) fn merge_with_own_edits(repo: &Path, range: &str) -> Result<Option<St
     }
     Ok(None)
 }
+
+/// The head of `branch` on the remote, fetched into `refs/po/target/<branch>`; `None` when it does not exist.
+pub(super) fn remote_branch(
+    repo: &Path,
+    remote: &str,
+    branch: &str,
+) -> Result<Option<String>, String> {
+    let spec = format!("refs/heads/{branch}");
+    let o = plain(repo)?
+        .args(["ls-remote", "--heads", remote, &spec])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !o.status.success() {
+        return Err(format!(
+            "git ls-remote failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ));
+    }
+    if o.stdout.is_empty() {
+        return Ok(None);
+    }
+    let tracking = format!("refs/po/target/{branch}");
+    plain_run(
+        repo,
+        &[
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            remote,
+            &format!("+{spec}:{tracking}"),
+        ],
+    )?;
+    Ok(Some(git::out(
+        repo,
+        &["rev-parse", "--verify", &format!("{tracking}^{{commit}}")],
+    )?))
+}

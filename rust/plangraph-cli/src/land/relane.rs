@@ -4,7 +4,8 @@
 //! dropped, not a conflict; a conflict leaves the lane ref and the remote untouched.
 use super::git;
 use super::relane_git::{
-    foreign, merge_with_own_edits, own_commits, patch_ids, plain_run, push_lock, rebase_in_worktree,
+    foreign, merge_with_own_edits, own_commits, patch_ids, plain_run, push_lock,
+    rebase_in_worktree, remote_branch,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -54,6 +55,11 @@ pub enum Outcome {
         lane: String,
         reason: String,
     },
+    /// An environment failure (fetch, git): the lane may work on a later run, so the settlement stays pending.
+    Retry {
+        lane: String,
+        reason: String,
+    },
 }
 
 impl Outcome {
@@ -77,6 +83,7 @@ impl Outcome {
                 format!("CONFLICT {lane} {}", files.join(" "))
             }
             Outcome::Refused { lane, reason } => format!("REFUSED {lane} {reason}"),
+            Outcome::Retry { lane, reason } => format!("RETRY {lane} {reason}"),
         }
     }
     pub fn is_ok(&self) -> bool {
@@ -138,7 +145,7 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
         }
     };
     if l.expected_head.is_empty() || l.writer.is_empty() {
-        return refuse(l.branch, "no recorded head or writer identity for the lane");
+        return refuse(l.branch, "no recorded head or writer identity for the lane (its Writer trailer must name the lane)");
     }
     // Each lane has its own ref, so a parallel fetch of another lane cannot change what is read here.
     let tracking = fetch_ref(l.branch);
@@ -202,6 +209,26 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
             l, &old, &old, true, &before, &before, None,
         )));
     }
+    let target = next_branch(l.branch);
+    if l.push {
+        // A run that stopped after its push finds the branch again: the lane is done, not refused as a clash.
+        if let Some(tip) = remote_branch(repo, l.remote, &target)? {
+            if !git::is_ancestor(repo, &onto, &tip)? {
+                return refuse(
+                    l.branch,
+                    format!("{target} exists and does not contain {onto}"),
+                );
+            }
+            let theirs = own_commits(repo, &format!("{onto}..{tip}"))?;
+            if let Some(bad) = foreign(repo, &theirs, l.writer)? {
+                return refuse(l.branch, format!("{target} has foreign commit {bad}"));
+            }
+            let mut r = report(l, &old, &tip, true, &before, &theirs, Some(target));
+            r.patch_ids_equal =
+                patch_ids(repo, &own_range)? == patch_ids(repo, &format!("{onto}..{tip}"))?;
+            return Ok(Outcome::Current(r));
+        }
+    }
     let new = match rebase_in_worktree(repo, &old, &onto, boundary.as_deref(), l.branch)? {
         Ok(new) => new,
         Err(files) => {
@@ -222,7 +249,6 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
         );
     }
     let equal = patch_ids(repo, &own_range)? == patch_ids(repo, &format!("{onto}..{new}"))?;
-    let target = next_branch(l.branch);
     git::out(repo, &["update-ref", &result_ref(&target), &new])?;
     let pushed = if l.push {
         let _lock = push_lock(repo)?;

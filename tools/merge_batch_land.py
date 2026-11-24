@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from merge_batch_build import (
-    check_landed_parts, cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
+    check_landed_parts, cmd_consumed, relane_open, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
     landing_report, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
     require_tested_ff_evidence, run_timing_import, seats_acknowledged, wait_marked_merged,
 )
@@ -502,6 +502,7 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
             sys.stderr.write(result.stdout)
             record_stage(repo, train["batch_key"], "host_sync", merge, started)
         elif step == "cleanup":
+            relane_open(repo, merge)  # first and idempotent: a failure keeps this step open
             if st is not None:
                 cleanup_landed(st, landed, strict=True)
                 drop_state(st)
@@ -513,13 +514,6 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
         else:
             raise MergeBatchError(f"unknown keeper landing step {step}")
         landing_journal(repo, "advance", pr=number, merge=merge, step=step, **receipt, **lease)
-    if train["open_steps"]:  # rebase every open lane onto the merge; a failure never fails the settlement
-        try:
-            r = run(["plangraph", "land-train", "relane-open", "--repo", ".", "--github", repo, "--remote", REMOTE,
-                     "--onto", merge, "--push", "true"], ok=None, timeout=1800)
-            sys.stderr.write(r.stdout + r.stderr)
-        except MergeBatchError as exc:
-            print(f"relane after {merge}: {exc}", file=sys.stderr)
 
 
 def cmd_settle(args):
@@ -645,6 +639,10 @@ def land_with_lease(args, lease, st, mode):
     except Exception as exc:  # Cleanup is strictly best effort after GitHub has landed.
         print(f"cleanup failed: {exc}", file=sys.stderr)
     close_merged_items()
+    try:
+        relane_open(repo, merge)
+    except MergeBatchError as exc:  # GitHub has landed: a lane left behind is relaned by hand or the next landing
+        print(f"relane failed: {exc}", file=sys.stderr)
     return 0
 
 

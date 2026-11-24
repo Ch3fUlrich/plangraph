@@ -129,6 +129,7 @@ with TemporaryDirectory() as tmp:
           patch.object(landing, 'write_landing', telemetry),
           patch.object(landing, 'read_verified_merge', return_value=('d'*40, 'merged')),
           patch.object(landing, 'run', effect),
+          patch.object(build, 'run', effect),
           patch.object(landing, 'cleanup_landed', side_effect=sweep),
           patch.object(landing, 'drop_state', side_effect=lambda st: calls.append('drop_state'))):
         landing.settle_train(pending[0], lease, st)
@@ -137,6 +138,8 @@ with TemporaryDirectory() as tmp:
     label.assert_called_once_with(identity['repo'], 6, 'needs-update')
     telemetry.assert_called_once_with(st, 'train-pr-merge', 'd'*40, ['rerun'], 'go-row')
     assert calls == [['plangraph', 'merge-close'], ['plangraph', 'landing', 'verify-hosts', 'example/repo', 'd'*40],
+                     ['plangraph', 'land-train', 'relane-open', '--repo', '.', '--github', 'example/repo',
+                      '--remote', 'origin', '--merge', 'd'*40, '--push', 'true'],
                      'cleanup', 'drop_state'], calls
     recorded = store.land(principal, dict(identity, action='show'))['train']
     assert recorded['host_verification'] == proof

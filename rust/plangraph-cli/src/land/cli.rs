@@ -15,7 +15,7 @@ const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA 
   plangraph land-train cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1,B=D-2 --grants FILE] [--gate FILE]\n\
   plangraph land-train cut-check --repo DIR --base SHA --head SHA [--gate FILE]\n\
   plangraph land-train relane --repo DIR --remote NAME --onto SHA --spec FILE [--push true]\n\
-  plangraph land-train relane-open --repo DIR --github OWNER/NAME --remote NAME --onto SHA [--push true]\n\
+  plangraph land-train relane-open --repo DIR --github OWNER/NAME --remote NAME --merge SHA [--push true]\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
@@ -160,6 +160,8 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
             eprintln!("{e}");
             if e.starts_with("usage") {
                 2
+            } else if e.starts_with("retry:") {
+                4
             } else {
                 3
             }

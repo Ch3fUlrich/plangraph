@@ -226,24 +226,40 @@ def test_tested_ff_settlement_waits_for_seat_acknowledgement(env, journal):
     assert journal()["train"]["open_steps"] == []
 
 
-@pytest.mark.parametrize("relane_rc", ["0", "3"])
-def test_settlement_relanes_the_open_lanes_onto_the_merge_and_never_fails_on_it(env, journal, relane_rc):
+def _interrupted_train(env):
     approval = pushed(env)
     mode(env, "tested-ff")
     env.env["INTERRUPT_LANDING"] = "1"
     assert "interrupted before saving" in land(env, approval).stderr
     del env.env["INTERRUPT_LANDING"]
     env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"] = "off"
-    env.env["RELANE_RC"] = relane_rc
+
+
+@pytest.mark.parametrize("relane_rc", ["0", "3"])
+def test_settlement_relanes_the_open_lanes_onto_the_merge_and_never_fails_on_it(env, journal, relane_rc):
+    _interrupted_train(env)
+    env.env["RELANE_RC"] = relane_rc  # 3: a lane was refused; that is final, not a reason to retry
     resumed = env.run("settle")
     assert resumed.returncode == 0, resumed.stderr
     (call,) = (env.tmp / "sweep.relane").read_text().splitlines()
     assert call.startswith("land-train relane-open --repo ")
-    assert f"--onto {main_tip(env)} --push true" in call and "--github" in call
+    assert f"--merge {main_tip(env)} --push true" in call and "--github" in call
     assert "REBASED lane/x-r1" in resumed.stderr
-    # A settled train is not relaned a second time.
-    env.run("settle")
+    assert journal()["train"]["open_steps"] == []
+    env.run("settle")  # a settled train is not relaned a second time
     assert len((env.tmp / "sweep.relane").read_text().splitlines()) == 1
+
+
+def test_a_transient_relane_failure_keeps_the_train_pending_until_it_works(env, journal):
+    _interrupted_train(env)
+    env.env["RELANE_RC"] = "4"
+    failed = env.run("settle")
+    assert failed.returncode == 1 and "relane-open" in failed.stderr, failed.stderr
+    assert journal()["train"]["open_steps"] == ["cleanup"]
+    env.env["RELANE_RC"] = "0"
+    assert env.run("settle").returncode == 0
+    assert journal()["train"]["open_steps"] == []
+    assert len((env.tmp / "sweep.relane").read_text().splitlines()) == 2
 
 
 def test_legacy_single_pr_settlement_uses_matching_saved_mode(env, journal):

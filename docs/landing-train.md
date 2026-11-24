@@ -129,24 +129,27 @@ them into a keeper table needs a keeper schema step that is not part of this cha
 
 ## Relane after a train merge
 
-The settlement of a landed train runs `plangraph land-train relane-open --repo DIR --github OWNER/NAME --remote NAME --onto SHA
---push true` (best effort: a failure never fails the settlement). It lists the open `lane/` pull requests; each lane's recorded
-head is its PR head and its recorded writer is the `Writer` trailer of its newest commit. `relane --repo DIR --remote NAME
---onto SHA --spec FILE [--push true]` does the same for a JSON array of `{branch, head, writer, parent: {branch, head} | null}`,
-parents first (rust/plangraph-cli/src/land/relane*.rs). One lane after the other, each is fetched into `refs/po/fetch/<lane>`
-(never FETCH_HEAD; results go to `refs/po/result/<next>`, a disjoint namespace) and rebased in a worktree of its own with
-`--empty=drop`: a patch already on main is dropped, not a conflict. The new head is pushed as the next `-rN` branch under a
-per-clone push lock. A stacked child replays only what follows its parent's recorded head, onto the parent's new head. Result
-lines: `REBASED` (old head, new head, `patch_ids_equal`, own commit counts, for the seat evidence rule), `CURRENT`,
-`CONFLICT <lane> <files>` (the lane is untouched) and `REFUSED` (fetched head is not the recorded head, no recorded writer, no
-own commit left, a commit without the lane's `Writer`, a merge with edits of its own that a rebase would flatten, parent not
-relaned). The verb exits 3 when any lane is not relaned.
+`plangraph land-train relane-open --repo DIR --github OWNER/NAME --remote NAME --merge SHA --push true` runs first in the final
+`cleanup` step of the keeper settlement journal, and after a landing without the journal too. It fetches main (the merge must be
+on it) and relanes every open `lane/` pull request onto that tip. A lane's recorded head is its PR head; its recorded writer is the
+newest `Writer` trailer of the PR that names the lane (the lane name comes from the branch, so a lane holding only another
+lane's commits has none and is refused). `relane --repo DIR --remote NAME --onto SHA --spec FILE [--push true]` takes a JSON array
+of `{branch, head, writer, parent: {branch, head} | null}`, parents first (rust/plangraph-cli/src/land/relane*.rs). One lane after
+the other, each is fetched into `refs/po/fetch/<lane>` (never FETCH_HEAD; results go to `refs/po/result/<next>`) and rebased in a
+worktree of its own with `--empty=drop`: a patch already on main is dropped, not a conflict. The new head is pushed as the next
+`-rN` branch under a per-clone push lock; a run that finds that branch already holding the new main reports `CURRENT`. A stacked
+child replays only what follows its parent's recorded head, onto the parent's new head. Result lines: `REBASED` (old head, new
+head, `patch_ids_equal`, own commit counts: the record for the seat evidence rule, which moves the probe PR and decides the seat
+re-run), `CURRENT`, `CONFLICT <lane> <files>` (the lane is untouched), `REFUSED` (head not the recorded one, no writer naming the
+lane, no own commit left, a foreign commit, a merge with edits of its own, parent not relaned, next branch without the new main)
+and `RETRY` (git or network failure). Exit 3: a lane was not relaned (final; the step advances). Exit 4 (`retry:`, also main
+without the merge or a failing `gh`): the `cleanup` step stays open and runs again.
 
 ## Cutting a slice or landing branch
 
 `plangraph land-train cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1 --grants FILE] [--gate FILE]`
 (rust/plangraph-cli/src/land/cut.rs) picks the source commits (full ids, oldest first) onto `--base` without `-x`, drops any
 `(cherry picked from commit ...)` line, adds `Picked-From: <source>` and, for a commit named in `--gate-edits` (the router's
-D-id), `Gate-Edit: <D-id>` (the D-id must be listed in the `--grants` file taken from the GO row) inside the existing trailer block, then runs `tools/ci_commit_gate.py check` on the range. The branch
+D-id), `Gate-Edit: <D-id>` (the D-id, and any `Gate-Edit` a source commit already carries, must be listed in the `--grants` file taken from the GO row) inside the existing trailer block, then runs `tools/ci_commit_gate.py check` on the range. The branch
 is created atomically and only when the gate accepts; a merge commit as a source is refused. `land-train cut-check --repo DIR --base SHA --head SHA`
 applies the same check to a branch cut by hand and refuses a `cherry-pick -x` line.

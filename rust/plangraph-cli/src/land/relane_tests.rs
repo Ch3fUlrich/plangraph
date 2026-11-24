@@ -1,17 +1,17 @@
 use super::build_tests::g;
 use super::relane::*;
-use super::relane_cli::{self, ParentSpec, Spec};
+use super::relane_cli;
 use std::path::PathBuf;
 
-struct Fx {
-    _dir: tempfile::TempDir,
-    origin: PathBuf,
-    work: PathBuf,
+pub(super) struct Fx {
+    pub(super) _dir: tempfile::TempDir,
+    pub(super) origin: PathBuf,
+    pub(super) work: PathBuf,
 }
 
 /// A bare origin and one clone; `commit_on` builds lane commits in a scratch clone and pushes them.
 impl Fx {
-    fn new() -> Fx {
+    pub(super) fn new() -> Fx {
         let dir = tempfile::tempdir().unwrap();
         let origin = dir.path().join("origin.git");
         let work = dir.path().join("work");
@@ -32,13 +32,13 @@ impl Fx {
             work,
         }
     }
-    fn scratch(&self, name: &str) -> PathBuf {
+    pub(super) fn scratch(&self, name: &str) -> PathBuf {
         let p = self._dir.path().join(name);
         g(self._dir.path(), &["clone", "-q", "origin.git", name]);
         p
     }
     /// A lane branch with one commit per (file, content), each with a Writer trailer.
-    fn lane(&self, branch: &str, writer: &str, edits: &[(&str, &str)]) -> String {
+    pub(super) fn lane(&self, branch: &str, writer: &str, edits: &[(&str, &str)]) -> String {
         let p = self.scratch(&format!("s-{}", branch.replace('/', "_")));
         g(&p, &["checkout", "-q", "-b", branch, "origin/main"]);
         for (f, c) in edits {
@@ -51,7 +51,7 @@ impl Fx {
         g(&p, &["rev-parse", "HEAD"])
     }
     /// A new main commit, from a scratch clone; returns the new tip.
-    fn advance(&self, file: &str, content: &str) -> String {
+    pub(super) fn advance(&self, file: &str, content: &str) -> String {
         let p = self.scratch(&format!("m-{file}"));
         std::fs::write(p.join(file), content).unwrap();
         g(&p, &["add", "-A"]);
@@ -60,7 +60,7 @@ impl Fx {
         g(&p, &["rev-parse", "HEAD"])
     }
     /// The lane as the registry records it: the head on the remote and the newest Writer trailer of its history.
-    fn input<'a>(&'a self, branch: &'a str, onto: &'a str) -> Lane<'a> {
+    pub(super) fn input<'a>(&'a self, branch: &'a str, onto: &'a str) -> Lane<'a> {
         let head = g(&self.origin, &["rev-parse", branch]);
         let writer = g(
             &self.origin,
@@ -88,7 +88,7 @@ impl Fx {
             push: true,
         }
     }
-    fn log(&self, rev: &str, onto: &str) -> Vec<String> {
+    pub(super) fn log(&self, rev: &str, onto: &str) -> Vec<String> {
         g(
             &self.origin,
             &["log", "--format=%s", &format!("{onto}..{rev}")],
@@ -99,7 +99,7 @@ impl Fx {
     }
 }
 
-fn rebased(o: Outcome) -> Report {
+pub(super) fn rebased(o: Outcome) -> Report {
     match o {
         Outcome::Rebased(r) => r,
         other => panic!("not rebased: {}", other.line()),
@@ -349,204 +349,4 @@ fn a_merge_of_main_inside_the_lane_is_not_an_own_commit() {
     let r = rebased(relane(&l).unwrap());
     assert_eq!((r.own_before, r.own_after), (1, 1));
     assert_eq!(fx.log("lane/merged-r2", &onto), ["edit a.txt"]);
-}
-
-#[test]
-fn a_lane_without_a_recorded_head_or_writer_is_refused_even_when_pushing() {
-    let fx = Fx::new();
-    fx.lane("lane/bare-r1", "w-bare", &[("a.txt", "bare\n2\n3\n")]);
-    let onto = fx.advance("c.txt", "1\n2\nmain\n");
-    for (head, writer) in [("", "w-bare"), ("x", "")] {
-        let mut l = fx.input("lane/bare-r1", &onto);
-        if head.is_empty() {
-            l.expected_head = head;
-        } else {
-            l.writer = writer;
-        }
-        match relane(&l).unwrap() {
-            Outcome::Refused { reason, .. } => assert!(reason.contains("recorded"), "{reason}"),
-            other => panic!("{}", other.line()),
-        }
-    }
-    assert!(g(&fx.origin, &["branch", "--list", "lane/bare-r2"]).is_empty());
-}
-
-#[test]
-fn fetch_and_result_refs_of_adjacent_revisions_are_disjoint() {
-    let fx = Fx::new();
-    let r1 = fx.lane("lane/adj-r1", "w-adj", &[("a.txt", "r1\n2\n3\n")]);
-    let r2 = fx.lane("lane/adj-r2", "w-adj2", &[("b.txt", "1\nr2\n3\n")]);
-    let onto = fx.advance("c.txt", "1\n2\nmain\n");
-    let mut first = fx.input("lane/adj-r1", &onto);
-    first.push = false;
-    rebased(relane(&first).unwrap());
-    // r1's result is the ref named for r2; r2's fetched head must not be it.
-    assert!(g(&fx.work, &["for-each-ref", "refs/po/fetch/lane/adj-r2"]).is_empty());
-    let mut second = fx.input("lane/adj-r2", &onto);
-    second.push = false;
-    let b = rebased(relane(&second).unwrap());
-    assert_eq!(b.old_head, r2);
-    assert_ne!(
-        g(&fx.work, &["rev-parse", "refs/po/fetch/lane/adj-r2"]),
-        g(&fx.work, &["rev-parse", "refs/po/result/lane/adj-r2"])
-    );
-    assert_eq!(g(&fx.work, &["rev-parse", "refs/po/fetch/lane/adj-r1"]), r1);
-    // Both in parallel: each keeps its own commit, and r1's result (named r2) does not replace r2's fetch.
-    let (a, b) = std::thread::scope(|s| {
-        let (fx, onto) = (&fx, &onto);
-        let run = move |branch: &str| {
-            let mut l = fx.input(branch, onto);
-            l.push = false;
-            relane(&l).unwrap()
-        };
-        let a = s.spawn(move || run("lane/adj-r1"));
-        let b = s.spawn(move || run("lane/adj-r2"));
-        (rebased(a.join().unwrap()), rebased(b.join().unwrap()))
-    });
-    assert_eq!(
-        (a.old_head.as_str(), b.old_head.as_str()),
-        (r1.as_str(), r2.as_str())
-    );
-    assert_eq!(
-        g(
-            &fx.work,
-            &["log", "--format=%s", &format!("{onto}..{}", a.new_head)]
-        ),
-        "edit a.txt"
-    );
-    assert_eq!(
-        g(
-            &fx.work,
-            &["log", "--format=%s", &format!("{onto}..{}", b.new_head)]
-        ),
-        "edit b.txt"
-    );
-}
-
-/// parent `lane/p-r1` (one commit) and child `lane/c-r1` on top of it, both by one writer.
-fn stack(fx: &Fx) -> (String, String) {
-    let p = fx.scratch("stack");
-    g(&p, &["checkout", "-q", "-b", "lane/p-r1", "origin/main"]);
-    std::fs::write(p.join("a.txt"), "parent\n2\n3\n").unwrap();
-    g(
-        &p,
-        &["commit", "-q", "-am", "parent edit\n\nWriter: w-shared"],
-    );
-    g(&p, &["push", "-q", "origin", "lane/p-r1"]);
-    let parent = g(&p, &["rev-parse", "HEAD"]);
-    g(&p, &["checkout", "-q", "-b", "lane/c-r1"]);
-    std::fs::write(p.join("b.txt"), "1\nchild\n3\n").unwrap();
-    g(
-        &p,
-        &["commit", "-q", "-am", "child edit\n\nWriter: w-shared"],
-    );
-    g(&p, &["push", "-q", "origin", "lane/c-r1"]);
-    (parent, g(&p, &["rev-parse", "HEAD"]))
-}
-
-fn stack_specs(parent: &str, child: &str) -> Vec<Spec> {
-    vec![
-        Spec {
-            branch: "lane/p-r1".into(),
-            head: parent.into(),
-            writer: "w-shared".into(),
-            parent: None,
-        },
-        Spec {
-            branch: "lane/c-r1".into(),
-            head: child.into(),
-            writer: "w-shared".into(),
-            parent: Some(ParentSpec {
-                branch: "lane/p-r1".into(),
-                head: parent.into(),
-            }),
-        },
-    ]
-}
-
-#[test]
-fn a_stacked_child_replays_only_its_own_commits_on_its_relaned_parent() {
-    let fx = Fx::new();
-    let (parent, child) = stack(&fx);
-    let onto = fx.advance("c.txt", "1\n2\nmain\n");
-    let lines = relane_cli::relane_all(
-        &fx.work,
-        "origin",
-        &onto,
-        true,
-        &stack_specs(&parent, &child),
-    )
-    .unwrap();
-    assert!(lines[1].contains("own 1->1"), "{lines:?}");
-    assert_eq!(fx.log("lane/p-r2", &onto), ["parent edit"]);
-    // The child sits on the parent's new head and adds only its own commit.
-    assert_eq!(
-        g(&fx.origin, &["rev-parse", "lane/c-r2~1"]),
-        g(&fx.origin, &["rev-parse", "lane/p-r2"])
-    );
-    assert_eq!(fx.log("lane/c-r2", "lane/p-r2"), ["child edit"]);
-}
-
-#[test]
-fn a_stacked_child_whose_parent_was_not_relaned_is_refused() {
-    let fx = Fx::new();
-    let (parent, child) = stack(&fx);
-    let onto = fx.advance("a.txt", "main\n2\n3\n");
-    let err = relane_cli::relane_all(
-        &fx.work,
-        "origin",
-        &onto,
-        true,
-        &stack_specs(&parent, &child),
-    )
-    .unwrap_err();
-    assert!(err.contains("CONFLICT lane/p-r1"), "{err}");
-    assert!(
-        err.contains("REFUSED lane/c-r1 its parent lane/p-r1 was not relaned"),
-        "{err}"
-    );
-    assert!(g(&fx.origin, &["branch", "--list", "lane/c-r2"]).is_empty());
-}
-
-#[test]
-fn a_merge_with_edits_of_its_own_is_refused_and_a_plain_merge_is_not() {
-    let fx = Fx::new();
-    let p = fx.scratch("evil");
-    g(&p, &["checkout", "-q", "-b", "lane/evil-r1", "origin/main"]);
-    std::fs::write(p.join("a.txt"), "lane\n2\n3\n").unwrap();
-    g(&p, &["commit", "-q", "-am", "edit a.txt\n\nWriter: w-evil"]);
-    fx.advance("c.txt", "1\n2\nfirst\n");
-    g(&p, &["fetch", "-q", "origin"]);
-    g(
-        &p,
-        &["merge", "-q", "--no-edit", "--no-commit", "origin/main"],
-    );
-    std::fs::write(p.join("b.txt"), "only in the merge\n").unwrap();
-    g(&p, &["add", "-A"]);
-    g(&p, &["commit", "-q", "-m", "merge main"]);
-    g(&p, &["push", "-q", "origin", "lane/evil-r1"]);
-    let onto = fx.advance("b.txt", "1\n2\nsecond\n");
-    match relane(&fx.input("lane/evil-r1", &onto)).unwrap() {
-        Outcome::Refused { reason, .. } => assert!(reason.contains("edits of its own"), "{reason}"),
-        other => panic!("{}", other.line()),
-    }
-    assert!(g(&fx.origin, &["branch", "--list", "lane/evil-r2"]).is_empty());
-}
-
-#[test]
-fn open_lane_prs_become_specs_parents_first_with_the_newest_writer() {
-    let json = r#"[
-      {"headRefName":"lane/c-r1","headRefOid":"c1","baseRefName":"lane/p-r1","commits":[{"messageBody":"x\n\nWriter: w-c"}]},
-      {"headRefName":"lane/p-r1","headRefOid":"p1","baseRefName":"main","commits":[{"messageBody":"Writer: old"},{"messageBody":"y\n\nWriter: w-p"}]},
-      {"headRefName":"feature/other","headRefOid":"o1","baseRefName":"main","commits":[]},
-      {"headRefName":"lane/none-r1","headRefOid":"n1","baseRefName":"main","commits":[{"messageBody":"no trailer"}]}
-    ]"#;
-    let specs = relane_cli::specs_from_prs(json).unwrap();
-    assert_eq!(specs.len(), 2);
-    assert_eq!(
-        (specs[0].branch.as_str(), specs[0].writer.as_str()),
-        ("lane/p-r1", "w-p")
-    );
-    assert_eq!(specs[0].parent, None);
-    assert_eq!(specs[1].parent.as_ref().unwrap().head, "p1");
 }
