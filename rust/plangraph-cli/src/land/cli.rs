@@ -12,6 +12,8 @@ const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA 
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
+  plangraph land-train evidence-assess --repo DIR --evidence FILE --main SHA --head SHA --trains-now N\n\
+  plangraph land-train evidence-report --records FILE\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
@@ -189,6 +191,12 @@ pub(super) fn run_inner(
     }
     if cmd == "deploy-plan" {
         return super::deploy::run_cli(&flags);
+    }
+    if cmd == "evidence-assess" {
+        return super::evidence_cli::assess_cli(&flags);
+    }
+    if cmd == "evidence-report" {
+        return super::evidence_cli::report_cli(&flags);
     }
     if cmd == "go-verify" {
         return super::go_verify::run_cli(&flags);
