@@ -5,7 +5,14 @@ mod build_tests;
 mod chain;
 pub mod cli;
 pub mod delta;
+pub mod deploy;
+mod deploy_probe;
+#[cfg(test)]
+mod deploy_tests;
 pub mod git;
+pub mod go_verify;
+#[cfg(test)]
+mod go_verify_tests;
 pub mod main_gh;
 #[cfg(test)]
 mod main_gh_tests;
