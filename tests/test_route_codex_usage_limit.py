@@ -81,3 +81,40 @@ def test_a_failed_probe_with_the_reply_books_the_limit():
         assert probe_quota_line(codex, review_mode, 7, "", "boom") is None
     # A writer probe of any other harness books nothing (unchanged).
     assert probe_quota_line(SimpleNamespace(harness="opencode"), False, 7, "", REPLY) is None
+
+
+def test_a_codex_probe_that_exits_7_with_the_reply_limits_every_codex_leg_and_is_named(tmp_path, monkeypatch):
+    """The incident: a probe exited 7 in seconds and the route read no limited_legs entry."""
+    import asyncio
+    import datetime
+    import subprocess
+    from plangraph.spawner import leg_probe
+    from plangraph.spawner.runner import spawn_service
+    leg = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.2-sol-medium")
+    store = LegStateStore(tmp_path / "legs.sqlite")
+    runner = SimpleNamespace(leg_reader=store, jobs={})
+    spawn_service(runner, state=tmp_path, leg_reader=store)
+    until = (datetime.datetime.now() + datetime.timedelta(days=2)).replace(second=0, microsecond=0)
+    reply = (f"ERROR: You've hit your usage limit. Upgrade to Pro or try again at "
+             f"{until:%b} {until.day}th, {until:%Y} {until:%I}:{until:%M} {until:%p}.")
+
+    async def spawn(**kwargs):
+        return SimpleNamespace(job_id="probe", status="failed", exit_code=7, stdout="", stderr=reply)
+
+    async def cancel(job_id):
+        pass
+    runner.spawn, runner.cancel = spawn, cancel
+    root = tmp_path / "probe"
+    root.mkdir()
+    monkeypatch.setattr(leg_probe.shutil, "which", lambda *a, **kw: "fake")
+    monkeypatch.setattr(leg_probe, "caller_heads", lambda: {})
+    monkeypatch.setattr(leg_probe.tempfile, "mkdtemp", lambda **kw: str(root))
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: b"initial")
+    result = asyncio.run(leg_probe.probe_many(runner, leg.id))
+    assert result["limited_legs"] == [leg.id] and result["ok"] is True
+    assert result["probes"][0]["reset_at"] == time.mktime(until.timetuple())
+    for model in codex_models():
+        status = store.leg_status(model, harness="codex")
+        assert status["state"] == "limited" and status["evidence"]["reset_at"] == time.mktime(until.timetuple()), model
+    plan = plan_spawn(CARD, role="implement", leg_reader=store, catalog_rows=())
+    assert plan.first_leg.id == "claude-sonnet-5-5-high"
