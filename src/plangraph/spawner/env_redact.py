@@ -359,6 +359,9 @@ _USAGE_LIMIT = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
     r'(?:reached|exceeded)(?:\s*[.!]?(?:\s*\(reset after \d[^\n)]*\))?'
     r'|\.\s*Please try again later[.!]?|,\s*retry in \d+(?:\.\d+)?\s*(?:s|m|h|d))\s*', re.I)
+#: The Codex CLI's own usage-limit reply ("You've hit your usage limit ... try again at <date>"): the
+#: start of an error line, never a mid-line mention.
+_CODEX_USAGE_LIMIT = re.compile(r"\s*(?:error:\s*)?You(?:'ve| have) hit your usage limit\b", re.I)
 _CREDIT_LIMIT = re.compile(
     r"\s*You've reached your credit usage limit\. Please upgrade your subscription plan "
     r'to get more resources\. Report Issue \(input /feedback\)\s*', re.I)
@@ -422,6 +425,8 @@ def harness_limit_line(exit_code, stdout, stderr):
     # a mid-line mention in prose, a traceback or a retry log never marks a
     # leg. Bare stdout credit refusals count only as the final non-empty line.
     def quota(line):
+        if _CODEX_USAGE_LIMIT.match(line):
+            return True
         if _CREDIT_LIMIT.fullmatch(re.sub(r'^\s*error:\s*', '', line, flags=re.I)):
             return True
         if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
@@ -456,6 +461,8 @@ def early_refusal(complete_text):
         return busy
     lines = normalize(complete_text).splitlines()
     for line in lines:
+        if _CODEX_USAGE_LIMIT.match(line):
+            return line.strip()
         if _ERROR_SHAPED.match(line) and _CREDIT_LIMIT.fullmatch(
                 re.sub(r'^\s*error:\s*', '', line, flags=re.I)):
             return line.strip()
