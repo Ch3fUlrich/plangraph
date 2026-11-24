@@ -128,9 +128,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
             if getattr(conn, "lost", False) or getattr(self.server, "fatal_reason", None):
                 self._json(503, {"status": "unavailable"})   # I11: flag only, no IO, no lock
             else:
-                # The budget a client sizes its claim timeout from.
-                self._json(200, {"status": "ok", "claim_preflight_s":
-                                 getattr(self.server.store, "claim_preflight_s", None)})
+                budget = getattr(self.server.store, "claim_preflight_s", None)   # sizes the client's claim timeout
+                self._json(200, {"status": "ok", **({"claim_preflight_s": budget} if budget else {})})
             return
 
         allowed = _READ_VERBS if method == "GET" else _WRITE_VERBS

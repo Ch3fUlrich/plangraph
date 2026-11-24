@@ -589,7 +589,9 @@ class ContextMixin:
         if unverified:
             flags["required_checks_unverified"] = unverified
         go_rows = self._landing_go_rows(item, proofs, snapshot)
-        if missing := [p["pr"] for p in proofs if p["pr"] not in {row["pr"] for row in go_rows}]:
+        if snapshot is None:   # an unreadable decisions document is not a missing row
+            flags["go_rows_unverified"] = True
+        elif missing := [p["pr"] for p in proofs if p["pr"] not in {row["pr"] for row in go_rows}]:
             flags["go_row_missing"] = {"prs": missing}
         return {"authority": authority, "landings": landings, "go_rows": go_rows, "flags": flags}
 
@@ -597,12 +599,12 @@ class ContextMixin:
         """``[{decision_id, pr}]``: the GO rows that name this item and bind a landed PR or head."""
         from .store_waiver import _go_binding as go_binding, _go_statement as go_statement, _names_item as names_item
 
-        project, rows = self._merge_project(item), []
+        projects, rows = {self._merge_project(item), item["project"]}, []   # a Merge-Repo item may be named by either
         for did in decisions_naming(snapshot["book"], item["key"]) if snapshot else ():
             statement = go_statement(snapshot["texts"].get(did))
             if statement is None or not names_item(statement, item["key"]):
                 continue
-            pr, _ = go_binding(statement, project)
+            pr = next((found for found, _ in (go_binding(statement, p) for p in sorted(projects)) if found), None)
             bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", statement)
             rows += [{"decision_id": did, "pr": p["pr"]} for p in proofs
                      if p["pr"] == pr or (pr is None and bound and p["head"].startswith(bound[1].lower()))]

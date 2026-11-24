@@ -246,6 +246,10 @@ def test_a_decisions_read_that_fails_flags_the_standing_authority_and_still_clos
     landing = evidence(env, "demo:A")["landing"]
     assert landing["authority"] == {"decision": STANDING, "verified": False}
     assert landing["flags"]["standing_authority_unverified"] == STANDING
+    # An unreadable decisions document is not a missing GO row.
+    assert landing["flags"]["go_rows_unverified"] is True
+    assert "go_row_missing" not in landing["flags"]
+    assert landing["go_rows"] == []
 
 
 def test_a_frozen_close_reads_the_decisions_the_warm_scan_captured(env, tmp_path):
@@ -259,3 +263,23 @@ def test_a_frozen_close_reads_the_decisions_the_warm_scan_captured(env, tmp_path
     landing = evidence(env, "demo:A")["landing"]
     assert landing["authority"] == {"decision": STANDING, "verified": True}
     assert landing["go_rows"] == [{"decision_id": "D-9002", "pr": 31}]
+
+
+def test_a_go_row_naming_the_items_own_project_binds_a_merge_repo_landing(env, tmp_path):
+    from test_keeper_merge_close_auto import two_repos
+
+    ci, path = forge(env, tmp_path)
+    env.store.merge_close_decision = STANDING
+    data = two_repos(env)
+    head = data.land("w", "Plan-Item: demo:A", 31)
+    merge = git(data.root, "rev-parse", "main")
+    ci.prs[merge] = {"number": 31, "merged_at": "2026-11-24T10:00:00Z", "head": {"sha": head}}
+    ci.runs[head] = [success("tests")]
+    # The row names the project the item belongs to, not the repository the merge landed in.
+    path.write_text(f"| D-9001 | OPERATOR | Standing |\n| D-9002 | router | GO demo PR #31 GO-HEAD {head} demo:A |\n",
+                    encoding="utf-8")
+    result = env.store.close_merged_auto(env.p("system"))
+    assert [c["key"] for c in result["closed"]] == ["demo:A"], result["listed"]
+    landing = evidence(env, "demo:A")["landing"]
+    assert landing["go_rows"] == [{"decision_id": "D-9002", "pr": 31}]
+    assert "go_row_missing" not in landing["flags"]
