@@ -28,6 +28,9 @@ struct SecretPaths {
     home_relative: Vec<String>,
     /// Relative to the config home (`XDG_CONFIG_HOME`, else `~/.config`).
     config_home_relative: Vec<String>,
+    /// Extra home-relative files only the session print guard denies: the Codex sandbox leaves
+    /// them readable because nested Codex runs authenticate with them.
+    session_guard_extra_home_relative: Vec<String>,
     /// Variable name patterns Codex removes from the environment of the commands it runs.
     tool_env_exclude: Vec<String>,
 }
@@ -58,6 +61,18 @@ pub fn deny_read_paths(home: &Path, xdg_config_home: Option<&Path>) -> Vec<PathB
                     .map(move |rel| base.join(rel))
             }));
     for path in all {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// The paths a fleet session may not print: the sandbox deny list plus the Codex auth file.
+pub fn session_guard_paths(home: &Path, xdg_config_home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = deny_read_paths(home, xdg_config_home);
+    for rel in &data().session_guard_extra_home_relative {
+        let path = home.join(rel);
         if !paths.contains(&path) {
             paths.push(path);
         }

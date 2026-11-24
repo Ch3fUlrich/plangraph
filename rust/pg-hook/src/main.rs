@@ -1,6 +1,7 @@
 mod lesson_gate;
 mod message_route;
 mod message_time;
+mod secret_read;
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -75,6 +76,12 @@ fn main() {
     }
     if args.get(1).is_some_and(|arg| arg == "message-time") {
         std::process::exit(message_time::hook(
+            std::io::stdin().lock(),
+            &mut std::io::stderr(),
+        ));
+    }
+    if args.get(1).is_some_and(|arg| arg == "secret-read") {
+        std::process::exit(secret_read::hook(
             std::io::stdin().lock(),
             &mut std::io::stderr(),
         ));
