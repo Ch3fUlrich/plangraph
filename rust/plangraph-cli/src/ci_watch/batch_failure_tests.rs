@@ -219,3 +219,27 @@ fn a_later_sweep_delivers_to_the_writer_that_became_reachable() {
     assert!(out[0].starts_with("delivered"));
     assert!(alerts.is_empty());
 }
+
+#[test]
+fn a_batch_failure_record_carries_the_class_job_and_where_to_start() {
+    let mut classed = task(Some(7));
+    classed.class = "configuration".into();
+    classed.run_class = "mixed".into();
+    classed.job_id = 31;
+    let mut records = vec![];
+    record_failure(&mut records, &owners(), &classed, 5).unwrap();
+    let brief = &records[0].class_brief;
+    assert!(
+        brief.contains("Class: configuration (run: mixed)"),
+        "{brief}"
+    );
+    assert!(
+        brief.contains("Failed job id: 31") && brief.contains("workflow"),
+        "{brief}"
+    );
+    let json = serde_json::to_string(&records[0]).unwrap();
+    assert!(
+        json.contains("class_brief"),
+        "the delivery command reads the record: {json}"
+    );
+}

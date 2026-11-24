@@ -84,9 +84,17 @@ reads green again (a failed cancel stays open and is retried on the next pass).
 
 Every red job is classified from its name and scrubbed log (`ci_watch/classify.rs`): fmt, clippy (only lints
 `cargo clippy --fix` applies), file-size, missing-trailer, missing-module (a non-Python job importing a module),
-flake, code, infrastructure, configuration, unknown; a run whose red jobs differ is mixed. The task row and
-the keeper definition carry the job class, the run class, the failed job id and where the fix starts (an
-infrastructure or configuration red starts at the runner, workflow or setting, not the batch's code). The class
-changes the brief, never whether a task is made. `decide` gives the first action: a flake is rerun once; fmt and
-clippy get one automatic fix per head and class, committed with `Hand-Edit: ci-watch <class> fix of failed job <id>`;
-all else goes to a narrow fix writer. The commit and push of an automatic fix are not part of the scan.
+flake, code, infrastructure, configuration, unknown; a run whose red jobs differ is mixed. A log that names failing
+tests is code (or fmt, clippy and the rest by their own signals) before infrastructure or configuration phrases are
+read; a known flake is classed per test, so it never hides a real failure of the same job. The task row, the
+keeper definition, the record delivered to a batch's writer and the fix task of a red main carry the job class, the
+run class, the failed job id and where the fix starts (`classify::brief_lines`; an infrastructure or configuration
+red starts at the runner, workflow or setting, not the batch's code). The class changes the brief, never whether a
+task is made.
+
+`decide` gives the first action: a flake is rerun once; fmt and clippy get one automatic fix per pull request and
+class; all else goes to a narrow fix writer. `plangraph ci-watch --autofix` runs the automatic fix after the scan
+(`ci_watch/autofix.rs`): a scratch clone of the pull request head (a fork or a moved head is refused), the command
+in `rust/`, one commit `Hand-Edit: ci-watch <class> fix of failed job <id>` and one plain push. A fix of more than 50
+lines, one that touches a gate file or one that changes nothing is dropped and left to the writer, whose task
+stays. The (pull request, class) is reserved in `autofix.json` before the fix runs, with the job id and result.

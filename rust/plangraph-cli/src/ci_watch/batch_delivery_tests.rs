@@ -19,6 +19,7 @@ fn intake_sweep_and_acknowledgement_share_one_locked_update_so_none_is_lost() {
         acked: false,
         escalated: false,
         claim: None,
+        ..Default::default()
     };
     let path = dir.path().to_owned();
     let threads: Vec<_> = (0..12)
@@ -215,6 +216,7 @@ fn a_delivery_command_is_killed_at_its_lease() {
         acked: false,
         escalated: false,
         claim: None,
+        ..Default::default()
     };
     let started = std::time::Instant::now();
     let r = CommandDeliver {
@@ -477,6 +479,7 @@ fn preparation_time_counts_against_the_deliverys_deadline_and_a_spent_budget_nev
         acked: false,
         escalated: false,
         claim: None,
+        ..Default::default()
     };
     let deliver = CommandDeliver {
         dir: dir.path(),
