@@ -387,10 +387,13 @@ def test_review_seats_accepts_one_witnessed_completion_after_skips(unseated_w, t
     ("opencode-go-glm-5.3-flash", "FILES READ: src/lib.rs:3\nTEST_GAMING: no\nVERDICT: ACCEPT\n", True),
     ("opencode-go-deepseek-v4-flash", "FILES READ: diff only\nTEST_GAMING: no\nVERDICT: ACCEPT\n", False),
     ("opencode-go-glm-5.3-flash", "TEST_GAMING: no\nVERDICT: ACCEPT\n", False),
-    ("agy-gemini-4-hydrogen-high", "TEST_GAMING: no\nVERDICT: ACCEPT\n", True),   # not a required seat
+    ("agy-gemini-4-hydrogen-high", "TEST_GAMING: no\nVERDICT: ACCEPT\n", False),   # rule 3.66 (f10): a smart seat counts too
+    ("agy-gemini-4-hydrogen-high", "FILES READ: src/lib.rs\nTEST_GAMING: no\nVERDICT: ACCEPT\n", True),
+    ("claude-sonnet-5-5-high", "TEST_GAMING: no\nVERDICT: ACCEPT\n", False),
+    ("gpt-6.2-sol-medium", "TEST_GAMING: no\nVERDICT: ACCEPT\n", True),   # not a counted seat
 ])
 def test_required_opencode_seat_counts_only_with_files_read(unseated_w, tmp_path, leg, tail, accepted):
-    """D-6652 (rule 3.66 (f)): an ACCEPT of a required OpenCode seat without FILES READ is no seat."""
+    """Rule 3.66 (f10): an ACCEPT of a counted seat (smart or required OpenCode) without FILES READ is no seat."""
     root = mirrored_reviews(unseated_w, tmp_path)
     path = root / "fixture" / "run-one" / "record.json"
     record = json.loads(path.read_text())
@@ -420,3 +423,31 @@ def test_the_close_path_gives_the_shared_fixture_tables_verdict(w, entry):
         assert _close(w)["state"] == "done"
     else:
         _refused(w, "evidence_unverified", "go_row_not_go")
+
+
+def _one_seat_close(w, tmp_path, leg, *, risk=None):
+    """A high-tier head cited with the one run of ``leg`` (rule 3.66 f10)."""
+    root = mirrored_reviews(w, tmp_path)
+    (root / "fixture" / "run-two" / "record.json").unlink()
+    path = root / "fixture" / "run-one" / "record.json"
+    record = json.loads(path.read_text())
+    record.update(chosen_leg={"id": leg}, stdout_tail="FILES READ: src/lib.rs\nTEST_GAMING: no\nVERDICT: ACCEPT\n")
+    path.write_text(json.dumps(record))
+    w.decision_path.write_text(f"| D-5504 | demo | GO {HEAD}; Review-Runs: run-one |\n", encoding="utf-8")
+    if risk:
+        w.store.put_card(w.p("router"), "demo:H", {"outcome": "fixture", "risk_tags": [risk]})
+    return w.store.close_merged(w.p("router"), "demo:H", "D-5504", None)
+
+
+def test_one_witnessed_smart_seat_closes_a_high_head(unseated_w, tmp_path):
+    assert _one_seat_close(unseated_w, tmp_path, "agy-gemini-4-hydrogen-high")["state"] == "done"
+
+
+def test_one_witnessed_weak_seat_does_not_close_a_high_head(unseated_w, tmp_path):
+    with pytest.raises(Refused, match="insufficient_seat_families"):
+        _one_seat_close(unseated_w, tmp_path, "opencode-go-deepseek-v4-flash")
+
+
+def test_one_smart_seat_does_not_close_a_credential_head(unseated_w, tmp_path):
+    with pytest.raises(Refused, match="insufficient_(non_anthropic_)?seat_famil"):
+        _one_seat_close(unseated_w, tmp_path, "agy-gemini-4-hydrogen-high", risk="auth")

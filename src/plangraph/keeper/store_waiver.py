@@ -352,6 +352,9 @@ class WaiverMixin:
                 raise Refused("same_family", "duplicate_seat_family")
             seats.append(family)
         need = 2 if item["review_tier"] == "high" else 1
+        if need == 2 and any(isinstance(w, dict) and w.get("smart") for w in witnessed) \
+                and not self._card_requires_non_anthropic_seats(item):
+            need = 1   # rule 3.66 (f10): one witnessed smart seat is the counted seat of a high head
         if len(seats) < need:
             raise Refused("coverage", f"insufficient_seat_families: need {need}")
         if self._card_requires_non_anthropic_seats(item) \

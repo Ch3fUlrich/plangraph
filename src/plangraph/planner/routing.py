@@ -684,8 +684,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             seats, coverage, open_parts = [smart], ({"leg": smart.id, "covers": writers},), []
         else:
             seats, coverage, open_parts = pick_seats(ordered, writer_set, high=high)
-        # D-6652: both required OpenCode seats stay in the seat set when no smart leg serves.
-        missing = [] if smart_seat else [
+        # D-6652: both required OpenCode seats stay in the seat set when no smart leg serves, and beside the
+        # Sonnet seat of a credential diff (the keeper close needs two non-Anthropic families there).
+        missing = [] if smart_seat and not sensitive_review else [
             leg for leg in ordered if leg.id in REVIEW_REQUIRED and leg not in seats
             and seat_family(leg.family) not in {seat_family(s.family) for s in seats}]
         if missing:

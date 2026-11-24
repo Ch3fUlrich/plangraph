@@ -87,3 +87,21 @@ def test_backfill_discovery_finds_a_part_seat_under_its_second_key(tmp_path):
     seats, reasons = sr.eligible_records(dict(ITEM, key=B), tmp_path)
     assert len(seats) == 1, reasons
     assert sr.eligible_records(dict(ITEM, key='plangraph:OTHER'), tmp_path)[0] == []
+
+
+def test_backfill_discovery_accepts_a_part_prompt_naming_every_key_of_the_part(tmp_path):
+    """The review brief names the part's first key; known_keys holds every in-review key."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'tools'))
+    import seat_record as sr
+    from test_seat_backfill import ITEM, record
+    run = record(tmp_path, item_key=A, item_keys=[A, B])
+    (run / 'prompt.txt').write_text(f'Review the part. Item key: {A}\nAlso covers {B}.')
+    for key in (A, B):
+        seats, reasons = sr.eligible_records(dict(ITEM, key=key), tmp_path, known_keys={A, B})
+        assert len(seats) == 1, (key, reasons)
+    # A key outside the part still refuses the seat.
+    (run / 'prompt.txt').write_text(f'Review {A} and {B} and plangraph:STRANGER')
+    seats, reasons = sr.eligible_records(dict(ITEM, key=B), tmp_path, known_keys={A, B, 'plangraph:STRANGER'})
+    assert seats == [] and any('item key mismatch' in r for r in reasons)

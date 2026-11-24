@@ -257,12 +257,12 @@ with reason `codex_limited` in the plan and `route_reason` in the run record, an
 returns to Codex when it serves again. Review (rule 3.66 (f10),
 D-6738..D-6741) plans one counted seat on the first smart leg served (`agy-gemini-4-hydrogen-high`,
 the argon legs, then `claude-sonnet-5-5-high` for a head Claude did not write; a credential,
-authentication or secrets diff tries Sonnet first). The two OpenCode seats
+authentication or secrets diff tries Sonnet first and also seats both OpenCode seats, which the keeper close needs). The two OpenCode seats
 (`opencode-go-deepseek-v4-flash`, `opencode-go-glm-5.3-flash`, tools mode with checkout reads)
 seat the head only when no smart leg serves; the legs after the seat are the fallbacks of a run
 that ends without a verdict. A seat run for several items carries `item_keys` and the head.
-`plangraph router go-row` accepts a part only with two seats that each ACCEPT its head with a
-`FILES READ` line naming files, and the keeper reads a required-seat record without
+`plangraph router go-row` accepts a part with one smart seat, or else two required seats, that each ACCEPT its head with a
+`FILES READ` line naming files, and the keeper reads a seat record (smart or required) without
 `FILES READ` as no seat.
 GPT implement and review legs default to medium effort (D-6397); elevated
 effort requires matching `card.effort` and an operator `card.effort_decision`
