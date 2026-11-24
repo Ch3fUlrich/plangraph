@@ -59,15 +59,14 @@ does not affect the verdict. Do not pad: **no findings is a valid result.**
   orchestrator may land a head with open MED findings as follow-up items where its rule
   allows it, so state each MED so that it stands alone.
 - **LOW**: style, naming, wording, small cleanups. Never blocks acceptance.
-- **NEW-REQ**: a requirement the item text and its done criteria do not state (hardening, a
-  rare race under a trusted caller, a wider refactor, a wish). Report it on its own line;
-  it never blocks and becomes a follow-up item.
-- **PROCESS**: a defect of the brief or of the review setup (a missing context field, a
-  sandbox that cannot run a test). Report it on its own line; it is the orchestrator's and
-  never counts against the head.
-
-Rate the defect, not the effort to fix it. Compare with the base: a defect that main
-already has and the change does not touch or worsen is NEW-REQ.
+- **NEW-REQ**: a requirement the item and its done criteria do not state (hardening, a rare
+  race under a trusted caller, a wish), or a defect main already has and the change does
+  not touch or worsen. Own line; never blocks; becomes a follow-up item.
+- **PROCESS**: a defect of the brief or the review setup (a missing context field, a test
+  you cannot run). Own line; the orchestrator's; never counts against the head. If you
+  cannot judge a done criterion without the missing piece, add `PROCESS-BLOCKING <what you
+  need>` and end with `VERDICT: REQUEST_CHANGES`: the orchestrator repairs the setup and
+  asks again without a writer round.
 
 ## Output
 
@@ -77,14 +76,14 @@ First line, exactly one of:
 VERDICT: ACCEPT|REQUEST_CHANGES
 ```
 
-(choose one value). `REQUEST_CHANGES` when any HIGH or MED finding stands, else `ACCEPT`.
+(choose one value). `REQUEST_CHANGES` when any HIGH or MED finding or a `PROCESS-BLOCKING`
+line stands, else `ACCEPT`.
 Then one line per finding:
 
 ```
 SEVERITY file:line - problem - fix
 ```
-
-SEVERITY is HIGH, MED, LOW, NEW-REQ or PROCESS. Only HIGH and MED decide the verdict.
+SEVERITY is HIGH, MED, LOW, NEW-REQ or PROCESS.
 
 Example: `MED src/x/y.py:42 - empty list returns None, caller indexes it - return [] and add a test`.
 
@@ -115,15 +114,17 @@ not check.
 ### Later rounds
 
 Round 1 reviews the whole range BASE..HEAD. A later round (your session is resumed, or
-the prompt lists the earlier findings with the writer's answers) reviews only what
-changed since the head you reviewed before, and whether each earlier HIGH or MED
-finding is fixed or validly refuted. Do not reopen a refuted finding without new
-evidence; raise no new finding on code unchanged since round 1. A new HIGH or MED in a
-later round cites a hunk changed since the previously reviewed head; on unchanged code
-only a HIGH with a reproduction you ran stands, anything else there is NEW-REQ. When the
-head is unchanged (the writer refuted instead of changing code), judge each earlier
-finding again against the code and the writer's evidence: keep it with the reason the
-refutation fails, or drop it.
+the prompt lists the earlier findings with the writer's answers) reviews what changed
+since the head you reviewed before, and whether each earlier HIGH or MED finding is
+fixed or validly refuted. Do not reopen a refuted finding without new evidence.
+
+New findings in a later round, one rule: on a hunk changed since the previously reviewed
+head, any severity; on code unchanged since you first reviewed it, only a HIGH with a
+reproduction you ran, and everything else there is NEW-REQ. Two exceptions the prompt
+names itself: when it says the base changed, review the whole range again as it orders;
+when it says the head is unchanged (the writer refuted instead of changing code; script
+drivers only), judge each earlier finding again against the code and the writer's
+evidence, and keep it with the reason the refutation fails or drop it.
 
 ## Inline seats
 
