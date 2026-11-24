@@ -86,6 +86,7 @@ fn check(launcher: &sandbox::Launcher) {
     remote::check(launcher);
     if matches!(launcher, sandbox::Launcher::Rust(_)) {
         restart::check(launcher);
+        refusals::check_cargo_target(launcher);
         records::check_router_prompt(launcher);
         records::check_batch_prompt(launcher);
     }
