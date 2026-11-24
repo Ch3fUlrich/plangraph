@@ -71,12 +71,15 @@ def load_root_providers(path=None):
     return _load_root_providers(path)[0]
 
 
+def root_providers_path():
+    """The root provider config the overlay reads: the env override, else the shipped file."""
+    return Path(os.environ.get('PLANGRAPH_PROVIDERS_FILE') or (
+        Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json'))
+
+
 def _load_root_providers(path=None):
     global _parse_warned, _missing_warned
-    if path is None:
-        path = os.environ.get('PLANGRAPH_PROVIDERS_FILE') or (
-            Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json')
-    path = Path(path)
+    path = Path(path) if path is not None else root_providers_path()
     try:
         text = path.read_text(encoding='utf-8')
         text = _strip_jsonc(text)

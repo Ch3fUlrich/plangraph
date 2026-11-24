@@ -541,44 +541,67 @@ def tcp_gateway_probe(url, timeout=1.0):
     return True
 
 
+def _file_stamp(path):
+    try:
+        info = Path(path).stat()
+    except OSError:
+        return None
+    return info.st_mtime_ns, info.st_size
+
+
 @functools.lru_cache(maxsize=512)
-def _upstream_pools(name, providers_file):
-    """Upstream pools a gateway model name is deployed on, from the deployed combo snapshot
-    (``deploy/omniroute/live/server-combos.json``) and the root provider config's ``modelID``."""
+def _declared_pools(name, providers_path, stamps):
+    """Pools a gateway model name is declared on, as (launch mapping, server combo).
+
+    ``stamps`` (the files' mtime and size) keys the cache, so a config replaced in place is
+    read again. The launch mapping is the root provider config's ``modelID``; the server combo
+    is ``deploy/omniroute/live/server-combos.json``. A malformed block declares nothing.
+    """
     import json
     from .opencode_overlay import load_root_providers
-    root = Path(__file__).resolve().parents[3]
-    pools = []
+    launch, combo = [], []
     try:
-        combos = json.loads((root / 'deploy/omniroute/live/server-combos.json').read_text(encoding='utf-8'))['combos']
-        pools += [u.split('/')[0] for u in combos.get(name, ()) if isinstance(u, str) and '/' in u]
+        entry = load_root_providers(providers_path)['omniroute']['models'][name]
+        model_id = entry['modelID']
+        if isinstance(model_id, str) and '/' in model_id:
+            launch.append(model_id.split('/')[0])
+    except (KeyError, TypeError, AttributeError):
+        pass
+    try:
+        combos = json.loads((_COMBOS_PATH).read_text(encoding='utf-8'))['combos']
+        combo += [u.split('/')[0] for u in combos.get(name, ()) if isinstance(u, str) and '/' in u]
     except (OSError, ValueError, KeyError, AttributeError, TypeError):
         pass
-    providers = load_root_providers()
-    models = ((providers.get('omniroute') or {}).get('models') or {}) if isinstance(providers, dict) else {}
-    model_id = (models.get(name) or {}).get('modelID') if isinstance(models, dict) and isinstance(models.get(name), dict) else None
-    if isinstance(model_id, str) and '/' in model_id:
-        pools.append(model_id.split('/')[0])
-    return tuple(dict.fromkeys(pools))
+    return tuple(dict.fromkeys(launch)), tuple(dict.fromkeys(combo))
+
+
+_COMBOS_PATH = Path(__file__).resolve().parents[3] / 'deploy/omniroute/live/server-combos.json'
 
 
 def _gateway_pool(states, leg):
     """State of the upstream pool serving a gateway-routed model.
 
-    The snapshot is keyed by upstream provider, not by the gateway prefix. Resolve the model's
-    own pool first (alias pools, then the deployed upstreams, then a pool whose name starts the
-    model name); only a model with no pool in the snapshot falls back to the gateway's own
-    ``omniroute`` row. No other pool stands in for a model it does not serve, and an available
-    row wins over an unavailable one among the model's own pools.
+    The snapshot is keyed by upstream provider, not by the gateway prefix. A declared pool
+    present in the snapshot decides: the launch mapping first, then the server combo; an
+    inferred pool (one whose name starts the model name) is used only when no declared pool is
+    in the snapshot, and a model with no pool at all takes the gateway's own ``omniroute`` row.
+    No other pool stands in for a model it does not serve; among one tier's rows an available
+    one wins.
     """
+    from .opencode_overlay import root_providers_path
     from .quota_snapshots import pool_of
     if (pool := pool_of(identity_model(leg))) is not None:
         return states.get(pool)   # a known alias pool never borrows another pool's state
     name = identity_model(leg).split('/', 1)[-1]
-    wanted = [*_upstream_pools(name, os.environ.get('PLANGRAPH_PROVIDERS_FILE')),
-              *(key for key in states if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-')))]
-    rows = [states[key] for key in dict.fromkeys(wanted) if key in states]
-    rows = rows or ([states['omniroute']] if 'omniroute' in states else [])
+    path = root_providers_path()
+    launch, combo = _declared_pools(name, str(path), (_file_stamp(path), _file_stamp(_COMBOS_PATH)))
+    inferred = tuple(key for key in states if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-')))
+    for tier in (launch, combo, inferred):
+        rows = [states[key] for key in tier if key in states]
+        if rows:
+            break
+    else:
+        rows = [states['omniroute']] if 'omniroute' in states else []
     return next((row for row in rows if row.available and not row.stale), rows[0] if rows else None)
 
 

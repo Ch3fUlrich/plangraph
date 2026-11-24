@@ -681,3 +681,42 @@ def test_route_survives_a_non_object_mimo_provider_with_a_gateway_override(tmp_p
     plan = review_plan(tmp_path, json_reader(tmp_path, ('omniroute/mimo-v2.6-pro',), 'xiaomi-mimo',
                                              gateway_probe=lambda url: True), writers=('gpt',))
     assert plan.legs
+
+
+def spark_providers(tmp_path, launch_env, pool):
+    use_providers(launch_env, tmp_path, '{"providers": {"omniroute": {"models": {"spark-1.3-contributor": '
+                  '{"modelID": "%s/spark"}}}}}' % pool)
+
+
+def test_launch_mapping_outranks_the_server_combo_pool(tmp_path, launch_env):
+    spark = 'omniroute/spark-1.3-contributor'   # the deployed combo declares meta-api
+    spark_providers(tmp_path, launch_env, 'opencode-go')
+    reader = json_reader(tmp_path, (spark,), 'meta-api', 'opencode-go', inactive=('opencode-go',))
+    assert reader(spark)['reason'] == 'provider_inactive'
+
+
+def test_an_inferred_pool_never_overrides_a_declared_pool(tmp_path):
+    model = 'omniroute/deepseek-v4.1-flash'
+    reader = json_reader(tmp_path, (model,), 'deepseek', 'deepseek-alt', inactive=('deepseek',))
+    assert reader(model)['reason'] == 'provider_inactive'
+    # A renamed pool is still inferred when no declared pool is in the snapshot.
+    assert json_reader(tmp_path, (model,), 'deepseek-alt')(model)['state'] == 'ok'
+
+
+@pytest.mark.parametrize('text', ['{"providers": {"omniroute": 5}}', '{"providers": {"omniroute": []}}',
+                                  '{"providers": {"omniroute": {"models": 5}}}',
+                                  '{"providers": {"omniroute": {"models": {"deepseek-v4.1-flash": 5}}}}'])
+def test_claude_writer_route_survives_a_malformed_omniroute_provider_block(tmp_path, launch_env, text):
+    use_providers(launch_env, tmp_path, text)
+    plan = review_plan(tmp_path, json_reader(tmp_path, ('omniroute/deepseek-v4.1-flash',), 'deepseek'))
+    assert 'omniroute-deepseek-flash' in [leg.id for leg in plan.legs]
+
+
+def test_provider_config_replaced_in_place_refreshes_the_pool_mapping(tmp_path, launch_env):
+    spark = 'omniroute/spark-1.3-contributor'
+    spark_providers(tmp_path, launch_env, 'opencode-go')
+    reader = json_reader(tmp_path, (spark,), 'opencode-go', 'meta-api', 'other-pool', inactive=('other-pool',))
+    assert reader(spark)['state'] == 'ok'
+    spark_providers(tmp_path, launch_env, 'other-pool')   # same path, new content
+    reader._at = None
+    assert reader(spark)['reason'] == 'provider_inactive'
