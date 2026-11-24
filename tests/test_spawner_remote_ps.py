@@ -648,3 +648,34 @@ def test_wsl_query_delivers_a_plan_larger_than_a_pipe_buffer(monkeypatch, tmp_pa
     monkeypatch.setattr(subprocess, 'Popen', run)
     assert remote_ps.query_host(host, 10) == '{"runs": []}'
     assert received.read_bytes() == body
+
+
+def test_remote_rows_carry_batch_member_keys_and_refuse_malformed_ones(tmp_path, monkeypatch):
+    config(tmp_path, monkeypatch, [dict(name='node-a', target='private-a')])
+    members = ['plangraph:ALPHA-1', 'plangraph:BETA-1']
+
+    def reply(item_keys):
+        return lambda host, timeout: json.dumps({'runs': [dict(
+            run_id='run-b', host='true-host', status='running', item_key=members[0],
+            item_keys=item_keys)]})
+
+    rows = remote_ps.list_runs([], transport=reply(members))
+    assert rows[0]['item_keys'] == members
+    assert ps_reply(rows)['runs'][0]['item_keys'] == members
+    for bad in ('plangraph:ALPHA-1', [], [7], ['no-colon'], ['plangraph:A'] * 51):
+        rows = remote_ps.list_runs([], transport=reply(bad))
+        assert rows[0]['status'] == 'unknown' and 'item_keys' not in rows[0], bad
+
+
+def test_batch_card_keys_land_on_the_run_record():
+    from plangraph.spawner.item_key import annotate_item
+    record = {}
+    annotate_item(record, {'item_key': 'plangraph:ALPHA-1',
+                           'item_keys': ['plangraph:ALPHA-1', 'plangraph:BETA-1', 'plangraph:ALPHA-1']})
+    assert record['item_keys'] == ['plangraph:ALPHA-1', 'plangraph:BETA-1']
+    for card in ({'item_key': 'plangraph:ALPHA-1'},
+                 {'item_key': 'plangraph:ALPHA-1', 'item_keys': ['bad key']},
+                 {'item_key': 'plangraph:ALPHA-1', 'item_keys': 'plangraph:ALPHA-1'}):
+        record = {}
+        annotate_item(record, card)
+        assert 'item_keys' not in record, card

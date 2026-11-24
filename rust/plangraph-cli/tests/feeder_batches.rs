@@ -302,10 +302,18 @@ fn dry_run_shows_the_batch_without_claiming() {
     let row = drive(&ready(items), &mut host, "dell", 2, true);
     assert_eq!(row["decision"], "would_spawn");
     assert_eq!(row["card"]["files"], json!(["src/a.rs", "src/b.rs"]));
-    assert_eq!(
-        row["brief"].as_str().unwrap(),
-        FEEDER_BATCH_INPUT.trim_end()
-    );
+    // Compared as JSON: key order is the serializer's, not part of the input.
+    let brief = row["brief"].as_str().unwrap();
+    let (prefix, payload) = brief.split_once('\n').unwrap();
+    let (golden_prefix, golden) = FEEDER_BATCH_INPUT.split_once('\n').unwrap();
+    assert_eq!(prefix, golden_prefix);
+    let payload: Value = serde_json::from_str(payload).unwrap();
+    assert_eq!(payload, serde_json::from_str::<Value>(golden).unwrap());
+    assert!(payload["run"]["trailers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t.as_str().unwrap().starts_with("Writer: ")));
     assert!(registry.lock().unwrap().claimed.is_empty());
 }
 
