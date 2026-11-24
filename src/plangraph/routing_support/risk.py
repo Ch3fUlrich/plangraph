@@ -104,7 +104,7 @@ RULE_33_CLASSES: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = tupl
         ("gate-files",
          r"^(?:tools/(?:ci_commit_[^/]*|gate_wiring_check|check_[^/]*|preflight[^/]*"
          r"|merge_gate[^/]*|bench_gate|hooks/[^/]*)|\.githooks/.*"
-         r"|rust/plangraph-cli/src/land/(?:go_verify|registrar|resolve)[^/]*"
+         r"|rust/plangraph-cli/src/land/(?:accept|go_verify|registrar|resolve)[^/]*"
          r"|\.gitattributes|(?:.*/)?\.gitattributes)$", ()),
         ("gate-files", r"^(?:.*/)?[^/]*(?:guard|validator|hook)s?[^/]*\.(?:py|rs|sh|toml)$", ()),
         # The verdict and record tools decide what a review counts for; the classifier decides how

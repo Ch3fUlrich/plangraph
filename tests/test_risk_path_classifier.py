@@ -81,6 +81,7 @@ def test_operational_escalation_preserved(kwargs):
     ("keeper-service-api", "src/plangraph/keeper/api_routes.py"),
     ("gate-files", "tools/ci_commit_gate.py"),
     ("gate-files", "rust/plangraph-cli/src/land/go_verify.rs"),
+    ("gate-files", "rust/plangraph-cli/src/land/accept.rs"),
     ("gate-files", "src/plangraph/spawner/git_guard.py"),
     ("gate-files", "tools/seat_verdict.py"),
     ("gate-files", "tools/seat_record.py"),
