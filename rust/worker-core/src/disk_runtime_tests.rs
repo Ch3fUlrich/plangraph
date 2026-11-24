@@ -426,3 +426,157 @@ fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_on
                 .all(|a| !a.contains("ffffffffffffffff"))
     );
 }
+
+#[cfg(target_os = "linux")]
+fn over_cap_target(
+    parent: &Path,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    Vec<std::path::PathBuf>,
+) {
+    let checkout = parent.join("checkout");
+    let target = parent.join("target");
+    let profile = target.join("debug");
+    fs::create_dir_all(profile.join("build")).unwrap();
+    fs::create_dir(&checkout).unwrap();
+    fs::write(profile.join(".cargo-lock"), []).unwrap();
+    fs::write(
+        target.join("CACHEDIR.TAG"),
+        b"Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 3600);
+    let units = (0..10)
+        .map(|n| {
+            let path = profile.join("build").join(format!("pg-core-{n:016x}"));
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("build-script-build"), vec![0u8; 100]).unwrap();
+            for p in [path.join("build-script-build"), path.clone()] {
+                fs::File::open(p).unwrap().set_modified(old).unwrap();
+            }
+            path
+        })
+        .collect();
+    (checkout, target, units)
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn trim_refusals_name_the_live_holder_pid() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, _) = over_cap_target(parent.path());
+    let lease = crate::cargo_cache::writer_lease(&target).unwrap();
+    let report = post_run_cargo_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap();
+    let note = format!("held by pid {}", std::process::id());
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.contains("cache lease held") && s.contains(&note)),
+        "{:?}",
+        report.skipped
+    );
+    drop(lease);
+    // A pool slot over its cap and leased reports the same holder.
+    let slot = parent.path().join("slot-0");
+    fs::create_dir_all(slot.join("debug")).unwrap();
+    fs::write(slot.join("debug/blob"), [0u8; 64]).unwrap();
+    let _slot_lease = crate::cargo_cache::writer_lease(&slot).unwrap();
+    let mut report = Report::default();
+    crate::cargo_pool::enforce_pool_cap(&[slot], 10, true, &mut report).unwrap();
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.contains("(leased") && s.contains(&note)),
+        "{:?}",
+        report.skipped
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_brings_an_over_cap_target_under_the_cap_under_the_exclusive_lease() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, _) = over_cap_target(parent.path());
+    let bytes = crate::disk_hygiene::scan(&target).unwrap().0;
+    assert!(bytes > 700);
+    let report =
+        reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap();
+    assert!(report.freed_bytes > 0);
+    assert!(crate::disk_hygiene::scan(&target).unwrap().0 <= 700);
+    // Under the cap nothing is touched, whatever is running.
+    let kept = reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], true))).unwrap();
+    assert!(kept.actions.is_empty() && kept.freed_bytes == 0);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_refuses_a_target_with_a_real_git_directory_and_keeps_it() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, units) = over_cap_target(parent.path());
+    fs::create_dir(target.join(".git")).unwrap();
+    let error =
+        reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap_err();
+    assert!(error.starts_with("cargo_target_not_reclaimed:"), "{error}");
+    assert!(
+        error.contains(".git") && error.contains("retry the push"),
+        "{error}"
+    );
+    assert!(units.iter().all(|unit| unit.exists()));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_leaves_a_receipt_while_a_second_build_runs_or_a_lease_is_held() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, units) = over_cap_target(parent.path());
+    let error =
+        reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], true))).unwrap_err();
+    assert!(
+        error.contains("still holds") && error.contains("retry the push"),
+        "{error}"
+    );
+    assert!(units.iter().all(|unit| unit.exists()));
+    let lease = crate::cargo_cache::writer_lease(&target).unwrap();
+    let error =
+        reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap_err();
+    assert!(
+        error.contains(&format!("held by pid {}", std::process::id())),
+        "{error}"
+    );
+    assert!(error.contains("cache lease held"), "{error}");
+    assert!(units.iter().all(|unit| unit.exists()));
+    drop(lease);
+    assert!(reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).is_ok());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_follows_a_symlinked_target_to_its_real_directory() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, real, units) = over_cap_target(parent.path());
+    let link = parent.path().join("configured-target");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    // Held at the real path (as a writer's shim holds it): the receipt names the holder.
+    let command = crate::cargo_cache::writer_lease(&real).unwrap();
+    let error =
+        reclaim_before_push_using(&checkout, &link, 700, || Ok((vec![], false))).unwrap_err();
+    assert!(
+        error.contains("not_reclaimed") && error.contains("held by pid"),
+        "{error}"
+    );
+    assert!(units.iter().all(|unit| unit.exists()));
+    drop(command);
+    reclaim_before_push_using(&checkout, &link, 700, || Ok((vec![], false))).unwrap();
+    assert!(crate::disk_hygiene::scan(&real).unwrap().0 <= 700);
+    // A target that is not cargo output is refused through the link too, never counted as empty.
+    let (_, other, _) = over_cap_target(&parent.path().join("second"));
+    let other_link = parent.path().join("other-link");
+    std::os::unix::fs::symlink(&other, &other_link).unwrap();
+    fs::create_dir(other.join(".git")).unwrap();
+    let error =
+        reclaim_before_push_using(&checkout, &other_link, 700, || Ok((vec![], false))).unwrap_err();
+    assert!(error.contains("not identified"), "{error}");
+}

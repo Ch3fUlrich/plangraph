@@ -1,0 +1,1 @@
+- Native runs: verified by test that a writer idle between Cargo commands does not hold the shared Cargo lease so host trim succeeds, and that `running_disk_refusal` cap refusals name the live PID holding the lease.

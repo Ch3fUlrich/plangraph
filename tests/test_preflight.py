@@ -728,3 +728,49 @@ def test_post_run_trim_executes_after_cargo_lease_is_released(repo, monkeypatch,
         assert "cargo post-run trim" not in output
     else:
         assert message in output
+
+
+def test_preflight_cargo_commands_mark_the_lease_they_hold(repo, monkeypatch):
+    """A cargo shim on PATH reuses preflight's lease instead of waiting on it (NATIVE-CARGO-COMMAND-LEASE)."""
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    monkeypatch.setenv("PATH", str(repo / "nobin"))
+    monkeypatch.delenv("RUSTC_WRAPPER", raising=False)
+    code, seen = _rust_main(repo, monkeypatch)
+    assert code == 0 and seen
+    assert seen[0]["PLANGRAPH_CARGO_LEASE_HELD"] == seen[0]["CARGO_TARGET_DIR"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc/locks")
+def test_cargo_lease_holders_name_live_pids_and_notes_the_refusal(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready as h
+    target = tmp_path / "shared"
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    assert h.cargo_lease_holders(target) == [] and h.lease_holder_note(target) == ""
+    lease = h.cargo_lease()
+    try:
+        assert h.cargo_lease_holders(target) == [os.getpid()]
+        assert h.lease_holder_note(target) == f" (held by pid {os.getpid()})"
+    finally:
+        lease.close()
+    assert h.cargo_lease_holders(target) == []
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc/locks")
+def test_running_disk_refusal_cap_message_names_holding_pid(repo, monkeypatch):
+    """A cap refusal names the pid holding the shared cargo lease (LE-RUN-SUPERVISOR-HOLDS-CARGO-LEASE-BLOCKS-TRIM)."""
+    from plangraph.spawner import host_ready as h
+    target = repo / "shared-cap"
+    (target / "debug").mkdir(parents=True)
+    (target / "debug" / "blob").write_bytes(b"x" * 65536)
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "0.000001")
+    monkeypatch.setattr(h, "disk_free_gb", lambda path: 100.0)
+    lease = h.cargo_lease()
+    try:
+        refusal = h.running_disk_refusal(repo)
+    finally:
+        lease.close()
+    assert refusal is not None and refusal.startswith("cargo_target_cap:"), refusal
+    assert f"(held by pid {os.getpid()})" in refusal, refusal
+    after = h.running_disk_refusal(repo)
+    assert after is not None and "held by pid" not in after, after
