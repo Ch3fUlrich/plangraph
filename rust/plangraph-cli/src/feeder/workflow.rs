@@ -221,6 +221,16 @@ const ATTEMPT_RESERVE_SECONDS: u64 = 60;
 /// held claim after the deadline.
 const CALL_SECONDS: u64 = 20;
 
+/// Most members a batch may claim from `elapsed` on: the k-th claim needs one call plus the
+/// release of k held claims (`CALL_SECONDS` each) before the budget, so k <= remaining/20 - 1
+/// (at least the seed, which `attempt_fits` already allowed). A larger batch is cut to its first
+/// members before claiming, instead of claiming and giving them all back for lack of time.
+fn claims_that_fit(elapsed: std::time::Duration, budget: u64) -> usize {
+    let used = elapsed.as_secs() + u64::from(elapsed.subsec_nanos() > 0);
+    let slots = budget.saturating_sub(used) / CALL_SECONDS;
+    usize::try_from(slots.saturating_sub(1)).map_or(usize::MAX, |k| k.max(1))
+}
+
 /// Whether one more keeper call can begin and, with `held` claims then held, still be followed
 /// by releasing them all before the budget (counted from service entry) is spent.
 fn call_fits(launch: &mut impl Launch, budget: u64, held: usize) -> bool {
@@ -312,7 +322,10 @@ pub fn tick(
             break;
         }
         attempt_started = Some(now);
-        let batch = pick_batch(&ready, &sim_runs, policy);
+        let mut batch = pick_batch(&ready, &sim_runs, policy);
+        if !dry {
+            batch.truncate(claims_that_fit(now, policy.tick_budget_seconds));
+        }
         let Some(seed) = batch.first() else { break };
         if let Admission::Refuse(reason) = admit(&sim_facts, policy) {
             if rows.is_empty() {
@@ -439,6 +452,20 @@ pub fn tick(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_batch_is_cut_to_the_members_whose_claims_and_releases_fit() {
+        let s = Duration::from_secs;
+        // 100 s budget: each claim needs 20 s for itself and 20 s per held claim to release.
+        assert_eq!(claims_that_fit(s(0), 100), 4);
+        assert_eq!(claims_that_fit(s(5), 100), 3);
+        assert_eq!(claims_that_fit(s(38), 100), 2);
+        assert_eq!(claims_that_fit(Duration::from_millis(500), 100), 3);
+        // Never below the seed the attempt guard already admitted.
+        assert_eq!(claims_that_fit(s(40), 100), 2);
+        assert_eq!(claims_that_fit(s(79), 100), 1);
+        assert_eq!(claims_that_fit(s(99), 100), 1);
+    }
 
     #[test]
     fn an_attempt_needs_the_reserve_or_the_last_attempt_before_the_deadline() {

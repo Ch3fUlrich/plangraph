@@ -250,3 +250,36 @@ fn a_launch_cut_off_at_its_deadline_keeps_its_claims() {
         .claimed
         .contains_key("plangraph:ALPHA-1"));
 }
+
+#[test]
+fn a_batch_of_four_still_launches_with_the_members_that_fit_the_deadline() {
+    let items: Vec<Value> = (1..=4)
+        .map(|n| item(&format!("ALPHA-{n}"), 10 - n, &[&format!("src/a{n}.rs")]))
+        .collect();
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    // 5 s of preflight and instant keeper calls: three claims fit with their releases. The
+    // fourth member waits for a later tick (its family is held by the running batch); the
+    // tick makes progress instead of claiming four and giving them all back.
+    host.clock = 5;
+    let row = drive(&ready(items.clone()), &mut host, "dell", 4, false);
+    assert_eq!(
+        registry.lock().unwrap().started,
+        [vec![
+            "plangraph:ALPHA-1",
+            "plangraph:ALPHA-2",
+            "plangraph:ALPHA-3"
+        ]]
+    );
+    assert_ne!(row["decision"], "refused");
+    assert!(registry.lock().unwrap().released.is_empty());
+    // With 38 s of preflight two claims fit.
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    host.clock = 38;
+    drive(&ready(items), &mut host, "dell", 4, false);
+    assert_eq!(
+        registry.lock().unwrap().started,
+        [vec!["plangraph:ALPHA-1", "plangraph:ALPHA-2"]]
+    );
+}
