@@ -506,14 +506,20 @@ def note_no_verdict(state, record, now=None):
             return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
         except (OSError, ValueError):
             return []
-    with open(seats, 'a', encoding='utf-8') as out:
-        out.write(json.dumps(dict(ts=now, run_id=record.get('run_id'), reason=reason)) + '\n')
+    try:
+        with open(seats, 'a', encoding='utf-8') as out:
+            out.write(json.dumps(dict(ts=now, run_id=record.get('run_id'), reason=reason)) + '\n')
+    except OSError:
+        return None   # an alert that cannot be booked never blocks the result
     recent = [row for row in rows(seats) if now - row['ts'] <= NO_VERDICT_WINDOW_S and row['reason'] == reason]
     if len(recent) < NO_VERDICT_REPEAT or any(
             row['reason'] == reason and now - row['ts'] <= NO_VERDICT_WINDOW_S for row in rows(alerts)):
         return None
     alert = dict(ts=now, kind='no_verdict_repeat', reason=reason, seats=[row['run_id'] for row in recent])
-    with open(alerts, 'a', encoding='utf-8') as out:
-        out.write(json.dumps(alert) + '\n')
+    try:
+        with open(alerts, 'a', encoding='utf-8') as out:
+            out.write(json.dumps(alert) + '\n')
+    except OSError:
+        pass
     logging.getLogger(__name__).error('no_verdict_alert %d review seats ended without a verdict: %s', len(recent), reason)
     return alert

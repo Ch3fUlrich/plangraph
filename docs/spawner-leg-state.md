@@ -165,3 +165,5 @@ Launch admission rereads quota evidence rather than trusting an earlier plan. `Q
 
 `plangraph quota [--db PATH]` prints usage by provider, account and window with the
 recorded observation time. `--db` selects an explicit read-only snapshot store.
+
+Model discovery runs the harness found by `resolve_harness_binary` (`routing_support/clients.py`), never a bare `opencode` on the unit's PATH. A missing binary is a host fault: the leg state is `down` with reason `harness_missing: <name> <searched paths>`, not `unknown`, `unreachable` or a timeout.
