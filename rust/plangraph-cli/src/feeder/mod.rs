@@ -191,16 +191,20 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
 }
 
 pub fn brief(item: &Task, house_rules: &str) -> String {
-    let done = item
-        .done_criteria
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| item.done_criteria.to_string());
+    let done = done_criteria_text(&item.done_criteria).unwrap_or_else(|| "null".into());
     let metadata = task_metadata(item);
     format!("Plan item: {}\nTitle: {}\n\n{}\n\nDone criteria:\n{}\n\nFiles:\n{}\n\nNotes:\n{}\n\nTask metadata:\n{}\n\n{}\n",
         item.key,item.title,item.description.as_deref().unwrap_or(""),done,item.files.join("\n"),
         item.fields.get("note").and_then(Value::as_str).unwrap_or(""),serde_json::to_string(&metadata).expect("JSON values"),
         house_rules.replace("{{item_key}}",&item.key).trim())
+}
+
+fn done_criteria_text(criteria: &Value) -> Option<String> {
+    (!criteria.is_null()).then(|| {
+        criteria
+            .as_str()
+            .map_or_else(|| criteria.to_string(), str::to_owned)
+    })
 }
 
 fn task_metadata(item: &Task) -> BTreeMap<&'static str, &Value> {

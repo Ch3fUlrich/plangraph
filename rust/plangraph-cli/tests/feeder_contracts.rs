@@ -100,6 +100,38 @@ fn whole_tick_dry_run_does_not_touch_claim_or_spawner() {
     assert_eq!(row["item_key"], "plangraph:PATCH-PR");
     assert!(f.calls.is_empty());
 }
+
+#[test]
+fn typed_feeder_brief_preserves_structured_done_criteria() {
+    for criteria in [
+        json!(["Tests pass", "Document the result"]),
+        json!({"tests": "pass", "evidence": "recorded"}),
+    ] {
+        let mut ready = ready();
+        let item = ready["items"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["key"] == "plangraph:PATCH-PR")
+            .unwrap();
+        item["done_criteria"] = criteria.clone();
+
+        let mut launch = Fake::default();
+        let preview = drive(&ready, &mut launch, true);
+        assert_eq!(preview["decision"], "would_spawn", "{preview}");
+        let input = pg_worker_core::writer_brief::Input::decode(preview["brief"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(input.items[0].done_criteria, criteria.to_string());
+        let started = drive(&ready, &mut launch, false);
+        assert_eq!(started["decision"], "spawned", "{started}");
+        assert_eq!(started["run"]["run_id"], "run-ok");
+        assert_eq!(
+            launch.calls,
+            ["claim plangraph:PATCH-PR", "start plangraph:PATCH-PR"]
+        );
+    }
+}
 #[test]
 fn legacy_ready_context_skips_guard_refusals_without_dropping_old_unclaimed_work() {
     let mut v = ready();

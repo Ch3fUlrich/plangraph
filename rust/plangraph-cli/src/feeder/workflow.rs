@@ -147,7 +147,7 @@ fn batch_brief(items: &[Task], policy: &Policy, reviews: &str) -> Result<String,
                 key: task.key.clone(),
                 title: task.title.clone(),
                 description: task.description.clone().unwrap_or_default(),
-                done_criteria: task.done_criteria.as_str().unwrap_or_default().into(),
+                done_criteria: done_criteria_text(&task.done_criteria).unwrap_or_default(),
                 files: task.files.clone(),
                 context: (!context.is_empty()).then(|| context.join("\n\n")),
             }

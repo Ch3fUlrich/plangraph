@@ -76,6 +76,8 @@ pub(super) fn prepare(
     } else {
         supplied.text = prompt;
     }
+    // The handoff resumes the local checkout. Forward the original wire so the receiver can validate it.
+    supplied.pushed_fix = None;
     Ok(Some(Restart {
         card: card.path,
         handoff: card.handoff,

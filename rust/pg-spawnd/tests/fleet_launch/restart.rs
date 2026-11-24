@@ -6,6 +6,9 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
+#[path = "typed_fix_respawn.rs"]
+mod typed_fix_respawn;
+
 const OLD: &str = "work/status/handoff-old.md";
 const NEW: &str = "work/status/handoff-new.md";
 
@@ -139,6 +142,7 @@ pub fn check(launcher: &Launcher) {
     check_explicit_guard(launcher);
     check_card_order(launcher);
     check_unrelated_prose(launcher);
+    typed_fix_respawn::check(launcher);
     println!("fleet-launch restart prompt checks passed");
 }
 
