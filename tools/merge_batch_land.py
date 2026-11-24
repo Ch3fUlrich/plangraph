@@ -779,7 +779,8 @@ def cmd_go_req(args):
     deviations += st.get("forced", [])
     deviation = "; ".join(deviations) or "none"
     version = keeper_migration(st)
-    migration = f"MIGRATION {version}; " if version is not None else ""
+    migration = (f"MIGRATION {version}; keeper deploy: plangraph keeper-restart CHECKOUT KEEPER_CONFIG "
+                 "MIGRATION_DSN_FILE, never a plain restart; " if version is not None else "")
     summary = landing_report(st).get("summary") if keeper_landing_configured() else None
     timeline = f"timeline: {summary}; " if summary else ""
     line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
