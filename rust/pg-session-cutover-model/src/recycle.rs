@@ -108,11 +108,11 @@ impl Model {
         }
         self.adopted_over_active |= working;
         self.adopted = succ;
-        // Whatever urgent events wait go to the successor at once, with its card.
-        let mut waiting = false;
+        // The urgent events that wait are delivered to the successor with its card, in the
+        // adoption itself: a role that had no live session reads them as its first act.
         for e in &mut self.events {
             if e.class == Class::Urgent && matches!(e.stage, Stage::Occurred | Stage::Detected) {
-                (e.escalated, waiting) = (true, true);
+                (e.stage, e.seen) = (Stage::Received, true);
             }
         }
         self.sessions[usize::from(succ)].fenced = false;
@@ -129,9 +129,6 @@ impl Model {
             if here && !m.record && (!snapshot_only || m.snap) {
                 (m.home, m.read) = (Home::Session(succ), false);
             }
-        }
-        if waiting {
-            self.wake_adopted();
         }
         self.recycle = if self.sessions[usize::from(pred)].life == Life::Stopped {
             Recycle::Idle

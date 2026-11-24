@@ -26,9 +26,10 @@ obligation is due, so a scan, wake, takeover or supervisor pass cannot be skippe
 | supervisor pass | at most 20 s | parameter; `takeover + pass <= bound` is checked |
 | one read per source | at most 60 s | A2 scan period; a hung read is visible at once |
 | Stop-hook cap | 9 | canary-a1, Claude Code 2.1.329 |
-| digest | 8192 bytes, header 64 | A3 req 6; the fleet's Bash output limit; the range header is counted |
+| digest | 8192 bytes, header 64 | A3 req 6; the fleet's Bash output limit; the range header comes first and is counted |
 | launch budget | 30 s | confirm and adopt, or abort; parameter |
 | longest timer | 2000 s (200 ticks) | `Params::check` refuses more: the counters would overflow |
+| events | at most 64 | the occurrence counter is a byte; more are refused |
 
 ## Invariants (`Model::violations`)
 
@@ -50,13 +51,16 @@ obligation is due, so a scan, wake, takeover or supervisor pass cannot be skippe
 Requirement 6: a scan moves events into the digest (scan cursor) and never acknowledges. A digest
 receipt starts with its range header and covers the events that fit `digest_bytes`, urgent first,
 then by occurrence order (not event id); the rest stay pending and are replayed to a successor
-(`DigestOverBudget`). Events on today's path (escalated, or after a rollback) are delivered one
-by one and are not capped. The text of the header is a build slice. Requirement 7 is `Rollback` and `RevokeGo`: both abort a launch not yet adopted, hand every
+(`DigestOverBudget`, `RangeNotFirst`: the digest is a list of sections, the range first). Events on today's path (escalated, or after a rollback) are delivered one
+by one and are not capped. The header text is a build slice.
+Requirement 7 is `Rollback` and `RevokeGo`: both abort a launch not yet adopted, hand every
 unreceived event to today's path and end the Stop hook; an adopted recycle is only cleaned up.
-Event time runs only while a live current session exists. With none, the supervisor owes a
-launch within 20 s (`Unattended`) and a launch must be confirmed and adopted, or aborted, within
-30 s, so each attempt costs at most 50 s on top of the 90 s; adoption hands the waiting urgent
-events to the successor, which reads them at once.
+The bound runs on elapsed time from occurrence, through recovery. With a live current session
+the event must be read by 90 s. With none nothing can read it, so by the bound it must be handed
+to today's path, which then is the operator alarm (`Escalate`); the supervisor owes a launch
+within 20 s and a launch is confirmed and adopted, or aborted, within 30 s. A recovery that
+needs two launches can therefore deliver after 90 s, never silently: adoption delivers the
+waiting urgent events to the successor with its card.
 
 ## Transitions
 
@@ -112,6 +116,9 @@ predecessor after the forward snapshot is carried by `Adopt`, which follows reco
 | review round 2 HIGH: the digest cap throttled legacy receipts after a rollback | `legacy_receipts_after_a_rollback_are_not_capped_by_the_digest` |
 | review round 2 MED: receipts sorted by event id | `receipts_follow_occurrence_order_not_event_ids` |
 | review round 2 MED: byte limit and range first | `a_digest_starts_with_its_range_and_never_exceeds_its_byte_limit` |
+| review round 3 HIGH: a paused clock let a receipt pass 90 s unrecorded | `a_stalled_launch_and_a_retry_hand_the_event_over_by_the_bound_...` |
+| review round 3 MED: byte arithmetic overflowed; the occurrence counter wrapped | `the_largest_digest_budget_does_not_overflow_...`, `the_occurrence_counter_cannot_wrap_...` |
+| review round 3 MED: range after the events could not be detected | `a_range_written_after_the_events_is_caught` |
 | review round 1 MED: a timer beyond the counters panicked | `timers_beyond_the_counters_are_refused_...` |
 | alwayson r3: activation, rollback, per-role GO; req 5 crons and beats | `activation_needs_shadow_fence_...`, `losing_the_go_...`; beats and follow-ups in the window test |
 
@@ -121,7 +128,7 @@ unsafe model breaks the listed invariant while the same search on the safe model
 ## Exhaustive bounds (`tests/exhaustive.rs`)
 
 Production times; Stop-hook cap 2 (1 in the two-recycle search, 9 in the named scenario); digest cap 1 in the wake search. Every ordering up to: wake, 1
-session, 2 urgent events on 2 sources and 1 ordinary, 13 events; recycle, 2 sessions, 1 urgent
+session, 2 urgent events on 2 sources, 13 events; recycle, 2 sessions, 1 urgent
 event, 2 messages, 11 events; recycles, 3 sessions (two recycles), 1 message, crashes, 16
 events; gates, all mode and gate events with 2 sessions and 1 event, 15 events. Each checks that
 refusals change nothing, invariants hold, event stages and handling records never go back, and

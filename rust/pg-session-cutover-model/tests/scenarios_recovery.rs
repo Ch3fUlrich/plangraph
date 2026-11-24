@@ -35,11 +35,9 @@ fn a_crashed_current_session_is_recovered_and_its_messages_are_replayed() {
     );
     assert_eq!(
         m.stage(0),
-        Stage::Detected,
-        "the event waited in the digest"
+        Stage::Received,
+        "adoption delivers the waiting event with the card"
     );
-    run(&mut m, &[Event::Receive(1)]);
-    assert_eq!(m.stage(0), Stage::Received);
 }
 
 #[test]
@@ -52,34 +50,45 @@ fn a_session_without_a_fresh_card_cannot_be_replaced_only_woken() {
 }
 
 #[test]
-fn a_stalled_launch_is_bounded_and_a_slow_recovery_still_reads_the_urgent_event() {
-    // gpt-6.2-sol-high round 2 HIGH: a fenced candidate must not count as attendance forever.
+fn a_stalled_launch_and_a_retry_hand_the_event_over_by_the_bound_and_deliver_it_at_adoption() {
+    // gpt-6.2-sol-high rounds 2 and 3 HIGH: the bound runs on elapsed time across recovery.
     let mut p = params(vec![URGENT(0)], 0);
     p.sessions = 3;
     let mut m = armed_ready(p);
     run(&mut m, &[Event::Occur(0), Event::Scan(0), Event::Crash(0)]);
-    // No live current session: the supervisor owes a launch within one pass, event time is paused.
+    // t=20 s: no live current session; the supervisor owes a launch within one pass.
     ticks(&mut m, SUPERVISOR_SECS);
     assert_eq!(m.apply(Event::Tick), Err(Denied::Deadline));
     run(&mut m, &[Event::BeginRecycle]);
-    // The launch never confirms: time stops at the launch budget until it is aborted.
+    // t=50 s: the launch never confirms; time stops at the launch budget until it is aborted.
     ticks(&mut m, RECYCLE_SECS);
     assert_eq!(m.apply(Event::Tick), Err(Denied::Deadline));
     run(&mut m, &[Event::AbortRecycle]);
+    // t=60 s: the sources are read again; the supervisor owes another launch.
+    ticks(&mut m, 10);
     scan_all(&mut m);
-    ticks(&mut m, SUPERVISOR_SECS);
-    assert_eq!(m.apply(Event::Tick), Err(Denied::Deadline));
+    assert_eq!(
+        m.apply(Event::Escalate(0)),
+        Err(Denied::Guard),
+        "not before the takeover age"
+    );
+    ticks(&mut m, 10);
+    // t=70 s: nothing can read the event, so by the bound it is handed to today's path (the
+    // alarm); without that, time stops before 90 s.
+    run(&mut m, &[Event::BeginRecycle]);
+    let mut silent = m.clone();
+    ticks(&mut silent, 20);
+    assert_eq!(silent.apply(Event::Tick), Err(Denied::Deadline));
+    run(&mut m, &[Event::Escalate(0)]);
+    // t=100 s: the second launch takes its whole budget, then adoption delivers the event.
+    ticks(&mut m, RECYCLE_SECS);
     assert_eq!(
         m.age_secs(0),
-        0,
-        "no session lived to read it, so its clock did not run"
+        100,
+        "the clock ran through the whole recovery"
     );
-    run(&mut m, &[Event::BeginRecycle, Event::Confirm]);
-    ticks(&mut m, 10);
-    run(&mut m, &[Event::Adopt]);
-    // The adopted session is handed the waiting event with its card and reads it at once.
-    assert_eq!(m.apply(Event::Tick), Err(Denied::Deadline));
-    run(&mut m, &[Event::Receive(2)]);
-    assert!(m.stage(0) == Stage::Received && m.age_secs(0) <= URGENT_BOUND_SECS);
+    assert_eq!((m.stage(0), m.escalated(0)), (Stage::Detected, true));
+    run(&mut m, &[Event::Confirm, Event::Adopt]);
+    assert_eq!(m.stage(0), Stage::Received);
     assert_eq!(m.violations(), vec![]);
 }

@@ -22,13 +22,36 @@ pub struct Model {
     pub(crate) last_digest: Option<Digest>,
 }
 
-/// What the last digest receipt covered: events and bytes, header included.
+/// One section of a digest, in the order it is written.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Part {
+    /// Occurrence order of the first and last event the digest covers.
+    Range(u8, u8),
+    /// An event line, by its occurrence order.
+    Event(u8),
+}
+
+/// The last digest receipt: its sections in output order, and its size, header included.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Digest {
-    pub events: u8,
-    pub bytes: u16,
-    /// Occurrence order of the first and last event covered.
-    pub range: (u8, u8),
+    pub parts: Vec<Part>,
+    pub bytes: u32,
+}
+
+impl Digest {
+    pub fn events(&self) -> usize {
+        self.parts
+            .iter()
+            .filter(|p| matches!(p, Part::Event(_)))
+            .count()
+    }
+
+    pub fn range(&self) -> Option<(u8, u8)> {
+        self.parts.iter().find_map(|p| match p {
+            Part::Range(a, b) => Some((*a, *b)),
+            Part::Event(_) => None,
+        })
+    }
 }
 
 impl Model {
@@ -172,8 +195,8 @@ impl Model {
         u16::from(self.asleep_age) * TICK_SECS
     }
 
-    pub fn last_digest(&self) -> Option<Digest> {
-        self.last_digest
+    pub fn last_digest(&self) -> Option<&Digest> {
+        self.last_digest.as_ref()
     }
 
     pub fn live_current(&self) -> usize {

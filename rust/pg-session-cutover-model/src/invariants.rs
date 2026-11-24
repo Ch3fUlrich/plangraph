@@ -38,15 +38,18 @@ impl Model {
         if self.msgs.iter().any(|m| m.record && !m.acted) {
             out.push(Invariant::HandledWithoutAction);
         }
-        // The bound runs to the session's receipt, on the fallback path too. With no live
-        // current session the recovery path owns the event (`Unattended` bounds that).
+        // The bound runs from occurrence to the session's receipt, across recovery too. With no
+        // live current session nothing can read the event, so by the bound it must at least be
+        // handed to today's path, which then is the operator alarm; adoption delivers it.
         let bound = Params::ticks(self.p.bound_secs);
+        let live = self.live_current() > 0;
         let late = |e: &&Evt| {
             e.class == Class::Urgent
                 && matches!(e.stage, Stage::Occurred | Stage::Detected)
                 && e.age > bound
+                && (live || !e.escalated)
         };
-        if active && self.live_current() > 0 && self.events.iter().filter(late).count() > 0 {
+        if active && self.events.iter().filter(late).count() > 0 {
             out.push(Invariant::UrgentBound);
         }
         if self
@@ -56,11 +59,18 @@ impl Model {
         {
             out.push(Invariant::ReceivedUnread);
         }
-        if self
-            .last_digest
-            .is_some_and(|d| d.bytes > self.p.digest_bytes)
-        {
-            out.push(Invariant::DigestOverBudget);
+        if let Some(d) = &self.last_digest {
+            if d.bytes > u32::from(self.p.digest_bytes) {
+                out.push(Invariant::DigestOverBudget);
+            }
+            let ranges = d
+                .parts
+                .iter()
+                .filter(|p| matches!(p, Part::Range(..)))
+                .count();
+            if ranges != 1 || !matches!(d.parts.first(), Some(Part::Range(..))) {
+                out.push(Invariant::RangeNotFirst);
+            }
         }
         let sup = Params::ticks(self.p.supervisor_secs);
         if active && self.asleep_age > sup && self.supervisor_can_act() {

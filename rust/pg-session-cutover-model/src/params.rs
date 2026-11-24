@@ -18,6 +18,8 @@ pub const HEADER_BYTES: u16 = 64;
 pub const RECYCLE_SECS: u16 = 30;
 pub const MAX_SESSIONS: u8 = 3;
 pub const MAX_SOURCES: usize = 2;
+/// Most events one exploration may define: the occurrence counter is a byte.
+pub const MAX_EVENTS: usize = 64;
 /// Longest timer, in ticks, that the counters hold without overflow.
 pub const MAX_TICKS: u16 = 200;
 
@@ -96,6 +98,7 @@ impl Params {
         if secs.iter().any(|s| s / TICK_SECS > MAX_TICKS)
             || self.sessions == 0
             || self.sessions > MAX_SESSIONS
+            || self.events.len() > MAX_EVENTS
             || self
                 .events
                 .iter()
@@ -135,10 +138,12 @@ pub enum Defect {
     ScanIsReceipt,
     /// A digest carries every pending event, whatever its size.
     DigestUnbounded,
+    /// The range is written after the event lines, where an output cut drops it.
+    FooterRange,
 }
 
 impl Defect {
-    pub const ALL: [Defect; 10] = [
+    pub const ALL: [Defect; 11] = [
         Defect::NoTakeover,
         Defect::RecycleWhileActive,
         Defect::NoFence,
@@ -149,6 +154,7 @@ impl Defect {
         Defect::FallbackNotAwaited,
         Defect::ScanIsReceipt,
         Defect::DigestUnbounded,
+        Defect::FooterRange,
     ];
 
     pub(crate) fn bit(self) -> u16 {
