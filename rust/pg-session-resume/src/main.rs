@@ -7,6 +7,9 @@
 //!   --quiet-s N      stop-done: transcript must be still this long (default 60)
 //!   --session ID     stop-done: only this session id (the Stop hook path)
 //!   --delay-s N      stop-done: wait first, so the turn that wrote DONE can end
+//!
+//! pg-session-resume deliver --lane L --head SHA [--file F] [--pr-dir DIR]
+//!   writes the next findings round of lane L (text from F or stdin) with its head sidecar
 
 use pg_session_resume::engine::{reap_idle, resume_findings, stop_done, Config, DEFAULT_ALLOW};
 use pg_session_resume::lock::Lock;
@@ -84,6 +87,23 @@ fn stop_hook(state: &std::path::Path, args: &[String]) -> Result<(), String> {
     child.spawn().map(drop).map_err(|e| e.to_string())
 }
 
+fn deliver_cmd(flags: &HashMap<String, String>, pr_dir: &std::path::Path) -> Result<(), String> {
+    let lane = flags.get("lane").ok_or("deliver needs --lane")?;
+    let head = flags.get("head").ok_or("deliver needs --head")?;
+    let text = match flags.get("file") {
+        Some(f) => std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?,
+        None => {
+            let mut t = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut t)
+                .map_err(|e| e.to_string())?;
+            t
+        }
+    };
+    let file = pg_session_resume::deliver::deliver(pr_dir, lane, head, &text)?;
+    println!("{}", file.display());
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (cmd, rest) = args
@@ -100,6 +120,9 @@ fn run() -> Result<(), String> {
             .map(PathBuf::from)
             .unwrap_or_else(|| home().join(".local/state/pr"))
     });
+    if cmd == "deliver" {
+        return deliver_cmd(&flags, &pr_dir);
+    }
     if cmd == "stop-hook" {
         let passthrough = ["--pr-dir".to_owned(), pr_dir.display().to_string()];
         return stop_hook(&state, &passthrough);

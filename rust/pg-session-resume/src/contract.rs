@@ -48,22 +48,16 @@ pub fn findings_round(lane: &str, file_name: &str) -> Option<u64> {
     digits.parse().ok().filter(|n| *n > 0)
 }
 
-/// One findings file: its round, path and modification time (unix seconds).
+/// One findings file of a lane: its round and path.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Finding {
     pub round: u64,
     pub path: PathBuf,
-    /// Modification time in nanoseconds since the epoch.
-    pub mtime_ns: u64,
 }
 
 pub fn mtime_secs(path: &Path) -> Option<u64> {
-    mtime_ns(path).map(|n| n / 1_000_000_000)
-}
-
-pub fn mtime_ns(path: &Path) -> Option<u64> {
     let m = std::fs::metadata(path).ok()?.modified().ok()?;
-    u64::try_from(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos()).ok()
+    Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
 }
 
 /// Every findings file of the lane, ascending by round.
@@ -74,11 +68,9 @@ pub fn list_findings(dir: &Path, lane: &str) -> Vec<Finding> {
         .flatten()
         .filter_map(|e| {
             let round = findings_round(lane, e.file_name().to_str()?)?;
-            let path = e.path();
             Some(Finding {
                 round,
-                mtime_ns: mtime_ns(&path)?,
-                path,
+                path: e.path(),
             })
         })
         .collect();
@@ -86,17 +78,8 @@ pub fn list_findings(dir: &Path, lane: &str) -> Vec<Finding> {
     found
 }
 
-/// The highest round whose file is strictly older than `cutoff_ns`: what the session
-/// already had when it stopped. A file that is not provably older (same instant, or
-/// the same truncated second) is still to be sent: a repeated prompt costs one turn,
-/// a lost one costs a review round.
-pub fn delivered_round(dir: &Path, lane: &str, cutoff_ns: u64) -> u64 {
-    list_findings(dir, lane)
-        .iter()
-        .filter(|f| f.mtime_ns < cutoff_ns)
-        .map(|f| f.round)
-        .max()
-        .unwrap_or(0)
+pub fn highest_round(dir: &Path, lane: &str) -> u64 {
+    list_findings(dir, lane).last().map_or(0, |f| f.round)
 }
 
 /// The sidecar naming the head a findings round reviewed: `<lane>.fix-round-<N>.head`.

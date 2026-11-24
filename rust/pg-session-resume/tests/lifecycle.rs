@@ -82,20 +82,17 @@ fn a_failed_stop_command_leaves_the_record_untouched() {
 fn findings_resume_the_same_session_with_exactly_the_file_text() {
     let r = rig("writer", json!({}));
     done(&r, HEAD);
+    // a round of an earlier review (another head), left from the hand-written days
     write(
         &r,
         "lane-a.fix-round-1.txt",
-        "old round, delivered by hand\n",
+        "old round for an older head\n",
     );
-    touch(&r, "lane-a.fix-round-1.txt", 9_000);
+    write_head(&r, 1, HEAD2);
     let mut h = Fake::new(5000);
     stop_done(&mut h, &r.cfg, 60, None);
     resume_findings(&mut h, &r.cfg);
-    assert_eq!(
-        h.runs.len(),
-        1,
-        "a file that existed at the stop is history"
-    );
+    assert_eq!(h.runs.len(), 1, "a round of another head is not sent");
 
     let text = "REQUEST_CHANGES\n  HIGH foo.rs:3 off by one\n\n";
     write(&r, "lane-a.fix-round-2.txt", text);
@@ -109,7 +106,7 @@ fn findings_resume_the_same_session_with_exactly_the_file_text() {
     assert_eq!(rec["state"], "running");
     assert!(rec["stopped_ts"].is_null());
     assert_eq!(rec["resume"]["round"], 2);
-    let line = h.lines.last().unwrap();
+    let line = resume_line(&h);
     assert!(
         line.contains("event=resume name=writer-0644")
             && line.contains("reason=findings")
@@ -121,6 +118,10 @@ fn findings_resume_the_same_session_with_exactly_the_file_text() {
 
     resume_findings(&mut h, &r.cfg);
     assert_eq!(h.runs.len(), 2, "one findings file resumes once");
+    assert!(h
+        .lines
+        .iter()
+        .any(|l| l.contains("event=resume-acked") && l.contains("round=2")));
 }
 
 #[test]
@@ -153,7 +154,7 @@ fn a_dirty_or_moved_worktree_is_resumed_but_the_log_says_so() {
     h.head = Some(HEAD2.into());
     resume_findings(&mut h, &r.cfg);
     assert!(
-        h.lines.last().unwrap().contains("worktree=dirty+moved"),
+        resume_line(&h).contains("worktree=dirty+moved"),
         "{:?}",
         h.lines
     );
@@ -261,24 +262,25 @@ fn allowlisted_sessions_are_never_reaped() {
 }
 
 #[test]
-fn a_findings_file_the_session_has_not_received_keeps_it_running() {
+fn a_findings_round_the_session_has_not_acknowledged_keeps_it_running() {
     let r = rig("writer", json!({}));
     write(&r, "lane-a.fix-round-1.txt", "old\n");
-    touch(&r, "lane-a.fix-round-1.txt", 90_000);
-    write(&r, "lane-a.fix-round-2.txt", "new findings\n");
-    touch(&r, "lane-a.fix-round-2.txt", 99_500);
     let mut h = Fake::new(100_000);
     h.activity = Some(95_000);
     reap_idle(&mut h, &r.cfg);
     assert!(
         h.runs.is_empty() && h.lines.is_empty(),
-        "round 2 is pending work"
+        "round 1 is pending work"
     );
-    h.activity = Some(99_900); // the session has since seen it (activity after the file)
-    h.now = 120_000;
+    // unrelated activity never clears it: only the acknowledged round does
+    h.activity = Some(99_999);
+    h.now = 200_000;
+    reap_idle(&mut h, &r.cfg);
+    assert!(h.runs.is_empty());
+    patch_resume(&r, "writer", json!({"round": 1}));
     reap_idle(&mut h, &r.cfg);
     assert_eq!(h.runs.len(), 1);
-    assert_eq!(record(&r, "writer")["resume"]["round"], 2);
+    assert_eq!(record(&r, "writer")["resume"]["round"], 1);
 }
 
 #[test]

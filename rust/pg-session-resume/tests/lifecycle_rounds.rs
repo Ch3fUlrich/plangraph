@@ -203,7 +203,7 @@ fn an_idle_stop_without_a_status_head_keeps_the_git_head_for_the_moved_check() {
     h.head = Some(HEAD2.into());
     resume_findings(&mut h, &r.cfg);
     assert!(
-        h.lines.last().unwrap().contains("worktree=clean+moved"),
+        resume_line(&h).contains("worktree=clean+moved"),
         "{:?}",
         h.lines
     );
@@ -219,7 +219,7 @@ fn a_failed_dirty_check_is_logged_as_unknown_never_clean() {
     h.dirty = None;
     resume_findings(&mut h, &r.cfg);
     assert!(
-        h.lines.last().unwrap().contains("worktree=unknown"),
+        resume_line(&h).contains("worktree=unknown"),
         "{:?}",
         h.lines
     );
@@ -290,56 +290,6 @@ fn a_finding_in_the_same_instant_as_the_done_line_is_sent_not_lost() {
     assert_eq!(h.runs.last().unwrap().1[4], "same second");
 }
 
-fn dead_claim(r: &Rig, h: &mut Fake) {
-    done(r, HEAD);
-    stop_done(h, &r.cfg, 60, None);
-    let path = r.cfg.launch_dir.join("writer-0644.json");
-    let mut rec: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    rec["resume"]["claim_round"] = json!(1);
-    rec["resume"]["claim_ts"] = json!(6000);
-    std::fs::write(&path, rec.to_string()).unwrap();
-    write(r, "lane-a.fix-round-1.txt", "fix it");
-}
-
-#[test]
-fn a_claim_left_by_a_dead_tick_counts_as_sent_when_the_runtime_shows_life_after_it() {
-    let r = rig("writer", json!({}));
-    let mut h = Fake::new(5000);
-    dead_claim(&r, &mut h);
-    h.activity = Some(6500);
-    h.now = 7000;
-    let runs = h.runs.len();
-    resume_findings(&mut h, &r.cfg);
-    assert_eq!(h.runs.len(), runs, "no second launch");
-    let rec = record(&r, "writer");
-    assert_eq!(
-        (rec["resume"]["round"].as_u64(), rec["state"].as_str()),
-        (Some(1), Some("running"))
-    );
-    assert!(rec["resume"]["claim_round"].is_null());
-    assert!(h
-        .lines
-        .iter()
-        .any(|l| l.contains("event=resume-reconciled") && l.contains("outcome=launched")));
-}
-
-#[test]
-fn a_claim_left_by_a_dead_tick_is_dropped_and_the_round_sent_again_when_nothing_ran() {
-    let r = rig("writer", json!({}));
-    let mut h = Fake::new(5000);
-    dead_claim(&r, &mut h);
-    h.activity = Some(5500); // before the claim at 6000
-    h.now = 7000;
-    resume_findings(&mut h, &r.cfg);
-    assert!(h.lines.iter().any(|l| l.contains("outcome=not-launched")));
-    assert_eq!(
-        h.runs.last().unwrap().1[4],
-        "fix it",
-        "the lost round goes out now"
-    );
-    assert_eq!(record(&r, "writer")["resume"]["round"], 1);
-}
-
 #[test]
 fn a_codex_session_with_a_running_child_or_unknown_state_is_never_stopped() {
     for (children, why) in [(Some(true), None), (None, Some("no-runtime-state"))] {
@@ -375,7 +325,7 @@ fn a_replaced_worktree_at_the_same_commit_is_logged_and_an_unknown_baseline_is_n
     h.wt_id = Some("w2".into()); // same commit, another checkout
     resume_findings(&mut h, &r.cfg);
     assert!(
-        h.lines.last().unwrap().contains("worktree=clean+replaced"),
+        resume_line(&h).contains("worktree=clean+replaced"),
         "{:?}",
         h.lines
     );
@@ -395,7 +345,7 @@ fn a_replaced_worktree_at_the_same_commit_is_logged_and_an_unknown_baseline_is_n
     h.wt_id = Some("w1".into());
     write(&r, "lane-a.fix-round-1.txt", "fix it");
     resume_findings(&mut h, &r.cfg);
-    let line = h.lines.last().unwrap();
+    let line = resume_line(&h);
     assert!(
         line.contains("worktree=clean+head-unknown+worktree-unknown"),
         "{line}"

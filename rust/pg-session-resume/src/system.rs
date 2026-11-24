@@ -102,6 +102,42 @@ impl Host for System {
         Some(format!("{}:{}:{git_dir}", meta.dev(), meta.ino()))
     }
 
+    fn turn_ended(&self, rec: &Record) -> Option<bool> {
+        let marker = mtime_secs(Path::new(rec.str("turn_end_path")?))?;
+        Some(marker >= self.activity_ts(rec)?)
+    }
+
+    fn transcript_len(&self, rec: &Record) -> Option<u64> {
+        Some(std::fs::metadata(transcript_file(rec)?).ok()?.len())
+    }
+
+    fn transcript_contains(&self, rec: &Record, from: u64, text: &str) -> Option<bool> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(transcript_file(rec)?).ok()?;
+        file.seek(SeekFrom::Start(from)).ok()?;
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail).ok()?;
+        // The transcript holds the message JSON-escaped; compare in that form.
+        let quoted = serde_json::to_string(text).ok()?;
+        let needle = &quoted[1..quoted.len() - 1];
+        Some(String::from_utf8_lossy(&tail).contains(needle))
+    }
+
+    fn find_process(&self, handle: &str) -> Option<(u32, u64)> {
+        for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            let Ok(cmdline) = std::fs::read(entry.path().join("cmdline")) else {
+                continue;
+            };
+            let args: Vec<&[u8]> = cmdline.split(|b| *b == 0).collect();
+            let has = |want: &str| args.contains(&want.as_bytes());
+            if has(handle) && (has("resume") || has("--resume") || has("--session")) {
+                return Some((pid, self.proc_start(pid)?));
+            }
+        }
+        None
+    }
+
     fn mem_available_mb(&self) -> Option<u64> {
         let text = std::fs::read_to_string("/proc/meminfo").ok()?;
         let line = text.lines().find(|l| l.starts_with("MemAvailable:"))?;
@@ -128,12 +164,9 @@ impl Host for System {
                 newest(vec![transcript, job_dir(&home, rec)?.join("state.json")])
             }
             Agent::Codex => newest(codex_rollouts(&home, rec.handle()?)),
-            // One database for every OpenCode session: its newest write is a conservative
-            // signal (a busy neighbour keeps this session alive, never the other way round).
-            Agent::OpenCode => newest(vec![
-                home.join(".local/share/opencode/opencode.db-wal"),
-                home.join(".local/share/opencode/opencode.db"),
-            ]),
+            // OpenCode keeps one shared database: without a per-session `activity_path` the
+            // session has no activity signal and is never reaped as idle.
+            Agent::OpenCode => None,
         }
     }
 
@@ -158,6 +191,22 @@ impl Host for System {
             );
             self.log_failed = true;
         }
+    }
+}
+
+/// The file the runtime appends the session's messages to.
+fn transcript_file(rec: &Record) -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    match rec.agent() {
+        Agent::Claude => Some(transcript_path(
+            &home,
+            rec.str("cwd")?,
+            rec.str("session_id")?,
+        )),
+        Agent::Codex => codex_rollouts(&home, rec.handle()?)
+            .into_iter()
+            .max_by_key(|p| mtime_secs(p)),
+        Agent::OpenCode => None,
     }
 }
 

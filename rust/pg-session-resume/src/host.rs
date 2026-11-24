@@ -28,6 +28,15 @@ pub trait Host {
     /// Identity of the worktree directory itself (inode and git dir), so a replacement
     /// checkout at the same commit is told apart. None when it cannot be read.
     fn worktree_id(&self, cwd: &Path) -> Option<String>;
+    /// A positive end-of-turn signal: Some(true) when the runtime wrote its turn-end marker
+    /// after its last activity, Some(false) while a turn is open, None without a marker.
+    fn turn_ended(&self, rec: &Record) -> Option<bool>;
+    /// Length in bytes of the session's transcript, None when the runtime keeps none we can read.
+    fn transcript_len(&self, rec: &Record) -> Option<u64>;
+    /// Whether the transcript, from byte `from` on, holds `text` as one of its messages.
+    fn transcript_contains(&self, rec: &Record, from: u64, text: &str) -> Option<bool>;
+    /// A live process whose command line resumes `handle`: (pid, start time).
+    fn find_process(&self, handle: &str) -> Option<(u32, u64)>;
     fn mem_available_mb(&self) -> Option<u64>;
     fn git_head(&self, cwd: &Path) -> Option<String>;
     /// None when the path is no git worktree.

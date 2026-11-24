@@ -1,14 +1,15 @@
-//! The three code paths of SESSION-AUTO-CLOSE: stop at DONE, resume on a findings
-//! file, reap idle sessions. Every stop and resume writes one log line.
+//! Stop at DONE and reap idle sessions (SESSION-AUTO-CLOSE). The resume path is in
+//! `resume`; every stop and resume writes one log line.
 
-use crate::agent::{claude_stop, resume_cmd};
+use crate::agent::claude_stop;
 use crate::contract::{
-    delivered_round, glob_match, list_findings, mtime_ns, parse_status, reviewed_head, status_path,
+    glob_match, list_findings, parse_status, reviewed_head, status_path, Finding,
 };
 use crate::host::Host;
 use crate::record::{load_all, Agent, Record};
+pub use crate::resume::resume_findings;
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A findings file bigger than this cannot be one argv element.
 pub const MAX_PROMPT_BYTES: u64 = 100_000;
@@ -44,12 +45,12 @@ fn allowed(cfg: &Config, rec: &Record) -> bool {
         .any(|n| cfg.allow.iter().any(|g| glob_match(g, n)))
 }
 
-fn age(host: &dyn Host, rec: &Record) -> u64 {
+pub(crate) fn age(host: &dyn Host, rec: &Record) -> u64 {
     host.now()
         .saturating_sub(rec.u64("ts").unwrap_or_else(|| host.now()))
 }
 
-fn one_line(s: &str) -> String {
+pub(crate) fn one_line(s: &str) -> String {
     s.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -58,7 +59,7 @@ fn one_line(s: &str) -> String {
         .collect()
 }
 
-fn head_of_status(cfg: &Config, lane: &str) -> Option<String> {
+pub(crate) fn head_of_status(cfg: &Config, lane: &str) -> Option<String> {
     parse_status(
         lane,
         &std::fs::read_to_string(status_path(&cfg.pr_dir, lane)).ok()?,
@@ -66,23 +67,34 @@ fn head_of_status(cfg: &Config, lane: &str) -> Option<String> {
     .head
 }
 
-/// Log a refusal once per cause: a record that stays refused must not fill the log every tick.
-fn refuse_once(host: &mut dyn Host, rec: &mut Record, key: &str, line: &str, why: &str) {
-    if rec.str(key) == Some(why) {
-        return;
-    }
-    rec.set(key, json!(why));
+/// Save the record; a failure is logged, never silent.
+pub(crate) fn save(host: &mut dyn Host, rec: &Record) {
     if let Err(e) = rec.save() {
         host.log(&format!(
             "event=record-save-failed name={} error={e}",
             rec.label()
         ));
     }
+}
+
+/// Log a refusal once per cause: a record that stays refused must not fill the log every tick.
+pub(crate) fn refuse_once(host: &mut dyn Host, rec: &mut Record, key: &str, line: &str, why: &str) {
+    if rec.str(key) == Some(why) {
+        return;
+    }
+    rec.set(key, json!(why));
+    save(host, rec);
     host.log(line);
 }
 
 /// The lane's resume file: the lane-side copy of the launch record's resume handle.
-fn write_lane_resume(host: &mut dyn Host, cfg: &Config, rec: &Record, lane: &str, state: &str) {
+pub(crate) fn write_lane_resume(
+    host: &mut dyn Host,
+    cfg: &Config,
+    rec: &Record,
+    lane: &str,
+    state: &str,
+) {
     let body = json!({"lane": lane, "state": state, "session_name": rec.label(), "agent": rec.agent().name(),
         "handle": rec.resume_str("handle"), "head": rec.resume_str("head"), "round": rec.resume_round(),
         "ts": host.now()});
@@ -95,6 +107,23 @@ fn write_lane_resume(host: &mut dyn Host, cfg: &Config, rec: &Record, lane: &str
             rec.label()
         ));
     }
+}
+
+/// The rounds above `after` whose sidecar names `head` (any sidecar when `head` is None).
+pub(crate) fn rounds_for_head(
+    cfg: &Config,
+    lane: &str,
+    after: u64,
+    head: Option<&str>,
+) -> Vec<Finding> {
+    list_findings(&cfg.pr_dir, lane)
+        .into_iter()
+        .filter(|f| f.round > after)
+        .filter(|f| {
+            let reviewed = reviewed_head(&cfg.pr_dir, lane, f.round);
+            reviewed.is_some() && (head.is_none() || reviewed.as_deref() == head)
+        })
+        .collect()
 }
 
 enum Target {
@@ -118,38 +147,35 @@ fn stop_target(host: &dyn Host, rec: &Record) -> Target {
             Some(_) => Target::Keep(None), // working, blocked or with running tasks
         },
         Agent::Codex | Agent::OpenCode => {
-            let Some(pid) = rec
+            let pid = rec
                 .u64("pid")
                 .filter(|p| *p > 1)
-                .and_then(|p| u32::try_from(p).ok())
-            else {
+                .and_then(|p| u32::try_from(p).ok());
+            let (Some(pid), Some(start)) = (pid, rec.u64("pid_start")) else {
                 return Target::Keep(Some("no-process-identity".into()));
             };
-            let Some(start) = rec.u64("pid_start") else {
-                return Target::Keep(Some("no-process-identity".into()));
-            };
-            match host.proc_start(pid) {
-                Some(now) if now == start => match host.has_children(pid) {
-                    // A child process is a running tool or shell: the turn is not over.
-                    Some(true) => Target::Keep(None),
-                    Some(false) => Target::Stop(vec!["kill".into(), pid.to_string()]),
-                    None => Target::Keep(Some("no-runtime-state".into())),
-                },
-                _ => Target::AlreadyStopped, // gone, or the pid belongs to another process now
+            if host.proc_start(pid) != Some(start) {
+                return Target::AlreadyStopped; // gone, or the pid belongs to another process now
+            }
+            // A model request in flight leaves no child process: only the runtime's own
+            // end-of-turn marker is a positive idle signal.
+            match (host.turn_ended(rec), host.has_children(pid)) {
+                (Some(true), Some(false)) => Target::Stop(vec!["kill".into(), pid.to_string()]),
+                (None, _) => Target::Keep(Some("no-idle-signal".into())),
+                (_, None) => Target::Keep(Some("no-runtime-state".into())),
+                _ => Target::Keep(None),
             }
         }
     }
 }
 
-/// Stop one session and record how to resume it. `delivered_cutoff`: findings files
-/// not newer than this are what the session already had. Returns true when stopped.
+/// Stop one session and record how to resume it. Returns true when stopped.
 fn stop_session(
     host: &mut dyn Host,
     cfg: &Config,
     rec: &mut Record,
     reason: &str,
     status_head: Option<&str>,
-    delivered_cutoff_ns: u64,
 ) -> bool {
     let (name, lane) = (rec.label(), rec.lane());
     let Some(handle) = rec.handle().map(str::to_owned) else {
@@ -183,15 +209,12 @@ fn stop_session(
         _ => "unknown".into(),
     };
     let now = host.now();
-    // A round already sent stays sent, whatever the file's mtime says.
-    let round = lane
-        .as_deref()
-        .map_or(0, |l| delivered_round(&cfg.pr_dir, l, delivered_cutoff_ns))
-        .max(rec.resume_round());
     // The worktree as observed at the stop; a failed lookup stays unknown, never a substitute.
     let cwd = rec.str("cwd").map(PathBuf::from);
     let head = cwd.as_deref().and_then(|c| host.git_head(c));
     let worktree = cwd.as_deref().and_then(|c| host.worktree_id(c));
+    // `round` is the last round this session acknowledged; time never decides it.
+    let round = rec.resume_round();
     rec.set("state", json!("stopped"));
     rec.set("stopped_ts", json!(now));
     rec.set("stop_refused", Value::Null);
@@ -200,9 +223,7 @@ fn stop_session(
         json!({"agent": rec.agent().name(), "handle": handle, "head": head, "worktree": worktree,
                "status_head": status_head, "round": round, "stopped_ts": now, "reason": reason}),
     );
-    if let Err(e) = rec.save() {
-        host.log(&format!("event=stop-record-failed name={name} error={e}"));
-    }
+    save(host, rec);
     if let Some(l) = &lane {
         write_lane_resume(host, cfg, rec, l, "stopped");
     }
@@ -222,8 +243,7 @@ pub fn stop_done(host: &mut dyn Host, cfg: &Config, quiet_s: u64, only: Option<&
             continue;
         }
         let Some(lane) = rec.lane() else { continue };
-        let path = status_path(&cfg.pr_dir, &lane);
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = std::fs::read_to_string(status_path(&cfg.pr_dir, &lane)) else {
             continue;
         };
         let facts = parse_status(&lane, &text);
@@ -238,226 +258,17 @@ pub fn stop_done(host: &mut dyn Host, cfg: &Config, quiet_s: u64, only: Option<&
             .activity_ts(&rec)
             .is_none_or(|t| host.now().saturating_sub(t) >= quiet_s);
         if quiet {
-            let cutoff = mtime_ns(&path).unwrap_or(u64::MAX); // unreadable: nothing counts as delivered
-            stop_session(host, cfg, &mut rec, "done", Some(&head), cutoff);
+            stop_session(host, cfg, &mut rec, "done", Some(&head));
         }
     }
-}
-
-/// Only the newest stopped record of a lane may resume, and only while no record of
-/// the lane is live: two records for one lane must not both start on one file.
-fn eligible(all: &[Record], rec: &Record, lane: &str) -> bool {
-    let key = |r: &Record| (r.resume_u64("stopped_ts").unwrap_or(0), r.label());
-    let same = |r: &&Record| r.path != rec.path && r.lane().as_deref() == Some(lane);
-    !all.iter()
-        .filter(same)
-        .any(|o| !o.stopped() || (o.resume().is_some() && key(o) > key(rec)))
-}
-
-/// A stopped writer with a findings file newer than its recorded round resumes
-/// in its own worktree; the prompt is exactly the file text.
-pub fn resume_findings(host: &mut dyn Host, cfg: &Config) {
-    let all = load_all(&cfg.launch_dir);
-    for mut rec in load_all(&cfg.launch_dir) {
-        let (Some(lane), true) = (rec.lane(), rec.stopped()) else {
-            continue;
-        };
-        reconcile_claim(host, &mut rec);
-        if !rec.stopped() {
-            continue;
-        }
-        let Some(handle) = rec.resume_str("handle").map(str::to_owned) else {
-            continue;
-        };
-        let Some(found) = list_findings(&cfg.pr_dir, &lane)
-            .into_iter()
-            .rfind(|f| f.round > rec.resume_round())
-        else {
-            continue;
-        };
-        if !eligible(&all, &rec, &lane) {
-            continue;
-        }
-        // The findings name the head they reviewed (sidecar); it must be the head this
-        // session was stopped at. The prompt text itself is never touched.
-        let stopped_at = rec
-            .resume_str("status_head")
-            .or_else(|| rec.resume_str("head"))
-            .map(str::to_owned);
-        let why = match (reviewed_head(&cfg.pr_dir, &lane, found.round), stopped_at) {
-            (None, _) => Some("no-reviewed-head"),
-            (Some(r), Some(s)) if r != s => Some("head-mismatch"),
-            (Some(_), None) => Some("no-stop-head"),
-            _ => None,
-        };
-        if let Some(why) = why {
-            let line = format!(
-                "event=resume-refused name={} lane={lane} round={} why={why}",
-                rec.label(),
-                found.round
-            );
-            refuse_once(host, &mut rec, "resume_refused", &line, why);
-            continue;
-        }
-        resume_one(
-            host,
-            cfg,
-            &mut rec,
-            &lane,
-            &handle,
-            found.round,
-            &found.path,
-        );
-    }
-}
-
-/// A claim left in the record means a tick died between the claim and the end of its
-/// launch. The runtime's own activity after the claim tells which: alive means the launch
-/// happened (the round counts as sent), silent means it never did (the claim is dropped
-/// and the round is sent again). Only one tick runs at a time, so any claim is a dead one's.
-fn reconcile_claim(host: &mut dyn Host, rec: &mut Record) {
-    let Some(round) = rec.resume_u64("claim_round") else {
-        return;
-    };
-    let claimed_at = rec.resume_u64("claim_ts").unwrap_or(0);
-    let launched = host.activity_ts(rec).is_some_and(|t| t >= claimed_at);
-    let name = rec.label();
-    if launched {
-        rec.set_resume("round", json!(round));
-        rec.set("state", json!("running"));
-        rec.set("stopped_ts", Value::Null);
-    }
-    rec.set_resume("claim_round", Value::Null);
-    rec.set_resume("claim_ts", Value::Null);
-    if let Err(e) = rec.save() {
-        host.log(&format!("event=record-save-failed name={name} error={e}"));
-    }
-    let outcome = if launched { "launched" } else { "not-launched" };
-    host.log(&format!(
-        "event=resume-reconciled name={name} round={round} outcome={outcome}"
-    ));
-}
-
-fn worktree_label(host: &dyn Host, rec: &Record, cwd: &Path) -> String {
-    let mut parts = vec![match host.git_dirty(cwd) {
-        Some(true) => "dirty",
-        Some(false) => "clean",
-        None => "unknown",
-    }];
-    match (host.git_head(cwd), rec.resume_str("head")) {
-        (Some(n), Some(t)) if n != t => parts.push("moved"),
-        (Some(_), Some(_)) => {}
-        _ => parts.push("head-unknown"),
-    }
-    match (host.worktree_id(cwd), rec.resume_str("worktree")) {
-        (Some(n), Some(t)) if n != t => parts.push("replaced"),
-        (Some(_), Some(_)) => {}
-        _ => parts.push("worktree-unknown"),
-    }
-    parts.join("+")
-}
-
-fn resume_one(
-    host: &mut dyn Host,
-    cfg: &Config,
-    rec: &mut Record,
-    lane: &str,
-    handle: &str,
-    round: u64,
-    file: &Path,
-) {
-    let name = rec.label();
-    let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
-    let prompt = match std::fs::read_to_string(file) {
-        Ok(p) if !p.trim().is_empty() && size <= MAX_PROMPT_BYTES => p,
-        Ok(p) if !p.trim().is_empty() => {
-            rec.set_resume("round", json!(round));
-            let _ = rec.save();
-            host.log(&format!("event=resume-refused name={name} lane={lane} round={round} bytes={size} why=too-large"));
-            return;
-        }
-        _ => return, // empty or unreadable: not a findings file yet (written atomically by contract)
-    };
-    let Some(cwd) = rec.str("cwd").map(PathBuf::from).filter(|c| c.is_dir()) else {
-        let line =
-            format!("event=resume-refused name={name} lane={lane} round={round} why=no-worktree");
-        refuse_once(host, rec, "resume_refused", &line, "no-worktree");
-        return;
-    };
-    let free = host.mem_available_mb();
-    if free.is_some_and(|f| f < cfg.min_free_mb) {
-        host.log(&format!(
-            "event=resume-deferred name={name} lane={lane} round={round} why=low-ram free_mb={}",
-            free.unwrap_or(0)
-        ));
-        return;
-    }
-    let worktree = worktree_label(host, rec, &cwd);
-    // Claim the round before the launch. A claim is not a delivery: if this tick dies before
-    // the launch ends, the next tick reconciles the claim against the runtime (reconcile_claim).
-    rec.set_resume("claim_round", json!(round));
-    rec.set_resume("claim_ts", json!(host.now()));
-    if let Err(e) = rec.save() {
-        host.log(&format!(
-            "event=resume-failed name={name} lane={lane} round={round} error=claim not saved: {e}"
-        ));
-        return;
-    }
-    let cmd = resume_cmd(rec.agent(), handle, &prompt);
-    let started = if cmd.detached {
-        host.spawn(&cwd, &cmd.argv).map(Some)
-    } else {
-        host.run(Some(&cwd), &cmd.argv).map(|_| None)
-    };
-    let pid = match started {
-        Ok(pid) => pid,
-        Err(e) => {
-            rec.set_resume("claim_round", Value::Null);
-            rec.set_resume("claim_ts", Value::Null);
-            let _ = rec.save();
-            host.log(&format!(
-                "event=resume-failed name={name} lane={lane} round={round} error={}",
-                one_line(&e)
-            ));
-            return;
-        }
-    };
-    // The resumed process replaces the old one: persist its verified identity, never keep the old pid.
-    let start = pid.and_then(|p| host.proc_start(p));
-    rec.set(
-        "pid",
-        pid.filter(|_| start.is_some())
-            .map_or(Value::Null, |p| json!(p)),
-    );
-    rec.set("pid_start", start.map_or(Value::Null, |s| json!(s)));
-    rec.set("state", json!("running"));
-    rec.set("stopped_ts", Value::Null);
-    rec.set("resume_refused", Value::Null);
-    let stopped_for = host
-        .now()
-        .saturating_sub(rec.resume_u64("stopped_ts").unwrap_or(0));
-    rec.set_resume("resumed_ts", json!(host.now()));
-    rec.set_resume("round", json!(round)); // delivered: the launch ended
-    rec.set_resume("claim_round", Value::Null);
-    rec.set_resume("claim_ts", Value::Null);
-    if let Err(e) = rec.save() {
-        host.log(&format!("event=record-save-failed name={name} error={e}"));
-    }
-    write_lane_resume(host, cfg, rec, lane, "running");
-    let (age_s, free) = (
-        age(host, rec),
-        free.map_or("unknown".to_owned(), |f| f.to_string()),
-    );
-    host.log(&format!(
-        "event=resume name={name} age_s={age_s} reason=findings lane={lane} round={round} stopped_for_s={stopped_for} ram_freed_mb=0 ram_free_mb={free} worktree={worktree} handle={handle}"
-    ));
 }
 
 /// Live sessions idle for `idle_s` outside the allowlist, with no findings waiting: a
-/// findings file the session has not received yet is pending work and keeps it running.
+/// round for the lane's current head that the session has not acknowledged is pending
+/// work and keeps it running.
 pub fn reap_idle(host: &mut dyn Host, cfg: &Config) {
     for mut rec in load_all(&cfg.launch_dir) {
-        if rec.stopped() || allowed(cfg, &rec) {
+        if rec.stopped() || rec.resume_u64("claim_round").is_some() || allowed(cfg, &rec) {
             continue;
         }
         let Some(last) = host.activity_ts(&rec) else {
@@ -467,15 +278,12 @@ pub fn reap_idle(host: &mut dyn Host, cfg: &Config) {
             continue;
         }
         let lane = rec.lane();
-        let last_ns = last.saturating_mul(1_000_000_000);
+        let head = lane.as_deref().and_then(|l| head_of_status(cfg, l));
         let pending = lane.as_deref().is_some_and(|l| {
-            let seen = delivered_round(&cfg.pr_dir, l, last_ns).max(rec.resume_round());
-            list_findings(&cfg.pr_dir, l).iter().any(|f| f.round > seen)
+            !rounds_for_head(cfg, l, rec.resume_round(), head.as_deref()).is_empty()
         });
-        if pending {
-            continue;
+        if !pending {
+            stop_session(host, cfg, &mut rec, "idle", head.as_deref());
         }
-        let head = lane.and_then(|l| head_of_status(cfg, &l));
-        stop_session(host, cfg, &mut rec, "idle", head.as_deref(), last_ns);
     }
 }

@@ -28,6 +28,12 @@ pub struct Fake {
     pub next_pid: u32,
     pub children: Option<bool>,
     pub wt_id: Option<String>,
+    pub turn_ended: Option<bool>,
+    pub tlen: Option<u64>,
+    pub tcontains: Option<bool>,
+    pub find: Option<(u32, u64)>,
+    /// A spawned process that is gone again when it is looked at.
+    pub spawn_dies: bool,
 }
 
 impl Fake {
@@ -51,6 +57,11 @@ impl Fake {
             next_pid: 777,
             children: Some(false),
             wt_id: Some("w1".into()),
+            turn_ended: Some(true),
+            tlen: Some(100),
+            tcontains: Some(true),
+            find: None,
+            spawn_dies: false,
         }
     }
 }
@@ -72,7 +83,9 @@ impl Host for Fake {
         if self.fail_run {
             return Err("boom".into());
         }
-        self.procs.insert(self.next_pid, 55);
+        if !self.spawn_dies {
+            self.procs.insert(self.next_pid, 55);
+        }
         Ok(self.next_pid)
     }
     fn proc_start(&self, pid: u32) -> Option<u64> {
@@ -86,6 +99,18 @@ impl Host for Fake {
     }
     fn worktree_id(&self, _: &Path) -> Option<String> {
         self.wt_id.clone()
+    }
+    fn turn_ended(&self, _: &Record) -> Option<bool> {
+        self.turn_ended
+    }
+    fn transcript_len(&self, _: &Record) -> Option<u64> {
+        self.tlen
+    }
+    fn transcript_contains(&self, _: &Record, _: u64, _: &str) -> Option<bool> {
+        self.tcontains
+    }
+    fn find_process(&self, _: &str) -> Option<(u32, u64)> {
+        self.find
     }
     fn mem_available_mb(&self) -> Option<u64> {
         let i = self.mem_reads.get();
@@ -195,4 +220,25 @@ pub fn add_record(r: &Rig, file: &str, extra: Value) {
         rec.to_string(),
     )
     .unwrap();
+}
+
+/// The log line a resume launch wrote (the acknowledgement line follows it).
+pub fn resume_line(h: &Fake) -> &str {
+    h.lines
+        .iter()
+        .find(|l| l.contains("event=resume name="))
+        .map_or("", String::as_str)
+}
+
+/// Merge `patch` into the `resume` object of a launch record on disk.
+pub fn patch_resume(r: &Rig, name: &str, patch: Value) {
+    let path = r.cfg.launch_dir.join(format!("{name}-0644.json"));
+    let mut rec: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    if rec.get("resume").is_none() {
+        rec["resume"] = json!({});
+    }
+    for (k, v) in patch.as_object().unwrap() {
+        rec["resume"][k] = v.clone();
+    }
+    std::fs::write(&path, rec.to_string()).unwrap();
 }
