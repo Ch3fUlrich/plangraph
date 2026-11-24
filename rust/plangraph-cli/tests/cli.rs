@@ -1,3 +1,5 @@
+mod lane_support;
+use lane_support::{git, Fixture};
 use std::fs;
 use std::process::{Command, Output};
 
@@ -355,4 +357,231 @@ fn the_usage_line_names_baseline() {
     assert!(String::from_utf8(output.stderr)
         .unwrap()
         .contains("baseline --keeper-only [--since RFC3339]"));
+}
+
+fn lane_ref(name: &str, sha: &str) -> String {
+    format!("refs/heads/lane/{name}:{sha}")
+}
+
+#[test]
+fn lane_cleanup_deletes_finished_lanes_and_logs_shas() {
+    let f = Fixture::new();
+    let merged = f.lane("lane/merged", "main", "m.txt", "m\n");
+    f.main_ff("lane/merged");
+    let patch = f.lane("lane/patch", "main", "p.txt", "p\n");
+    f.main_pick(&patch);
+    let r1 = f.lane("lane/sup-r1", "main", "s.txt", "s1\n");
+    let r2 = f.lane("lane/sup-r2", "lane/sup-r1", "s2.txt", "s2\n");
+    let live = f.lane("lane/live", "main", "l.txt", "l\n");
+    assert!(f
+        .record_replacement("B1", &lane_ref("sup-r1", &r1), &lane_ref("sup-r2", &r2))
+        .status
+        .success());
+    f.hook_on(true);
+    let (code, text) = f.cleanup(&["--apply"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(f.heads(), ["live", "sup-r2"], "{text}");
+    let restore = f.restore_text();
+    for sha in [&merged, &patch, &r1] {
+        assert!(
+            restore.contains(sha.as_str()),
+            "restore row for {sha}\n{restore}"
+        );
+        assert!(text.contains(sha.as_str()), "log line for {sha}\n{text}");
+        // The pinned object restores the branch.
+        git(
+            &f.work,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("refs/plangraph/restore/{sha}"),
+            ],
+        );
+    }
+    assert!(text.contains(&live), "{text}");
+    assert!(
+        text.contains("reconcile heads=5 eligible=3 protected=0 deleted=3 absent=0"),
+        "{text}"
+    );
+}
+
+#[test]
+fn lane_cleanup_preserves_live_and_unproven_heads() {
+    let f = Fixture::new();
+    // An older round with unique work: the later round does not carry it.
+    let uniq1 = f.lane("lane/uniq-r1", "main", "u1.txt", "u1\n");
+    let uniq2 = f.lane("lane/uniq-r2", "main", "u2.txt", "u2\n");
+    let rec = f.record_replacement(
+        "B2",
+        &lane_ref("uniq-r1", &uniq1),
+        &lane_ref("uniq-r2", &uniq2),
+    );
+    assert!(
+        !rec.status.success(),
+        "replacement without the old work must be refused"
+    );
+    // A merge commit hides a resolution: the patch id of its parts proves nothing.
+    f.lane("lane/mergey", "main", "x.txt", "x\n");
+    git(&f.work, &["checkout", "-q", "-B", "side", "main"]);
+    std::fs::write(f.work.join("y.txt"), "y\n").unwrap();
+    git(&f.work, &["add", "."]);
+    git(&f.work, &["commit", "-m", "side"]);
+    git(&f.work, &["merge", "--no-ff", "-m", "merge", "lane/mergey"]);
+    git(
+        &f.work,
+        &["push", "-q", "origin", "HEAD:refs/heads/lane/mergey2"],
+    );
+    // Merged by ancestry, but a claim, an open PR head and an open child PR base protect them.
+    let claimed = f.lane("lane/claimed", "main", "c.txt", "c\n");
+    let opened = f.lane("lane/opened", "main", "o.txt", "o\n");
+    let parent = f.lane("lane/parent", "main", "pa.txt", "pa\n");
+    git(&f.work, &["checkout", "-q", "main"]);
+    for l in ["lane/claimed", "lane/opened", "lane/parent"] {
+        git(&f.work, &["merge", "--no-edit", l]);
+    }
+    git(&f.work, &["push", "-q", "origin", "main"]);
+    f.set("claims.json", r#"{"paths":[],"branches":["lane/claimed"]}"#);
+    f.set(
+        "pulls.json",
+        &format!(
+            r#"[{{"number":5,"headRefName":"lane/opened","baseRefName":"main","headRefOid":"{opened}"}},
+               {{"number":6,"headRefName":"lane/child","baseRefName":"lane/parent","headRefOid":"{}"}}]"#,
+            "1".repeat(40)
+        ),
+    );
+    // A moved head: the scope names the old SHA after the remote advanced.
+    let moved_old = f.lane("lane/moving", "main", "mv.txt", "mv\n");
+    f.main_ff("lane/moving");
+    f.lane("lane/moving", "lane/moving", "mv2.txt", "mv2\n");
+    f.hook_on(true);
+    let (code, text) = f.cleanup(&["--apply"]);
+    assert_eq!(code, 0, "{text}");
+    for kept in [
+        "uniq-r1", "uniq-r2", "mergey", "mergey2", "claimed", "opened", "parent", "moving",
+    ] {
+        assert!(
+            f.heads().contains(&kept.to_string()),
+            "{kept} deleted\n{text}"
+        );
+    }
+    assert!(
+        text.contains(&format!("lane/claimed {claimed}")) && text.contains("(claimed)"),
+        "{text}"
+    );
+    assert!(text.contains("(open-pr)"), "{text}");
+    let _ = parent;
+    // The old SHA of the moved head is kept and reported; no restore row exists for it.
+    let (_, scoped) = f.cleanup(&["--apply", "--refs", &lane_ref("moving", &moved_old)]);
+    assert!(scoped.contains("absent-or-moved kept"), "{scoped}");
+    assert!(f.heads().contains(&"moving".to_string()));
+    assert!(!f.restore_text().contains(&moved_old));
+}
+
+#[test]
+fn lane_cleanup_delete_needs_the_app_remote_and_unresolved_authority_keeps_everything() {
+    let f = Fixture::new();
+    let merged = f.lane("lane/merged", "main", "m.txt", "m\n");
+    f.main_ff("lane/merged");
+    // The hook refuses a plain delete from any caller.
+    f.hook_on(false);
+    let plain = std::process::Command::new("git")
+        .current_dir(&f.work)
+        .args(["push", "origin", ":refs/heads/lane/merged"])
+        .output()
+        .unwrap();
+    assert!(!plain.status.success());
+    // The sweep through a remote that is not marked as the App's is refused, with a retry code.
+    let (code, text) = f.cleanup(&["--apply"]);
+    assert_eq!(code, 3, "{text}");
+    assert!(
+        text.contains("refused") && f.heads() == ["merged"],
+        "{text}"
+    );
+    // Unresolved claims keep every head, even with the App remote.
+    f.hook_on(true);
+    let out = f.cli(&[
+        "lane-cleanup",
+        "--repo",
+        f.work.to_str().unwrap(),
+        "--state",
+        f.state.to_str().unwrap(),
+        "--gh-repo",
+        "fixture/origin",
+        "--apply",
+    ]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("protection unresolved"), "{text}");
+    assert_eq!(f.heads(), ["merged"]);
+    // The retry with resolved authority deletes it.
+    let (code, text) = f.cleanup(&["--apply"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(f.heads().is_empty() && text.contains(&merged), "{text}");
+}
+
+#[test]
+fn probe_cleanup_closes_only_bound_terminal_runs() {
+    let f = Fixture::new();
+    let state = f.state.to_str().unwrap();
+    let head = |c: &str| c.repeat(40);
+    for (pr, run, c) in [(1, 11, "a"), (2, 12, "b"), (3, 13, "c")] {
+        let out = f.cli(&[
+            "lane-cleanup",
+            "record-probe",
+            "--state",
+            state,
+            "--gh-repo",
+            "fixture/origin",
+            "--pr",
+            &pr.to_string(),
+            "--head",
+            &head(c),
+            "--run-id",
+            &run.to_string(),
+        ]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let pr = |h: &str| format!(r#"{{"state":"OPEN","headRefOid":"{h}"}}"#);
+    let run = |status: &str, h: &str| format!(r#"{{"status":"{status}","headSha":"{h}"}}"#);
+    f.set("pr-1.json", &pr(&head("a")));
+    f.set("run-11.json", &run("completed", &head("a")));
+    f.set("pr-2.json", &pr(&head("b")));
+    f.set("run-12.json", &run("in_progress", &head("b")));
+    f.set("pr-3.json", &pr(&head("d")));
+    f.set("run-13.json", &run("completed", &head("c")));
+    f.set("pr-4.json", &pr(&head("e")));
+    let out = f.cli(&[
+        "lane-cleanup",
+        "close-probes",
+        "--state",
+        state,
+        "--gh-repo",
+        "fixture/origin",
+        "--apply",
+    ]);
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "{text}");
+    assert_eq!(
+        fs::read_to_string(f.gh.join("closed.log")).unwrap(),
+        "1\n",
+        "{text}"
+    );
+    assert!(
+        text.contains("#2") && text.contains("run-active") && text.contains("head-moved"),
+        "{text}"
+    );
+    // A second run closes nothing again.
+    f.cli(&[
+        "lane-cleanup",
+        "close-probes",
+        "--state",
+        state,
+        "--gh-repo",
+        "fixture/origin",
+        "--apply",
+    ]);
+    assert_eq!(fs::read_to_string(f.gh.join("closed.log")).unwrap(), "1\n");
 }

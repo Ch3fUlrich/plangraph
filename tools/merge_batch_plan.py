@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, gh_json, git,
-                              pr_labels, save_state)
+                              pr_labels, run, save_state, worktrees)
 
 try:
     from ci_commit_gate import AUTH_DOOR_PATHS, GATE_PATHS
@@ -378,3 +378,57 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
         if not data["jobs"]:
             raise MergeBatchError("full_ci: incomplete job pagination")
         page += 1
+
+
+def lane_cleanup_landed(repo, st, landed):
+    """Run `plangraph lane-cleanup` for the frozen refs and SHAs of the landed parts and every older
+    round of their lanes. Exit 3 (a delete was refused) raises, so a strict settlement resumes at
+    its cleanup step; moved and absent refs are done or re-evaluated by the daily timer."""
+    pairs = [(st["prs"][str(rec["pr"])]["ref"], rec["head"]) for rec in landed]
+    pairs = [(ref, sha) for ref, sha in pairs if ref.startswith("lane/")]
+    if not pairs or not st.get("repo"):
+        return
+    state = os.environ.get("PG_LANE_STATE", str(Path.home() / ".local/state/plangraph/lane-cleanup"))
+    argv = ["plangraph", "lane-cleanup", "--repo", repo, "--state", state, "--gh-repo", st["repo"],
+            "--refs", ",".join(f"refs/heads/{ref}:{sha}" for ref, sha in pairs),
+            "--stems", ",".join(ref for ref, _ in pairs), "--apply"]
+    for flag, name in (("--claims-reader", "PG_SWEEP_CLAIMS_READER"), ("--remote", "PG_LANE_DELETE_REMOTE")):
+        if os.environ.get(name):
+            argv.extend([flag, os.environ[name]])
+    proc = run(argv, ok=(0, 3))
+    sys.stderr.write(proc.stdout + proc.stderr)
+    if proc.returncode == 3:
+        raise MergeBatchError("lane cleanup deferred: a delete was refused; settle again or wait for the daily run")
+
+
+def cleanup_landed(st, landed, *, strict=False):
+    """Best effort cleanup with exact state SHAs; all sweep protections still apply."""
+    try:
+        repo = git("rev-parse", "--show-toplevel").stdout.strip()
+        trees = worktrees()
+        targets = [(st["worktree"], st["branch"], st["head"])] if st["worktree"] and Path(st["worktree"]).is_dir() else []
+        for rec in landed:
+            branch = st["prs"][str(rec["pr"])]["ref"]
+            for path, name in trees:
+                if name == branch or (not name and git("rev-parse", "HEAD", cwd=path).stdout.strip() == rec["head"]):
+                    targets.append((path, name, rec["head"]))
+        pins = os.environ.get("PG_PINS", str(Path.home() / ".config/plangraph/pins.json"))
+        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--delete-remote", "--include-merged"]
+        roots = dict.fromkeys(Path(path).parent for path, _, _ in targets)
+        for key in ("PG_WORKTREES", "PG_CLAUDE_WORKTREES", "PG_RUNS", "PG_RUN_WORKTREES"):
+            if os.environ.get(key):
+                roots[Path(os.environ[key])] = None
+        for root in roots or (repo,):
+            argv.extend(["--root", str(root)])
+        for path, branch, sha in targets:
+            argv.extend(["--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
+        for rec in landed:
+            branch = st["prs"][str(rec["pr"])]["ref"]
+            argv.extend(["--remote-target", f"{branch}:{rec['head']}"])
+        result = run(argv)
+        print(result.stdout, end="", file=sys.stderr)
+        lane_cleanup_landed(repo, st, landed)
+    except MergeBatchError as exc:
+        if strict:
+            raise
+        print(f"cleanup sweep failed: {exc}", file=sys.stderr)

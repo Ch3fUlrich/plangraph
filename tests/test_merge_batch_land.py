@@ -545,6 +545,12 @@ def test_land_sweep_targets_only_landed_parts_and_failure_is_nonfatal(env, exit_
                      f"with Path({str(log)!r}).open('a') as f: print(json.dumps(sys.argv[1:]), file=f)\n"
                      f"sys.exit({exit_code})\n")
     sweep.chmod(0o755)
+    lane_log = env.tmp / "lane-cleanup.json"
+    lane = env.stubs / "plangraph"
+    lane.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
+                    "if sys.argv[1:2] == ['lane-cleanup']:\n"
+                    f"    with Path({str(lane_log)!r}).open('a') as f: print(json.dumps(sys.argv[1:]), file=f)\n")
+    lane.chmod(0o755)
     result = land(env, approval)
     assert result.returncode == 0
     assert ("cleanup sweep failed" in result.stderr) == bool(exit_code)
@@ -562,6 +568,10 @@ def test_land_sweep_targets_only_landed_parts_and_failure_is_nonfatal(env, exit_
     assert unrelated.exists()
     remote = [args[i + 1] for i, arg in enumerate(args) if arg == "--remote-target"]
     assert remote == [f"{saved['prs'][str(n)]['ref']}:{saved['prs'][str(n)]['head']}" for n in (1, 3)]
+    if not exit_code:  # the lane cleanup runs after the sweep, for the frozen refs and their lane stems
+        lane_args = json.loads(lane_log.read_text().splitlines()[0])
+        pairs = [f"refs/heads/{saved['prs'][str(n)]['ref']}:{saved['prs'][str(n)]['head']}" for n in (1, 3)]
+        assert lane_args[lane_args.index("--refs") + 1] == ",".join(pairs) and "--apply" in lane_args
 
 
 def test_land_cleanup_metadata_failure_is_nonfatal(env):

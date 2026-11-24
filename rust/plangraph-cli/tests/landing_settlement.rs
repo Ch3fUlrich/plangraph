@@ -152,6 +152,81 @@ with TemporaryDirectory() as tmp:
     );
 }
 
+#[test]
+fn settle_retries_deferred_lane_cleanup() {
+    keeper_fixture(
+        r#"
+from pathlib import Path
+import json
+from tempfile import TemporaryDirectory
+from plangraph.keeper.auth import Principal, add_principal
+from plangraph.keeper.db import open_db
+from plangraph.keeper.store import Store
+from unittest.mock import patch, Mock
+import merge_batch_build as build
+import merge_batch_land as landing
+import merge_batch_util as util
+import merge_batch_plan as plan
+
+with TemporaryDirectory() as tmp:
+    path = Path(tmp) / 'keeper.db'
+    db = open_db(path, create=True, backend='sqlite')
+    add_principal(db, 'lander', 'router', [])
+    principal = Principal('lander', 'router', [])
+    identity = dict(repo='example/repo', pr=17)
+    lease = Store(db).land(principal, dict(repo=identity['repo'], action='acquire', owner='test'))
+    identity.update(lease)
+    train = dict(identity, base='a'*40, head='b'*40, parts=[{'pr': 5, 'head': 'c'*40, 'ref': 'lane/landed-r3'}])
+    Store(db).land(principal, dict(train, action='prepare'))
+    db.close()
+    db = open_db(path, backend='sqlite')
+    store = Store(db)
+    pending = store.land(principal, dict(repo=identity['repo'], action='pending'))['trains']
+    def journal(repo, action, **fields):
+        return store.land(principal, dict(fields, repo=repo, action=action))
+    journal(identity['repo'], 'landed', pr=17, merge='d'*40, **lease)
+    proof = [dict(host=str(i), head='d'*40, checkout='d'*40, hooks='d'*40, build='d'*40, synced=i==1)
+             for i in range(3)]
+    lane_calls, rcs = [], [3, 0]
+    def effect(args, **kwargs):
+        return Mock(stdout=json.dumps({'verified': proof}) if 'verify-hosts' in args else '', stderr='')
+    def cleanup_run(argv, **kwargs):
+        if argv[:2] == ['plangraph', 'lane-cleanup']:
+            lane_calls.append(argv)
+            return Mock(returncode=rcs.pop(0), stdout='lane refused\n', stderr='')
+        return Mock(returncode=0, stdout='', stderr='')
+    def live_part(*args):
+        return dict(state='MERGED', headRefOid='c'*40)
+    def settle():
+        with (patch.object(landing, 'landing_journal', journal),
+              patch.object(build, 'landing_journal', journal),
+              patch.object(build, 'gh_json', side_effect=live_part),
+              patch.object(build, 'git', return_value=Mock(returncode=0)),
+              patch.object(landing, 'write_landing', Mock()),
+              patch.object(landing, 'read_verified_merge', return_value=('d'*40, 'merged')),
+              patch.object(landing, 'run', effect),
+              patch.object(plan, 'run', cleanup_run),
+              patch.object(plan, 'git', return_value=Mock(stdout='/repo\n')),
+              patch.object(plan, 'worktrees', return_value=[])):
+            landing.settle_train(pending[0], lease)
+    try:
+        settle()
+    except util.MergeBatchError as exc:
+        assert 'deferred' in str(exc), exc
+    else:
+        raise AssertionError('a refused lane delete must hold the cleanup step open')
+    assert 'cleanup' in journal(identity['repo'], 'landed', pr=17, merge='d'*40, **lease)['open_steps']
+    settle()
+    assert journal(identity['repo'], 'landed', pr=17, merge='d'*40, **lease)['open_steps'] == []
+    assert len(lane_calls) == 2 and lane_calls[0] == lane_calls[1], lane_calls
+    argv = lane_calls[0]
+    assert argv[argv.index('--refs') + 1] == 'refs/heads/lane/landed-r3:' + 'c'*40, argv
+    assert argv[argv.index('--stems') + 1] == 'lane/landed-r3' and '--apply' in argv, argv
+    assert argv[argv.index('--gh-repo') + 1] == 'example/repo', argv
+"#,
+    );
+}
+
 fn keeper_fixture(fixture: &str) {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = test_python::command()

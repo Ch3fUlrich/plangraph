@@ -20,8 +20,8 @@ from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_con
                               TESTED_FF, REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, keeper_migration, part_review, run, write_landing, write_landing_records,
-                              cleanup_landed, close_merged_items, active_train, go_key_block, part_items, train_keys)
-from merge_batch_plan import windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
+                              close_merged_items, active_train, go_key_block, part_items, train_keys)
+from merge_batch_plan import cleanup_landed, windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -507,7 +507,7 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
                 drop_state(st)
             else:
                 parts = [part for part in landed if part["ref"]]
-                state = {"head": train["head"], "worktree": "", "branch": "",
+                state = {"repo": repo, "head": train["head"], "worktree": "", "branch": "",
                          "prs": {str(part["pr"]): part for part in parts}}
                 cleanup_landed(state, parts, strict=True)
         else:

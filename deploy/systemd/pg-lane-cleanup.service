@@ -1,0 +1,11 @@
+[Unit]
+Description=Delete finished lane branches and close ended probe pull requests
+
+[Service]
+Type=oneshot
+# disk-hygiene.env carries PG_REPO, PG_URL, PG_TOKEN_FILE and PG_SWEEP_CLAIMS_READER; lane-cleanup.env carries
+# PG_GH_REPO, PG_LANE_STATE and PG_LANE_DELETE_REMOTE (the git remote that authenticates as the land App).
+EnvironmentFile=%h/.config/plangraph/disk-hygiene.env
+EnvironmentFile=%h/.config/plangraph/lane-cleanup.env
+ExecStart=%h/.local/bin/plangraph lane-cleanup --repo ${PG_REPO} --state ${PG_LANE_STATE} --gh-repo ${PG_GH_REPO} --remote ${PG_LANE_DELETE_REMOTE} --claims-reader ${PG_SWEEP_CLAIMS_READER} --apply
+ExecStart=%h/.local/bin/plangraph lane-cleanup close-probes --state ${PG_LANE_STATE} --gh-repo ${PG_GH_REPO} --apply
