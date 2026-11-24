@@ -27,7 +27,10 @@ fn installing_and_removing_a_lane_preserves_other_worktrees_hooks() {
     assert!(git(root, &["init", "-b", "main"]).status.success());
     std::fs::create_dir_all(root.join("tools/hooks")).unwrap();
     for path in ["tools/ci_commit_gate.py", "tools/hooks/pre-push"] {
-        std::fs::copy(source.join(path), root.join(path)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(
+            root.join(path),
+            std::fs::read(source.join(path)).unwrap(),
+        );
     }
     assert!(git(root, &["add", "."]).status.success());
     assert!(git(

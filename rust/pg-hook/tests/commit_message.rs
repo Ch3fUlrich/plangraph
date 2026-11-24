@@ -22,7 +22,10 @@ fn repo() -> tempfile::TempDir {
     std::fs::create_dir(&tools).unwrap();
     let hooks = tools.join("hooks");
     std::fs::create_dir(&hooks).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_commit-msg"), hooks.join("commit-msg")).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        hooks.join("commit-msg"),
+        std::fs::read(env!("CARGO_BIN_EXE_commit-msg")).unwrap(),
+    );
     assert!(git(
         dir.path(),
         &["config", "core.hooksPath", hooks.to_str().unwrap()]
