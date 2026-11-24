@@ -516,7 +516,8 @@ def test_go_req_runs_the_real_deploy_plan_for_a_unit_part_and_a_unitless_part(en
     example = json.loads((Path(__file__).resolve().parents[1] / "docs/schemas/examples/hosts.example.json").read_text())
     registry.write_text(json.dumps(example))
     unit = "[Service]\nEnvironmentFile=%h/.config/p/t.env\nExecStart=%h/.local/bin/train --pins ${PG_PINS}\n"
-    go_ready(env, first_files={"deploy/systemd/train.service": unit}, first_trailer="\nDeploy: code")
+    st = go_ready(env, first_files={"deploy/systemd/train.service": unit}, first_trailer="\nDeploy: code", prs="1,2")
+    assert [rec["pr"] for rec in st["merged"]] == [1, 2]  # PR 2 is the unitless part
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 0, result.stderr
     assert ("; deploy: none; NOT READY train.service@code parts #1 blocker plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-CODE "
