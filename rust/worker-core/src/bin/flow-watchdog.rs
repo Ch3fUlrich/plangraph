@@ -36,6 +36,9 @@ struct Snapshot {
     stuck: stuck::Snapshot,
     #[serde(flatten)]
     session_activity: quiet::Reader,
+    // Set by the collector for every reading it could not take; any entry is an invalid snapshot.
+    #[serde(default)]
+    collector_gaps: Vec<String>,
     pace: f64,
     budget: f64,
     ci_failed: u64,
@@ -163,6 +166,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if s.budget <= 0.0 {
             return Err("budget must be positive".into());
+        }
+        if !s.collector_gaps.is_empty() {
+            return Err(format!("collector gaps: {}", s.collector_gaps.join("; ")).into());
         }
         Ok(s)
     })();

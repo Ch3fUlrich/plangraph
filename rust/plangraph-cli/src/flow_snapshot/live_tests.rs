@@ -144,3 +144,10 @@ fn ci_rows_without_a_string_time_or_conclusion_are_not_counted() {
         json!([{"conclusion":"success","created":"2026-01-01T00:00:00Z"}])
     );
 }
+
+#[test]
+fn ready_keys_are_the_keys_of_keepers_ready_items_and_a_bad_shape_is_null() {
+    let ready = json!({"items":[{"key":"p:A"},{"key":"p:B"}],"in_progress":[{"key":"p:C"}]});
+    assert_eq!(ready_keys(&ready), json!(["p:A", "p:B"]));
+    assert_eq!(ready_keys(&json!({"error":"x"})), Value::Null);
+}

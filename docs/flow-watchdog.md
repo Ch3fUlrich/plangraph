@@ -187,27 +187,38 @@ checkout just before each tick. Readings and the derivation of each field:
 - `pace`, `budget`: `tools/claude_usage.py pace --json` (`weighted`, `budget_per_day`).
 - `ci_*`: `gh run list`, runs created in the last 7 days. `failure`, `timed_out` and
   `startup_failure` fail; the last two are `infra_failed`; other conclusions are not counted.
-- `review_age_hours`, `review_rounds`: keeper snapshot items in `in_review`; rounds are the
-  `changes_requested` events of the item plus one.
+- `review_age_hours`, `review_rounds`: keeper snapshot items in `in_review`; a round is one
+  plus the `changes_requested` events since the item's latest `claimed` event, so a fresh
+  claim starts again at round 1.
 - `critical_idle_hours`: the critical-path stall rule: the longest keeper `last_activity`
-  silence among the claimed and in-review items on the keeper critical path (zero when none;
-  a lease or an unstarted open item does not count). A path item without activity is a gap.
+  silence among the claimed and in-review items among the open dependencies of the stall
+  service's target (`plangraph:RT-P1-E2E`; zero when none; a lease or an unstarted open item
+  does not count). A missing target, dependency or activity is a gap.
 - `closes_recent`, `closes_previous`: `review_passed`, `closed_on_decision` and `answered`
   events in the last and the preceding 24 hours.
 - `hosts`, `host_drift`: the checkout's `HEAD`, `origin/main` (fetched first; a failed fetch is a gap), ancestry count and the age of
   the first missing commit, `/tmp` and `/` use; drift is also set when an installed
   user unit differs from its source in `deploy/` (templated units are skipped).
-- `coding_vm_runs`, `worker_idle`: the newest fleet-series sample per host
-  (`PLANGRAPH_FLEET_SERIES_DIR`, default `<state>/fleet`, the sampler's store) for the hosts in
-  `PLANGRAPH_FLOW_CODING_HOSTS` and `PLANGRAPH_FLOW_WORKER_HOSTS`.
-- `lapsed_leases`, `ordered_items`, `ready_owners`, `idle_capacity`, `merged_reviews`: keeper
-  items; ready means open, unclaimed, not waiting on the operator, every dependency done.
-  `ready_families` maps each owner to the project families with ready work.
+- `coding_vm_runs`, `worker_idle`: the newest fleet-series sample per configured host
+  (`PLANGRAPH_FLEET_SERIES_DIR`, default `<state>/fleet`, the sampler's store; hosts in
+  `PLANGRAPH_FLOW_CODING_HOSTS` and `PLANGRAPH_FLOW_WORKER_HOSTS`). A configured host without
+  a sample from the last 300 seconds is a gap, as is an unreachable coding host; an unreachable
+  worker is not idle.
+- `lapsed_leases`, `merged_reviews`: keeper items (a claim without a lease cannot lapse).
+  `ready_owners` and `ready_families` use Keeper's agent-ready result
+  (`ready?agent=true&all=1`, landing-train parts included); an owner counts as having a
+  session when a current, reachable fleet sample lists one.
 
-A reading that fails is named on stderr, its fields are left out and the exit status is 3;
-the checker then queues `invalid snapshot` rather than reading a made-up healthy zero.
-`go_requests`, `writer_activity`, `review_leg_activity`, `session_activity` and
-`host_idle_capacity` are not collected yet: a snapshot without them is a legacy snapshot.
+A reading that fails, or that is malformed, is named on stderr and in the snapshot's
+`collector_gaps`; its fields are left out, the file is still replaced and the exit status is 3.
+The checker reads any `collector_gaps` entry as `invalid snapshot`, including a gap in an
+optional block, so no gap reads as a healthy zero.
+`absent_inputs` lists what the collector does not read yet: `leg_state`,
+`review_leg_activity`, `writer_activity`, `session_activity`, `go_requests`,
+`ordered_items`, `idle_capacity` and `host_idle_capacity`. Those blocks are not emitted, and
+their conditions (review-leg-unserved, writer-idle, busy-quiet, unanswered-go-req,
+ordered-unclaimed, idle-capacity, host-idle) cannot fire from this collector until each
+is wired.
 
 ## Optional turn-budget reader
 

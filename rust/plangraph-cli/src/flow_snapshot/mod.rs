@@ -3,7 +3,7 @@
 //! left out of the file, so the checker raises its durable invalid-snapshot alert.
 mod live;
 
-use pg_worker_core::flow_collect::{assemble, Readings};
+use pg_worker_core::flow_collect::{assemble_with_gaps, decode};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -47,9 +47,9 @@ pub fn run(env: &BTreeMap<String, String>, args: &[String]) -> Result<i32, Strin
         }
         None => live::collect(env),
     };
-    let readings: Readings =
-        serde_json::from_value(readings).map_err(|e| format!("readings: {e}"))?;
-    let assembled = assemble(&readings);
+    // A malformed source is a gap of that source; the file is still replaced.
+    let (readings, malformed) = decode(readings)?;
+    let assembled = assemble_with_gaps(&readings, malformed);
     for gap in &assembled.gaps {
         eprintln!("flow-snapshot: {gap}");
     }

@@ -8,6 +8,7 @@ mod test_python;
 mod binary;
 #[path = "native_writer_fixture/codex.rs"]
 mod codex_fixture;
+mod spawn_attempt_delivery;
 use std::{fs, path::Path, process::Command};
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = pg_worker_core::git_test_support::command(repo)
@@ -505,5 +506,39 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
     completed.sort_unstable();
     let expected: &[u64] = if systemd_path { &[2] } else { &[2, 2, 2, 3] };
     assert_eq!(completed, expected);
+    // Every terminal run the real native writer and its review seats left behind reaches
+    // Keeper exactly once, with the fields route-shadow groups by.
+    let terminal: Vec<String> = fs::read_dir(dir.join("state/runs"))
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.unwrap().path().join("record.json");
+            let record: serde_json::Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+            record["ended"]
+                .is_number()
+                .then(|| record["run_id"].as_str().unwrap().to_owned())
+        })
+        .collect();
+    let rows = spawn_attempt_delivery::delivered(&dir.join("state"));
+    let mut persisted: Vec<_> = rows
+        .iter()
+        .map(|r| r["attempt_id"].as_str().unwrap().to_owned())
+        .collect();
+    persisted.sort();
+    let mut wanted = terminal.clone();
+    wanted.sort();
+    assert!(!wanted.is_empty());
+    assert_eq!(persisted, wanted, "one Keeper row per terminal run");
+    for row in &rows {
+        for field in ["task_class", "leg", "harness", "host", "exit_class"] {
+            assert!(
+                row[field].as_str().is_some_and(|v| !v.is_empty()),
+                "{field} missing in {row}"
+            );
+        }
+    }
+    assert!(rows
+        .iter()
+        .any(|r| r["leg"] == "native-codex" && r["exit_class"] == "ok"));
+    assert!(rows.iter().any(|r| r["role"] == "implement"));
     fixture.close().unwrap();
 }

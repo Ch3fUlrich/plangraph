@@ -11,6 +11,7 @@ mod tests {
             hosts: Vec::new(),
             stuck: Default::default(),
             session_activity: Default::default(),
+            collector_gaps: Vec::new(),
             pace: 65.0,
             budget: 66.0,
             ci_failed: 0,

@@ -22,8 +22,10 @@ pub struct Readings {
     pub items: Option<Vec<Item>>,
     /// Keeper activity feed: closes and review rounds.
     pub activity: Option<Vec<Event>>,
-    /// Keys on the keeper critical path.
-    pub critical_path: Option<Vec<String>>,
+    /// The keeper item whose open dependencies are the critical path (the stall service's target).
+    pub critical_target: Option<String>,
+    /// Keeper's agent-ready result: open items an agent may take, landing-train parts included.
+    pub ready_keys: Option<Vec<String>>,
     /// Per host code checkout and disk readings, passed through to `hosts`.
     pub hosts: Option<Vec<Host>>,
     /// Installed unit file checksum against the checkout, per host.
@@ -113,6 +115,60 @@ pub struct Sample {
     pub sessions: Vec<String>,
 }
 
+/// Inputs the collector does not read yet. They are named in every snapshot so their
+/// absence cannot be mistaken for a healthy reading.
+pub const ABSENT_INPUTS: [&str; 8] = [
+    "leg_state",
+    "review_leg_activity",
+    "writer_activity",
+    "session_activity",
+    "go_requests",
+    "ordered_items",
+    "idle_capacity",
+    "host_idle_capacity",
+];
+
+/// Readings older than this many seconds are not current evidence.
+pub const SERIES_MAX_AGE_S: f64 = 300.0;
+
+/// Decode each reading on its own: a malformed source is a gap for that source only.
+/// `now` is the one reading without which nothing can be judged.
+pub fn decode(value: Value) -> Result<(Readings, Vec<String>), String> {
+    let Value::Object(mut map) = value else {
+        return Err("readings must be a JSON object".into());
+    };
+    let mut gaps = Vec::new();
+    fn take<T: serde::de::DeserializeOwned>(
+        map: &mut Map<String, Value>,
+        name: &str,
+        gaps: &mut Vec<String>,
+    ) -> Option<T> {
+        match serde_json::from_value(map.remove(name)?) {
+            Ok(value) => value,
+            Err(error) => {
+                gaps.push(format!("{name}: malformed reading ({error})"));
+                None
+            }
+        }
+    }
+    let now: f64 = take(&mut map, "now", &mut gaps).ok_or("readings have no usable now")?;
+    let readings = Readings {
+        now,
+        usage: take(&mut map, "usage", &mut gaps),
+        ci: take(&mut map, "ci", &mut gaps),
+        items: take(&mut map, "items", &mut gaps),
+        activity: take(&mut map, "activity", &mut gaps),
+        critical_target: take(&mut map, "critical_target", &mut gaps),
+        ready_keys: take(&mut map, "ready_keys", &mut gaps),
+        hosts: take(&mut map, "hosts", &mut gaps),
+        units: take(&mut map, "units", &mut gaps),
+        series: take(&mut map, "series", &mut gaps),
+        coding_hosts: take(&mut map, "coding_hosts", &mut gaps).unwrap_or_default(),
+        worker_hosts: take(&mut map, "worker_hosts", &mut gaps).unwrap_or_default(),
+    };
+    Ok((readings, gaps))
+}
+
 pub struct Assembled {
     pub snapshot: Value,
     /// One line per field group that could not be filled, with the reason.
@@ -120,8 +176,12 @@ pub struct Assembled {
 }
 
 pub fn assemble(readings: &Readings) -> Assembled {
+    assemble_with_gaps(readings, Vec::new())
+}
+
+/// `gaps` are the readings [`decode`] could not read; they join the ones found here.
+pub fn assemble_with_gaps(readings: &Readings, mut gaps: Vec<String>) -> Assembled {
     let mut out = Map::new();
-    let mut gaps = Vec::new();
     let mut put = |group: &str, result: Result<Map<String, Value>, String>| match result {
         Ok(fields) => out.extend(fields),
         Err(reason) => gaps.push(format!("{group}: {reason}")),
@@ -135,8 +195,12 @@ pub fn assemble(readings: &Readings) -> Assembled {
     put("closes", derive::closes(readings));
     put("hosts", derive::hosts(readings));
     put("stuck", stuck::rows(readings));
+    put("ready_owners", stuck::ready_owners(readings));
     put("ready_families", stuck::families(readings));
     out.insert("collected_at".into(), json!(readings.now));
+    out.insert("absent_inputs".into(), json!(ABSENT_INPUTS));
+    // The checker reads a snapshot with gaps as invalid, also when only optional blocks failed.
+    out.insert("collector_gaps".into(), json!(gaps));
     Assembled {
         snapshot: Value::Object(out),
         gaps,

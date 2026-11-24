@@ -1,11 +1,12 @@
-//! Stuck-lane rows and ready families: what waits although the fleet could take it.
-use super::{derive::open, derive::parse_time, Item, Readings};
+//! Stuck-lane rows and ready families, from Keeper's own readiness and lease facts.
+use super::{derive::parse_time, Item, Readings, SERIES_MAX_AGE_S};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 type Fields = Result<Map<String, Value>, String>;
 
-fn deps(item: &Item) -> Vec<String> {
+/// Dependencies as the keeper stores them: a list, a JSON list in text, or a separated string.
+pub fn deps(item: &Item) -> Vec<String> {
     match &item.depends_on {
         Value::Array(rows) => rows
             .iter()
@@ -21,22 +22,18 @@ fn deps(item: &Item) -> Vec<String> {
     }
 }
 
-/// Open, unclaimed, not waiting on the operator, and every dependency finished.
-fn ready(items: &[Item]) -> Vec<&Item> {
-    let closed: BTreeSet<&str> = items
-        .iter()
-        .filter(|i| !open(i) && i.state != "cancelled")
-        .map(|i| i.key.as_str())
-        .collect();
-    items
+/// Keeper's agent-ready result (landing-train parts and operator steps already decided),
+/// restricted to items still open and unclaimed in the same snapshot.
+fn ready<'a>(r: &Readings, items: &'a [Item]) -> Result<Vec<&'a Item>, String> {
+    let keys = r.ready_keys.as_ref().ok_or("keeper ready reading failed")?;
+    Ok(items
         .iter()
         .filter(|i| {
             i.state == "open"
-                && !i.waits_on_operator
                 && i.claimed_by.as_deref().is_none_or(str::is_empty)
-                && deps(i).iter().all(|d| closed.contains(d.as_str()))
+                && keys.contains(&i.key)
         })
-        .collect()
+        .collect())
 }
 
 fn owner(item: &Item) -> String {
@@ -55,18 +52,9 @@ fn minutes(now: f64, since: &Option<String>, key: &str) -> Result<u64, String> {
     Ok(((now - at).max(0.0) / 60.0) as u64)
 }
 
+/// Leases that ran out on claimed items, and merged items still in review.
 pub fn rows(r: &Readings) -> Fields {
     let items = r.items.as_ref().ok_or("keeper items reading failed")?;
-    let series = r.series.as_ref().ok_or("fleet series reading failed")?;
-    let live: BTreeSet<&str> = series
-        .iter()
-        .flat_map(|s| s.sessions.iter().map(String::as_str))
-        .collect();
-    let alive = |owner: &str| {
-        live.iter()
-            .any(|s| *s == owner || s.starts_with(&format!("{owner}-")))
-    };
-    let waiting = ready(items);
     let mut lapsed = Vec::new();
     for item in items.iter().filter(|i| i.state == "claimed") {
         // A claim without a lease (legacy or reaped rows) has nothing to lapse.
@@ -79,35 +67,6 @@ pub fn rows(r: &Readings) -> Fields {
             lapsed.push(json!({"item":item.key,"owner":who,"age_minutes":(over / 60.0) as u64,"open_lane":true}));
         }
     }
-    let mut ordered = Vec::new();
-    let mut no_session = Vec::new();
-    for item in waiting
-        .iter()
-        .filter(|i| i.owner.as_deref().is_some_and(|o| !o.is_empty()))
-    {
-        let age = minutes(r.now, &item.updated_at, &item.key)?;
-        ordered
-            .push(json!({"item":item.key,"owner":owner(item),"age_minutes":age,"unclaimed":true}));
-        no_session.push(
-            json!({"item":item.key,"owner":owner(item),"age_minutes":age,
-                               "no_live_session":!alive(&owner(item))}),
-        );
-    }
-    let mut oldest: Option<(u64, &str)> = None;
-    for item in &waiting {
-        let age = minutes(r.now, &item.updated_at, &item.key)?;
-        if oldest.is_none_or(|(best, _)| age > best) {
-            oldest = Some((age, item.key.as_str()));
-        }
-    }
-    let idle: Vec<Value> = oldest
-        .into_iter()
-        .flat_map(|(age, key)| {
-            series.iter().filter(|s| s.reachable && s.runs == 0 && s.ready > 0).map(move |s| {
-            json!({"item":key,"owner":s.host,"age_minutes":age,"capacity_available":true})
-        })
-        })
-        .collect();
     let mut merged = Vec::new();
     for item in items.iter().filter(|i| i.state == "in_review" && i.merged) {
         merged.push(json!({"item":item.key,"owner":owner(item),
@@ -115,10 +74,40 @@ pub fn rows(r: &Readings) -> Fields {
     }
     let mut out = Map::new();
     out.insert("lapsed_leases".into(), json!(lapsed));
-    out.insert("ordered_items".into(), json!(ordered));
-    out.insert("ready_owners".into(), json!(no_session));
-    out.insert("idle_capacity".into(), json!(idle));
     out.insert("merged_reviews".into(), json!(merged));
+    Ok(out)
+}
+
+/// Ready, owned items whose owner has no session in a current, reachable fleet sample.
+pub fn ready_owners(r: &Readings) -> Fields {
+    let items = r.items.as_ref().ok_or("keeper items reading failed")?;
+    let series = r.series.as_ref().ok_or("fleet series reading failed")?;
+    let current: Vec<_> = series
+        .iter()
+        .filter(|s| s.reachable && r.now - s.ts <= SERIES_MAX_AGE_S)
+        .collect();
+    if current.is_empty() {
+        return Err("no current fleet sample to tell who has a session".into());
+    }
+    let live: BTreeSet<&str> = current
+        .iter()
+        .flat_map(|s| s.sessions.iter().map(String::as_str))
+        .collect();
+    let alive = |owner: &str| {
+        live.iter()
+            .any(|s| *s == owner || s.starts_with(&format!("{owner}-")))
+    };
+    let mut rows = Vec::new();
+    for item in ready(r, items)?
+        .into_iter()
+        .filter(|i| i.owner.as_deref().is_some_and(|o| !o.is_empty()))
+    {
+        rows.push(json!({"item":item.key,"owner":owner(item),
+                         "age_minutes":minutes(r.now, &item.updated_at, &item.key)?,
+                         "no_live_session":!alive(&owner(item))}));
+    }
+    let mut out = Map::new();
+    out.insert("ready_owners".into(), json!(rows));
     Ok(out)
 }
 
@@ -126,7 +115,7 @@ pub fn rows(r: &Readings) -> Fields {
 pub fn families(r: &Readings) -> Fields {
     let items = r.items.as_ref().ok_or("keeper items reading failed")?;
     let mut roles: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for item in ready(items) {
+    for item in ready(r, items)? {
         let family = item.key.split(':').next().unwrap_or(&item.key).to_owned();
         roles.entry(owner(item)).or_default().insert(family);
     }

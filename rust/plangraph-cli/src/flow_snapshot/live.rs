@@ -236,18 +236,14 @@ fn series_dir(env: &BTreeMap<String, String>) -> Result<PathBuf, String> {
     }
 }
 
-/// Keeper `last_activity` of the claimed and in-review items on the critical path,
-/// the evidence the critical-path stall service reads.
-fn with_activity(client: &Client, items: &mut Value, path: &Value) {
-    let keys: Vec<&str> = path
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
+/// The stall service's target; its open dependencies are the critical path.
+const CRITICAL_TARGET: &str = "plangraph:RT-P1-E2E";
+
+/// Keeper `last_activity` of the claimed and in-review items, the evidence the
+/// critical-path stall service reads.
+fn with_activity(client: &Client, items: &mut Value) {
     for item in items.as_array_mut().into_iter().flatten() {
-        let on_path = item["key"].as_str().is_some_and(|key| keys.contains(&key));
-        if !on_path || !matches!(item["state"].as_str(), Some("claimed" | "in_review")) {
+        if !matches!(item["state"].as_str(), Some("claimed" | "in_review")) {
             continue;
         }
         let key = item["key"].as_str().unwrap_or_default().to_owned();
@@ -256,6 +252,14 @@ fn with_activity(client: &Client, items: &mut Value, path: &Value) {
             Err(error) => eprintln!("flow-snapshot: show {key} failed: {error}"),
         }
     }
+}
+
+/// Keys of Keeper's agent-ready result (`ready?agent=true&all=1`).
+fn ready_keys(ready: &Value) -> Value {
+    ready["items"]
+        .as_array()
+        .map(|rows| Value::Array(rows.iter().map(|r| r["key"].clone()).collect()))
+        .unwrap_or(Value::Null)
 }
 
 pub fn collect(env: &BTreeMap<String, String>) -> Value {
@@ -297,18 +301,19 @@ pub fn collect(env: &BTreeMap<String, String>) -> Value {
     put("series", series_dir(env).and_then(|d| series(&d)));
     let keeper = Client::new(env).and_then(|client| {
         let mut snapshot: Value = client.get("v1/snapshot")?;
-        let path: Value = client.get("v1/critical_path")?;
-        with_activity(&client, &mut snapshot["items"], &path["keys"]);
-        Ok((snapshot, path))
+        with_activity(&client, &mut snapshot["items"]);
+        let ready: Value = client.get("v1/ready?agent=true&all=1")?;
+        Ok((snapshot, ready))
     });
+    put("critical_target", Ok(json!(CRITICAL_TARGET)));
     match keeper {
-        Ok((snapshot, path)) => {
+        Ok((snapshot, ready)) => {
             put("items", Ok(snapshot["items"].clone()));
             put("activity", Ok(snapshot["activity"].clone()));
-            put("critical_path", Ok(path["keys"].clone()));
+            put("ready_keys", Ok(ready_keys(&ready)));
         }
         Err(error) => {
-            for name in ["items", "activity", "critical_path"] {
+            for name in ["items", "activity", "ready_keys"] {
                 put(name, Err(error.clone()));
             }
         }
