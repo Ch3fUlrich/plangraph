@@ -11,6 +11,13 @@ from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence import DecisionVerifier
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 
+# A test helper runs `cargo build -p pg-seat-evidence` when PG_CLAUDE_SEAT_BIN is unset, so the
+# first test that records seat evidence on a cold runner pays that build.
+pytestmark = pytest.mark.long_test_deadline(
+    600, reason="A cold runner builds pg-seat-evidence inside the test that records seat evidence "
+    "when PG_CLAUDE_SEAT_BIN is unset, which exceeds the 120 s default.",
+)
+
 KEY = "demo:A"
 HEAD = "abcdef0123456789" * 2 + "abcdef01"
 MERGE = "1" * 40
