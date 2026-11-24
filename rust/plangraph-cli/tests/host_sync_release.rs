@@ -47,6 +47,27 @@ fn rust_release_installs_train_cli_and_spawner_together() {
         "after",
     ]);
 
+    // The install list is the manifest's deployed binaries for the host's roles.
+    let deploy = repo.join("deploy");
+    fs::create_dir_all(&deploy).unwrap();
+    let binary = |package: &str, bin: &str, host: &str| {
+        format!(
+            "[[binary]]\npackage = \"{package}\"\nbin = \"{bin}\"\nhosts = [\"{host}\"]\nfirst_run = \"run it\"\n\n"
+        )
+    };
+    fs::write(
+        deploy.join("manifest.toml"),
+        [
+            binary("pg-spawnd", "pg-spawnd", "all"),
+            binary("plangraph-cli", "plangraph", "all"),
+            binary("pg-worker-core", "pg-disk-hygiene", "all"),
+            binary("pg-worker-core", "turn-budget-hook", "all"),
+            binary("pg-keeper-backup", "pg-keeper-backup", "keeper"),
+        ]
+        .concat(),
+    )
+    .unwrap();
+
     let stamp = home.join(".local/state/plangraph/release-built-tree");
     fs::create_dir_all(stamp.parent().unwrap()).unwrap();
     fs::write(&stamp, before).unwrap();
@@ -135,4 +156,22 @@ done
         .output()
         .unwrap();
     assert!(check.status.success(), "{check:?}");
+}
+
+#[test]
+fn install_units_refuses_a_checkout_without_a_manifest() {
+    let repo = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_host-sync"))
+        .env_clear()
+        .env("HOME", home.path())
+        .arg("--install-units")
+        .arg(repo.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("manifest.toml"),
+        "{output:?}"
+    );
 }

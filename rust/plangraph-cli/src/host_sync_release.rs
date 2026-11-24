@@ -1,17 +1,31 @@
 //! Build and publish the host tooling from the synchronized Rust tree.
 use super::{is_executable, Env};
+use crate::deploy_manifest::{this_host_roles, Manifest};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
-const BINARIES: &[(&str, &str)] = &[
-    ("pg-spawnd", "pg-spawnd"),
-    ("plangraph-cli", "plangraph"),
-    ("pg-worker-core", "pg-disk-hygiene"),
-    ("pg-worker-core", "turn-budget-hook"),
-];
+/// The binaries this host installs: the manifest's deployed binaries of the host's roles, plus the
+/// keeper role when `--with-keeper-backup` is given.
+fn binaries(repo: &Path, home: &Path, keeper: bool) -> io::Result<Vec<(String, String)>> {
+    let manifest = Manifest::load_from_repo(repo).map_err(io::Error::other)?;
+    let config = env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("plangraph");
+    let mut roles = this_host_roles(&config).map_err(io::Error::other)?;
+    if keeper {
+        roles.insert("keeper".into());
+    }
+    Ok(manifest
+        .binaries_for(&roles)
+        .into_iter()
+        .map(|(package, bin)| (package.to_owned(), bin.to_owned()))
+        .collect())
+}
 
 pub(super) fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
     let mut command = Command::new("git");
@@ -50,11 +64,8 @@ pub(super) fn publish(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
-    let mut binaries = BINARIES.to_vec();
-    if keeper {
-        binaries.push(("pg-keeper-backup", "pg-keeper-backup"));
-    }
     let repo = repo.canonicalize()?;
+    let binaries = binaries(&repo, home, keeper)?;
     let bin = home.join(".local/bin");
     let state = env::var_os("XDG_STATE_HOME")
         .filter(|value| !value.is_empty())
@@ -92,13 +103,15 @@ fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
     build
         .current_dir(repo.join("rust"))
         .args(["build", "--release", "--locked"]);
-    let packages: std::collections::BTreeSet<_> =
-        binaries.iter().map(|(package, _)| *package).collect();
+    let packages: std::collections::BTreeSet<_> = binaries
+        .iter()
+        .map(|(package, _)| package.as_str())
+        .collect();
     for package in packages {
         build.args(["-p", package]);
     }
     for (_, name) in &binaries {
-        build.args(["--bin", *name]);
+        build.args(["--bin", name]);
     }
     let status = build.status()?;
     if !status.success() {

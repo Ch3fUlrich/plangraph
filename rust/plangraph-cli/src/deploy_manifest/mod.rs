@@ -10,7 +10,9 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+pub mod install;
 pub mod scan;
+pub mod systemd;
 
 /// The role that every host has.
 pub const ALL: &str = "all";
@@ -306,5 +308,16 @@ pub fn host_roles(
     Ok(roles)
 }
 
+/// The roles of the host that runs this process; `config_dir` is `~/.config/plangraph`.
+pub fn this_host_roles(config_dir: &Path) -> Result<BTreeSet<String>, String> {
+    let file = std::fs::read_to_string(config_dir.join("host-roles")).ok();
+    host_roles(
+        std::env::var("PG_HOST_ROLES").ok().as_deref(),
+        file.as_deref(),
+    )
+}
+
+#[cfg(test)]
+mod install_tests;
 #[cfg(test)]
 mod tests;

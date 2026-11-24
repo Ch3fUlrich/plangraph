@@ -146,14 +146,24 @@ time when the monitor has one. Use `ssh-status` to guard steps with side effects
 the selected SSH route has a confirmed outage.
 
 
+## Host units
+
+`host-sync --install-units REPO [--scope user|system]` copies the unit files of every deployed family the
+manifest assigns to the host's roles into `~/.config/systemd/user` (system scope: `/etc/systemd/system`, as
+root), runs `daemon-reload` when a file changed, and runs `enable --now` for the family's timer or service
+unless it is already enabled and active. A family whose env file (`~/.config/plangraph/<name>`) is missing is
+reported as `NEEDS-ENV` and left disabled; template units are installed and enabled per instance by hand.
+The command exits 1 while any family is pending.
+
 ## Host release binaries
 
 After fast-forwarding the main checkout, run `host-sync --install-release REPO`
 with the host's shared `CARGO_TARGET_DIR` in the environment. On the first
 rollout, build the entry point with
 `cargo build --manifest-path REPO/rust/Cargo.toml --release -p plangraph-cli --bin host-sync`.
-Use that entry point as the release step in the host-sync schedule. It installs
-`pg-spawnd`, `pg-disk-hygiene`, `plangraph` and `turn-budget-hook` in
+Use that entry point as the release step in the host-sync schedule. It builds and installs every
+binary `deploy/manifest.toml` assigns to the host's roles (role `all`, plus the roles in `PG_HOST_ROLES`
+or `~/.config/plangraph/host-roles`; `--with-keeper-backup` adds the `keeper` role) in
 `~/.local/bin` and records the installed Rust tree in
 `${XDG_STATE_HOME:-$HOME/.local/state}/plangraph/release-built-tree`.
 Keep `~/.local/bin` on the landing and pre-push workers' PATH.
