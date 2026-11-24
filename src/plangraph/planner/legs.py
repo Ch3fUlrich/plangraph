@@ -442,9 +442,11 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         mrt = raw["max_request_tokens"]
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
-    for key in ("trains_on_data", "claude_family", "benchmark_optional", "web_access", "vision"):
+    for key in ("trains_on_data", "claude_family", "benchmark_optional", "web_access"):
         if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
+    if raw.get("vision") is not None and not isinstance(raw["vision"], bool):
+        problems.append(f"{where}.vision: must be a bool or null")
     if len(problems) > start:
         return None
     data = dict(raw)
