@@ -1,1 +1,0 @@
-The feeder's run view keeps each writer's `session_id` and `cwd`. An accepted writer (status `completed`) no longer counts against host capacity, and `fix_session` names its run so a fix round resumes the saved session on the same checkout instead of starting a fresh writer; while the resumed run is active no second resume is offered.

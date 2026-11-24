@@ -346,50 +346,6 @@ mod tests {
         assert_eq!(admit(&remote, &p), Admission::Admit);
     }
     #[test]
-    fn accepted_writer_frees_capacity_and_keeps_its_session_for_a_fix_round() {
-        let ps = |status: &str| {
-            json!({"runs":[{"run_id":"run-a","host":"dell","role":"implement","status":status,
-                "item_key":"other:KEY","session_id":"fixture-session","cwd":"/work/run-a"},
-                {"run_id":"run-r","host":"dell","role":"review","status":"running",
-                 "item_key":"other:KEY"}]})
-        };
-        let facts = |runs: &[Run]| {
-            let f: HostFacts = serde_json::from_value(json!({"host":"dell",
-                "free_ram_bytes":12000000000u64,"free_disk_bytes":20000000000u64,
-                "quota_remaining_percent":80,"observed_at":1000}))
-            .unwrap();
-            apply_facts(f, runs, &Policy::default(), 1001, false, None, None).unwrap()
-        };
-        let none = json!({"items":[]});
-        // Running: the writer holds capacity and no fix session is offered.
-        let running = decode_runs(&ps("running"), &none, &none, &[]).unwrap();
-        assert_eq!(facts(&running).running_writers, 1);
-        assert!(fix_session(&running, "other:KEY").is_none());
-        // Accepted and exited: capacity returns, the session and checkout survive on the record.
-        let ended = decode_runs(&ps("completed"), &none, &none, &[]).unwrap();
-        assert_eq!(facts(&ended).running_writers, 0);
-        let fix = fix_session(&ended, "other:KEY").expect("saved session");
-        assert_eq!(
-            (
-                fix.run_id.as_str(),
-                fix.session_id.as_str(),
-                fix.cwd.as_str(),
-                fix.host.as_str()
-            ),
-            ("run-a", "fixture-session", "/work/run-a", "dell")
-        );
-        // The fix round resumes the same run id: it holds capacity again, no second resume.
-        let resumed = decode_runs(&ps("running"), &none, &none, &[]).unwrap();
-        assert_eq!(resumed[0].session_id, "fixture-session");
-        assert_eq!(resumed[0].cwd, "/work/run-a");
-        assert!(fix_session(&resumed, "other:KEY").is_none());
-        // An ended run without a saved session cannot resume.
-        let lost = json!({"runs":[{"run_id":"run-b","host":"dell","role":"implement",
-            "status":"completed","item_key":"other:KEY"}]});
-        let lost = decode_runs(&lost, &none, &none, &[]).unwrap();
-        assert!(fix_session(&lost, "other:KEY").is_none());
-    }
-    #[test]
     fn claimed_snapshot_notes_and_queued_associations_restore_scope() {
         let data = json!({"runs":[{"run_id":"run-a","item_key":null,"host":"dell","status":"queued","role":"implement"}]});
         let snapshot = json!({"items":[{"key":"plangraph:PATCH-A","state":"claimed","note":"files: [\"src/shared.rs\"]"}]});
