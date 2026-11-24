@@ -17,20 +17,11 @@ def assert_review_seat_safety(estimate):
     for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
         review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review",
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
-        assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        # D-6652 starts with the two required OpenCode seats, then Hydrogen. Mimo Pro is parked for tool denial, and every
-        # seat must fit its own request limit and contribute a distinct family.
-        limit = {leg.id: leg.max_request_tokens for leg in DEFAULT_LEGS}
-        fits = lambda leg_id: estimate * 100 <= USABLE_FRACTION_PCT * limit[leg_id]
-        order = [("opencode-go-deepseek-v4-flash", "deepseek"), ("opencode-go-glm-5.3-flash", "glm"),
-                 ("agy-gemini-4-hydrogen-high", "gemini"), ("opencode-deepseek-v4.1-flash-free", "deepseek")]
-        expected, families = [], set()
-        for leg_id, family in order:
-            if fits(leg_id) and family not in families and len(expected) < 2:
-                expected.append(leg_id)
-                families.add(family)
-        assert [leg.id for leg in review.review_seats] == expected
+        # Rule 3.66 (f10): one counted seat on Hydrogen, which must fit its own request limit.
+        assert estimate * 100 <= USABLE_FRACTION_PCT * 900000
+        assert [leg.id for leg in review.review_seats] == ["agy-gemini-4-hydrogen-high"]
+        assert [leg.family for leg in review.review_seats] == ["gemini"]
 
 
 

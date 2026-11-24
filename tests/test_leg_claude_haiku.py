@@ -35,13 +35,13 @@ def test_leg_present_review_only_and_last():
 def test_review_route_ends_with_haiku_for_mimo_writer():
     plan = plan_spawn(CARD, role="review", writer_families=("mimo",), leg_reader=_clear)
     ids = [l.id for l in plan.legs]
-    assert ids[:4] == ["opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",   # D-6652 required seats
-                       "agy-gemini-4-hydrogen-high", "gpt-6.2-sol-medium"]
+    assert ids[:6] == ["agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",   # f10 smart legs
+                       "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "gpt-6.2-sol-medium"]
     assert "claude-sonnet-5-5-high" not in ids
     assert "claude-haiku-5.5" not in ids
 
     def limited(model, **kwargs):
-        state = "limited" if model in {"opencode-go/deepseek-v4.1-flash", "opencode-go/glm-5.3-flash"} else "available"
+        state = "limited" if model in {"gemini-4-hydrogen-high", "gemini-4-argon-low", "gemini-4-argon-medium"} else "available"
         return {"state": state, "evidence": None}
 
     fallback = plan_spawn(CARD, role="review", writer_families=("mimo",), leg_reader=limited)

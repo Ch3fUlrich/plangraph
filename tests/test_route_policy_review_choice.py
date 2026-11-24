@@ -62,7 +62,7 @@ def test_d6550_routes_native_writer_hydrogen_and_sensitive_review():
     sensitive = plan("review", dict(card, paths=["src/auth/session.rs"]))
     assert (writer.first_leg.id, writer.first_leg.harness) == ("cx-gpt-6.2-sol-medium", "codex")
     assert all(not leg.claude_family for leg in writer.legs)
-    assert [leg.id for leg in review.review_seats] == list(REVIEW_REQUIRED)
+    assert [leg.id for leg in review.review_seats] == ["agy-gemini-4-hydrogen-high"]   # rule 3.66 (f10)
     assert all(not leg.claude_family for leg in review.legs)
     assert sensitive.first_leg.id == "claude-sonnet-5-5-high"
 
@@ -74,7 +74,7 @@ def test_d6550_routes_native_writer_hydrogen_and_sensitive_review():
 
     def required_out(model, **kwargs):
         state = available(model)
-        if model in REQUIRED_MODELS:
+        if model in {"gemini-4-hydrogen-high", "gemini-4-argon-low", "gemini-4-argon-medium"}:
             state["state"] = "limited"
         return state
 
@@ -140,7 +140,7 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
 
     for role, base, head, expected in (
         ("implement", None, None, ("cx-gpt-6.2-sol-medium", "codex")),
-        ("review", "HEAD~2", "HEAD~1", ("opencode-go-deepseek-v4-flash", "opencode")),
+        ("review", "HEAD~2", "HEAD~1", ("agy-gemini-4-hydrogen-high", "agy")),
         ("review", "HEAD~1", "HEAD", ("claude-sonnet-5-5-high", "claude")),
     ):
         card = {"estimate_tokens": 1000}
@@ -160,7 +160,7 @@ def test_native_review_route_requires_repository_tools():
                       role="review", writer_families=("gpt",), installed=lambda _: True,
                       leg_reader=lambda *_args, **_kwargs: {"state": "available", "evidence": None},
                       catalog_rows=())
-    assert plan.first_leg.id == "opencode-go-deepseek-v4-flash"
+    assert plan.first_leg.id == "agy-gemini-4-hydrogen-high"
     assert all(leg.tool_mode == "tools" for leg in plan.legs)
     assert {leg.id for leg in plan.legs if leg.harness == "opencode"} == {
         "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",

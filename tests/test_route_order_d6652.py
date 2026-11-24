@@ -77,17 +77,23 @@ def test_a_hard_card_gets_sonnet_xhigh_first_while_codex_is_limited():
         implement({"hard": "yes"})
 
 
-def test_review_route_returns_the_two_required_opencode_seats_with_tools():
+def test_review_route_seats_one_smart_leg_and_keeps_the_weak_pair_next():
+    # Rule 3.66 (f10): one counted seat on Hydrogen; the two OpenCode seats (tools mode) follow as fallbacks.
     plan = review({"repository_review_required": True})
-    assert [leg.id for leg in plan.review_seats] == list(REVIEW_REQUIRED)
-    assert all(leg.harness == "opencode" and leg.tool_mode == "tools" for leg in plan.review_seats)
-    assert [leg.id for leg in plan.legs[:2]] == list(REVIEW_REQUIRED) == list(REVIEW_ORDER[:2])
+    assert [leg.id for leg in plan.review_seats] == ["agy-gemini-4-hydrogen-high"]
+    assert [leg.id for leg in plan.legs[:5]] == ["agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-low",
+                                                 "agy-gemini-4-argon-medium", *REVIEW_REQUIRED]
+    assert all(leg.harness == "opencode" and leg.tool_mode == "tools" for leg in plan.legs[3:5])
+    assert list(REVIEW_ORDER[4:6]) == list(REVIEW_REQUIRED)
     assert not any(leg.claude_family for leg in plan.legs)
 
 
-def test_review_needs_two_seats_on_a_standard_head_too():
+def test_review_needs_one_seat_on_a_standard_head_and_two_weak_seats_without_a_smart_leg():
     plan = review()
-    assert len(plan.review_seats) == 2 and plan.error is None
+    assert len(plan.review_seats) == 1 and plan.error is None
+    gemini = {BY_ID[i].model for i in ("agy-gemini-4-hydrogen-high",)} | {"gemini-4-argon-low", "gemini-4-argon-medium"}
+    weak = review(down=gemini | {"claude-sonnet-5-5-high"})
+    assert [leg.id for leg in weak.review_seats] == list(REVIEW_REQUIRED) and weak.error is None
 
 
 def test_a_credential_tagged_diff_gets_the_claude_seat():
@@ -97,26 +103,23 @@ def test_a_credential_tagged_diff_gets_the_claude_seat():
     assert "claude-sonnet-5-5-high" not in [leg.id for leg in review().legs]
 
 
-def test_a_credential_diff_keeps_both_required_seats_and_adds_sonnet():
+def test_a_credential_diff_gets_one_sonnet_seat_and_the_weak_pair_stays_behind_it():
     for card in ({"risk_tags": ["secrets"]}, {"paths": ["src/auth/session.rs"]}):
         plan = review(card)
-        ids = [leg.id for leg in plan.review_seats]
-        assert ids[0] == "claude-sonnet-5-5-high" and set(REVIEW_REQUIRED) <= set(ids), (card, ids)
-        assert len(ids) == 3 and plan.error is None
-    # A deepseek-written credential diff fences that required seat; the other stays beside Sonnet.
-    plan = review({"risk_tags": ["secrets"]}, writers=("deepseek",))
-    ids = [leg.id for leg in plan.review_seats]
-    assert ids[0] == "claude-sonnet-5-5-high" and REVIEW_REQUIRED[1] in ids and REVIEW_REQUIRED[0] not in ids
-    # Without a credential tag the seats stay the two required ones.
-    assert [leg.id for leg in review().review_seats] == list(REVIEW_REQUIRED)
+        assert [leg.id for leg in plan.review_seats] == ["claude-sonnet-5-5-high"] and plan.error is None
+        assert set(REVIEW_REQUIRED) <= {leg.id for leg in plan.legs}
+    # A Claude-written credential diff never gets the Claude seat.
+    plan = review({"risk_tags": ["secrets"]}, writers=("claude",))
+    assert [leg.id for leg in plan.review_seats] == ["agy-gemini-4-hydrogen-high"]
 
 
-def test_the_claude_seat_serves_only_when_both_required_seats_are_out():
-    assert not any(leg.claude_family for leg in review(down=REQUIRED_MODELS - {BY_ID[REVIEW_REQUIRED[0]].model}).legs)
-    assert any(leg.id == "claude-sonnet-5-5-high" for leg in review(down=REQUIRED_MODELS).legs)
-    # A deepseek-written diff fences one required seat; the other still serves and Claude stays out.
+def test_the_claude_seat_serves_only_when_no_gemini_smart_leg_is_left():
+    gemini = {"gemini-4-hydrogen-high", "gemini-4-argon-low", "gemini-4-argon-medium"}
+    assert not any(leg.claude_family for leg in review(down={"gemini-4-hydrogen-high"}).legs)
+    assert any(leg.id == "claude-sonnet-5-5-high" for leg in review(down=gemini).legs)
+    # A deepseek-written diff fences one weak seat; Hydrogen still serves and Claude stays out.
     plan = review(writers=("deepseek",))
-    assert plan.legs[0].id == REVIEW_REQUIRED[1]
+    assert plan.legs[0].id == "agy-gemini-4-hydrogen-high"
     assert not any(leg.claude_family for leg in plan.legs)
-    # A claude-written diff never gets the Claude seat, even with both required seats out.
-    assert not any(leg.claude_family for leg in review(writers=("claude",), down=REQUIRED_MODELS).legs)
+    # A claude-written diff never gets the Claude seat, even with every Gemini leg out.
+    assert not any(leg.claude_family for leg in review(writers=("claude",), down=gemini).legs)

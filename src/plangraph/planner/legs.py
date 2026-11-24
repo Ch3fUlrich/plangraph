@@ -227,11 +227,16 @@ REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-m
 REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
 REVIEW_SONNET = "claude-sonnet-5-5-high"
 REVIEW_GPT = "gpt-6.2-sol-medium"
-# D-6652 (rule 3.66 (f)): every head needs these two OpenCode seats with file access, each
-# outside every writer family of the diff; both must ACCEPT with FILES READ.  They lead the route.
+# D-6652 (rule 3.66 (f)): the weak pair, two OpenCode seats with file access, each
+# outside every writer family of the diff; both must ACCEPT with FILES READ when they seat a head (f10: fallback).
 REVIEW_REQUIRED = ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash")
-REVIEW_ORDER = (*REVIEW_REQUIRED, REVIEW_HYDROGEN, REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK,
-                REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH, REVIEW_ARGON_LOW, REVIEW_ARGON)
+#: Rule 3.66 (f10, D-6738..D-6741): the one counted seat is the first smart leg the route serves (Sonnet only for a
+#: head Claude did not write); the REVIEW_REQUIRED pair seats the head only when none serves. The legs after the seat
+#: are the fallbacks of a seat run that ends without a verdict, in this order.
+REVIEW_GEMINI_SMART = (REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON)
+REVIEW_SMART = (*REVIEW_GEMINI_SMART, REVIEW_SONNET)
+REVIEW_ORDER = (*REVIEW_SMART, *REVIEW_REQUIRED, REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK,
+                REVIEW_NEON, REVIEW_MIMO_FLASH)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
     Leg(REVIEW_GPT, "subscription", "codex", "gpt-6.2-sol-medium", "gpt",
