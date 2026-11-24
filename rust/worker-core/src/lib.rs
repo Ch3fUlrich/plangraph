@@ -19,6 +19,7 @@ pub mod cpu;
 pub mod cpu_linux;
 pub mod diffscan;
 pub mod disk_hygiene;
+pub mod disk_measure;
 pub mod disk_runtime;
 #[cfg(target_os = "linux")]
 pub mod disk_watermark;
@@ -73,6 +74,7 @@ pub mod placement_rule_store;
 pub mod placement_rules;
 pub mod private_targets;
 pub mod probe;
+mod push_reclaim;
 #[cfg(unix)]
 mod reap_journal;
 #[cfg(unix)]
@@ -138,6 +140,7 @@ mod affected_scratch;
 pub mod cargo_cache;
 #[cfg(target_os = "linux")]
 pub mod cargo_command_lease;
+mod cargo_lease_diag;
 pub mod cargo_pool;
 mod cargo_pool_telemetry;
 mod cargo_pool_trim;

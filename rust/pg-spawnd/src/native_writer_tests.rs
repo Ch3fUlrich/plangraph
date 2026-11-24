@@ -4,7 +4,7 @@ use super::*;
 use serde_json::json;
 
 #[derive(Default)]
-struct Fake {
+pub(crate) struct Fake {
     calls: Vec<Option<String>>,
     heads: usize,
     stale: bool,
@@ -42,6 +42,9 @@ struct Fake {
     /// Turns from this call number on return the Codex usage-limit error.
     quota_from: Option<usize>,
     quota_booked: Vec<crate::native_writer::quota::Limit>,
+    /// The real host's reclaim and push, in place of the fixture's, when set.
+    host_reclaim: Option<Box<dyn FnMut() -> Result<(), String>>>,
+    host_push: Option<Box<dyn FnMut(&str) -> Result<Option<String>, String>>>,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
@@ -161,6 +164,9 @@ impl Driver for Fake {
     }
     fn reclaim_target(&mut self) -> Result<(), String> {
         self.reclaims += 1;
+        if let Some(reclaim) = self.host_reclaim.as_mut() {
+            return reclaim();
+        }
         if self.reclaims <= self.reclaim_failures {
             return Err("cargo_target_not_reclaimed: lease held by pid 4242".into());
         }
@@ -168,6 +174,9 @@ impl Driver for Fake {
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         self.pushed.push(head.into());
+        if let Some(push) = self.host_push.as_mut() {
+            return push(head);
+        }
         if self.pushed.len() <= self.push_failures {
             return Err("pre-push: fixture scrub hit".into());
         }
@@ -786,3 +795,20 @@ mod push;
 #[cfg(test)]
 #[path = "native_writer_quota_tests.rs"]
 mod quota_tests;
+
+/// Run an accepted writer lifecycle whose host reclaim and push are the real host's.
+/// Returns the record, the writer turns taken and the reviews run.
+pub(crate) fn run_with_host_handoff(
+    accepted: &str,
+    reclaim: Box<dyn FnMut() -> Result<(), String>>,
+    push: Box<dyn FnMut(&str) -> Result<Option<String>, String>>,
+) -> (serde_json::Value, usize, usize) {
+    let mut driver = Fake {
+        head_script: vec!["base", Box::leak(accepted.to_owned().into_boxed_str())],
+        host_reclaim: Some(reclaim),
+        host_push: Some(push),
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    (record, driver.calls.len(), driver.reviews.len())
+}

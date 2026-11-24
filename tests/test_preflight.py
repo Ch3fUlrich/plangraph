@@ -778,6 +778,28 @@ def test_cap_refusal_names_the_holder_of_a_symlinked_shared_target(repo, monkeyp
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc/locks")
+def test_leases_through_a_symlink_and_its_real_path_contend(tmp_path, monkeypatch):
+    """Preflight leases the configured symlink, the shim and host reclaim the real path: one lock."""
+    from plangraph.spawner import host_ready as h
+    real = tmp_path / "real-target"
+    real.mkdir()
+    link = tmp_path / "link-target"
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(link))
+    shared = h.cargo_lease()
+    try:
+        with pytest.raises(OSError):
+            h._cargo_lease_for(real, exclusive=True)
+        with pytest.raises(OSError):
+            h._cargo_lease_for(link, exclusive=True)
+        assert h.cargo_lease_holders(real) == [os.getpid()]
+        assert h.cargo_lease_holders(link) == [os.getpid()]
+    finally:
+        shared.close()
+    h._cargo_lease_for(real, exclusive=True).close()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc/locks")
 def test_running_disk_refusal_cap_message_names_holding_pid(repo, monkeypatch):
     """A cap refusal names the pid holding the shared cargo lease (LE-RUN-SUPERVISOR-HOLDS-CARGO-LEASE-BLOCKS-TRIM)."""
     from plangraph.spawner import host_ready as h

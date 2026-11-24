@@ -83,12 +83,10 @@ pub fn run_command(
     if let Some(target) = target {
         command.env(HELD_ENV, target);
     }
-    // SAFETY: prctl is async-signal-safe and the closure touches no shared Rust state.
+    let shim = std::process::id() as libc::pid_t;
+    // SAFETY: prctl and getppid are async-signal-safe and the closure touches no shared Rust state.
     unsafe {
-        command.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-            Ok(())
-        });
+        command.pre_exec(move || die_with_parent(shim));
     }
     let status = command.status();
     drop(lease);
@@ -97,6 +95,21 @@ pub fn run_command(
     Ok(status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
+}
+
+/// Make the child die with its parent `shim`, and refuse to run Cargo when the shim already
+/// exited: the lease would be released while the child survives.
+fn die_with_parent(shim: libc::pid_t) -> io::Result<()> {
+    // SAFETY: prctl and getppid take no pointers and have no preconditions.
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::getppid() } != shim {
+        return Err(io::Error::other(
+            "the cargo shim exited before the command started",
+        ));
+    }
+    Ok(())
 }
 
 /// Entry point of the shim: `args` are the arguments the writer gave `cargo`.

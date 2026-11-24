@@ -133,3 +133,37 @@ fn resume_of_an_ended_run_with_a_pending_push_only_pushes() {
     assert_eq!(driver.reviews.len(), reviews);
     assert_eq!(driver.pushed, ["final-head"]);
 }
+
+#[test]
+fn a_preflight_cap_refusal_keeps_the_accepted_head_for_a_push_only_retry() {
+    let refused = std::rc::Rc::new(std::cell::Cell::new(true));
+    let flag = refused.clone();
+    let mut driver = Fake {
+        host_push: Some(Box::new(move |_| {
+            if flag.get() {
+                Err("pre-push: cargo_target_cap: measured 4096 bytes in the shared target, cap 1024 bytes".into())
+            } else {
+                Ok(Some("refs/heads/lane/fixture".into()))
+            }
+        })),
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["status"], "failed", "{record}");
+    assert!(record["reason"]
+        .as_str()
+        .unwrap()
+        .contains("push_blocked_by_host"));
+    assert_eq!(record["push_pending"]["head"], "final-head");
+    // The writer is not asked to fix a host cause.
+    assert_eq!(driver.calls, [None]);
+    let reviews = driver.reviews.len();
+
+    refused.set(false);
+    let retried = run_resume(&mut driver, record, "same-session", "operator retry");
+    assert_eq!(retried["status"], "completed", "{retried}");
+    assert_eq!(retried["pushed"], "refs/heads/lane/fixture");
+    assert_eq!(driver.calls, [None]);
+    assert_eq!(driver.reviews.len(), reviews);
+    assert_eq!(driver.pushed, ["final-head", "final-head"]);
+}
