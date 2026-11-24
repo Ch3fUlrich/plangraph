@@ -18,6 +18,9 @@ pub struct Stage {
     pub start: i64,
     pub end: i64,
     pub result: String,
+    /// Plan items the batch carried; recorded on the `merge` row for the throughput experiment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<u32>,
 }
 
 impl Stage {
@@ -70,6 +73,7 @@ pub fn ci_stages(subject: &str, head: &str, jobs: &[Value]) -> Vec<Stage> {
                 start: epoch(j, "started_at")?,
                 end: epoch(j, "completed_at")?,
                 result: j["conclusion"].as_str().unwrap_or("unknown").into(),
+                items: None,
             })
         })
         .collect()
@@ -176,7 +180,7 @@ pub fn render(r: &Report) -> Vec<String> {
     out
 }
 
-const USAGE: &str = "usage:\n  plangraph land-timeline record --subject S --head H --stage NAME --host HOST --start EPOCH --end EPOCH --result R\n  plangraph land-timeline report [--last N]";
+const USAGE: &str = "usage:\n  plangraph land-timeline record --subject S --head H --stage NAME --host HOST --start EPOCH --end EPOCH --result R\n  plangraph land-timeline report [--last N]\n  plangraph land-timeline experiment [--days N] [--now EPOCH]\nrecord takes --items N on the merge row of a batch";
 
 pub fn run(home: &Path, args: &[String]) -> i32 {
     let ledger = home.join(".local/state/plangraph/land-timeline.jsonl");
@@ -220,6 +224,10 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
                     start: num("start")?,
                     end: num("end")?,
                     result: get("result")?,
+                    items: flags
+                        .get("items")
+                        .map(|v| v.parse().map_err(|_| "--items must be a number".to_owned()))
+                        .transpose()?,
                 },
             )
         })()
@@ -230,6 +238,20 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
                     .map_err(|_| "--last must be a number".to_owned())
             })?;
             Ok(render(&report(&s, n)))
+        }),
+        "experiment" => load(&ledger).and_then(|s| {
+            let num = |k: &str, d: i64| {
+                flags.get(k).map_or(Ok(d), |v| {
+                    v.parse::<i64>()
+                        .map_err(|_| format!("--{k} must be a number"))
+                })
+            };
+            let now = num("now", chrono::Utc::now().timestamp())?;
+            Ok(super::experiment::render(&super::experiment::compare(
+                &s,
+                now,
+                num("days", 3)?,
+            )))
         }),
         _ => Err(USAGE.to_owned()),
     };

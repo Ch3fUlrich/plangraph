@@ -94,6 +94,22 @@ train base from the first-parent chain (`rev-list --first-parent TIP --not origi
 main is main itself after a remerge. Replay recomputes the remerge, refuses a conflict or an edit
 hidden in it, and lists it as `remerges` in the review artifact for the remerge-diff review.
 
+The driver steps (`parallel.rs`, `remerge.rs`, `combine.rs`; commands in `driver_cli.rs`), run between CI results:
+
+- `land-train plan --main SHA --trains FILE` reads each train's CI state (`running`, `green`, `{red: {hints, log}}`) and the
+  tip of main it contains, and prints the next steps as JSON lines: `land` the first green train that contains the live tip
+  (alone, since main moves), else `remerge` the one stale green or running train, or `combine` several stale ones, and
+  `drop_part` for a red train (the existing red-train session of `split.rs` leaves the hinted part out). Ask again after each step.
+- `land-train remerge --repo DIR --manifest FILE --main SHA --parts FILE --out FILE` merges the new main into the train,
+  replays it and moves the branch; parts, receipts and merges stay, so no part is reviewed again. A conflict is refused:
+  combine the train instead.
+- `land-train combine --manifests A,B,... --out FILE` writes the union of the parts (each pull request once, receipts kept)
+  as `--parts` input for one `build` on the new main.
+- The GO verifier still wants the manifest base to be main's tip, so a remerged train cannot be admitted until
+  `go_verify.rs` accepts a train whose tested head contains main's tip (gate path, separate item).
+- `land-timeline experiment [--days N]` compares batches and items per hour, test runs per landed batch and red trains
+  per day over the last N days with the N days before (D-6774); `record --items N` on the `merge` row feeds the items.
+
 Run a hand-started train resolver from its worktree with
 `pg-spawnd hand-run -- PROGRAM [ARGS ...]`. Export `CARGO_TARGET_DIR` with the
 host's configured shared target before launching it. The launcher validates
