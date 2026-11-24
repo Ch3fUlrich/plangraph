@@ -126,3 +126,22 @@ subject, head, host, start, end, result. `report --last N` prints, per train, th
 critical path (parallel jobs count once), idle time between stages and the bottleneck stage, then the stage with the most
 critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
 them into a keeper table needs a keeper schema step that is not part of this change.
+
+## Cutting a slice or landing branch
+
+`plangraph land-train cut --repo DIR --base REV --branch NAME --commits A,B [--gate-edits A=D-1] --grants FILE`
+(rust/plangraph-cli/src/land/cut.rs) resolves every input once to a full commit id, picks the sources (oldest first) onto
+`--base` without `-x`, drops any `(cherry picked from commit ...)` line and adds `Picked-From: <full id>` and, for a commit named
+in `--gate-edits`, `Gate-Edit: <D-id>` inside the existing trailer block. Then it runs `tools/ci_commit_gate.py check` on the
+range with full ids. The gate is the one of the base commit, as CI reads it, and runs under the cutter's git environment (no
+`GIT_*` override, no replacement refs); no flag names another gate. The branch is created by one atomic ref update that fails
+when the branch exists, and that update is the success boundary: a scratch worktree that cannot be removed afterwards is a
+warning line (`git worktree prune` after deleting its directory under `<git-common-dir>/plangraph/cut-worktrees/`), never a failed cut.
+A merge commit as a source is refused.
+
+`--grants FILE` is the pre-cut grant record, a JSON array of `{d_id, prefix, head}` (the `go_verify` grant): a `Gate-Edit` D-id,
+whether named in `--gate-edits` or already carried by a source anywhere in its message (also where git's trailer parser misses it),
+needs a row for that D-id, the source head, and a prefix covering every operator-class path the commit changes. The record is
+written by the router before the cut, because the GO row binds a head that exists only after the cut; its producer is a follow-up
+item. `land-train cut-check --repo DIR --base REV --head REV [--grants FILE]` runs the same message check and the same gate on a
+branch cut by hand (the source head is its last `Picked-From:`) and refuses a `cherry-pick -x` line.

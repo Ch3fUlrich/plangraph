@@ -46,7 +46,9 @@ R-batch-09: Combine heads with accepted keeper-bound spawner reviews and green f
   (why: one CI and one GO replace per-PR gates; source: routing DECISIONS 3.39 D-5938, tools/merge_batch.py)
 R-batch-10: Send one GO request per batch naming its PR, full head sha, each part's keeper-bound review run and CI result. Include the rule 3.17 block.
   Its exact format is `PLAN <keeper key> conforms=yes|no deviations=<text|none>`; `conforms=no` requires stated deviations.
-  Gate/workflow edits (GATE_PATHS in tools/ci_commit_gate.py) require a router Gate-Edit D-id. (why: routing compares one patch per GO; source: plangraph:BATCH-PORT-GO-REQ, docs/ci-gate.md)
+  Gate/workflow edits (GATE_PATHS in tools/ci_commit_gate.py) require a router Gate-Edit D-id.
+  Cut slices and landing branches only with `plangraph land-train cut` (D-ids from the pre-cut grant record in `--grants`), never by hand `cherry-pick -x`.
+  (why: one patch per GO; a `-x` line ends the trailer block; source: plangraph:BATCH-PORT-GO-REQ, plangraph:LE-LANDING-CUT-CHERRY-PICK-X-BREAKS-TRAILERS, docs/ci-gate.md)
 R-batch-11: Record every incident or workaround in the same beat: every session, router included, sends plan-order one line `LESSON <what> <evidence>`.
   plan-order attaches it to an existing LE item or defines a new one, names its writer run and starts the fix.
   (why: unrecorded lessons repeat; one converter keeps one item per root cause; source: routing DECISIONS 2.12 D-5852, 3.56 (2) D-6357)
