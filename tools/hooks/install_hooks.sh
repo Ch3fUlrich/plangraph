@@ -50,8 +50,6 @@
 # See docs/rust-hooks.md for the ledger contract. Register PreToolUse
 # for SendMessage and Bash (or exec_command) with:
 #   sh -c 'test -x "$1" || exit 1; exec "$1" message-time' _ DEST/pg-hook
-# and, on SendMessage, the same line with `message-route` (routine lines to routing,
-# stale session names; docs/rust-hooks.md).
 #
 # Usage:
 #   tools/hooks/install_hooks.sh --session-rust # include the Rust session guards
