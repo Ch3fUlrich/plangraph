@@ -663,11 +663,12 @@ def _github_repo(origin):
 def _closed_lane_pr(git, repo, hosted, branch, head):
     """Return the verified closed PR number, zero for open work, None on error."""
     fields = "number,state,headRefOid,isCrossRepository"
+    timing.check_io_deadline("closed lane pull request")
     try:
         result = subprocess.run(
             ["gh", "pr", "list", "--repo", hosted, "--head", branch, "--state", "all",
              "--limit", "100", "--json", fields], cwd=repo, capture_output=True,
-            text=True, timeout=20, check=False)
+            text=True, timeout=timing.io_timeout(20), check=False)
         prs = json.loads(result.stdout) if result.returncode == 0 else None
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None

@@ -14,9 +14,18 @@ use std::time::{Duration, Instant};
 /// Keep a bound on each keeper call, including a page of close results.
 const MAX_TIME_SECS: u32 = 300;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(95);
+/// The scheduled pass waits this long for the keeper scan (its budget is 180 s, see
+/// `MergeRefresh.SCAN_BUDGET_SECONDS`), which leaves 150 s of the 300 s index age and 250 s of the
+/// pass budget for paging. A scan still running then is continued by the next pass.
+pub(crate) const SCHEDULED_REFRESH_WAIT: Duration = Duration::from_secs(150);
+pub(crate) const WAIT_SWITCH: &str = "PG_MERGE_CLOSE_REFRESH_WAIT_SECS";
 const REFRESH_STILL_RUNNING: &str = "merge index refresh is still running";
+/// Consecutive scheduled passes that end on a pending refresh before the unit fails.
+pub const PENDING_LIMIT: u32 = 3;
+/// A pending pass is continued only while its scan can still be read inside the 300 s index age.
+pub(crate) const CONTINUE_WINDOW_SECS: u64 = 240;
 // Leave time for process overhead and logging before the service's 420 s timeout.
-const PASS_BUDGET: Duration = Duration::from_secs(400);
+pub(crate) const PASS_BUDGET: Duration = Duration::from_secs(400);
 const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
 
 /// What one run did, as the keeper reported it.
@@ -30,6 +39,7 @@ pub struct Outcome {
 pub struct ScheduleTiming {
     refresh_timeout: Duration,
     deadline: Instant,
+    resume: bool,
 }
 
 impl ScheduleTiming {
@@ -37,8 +47,32 @@ impl ScheduleTiming {
         Self {
             refresh_timeout,
             deadline: Instant::now() + budget,
+            resume: false,
         }
     }
+
+    /// Continue a pending scan: reuse a fresh completed scan another caller already consumed.
+    pub fn resuming(mut self) -> Self {
+        self.resume = true;
+        self
+    }
+}
+
+/// How the keeper's index refresh ended inside its wait.
+#[derive(Debug, PartialEq)]
+pub enum Refresh {
+    Ready,
+    /// The keeper scan was still `running` when the wait ended.
+    Pending {
+        waited_secs: u64,
+    },
+}
+
+/// What a scheduled pass ended with.
+#[derive(Debug, PartialEq)]
+pub enum Pass {
+    Done(Outcome),
+    Pending { waited_secs: u64 },
 }
 
 /// The `require_seats` switch: unset leaves the keeper's own `require_seats` setting in force
@@ -296,13 +330,35 @@ fn run_scheduled(
     project: Option<&str>,
     deployment_only: bool,
 ) -> Result<Outcome, String> {
-    let seats = require_seats(env)?;
     let timing = ScheduleTiming::new(REFRESH_TIMEOUT, PASS_BUDGET);
+    match scheduled_pass(
+        env,
+        apply,
+        project,
+        deployment_only,
+        timing,
+        &mut |_| Ok(()),
+    )? {
+        Pass::Done(outcome) => Ok(outcome),
+        Pass::Pending { .. } => Err(REFRESH_STILL_RUNNING.into()),
+    }
+}
+
+pub(crate) fn scheduled_pass(
+    env: &Env,
+    apply: bool,
+    project: Option<&str>,
+    deployment_only: bool,
+    timing: ScheduleTiming,
+    on_refresh: &mut dyn FnMut(&Refresh) -> Result<(), String>,
+) -> Result<Pass, String> {
+    let seats = require_seats(env)?;
+    let deadline = timing.deadline;
     let transport = |max_time_secs| DeadlineKeeper {
         keeper: SlowKeeper { env, max_time_secs },
-        deadline: timing.deadline,
+        deadline,
     };
-    run_scheduled_with(
+    run_pass(
         &transport(MAX_TIME_SECS),
         &transport(10),
         seats,
@@ -310,10 +366,12 @@ fn run_scheduled(
         project,
         deployment_only,
         timing,
+        on_refresh,
     )
 }
 
-/// Run the scheduled refresh and paged close using the supplied keeper transports.
+/// Run the scheduled refresh and paged close using the supplied keeper transports; a refresh
+/// still running at its wait is the error `merge index refresh is still running`.
 pub fn run_scheduled_with(
     keeper: &dyn Transport,
     control: &dyn Transport,
@@ -323,11 +381,44 @@ pub fn run_scheduled_with(
     deployment_only: bool,
     timing: ScheduleTiming,
 ) -> Result<Outcome, String> {
+    match run_pass(
+        keeper,
+        control,
+        seats,
+        apply,
+        project,
+        deployment_only,
+        timing,
+        &mut |_| Ok(()),
+    )? {
+        Pass::Done(outcome) => Ok(outcome),
+        Pass::Pending { .. } => Err(REFRESH_STILL_RUNNING.into()),
+    }
+}
+
+/// The scheduled pass. `on_refresh` sees the first refresh outcome before any page is read, so
+/// the caller commits its pending streak before a close can be interrupted.
+#[allow(clippy::too_many_arguments)]
+pub fn run_pass(
+    keeper: &dyn Transport,
+    control: &dyn Transport,
+    seats: Option<bool>,
+    apply: bool,
+    project: Option<&str>,
+    deployment_only: bool,
+    timing: ScheduleTiming,
+    on_refresh: &mut dyn FnMut(&Refresh) -> Result<(), String>,
+) -> Result<Pass, String> {
     let ScheduleTiming {
         refresh_timeout,
         deadline,
+        resume,
     } = timing;
-    refresh_index(control, refresh_timeout)?;
+    let first = refresh_index(control, refresh_timeout, resume)?;
+    on_refresh(&first)?;
+    if let Refresh::Pending { waited_secs } = first {
+        return Ok(Pass::Pending { waited_secs });
+    }
     let mut pass = ClosePass {
         deployment_count: Some(0),
         ..ClosePass::default()
@@ -357,14 +448,12 @@ pub fn run_scheduled_with(
                     if apply && error == MERGE_INDEX_EXPIRED && Instant::now() < deadline =>
                 {
                     let remaining = deadline.saturating_duration_since(Instant::now());
-                    if let Err(reason) = refresh_index(control, refresh_timeout.min(remaining)) {
-                        return if reason == REFRESH_STILL_RUNNING {
-                            Err(error)
-                        } else {
-                            Err(reason)
-                        };
+                    // Only the first refresh of a pass counts toward the pending streak: a
+                    // refresh that is still running here keeps the expiry the pass reports.
+                    match refresh_index(control, refresh_timeout.min(remaining), false)? {
+                        Refresh::Ready => call(),
+                        Refresh::Pending { .. } => Err(error),
                     }
-                    call()
                 }
                 result => result,
             }
@@ -384,23 +473,34 @@ pub fn run_scheduled_with(
     if !apply && !pass.scan_errors.is_empty() {
         return Err(format!("incomplete merge scan: {:?}", pass.scan_errors));
     }
-    Ok(pass.finish(deployment_only))
+    Ok(Pass::Done(pass.finish(deployment_only)))
 }
 
-fn refresh_index(control: &dyn Transport, timeout: Duration) -> Result<(), String> {
-    let deadline = Instant::now() + timeout;
-    control.call("close_merged_auto", Some(json!({"refresh": "start"})))?;
+/// Start the keeper scan (`resume` continues a fresh completed one) and wait for it. A scan still
+/// `running` at the wait is [`Refresh::Pending`]; every other failure stays an error.
+fn refresh_index(
+    control: &dyn Transport,
+    timeout: Duration,
+    resume: bool,
+) -> Result<Refresh, String> {
+    let begun = Instant::now();
+    let deadline = begun + timeout;
+    let verb = if resume { "resume" } else { "start" };
+    control.call("close_merged_auto", Some(json!({"refresh": verb})))?;
     loop {
         let reply = control.call("close_merged_auto", Some(json!({"refresh": "status"})))?;
         match reply["scan"].as_str() {
-            Some("ready") => return Ok(()),
+            Some("ready") => return Ok(Refresh::Ready),
             Some("running") => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
-                    return Err(REFRESH_STILL_RUNNING.into());
+                    return Ok(Refresh::Pending {
+                        waited_secs: begun.elapsed().as_secs(),
+                    });
                 }
                 std::thread::sleep(remaining.min(Duration::from_secs(1)));
             }
+            Some("failed") => return Err("keeper merge index refresh failed".into()),
             _ => return Err("keeper reply has no valid merge index status".into()),
         }
     }
@@ -417,6 +517,9 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
     let mut count = false;
     let mut repos = false;
     let mut deploy_status = false;
+    let mut scheduled = false;
+    let mut continuation = false;
+    let mut state = None;
     let mut project = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
@@ -424,6 +527,12 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
             "--count" => count = true,
             "--repos" => repos = true,
             "--deploy-status" => deploy_status = true,
+            "--scheduled" => scheduled = true,
+            "--continue" => continuation = true,
+            "--state" => match rest.next() {
+                Some(path) => state = Some(std::path::PathBuf::from(path)),
+                None => return usage(),
+            },
             "--project" => match rest.next() {
                 Some(name) => project = Some(name.as_str()),
                 None => return usage(),
@@ -432,6 +541,18 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
         }
     }
     if u8::from(count) + u8::from(repos) + u8::from(deploy_status) > 1 {
+        return usage();
+    }
+    // The timer's mode owns the pending exit policy; the numeric and preview flags never see it.
+    if scheduled {
+        return match state {
+            Some(state) if !(count || repos || deploy_status) => {
+                crate::merge_close_unit::run_unit(env, &state, continuation, project)
+            }
+            _ => usage(),
+        };
+    }
+    if continuation || state.is_some() {
         return usage();
     }
     if repos {
@@ -469,7 +590,7 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
 
 fn usage() -> i32 {
     eprintln!(
-        "usage: plangraph merge-close [--count | --repos | --deploy-status] [--project NAME]"
+        "usage: plangraph merge-close [--count | --repos | --deploy-status] [--project NAME] | merge-close --scheduled --state PATH [--continue] [--project NAME]"
     );
     2
 }
@@ -482,7 +603,9 @@ pub fn reconcile_with(
     state: &std::path::Path,
     refresh_timeout: Duration,
 ) -> Result<String, String> {
-    refresh_index(control, refresh_timeout)?;
+    if let Refresh::Pending { .. } = refresh_index(control, refresh_timeout, false)? {
+        return Err(REFRESH_STILL_RUNNING.into());
+    }
     let mut request = json!({"apply": false, "watch": true});
     if let Some(required) = seats {
         request["require_seats"] = json!(required);
