@@ -249,3 +249,60 @@ fn a_closed_pull_request_is_never_cloned_and_is_read_once() {
         .is_empty());
     assert_eq!(lookups.get(), 1, "one read for both tasks");
 }
+
+#[test]
+fn the_protected_paths_equal_the_commit_gates_hand_edit_and_gate_lists() {
+    let source = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/ci_commit_gate.py"),
+    )
+    .unwrap();
+    let mut python = Vec::new();
+    for name in ["AUTH_DOOR_PATHS", "GATE_PATHS"] {
+        let start = source
+            .find(&format!("{name}: tuple[str, ...] = ("))
+            .unwrap();
+        let body = &source[start..start + source[start..].find("\n)").unwrap()];
+        for line in body.lines().skip(1) {
+            let line = line.split('#').next().unwrap().trim();
+            if let Some(item) = line.strip_prefix('\'').and_then(|l| l.split('\'').next()) {
+                python.push(item.to_owned());
+            }
+        }
+    }
+    python.sort();
+    python.dedup();
+    let mut rust: Vec<String> = PROTECTED.iter().map(|p| (*p).to_owned()).collect();
+    rust.sort();
+    assert_eq!(
+        rust, python,
+        "update PROTECTED with tools/ci_commit_gate.py"
+    );
+}
+
+#[test]
+fn a_fix_touching_the_go_verifier_or_a_gitattributes_file_is_dropped() {
+    let root = tempfile::tempdir().unwrap();
+    let head = remote(root.path());
+    let go = |name: &str, command: &str| {
+        apply(
+            &root.path().join(name),
+            &request(&head, &["sh", "-c", command]),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        go(
+            "a",
+            "mkdir -p plangraph-cli/src/land && echo x > plangraph-cli/src/land/go_verify.rs"
+        ),
+        Outcome::GatePath("rust/plangraph-cli/src/land/go_verify.rs".into())
+    );
+    assert_eq!(
+        go("b", "mkdir -p sub && echo x > sub/.gitattributes"),
+        Outcome::GatePath("rust/sub/.gitattributes".into())
+    );
+    assert!(
+        matches!(go("c", "echo y >> a.txt"), Outcome::Pushed(_)),
+        "an ordinary file is still fixed"
+    );
+}
