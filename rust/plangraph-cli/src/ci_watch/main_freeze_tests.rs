@@ -103,6 +103,7 @@ fn flake_diag() -> Diagnosis {
     Diagnosis {
         tests: vec!["flaky::test".into()],
         incomplete: false,
+        ..Default::default()
     }
 }
 
@@ -156,6 +157,7 @@ fn a_failure_without_a_flake_item_goes_to_the_fix_task_without_a_rerun() {
         Diagnosis {
             tests: vec!["real::bug".into()],
             incomplete: false,
+            ..Default::default()
         },
     );
     let mut state = FreezeState::default();
@@ -179,6 +181,7 @@ fn a_capped_log_never_counts_as_a_known_flake() {
         Diagnosis {
             tests: vec!["flaky::test".into()],
             incomplete: true,
+            ..Default::default()
         },
     );
     let mut state = FreezeState::default();
@@ -393,6 +396,7 @@ fn a_red_main_without_progress_alerts_after_thirty_minutes_and_a_young_attempt_i
         Diagnosis {
             tests: vec!["real::bug".into()],
             incomplete: false,
+            ..Default::default()
         },
     );
     run_step(&mut state, &red(list.clone(), 0), &mut fx);
@@ -489,6 +493,7 @@ fn a_red_rerun_after_the_train_pr_closed_creates_the_fix_task_and_a_green_rerun_
         Diagnosis {
             tests: vec!["real::bug".into()],
             incomplete: false,
+            ..Default::default()
         },
     );
     let mut state = FreezeState::default();
@@ -539,6 +544,7 @@ fn a_close_that_fails_stays_open_and_is_retried_on_the_next_pass() {
         Diagnosis {
             tests: vec!["real::bug".into()],
             incomplete: false,
+            ..Default::default()
         },
     );
     let mut state = FreezeState::default();
@@ -570,6 +576,7 @@ fn a_fix_task_the_keeper_did_not_confirm_keeps_its_budget_and_is_retried() {
         Diagnosis {
             tests: vec!["real::bug".into()],
             incomplete: false,
+            ..Default::default()
         },
     );
     let mut state = FreezeState::default();
@@ -599,6 +606,7 @@ fn each_red_episode_of_a_run_gets_its_own_fix_task_identity() {
         Diagnosis {
             tests: vec!["real::bug".into()],
             incomplete: false,
+            ..Default::default()
         },
     );
     let mut state = FreezeState::default();
@@ -661,6 +669,7 @@ fn a_fix_task_whose_creation_reply_was_lost_is_still_closed_when_main_turns_gree
         Diagnosis {
             tests: vec!["real::bug".into()],
             incomplete: false,
+            ..Default::default()
         },
     );
     let mut state = FreezeState::default();
@@ -689,6 +698,7 @@ fn a_lost_first_creation_reply_still_advances_the_episode_so_the_next_red_gets_a
         Diagnosis {
             tests: vec!["real::bug".into()],
             incomplete: false,
+            ..Default::default()
         },
     );
     let mut state = FreezeState::default();

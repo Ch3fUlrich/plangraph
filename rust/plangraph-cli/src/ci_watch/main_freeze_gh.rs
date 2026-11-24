@@ -1,5 +1,6 @@
 //! The GitHub, keeper and file effects of the main-freeze handler, and its wiring into `plangraph ci-watch`.
 use super::batch_failure::{self, Deliver, FailureRecord, Owners};
+use super::classify;
 use super::github::Github;
 use super::main_freeze::{self, Alert, Diagnosis, Effects, FreezeState, Kind};
 use super::{logs, Result, Task};
@@ -61,6 +62,15 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
             match self.gh.log(id) {
                 Ok(log) => {
                     found.incomplete |= log.contains("[log truncated");
+                    let name = logs::scrub(job["name"].as_str().unwrap_or("main"));
+                    let class = classify::classify_job(&name, &logs::scrub(&log), false);
+                    found.red.push((name, id, class));
+                    if found.excerpt.is_empty() {
+                        found.excerpt = logs::failures(&log)
+                            .into_values()
+                            .next()
+                            .unwrap_or_default();
+                    }
                     found.tests.extend(
                         logs::failures(&log)
                             .into_keys()
@@ -103,14 +113,26 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
         let task_path = self.dir.join("tasks.jsonl");
         let mut tasks = super::load_tasks(&task_path)?;
         let old = tasks.get(&key).cloned();
+        let classes: Vec<_> = diagnosis.red.iter().map(|(_, _, class)| *class).collect();
+        let run_class = classify::classify_run(&classes);
+        let first = diagnosis.red.first();
         let task = Task {
             key: key.clone(),
             head: "main".into(),
             pr: None,
             run_id: run,
-            job: "main".into(),
+            job: first.map_or_else(|| "main".into(), |(name, _, _)| name.clone()),
             test,
-            excerpt: format!("main is red; failing tests {:?}", diagnosis.tests),
+            excerpt: format!(
+                "main is red; failing tests {:?}\n{}",
+                diagnosis.tests, diagnosis.excerpt
+            ),
+            class: first
+                .map_or(classify::RedClass::Unknown, |(_, _, class)| *class)
+                .name()
+                .into(),
+            run_class: run_class.name().into(),
+            job_id: first.map_or(0, |(_, id, _)| *id),
             priority: 10,
             keeper_defined: old
                 .as_ref()
