@@ -106,8 +106,10 @@ impl DeployPlan {
                 let title = format!("Train deploy target {}{at} refused: {}", b.family, b.reasons.join("; "));
                 let parts: Vec<_> = b.parts.iter().map(|p| format!("#{p}")).collect();
                 serde_json::json!({
-                    "key": b.key, "project": "plangraph", "kind": "task",
+                    "id": b.key.strip_prefix("plangraph:").unwrap_or(&b.key),
+                    "key": b.key, "project": "plangraph", "kind": "lane",
                     "under": "plangraph:LESSONS-ENFORCE", "priority": 10,
+                    "done_criteria": format!("the host install dry run passes for {}{at}", b.family),
                     "title": title.chars().take(200).collect::<String>(),
                     "description": format!(
                         "Why: the train deploy preflight refused {}{at} of part(s) {}: {}.\nHow: fix the host or the Deploy-Hosts/Deploy declaration, rerun the dry run.\nDone when: the dry run passes for this target.",
