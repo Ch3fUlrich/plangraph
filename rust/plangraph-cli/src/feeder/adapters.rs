@@ -191,6 +191,30 @@ pub(super) struct Adapters<'a, T> {
     pub host: String,
 }
 impl<T: Transport> Launch for Adapters<'_, T> {
+    /// Asks `pg-spawnd lane-check`, the guard of the spawner's own native dispatch, so the brief
+    /// generator and the dispatch refuse by the same rule and name the same lane.
+    fn lane_holder(&mut self, key: &str) -> Result<Option<String>, String> {
+        let mut cmd = Command::new(self.env.get("PG_SPAWND_BIN").map_or("pg-spawnd", |s| s));
+        cmd.arg("lane-check")
+            .arg("--repo")
+            .arg(&self.repo)
+            .args(["--item", key])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let out = cmd
+            .output()
+            .map_err(|_| "cannot execute pg-spawnd lane-check")?;
+        match out.status.code() {
+            Some(0) => Ok(None),
+            Some(2) => {
+                let message = String::from_utf8_lossy(&out.stderr);
+                let message = message.lines().next().unwrap_or("lane_collision");
+                Ok(Some(message.trim().to_owned()))
+            }
+            other => Err(format!("pg-spawnd lane-check failed (exit {other:?})")),
+        }
+    }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError> {
         let result = self
             .keeper
@@ -416,6 +440,34 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
                 )
             ]
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lane_holder_asks_the_spawner_guard_and_names_the_lane_it_refused_with() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let guard = temp.path().join("pg-spawnd");
+        fs::write(
+            &guard,
+            "#!/bin/sh\ncase \"$*\" in *plangraph:HELD*) echo 'lane_collision: plangraph:HELD is held by live lane writer-0673 (run)' >&2; exit 2;; *plangraph:BROKEN*) exit 9;; esac\n",
+        )
+        .unwrap();
+        fs::set_permissions(&guard, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut env = Env::new();
+        env.insert("PG_SPAWND_BIN".into(), guard.to_string_lossy().into_owned());
+        let mut a = Adapters {
+            keeper: Snapshot(json!({})),
+            env: &env,
+            repo: temp.path().into(),
+            state: temp.path().into(),
+            host: "dell".into(),
+        };
+        assert_eq!(a.lane_holder("plangraph:FREE"), Ok(None));
+        assert_eq!(
+            a.lane_holder("plangraph:HELD").unwrap().as_deref(),
+            Some("lane_collision: plangraph:HELD is held by live lane writer-0673 (run)")
+        );
+        assert!(a.lane_holder("plangraph:BROKEN").is_err());
     }
     struct Snapshot(Value);
     impl Transport for Snapshot {

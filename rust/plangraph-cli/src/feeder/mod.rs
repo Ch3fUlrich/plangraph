@@ -229,6 +229,11 @@ pub fn same_host(a: &str, b: &str, p: &Policy) -> bool {
 
 /// HTTP claim result carries its epoch through compensation; no priority writes.
 pub trait Launch {
+    /// The live lane that already holds `key` (another writer run, an unmerged lane branch or a
+    /// lane Keeper reports), or none. The default has no lane registry to ask.
+    fn lane_holder(&mut self, _key: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError>;
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String>;
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String>;

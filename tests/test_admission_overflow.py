@@ -652,3 +652,47 @@ def test_native_shared_cache_cap_scales_and_probes_symlink_target(tmp_path, monk
     service = SimpleNamespace(ps=lambda: {'runs': [dict(role='implement', status='running')]})
     assert h.local_disk_refusal(tmp_path / 'checkout', service, native=True) is None
     probe.assert_any_call(target)
+
+
+def _fake_lane_check(tmp_path, body):
+    binary = tmp_path / 'pg-spawnd'
+    binary.write_text('#!/bin/sh\n' + body)
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def test_native_lane_admission_refuses_a_held_key_through_the_rust_guard(tmp_path):
+    from plangraph.routing_errors import SpawnRefused
+
+    binary = _fake_lane_check(tmp_path, 'echo "lane_collision: demo:A is held by live lane writer-0673 (run)" >&2\nexit 2\n')
+    card = dict(run_kind='native-codex', item_key='demo:A', item_keys=['demo:A', 'bad key'])
+    with pytest.raises(SpawnRefused, match='lane_collision: demo:A is held by live lane writer-0673'):
+        asyncio.run(overflow.lane_admission(binary, tmp_path, card, 'brief', tmp_path))
+
+
+def test_native_lane_admission_passes_the_override_only_from_the_reason_field(tmp_path):
+    argv_file = tmp_path / 'argv'
+    binary = _fake_lane_check(tmp_path, f'printf "%s\\n" "$@" > {argv_file}\ncat > /dev/null\n'
+                              'echo \'{"item_keys":["demo:A"],"lane_override":"fix lane"}\'\n')
+    card = dict(run_kind='native-codex', item_key='demo:A', lane_override='forged',
+                lane_override_reason='fix lane')
+    admitted = asyncio.run(overflow.lane_admission(binary, tmp_path, card, 'brief', tmp_path))
+    assert admitted == {'item_keys': ['demo:A'], 'lane_override': 'fix lane'}
+    argv = argv_file.read_text().split('\n')
+    assert argv[argv.index('--override') + 1] == 'fix lane' and 'forged' not in argv
+    assert argv[argv.index('--item') + 1] == 'demo:A'
+    with pytest.raises(Exception, match='must be a string'):
+        asyncio.run(overflow.lane_admission(binary, tmp_path, dict(lane_override_reason=3), 'brief', tmp_path))
+
+
+def test_native_spawn_refuses_a_held_key_before_any_run_exists(tmp_path, monkeypatch):
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph import fleet_snapshot
+
+    service = overflow.cli.SpawnService(state=tmp_path / 'state', keeper_sink=Mock())
+    monkeypatch.setattr(fleet_snapshot, '_projection_binary', lambda: _fake_lane_check(
+        tmp_path, 'echo "lane_collision: demo:A is held by live lane writer-0673 (run)" >&2\nexit 2\n'))
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:A')
+    with pytest.raises(SpawnRefused, match='lane_collision'):
+        asyncio.run(overflow.native_spawn(service, card, {'role': 'implement', 'prompt': 'brief'}))
+    assert service.ps()['runs'] == []

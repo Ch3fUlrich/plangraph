@@ -39,6 +39,25 @@ fn claim_batch(
 ) -> Result<Vec<(Task, u64)>, SpawnError> {
     let mut claimed: Vec<(Task, u64)> = Vec::new();
     for item in batch {
+        // An item another live lane carries is never written a second time: it is dropped from
+        // this batch with the lane that holds it, before any claim.
+        match launch.lane_holder(&item.key) {
+            Ok(None) => {}
+            Ok(Some(lane)) => {
+                dropped.push(json!({"item_key":item.key,"reason":format!("lane_held_by:{lane}")}));
+                if claimed.is_empty() && item.key == batch[0].key {
+                    return Ok(Vec::new());
+                }
+                continue;
+            }
+            Err(e) => {
+                let failures = release_held(&claimed, launch);
+                return Err(SpawnError::Start(with_failures(
+                    format!("lane check failed: {e}"),
+                    &failures,
+                )));
+            }
+        }
         match launch.claim(&item.key) {
             Ok(epoch) => claimed.push((item.clone(), epoch)),
             Err(ClaimError::Refused(reason)) => {

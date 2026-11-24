@@ -46,6 +46,8 @@ struct Host {
     unavailable_at: Option<String>,
     rival_error_at: Option<String>,
     queued: bool,
+    /// The live lane that holds a key, by key.
+    lanes: BTreeMap<String, String>,
     /// Held after the first claim until the other host has claimed as well.
     meet: Option<Arc<Barrier>>,
 }
@@ -68,11 +70,15 @@ impl Host {
             unavailable_at: None,
             rival_error_at: None,
             queued: false,
+            lanes: BTreeMap::new(),
             meet: None,
         }
     }
 }
 impl Launch for Host {
+    fn lane_holder(&mut self, key: &str) -> Result<Option<String>, String> {
+        Ok(self.lanes.get(key).cloned())
+    }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError> {
         let mut registry = self.registry.lock().unwrap();
         let result = if self.unavailable_at.as_deref() == Some(key) {
@@ -677,4 +683,26 @@ fn a_failed_batch_still_reports_the_members_dropped_before_the_failure() {
         .expect("the dropped member is reported");
     assert_eq!(dropped["reason"], "conflict");
     assert_released_with_own_epochs(&registry.lock().unwrap(), &["plangraph:ALPHA-1"]);
+}
+
+#[test]
+fn an_item_another_live_lane_holds_is_dropped_before_any_claim_and_the_next_is_launched() {
+    let items = vec![item("HELD", 9, &["a.rs"]), item("FREE", 5, &["b.rs"])];
+    let registry = Arc::new(Mutex::new(Registry::default()));
+    let mut host = Host::new(&registry, &items);
+    host.lanes.insert(
+        "plangraph:HELD".into(),
+        "lane_collision: plangraph:HELD is held by live lane writer-0673 (run)".into(),
+    );
+    let row = drive(&ready(items), &mut host, "dell", 1, false);
+    let registry = registry.lock().unwrap();
+    assert_eq!(registry.started, [["plangraph:FREE"]], "{row}");
+    assert!(
+        !registry.epochs.contains_key("plangraph:HELD"),
+        "never claimed"
+    );
+    assert_eq!(row["skipped"][0]["item_key"], "plangraph:HELD");
+    assert!(row["skipped"][0]["reason"].as_str().unwrap().starts_with(
+        "lane_held_by:lane_collision: plangraph:HELD is held by live lane writer-0673"
+    ));
 }

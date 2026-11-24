@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import secrets
 import shlex
 import subprocess
@@ -545,6 +546,33 @@ def native_repo(card):
     return Path(repo).resolve()
 
 
+async def lane_admission(binary, state, card, prompt, repo):
+    """Refuse a key another live lane holds before any run exists (pg-spawnd lane-check).
+
+    The Rust guard reads this host's live runs, the remote lane branches and Keeper's open
+    lanes. It answers the admitted keys and the reason of a deliberate second lane, which come
+    only from `card.lane_override_reason` or the typed batch input, never from card.lane_override.
+    """
+    import asyncio
+    from plangraph.routing_errors import SpawnRefused
+    items = [key for key in [card.get('item_key'), card.get('item'), *(card.get('item_keys') or [])]
+             if isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+', key)]
+    reason = card.get('lane_override_reason')
+    if reason is not None and not isinstance(reason, str):
+        raise SpawnRefused('lane_override_reason must be a string')
+    argv = [binary, 'lane-check', '--state', str(state), '--repo', str(repo)]
+    for key in dict.fromkeys(items):
+        argv += ['--item', key]
+    if reason is not None:
+        argv += ['--override', reason]
+    process = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, error = await process.communicate((prompt or '').encode())
+    if process.returncode:
+        raise SpawnRefused(error.decode(errors='replace').strip() or 'lane check failed')
+    return json.loads(out)
+
+
 async def native_spawn(self, card, options):
     """Placement is already admitted; Rust owns the native writer lifecycle."""
     import asyncio, time
@@ -563,6 +591,13 @@ async def native_spawn(self, card, options):
     except (TypeError, ValueError) as exc:
         raise SpawnRefused(str(exc)) from exc
     binary = _projection_binary()
+    # One live lane per item key: refuse before a run exists, then carry the admitted keys and
+    # the override reason (never a caller-supplied lane_override) into the run record.
+    admitted = await lane_admission(binary, self.state, card, options.get('prompt', ''), repo)
+    card = {key: value for key, value in card.items() if key != 'lane_override'}
+    card['item_keys'] = admitted['item_keys'][:50]
+    if admitted.get('lane_override'):
+        card['lane_override'] = admitted['lane_override']
     from .host_ready import harness_path
     tool_env = dict(os.environ)
     tool_env['PATH'] = harness_path(tool_env, native_writer=True)
