@@ -14,6 +14,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+/// The host-side code sync; a host may name another unit in `PG_REJOIN_SYNC_UNIT`.
 const SYNC_UNIT: &str = "plangraph-host-sync.service";
 const SWEEP_UNIT: &str = "pg-worktree-sweep.service";
 
@@ -106,7 +107,12 @@ fn now() -> u64 {
 impl RejoinHost for Ssh<'_> {
     fn sync_checkouts(&mut self) -> io::Result<SyncReport> {
         let before = self.heads();
-        self.ok(&["systemctl", "--user", "start", SYNC_UNIT], 900)?;
+        let unit = self
+            .host
+            .env
+            .get("PG_REJOIN_SYNC_UNIT")
+            .map_or(SYNC_UNIT, String::as_str);
+        self.ok(&["systemctl", "--user", "start", unit], 900)?;
         let after = self.heads();
         Ok(SyncReport {
             head: after.values().next().cloned().unwrap_or_default(),
@@ -182,17 +188,27 @@ impl RejoinHost for Ssh<'_> {
     }
 
     fn settle_run(&mut self, run: &str, fate: RunFate) -> io::Result<()> {
-        if fate == RunFate::Live {
-            return Ok(());
-        }
         let mut record = match RunRecord::read(&self.state, run) {
             Ok(record) => record,
             // The run never reached this coordinator's records.
             Err(pg_worker_core::run::record::RecordError::Unknown) => return Ok(()),
             Err(error) => return Err(io::Error::other(error.to_string())),
         };
-        if record.get("status").and_then(Value::as_str) == Some("unknown") {
+        let was_unknown = record.get("status").and_then(Value::as_str) == Some("unknown");
+        if was_unknown {
             record.set("status", json!("running"));
+        }
+        if fate == RunFate::Live {
+            // Re-attach: the record goes back to running and the host's own reconcile
+            // loop keeps following the session.
+            if was_unknown {
+                let at = now();
+                return record
+                    .push_event(json!({"event": "REJOIN_REATTACHED", "at": at}))
+                    .and_then(|()| record.save())
+                    .map_err(|error| io::Error::other(error.to_string()));
+            }
+            return Ok(());
         }
         if record.status().is_none_or(Status::is_terminal) {
             return Ok(());
@@ -230,35 +246,84 @@ impl RejoinHost for Ssh<'_> {
             .map_err(|error| io::Error::other(error.to_string()))
     }
 
-    fn reap_worktrees(&mut self) -> io::Result<u64> {
-        self.ok(&["systemctl", "--user", "start", SWEEP_UNIT], 600)?;
-        Ok(0)
+    /// The sweep unit reports removal candidates only; nothing is deleted here.
+    fn sweep_worktrees(&mut self) -> io::Result<()> {
+        self.ok(&["systemctl", "--user", "start", SWEEP_UNIT], 600)
+            .map(drop)
     }
 
     fn check_floors(&mut self) -> io::Result<FloorReport> {
         let mut problems = Vec::new();
-        let disk = self.run(&["pg-spawnd", "host", "work-disk"], 60)?;
-        let disk_ok = disk.status.success()
-            || String::from_utf8_lossy(&disk.stderr).contains("no worktree mounts configured");
-        if !disk_ok {
-            problems.push(format!(
-                "disk: {}",
-                String::from_utf8_lossy(&disk.stderr).trim()
-            ));
-        }
-        let ram_ok = if self.host.os == Os::Linux {
+        let mut unchecked = Vec::new();
+        // The host's registry mounts reach the command; an ssh session has no such env.
+        let disk_ok = match self.host.env.get("PLANGRAPH_WORK_MOUNTS") {
+            Some(mounts) if !mounts.is_empty() => {
+                let assign = format!("PLANGRAPH_WORKTREE_MOUNTS={mounts}");
+                let disk = self.run(&["env", &assign, "pg-spawnd", "host", "work-disk"], 60)?;
+                if !disk.status.success() {
+                    problems.push(format!(
+                        "disk: {}",
+                        String::from_utf8_lossy(&disk.stderr).trim()
+                    ));
+                }
+                disk.status.success()
+            }
+            _ => {
+                unchecked.push("disk: no work mounts configured in the host registry".into());
+                true
+            }
+        };
+        let floor = self.host.caps.mem_floor_mb;
+        let ram_ok = if self.host.wsl_distro.is_some() {
+            // The guest's MemAvailable counts page cache as used; Windows free memory
+            // is what starves the host, so ask the WSL cache guard for it.
+            let min = floor.max(1).to_string();
+            let guard = self.run(
+                &[
+                    "pg-spawnd",
+                    "host",
+                    "wsl-cache-guard",
+                    "--min-free-mb",
+                    &min,
+                ],
+                120,
+            )?;
+            let line = String::from_utf8_lossy(&guard.stdout).into_owned();
+            let value = |key: &str| {
+                line.split_whitespace()
+                    .find_map(|word| word.strip_prefix(key)?.parse::<u64>().ok())
+            };
+            if !guard.status.success() {
+                problems.push(format!(
+                    "ram: Windows free memory is below {floor} MiB and the page cache could not be dropped"
+                ));
+                false
+            } else if line.contains("status=skipped") {
+                unchecked.push("ram: Windows free memory unavailable from the WSL guest".into());
+                true
+            } else if let Some(free) = value("after_free_mb=").or_else(|| value("before_free_mb="))
+            {
+                if free < floor {
+                    problems.push(format!("ram: Windows free {free} MiB < floor {floor} MiB"));
+                }
+                free >= floor
+            } else {
+                unchecked.push("ram: unreadable WSL cache guard output".into());
+                true
+            }
+        } else if self.host.os == Os::Linux {
             let out = self.ok(
                 &["pg-spawnd", "probe", "--host-id", &self.host.id, "--json"],
                 60,
             )?;
             let probe: Value = serde_json::from_slice(&out).map_err(io::Error::other)?;
             let free = probe["mem_available_mb"].as_u64().unwrap_or(0);
-            let floor = self.host.caps.mem_floor_mb;
             if free < floor {
                 problems.push(format!("ram: {free} MiB available < floor {floor} MiB"));
             }
             free >= floor
         } else {
+            unchecked.push("ram: no memory source for a Windows host".into());
             true
         };
         Ok(FloorReport {
@@ -269,6 +334,7 @@ impl RejoinHost for Ssh<'_> {
             } else {
                 problems.join("; ")
             },
+            unchecked,
         })
     }
 
