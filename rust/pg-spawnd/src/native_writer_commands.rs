@@ -299,3 +299,44 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
     }
     Ok(())
 }
+
+/// What `pg-spawnd step-run` needs of a native run: its agent steps over the run's Host, the
+/// checkout and worktree paths of its record, and the lock that keeps a second supervisor off.
+pub(crate) struct StepHost {
+    pub agents: Box<dyn pg_spawnd::step_runner::StepActions>,
+    pub repo: PathBuf,
+    pub worktree: PathBuf,
+    pub _owner: pg_worker_core::lockfile::LockGuard,
+}
+
+pub(crate) fn step_host(
+    state: &Path,
+    id: &str,
+    base: &str,
+    findings: PathBuf,
+) -> Result<StepHost, String> {
+    let directory = run_dir(state, id).map_err(|_| "unknown run id")?;
+    let path = directory.join("record.json");
+    if !path.exists() {
+        return Err("unknown run id".into());
+    }
+    let owner = crate::writer_control::supervisor_guard(&path)?;
+    let record = read_record(&path)?;
+    let request = read_record(&directory.join("native-request.json"))?;
+    if record["run_id"] != id || request["record"]["run_id"] != id {
+        return Err("native request belongs to another run".into());
+    }
+    let mut host = Host::from_request(&request, &record, path)?;
+    host.configure(&request)?;
+    let (repo, worktree) = (host.repo.clone(), host.cwd.clone());
+    Ok(StepHost {
+        agents: Box::new(crate::native_writer_steps::AgentSteps::new(
+            host,
+            base.to_owned(),
+            findings,
+        )),
+        repo,
+        worktree,
+        _owner: owner,
+    })
+}
