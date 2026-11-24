@@ -18,14 +18,25 @@ pub(super) fn register(
         role @ ("fix" | "review" | "judge" | "research") => role,
         _ => "orchestrate",
     };
-    Registered::start(
-        state,
-        json!({
-            "run_kind":"fleet-session", "fleet_session_name":name, "host":host, "role":role,
-            "harness":"claude", "requested_model":args.model, "effort":args.effort,
-            "item_key":admission.fields["card"],
-        }),
-    )
+    let mut record = json!({
+        "run_kind":"fleet-session", "fleet_session_name":name, "host":host, "role":role,
+        "harness":"claude", "requested_model":args.model, "effort":args.effort,
+        "item_key":admission.fields["card"],
+    });
+    // The session that launched this one: completion events reach it by name.
+    if let Some(parent) = args.option("parent").filter(|parent| valid_parent(parent)) {
+        record["parent_session"] = json!(parent);
+    }
+    Registered::start(state, record)
+}
+
+/// A session name the native run records already accept as a parent.
+fn valid_parent(name: &str) -> bool {
+    name.len() <= 128
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 pub(crate) fn agent_roster() -> io::Result<Vec<Value>> {

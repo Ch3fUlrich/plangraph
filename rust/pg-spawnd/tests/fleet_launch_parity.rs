@@ -52,6 +52,8 @@ fn main() {
     let rust = Launcher::Rust(None);
     check(&rust);
     records::check_lifecycle(&rust);
+    records::parent_session_is_recorded(&rust);
+    records::invalid_parent_is_not_recorded(&rust);
     interrupted::check(&rust);
     interrupted::check_counter(&rust, false);
     interrupted::check_counter(&rust, true);

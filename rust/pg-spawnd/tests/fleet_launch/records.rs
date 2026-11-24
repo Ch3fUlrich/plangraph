@@ -360,3 +360,41 @@ pub fn check_batch_prompt(launcher: &Launcher) {
         include_str!("../fixtures/batch-writer-run-values.txt").strip_prefix("# Run values"),
     );
 }
+
+/// Launches a writer with `--parent <parent>` and returns its fleet-session run record.
+fn launched_record(launcher: &Launcher, parent: &str) -> Value {
+    let s = Sandbox::new(launcher);
+    let out = s
+        .launch("writer")
+        .args(["--parent", parent])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let spec = s.json("state/launch/sessions/writer-0001.json");
+    let id = spec["run_id"].as_str().expect("fleet run ID");
+    s.json(&format!("xdg/plangraph/runs/{id}/record.json"))
+}
+
+pub fn parent_session_is_recorded(launcher: &Launcher) {
+    let record = launched_record(launcher, "plan-order-0706");
+    assert_eq!(record["parent_session"], "plan-order-0706");
+}
+
+pub fn invalid_parent_is_not_recorded(launcher: &Launcher) {
+    for parent in ["-leading-dash", "has space", "semi;colon", &"a".repeat(129)] {
+        let record = launched_record(launcher, parent);
+        assert!(
+            record.get("parent_session").is_none(),
+            "{parent:?} was recorded: {record}"
+        );
+    }
+    let longest = "a".repeat(128);
+    assert_eq!(
+        launched_record(launcher, &longest)["parent_session"],
+        longest
+    );
+}
