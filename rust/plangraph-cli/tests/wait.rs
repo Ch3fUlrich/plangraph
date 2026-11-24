@@ -6,10 +6,15 @@ fn fake_gh(dir: &Path, runs: &str) -> std::path::PathBuf {
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).unwrap();
     fs::write(dir.join("runs.json"), runs).unwrap();
+    fs::write(dir.join("tip"), "abc\n").unwrap();
+    fs::write(dir.join("comments.json"), r#"{"comments":[]}"#).unwrap();
     let script = format!(
-        "#!/bin/sh\necho \"$@\" >> {log}\ncase \"$1 $2\" in\n  \"run list\") cat {runs} ;;\n  \"pr view\") echo '{{\"headRefName\":\"lane/x\",\"headRefOid\":\"abc\"}}' ;;\n  *) exit 9 ;;\nesac\n",
+        "#!/bin/sh\necho \"$@\" >> {log}\ncase \"$1 $2\" in\n  \"run list\") [ -f {delay} ] && sleep $(cat {delay}); cat {runs} ;;\n  api\\ *) cat {tip} ;;\n  \"pr view\") case \"$*\" in *comments*) cat {comments} ;; *) echo '{{\"headRefName\":\"lane/x\",\"headRefOid\":\"abc\"}}' ;; esac ;;\n  *) exit 9 ;;\nesac\n",
         log = dir.join("gh.log").display(),
-        runs = dir.join("runs.json").display()
+        runs = dir.join("runs.json").display(),
+        delay = dir.join("delay").display(),
+        tip = dir.join("tip").display(),
+        comments = dir.join("comments.json").display()
     );
     pg_worker_core::executable_test_support::write_executable(bin.join("gh"), script);
     bin
@@ -83,6 +88,95 @@ fn a_run_that_never_completes_ends_at_the_deadline_with_a_named_timeout() {
     );
     let record = fs::read_to_string(dir.path().join("job/waits/ci-lane_x.json")).unwrap();
     assert!(record.contains("\"outcome\": \"timeout\""), "{record}");
+}
+
+#[test]
+fn a_branch_wait_filters_by_the_tip_and_never_returns_the_previous_commits_green() {
+    let dir = tempfile::tempdir().unwrap();
+    // The branch tip moved to `new`; only the older commit has a (green) run.
+    let bin = fake_gh(
+        dir.path(),
+        r#"[{"databaseId":5,"status":"completed","conclusion":"success","headSha":"old"}]"#,
+    );
+    fs::write(dir.path().join("tip"), "new\n").unwrap();
+    let out = wait(
+        dir.path(),
+        &bin,
+        &["ci", "--branch", "lane/x", "--deadline", "2", "--poll", "1"],
+    );
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("no run seen for this head"), "{text}");
+    let log = fs::read_to_string(dir.path().join("gh.log")).unwrap();
+    assert!(log.contains("commits/lane/x"), "{log}");
+    // Once the tip has its own run, that run decides.
+    fs::write(
+        dir.path().join("runs.json"),
+        r#"[{"databaseId":5,"status":"completed","conclusion":"success","headSha":"old"},{"databaseId":6,"status":"completed","conclusion":"failure","headSha":"new"}]"#,
+    )
+    .unwrap();
+    let out = wait(
+        dir.path(),
+        &bin,
+        &["ci", "--branch", "lane/x", "--deadline", "5", "--poll", "1"],
+    );
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+}
+
+#[test]
+fn a_slow_gh_ends_at_the_deadline_not_at_its_own_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_gh(
+        dir.path(),
+        r#"[{"databaseId":7,"status":"in_progress","conclusion":"","headSha":"abc"}]"#,
+    );
+    // `gh run list` hangs for 40 s; the wait has 3 s and must kill the call at the deadline.
+    fs::write(dir.path().join("delay"), "40").unwrap();
+    let started = std::time::Instant::now();
+    let out = wait(
+        dir.path(),
+        &bin,
+        &["ci", "--pr", "9", "--deadline", "3", "--poll", "60"],
+    );
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("deadline 3s"), "{text}");
+}
+
+#[test]
+fn a_green_run_with_no_go_request_raises_the_gate_alert_until_one_is_posted() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_gh(
+        dir.path(),
+        r#"[{"databaseId":9,"status":"completed","conclusion":"success","headSha":"abc","updatedAt":"2020-01-01T00:00:00Z"}]"#,
+    );
+    let alert = |grace: &str| {
+        wait(
+            dir.path(),
+            &bin,
+            &["gate-alert", "--pr", "9", "--grace", grace],
+        )
+    };
+    let late = alert("900");
+    assert_eq!(late.status.code(), Some(1), "{late:?}");
+    let text = String::from_utf8(late.stdout).unwrap();
+    assert!(
+        text.contains("ALERT green-without-go pr=9 head=abc run=9"),
+        "{text}"
+    );
+    // The same run inside a huge grace is not stale yet.
+    assert_eq!(alert("4000000000").status.code(), Some(0));
+    fs::write(
+        dir.path().join("comments.json"),
+        r#"{"comments":[{"body":"GO-REQ #9 owner/proj head abc; diff stat: 1 file"}]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        alert("900").status.code(),
+        Some(0),
+        "a GO request suppresses it"
+    );
 }
 
 #[test]
