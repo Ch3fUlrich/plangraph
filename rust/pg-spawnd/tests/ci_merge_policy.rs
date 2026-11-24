@@ -3,6 +3,9 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
+#[path = "ci_merge_policy/python_inputs.rs"]
+mod python_inputs;
+
 use std::path::PathBuf;
 
 fn root() -> PathBuf {

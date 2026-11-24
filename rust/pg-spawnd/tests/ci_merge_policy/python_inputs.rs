@@ -1,38 +1,18 @@
 //! Python inputs run by the spawnd Rust tests select Rust CI, and the scan stays inside the checkout.
-#[cfg(test)]
-#[path = "../../test_support/python.rs"]
-mod test_python;
+//! A submodule of `ci_merge_policy` so its tests run under that Cargo target.
+use super::python;
 
-use std::path::PathBuf;
-
-fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-fn python(source: &str) {
-    let fixture = tempfile::tempdir().unwrap();
-    let mut command = test_python::command();
-    pg_worker_core::git_test_support::configure(&mut command, fixture.path());
-    let output = command
-        .args(["-c", source])
-        .current_dir(root())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// Collect a Python input only when it lies inside the checkout. A path such as
-/// `../../../tools/x.py` (an include_str! of a sibling file) is a real file only in a
-/// worktree nested under another checkout, so it must not change the result by location.
+/// Collect a Python input only when it lies inside the checkout, by its name and by its
+/// resolved target. A path such as `../../../tools/x.py` (an include_str! of a sibling
+/// file) is a real file only in a worktree nested under another checkout, and a symlink can
+/// lead out of the checkout; neither may change the result by location.
 const MAKE_ADD: &str = r####"
 import os, pathlib
 def make_add(root, inputs):
     def add(path):
-        try: rel = pathlib.Path(os.path.normpath(path)).relative_to(os.path.normpath(root))
+        try:
+            rel = pathlib.Path(os.path.normpath(path)).relative_to(os.path.normpath(root))
+            pathlib.Path(path).resolve().relative_to(pathlib.Path(root).resolve())
         except ValueError: return
         if path.is_file(): inputs.add(rel.as_posix())
     return add
@@ -57,6 +37,16 @@ with tempfile.TemporaryDirectory() as tmp:
     add(root / 'tools/in.py')
     add(root / 'tools/../tools/in.py')
     add(root / 'tools/missing.py')
+    try:
+        os.symlink(base / 'tools/out.py', root / 'tools/escape.py')
+        os.symlink(root / 'tools/in.py', root / 'tools/inside.py')
+    except (OSError, NotImplementedError):
+        pass
+    else:
+        add(root / 'tools/escape.py')
+        add(root / 'tools/inside.py')
+        assert 'tools/escape.py' not in inputs and 'tools/inside.py' in inputs, inputs
+        inputs.discard('tools/inside.py')
     assert inputs == {'tools/in.py'}, inputs
 "####
     ));
