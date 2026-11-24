@@ -144,60 +144,87 @@ impl Inputs {
         hosts
     }
 
-    pub fn accepted(&self, arrival: &Arrival) -> Option<Accepted<'_>> {
-        self.writers()
-            .filter_map(|run| {
-                let review = &run["review"];
-                let head = review["head"].as_str()?;
-                if review["verdict"] != "ACCEPT"
-                    || run["final_head"] != head
-                    || (head != arrival.sha
-                        && arrival.parents.get(1).is_none_or(|parent| parent != head))
-                {
-                    return None;
-                }
-                let at = seconds(&review["accepted_at"]).or_else(|| {
-                    let reader = self.records.get(review["run_id"].as_str()?)?;
-                    seconds(&reader["ended"])
-                })?;
-                let seconds = arrival.at.checked_sub(at).filter(|seconds| *seconds >= 0)?;
-                let usage = run["throughput_attempts"].as_array();
-                let model = usage.and_then(|rows| rows.first()?.get("model")?.as_str());
-                let tokens = usage.zip(model).and_then(|(rows, model)| {
-                    rows.iter().try_fold(0_u64, |total, row| {
-                        if row["model"] != model {
-                            return None;
-                        }
-                        total.checked_add(row["tokens"].as_u64()?)
-                    })
-                });
-                Some(Accepted {
-                    seconds,
-                    commits: arrival
-                        .commits
-                        .saturating_sub(u64::from(head != arrival.sha)),
-                    model,
-                    tokens,
+    /// One acceptance per verified included part: every ACCEPT of a writer's final head that is a commit the
+    /// arrival made reachable, joined to that head, with the commits only that part brought.
+    pub fn accepted_parts(&self, arrival: &Arrival) -> Vec<(String, Accepted<'_>)> {
+        let mut found: BTreeMap<&str, Accepted<'_>> = BTreeMap::new();
+        for run in self.writers() {
+            let review = &run["review"];
+            let Some(head) = review["head"].as_str() else {
+                continue;
+            };
+            if review["verdict"] != "ACCEPT"
+                || run["final_head"] != head
+                || !arrival.members.iter().any(|(sha, _)| sha == head)
+            {
+                continue;
+            }
+            let Some(at) = seconds(&review["accepted_at"]).or_else(|| {
+                let reader = self.records.get(review["run_id"].as_str()?)?;
+                seconds(&reader["ended"])
+            }) else {
+                continue;
+            };
+            let Some(wait) = arrival.at.checked_sub(at).filter(|wait| *wait >= 0) else {
+                continue;
+            };
+            let usage = run["throughput_attempts"].as_array();
+            let model = usage.and_then(|rows| rows.first()?.get("model")?.as_str());
+            let tokens = usage.zip(model).and_then(|(rows, model)| {
+                rows.iter().try_fold(0_u64, |total, row| {
+                    if row["model"] != model {
+                        return None;
+                    }
+                    total.checked_add(row["tokens"].as_u64()?)
                 })
-            })
-            .min_by_key(|value| value.seconds)
+            });
+            let candidate = Accepted {
+                seconds: wait,
+                commits: 0,
+                model,
+                tokens,
+            };
+            match found.get(head) {
+                Some(best) if best.seconds <= wait => {}
+                _ => {
+                    found.insert(head, candidate);
+                }
+            }
+        }
+        // Oldest part first: a commit counts for the first part that contains it.
+        let parents_of: std::collections::HashMap<&str, &Vec<String>> = arrival
+            .members
+            .iter()
+            .map(|(sha, parents)| (sha.as_str(), parents))
+            .collect();
+        let mut covered = std::collections::HashSet::new();
+        let mut parts = Vec::new();
+        for (sha, _) in &arrival.members {
+            let Some(mut accepted) = found.remove(sha.as_str()) else {
+                continue;
+            };
+            let mut stack = vec![sha.as_str()];
+            let mut own = 0;
+            while let Some(next) = stack.pop() {
+                let Some(parents) = parents_of.get(next) else {
+                    continue;
+                };
+                if covered.insert(next.to_owned()) {
+                    own += 1;
+                    stack.extend(parents.iter().map(String::as_str));
+                }
+            }
+            accepted.commits = own;
+            parts.push((sha.clone(), accepted));
+        }
+        parts
     }
 
-    pub fn quota(&self, now: i64) -> BTreeMap<&str, f64> {
-        let Some(data) = &self.quota else {
-            return BTreeMap::new();
-        };
-        data.as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|row| row["provider"].as_str())
-            .map(|name| name.split(':').next().unwrap_or(name))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .filter_map(|name| {
-                crate::feeder::quota::remaining_for(data, name, now, 10_800)
-                    .map(|remaining| (name, remaining))
-            })
-            .collect()
+    /// Latest quota window of every provider and account at `now`, with its reset; stale readings keep a NULL percentage.
+    pub fn quota(&self, now: i64) -> Vec<crate::feeder::quota::Window> {
+        self.quota
+            .as_ref()
+            .map(|data| crate::feeder::quota::windows(data, now, 10_800))
+            .unwrap_or_default()
     }
 }

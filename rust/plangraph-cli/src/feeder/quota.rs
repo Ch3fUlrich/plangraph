@@ -103,6 +103,45 @@ pub(crate) fn remaining_for(rows: &Value, target: &str, now: i64, max_age: i64) 
         .reduce(f64::max)
 }
 
+/// Latest snapshot of one provider, account and window, with the reset the snapshot names.
+pub(crate) struct Window {
+    pub provider: String,
+    pub account: String,
+    pub window: String,
+    /// Unix seconds of `next_reset_at`, unknown when the snapshot names none.
+    pub reset: Option<i64>,
+    /// Remaining percent; `None` when the snapshot is stale at `now` or carries no percentage.
+    pub remaining: Option<f64>,
+}
+
+/// One row per provider, account and window: the newest snapshot observed no later than `now`.
+pub(crate) fn windows(rows: &Value, now: i64, max_age: i64) -> Vec<Window> {
+    let mut latest: BTreeMap<(String, String, String), (i64, &Value)> = BTreeMap::new();
+    for row in rows.as_array().into_iter().flatten() {
+        let (Some((provider, account)), Some(window)) = (identity(row), window(row)) else {
+            continue;
+        };
+        let Some(at) = observed(row).and_then(stamp).filter(|at| *at <= now) else {
+            continue;
+        };
+        let key = (provider.to_owned(), account.to_owned(), window.to_owned());
+        let entry = latest.entry(key).or_insert((at, row));
+        if at >= entry.0 {
+            *entry = (at, row);
+        }
+    }
+    latest
+        .into_iter()
+        .map(|((provider, account, window), (at, row))| Window {
+            provider,
+            account,
+            window,
+            reset: field(row, &["next_reset_at", "nextResetAt", "resetAt"]).and_then(stamp),
+            remaining: remaining_percent(row).filter(|_| now - at <= max_age),
+        })
+        .collect()
+}
+
 /// Print the most recent available observation for each provider, account and window.
 pub fn run_status(env: &Env, args: &[String]) -> i32 {
     let mut effective = env.clone();

@@ -19,6 +19,7 @@ fn intake_sweep_and_acknowledgement_share_one_locked_update_so_none_is_lost() {
         acked: false,
         escalated: false,
         claim: None,
+        ..Default::default()
     };
     let path = dir.path().to_owned();
     let threads: Vec<_> = (0..12)
@@ -97,6 +98,7 @@ fn delivery_runs_outside_the_lock_so_a_command_that_acknowledges_at_once_works()
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        ..Default::default()
     };
     update_failures(dir.path(), |records| {
         Ok(super::batch_failure::record_failure(
@@ -132,6 +134,7 @@ fn a_failed_delivery_releases_its_claim_and_a_stale_claim_is_retried() {
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        ..Default::default()
     };
     let mut records = vec![];
     let id = super::batch_failure::record_failure(&mut records, &owners, &task, 0).unwrap();
@@ -170,6 +173,7 @@ fn an_expired_delivery_cannot_clear_its_replacements_claim() {
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        ..Default::default()
     };
     let mut records = vec![];
     let id = super::batch_failure::record_failure(&mut records, &owners, &task, 0).unwrap();
@@ -212,6 +216,7 @@ fn a_delivery_command_is_killed_at_its_lease() {
         acked: false,
         escalated: false,
         claim: None,
+        ..Default::default()
     };
     let started = std::time::Instant::now();
     let r = CommandDeliver {
@@ -265,6 +270,7 @@ fn each_delivery_is_claimed_immediately_before_it_is_sent_not_when_the_pass_star
             priority: 10,
             keeper_defined: false,
             keeper_key: None,
+            ..Default::default()
         };
         update_failures(dir.path(), |records| {
             Ok(super::batch_failure::record_failure(
@@ -302,6 +308,7 @@ fn an_expired_deliverys_success_does_not_overwrite_the_replacements_confirmed_de
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        ..Default::default()
     };
     let mut records = vec![];
     let id = super::batch_failure::record_failure(&mut records, &owners, &task, 0).unwrap();
@@ -350,6 +357,7 @@ fn every_claim_is_stamped_with_the_clock_read_for_that_claim() {
             priority: 10,
             keeper_defined: false,
             keeper_key: None,
+            ..Default::default()
         };
         update_failures(dir.path(), |records| {
             Ok(super::batch_failure::record_failure(
@@ -409,6 +417,7 @@ fn the_deliverys_deadline_comes_from_its_claim_and_a_launch_after_it_is_skipped(
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        ..Default::default()
     };
     for (delay, expect) in [
         (61, Some((CLAIM_SECS - CLAIM_MARGIN_SECS - 61) as u64)),
@@ -470,6 +479,7 @@ fn preparation_time_counts_against_the_deliverys_deadline_and_a_spent_budget_nev
         acked: false,
         escalated: false,
         claim: None,
+        ..Default::default()
     };
     let deliver = CommandDeliver {
         dir: dir.path(),
