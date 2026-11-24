@@ -163,16 +163,6 @@ def test_the_entry_run_executes_workspace_and_standalone_nextest_commands(tmp_pa
         "rust/pg-spawnd/src/lib.rs": "// workspace change\n",
         "rust/worker/src/lib.rs": "// standalone change\n",
     }, base_files)
-    runner = ["cargo", "nextest", "run", "--config-file", str(root / "rust/.config/nextest.toml"),
-              "--no-fail-fast", "--color", "never"]
-    real_load = ci_select._load_tool
-    preflight = real_load("preflight")
-    monkeypatch.setattr(preflight, "rust_commands", lambda *_a, **_kw: [
-        ["cargo", "fmt", "--check"],
-        [*runner, "-p", "pg-spawnd"],
-        [*runner, "--manifest-path", str(root / "rust/worker/Cargo.toml"), "--lib", "--bins"],
-    ])
-    monkeypatch.setattr(ci_select, "_load_tool", lambda name: preflight if name == "preflight" else real_load(name))
     run = subprocess.run
     cargo_calls = []
 
@@ -188,7 +178,10 @@ def test_the_entry_run_executes_workspace_and_standalone_nextest_commands(tmp_pa
     result = capfd.readouterr()
     assert json.loads(result.out)["rust_packages"] == ["pg-spawnd"]
     assert "entry-set: FAIL: cargo nextest run" in result.err
+    runner = ["cargo", "nextest", "run", "--config-file", str(root / "rust/.config/nextest.toml"),
+              "--no-fail-fast", "--color", "never"]
     assert cargo_calls == [
+        ["cargo", "nextest", "--version"],
         [*runner, "-p", "pg-spawnd"],
         [*runner, "--manifest-path", str(root / "rust/worker/Cargo.toml"), "--lib", "--bins"],
     ]
