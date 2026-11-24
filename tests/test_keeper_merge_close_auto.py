@@ -768,4 +768,3 @@ def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
     assert result["closed"] == []
     assert any(row["key"] == "demo:A" and "merged_pr_missing" in row["reason"]
                for row in result["listed"])
-
