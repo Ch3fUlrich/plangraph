@@ -178,7 +178,7 @@ impl Host {
         }))
     }
 
-    fn rebase(&self, onto: &str, upstream: &str) -> Result<bool, String> {
+    pub(super) fn rebase(&self, onto: &str, upstream: &str) -> Result<bool, String> {
         let result = self.git(&[
             "-c",
             "rerere.enabled=false",
@@ -187,8 +187,7 @@ impl Host {
             "--no-update-refs",
             "--no-fork-point",
             "--rebase-merges",
-            "--reapply-cherry-picks",
-            "--empty=keep",
+            "--empty=drop",
             "--onto",
             onto,
             upstream,
