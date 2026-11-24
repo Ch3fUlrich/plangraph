@@ -1,10 +1,19 @@
 use super::guard::{
-    check as check_hosts, expected_hosts, parse_exceptions, read_ledgers, Exception, ExpectedHost,
-    Finding, LEDGER_MAX_AGE_HOURS,
+    check as check_pinned, expected_hosts, parse_exceptions, read_ledgers, Exception, ExpectedHost,
+    Finding, Pins, LEDGER_MAX_AGE_HOURS,
 };
 use super::ledger::Ledger;
 
 const NOW: i64 = 1_800_000_000; // 2027-01-15
+
+fn fresh() -> Ledger {
+    Ledger {
+        written_at: NOW - 60,
+        manifest: Some(pins().manifest),
+        stamp: Some(pins().stamp),
+        ..Ledger::default()
+    }
+}
 
 fn host_a() -> Vec<ExpectedHost> {
     vec![ExpectedHost {
@@ -13,15 +22,28 @@ fn host_a() -> Vec<ExpectedHost> {
     }]
 }
 
+fn pins() -> Pins {
+    Pins {
+        manifest: "m".repeat(64),
+        stamp: "s".repeat(40),
+    }
+}
+
+fn check_hosts(
+    ledgers: &[(String, Ledger)],
+    expected: &[ExpectedHost],
+    exceptions: &[Exception],
+    now: i64,
+) -> Vec<Finding> {
+    check_pinned(ledgers, expected, &pins(), exceptions, now)
+}
+
 fn check(ledgers: &[(String, Ledger)], exceptions: &[Exception], now: i64) -> Vec<Finding> {
     check_hosts(ledgers, &host_a(), exceptions, now)
 }
 
 fn ledger(key: &str, hours_ago: i64) -> (String, Ledger) {
-    let mut l = Ledger {
-        written_at: NOW - 60,
-        ..Ledger::default()
-    };
+    let mut l = fresh();
     l.not_live_since.insert(key.into(), NOW - hours_ago * 3600);
     l.state.insert(key.into(), "not-installed".into());
     ("host-a".into(), l)
@@ -121,13 +143,6 @@ const REGISTRY: &str = r#"{"version":1,"self":"center","hosts":[
  {"id":"dell","aliases":[],"transport":"ssh","ssh_target":"dell-ssh"},
  {"id":"odd","aliases":[],"transport":"keeper"}]}"#;
 
-fn fresh() -> Ledger {
-    Ledger {
-        written_at: NOW - 60,
-        ..Ledger::default()
-    }
-}
-
 #[test]
 fn one_fresh_ledger_is_not_enough_while_another_expected_host_never_reported() {
     let expected = expected_hosts(REGISTRY).unwrap();
@@ -194,4 +209,33 @@ fn a_ledger_six_hours_and_one_second_old_is_stale() {
     let (host, mut l) = ledger("unit:x", 1);
     l.written_at = NOW - LEDGER_MAX_AGE_HOURS * 3600 - 1;
     assert_eq!(check(&[(host, l)], &[], NOW)[0].code, "deploy_ledger_stale");
+}
+
+#[test]
+fn a_report_for_older_inputs_is_refused_even_when_it_is_fresh_and_clean() {
+    let mut old_manifest = fresh();
+    old_manifest.manifest = Some("a".repeat(64));
+    let findings = check(&[("host-a".into(), old_manifest)], &[], NOW);
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].code, "deploy_ledger_outdated");
+    assert!(
+        findings[0].detail.starts_with("host-a:"),
+        "{}",
+        findings[0].detail
+    );
+    let mut old_release = fresh();
+    old_release.stamp = Some("b".repeat(40));
+    assert_eq!(
+        check(&[("host-a".into(), old_release)], &[], NOW)[0].code,
+        "deploy_ledger_outdated"
+    );
+    let mut unpinned = fresh();
+    unpinned.manifest = None;
+    unpinned.stamp = None;
+    assert_eq!(
+        check(&[("host-a".into(), unpinned)], &[], NOW)[0].code,
+        "deploy_ledger_outdated",
+        "a ledger without the pins is from before they existed"
+    );
+    assert!(check(&[("host-a".into(), fresh())], &[], NOW).is_empty());
 }

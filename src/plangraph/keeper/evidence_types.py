@@ -122,6 +122,35 @@ def no_deploy_declaration(item: dict) -> str | None:
     return next((r for r in reasons if r), "" if reasons else None)
 
 
+def oneshot_timer(ref: dict) -> str | None:
+    """The timer a oneshot deploy row needs active beside it, or ``None`` when the row is not a oneshot."""
+    unit = ref.get("unit")
+    if (ref.get("type") == "oneshot" and isinstance(unit, str)
+            and not unit.startswith("bin:") and unit.endswith(".service")):
+        return unit.removesuffix(".service") + ".timer"
+    return None
+
+
+def _live_rows(item: dict, rows, since: float | None) -> list[dict]:
+    """The verified ``deploy`` rows of the item's current epoch recorded at or after ``since``."""
+    return [row for row in rows if row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
+            and (since is None or (as_epoch(row["at"]) or 0) >= since)]
+
+
+def has_live_proof(item: dict, rows, since: float | None = None) -> bool:
+    """A live row exists; a oneshot row counts only beside an active row of its timer on the same host
+    (the same companion rule as the deployment gate, ``deploy_missing``)."""
+    live = _live_rows(item, rows, since)
+    active = {((row.get("ref") or {}).get("host"), (row.get("ref") or {}).get("unit")) for row in live
+              if (row.get("ref") or {}).get("is_active") == "active"}
+    for row in live:
+        ref = row.get("ref") or {}
+        timer = oneshot_timer(ref)
+        if timer is None or (ref.get("host"), timer) in active:
+            return True
+    return False
+
+
 def live_evidence_status(item: dict, rows, since: float | None = None) -> str | None:
     """Why an item may not close yet, or ``None``: every item needs a verified ``deploy`` row of its current
     epoch (probe, deploy record: the item went into production) or a ``no deploy needed: <reason>`` line.
@@ -130,8 +159,7 @@ def live_evidence_status(item: dict, rows, since: float | None = None) -> str | 
     (epoch seconds) is the last merge: the row must be at or after it, so evidence of an older deployment
     never proves newer work. Codes: ``live_evidence_missing``, ``no_deploy_reason_empty``.
     """
-    if any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
-           and (since is None or (as_epoch(row["at"]) or 0) >= since) for row in rows):
+    if has_live_proof(item, rows, since):
         return None
     if has_live_clause(item):
         return "live_evidence_missing"

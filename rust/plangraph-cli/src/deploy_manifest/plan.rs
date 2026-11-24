@@ -24,6 +24,9 @@ pub enum Fix {
     OperatorEnv(String),
     /// A root unit: never installed by this command.
     OperatorRoot,
+    /// A binary a system unit runs from a path this command does not write: the operator copies the built
+    /// artifact there (as root).
+    OperatorBinary(String),
     /// Installed and enabled; nothing to do until the timer has started its service once and it succeeded.
     AwaitFirstRun,
 }
@@ -44,6 +47,9 @@ impl Row {
             Fix::EnvFamily(family) => format!("create env files (family {family})"),
             Fix::OperatorEnv(name) => format!("OPERATOR: provide {name}"),
             Fix::OperatorRoot => "OPERATOR: install as root (system unit)".into(),
+            Fix::OperatorBinary(path) => {
+                format!("OPERATOR: copy the built binary to {path} (as root)")
+            }
             Fix::AwaitFirstRun => "wait: the first run of the service is not done".into(),
         }
     }
@@ -75,11 +81,28 @@ pub fn plan(
     {
         if entry.kind == Kind::Binary {
             if !entry.live.is_live() {
+                // A binary run from a path outside the user bin directory needs the operator once the
+                // current release is built; before that, the release build comes first.
+                let consumer = manifest
+                    .binary
+                    .iter()
+                    .find(|b| format!("{}/{}", b.package, b.bin) == entry.name)
+                    .and_then(|b| b.install_path.clone().map(|p| (b.bin.clone(), p)));
+                let fix = match consumer {
+                    Some((bin, path))
+                        if facts.source_tree().is_some()
+                            && facts.artifact_record(&bin).map(|(stamp, _)| stamp)
+                                == facts.source_tree() =>
+                    {
+                        Fix::OperatorBinary(path)
+                    }
+                    _ => Fix::Release,
+                };
                 rows.push(Row {
                     kind: Kind::Binary,
                     name: entry.name.clone(),
                     before: entry.live.text(),
-                    fix: Fix::Release,
+                    fix,
                 });
             }
             continue;

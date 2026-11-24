@@ -30,6 +30,7 @@ from .evidence_types import (
     DEFAULT_SKEW_S,
     Context,
     Result,
+    oneshot_timer,
     as_epoch,
     valid_commit_ref,
 )
@@ -637,14 +638,6 @@ def deploy_hosts(item: dict) -> list[str]:
     return deploy_host_names(_HOSTS_RE.findall(f"{item.get('description') or ''}\n{item.get('note') or ''}"))
 
 
-def _oneshot_timer(ref: dict) -> str | None:
-    unit = ref.get("unit")
-    if (ref.get("type") == "oneshot" and isinstance(unit, str)
-            and not unit.startswith("bin:") and unit.endswith(".service")):
-        return unit.removesuffix(".service") + ".timer"
-    return None
-
-
 def deploy_missing(targets, hosts, rows) -> list[str]:
     """``host:unit`` pairs with no verified ``deploy`` evidence; ``(hosts unnamed)`` when none are named."""
     if not hosts:
@@ -655,7 +648,7 @@ def deploy_missing(targets, hosts, rows) -> list[str]:
     have = set()
     for ref in verified:
         host = ref.get("host")
-        timer = _oneshot_timer(ref)
+        timer = oneshot_timer(ref)
         if timer is None or (host, timer) in active:
             have.add((host, ref.get("unit")))
     return [f"{host}:{unit}" for host in hosts for unit in targets
@@ -706,7 +699,7 @@ class DeployVerifier:
         if not (isinstance(host, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", host)
                 and isinstance(unit, str) and unit):
             return _fail("deploy requires 'host' and 'unit'", ref)
-        timer = _oneshot_timer(ref)
+        timer = oneshot_timer(ref)
         if timer is not None:
             if "/" in unit or unit == ".service":
                 return _fail("deploy oneshot requires a service unit name", ref)

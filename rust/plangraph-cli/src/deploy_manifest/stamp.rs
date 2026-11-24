@@ -103,3 +103,35 @@ pub fn release_stamp(repo: &Path) -> Result<(String, Vec<String>), String> {
     };
     Ok((stamp, inputs))
 }
+
+/// SHA-256 (hex) of a file's bytes; `None` when it cannot be read.
+pub fn sha256_file(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+/// Where the release installer records what it built, one file per binary under the state directory.
+fn artifact_file(state_dir: &Path, bin: &str) -> PathBuf {
+    state_dir.join("release-bins").join(bin)
+}
+
+/// Record that `bin` was built from release `stamp` into an artifact with hash `sha`. The binary counts as
+/// live only where the file its consumer runs has exactly this hash.
+pub fn record_artifact(state_dir: &Path, bin: &str, stamp: &str, sha: &str) -> std::io::Result<()> {
+    let path = artifact_file(state_dir, bin);
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("no parent"))?;
+    std::fs::create_dir_all(dir)?;
+    let mut staged = tempfile::NamedTempFile::new_in(dir)?;
+    std::io::Write::write_all(&mut staged, format!("{stamp} {sha}\n").as_bytes())?;
+    staged.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// `(stamp, sha)` recorded for `bin`.
+pub fn read_artifact(state_dir: &Path, bin: &str) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(artifact_file(state_dir, bin)).ok()?;
+    let (stamp, sha) = text.trim().split_once(' ')?;
+    Some((stamp.to_owned(), sha.to_owned()))
+}

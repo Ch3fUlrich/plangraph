@@ -72,6 +72,9 @@ pub struct BinaryEntry {
     /// The Cargo package that builds it.
     pub package: String,
     pub bin: String,
+    /// Where the binary's consumer runs it from, when that is not the user bin directory (a system unit
+    /// that runs `/usr/local/bin/<bin>`): liveness checks the file there, and an operator copies it.
+    pub install_path: Option<String>,
     #[serde(default)]
     pub hosts: Vec<String>,
     pub first_run: Option<String>,
@@ -235,6 +238,13 @@ impl Manifest {
             let what = format!("binary {}/{}", binary.package, binary.bin);
             if !bins.insert((binary.package.as_str(), binary.bin.as_str())) {
                 return Err(format!("{what}: listed twice"));
+            }
+            if binary
+                .install_path
+                .as_deref()
+                .is_some_and(|p| !p.starts_with('/') || p.contains(".."))
+            {
+                return Err(format!("{what}: install_path must be an absolute path"));
             }
             check_disposition(
                 &what,

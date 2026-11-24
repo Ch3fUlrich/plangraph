@@ -10,13 +10,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// What the host says about itself apart from systemd.
 pub trait HostFacts {
-    fn binary_installed(&self, bin: &str) -> bool;
-    /// The Rust trees the release installer has built and installed on this host (its stamps).
-    fn built_trees(&self) -> Vec<String>;
-    /// The Rust tree of the checkout the release installer builds from.
+    /// The hash of the executable the binary's consumer runs (`install_path`, else the user bin directory);
+    /// `None` when it is missing or not executable.
+    fn installed_sha(&self, entry: &BinaryEntry) -> Option<String>;
+    /// `(release stamp, artifact hash)` the release installer recorded for `bin`.
+    fn artifact_record(&self, bin: &str) -> Option<(String, String)>;
+    /// The release stamp of the checkout the release installer builds from.
     fn source_tree(&self) -> Option<String>;
     /// When the newest commit touching `paths` reached the checkout's head, epoch seconds.
     fn merged_at(&self, paths: &[String]) -> Option<i64>;
+    /// When `file` of the unit family was last written into the unit directory, epoch seconds.
+    fn unit_file_changed_at(&self, _entry: &UnitEntry, _file: &str) -> Option<i64> {
+        None
+    }
     fn now(&self) -> i64;
 }
 
@@ -33,7 +39,8 @@ pub enum Live {
     NeedsReload,
     /// The service of an active timer is not loaded, or has never run: nothing shows the unit works yet.
     NeverRun(String),
-    /// The installed binaries are older than the checkout, or no release was installed.
+    /// The installed file is not the artifact built from this checkout's release, or the unit runs an older
+    /// revision of its file than the one installed.
     Stale(String),
     /// systemd could not be read; the entry is counted as not live.
     Unreadable(String),
@@ -94,7 +101,7 @@ impl Entry {
 }
 
 /// The properties read of every unit.
-pub const SHOW_PROPS: [&str; 7] = [
+pub const SHOW_PROPS: [&str; 8] = [
     "LoadState",
     "ActiveState",
     "UnitFileState",
@@ -102,14 +109,20 @@ pub const SHOW_PROPS: [&str; 7] = [
     "NeedDaemonReload",
     "ExecMainStartTimestamp",
     "ExecMainStatus",
+    "ActiveEnterTimestamp",
 ];
+
+/// `systemctl show --timestamp=unix` prints `@<epoch>`; anything else (`n/a`, empty) is no time.
+fn unix(value: &str) -> Option<i64> {
+    value.strip_prefix('@')?.parse().ok()
+}
 
 fn show(
     sysctl: &dyn Systemctl,
     scope: Scope,
     unit: &str,
 ) -> Result<BTreeMap<String, String>, String> {
-    let mut args = vec!["show", unit];
+    let mut args = vec!["show", "--timestamp=unix", unit];
     for prop in SHOW_PROPS {
         args.extend(["-p", prop]);
     }
@@ -125,7 +138,7 @@ fn show(
         .collect())
 }
 
-fn unit_live(entry: &UnitEntry, sysctl: &dyn Systemctl) -> Live {
+fn unit_live(entry: &UnitEntry, sysctl: &dyn Systemctl, host: &dyn HostFacts) -> Live {
     let enable = match entry.enable_unit() {
         Ok(unit) => unit,
         Err(error) => return Live::Unreadable(error),
@@ -151,12 +164,22 @@ fn unit_live(entry: &UnitEntry, sysctl: &dyn Systemctl) -> Live {
     if get("ActiveState") != "active" {
         return Live::NotActive(get("ActiveState").to_owned());
     }
+    // The running unit must have started after its file was last written: otherwise the old process or
+    // schedule is still in charge of a revision that was only copied and reloaded.
+    if let Some(written) = host.unit_file_changed_at(entry, enable) {
+        if unix(get("ActiveEnterTimestamp")).is_none_or(|entered| entered < written) {
+            return Live::Stale(format!(
+                "{enable} runs a revision older than its installed file"
+            ));
+        }
+    }
     let service = entry.service_unit().unwrap_or_else(|| enable.to_owned());
     if service == enable {
         // A service that is itself the enabled unit is running: that is its proof.
         return Live::Live;
     }
-    // A timer proves nothing alone: the service it starts must be loaded and have run to success.
+    // A timer proves nothing alone: the service it starts must be loaded, need no reload, and have run
+    // to success after its own file was last written.
     let run = match show(sysctl, entry.scope, &service) {
         Ok(facts) => facts,
         Err(error) => return Live::Unreadable(error),
@@ -164,6 +187,9 @@ fn unit_live(entry: &UnitEntry, sysctl: &dyn Systemctl) -> Live {
     let run_get = |k: &str| run.get(k).map(String::as_str).unwrap_or("");
     if run_get("LoadState") != "loaded" {
         return Live::NeverRun(format!("{service} is not loaded"));
+    }
+    if run_get("NeedDaemonReload") == "yes" {
+        return Live::NeedsReload;
     }
     let (active, result) = (run_get("ActiveState"), run_get("Result"));
     let status = run_get("ExecMainStatus");
@@ -180,24 +206,47 @@ fn unit_live(entry: &UnitEntry, sysctl: &dyn Systemctl) -> Live {
         };
         return Live::LastRunFailed(why.to_owned());
     }
-    if run_get("ExecMainStartTimestamp").is_empty() {
+    let started = run_get("ExecMainStartTimestamp");
+    if started.is_empty() {
         return Live::NeverRun(format!("{service} has not run since it was installed"));
+    }
+    let Some(started) = unix(started) else {
+        return Live::NeverRun(format!("{service} has an unreadable start time"));
+    };
+    if host
+        .unit_file_changed_at(entry, &service)
+        .is_some_and(|written| started < written)
+    {
+        return Live::NeverRun(format!(
+            "{service} last ran before its installed file changed"
+        ));
     }
     Live::Live
 }
 
-fn binary_live(entry: &BinaryEntry, facts: &dyn HostFacts) -> Live {
-    if !facts.binary_installed(&entry.bin) {
+fn binary_live(entry: &BinaryEntry, host: &dyn HostFacts) -> Live {
+    let Some(installed) = host.installed_sha(entry) else {
         return Live::NotInstalled;
-    }
-    let (built, source) = (facts.built_trees(), facts.source_tree());
-    match source {
-        Some(tree) if !built.contains(&tree) => Live::Stale(format!(
-            "installed release is not tree {}",
-            &tree[..tree.len().min(12)]
+    };
+    let short = |t: &str| t[..t.len().min(12)].to_owned();
+    let Some(source) = host.source_tree() else {
+        return Live::Stale("the checkout's release stamp cannot be read".into());
+    };
+    match host.artifact_record(&entry.bin) {
+        None => Live::Stale("no release record for this binary".into()),
+        Some((stamp, _)) if stamp != source => Live::Stale(format!(
+            "built from release {}, the checkout is at {}",
+            short(&stamp),
+            short(&source)
         )),
-        None if built.is_empty() => Live::Stale("no release stamp".into()),
-        _ => Live::Live,
+        Some((_, built)) if built != installed => Live::Stale(format!(
+            "{} is not the artifact built for this release",
+            entry
+                .install_path
+                .as_deref()
+                .unwrap_or("the installed file")
+        )),
+        Some(_) => Live::Live,
     }
 }
 
@@ -214,7 +263,7 @@ pub fn read_live(
         let live = match (&unit.not_deployed, placed) {
             (Some(reason), _) => Live::Elsewhere(format!("not deployed: {reason}")),
             (None, false) => Live::Elsewhere(format!("roles {}", unit.hosts.join(","))),
-            (None, true) => unit_live(unit, sysctl),
+            (None, true) => unit_live(unit, sysctl, facts),
         };
         let paths: Vec<String> = unit
             .files

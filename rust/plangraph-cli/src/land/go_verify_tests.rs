@@ -258,8 +258,11 @@ fn the_cli_prints_one_line_for_green_evidence_and_every_refusal_otherwise() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
+    let (repo, pins) = super::go_deploy_tests::pinned_repo(dir.path());
     let ledger = crate::deploy_manifest::ledger::Ledger {
         written_at: now,
+        manifest: Some(pins.manifest.clone()),
+        stamp: Some(pins.stamp.clone()),
         ..Default::default()
     };
     crate::deploy_manifest::ledger::save(&ledgers.join("h.json"), &ledger).unwrap();
@@ -274,6 +277,7 @@ fn the_cli_prints_one_line_for_green_evidence_and_every_refusal_otherwise() {
             ("evidence".to_string(), p.display().to_string()),
             ("deploy-ledgers".to_string(), ledgers.display().to_string()),
             ("hosts".to_string(), hosts.display().to_string()),
+            ("repo".to_string(), repo.display().to_string()),
         ])
     };
     std::fs::write(&file, serde_json::to_vec(&green()).unwrap()).unwrap();

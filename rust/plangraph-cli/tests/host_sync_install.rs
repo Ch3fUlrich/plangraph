@@ -64,7 +64,7 @@ fn the_fleet_form_runs_every_registry_host_over_ssh_and_prints_one_table() {
     script(
         &tools,
         "ssh",
-        "#!/bin/sh\ncase \"$5\" in\n  good) printf 'nothing to do\\t3 entries live\\npending\\t0\\nledger\\t{\"written_at\":1}\\n';;\n  bad) printf 'plan\\tunit\\tpg-a\\tnot-installed\\tinstall unit files and enable\\npending\\t1\\n'; exit 1;;\n  *) echo 'ssh: Connection refused' >&2; exit 255;;\nesac\n",
+        "#!/bin/sh\ncase \"$5\" in\n  good) printf 'nothing to do\\t3 entries live\\npending\\t0\\nledger\\t{\"written_at\":1}\\n';;\n  bad) printf 'plan\\tunit\\tpg-a\\tnot-installed\\tinstall unit files and enable\\npending\\t1\\nledger\\t{\"written_at\":1}\\n'; exit 1;;\n  *) echo 'ssh: Connection refused' >&2; exit 255;;\nesac\n",
     );
     let config = dir.path().join(".config/plangraph");
     fs::create_dir_all(&config).unwrap();

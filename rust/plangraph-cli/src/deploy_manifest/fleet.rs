@@ -181,6 +181,9 @@ fn collect(host: &FleetHost, out: &Out) -> HostResult {
             "install run gave no result (exit {}): {tail}",
             out.code
         ));
+    } else if result.ledger.is_none() {
+        // A host that cannot hand its ledger back reported nothing the center can judge.
+        result.failure = Some("install run answered without a ledger".to_owned());
     }
     result
 }
@@ -219,8 +222,20 @@ pub fn run_fleet(
     check: bool,
     ledger_dir: &Path,
 ) -> (Vec<String>, bool) {
+    let (table, failed, _) = run_fleet_results(hosts, remote, check, ledger_dir);
+    (table, failed)
+}
+
+/// [`run_fleet`] with each host's result, so a caller can tell a host that answered with a ledger from one
+/// that did not (the landing guard refuses on the latter instead of reading an older ledger file).
+pub fn run_fleet_results(
+    hosts: &[FleetHost],
+    remote: &dyn Remote,
+    check: bool,
+    ledger_dir: &Path,
+) -> (Vec<String>, bool, Vec<HostResult>) {
     let script = remote_script(check);
-    let results: Vec<HostResult> = std::thread::scope(|scope| {
+    let mut results: Vec<HostResult> = std::thread::scope(|scope| {
         let handles: Vec<_> = hosts
             .iter()
             .map(|h| scope.spawn(|| run_host(h, &script, remote)))
@@ -232,7 +247,7 @@ pub fn run_fleet(
     });
     let mut table = Vec::new();
     let mut failed = false;
-    for result in &results {
+    for result in &mut results {
         for line in &result.lines {
             table.push(format!("{}\t{line}", result.id));
         }
@@ -252,9 +267,10 @@ pub fn run_fleet(
                 ledger::save(&ledger_dir.join(format!("{}.json", result.id)), ledger)
             {
                 table.push(format!("{}\tFAIL\tledger not written: {error}", result.id));
+                result.failure = Some(format!("ledger not written: {error}"));
                 failed = true;
             }
         }
     }
-    (table, failed)
+    (table, failed, results)
 }

@@ -26,3 +26,9 @@ A timer is live only when its service is loaded and has run to success; a pendin
 the installer reloads on retry; the release stamp includes embedded files outside `rust/` (an exceptions-only change is a
 new release); unit files under `deploy/liveness`, `deploy/pganchor` and `deploy/watchdog` are manifest entries; and the
 daily `landing report --day` carries the `deploy-not-live` line.
+Deploy guard, round five: a failed fleet refresh no longer passes on cached ledgers (`deploy_refresh_failed`); ledgers
+carry the manifest digest and release stamp and the guard refuses reports for older inputs; an active unit must have
+started after its file was written and the installer restarts a changed active unit; binaries are live only as the
+recorded built artifact at the path their consumer runs (`install_path`); a oneshot deploy row satisfies a `Live:`
+clause only beside its active timer; units are dated from their landing commit; the digest counts a host once and names
+missing or stale hosts; coverage knows every systemd unit type.

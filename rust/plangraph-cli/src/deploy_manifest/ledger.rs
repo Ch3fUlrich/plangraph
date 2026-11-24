@@ -18,6 +18,13 @@ pub struct Ledger {
     /// Entry key -> its state text, for the reader of the file.
     #[serde(default)]
     pub state: BTreeMap<String, String>,
+    /// SHA-256 of the `deploy/manifest.toml` of the checkout this ledger was computed from.
+    #[serde(default)]
+    pub manifest: Option<String>,
+    /// The release stamp (Rust tree and embedded inputs) of that checkout. The GO check compares both with
+    /// the checkout it runs from, so a host on older inputs cannot publish a clean report for them.
+    #[serde(default)]
+    pub stamp: Option<String>,
 }
 
 /// The ledger after a status run: entries not live keep their first-seen time.

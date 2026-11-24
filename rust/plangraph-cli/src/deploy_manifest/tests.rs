@@ -175,3 +175,35 @@ fn unit_files_outside_deploy_systemd_need_a_placement_or_an_exclusion() {
     .unwrap();
     assert!(excluded.coverage(&shipped, &Default::default()).is_empty());
 }
+
+#[test]
+fn an_unlisted_unit_of_any_systemd_type_fails_coverage() {
+    for ext in [
+        "target",
+        "mount",
+        "automount",
+        "swap",
+        "slice",
+        "scope",
+        "device",
+        "path",
+        "socket",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("deploy/systemd")).unwrap();
+        std::fs::write(
+            dir.path().join(format!("deploy/systemd/x.{ext}")),
+            "[Unit]\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("deploy/systemd/x.example"), "not a unit\n").unwrap();
+        let shipped = super::scan::unit_files(dir.path()).unwrap();
+        assert_eq!(shipped.len(), 1, "{ext}: {shipped:?}");
+        let empty = Manifest::default();
+        let problems = empty.coverage(&shipped, &Default::default());
+        assert!(
+            problems.iter().any(|p| p.contains(&format!("x.{ext}"))),
+            "{ext}: {problems:?}"
+        );
+    }
+}

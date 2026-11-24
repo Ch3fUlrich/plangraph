@@ -108,10 +108,26 @@ fn install_entry(entry: &UnitEntry, target: &Target, sysctl: &dyn Systemctl, rep
     let enabled = state("is-enabled").is_ok_and(|s| s.starts_with("enabled") || s == "static");
     let active = state("is-active").is_ok_and(|s| s == "active");
     if enabled && active {
-        report.lines.push(format!(
-            "SAME {name}: {enable} enabled and active{}",
-            if changed { " (files updated)" } else { "" }
-        ));
+        if !(changed || reload_pending) {
+            report
+                .lines
+                .push(format!("SAME {name}: {enable} enabled and active"));
+            return;
+        }
+        // The new text is loaded; the process (or timer schedule) that is running is still the old one.
+        match sysctl.run(target.scope, &["restart", enable]) {
+            Ok(out) if out.code == 0 => {
+                report
+                    .lines
+                    .push(format!("RESTARTED {name}: {enable} (files updated)"));
+            }
+            other => {
+                report
+                    .lines
+                    .push(format!("FAIL {name}: restart {enable} {other:?}"));
+                report.pending = true;
+            }
+        }
         return;
     }
     match sysctl.run(target.scope, &["enable", "--now", enable]) {

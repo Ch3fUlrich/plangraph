@@ -289,6 +289,7 @@ first_run = "pg-host-link tick exits 0 against a fixture state"
 [[binary]]
 package = "pg-worker-core"
 bin = "pg-live-probe"
+install_path = "/usr/local/bin/pg-live-probe"
 hosts = ["keeper"]
 first_run = "pg-live-probe run on the probe list exits 0 (the unit runs it from /usr/local/bin)"
 

@@ -787,4 +787,3 @@ def test_the_automatic_close_holds_a_merge_with_neither_and_closes_one_with_a_re
     assert held["closed"] == [] and "live_evidence_missing" in held["listed"][0]["reason"]
     _edit_text(env, "demo:A", note="no deploy needed: docs only")
     assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
-

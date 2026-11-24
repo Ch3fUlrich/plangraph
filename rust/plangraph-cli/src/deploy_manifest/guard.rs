@@ -97,6 +97,54 @@ pub fn read_ledgers(dir: &Path) -> (Vec<(String, Ledger)>, Vec<Finding>) {
     (ledgers, findings)
 }
 
+/// What the ledgers must have been computed from: the manifest and the release stamp of the checkout the
+/// GO check runs from. A report for older inputs proves nothing about the entries merged since.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pins {
+    pub manifest: String,
+    pub stamp: String,
+}
+
+/// SHA-256 (hex) of the manifest file of `repo`.
+pub fn manifest_digest(repo: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(repo.join("deploy/manifest.toml")).ok()?;
+    Some(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+impl Pins {
+    pub fn from_repo(repo: &Path) -> Result<Pins, String> {
+        let manifest = manifest_digest(repo)
+            .ok_or_else(|| format!("{}: no deploy/manifest.toml", repo.display()))?;
+        let (stamp, _) = super::stamp::release_stamp(repo)?;
+        Ok(Pins { manifest, stamp })
+    }
+}
+
+/// The hosts registry text: `path` when given, else `$XDG_CONFIG_HOME/plangraph/hosts.json`.
+pub fn registry_text(path: Option<&Path>) -> Option<String> {
+    let path = match path {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let config = std::env::var_os("XDG_CONFIG_HOME")
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))?;
+            config.join("plangraph/hosts.json")
+        }
+    };
+    std::fs::read_to_string(path).ok()
+}
+
+/// The newest ledger filed under the host's id or an alias.
+pub fn ledger_for<'a>(ledgers: &'a [(String, Ledger)], host: &ExpectedHost) -> Option<&'a Ledger> {
+    ledgers
+        .iter()
+        .filter(|(name, _)| host.owns(name))
+        .map(|(_, ledger)| ledger)
+        .max_by_key(|l| l.written_at)
+}
+
 /// A host the GO check expects a fresh ledger from: a registry host the fleet install can reach.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExpectedHost {
@@ -146,6 +194,7 @@ pub fn expected_hosts(registry: &str) -> Result<Vec<ExpectedHost>, String> {
 pub fn check(
     ledgers: &[(String, Ledger)],
     expected: &[ExpectedHost],
+    pins: &Pins,
     exceptions: &[Exception],
     now: i64,
 ) -> Vec<Finding> {
@@ -157,11 +206,7 @@ pub fn check(
     }
     let mut out = Vec::new();
     for host in expected {
-        let Some((_, ledger)) = ledgers
-            .iter()
-            .filter(|(name, _)| host.owns(name))
-            .max_by_key(|(_, l)| l.written_at)
-        else {
+        let Some(ledger) = ledger_for(ledgers, host) else {
             out.push(Finding {
                 code: "deploy_ledger_missing",
                 detail: format!(
@@ -172,6 +217,25 @@ pub fn check(
             continue;
         };
         let host = &host.id;
+        let short = |v: &Option<String>| {
+            v.as_deref()
+                .map_or("none".to_owned(), |t| t[..t.len().min(12)].to_owned())
+        };
+        if ledger.manifest.as_deref() != Some(pins.manifest.as_str())
+            || ledger.stamp.as_deref() != Some(pins.stamp.as_str())
+        {
+            out.push(Finding {
+                code: "deploy_ledger_outdated",
+                detail: format!(
+                    "{host}: report is for manifest {} and release {}, this checkout has {} and {}; run `plangraph host-sync --install --fleet` from the center",
+                    short(&ledger.manifest),
+                    short(&ledger.stamp),
+                    &pins.manifest[..pins.manifest.len().min(12)],
+                    &pins.stamp[..pins.stamp.len().min(12)]
+                ),
+            });
+            continue;
+        }
         let stale = ledger::age_hours(ledger.written_at, now);
         if now - ledger.written_at > LEDGER_MAX_AGE_HOURS * 3600 {
             out.push(Finding {

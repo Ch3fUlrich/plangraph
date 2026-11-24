@@ -4,7 +4,20 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const UNIT_EXTENSIONS: [&str; 4] = [".service", ".timer", ".socket", ".path"];
+/// Every systemd unit type; a file of any of them under `deploy/` must be placed or excluded.
+const UNIT_EXTENSIONS: [&str; 11] = [
+    ".service",
+    ".timer",
+    ".socket",
+    ".path",
+    ".target",
+    ".mount",
+    ".automount",
+    ".swap",
+    ".slice",
+    ".scope",
+    ".device",
+];
 
 /// Unit files the tree ships, as coverage names them: a plain name for `deploy/systemd`, `<dir>/<name>` for a
 /// unit that ships beside its tooling in another directory directly under `deploy/` (templates included;

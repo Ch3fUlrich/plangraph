@@ -14,6 +14,8 @@ pub struct LocalFacts {
     pub repo: PathBuf,
     pub bin_dir: PathBuf,
     pub state_dir: PathBuf,
+    /// The user unit directory the unit files are copied into.
+    pub unit_dir: PathBuf,
 }
 
 fn git(repo: &Path, args: &[&str]) -> Option<String> {
@@ -26,31 +28,42 @@ fn git(repo: &Path, args: &[&str]) -> Option<String> {
 }
 
 impl HostFacts for LocalFacts {
-    fn binary_installed(&self, bin: &str) -> bool {
-        let path = self
-            .bin_dir
-            .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
-        let Ok(meta) = std::fs::metadata(&path) else {
-            return false;
+    fn installed_sha(&self, entry: &super::BinaryEntry) -> Option<String> {
+        let path = match &entry.install_path {
+            Some(path) => PathBuf::from(path),
+            None => self
+                .bin_dir
+                .join(format!("{}{}", entry.bin, std::env::consts::EXE_SUFFIX)),
         };
+        let meta = std::fs::metadata(&path).ok()?;
         #[cfg(unix)]
-        {
+        let executable = {
             use std::os::unix::fs::PermissionsExt;
             meta.is_file() && meta.permissions().mode() & 0o111 != 0
-        }
+        };
         #[cfg(not(unix))]
-        {
-            meta.is_file()
-        }
+        let executable = meta.is_file();
+        executable
+            .then(|| super::stamp::sha256_file(&path))
+            .flatten()
     }
 
-    fn built_trees(&self) -> Vec<String> {
-        ["release-built-tree", "release-keeper-built-tree"]
-            .iter()
-            .filter_map(|name| std::fs::read_to_string(self.state_dir.join(name)).ok())
-            .map(|text| text.trim().to_owned())
-            .filter(|tree| !tree.is_empty())
-            .collect()
+    fn artifact_record(&self, bin: &str) -> Option<(String, String)> {
+        super::stamp::read_artifact(&self.state_dir, bin)
+    }
+
+    fn unit_file_changed_at(&self, entry: &super::UnitEntry, file: &str) -> Option<i64> {
+        if entry.scope == super::Scope::System {
+            return None;
+        }
+        let modified = std::fs::metadata(self.unit_dir.join(file))
+            .ok()?
+            .modified()
+            .ok()?;
+        modified
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs() as i64)
     }
 
     fn source_tree(&self) -> Option<String> {
@@ -61,7 +74,9 @@ impl HostFacts for LocalFacts {
     }
 
     fn merged_at(&self, paths: &[String]) -> Option<i64> {
-        let mut args = vec!["log", "-1", "--format=%ct", "--"];
+        // The landing on the checkout's default line, not the topic commit: --first-parent dates a merged
+        // branch by its merge, so work written days earlier does not look old the day it landed.
+        let mut args = vec!["log", "-1", "--first-parent", "--format=%ct", "--"];
         args.extend(paths.iter().map(String::as_str));
         git(&self.repo, &args)?.parse().ok()
     }
@@ -148,15 +163,37 @@ pub fn state_dir(home: &Path) -> PathBuf {
 }
 
 /// One line for a digest: how many entries are not live on the hosts that reported, and the oldest.
-/// Read from the ledgers only (no systemd), so a digest never blocks on a host.
-pub fn digest_line(ledger_dir: &Path, now: i64) -> String {
+/// Read from the ledgers only (no systemd), so a digest never blocks on a host. With the hosts registry
+/// it uses the guard's rules: a host is its id or an alias (counted once, newest file), and a host with no
+/// ledger or one older than the freshness limit is named, so a missing or stale host never reads as zero.
+pub fn digest_line(ledger_dir: &Path, registry: Option<&str>, now: i64) -> String {
+    use super::guard::{expected_hosts, ledger_for, LEDGER_MAX_AGE_HOURS};
     let (ledgers, broken) = super::guard::read_ledgers(ledger_dir);
-    if ledgers.is_empty() {
+    let hosts = registry
+        .and_then(|text| expected_hosts(text).ok())
+        .filter(|hosts| !hosts.is_empty());
+    let (mut counted, mut missing, mut stale): (Vec<(String, &Ledger)>, Vec<String>, Vec<String>) =
+        (Vec::new(), Vec::new(), Vec::new());
+    match &hosts {
+        Some(hosts) => {
+            for host in hosts {
+                match ledger_for(&ledgers, host) {
+                    None => missing.push(host.id.clone()),
+                    Some(l) if now - l.written_at > LEDGER_MAX_AGE_HOURS * 3600 => {
+                        stale.push(host.id.clone());
+                    }
+                    Some(l) => counted.push((host.id.clone(), l)),
+                }
+            }
+        }
+        None => counted = ledgers.iter().map(|(h, l)| (h.clone(), l)).collect(),
+    }
+    if counted.is_empty() && missing.is_empty() && stale.is_empty() {
         return "deploy-not-live unknown: no host has written a deploy-status ledger".into();
     }
     let mut count = 0;
     let mut oldest: Option<(i64, String)> = None;
-    for (host, ledger) in &ledgers {
+    for (host, ledger) in &counted {
         for (key, since) in &ledger.not_live_since {
             count += 1;
             if oldest.as_ref().is_none_or(|(first, _)| since < first) {
@@ -164,14 +201,27 @@ pub fn digest_line(ledger_dir: &Path, now: i64) -> String {
             }
         }
     }
-    let mut line = format!("deploy-not-live {count}");
+    let incomplete = !missing.is_empty() || !stale.is_empty();
+    let mut line = if incomplete {
+        format!("deploy-not-live unknown: {count} counted")
+    } else {
+        format!("deploy-not-live {count}")
+    };
     if let Some((since, what)) = oldest {
         line.push_str(&format!(
             " oldest {what} {}h",
             ledger::age_hours(since, now)
         ));
     }
-    line.push_str(&format!(" ({} hosts reporting", ledgers.len()));
+    line.push_str(&format!(" ({} hosts reporting", counted.len()));
+    for (label, names) in [("missing", &missing), ("stale", &stale)] {
+        if !names.is_empty() {
+            line.push_str(&format!(", {label}: {}", names.join(" ")));
+        }
+    }
+    if hosts.is_none() {
+        line.push_str(", no hosts registry: every ledger file counted");
+    }
     if !broken.is_empty() {
         line.push_str(&format!(", {} unreadable", broken.len()));
     }
@@ -179,7 +229,7 @@ pub fn digest_line(ledger_dir: &Path, now: i64) -> String {
     line
 }
 
-/// [`digest_line`] for this host's ledger directory.
+/// [`digest_line`] for this host's ledger directory and hosts registry.
 pub fn digest_line_local() -> String {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -187,7 +237,11 @@ pub fn digest_line_local() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
-    digest_line(&ledger_dir(&state_dir(&home)), now)
+    digest_line(
+        &ledger_dir(&state_dir(&home)),
+        super::guard::registry_text(None).as_deref(),
+        now,
+    )
 }
 
 /// The directory of ledgers, one file per host, under the state directory.
@@ -236,6 +290,7 @@ pub fn run_local(home: &Path, args: &[String]) -> Result<(Vec<String>, usize), S
         repo: repo.clone(),
         bin_dir: home.join(".local/bin"),
         state_dir: state_dir.clone(),
+        unit_dir: xdg(home, "XDG_CONFIG_HOME", ".config").join("systemd/user"),
     };
     let ledger_file = ledger_dir(&state_dir).join(format!("{}.json", host_id()));
     let out = status(

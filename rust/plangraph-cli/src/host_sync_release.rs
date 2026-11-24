@@ -90,10 +90,19 @@ pub(super) fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> 
         args.extend(embedded.iter().map(String::as_str));
         Ok(!git(repo, &args)?.is_empty())
     };
+    // The host-wide stamp alone is not enough: every binary needs its own record of this release, made
+    // from the artifact that is installed, so an older or excluded binary cannot ride on a current stamp.
+    let recorded = |(_, name): &(String, String)| {
+        let file = bin.join(executable(name));
+        crate::deploy_manifest::stamp::read_artifact(&state, name).is_some_and(|(at, sha)| {
+            at == tree
+                && is_executable(&file)
+                && crate::deploy_manifest::stamp::sha256_file(&file).as_deref()
+                    == Some(sha.as_str())
+        })
+    };
     if fs::read_to_string(&stamp).is_ok_and(|saved| saved.trim() == tree)
-        && binaries
-            .iter()
-            .all(|(_, name)| is_executable(&bin.join(executable(name))))
+        && binaries.iter().all(recorded)
     {
         println!("SAME release {tree}");
         return Ok(());
@@ -144,7 +153,12 @@ pub(super) fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> 
     for (_, name) in &binaries {
         let path = executable(name);
         let out = bin.join(&path);
-        publish(&artifacts.join(path), &out)?;
+        let built = artifacts.join(&path);
+        publish(&built, &out)?;
+        // What was built, hashed once at the source: the file at the path each consumer runs must match it.
+        let sha = crate::deploy_manifest::stamp::sha256_file(&built)
+            .ok_or_else(|| io::Error::other(format!("cannot read {}", built.display())))?;
+        crate::deploy_manifest::stamp::record_artifact(&state, name, &tree, &sha)?;
         println!("INSTALLED {}", out.display());
     }
     let mut staged = tempfile::NamedTempFile::new_in(&state)?;

@@ -85,6 +85,7 @@ fn install_here(args: &Args, env: &Env, home: &Path) -> io::Result<bool> {
         repo: repo.clone(),
         bin_dir: home.join(".local/bin"),
         state_dir: state,
+        unit_dir: unit_dir.clone(),
     };
     let steps = RealSteps { repo: &repo, home };
     let outcome = apply::run(

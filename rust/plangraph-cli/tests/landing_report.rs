@@ -62,6 +62,13 @@ fn daily_report_names_the_slowest_stage_in_minutes() {
 #[test]
 fn the_daily_report_carries_the_not_live_deploy_count_from_the_host_ledgers() {
     let state = tempfile::tempdir().unwrap();
+    let config = state.path().join("config/plangraph");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("hosts.json"),
+        r#"{"version":1,"self":"host-a","hosts":[{"id":"host-a","aliases":[],"transport":"local"}]}"#,
+    )
+    .unwrap();
     let ledgers = state.path().join("plangraph/deploy-live");
     std::fs::create_dir_all(&ledgers).unwrap();
     let now = std::time::SystemTime::now()
@@ -99,6 +106,7 @@ fn report(args: &[&str], fixture: &Value) -> Value {
 fn report_in(args: &[&str], fixture: &Value, state: &std::path::Path) -> Value {
     let mut child = Command::new(env!("CARGO_BIN_EXE_plangraph"))
         .env("XDG_STATE_HOME", state)
+        .env("XDG_CONFIG_HOME", state.join("config"))
         .args(["landing", "report", "example/repo"])
         .args(args)
         .arg("--fixture")

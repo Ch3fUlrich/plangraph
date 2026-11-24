@@ -280,3 +280,20 @@ def test_decision_item_end_to_end(w):
     assert w.store._item(key)["state"] == "in_review"
     w.store.verdict(w.p("reviewer2"), key, True, "second family")
     assert w.store._item(key)["state"] == "done"
+
+
+def _deploy_row(unit, active=None, **extra):
+    ref = {"host": "fixture", "unit": unit, **extra, **({"is_active": active} if active else {})}
+    return {"kind": "deploy", "verified": True, "epoch": 1, "at": 100, "ref": ref}
+
+
+def test_a_oneshot_deploy_row_satisfies_a_live_clause_only_beside_its_active_timer():
+    """The Live-clause gate uses the deployment gate's companion rule (deploy_missing)."""
+    from plangraph.keeper.evidence_types import live_evidence_status
+
+    item = {"epoch": 1, "done_criteria": "Live: the unit ran.", "description": "", "note": ""}
+    oneshot = _deploy_row("job.service", type="oneshot", result="success")
+    assert live_evidence_status(item, [oneshot]) == "live_evidence_missing"
+    assert live_evidence_status(item, [oneshot, _deploy_row("job.timer", "active")]) is None
+    assert live_evidence_status(item, [_deploy_row("daemon.service", "active")]) is None, "a service needs no timer"
+    assert live_evidence_status(item, [oneshot, _deploy_row("job.timer", "active")], since=200) == "live_evidence_missing"

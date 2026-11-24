@@ -179,6 +179,10 @@ A unit is live when systemd has loaded it, no reload is pending (`NeedDaemonRelo
 for a timer, the service it starts is loaded, has run at least once and its last run succeeded (exit status 0). A
 timer that has not fired yet is `never-run(...)`: `--install` lists it as `wait: the first run of the service is not
 done` and exits 1 until it has run, which every shipped timer does within a day (the 24-hour limit then applies).
+A unit that is itself the enabled one must have started after its file was last written, so a copied and reloaded
+service whose old process still runs is `stale(... runs a revision older than its installed file)`; the installer
+restarts an active unit whose file changed (`RESTARTED`) and keeps the run pending when the restart fails. A
+timer's service must also need no reload and have started after its own file was written.
 The release stamp covers the Rust tree and every file outside `rust/` that the Rust sources embed (for example
 `deploy/exceptions.toml`, compiled into the GO verifier), so a change to such a file is a new release.
 
@@ -189,6 +193,20 @@ has no ledger newer than 6 hours or an entry is more than 24 hours (compared in 
 exception. `land-train go-verify` applies the same check to the same hosts (`--hosts FILE`, default
 `~/.config/plangraph/hosts.json`); an unreadable registry is a refusal, not a pass. Hosts with transport `keeper`
 have no install path and are not asked for a ledger.
+
+The release installer records, per binary, the stamp and the hash of the artifact it built
+(`~/.local/state/plangraph/release-bins/<bin>`). A binary is live only when the file its consumer runs hashes to
+that record under the checkout's current stamp: `install_path` in the manifest names a path other than
+`~/.local/bin` (for example `/usr/local/bin/pg-live-probe`, run by a system unit), and `--install` then lists
+`OPERATOR: copy the built binary to <path> (as root)` once the release is built. A binary the build did not
+record is never live, whatever the host-wide stamp says.
+
+Every ledger carries the SHA-256 of the checkout's `deploy/manifest.toml` and its release stamp; the guard
+(`land-train deploy-guard`, `go-verify --repo PATH`) refuses a ledger for other inputs than the checkout it runs
+from (`deploy_ledger_outdated`), and with `--refresh yes` a host that hands back no ledger on that run is
+`deploy_refresh_failed` instead of being judged by a cached file. The digest line (`deploy-status --summary`,
+`landing report --day`) counts a host once by id or alias and names hosts with no ledger or one older than 6 hours
+(`deploy-not-live unknown: ...`), never reading them as zero.
 
 Unit files that ship beside their tooling (`deploy/liveness`, `deploy/pganchor`, `deploy/watchdog`) are manifest
 entries with `dir = "<subdir>"`; the coverage test names every unit file under any `deploy/<dir>`.

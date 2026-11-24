@@ -57,7 +57,7 @@ fn a_unit_systemd_does_not_know_is_listed_not_live_and_fails_the_run() {
 
 #[test]
 fn a_live_unit_gives_a_clean_run() {
-    let script = "#!/bin/sh\necho LoadState=loaded\necho ActiveState=active\necho UnitFileState=enabled\necho Result=success\necho ExecMainStartTimestamp=Mon\necho ExecMainStatus=0\n";
+    let script = "#!/bin/sh\necho LoadState=loaded\necho ActiveState=active\necho UnitFileState=enabled\necho Result=success\necho ExecMainStartTimestamp=@100\necho ExecMainStatus=0\necho ActiveEnterTimestamp=@100\n";
     let (output, _dir) = run(script);
     let text = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
