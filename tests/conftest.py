@@ -22,7 +22,9 @@ from contextlib import contextmanager
 import pytest
 from pathlib import Path
 from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
-    pytest_sessionstart, pytest_terminal_summary, detached_git_environment, isolated_git_session, config_guard)
+    pytest_sessionstart, pytest_addoption, pytest_runtest_protocol, pytest_runtest_setup,
+    pytest_runtest_call, pytest_runtest_teardown, pytest_runtest_makereport, pytest_terminal_summary,
+    detached_git_environment, isolated_git_session, config_guard)
 from _stray_git_guard import no_git_outside_tmp_path, settings_root_ceiling, SharedTempCheck  # noqa: F401
 
 # Initial nested conftests load before sessionstart and may invoke Git at import.
