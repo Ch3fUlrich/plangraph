@@ -9,3 +9,4 @@ plangraph quota --push SSH_DESTINATION delivers the quota snapshot to a worker; 
 A live feeder tick starts every batch its free slots allow (started, slots, stopped), by the same loop the dry run plays.
 Hand-lane detection merges with the spawner's runs by run id, honours ROUTING_STATE_DIR and CLAUDE_CONFIG_DIR, checks pid and the Claude roster instead of a fixed cutoff, and holds every key of a lane's card.
 A feeder refusal for a stale quota snapshot keeps the sampled RAM, load and writer count in its capacity line.
+Hand-lane detection keeps a slot on any one of fresh job state, Claude roster or live pid, reads the roster whole through the bounded host-command capture, and splits the spawner's whole-card item_key into the card's keys.

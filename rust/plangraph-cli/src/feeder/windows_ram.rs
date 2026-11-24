@@ -2,7 +2,7 @@
 //! so admission takes the lower of it and Windows' own free physical memory (read through WSL
 //! interop), less a Windows floor. A failed read falls back to the last value for one facts
 //! window, then refuses: a host that cannot see its Windows side admits nothing.
-use super::probe::capture;
+use pg_worker_core::host_command;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -40,7 +40,7 @@ fn parse_free_kb(out: &str) -> Result<u64, String> {
 
 /// Windows' free physical memory in bytes via `powershell.exe`, killed after `READ_TIMEOUT`.
 pub(super) fn read_powershell() -> Result<u64, String> {
-    let out = capture(
+    let out = host_command::output(
         Command::new("powershell.exe").args([
             "-NoProfile",
             "-NonInteractive",
@@ -48,7 +48,8 @@ pub(super) fn read_powershell() -> Result<u64, String> {
             "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory",
         ]),
         READ_TIMEOUT,
-    )?;
+    )
+    .map_err(|e| format!("powershell.exe: {e}"))?;
     parse_free_kb(&String::from_utf8_lossy(&out))
 }
 

@@ -87,6 +87,13 @@ fn decode_runs(
     receipts: &[Value],
 ) -> Result<Vec<Run>, String> {
     let mut runs = read_runs(data)?;
+    let lane_cards: std::collections::BTreeSet<String> = data["runs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["lane_card"] == true)
+        .filter_map(|row| row["run_id"].as_str().map(str::to_owned))
+        .collect();
     for run in runs.iter_mut().filter(|r| r.active()) {
         if let Some(receipt) = receipts
             .iter()
@@ -131,7 +138,8 @@ fn decode_runs(
                 })
                 .find(|i| i["key"].as_str() == Some(key))
         };
-        let lane = run.run_id.starts_with(super::lanes::LANE_RUN_PREFIX);
+        let lane = run.run_id.starts_with(super::lanes::LANE_RUN_PREFIX)
+            || lane_cards.contains(&run.run_id);
         if lane {
             // A hand lane holds every key its card names; each key's files resolve on their
             // own, so a key that left the ready list never hides the files of the others.
@@ -158,6 +166,19 @@ fn decode_runs(
     }
     Ok(runs)
 }
+/// The spawner lists a launched session as one run whose `item_key` is the whole card string.
+/// Replace it with the keys the launcher record parsed from that card, and mark the row as a
+/// lane card so each key resolves on its own (a key that left the ready list never fails a tick).
+fn mark_lane_cards(data: &mut Value, cards: &std::collections::BTreeMap<String, Vec<String>>) {
+    for row in data["runs"].as_array_mut().into_iter().flatten() {
+        let Some(keys) = row["run_id"].as_str().and_then(|id| cards.get(id)) else {
+            continue;
+        };
+        row["item_key"] = json!(keys.first().map_or("", String::as_str));
+        row["item_keys"] = json!(keys.iter().skip(1).collect::<Vec<_>>());
+        row["lane_card"] = json!(true);
+    }
+}
 pub(super) fn runs(
     env: &Env,
     repo: &Path,
@@ -171,15 +192,16 @@ pub(super) fn runs(
     let mut data = output(cmd)?;
     // Hand lanes (fleet-launch writer sessions) count beside the spawner's runs, except the
     // sessions the spawner lists already under the same run id.
+    let (sessions, jobs) = (
+        super::lanes::sessions_dir(home, env),
+        super::lanes::jobs_dir(home, env),
+    );
     let listed: std::collections::BTreeSet<String> = read_runs(&data)?
         .into_iter()
         .map(|r| r.run_id)
         .filter(|id| !id.is_empty())
         .collect();
-    let (sessions, jobs) = (
-        super::lanes::sessions_dir(home, env),
-        super::lanes::jobs_dir(home, env),
-    );
+    mark_lane_cards(&mut data, &super::lanes::lane_cards(&sessions));
     let lanes = super::lanes::live_lane_runs(&super::lanes::Evidence {
         sessions: &sessions,
         jobs: &jobs,
@@ -401,6 +423,33 @@ mod tests {
         .unwrap();
         let f = apply_facts(f, &runs, &p, 1001, false, None, None).unwrap();
         assert_eq!(f.running_writers, 2);
+    }
+    #[test]
+    fn a_spawner_row_holding_the_whole_card_is_split_into_its_keys() {
+        // The launcher registers the session as one run whose item_key is the whole card.
+        let mut data = json!({"runs":[{"run_id":"run-1","host":"workstation","role":"implement",
+            "status":"running","item_key":"plangraph:GONE plangraph:HELD-C","started":900}]});
+        let cards = std::collections::BTreeMap::from([(
+            "run-1".to_string(),
+            vec!["plangraph:GONE".to_string(), "plangraph:HELD-C".to_string()],
+        )]);
+        mark_lane_cards(&mut data, &cards);
+        let ready = json!({"items":[
+            {"key":"plangraph:HELD-C","priority":8,"files":["src/c.rs"]},
+            {"key":"plangraph:SAME-C","priority":7,"files":["src/c.rs"]},
+            {"key":"plangraph:FREE-B","priority":1,"files":["src/b.rs"]}]});
+        // GONE is not in the ready list or the snapshot: no writer_item_missing, HELD-C still held.
+        let runs = decode_runs(&data, &ready, &json!({"items":[]}), &[]).unwrap();
+        assert!(runs[0].holds("plangraph:GONE") && runs[0].holds("plangraph:HELD-C"));
+        assert_eq!(runs[0].files, ["src/c.rs"]);
+        assert_eq!(
+            pick(&ready, &runs, &Policy::default()).unwrap().key,
+            "plangraph:FREE-B"
+        );
+        // Without the split the same row stops the tick, as a plain writer run must.
+        let plain = json!({"runs":[{"run_id":"run-2","host":"workstation","role":"implement",
+            "status":"running","item_key":"plangraph:GONE","started":900}]});
+        assert!(decode_runs(&plain, &ready, &json!({"items":[]}), &[]).is_err());
     }
     #[test]
     fn a_session_both_listed_by_the_spawner_and_recorded_is_counted_once() {
