@@ -14,12 +14,6 @@ pub struct Accept {
     /// The review leg named by the `[served by LEG via spawner run RUN, ...]` header, lowercased.
     pub leg: String,
     pub run_id: String,
-    /// The review card's `EFFORT:` line, lowercased.
-    pub effort: Option<String>,
-    /// The review card's `EFFORT_DECISION:` line (a D-id).
-    pub effort_decision: Option<String>,
-    /// The review card's `WRITER_FAMILIES:` line: the model families that wrote the head, lowercased.
-    pub writer_families: Vec<String>,
 }
 
 /// The two OpenCode seats every head needs when no single-seat leg accepted it (rule 3.66 (f)): the
@@ -28,30 +22,59 @@ const REQUIRED_PAIR: [&str; 2] = ["opencode-go-deepseek-v4-flash", "opencode-go-
 /// The exact legs whose one ACCEPT counts for the head alone, comma separated (rule 3.66 (f10) clause 8,
 /// D-6804): Hydrogen (`REVIEW_HYDROGEN`), and the gpt high-effort leg under the conditions of `GPT_ALONE`.
 pub const DEFAULT_SINGLE_SEAT: &str = "agy-gemini-4-hydrogen-high,cx-gpt-6.2-sol-high";
-/// A single-seat leg that counts alone only on a review card with `EFFORT: high`, `EFFORT_DECISION: D-6804`
-/// and a `WRITER_FAMILIES:` line that does not name the reviewer's own family.
+/// A single-seat leg that counts alone only when the launcher's metadata for its run says effort high,
+/// decision D-6804 and a writer family other than the reviewer's own.
 const GPT_ALONE: (&str, [&str; 3]) = ("cx-gpt-6.2-sol-high", ["gpt", "openai", "codex"]);
 const GPT_EFFORT_DECISION: &str = "D-6804";
 
-/// Whether a single-seat answer meets the extra conditions of its leg.
-fn alone_conditions_met(accept: &Accept) -> bool {
-    if accept.leg != GPT_ALONE.0 {
-        return true;
-    }
-    accept.effort.as_deref() == Some("high")
-        && accept.effort_decision.as_deref() == Some(GPT_EFFORT_DECISION)
-        && !accept.writer_families.is_empty()
-        && !accept
-            .writer_families
-            .iter()
-            .any(|family| GPT_ALONE.1.contains(&family.as_str()))
+/// What the orchestrator that launched a review run recorded about its card; never read from the answer.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct SeatMeta {
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub effort_decision: Option<String>,
+    /// The model families that wrote the reviewed head.
+    #[serde(default)]
+    pub writer_families: Vec<String>,
 }
 
-/// Where the reviewers' answers are and which exact legs count alone; part of every train build.
+/// Where the reviewers' answers are, which exact legs count alone, and the launcher metadata by run id.
 #[derive(Clone, Debug)]
 pub struct AcceptGate {
     pub dir: PathBuf,
     pub single_seat: Vec<String>,
+    pub meta: std::collections::BTreeMap<String, SeatMeta>,
+}
+
+impl AcceptGate {
+    /// `meta` is a JSON object of run id to `SeatMeta`, written by the launcher of the review runs.
+    pub fn read_meta(path: &Path) -> Result<std::collections::BTreeMap<String, SeatMeta>, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("seat meta {}: {e}", path.display()))?;
+        serde_json::from_str(&text).map_err(|e| format!("seat meta {}: {e}", path.display()))
+    }
+
+    /// Whether a single-seat answer meets the extra conditions of its leg.
+    fn alone_conditions_met(&self, accept: &Accept) -> bool {
+        if accept.leg != GPT_ALONE.0 {
+            return true;
+        }
+        self.meta.get(&accept.run_id).is_some_and(|meta| {
+            meta.effort
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+                == Some("high")
+                && meta.effort_decision.as_deref() == Some(GPT_EFFORT_DECISION)
+                && !meta.writer_families.is_empty()
+                && !meta.writer_families.iter().any(|family| {
+                    GPT_ALONE
+                        .1
+                        .contains(&family.trim().to_ascii_lowercase().as_str())
+                })
+        })
+    }
 }
 
 fn run_id_ok(id: &str) -> bool {
@@ -86,25 +109,10 @@ pub fn parse(text: &str) -> Option<Accept> {
         .find_map(|l| l.trim().strip_prefix("HEAD:"))?
         .trim();
     let full = head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit());
-    let line = |key: &str| {
-        text.lines()
-            .find_map(|l| l.trim().strip_prefix(key))
-            .map(|v| v.trim().to_owned())
-    };
     full.then(|| Accept {
         head: head.to_ascii_lowercase(),
         leg,
         run_id,
-        effort: line("EFFORT:").map(|v| v.to_ascii_lowercase()),
-        effort_decision: line("EFFORT_DECISION:"),
-        writer_families: line("WRITER_FAMILIES:")
-            .map(|v| {
-                v.split(',')
-                    .map(|f| f.trim().to_ascii_lowercase())
-                    .filter(|f| !f.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default(),
     })
 }
 
@@ -155,10 +163,14 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
                 .collect::<Vec<_>>()
         };
         let pair: Vec<_> = REQUIRED_PAIR.iter().map(|leg| run_of(leg)).collect();
-        let paired = pair.iter().all(|runs| runs.len() == 1) && pair[0][0] != pair[1][0];
+        // Each pair run belongs to exactly one answer at the head, so a run claimed by a second answer
+        // (of any leg) never counts.
+        let unique = |run: &str| at_head.iter().filter(|(_, a)| a.run_id == run).count() == 1;
+        let paired =
+            pair.iter().all(|runs| runs.len() == 1 && unique(runs[0])) && pair[0][0] != pair[1][0];
         let counted = match bound.as_slice() {
             [one] => {
-                single_seat.contains(&one.1.leg) && alone_conditions_met(&one.1)
+                single_seat.contains(&one.1.leg) && gate.alone_conditions_met(&one.1)
                     || (paired && pair.iter().any(|runs| runs[0] == one.1.run_id))
             }
             _ => false,

@@ -1,4 +1,4 @@
-use super::accept::{parse, require, AcceptGate, DEFAULT_SINGLE_SEAT};
+use super::accept::{parse, require, AcceptGate, SeatMeta, DEFAULT_SINGLE_SEAT};
 use super::build_tests::part as built_part;
 use super::train::PartIn;
 
@@ -28,6 +28,7 @@ fn gate(dir: &tempfile::TempDir, single: &[&str]) -> AcceptGate {
     AcceptGate {
         dir: dir.path().to_owned(),
         single_seat: single.iter().map(|leg| (*leg).to_owned()).collect(),
+        meta: Default::default(),
     }
 }
 
@@ -96,6 +97,23 @@ fn the_pair_on_one_run_or_with_a_duplicate_run_never_counts() {
 }
 
 #[test]
+fn a_second_pair_run_claimed_by_another_answer_never_counts() {
+    // The receipt run is the deepseek answer; the glm run is also claimed by an unrelated leg's answer.
+    let dir = dir_with(&[
+        ("d.txt", answer(DEEPSEEK, RUN, NEW, "ACCEPT")),
+        ("g.txt", answer(GLM, OTHER_RUN, NEW, "ACCEPT")),
+        ("x.txt", answer("some-other-leg", OTHER_RUN, NEW, "ACCEPT")),
+    ]);
+    assert!(require(&gate(&dir, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_err());
+    // Without the duplicate the same two answers count.
+    let clean = dir_with(&[
+        ("d.txt", answer(DEEPSEEK, RUN, NEW, "ACCEPT")),
+        ("g.txt", answer(GLM, OTHER_RUN, NEW, "ACCEPT")),
+    ]);
+    assert!(require(&gate(&clean, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_ok());
+}
+
+#[test]
 fn leg_ids_are_compared_whole_never_as_substrings() {
     // A leg that merely contains an approved id, or a made-up leg naming deepseek and glm, is not one.
     let lookalikes = dir_with(&[
@@ -153,14 +171,29 @@ fn request_changes_writer_status_and_unserved_text_never_count() {
     assert!(require(&gate(&dir, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_err());
 }
 
-fn gpt_answer(extra: &str) -> String {
-    format!("{extra}{}", answer(GPT, RUN, NEW, "ACCEPT"))
+fn gpt_answer(body_extra: &str) -> String {
+    format!("{body_extra}{}", answer(GPT, RUN, NEW, "ACCEPT"))
+}
+
+fn meta(effort: &str, decision: &str, families: &[&str]) -> SeatMeta {
+    SeatMeta {
+        effort: Some(effort.into()),
+        effort_decision: Some(decision.into()),
+        writer_families: families.iter().map(|f| (*f).to_owned()).collect(),
+    }
+}
+
+fn with_meta(dir: &tempfile::TempDir, meta: SeatMeta) -> AcceptGate {
+    let mut gate = default_gate(dir);
+    gate.meta.insert(RUN.into(), meta);
+    gate
 }
 
 fn default_gate(dir: &tempfile::TempDir) -> AcceptGate {
     AcceptGate {
         dir: dir.path().to_owned(),
         single_seat: DEFAULT_SINGLE_SEAT.split(',').map(str::to_owned).collect(),
+        meta: Default::default(),
     }
 }
 
@@ -170,37 +203,49 @@ fn the_default_single_seat_set_is_hydrogen_and_gpt() {
 }
 
 #[test]
-fn gpt_high_with_the_effort_decision_and_another_writer_family_counts_alone() {
-    let card = "EFFORT: high\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n";
-    let dir = dir_with(&[("g.txt", gpt_answer(card))]);
-    assert!(require(&default_gate(&dir), &[part(7, NEW, RUN)]).is_ok());
+fn gpt_high_with_the_launcher_metadata_and_another_writer_family_counts_alone() {
+    let dir = dir_with(&[("g.txt", gpt_answer(""))]);
+    let gate = with_meta(&dir, meta("high", "D-6804", &["claude"]));
+    assert!(require(&gate, &[part(7, NEW, RUN)]).is_ok());
 }
 
 #[test]
-fn gpt_without_the_high_effort_or_the_decision_is_refused() {
-    for card in [
-        "WRITER_FAMILIES: claude\n",
-        "EFFORT: high\nWRITER_FAMILIES: claude\n",
-        "EFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n",
-        "EFFORT: medium\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n",
-        "EFFORT: high\nEFFORT_DECISION: D-1\nWRITER_FAMILIES: claude\n",
-        "EFFORT: high\nEFFORT_DECISION: D-6804\n",
+fn gpt_without_the_high_effort_or_the_decision_in_the_metadata_is_refused() {
+    let dir = dir_with(&[("g.txt", gpt_answer(""))]);
+    for meta in [
+        meta("medium", "D-6804", &["claude"]),
+        meta("high", "D-1", &["claude"]),
+        meta("high", "D-6804", &[]),
+        SeatMeta::default(),
     ] {
-        let dir = dir_with(&[("g.txt", gpt_answer(card))]);
-        let error = require(&default_gate(&dir), &[part(7, NEW, RUN)]).unwrap_err();
-        assert!(error.contains("meeting its conditions"), "{card}: {error}");
+        let error = require(&with_meta(&dir, meta), &[part(7, NEW, RUN)]).unwrap_err();
+        assert!(error.contains("meeting its conditions"), "{error}");
     }
+    // No metadata for the run at all.
+    assert!(require(&default_gate(&dir), &[part(7, NEW, RUN)]).is_err());
+}
+
+#[test]
+fn conditions_written_only_in_the_answer_body_never_qualify() {
+    // The reviewer's own text claims the card fields; the launcher recorded none for this run.
+    let body = "EFFORT: high\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n";
+    let dir = dir_with(&[("g.txt", gpt_answer(body))]);
+    let error = require(&default_gate(&dir), &[part(7, NEW, RUN)]).unwrap_err();
+    assert!(error.contains("meeting its conditions"), "{error}");
+    // Metadata recorded for another run does not help either.
+    let mut other = default_gate(&dir);
+    other
+        .meta
+        .insert(OTHER_RUN.into(), meta("high", "D-6804", &["claude"]));
+    assert!(require(&other, &[part(7, NEW, RUN)]).is_err());
 }
 
 #[test]
 fn a_gpt_review_of_a_gpt_written_head_is_refused() {
-    for family in ["gpt", "openai", "claude, GPT", "codex"] {
-        let card = format!("EFFORT: high\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: {family}\n");
-        let dir = dir_with(&[("g.txt", gpt_answer(&card))]);
-        assert!(
-            require(&default_gate(&dir), &[part(7, NEW, RUN)]).is_err(),
-            "{family}"
-        );
+    let dir = dir_with(&[("g.txt", gpt_answer(""))]);
+    for family in ["gpt", "openai", "GPT", "codex"] {
+        let gate = with_meta(&dir, meta("high", "D-6804", &["claude", family]));
+        assert!(require(&gate, &[part(7, NEW, RUN)]).is_err(), "{family}");
     }
 }
 
@@ -208,9 +253,12 @@ fn a_gpt_review_of_a_gpt_written_head_is_refused() {
 fn hydrogen_needs_no_card_conditions_and_the_override_replaces_the_default() {
     let dir = dir_with(&[("h.txt", answer(HYDROGEN, RUN, NEW, "ACCEPT"))]);
     assert!(require(&default_gate(&dir), &[part(7, NEW, RUN)]).is_ok());
-    let card = "EFFORT: high\nEFFORT_DECISION: D-6804\nWRITER_FAMILIES: claude\n";
-    let gpt = dir_with(&[("g.txt", gpt_answer(card))]);
-    assert!(require(&gate(&gpt, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_err());
+    let gpt = dir_with(&[("g.txt", gpt_answer(""))]);
+    let mut only_hydrogen = gate(&gpt, &[HYDROGEN]);
+    only_hydrogen
+        .meta
+        .insert(RUN.into(), meta("high", "D-6804", &["claude"]));
+    assert!(require(&only_hydrogen, &[part(7, NEW, RUN)]).is_err());
 }
 
 #[test]
@@ -284,4 +332,22 @@ fn build_train_refuses_a_stale_head_and_builds_an_exact_head() {
         "{lines:?}"
     );
     assert!(out.path().join("exact.manifest.json").exists());
+}
+
+#[test]
+fn the_seat_meta_file_is_read_by_run_id_and_a_bad_file_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"{RUN}": {{"effort": "high", "effort_decision": "D-6804", "writer_families": ["claude"]}}}}"#
+        ),
+    )
+    .unwrap();
+    let read = AcceptGate::read_meta(&path).unwrap();
+    assert_eq!(read[RUN].effort.as_deref(), Some("high"));
+    std::fs::write(&path, "not json").unwrap();
+    assert!(AcceptGate::read_meta(&path).is_err());
+    assert!(AcceptGate::read_meta(&dir.path().join("missing.json")).is_err());
 }
