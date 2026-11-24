@@ -11,7 +11,7 @@ other than `labeled`, `.github/workflows/tests.yml`). No run timed out and none 
 newer run behind it.
 
 Method: runs of the workflow on `land/*` since the cutoff, each cancelled run matched to the oldest
-run on the same branch created within its life; same-head matches checked against the pull
+run on the same branch created within its life (runs created in the same second are ordered by run id); same-head matches checked against the pull
 request timeline (`reopened`, `renamed`). A same-head cause with no timeline event is inferred
 (a body or base edit leaves no timeline entry).
 
@@ -23,9 +23,9 @@ request timeline (`reopened`, `renamed`). A same-head cause with no timeline eve
 | 44954648287 | pull_request | 1 | land/train-20261121-8b | afcfd60d34 | 2026-11-21T22:02:43Z | 2026-11-21T22:02:45Z (run update time) | 44954649960 | newer push to the same pull request (new head commit) |
 | 44973875711 | pull_request | 1 | land/train-20261121-9 | b627322e2a | 2026-11-22T01:58:09Z | 2026-11-22T01:58:10Z | 44973876528 | newer push to the same pull request (new head commit) |
 | 44982808388 | pull_request | 1 | land/train-20261121-9 | 06ce16c763 | 2026-11-22T03:56:00Z | 2026-11-22T03:56:01Z | 44982808928 | newer push to the same pull request (new head commit) |
-| 44982808928 | pull_request | 1 | land/train-20261121-9 | 16d5f979da | 2026-11-22T03:56:00Z | 2026-11-22T04:01:11Z | 44982808388 | newer push to the same pull request (new head commit) |
+| 44982808928 | pull_request | 1 | land/train-20261121-9 | 16d5f979da | 2026-11-22T03:56:00Z | 2026-11-22T04:01:11Z | 44983151396 | pull request title edited (same head, new run) |
 | 44985858180 | pull_request | 1 | land/train-20261121-9 | 16d5f979da | 2026-11-22T04:37:15Z | 2026-11-22T04:37:16Z | 44985858931 | newer push to the same pull request (new head commit) |
-| 44985858931 | pull_request | 1 | land/train-20261121-9 | d70cb1c78f | 2026-11-22T04:37:15Z | 2026-11-22T04:57:49Z | 44985858180 | newer push to the same pull request (new head commit) |
+| 44985858931 | pull_request | 1 | land/train-20261121-9 | d70cb1c78f | 2026-11-22T04:37:15Z | 2026-11-22T04:57:49Z | 44987286714 | pull request closed and reopened (same head, new run) |
 | 44987286714 | pull_request | 1 | land/train-20261121-9 | d70cb1c78f | 2026-11-22T04:57:34Z | 2026-11-22T04:57:35Z (run update time) | 44987287430 | newer push to the same pull request (new head commit) |
 | 44991308840 | pull_request | 1 | land/train-20261121-9 | 11e2a509dd | 2026-11-22T05:53:15Z | 2026-11-22T05:53:16Z | 44991310118 | newer push to the same pull request (new head commit) |
 | 44991310118 | pull_request | 1 | land/train-20261121-9 | 5577564191 | 2026-11-22T05:53:16Z | 2026-11-22T05:55:21Z | 44991432390 | pull request edited (inferred: same head, no push, reopen or label event) |
@@ -56,12 +56,12 @@ request timeline (`reopened`, `renamed`). A same-head cause with no timeline eve
 
 | cause | runs |
 |---|---|
-| newer push to the same pull request (new head commit) | 25 |
-| pull request closed and reopened (same head, new run) | 7 |
+| newer push to the same pull request (new head commit) | 23 |
+| pull request closed and reopened (same head, new run) | 8 |
 | pull request edited (inferred: same head, no push, reopen or label event) | 3 |
-| pull request title edited (same head, new run) | 1 |
+| pull request title edited (same head, new run) | 2 |
 | total | 36 |
 
-The "newer push" rows confirm the likely cause. Eleven runs have a different one: a train pull request was closed and reopened
+The "newer push" rows (23) confirm the likely cause. Thirteen runs have a different one: a train pull request was closed and reopened
 (or edited) on the same head, which starts a run that cancels the one in flight. Who closes and reopens is
-not read from the data (one account does every action). A follow-up item covers it (`slices.json` beside the batch status file).
+not read from the data (one account does every action). A follow-up item covers it (CI-REOPEN-CANCELS-LANDING-RUN in the batch slices).
