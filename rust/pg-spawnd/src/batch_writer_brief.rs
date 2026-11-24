@@ -130,6 +130,16 @@ pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
     Ok(Cow::Owned(rendered))
 }
 
+/// The admitted base of a rendered batch brief: its `BASE:` Run value, a full commit id.
+pub fn admitted_base(brief: &str) -> Option<&str> {
+    let run = &brief[brief.find("\n# Run values\n")?..];
+    let base = run
+        .lines()
+        .find_map(|line| line.strip_prefix("BASE: "))?
+        .trim();
+    (base.len() == 40 && base.bytes().all(|b| b.is_ascii_hexdigit())).then_some(base)
+}
+
 /// `render`, then the lane admission of its items: a key another live lane holds is refused
 /// with the lane name unless the brief carries a `LANE_OVERRIDE` reason. The one entry point
 /// of every writer launch (Claude session, native dispatch, external brief generation).
@@ -145,7 +155,7 @@ pub fn render_admitted<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{render, render_admitted, Cow, PREFIX};
+    use super::{admitted_base, render, render_admitted, Cow, PREFIX};
     use serde_json::{json, Value};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/batch-writer-input.txt");
@@ -295,6 +305,21 @@ mod tests {
         assert_eq!(tail("claude"), expected.replace("\r\n", "\n"));
         assert_eq!(tail("codex"), tail("claude"));
         assert!(tail("claude").contains("FAST_CHECKS:\n- git diff --check\n- cargo fmt --check\n"));
+    }
+
+    #[test]
+    fn admitted_base_is_the_run_values_base_of_a_batch_brief_only() {
+        let brief = render(FIXTURE).unwrap();
+        assert_eq!(
+            admitted_base(&brief),
+            Some("1111111111111111111111111111111111111111")
+        );
+        assert_eq!(
+            admitted_base("Plain\nBASE: 1111111111111111111111111111111111111111\n"),
+            None
+        );
+        let short = brief.replace("1111111111111111111111111111111111111111", "origin/main");
+        assert_eq!(admitted_base(&short), None);
     }
 
     #[test]
