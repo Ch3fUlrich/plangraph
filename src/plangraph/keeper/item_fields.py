@@ -20,8 +20,6 @@ one exit decision (a ``decision`` item depending on it).
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 
 from .credential_guard import guard
@@ -117,13 +115,6 @@ def premise_texts(values):
     return [values[name] for name in PREMISE_FIELDS if isinstance(values.get(name), str)]
 
 
-def premise_digest(values):
-    """A short digest of the effective premise of *values*: equal text, equal digest."""
-    text = json.dumps([values.get(name) if isinstance(values.get(name), str) else None
-                       for name in PREMISE_FIELDS])
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
 SESSION_CAP = 200
 _LINE_SEPARATOR = re.compile("[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
 
@@ -148,7 +139,9 @@ def check_metadata(raw, key):
         text = render(value)
         if len(text) > NOTE_CAP:
             raise Refused("validation", f"{key}: {name} exceeds {NOTE_CAP} characters")
-        guard(name, text, key)
+        # Checked with the note it travels beside: a credential label in the note makes the
+        # value credential-shaped, as it did when the value was folded into the note.
+        guard(name, f"{raw.get('note') if isinstance(raw.get('note'), str) else ''}\n{name}: {text}", key)
         out[name] = value
     return out
 

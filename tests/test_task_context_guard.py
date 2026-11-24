@@ -689,3 +689,55 @@ def test_saving_an_identical_note_keeps_the_floor_and_a_changed_one_voids_it(w, 
     assert _newer(w, "demo:V") == []                          # a re-save does not reopen the refusal
     w.store.edit_definition(w.p("router"), "demo:V", {"note": "another note"})
     assert _newer(w, "demo:V") == ["D-5950"]                  # a change of the premise does
+
+
+def test_reverting_a_premise_edit_does_not_revive_the_old_floor(w, decisions):
+    _mk(w, defn("V", description="per D-5800", note="first note"))
+    _decide(decisions, 5950, "demo:V scope changed")
+    w.store.reconfirm(w.p("router"), "demo:V", "D-5950")
+    assert _newer(w, "demo:V") == []
+    w.store.edit_definition(w.p("router"), "demo:V", {"note": "second note"})
+    assert _newer(w, "demo:V") == ["D-5950"]                  # the edit voids the floor
+    w.store.edit_definition(w.p("router"), "demo:V", {"note": "first note"})   # revert
+    assert _newer(w, "demo:V") == ["D-5950"]                  # and the revert does not bring it back
+    with pytest.raises(Refused):
+        w.store.claim(w.p("l1main"), "demo:V")
+
+
+def test_resaving_a_legacy_note_does_not_publish_its_folded_metadata(w, decisions):
+    # a note an older Keeper folded metadata into: its D-999999 line is not a citation of this
+    # premise, and an edit that re-lists the note unchanged must not make it one
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("L", note="plain note"), defn("B"))
+    legacy = "plain note\nsession: D-999999"
+    w.conn.execute("UPDATE items SET note=? WHERE key='demo:L'", (legacy,))   # as an old Keeper left it
+    w.store.edit_definition(w.p("router"), "demo:L", {"note": legacy})
+    assert w.store._decision_clock()["marks"][-1] == 5800
+    _mk(w, defn("Z"))
+    _decide(decisions, 5900, "demo:Z scope changed")
+    assert "D-5900" in _refuses(w, "demo:Z")
+
+
+def test_an_export_keeps_the_metadata_and_a_reimport_gets_it_back(w, tmp_path):
+    from plangraph.keeper.importer import export_yaml, load_dir
+    _mk(w, defn("A", session="sess-9", category="infra", similar=["demo:B"], supersedes="demo:OLD"))
+    out = tmp_path / "export"
+    export_yaml(w.store, out)
+    items = {i["id"]: i for i in load_dir(out)}
+    assert [items["A"][n] for n in ("session", "category", "similar", "supersedes")] == [
+        "sess-9", "infra", ["demo:B"], "demo:OLD"]
+    assert "session" not in (items["A"].get("note") or "")
+
+
+def test_an_imported_credential_label_in_the_note_covers_the_metadata_value(w, tmp_path):
+    from plangraph.keeper.importer import load_dir
+    plan = tmp_path / "plan"
+    plan.mkdir()
+    secret = "svc" + "acct/" + "Zq9xk2LmPw"
+    (plan / "p.yaml").write_text(
+        "items:\n"
+        f"- {{project: demo, id: A, title: a, note: 'the password is', session: '{secret}', owner: tester,"
+        " track: T0, estimate_h: 1, kind: lane}\n", encoding="utf-8")
+    with pytest.raises(Refused) as exc:
+        load_dir(plan)
+    assert "credential" in exc.value.msg and secret not in exc.value.msg

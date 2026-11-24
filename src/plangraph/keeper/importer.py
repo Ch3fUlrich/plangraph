@@ -218,6 +218,25 @@ def _read_items(source):
     return out
 
 
+def _creation_metadata(source):
+    """``key -> {metadata field: value}`` from the creation events: where create and import keep
+    session, similar, category and supersedes, so an export can write them back."""
+    conn = getattr(source, "conn", source)
+    out = {}
+    for row in conn.execute("SELECT key, payload FROM events WHERE type='item_created' ORDER BY seq"):
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                continue
+        found = {name: payload[name] for name in METADATA_FIELDS
+                 if isinstance(payload, dict) and payload.get(name) is not None}
+        if found:
+            out[row["key"]] = found
+    return out
+
+
 def _export_record(item):
     record = {}
     for field in _FIELD_ORDER:
@@ -234,6 +253,7 @@ def _export_record(item):
                 and value.is_integer():
             value = int(value)  # SQLite REAL columns coerce whole numbers
         record[field] = value
+    record.update(item.get("metadata") or {})
     return record
 
 
@@ -253,9 +273,11 @@ def export_yaml(conn_or_store, dir):
     out = Path(dir)
     out.mkdir(parents=True, exist_ok=True)
     groups = {}
+    metadata = _creation_metadata(conn_or_store)
     for item in _read_items(conn_or_store):
         if item.get("state") not in _IMPORT_STATES:
             continue
+        item = {**item, "metadata": metadata.get(item["key"], {})}
         track = item.get("track") or "untracked"
         groups.setdefault(str(track), []).append(item)
     written = []
