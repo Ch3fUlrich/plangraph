@@ -23,8 +23,17 @@ fn state_dir() -> Option<PathBuf> {
         })
 }
 
-/// Run one step, echo its stderr unchanged, and for cargo steps record how long it
-/// waited on Cargo file locks (real milliseconds) in the per-host telemetry log.
+fn nextest_timeout_name(line: &str) -> Option<&str> {
+    let timeout = line.trim().strip_prefix("TIMEOUT ")?;
+    let (_, details) = timeout.strip_prefix('[')?.split_once(']')?;
+    let (progress, name) = details.trim_start().split_once(") ")?;
+    let (completed, total) = progress.strip_prefix('(')?.split_once('/')?;
+    completed.trim_start_matches(' ').parse::<usize>().ok()?;
+    total.trim_start_matches(' ').parse::<usize>().ok()?;
+    Some(name.trim_start())
+}
+
+/// Stream stderr, name timed-out nextest tests, and record Cargo lock waits.
 pub(super) fn run_step(
     command: &mut Command,
     program: &str,
@@ -33,19 +42,27 @@ pub(super) fn run_step(
     if Path::new(program).file_name().and_then(|n| n.to_str()) != Some("cargo") {
         return command.status();
     }
+    let nextest = command
+        .get_args()
+        .zip(command.get_args().skip(1))
+        .any(|(first, second)| first == "nextest" && second == "run");
     let started = Instant::now();
     let mut child = command.stderr(Stdio::piped()).spawn()?;
     let stderr = child.stderr.take().expect("piped stderr");
     let reader = std::thread::spawn(move || {
         let mut tracker = LockWaitTracker::default();
         let mut reader = std::io::BufReader::new(stderr);
+        let mut hung = std::collections::HashSet::new();
         let mut line = Vec::new();
         while reader.read_until(b'\n', &mut line).unwrap_or(0) > 0 {
             let _ = std::io::stderr().write_all(&line);
-            tracker.observe(
-                &String::from_utf8_lossy(&line),
-                started.elapsed().as_millis() as u64,
-            );
+            let text = String::from_utf8_lossy(&line);
+            tracker.observe(&text, started.elapsed().as_millis() as u64);
+            if let Some(name) = nextest_timeout_name(&text)
+                .filter(|name| nextest && hung.insert((*name).to_owned()))
+            {
+                eprintln!("HUNG {name}");
+            }
             line.clear();
         }
         tracker
@@ -291,5 +308,25 @@ fn jail_binary_uses_the_built_helper_without_a_target_override() {
     assert_eq!(
         jail_binary(&root.join("cache")),
         root.join("cache").join(suffix)
+    );
+}
+
+#[test]
+fn nextest_timeout_names_only_a_timed_out_test() {
+    for counter in ["(1/1)", "( 1/12)", "(10/12)", "( 1/ 12)"] {
+        let line = format!("     TIMEOUT [   2.017s] {counter} example::unit nested::blocked\n");
+        assert_eq!(
+            nextest_timeout_name(&line),
+            Some("example::unit nested::blocked"),
+            "{counter}",
+        );
+    }
+    assert_eq!(
+        nextest_timeout_name("TIMEOUT [ 2s] unstructured output"),
+        None
+    );
+    assert_eq!(
+        nextest_timeout_name("TERMINATING [> 2s] (1/1) example test"),
+        None
     );
 }
