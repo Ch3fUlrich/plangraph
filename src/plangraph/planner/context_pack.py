@@ -4,9 +4,10 @@ A pack is plain text ordered for prompt-cache reuse: the stable material first (
 without the held-out check, then the files of the write set followed by the read set,
 bounded by a token budget), the per-run material last (an optional tail of the last failing
 check output).  A ``check_fail`` retry is the same pack plus ``check_tail``: the bytes before
-the tail (``Pack.prefix_chars``) do not change with the check output.  When a tail is given,
-``TAIL_RESERVE_TOKENS`` of the budget are held back for it, a fixed amount, so the files
-chosen never depend on the tail; the tail is clipped to that reserve.
+the tail (``Pack.prefix_chars``) do not change with the check output.  The budget bounds the
+stable prefix only, for the first attempt and every retry alike, so a tail never changes
+which files are admitted; the tail is clipped to ``TAIL_RESERVE_TOKENS`` and comes on top
+(``pack_budget`` already keeps a reserve below the window for it).
 
 Pure: reads files under ``repo_root`` only.  Entries may be files, directories (files at
 depth <= 2, no deeper) or globs; every file is resolved and must stay inside the root
@@ -239,7 +240,7 @@ def _header(card: Mapping[str, Any], key: str | None) -> str:
 
 
 def _tail_block(check_tail: str | None, tail_lines: int) -> str | None:
-    """The per-run ``# CHECK OUTPUT`` section, clipped to ``TAIL_RESERVE_TOKENS``."""
+    """The per-run ``# CHECK OUTPUT`` section, clipped to ``TAIL_RESERVE_TOKENS`` tokens."""
     if check_tail is None:
         return None
     n = min(max(tail_lines, TAIL_MIN), TAIL_MAX)
@@ -276,9 +277,7 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
     for rel in [r for r in reads if r in writes or r in new_writes]:
         del reads[rel]  # a file in both sets is shown once, as write
 
-    tail_block = _tail_block(check_tail, tail_lines)
-    if tail_block is not None:
-        budget_tokens = max(0, budget_tokens - TAIL_RESERVE_TOKENS)  # files never see the tail
+    tail_block = _tail_block(check_tail, tail_lines)  # outside the file budget
 
     files: list[PackFile] = []
     cur = _header(card, key)

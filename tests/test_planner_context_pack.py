@@ -4,7 +4,7 @@ import os
 import pytest
 
 from plangraph.planner.context_pack import (
-    PackTooBig, build_pack, estimate_tokens, pack_budget)
+    TAIL_RESERVE_TOKENS, PackTooBig, build_pack, estimate_tokens, pack_budget)
 
 BIG = 10**6
 
@@ -287,11 +287,11 @@ def test_prefix_does_not_depend_on_tail_size_at_budget_edge(tmp_path):
     put(tmp_path, "r1.py", "a" * 4000)
     put(tmp_path, "r2.py", "b" * 4000)
     c = card(write_set=["w.py"], read_set=["r1.py", "r2.py"])
-    small = build(tmp_path, c, budget_tokens=3300, check_tail="x")
-    big = build(tmp_path, c, budget_tokens=3300, check_tail="y" * 100000)
+    small = build(tmp_path, c, budget_tokens=1300, check_tail="x")
+    big = build(tmp_path, c, budget_tokens=1300, check_tail="y" * 100000)
     assert small.text[:small.prefix_chars] == big.text[:big.prefix_chars]
     assert small.skipped == big.skipped == (("r2.py", "over_budget"),)
-    assert small.tokens <= 3300 and big.tokens <= 3300
+    assert small.tokens <= 1300 + TAIL_RESERVE_TOKENS and big.tokens <= 1300 + TAIL_RESERVE_TOKENS
 
 
 def test_pack_tokens_still_reported_with_tail(tmp_path):
@@ -300,3 +300,26 @@ def test_pack_tokens_still_reported_with_tail(tmp_path):
     assert p.tokens == estimate_tokens(p.text)
     assert p.as_dict()["tokens"] == p.tokens
     assert build(tmp_path, c).prefix_chars == len(build(tmp_path, c).text)
+
+
+def test_first_tail_keeps_admitted_files_at_the_stock_budget(tmp_path):
+    """Admission (no tail) and every retry (with a tail) choose the same files."""
+    budget = pack_budget("128k")
+    body = "w" * 4 * (budget - 1500)            # write file just under the stock budget
+    put(tmp_path, "w.py", body)
+    put(tmp_path, "r.py", "r" * 4 * 500)         # read file that fits only without a reserve
+    c = card(write_set=["w.py"], read_set=["r.py"])
+    first = build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG)
+    retry = build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG, check_tail="FAILED\n" * 50)
+    assert [f.path for f in first.files] == [f.path for f in retry.files]
+    assert first.skipped == retry.skipped
+    assert retry.text[:retry.prefix_chars] == first.text
+    assert retry.tokens <= budget + TAIL_RESERVE_TOKENS
+
+
+def test_tail_never_raises_pack_too_big_for_an_admitted_write_set(tmp_path):
+    budget = pack_budget("128k")
+    put(tmp_path, "w.py", "w" * 4 * (budget - 100))
+    c = card(write_set=["w.py"])
+    build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG)   # admitted
+    build(tmp_path, c, budget_tokens=budget, max_file_tokens=BIG, check_tail="boom")  # still builds
