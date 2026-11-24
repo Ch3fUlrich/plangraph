@@ -394,8 +394,9 @@ def test_a_claude_writer_ignores_user_sandbox_exclusions(monkeypatch, tmp_path):
 
 
 def _fake_messages_api(commands, log):
-    """A local Messages API: the first request of a run answers with one Bash tool call of
-    ``commands``, the request that carries its result answers with text. No model, no credential."""
+    """A local Messages API: each request answers with the next Bash tool call of ``commands``
+    (one call per turn, so a refusal of one cannot hide another) and, when they are used up, with
+    text. ``log`` always holds the tool results shown so far. No model, no credential."""
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -421,7 +422,7 @@ def _fake_messages_api(commands, log):
                 return self.reply(200, 'application/json', b'{"input_tokens": 1}')
             results = [part for message in request.get('messages', []) if isinstance(message.get('content'), list)
                        for part in message['content'] if part.get('type') == 'tool_result']
-            log.extend(str(part.get('content')) for part in results)
+            log[:] = [str(part.get('content')) for part in results]
             message = {'id': 'msg_f', 'type': 'message', 'role': 'assistant', 'model': request.get('model', 'm'),
                        'content': [], 'stop_reason': None, 'stop_sequence': None,
                        'usage': {'input_tokens': 1, 'output_tokens': 1}}
@@ -429,13 +430,13 @@ def _fake_messages_api(commands, log):
             if not request.get('stream'):
                 done = dict(message, content=[{'type': 'text', 'text': 'ok'}], stop_reason='end_turn')
                 return self.reply(200, 'application/json', json.dumps(done).encode())
-            if not results and 'Bash' in tools:
+            if len(results) < len(commands) and 'Bash' in tools:
                 events = [('message_start', {'type': 'message_start', 'message': message}),
                           ('content_block_start', {'type': 'content_block_start', 'index': 0, 'content_block': {
-                              'type': 'tool_use', 'id': 'toolu_f1', 'name': 'Bash', 'input': {}}}),
+                              'type': 'tool_use', 'id': f'toolu_f{len(results)}', 'name': 'Bash', 'input': {}}}),
                           ('content_block_delta', {'type': 'content_block_delta', 'index': 0, 'delta': {
                               'type': 'input_json_delta', 'partial_json': json.dumps(
-                                  {'command': commands, 'description': 'fixture reads'})}}),
+                                  {'command': commands[len(results)], 'description': 'fixture read'})}}),
                           ('content_block_stop', {'type': 'content_block_stop', 'index': 0}),
                           ('message_delta', {'type': 'message_delta', 'delta': {
                               'stop_reason': 'tool_use', 'stop_sequence': None}, 'usage': {'output_tokens': 5}}),
@@ -474,8 +475,10 @@ def _launch_claude_writer_against_fake_api(monkeypatch, tmp_path, *, enforce):
     control.write_text('CONTROL-FIXTURE-TEXT')
     (home / '.claude').mkdir()
     (home / '.claude' / 'settings.json').write_text(json.dumps({'sandbox': {'excludedCommands': ['cat']}}))
+    link = tmp_path / 'link-to-denied'       # a path the permission rules do not name: only the sandbox can stop it
+    link.symlink_to(denied)
     results = []
-    server = _fake_messages_api(f'cat {denied}; cat {control}', results)
+    server = _fake_messages_api([f'cat {control}', f'cat {denied}', f'cat {link}'], results)
     for name in ('XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR'):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv('HOME', str(home))
@@ -517,11 +520,18 @@ def test_a_launched_claude_writer_cannot_read_a_denied_fixture_under_a_user_sand
         pytest.skip('needs the claude binary and a sandbox that starts and hides a fixture (bwrap and socat); '
                     'on other hosts the route is refused, see test_a_claude_writer_is_not_started_where_enforcement_cannot_be_verified')
     job, results = _launch_claude_writer_against_fake_api(monkeypatch, tmp_path, enforce=True)
-    shown = '\n'.join(results)
     assert job.status == 'completed', (job.status, job.stderr)
-    assert 'CONTROL-FIXTURE-TEXT' in shown, 'the shell did not run: no control read'
-    assert 'DENIED-FIXTURE-TEXT' not in shown
-    assert 'fixture-secret' in shown and ('Permission denied' in shown or 'No such file' in shown)
+    assert len(results) == 3, f'expected one result per tool call, got {len(results)}'
+    control, denied, via_link = results
+    # What a launched writer may run through Bash under the generated settings (observed with the sandbox
+    # removed: plan mode, -p): a simple read-only command on an allowed path runs; a command that names a
+    # path of the deny list is refused by the generated Read rule; shells and interpreters are not run.
+    assert 'CONTROL-FIXTURE-TEXT' in control, 'the launched shell did not run the permitted control read'
+    assert 'DENIED-FIXTURE-TEXT' not in denied and 'denied' in denied.lower()          # the permission layer
+    # The symlink name is not on the deny list: this read reaches the file system, so only the sandbox
+    # (denyRead, with the user exclusion for cat ignored) can stop it.
+    assert 'DENIED-FIXTURE-TEXT' not in via_link
+    assert any(word in via_link for word in ('Permission denied', 'No such file', 'denied', 'blocked')), via_link
 
 
 def test_the_real_claude_binary_fails_closed_under_the_generated_settings_when_its_sandbox_cannot_start(monkeypatch, tmp_path):
