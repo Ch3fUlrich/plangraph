@@ -46,7 +46,7 @@ Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_h
 `work_used_percent`, an array of usage percentages for configured work mounts.
 `host-disk` alerts once per host when any sampled filesystem exceeds 85% used. A collector can add
 `top_consumers` (`{path, bytes}` rows); the alert text names the five largest, and the dedupe key
-holds only the host so moving sizes do not re-alert. The watchdog fills the local host's entry (`PLANGRAPH_HOST_NAME`, else the kernel hostname) from `disk-watermarks.json` in the spawn state directory (`PLANGRAPH_DISK_WATERMARKS` overrides the path) when the collector gave none. An alert queued before hygiene has sampled is followed once by one that names them (its dedupe key gains `measured`).
+holds only the host so moving sizes do not re-alert. The watchdog fills the local host's entry (`PLANGRAPH_HOST_NAME`, else the kernel hostname) from `disk-watermarks.json` in the spawn state directory (`PLANGRAPH_DISK_WATERMARKS` overrides the path) when the collector gave none. An alert queued before hygiene has sampled is followed once by one that names them (its dedupe key gains `measured`, which then stays for the whole crossing, so a flapping measurement queues nothing more).
 `host-code` alerts when the spawner checkout
 is behind origin/main by more than 10 commits **or** 24 hours. The collector must
 provide the ancestry-based behind count and age in hours since the first missing
