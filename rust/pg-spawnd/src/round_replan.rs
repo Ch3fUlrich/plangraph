@@ -168,6 +168,13 @@ pub(crate) fn enqueue(state: &Path, item: &str, pr: &str, reason: &str) -> Resul
     Ok(true)
 }
 
+/// True once the replan job of the escalation to `level` planned its slices and delivered its
+/// report: the only state in which a stalled round may launch.
+pub(crate) fn escalation_sent(state: &Path, item: &str, pr: &str, level: u64) -> bool {
+    load(&escalation_path(state, item, pr, level))
+        .is_ok_and(|job| job["report"] == "sent" && !job["plan"].is_null())
+}
+
 /// Queue the replan record of an escalation to `level`: the slices of the PR are planned and
 /// reported, nothing is defined and the PR stays open because the stronger writer continues on
 /// it. Returns true when this call created the job.

@@ -94,7 +94,7 @@ pub(crate) fn report(records: &[Value], since: f64, until: f64) -> Value {
             continue;
         }
         let entry = items.entry(item.to_string()).or_default();
-        if record["round_replan"] == "queued" {
+        if record["round_replan"].is_string() {
             entry.replans += 1;
         }
         entry.rounds += 1;
