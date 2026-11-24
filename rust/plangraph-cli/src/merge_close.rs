@@ -5,7 +5,7 @@
 //! The job prints one line per closed item and one line per key the keeper refused or
 //! flagged, with the reason, so routing sees every merged key that stayed open.
 //! A timer runs it every ten minutes, and the batch land step calls [`run_once`].
-use crate::feeder::{Env, SlowKeeper, Transport, MERGE_INDEX_EXPIRED, MERGE_INDEX_RUNNING};
+use crate::feeder::{Env, SlowKeeper, Transport, MERGE_INDEX_EXPIRED};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 /// Keep a bound on each keeper call, including a page of close results.
 const MAX_TIME_SECS: u32 = 300;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(95);
+const REFRESH_STILL_RUNNING: &str = "merge index refresh is still running";
 // Leave time for process overhead and logging before the service's 420 s timeout.
 const PASS_BUDGET: Duration = Duration::from_secs(400);
 const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
@@ -356,18 +357,20 @@ pub fn run_scheduled_with(
                     if apply && error == MERGE_INDEX_EXPIRED && Instant::now() < deadline =>
                 {
                     let remaining = deadline.saturating_duration_since(Instant::now());
-                    refresh_index(control, refresh_timeout.min(remaining))
-                        .map_err(|reason| format!("{MERGE_INDEX_EXPIRED} ({reason})"))?;
+                    if let Err(reason) = refresh_index(control, refresh_timeout.min(remaining)) {
+                        return if reason == REFRESH_STILL_RUNNING {
+                            Err(error)
+                        } else {
+                            Err(reason)
+                        };
+                    }
                     call()
                 }
                 result => result,
             }
         });
         if let Err(error) = result {
-            if !apply
-                || !pass.closed_any
-                || !(error.starts_with(MERGE_INDEX_EXPIRED) || error == MERGE_INDEX_RUNNING)
-            {
+            if !apply || !pass.closed_any || error != MERGE_INDEX_EXPIRED {
                 return Err(error);
             }
             let remaining = projects.len() - index;
@@ -394,7 +397,7 @@ fn refresh_index(control: &dyn Transport, timeout: Duration) -> Result<(), Strin
             Some("running") => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
-                    return Err("merge index refresh is still running".into());
+                    return Err(REFRESH_STILL_RUNNING.into());
                 }
                 std::thread::sleep(remaining.min(Duration::from_secs(1)));
             }

@@ -117,6 +117,9 @@ database as the keeper configuration. The role needs schema ownership or its
 equivalent DDL and migration-table permissions. Creating a missing schema still
 requires database-level permission.
 
+The file accepts a raw PostgreSQL DSN or one `PG_DSN=<value>` line. The value
+can be wrapped in matching single or double quotes.
+
 On the keeper host, point the effective unit at the candidate checkout and use
 its runtime configuration:
 
@@ -124,13 +127,14 @@ its runtime configuration:
 
 The command reloads the user systemd manager before reading the unit. It checks
 the unit's working directory and expects a direct Python `-m plangraph.keeper.daemon
---config PATH` command. Both admin commands use that interpreter and the user
+--config PATH` command. The admin commands use that interpreter and the user
 manager's environment, including the unit's `Environment`, `EnvironmentFile`
 and `UnsetEnvironment` settings.
 
-The command runs `pg admin migrate` with the migration DSN file, then opens
+The command runs `pg admin migrate --dsn-file FILE --dry-run` to validate the
+file without connecting. It then runs the migration and opens
 the candidate schema with the runtime role through `pg admin check-schema`.
-It requests the restart only after both commands succeed. A reload, migration
+It requests the restart only after all checks and the migration succeed. A reload, migration
 or runtime schema-check failure leaves the existing keeper process running.
 
 ## Hash chain

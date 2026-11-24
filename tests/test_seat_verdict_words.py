@@ -111,6 +111,19 @@ def test_cli_request_changes_is_fix(tmp_path, capsys):
                finish_reason="length", test_gaming="yes") == 0
 
 
+@pytest.mark.parametrize("report,verdict,want", [
+    ("", "ACCEPT", sv.EXIT_PASS_REFUSED),
+    ("TESTS: none: Bash denied\n", "ACCEPT", sv.EXIT_PASS_REFUSED),
+    ("TESTS: pytest -q tests/test_fixture.py — permission denied\n", "ACCEPT", sv.EXIT_PASS_REFUSED),
+    ("~~~\nTESTS: pytest -q tests/test_fixture.py — 1 passed\n~~~\n", "ACCEPT", sv.EXIT_PASS_REFUSED),
+    ("TESTS: pytest -q tests/test_fixture.py — 1 passed in 0.1s\n", "ACCEPT", 0),
+    ("TESTS: none: Bash denied\n", "REQUEST_CHANGES", 0),
+])
+def test_sonnet_pass_requires_test_evidence(tmp_path, report, verdict, want):
+    assert run(tmp_path, "seat", report + "VERDICT: " + verdict, extra=("--dry-run",),
+               served_model="claude-sonnet-5-5") == want
+
+
 def test_reason_head_labels_by_verdict():
     ev = {"served_model": "m", "correlation_id": "c",
           "prompt_sha256": "0123456789abcdef"}

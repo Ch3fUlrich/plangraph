@@ -193,14 +193,14 @@ def test_review_launch_refuses_placeholder_author(launch_leg_case):
 
 
 @pytest.mark.parametrize('outcome', [
-    'completed', 'launch_failed', 'cancelled', 'ordinary_review', 'orchestration_only',
+    'completed', 'sonnet_completed', 'launch_failed', 'cancelled', 'ordinary_review', 'orchestration_only',
     'disk_low', 'memory_low',
 ])
 def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkeypatch, outcome):
     import asyncio
     from pathlib import Path
     import subprocess
-    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS, REVIEW_SONNET
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner import host_ready, overflow, seat_spawn
     from plangraph.spawner.notify import completion_event
@@ -226,7 +226,8 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
     head = git('rev-parse', 'HEAD')
     git('checkout', '--detach', base)
     assert not (receiver / 'source').exists()
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
+    leg_id = REVIEW_SONNET if outcome == 'sonnet_completed' else 'opencode-go-deepseek-v4-flash'
+    leg = next(leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == leg_id)
     monkeypatch.delenv('PG_URL', raising=False)
     monkeypatch.delenv('PG_TOKEN_FILE', raising=False)
     monkeypatch.delenv('PLANGRAPH_PLACED_HOST', raising=False)
@@ -261,7 +262,10 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         assert (checkout / 'source').read_text() == 'head'
         assert options['extra_env']['FIXTURE_HARNESS_ENV'] == 'keep'
         target = Path(options['extra_env']['CARGO_TARGET_DIR'])
-        assert checkout.parent == target.parent
+        assert target == checkout.parent / 'build' / 'target'
+        if chosen.id == REVIEW_SONNET:
+            assert '+head' in options['prompt']
+            assert 'use repository tools to verify' in options['prompt']
         assert checkout.parent.is_relative_to(service.state)
         target.mkdir(exist_ok=True)
         (target / 'build-output').touch()
@@ -302,9 +306,10 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
             await service.cancel(record['run_id'])
         await asyncio.gather(task, return_exceptions=True)
         final = service.result(record['run_id'])
-        assert final['status'] == {'launch_failed': 'failed'}.get(outcome, outcome), final.get('error')
+        assert final['status'] == {'launch_failed': 'failed', 'sonnet_completed': 'completed'}.get(
+            outcome, outcome), final.get('error')
         assert final['head_sha'] == head
-        if outcome == 'completed':
+        if outcome in ('completed', 'sonnet_completed'):
             assert final['cwd'] == str(paths[0])
         assert final['host'] == 'worker'
         assert final['item_key'] == 'demo:ITEM'

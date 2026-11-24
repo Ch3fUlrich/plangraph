@@ -492,7 +492,8 @@ class SpawnService(SeatSpawnMixin):
                     from .prompt_input import checkout_review
                     lease = tempfile.TemporaryDirectory(prefix='review-', dir=self._path(record['run_id']).parent)
                     checkout = Path(lease.name) / 'checkout'
-                    target = Path(lease.name) / 'target'
+                    target = Path(lease.name) / 'build' / 'target'
+                    target.parent.mkdir(mode=0o700)
                     diff = card.get('diff_ref') or {}
                     creating = asyncio.create_task(asyncio.to_thread(checkout_review, diff, checkout))
                     try:
@@ -509,10 +510,11 @@ class SpawnService(SeatSpawnMixin):
                 launched = False
                 for chosen in plan.legs:
                     if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
-                    from .inline_diff import InlineDiffError
+                    from .inline_diff import InlineDiffError, review_sonnet_diff_prompt
                     try:
                         leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run,
                             deadline=watchdog.get('deadline'))   # Dry runs never launch; live document reviews require --leg.
+                        leg_prompt = await review_sonnet_diff_prompt(leg_prompt, card, role, chosen, deadline=watchdog.get('deadline'))
                     except InlineDiffError as exc:
                         record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                             skip_reason='inline_diff_failed: ' + str(exc),

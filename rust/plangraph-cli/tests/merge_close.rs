@@ -270,10 +270,7 @@ fn expiry_refreshes_and_retries_the_same_cursor() {
             first,
             json!({"closed":[{"key":"demo:A"}],"merged_not_done":0,"next_after":"demo:A"}),
         ),
-        (
-            next.clone(),
-            json!("item_refused:conflict:merge index expired; start a refresh"),
-        ),
+        (next.clone(), json!("merge_index_expired")),
         (json!({"refresh":"start"}), json!({"scan":"running"})),
         (json!({"refresh":"status"}), json!({"scan":"ready"})),
         (
@@ -298,7 +295,7 @@ fn expiry_refreshes_and_retries_the_same_cursor() {
 
 #[test]
 fn successful_pages_stop_at_the_pass_deadline_after_recovery() {
-    const MERGE_INDEX_EXPIRED: &str = "item_refused:conflict:merge index expired; start a refresh";
+    const MERGE_INDEX_EXPIRED: &str = "merge_index_expired";
     struct DelayedRetry(Script);
     impl Transport for DelayedRetry {
         fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
@@ -356,7 +353,7 @@ fn expiry_after_a_close_exits_successfully_if_refresh_cannot_finish() {
         ),
         (
             json!({"apply":true,"project":"demo","after":"demo:A"}),
-            json!("item_refused:conflict:merge index expired; start a refresh"),
+            json!("merge_index_expired"),
         ),
         (json!({"refresh":"start"}), json!({"scan":"running"})),
         (json!({"refresh":"status"}), json!({"scan":"running"})),
@@ -383,7 +380,7 @@ fn running_refresh_conflict_without_a_close_is_an_error() {
         (json!({"refresh":"status"}), json!({"scan":"ready"})),
         (
             json!({"apply":true,"project":"demo"}),
-            json!("item_refused:conflict:merge index refresh is running"),
+            json!("merge_index_running"),
         ),
     ]);
     assert_eq!(
@@ -397,9 +394,98 @@ fn running_refresh_conflict_without_a_close_is_an_error() {
             ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400))
         )
         .unwrap_err(),
-        "item_refused:conflict:merge index refresh is running",
+        "merge_index_running",
     );
     keeper.assert_finished();
+}
+
+#[test]
+fn failed_recovery_after_a_close_is_an_error() {
+    for refusal in [
+        "keeper request refused or unreachable",
+        "item_refused:conflict",
+    ] {
+        let keeper = Script::new([
+            (json!({"refresh":"start"}), json!({"scan":"running"})),
+            (json!({"refresh":"status"}), json!({"scan":"ready"})),
+            (
+                json!({"apply":true,"project":"demo"}),
+                json!({"closed":[{"key":"demo:A"}],"merged_not_done":0,"next_after":"demo:A"}),
+            ),
+            (
+                json!({"apply":true,"project":"demo","after":"demo:A"}),
+                json!("merge_index_expired"),
+            ),
+            (json!({"refresh":"start"}), json!(refusal)),
+        ]);
+        assert_eq!(
+            run_scheduled_with(
+                &keeper,
+                &keeper,
+                None,
+                true,
+                Some("demo"),
+                false,
+                ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400)),
+            )
+            .unwrap_err(),
+            refusal,
+        );
+        keeper.assert_finished();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn merge_close_exit_status_distinguishes_expiry_from_connection_failure() {
+    use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+
+    let root = tempfile::tempdir().unwrap();
+    let curl = root.path().join("curl");
+    let token = root.path().join("token");
+    let count = root.path().join("calls");
+    fs::write(&token, "fixture").unwrap();
+    fs::write(
+        &curl,
+        r#"#!/bin/sh
+/bin/cat >/dev/null
+read -r n < "$CALLS"
+printf '%s\n' "$((n+1))" > "$CALLS"
+case "$n" in
+  0|1|5) printf '{"scan":"ready"}\n200' ;;
+  2) printf '{"closed":[{"key":"demo:A"}],"merged_not_done":0,"next_after":"demo:A"}\n200' ;;
+  3|6) printf '{"error":"merge_index_expired","msg":"reworded diagnostic"}\n409' ;;
+  4) [ "$FAIL_REFRESH" = yes ] && exit 7; printf '{"scan":"ready"}\n200' ;;
+  *) exit 99 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+    for (fail_refresh, exit, calls) in [("yes", 1, "5\n"), ("no", 0, "7\n")] {
+        fs::write(&count, "0\n").unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .args(["merge-close", "--project", "demo"])
+            .env_clear()
+            .env("HOME", root.path())
+            .env("PATH", root.path())
+            .env("PG_URL", "http://127.0.0.1")
+            .env("PG_TOKEN_FILE", &token)
+            .env("CALLS", &count)
+            .env("FAIL_REFRESH", fail_refresh)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(exit), "{output:?}");
+        assert_eq!(fs::read_to_string(&count).unwrap(), calls);
+        if exit == 0 {
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(stdout.contains("closed\tdemo:A\t\n"));
+            assert!(stdout.contains("continue\t1 projects remaining"));
+        } else {
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(stderr.contains("keeper request refused or unreachable"));
+        }
+    }
 }
 
 #[test]

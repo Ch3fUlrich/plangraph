@@ -139,7 +139,7 @@ def refuse_empty_diff(card, role, *, dry_run=False) -> None:
 
 
 def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
-                       allow_document: bool = False) -> str:
+                       allow_document: bool = False, repository_tools: bool = False) -> str:
     """The prompt with the diff inlined. ``diff_ref is None`` returns the prompt
     unchanged only when ``allow_document`` says the caller already decided a
     document review (no diff) is allowed; otherwise the leg must not proceed."""
@@ -173,5 +173,29 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
         shown = _withhold_key_hunks(proc.stdout, diff_ref["repo"], timeout) if "@@ -" in proc.stdout else proc.stdout
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InlineDiffError(f"private key check failed: {type(exc).__name__}") from None
-    block = HEADER.format(base=base, head=head) + _diff_block(shown) + FOOTER
+    header = ("\n\n=== INLINE DIFF (base {base}, head {head}; use repository tools to verify) ===\n"
+              if repository_tools else HEADER)
+    block = header.format(base=base, head=head) + _diff_block(shown) + FOOTER
     return _before_review_output(prompt, block)
+
+
+async def review_sonnet_diff_prompt(prompt: str, card, role: str, leg, *, deadline=None) -> str:
+    """Inline the bound diff for the Sonnet review leg, whose Bash is scoped to tests.
+
+    Any other role or leg, or a card without ``diff_ref``, returns ``prompt`` unchanged.
+    One implementation for every spawn path (service and routed runner).
+    """
+    import asyncio
+    import time
+    from plangraph.planner.legs import REVIEW_SONNET
+    from .context_pack import bound_prompt
+
+    if role != "review" or leg.id != REVIEW_SONNET or not card.get("diff_ref"):
+        return prompt
+    remaining = float("inf") if deadline is None else deadline - time.time()
+    if remaining <= 0:
+        raise InlineDiffError("review prompt packaging deadline exceeded")
+    prompt = await asyncio.to_thread(
+        inline_diff_prompt, prompt, card["diff_ref"], max_chars=leg.max_request_tokens * 3,
+        timeout=min(60, remaining), repository_tools=True)
+    return bound_prompt(prompt, leg.max_request_tokens)
