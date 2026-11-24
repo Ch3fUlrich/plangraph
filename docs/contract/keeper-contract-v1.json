@@ -32,7 +32,7 @@
     {"method": "POST", "path": "/v1/delegate", "roles": ["claimant"], "request": "DelegateBody", "response": "Delegate"},
     {"method": "POST", "path": "/v1/heartbeat", "roles": ["claimant", "delegate", "run_token_writer"], "request": "Fenced", "response": "Claim"},
     {"method": "POST", "path": "/v1/release", "roles": ["claimant", "router"], "request": "Fenced", "response": "KeyOnly"},
-    {"method": "POST", "path": "/v1/add_evidence", "roles": ["claimant", "delegate", "run_token_writer"], "request": "AddEvidence", "response": "Evidence"},
+    {"method": "POST", "path": "/v1/add_evidence", "roles": ["claimant", "delegate", "run_token_writer", "project_l1_merged_open_deploy", "project_worker_merged_open_deploy"], "request": "AddEvidence", "response": "Evidence"},
     {"method": "POST", "path": "/v1/add_evidence_router", "roles": ["router"], "request": "AddEvidenceRouter", "response": "Evidence"},
     {"method": "POST", "path": "/v1/submit", "roles": ["claimant", "delegate", "run_token_writer"], "request": "Fenced", "response": "Submit"},
     {"method": "POST", "path": "/v1/verdict", "roles": ["reviewer", "run_token_reviewer"], "request": "VerdictBody", "response": "Verdict"},

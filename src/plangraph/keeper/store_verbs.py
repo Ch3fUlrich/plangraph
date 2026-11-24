@@ -123,16 +123,23 @@ class VerbsMixin:
         """
         key = item["key"]
         self._require_role(principal, "l1", "worker", "phase-worker")
+        if isinstance(principal, auth.RunPrincipal):
+            raise Refused("forbidden", "a run token is bound to a claim; an open item has none")
         self._require_project(principal, item["project"])
         self._epoch_ok(item, epoch)
+        # The same delivery lookup as the claim guard: qualified trailers of other
+        # scanned repositories and decision-only deliveries count as merged.
         with timing.outside_request_lock():
             indexes = self._work_indexes({item["project"]}, fresh=True)
-        commits = src.indexed_work(indexes[item["project"]], key)["commits"]
+            book = src.decision_book(self._adapter("decisions"))
+        commits = self._indexed_delivery(indexes, key, item["project"], book)["commits"]
         if not commits:
             raise Refused("bad_state", f"{key} is open, not claimed, and has no"
                           " Plan-Item commit on the default branch")
         result = self._verify_evidence(item, "deploy", ref, now)
         with self._write():
+            # The lookups above ran unlocked: a revoke or a scope change meanwhile ends this door.
+            self._check_principal(principal)
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
             self._epoch_ok(fresh, epoch)
