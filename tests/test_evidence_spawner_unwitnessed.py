@@ -59,6 +59,10 @@ def test_an_unwitnessed_seat_is_refused_unless_the_caller_allows_it(tmp_path):
 @pytest.mark.parametrize("tests,accepted", [
     ("TESTS: cargo test -p fixture: 4 passed", True),
     ("TESTS: none: no shell", False),
+    ("TESTS: pytest -q: 0 passed", False),
+    ("TESTS: cargo test: 0 tests, 0 failed", False),
+    ("TESTS: pytest -q: no tests ran", False),
+    ("TESTS: pytest -q: 3 passed, 0 failed", True),
     ("TESTS: pytest (requires approval)", False),
     ("", False),
 ])
