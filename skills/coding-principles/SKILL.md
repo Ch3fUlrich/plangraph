@@ -1,270 +1,117 @@
 ---
 name: coding-principles
-description: Apply core software-engineering discipline to any coding task in this and downstream repositories — DRY / single source of truth, test-driven development, single responsibility, documenting the why, backtracking via changelogs and ADRs, MCP-first code navigation, developing on small data batches before running the full dataset once, and telemetry: every path leaves a record that explains what happened. Use at the start of any implementation, refactor, bugfix or data investigation, before launching any job over a full dataset, and whenever deciding how to structure code, tests, docs, or commits. Do not use for pure prose writing or non-code tasks.
+description: Use at the start of any implementation, refactor, bugfix or data investigation, and before a job over a full dataset: DRY, test first, single responsibility, why-comments, changelog backtracking, verify the production path, small batches, telemetry. Not for prose or non-code tasks.
 ---
 
 # Coding Principles
 
-A compact, enforceable baseline for how agents write code in this repository and
-in any repository that loads this skill. These are
-**flexible** principles — adapt them to context — except TDD and backtracking,
-which are **rigid**: follow them exactly.
-
-When a stronger, more specific skill is available (e.g.
-`superpowers:test-driven-development`, `superpowers:systematic-debugging`), that
-skill wins. This skill is the always-on floor, not a ceiling.
+The baseline for how agents write code here and in any repository that loads this
+skill. Principles marked rigid are followed exactly; the rest adapt to context.
+A stronger, more specific skill (e.g. `superpowers:systematic-debugging`) wins; this is the floor.
+Read [references/red-flags.md](references/red-flags.md) when you catch yourself
+reasoning toward a shortcut on Principles 1-9.
 
 ## Principle 1 — DRY / Single Source of Truth
 
 Every fact, rule, or piece of logic has exactly one authoritative home. Other
 places reference it; they do not restate it.
 
-- Extract a shared unit on the **second real duplication**, not the first
-  (premature abstraction is its own defect) and not the third.
-- Config, constants, and copy live in one place and are imported.
-- In this repo specifically: a skill's `SKILL.md` is the source of truth; root
-  instruction files (`CLAUDE.md`) are thin pointers, never copies of the workflow.
-
-| Red flag | Reality |
-|---|---|
-| "I'll copy this block and tweak it" | Two copies drift. Extract or parameterize. |
-| "It's only duplicated twice" | The third copy is coming. Extract now. |
-| "I'll keep the README and the code in sync by hand" | You won't. Generate or reference. |
+- Extract a shared unit on the **second real duplication**, not the first and not the third.
+  Config, constants, and copy live in one place and are imported. A skill's `SKILL.md` is the source of truth; root instruction files (`CLAUDE.md`) are thin pointers.
 
 ## Principle 2 — Test-Driven Development (rigid)
 
 Write the failing test first, watch it fail, write the minimal code to pass,
 then refactor. Defers to `superpowers:test-driven-development` when present.
 
-- Red → Green → Refactor, one behavior at a time.
-- A bug fix starts with a test that reproduces the bug.
-- Never write implementation before there is a test that demands it.
-
-| Red flag | Reality |
-|---|---|
-| "I'll add tests after" | After never comes, and the test can't fail-first. |
-| "This is too simple to test" | Simple code breaks too; the test is cheap. |
-| "The test passed on the first try" | Did you see it fail? If not, it may test nothing. |
+- Red → Green → Refactor, one behavior at a time; a bug fix starts with a test that reproduces it.
+  Never write implementation before a test demands it.
 
 ## Principle 3 — Single Responsibility
 
-Each module, file, function, and skill does one thing and has one reason to
-change.
+Each module, file, function, and skill does one thing and has one reason to change.
+If you can't describe a unit without "and", split it.
 
-- If you can't describe a unit without "and", split it.
-- File size is a smell: when a file grows past what you can hold in context,
-  that usually means it took on a second responsibility.
 - Hand-written source, test, script, playbook and doc files <= 400 lines.
-  Over 400 -> split by responsibility before adding more.
-- Split by responsibility, not by technical layer. Things that change together
-  live together.
+  Over 400 -> split by responsibility (not by technical layer) before adding more.
 
-| Red flag | Reality |
-|---|---|
-| "This helper does X and also Y" | Two responsibilities. Two units. |
-| "One more flag on this function" | Flags that switch behavior are a split signal. |
+## Principle 4 — Document the *why*
 
-## Principle 4 — Documentation: document the *why*
+Comments and docs state the constraint, the tradeoff, the non-obvious reason; code shows what and how.
 
-Code shows what and how. Comments and docs exist for **why** — the constraint,
-the tradeoff, the non-obvious reason.
-
-- Keep `SKILL.md` / `README` in sync with behavior in the same change, never as
-  a follow-up.
-- Prefer a short "why" comment over a long "what" comment restating the code.
-- Public interfaces get a one-line contract: what it does, how to call it, what
-  it depends on.
-
-| Red flag | Reality |
-|---|---|
-| `// increment i by 1` | Restates code. Delete or explain *why*. |
-| "Docs update is a separate PR" | Docs drift from code. Same change or it's wrong. |
+- Keep `SKILL.md` / `README` in sync with behavior in the same change, never as a follow-up.
+  Public interfaces get a one-line contract: what it does, how to call it, what it needs.
 
 ## Principle 5 — Backtracking via changelogs and ADRs (rigid)
 
 Any future agent must be able to reconstruct *why* a change was made and revert
 it safely. See [references/changelog-backtracking.md](references/changelog-backtracking.md).
 
-- Maintain a `CHANGELOG.md` (Keep a Changelog style) — one entry per meaningful
-  change, newest first.
-- Record non-obvious decisions as ADRs under `docs/decisions/NNNN-title.md`
-  (context → decision → consequences).
-- Commits are small and frequent, each independently revertible, with a message
-  that states intent, not just mechanics.
+- Maintain a `CHANGELOG.md` (Keep a Changelog style), one entry per meaningful change, newest first.
+- Record non-obvious decisions as ADRs under `docs/decisions/NNNN-title.md`.
+- Commits are small, each independently revertible, with a message that states intent.
 
-| Red flag | Reality |
-|---|---|
-| "One big commit at the end" | Un-revertible, un-reviewable. Commit per task. |
-| "Everyone knows why we did this" | They won't in six months. Write the ADR. |
+## Principle 6 — Navigate by symbol; verify at the real thing
 
-## Principle 6 — MCP-first navigation
+Use semantic tools before brute-force file reads; verify through the tool that observes the real thing.
 
-Use semantic tools before brute-force file reads, and verify through the tool that
-observes the real thing. Four servers are **mandatory**, not optional: Serena (LSP
-symbols/refs/refactor), Graphify (code-structure graph), Omnigraph (structured
-cross-project memory), and Playwright (browser verification of anything rendered).
-See the [structured-memory](../structured-memory/SKILL.md) and `mcp-servers-setup` skills.
+- Find a symbol or its references with LSP, or `pg-ctx nav <symbol|path|key>` in
+  Codex and agy, not by reading whole files (typically 80–95% fewer tokens). Use grep
+  for text that is not a symbol. Serena (LSP symbols/refs/refactor) does the same job
+  where the harness provides it; see the `mcp-servers-setup` skill.
+- Graphify (code-structure graph) answers broad code-structure questions where the harness provides it.
+- A rule's source is the file or keeper item that states it, found through AGENTS.md.
+  Omnigraph memory is for recall ("what did we decide"), never the source of a rule:
+  use the [structured-memory](../structured-memory/SKILL.md) skill only for what belongs in
+  the graph.
+- Changed something a browser renders? Drive it with Playwright before claiming it works.
+- If a tool is genuinely down, fall back **and say which one**.
 
-- Session start: activate Serena, and load project structure and prior decisions
-  from memory/graph before editing.
-- Find a symbol/reference with Serena, not by reading whole files (typically
-  80–95% fewer tokens).
-- Ask the graph broad-structure questions; ask memory "what did we decide".
-- Changed something a browser renders? Drive it with Playwright before claiming it
-  works — this is Principle 9 (verify through the path that actually runs) applied
-  to a UI.
-- Write durable decisions back to structured memory at session end.
-- If a server is genuinely down, fall back **and say which one**. An unreported
-  fallback turns a config bug into an apparent fact about the repo.
+## Principle 7 — Scratch script and filesystem hygiene
 
-| Red flag | Reality |
-|---|---|
-| "Let me read the whole file to find this function" | Use `find_symbol`. Cheaper and exact. |
-| "I'll re-derive how this project works" | Query memory first — it's the ground truth. |
-| "The diff looks right, the page must render" | You changed the UI and never opened it. Drive it with Playwright. |
-
-## Principle 7 — Scratch Script & Filesystem Hygiene
-
-Never leave temporary scripts, throwaway code, or query files in random
-repository locations or the root directory.
-
-- Place all scratch work strictly inside connected scratch directories
-  (`.claude/scratch/` or `scratch/`).
-- Clean up or delete throwaway scripts when work is complete unless intentionally
-  persisted in a designated `scratch/` folder.
-
-| Red flag | Reality |
-|---|---|
-| "I'll just drop `scratch_test.py` in the repo root" | Pollutes root/source tree. Use connected scratch dir. |
-| "It's temporary, I'll delete it later" | It gets left behind. Create it in `scratch/` from the start. |
+Put throwaway scripts and query files only in `.claude/scratch/` or `scratch/`, never in
+the repository root or random locations; delete them when the work is done.
 
 ## Principle 8 — Change the coupled state in the same act (rigid)
 
-A datum is almost never in one place. Before changing anything, name what
-**derives from** it and what **points at** it, and move those in the same change
-or do not make the change.
+Before changing anything, name what **derives from** it and what **points at** it, and
+move those in the same change or do not make the change. Examples in
+[references/red-flags.md](references/red-flags.md).
 
-The failures this exists to prevent all look identical afterwards and are
-invisible beforehand:
-
-- files were merged and renumbered, but the job database still named the old
-  paths — and for one case that old path *existed* and held the pre-merge file,
-  so staging silently re-fetched it over the new one;
-- a record's ids were corrected in one store while two upstream sources kept the
-  old ones, so the next sync restored them;
-- work was re-queued to re-run while its previous results stayed in place, and
-  the integrity guard refused every item;
-- a hand-edited input left its *derived* fields frozen, and gigabytes were
-  written under a placeholder name.
-
-**Fix the condition, not the instances.** Selecting the records that have already
-failed leaves the ones that merely have not run yet, and they fail identically on
-the next pass. Select by the property that makes them wrong, not by the symptom
-that has surfaced so far.
+**Fix the condition, not the instances.** Select by the property that makes them wrong,
+not by the symptom that has surfaced so far.
 
 ## Principle 9 — Verify through the path production takes (rigid)
 
-A check that exercises the fallback proves nothing about the real system. If a
-resolver tries A then B, and your test passes `None` so it uses B, then B is what
-you verified — however many cases pass.
+A check that exercises the fallback proves nothing about the real system. Before
+believing a verification, ask: **which branch does production take, and did I take
+it?** Prefer asserting on the caller's real entry point over a convenient inner function.
 
-Before believing a verification, ask: **which branch does production take, and
-did I take it?** Prefer asserting on the caller's real entry point over a
-convenient inner function.
-
-Corollary for output: never pipe a long-running command through `grep`/`tail`.
-The output buffers, so a traceback is lost and a broken run reads as a silent
-one. Redirect to a file and read the file.
+Never pipe a long-running command through `grep`/`tail` (a traceback is lost); redirect to a file.
 
 ## Principle 10 — Develop on small batches; run the full data once (rigid)
 
-A defect found on the full data costs a full rerun; one found on ten items costs
-seconds. Investigation and development iterate on the **smallest input that can
-show the effect**, and the full dataset is processed **once**, when the method has
-stopped changing. Measured 2026-10-08: three investigators each launched a
-corpus-wide pass to answer a question a 10-recording batch would have answered.
-That held a shared 32-core machine at 99 % for hours, and each answer would have
-arrived after the method had already changed again.
+Iterate on the **smallest input that can show the effect** and process the full
+dataset **once**, when the method has stopped changing. Climb the data ladder; never
+skip a rung: (1) small artificial data with a known output, (2) a small real slice
+chosen to cover the variation, (3) the full data. A red result at any rung sends you
+back to rung 1. Read stored figures instead of recomputing them at scale, label every
+number with its sample, share the machine.
 
-1. **Climb the data ladder; never skip a rung.**
-   1. *Small artificial data with a known output*: a fixture whose expected result
-      you can state before running. It proves the logic.
-   2. *A small slice of real data*: the known examples plus a handful of items chosen
-      to **cover the variation** (sizes, cohorts, edge cases). It proves the code
-      meets reality's formats and edge cases. Investigate the differences here,
-      refine, and repeat.
-   3. *The full data*: only when rungs 1 and 2 are green and the method is final.
-      Prefer making it the production run's own dry run over a separate pass.
-
-   A red result at any rung sends you back to rung 1, with a fixture that
-   reproduces the failure.
-2. **An iteration takes minutes, not hours.** If it does not, the batch is too big
-   or the work is not cached. Persist per-item intermediates so the next iteration
-   reuses them.
-3. **Read what is already stored; never recompute it at scale.** A count, coverage
-   figure or distribution that the store, the database or an earlier run already
-   holds is a cheap read even over everything. Recomputing it is a full pass in
-   disguise.
-4. **Label every number with its sample** (how many items it came from), and say
-   which figures are extrapolated.
-5. **Share the machine.** A job that genuinely has to run at scale runs one at a
-   time, with capped workers and BLAS threads, at below-normal priority, so the
-   person using the machine and the other jobs are not starved.
-
-| Red flag | Reality |
-|---|---|
-| "I'll run it on everything to see what happens" | Hours per question, and the answer lands after the method changed. Run the batch. |
-| "The sample might miss something" | Choose it to cover the variation. When a miss turns up, add it to the batch. The full run still happens once, at the end. |
-| "It is read-only, so a full pass is harmless" | It still costs hours of a shared machine and stalls every iteration behind it. |
-| "Let me compute the corpus-wide distribution" | Is it already stored? Read it. |
+Read [references/small-batches.md](references/small-batches.md) before any job over a full dataset or corpus.
 
 ## Principle 11 — Telemetry: every path leaves a record that explains it (rigid)
 
-Work that fails, waits or is refused without a record cannot be found, only
-stumbled upon. Every command, job, unit and gate you add writes what an
-investigator needs to see **what happened, when, for which item and why**, and
-something reads it. Measured 2026-11-20: three finished batches waited 80 minutes
-for reviews that could not start and no record said so; the alert list was
-rebuilt from every row since October on each call and held 1,191 rows, eight of
-them current.
+Every command, job, unit and gate you add writes what an investigator needs to see
+what happened, when, for which item and why, and something reads it: one structured
+record per run, a wait that records since when and why, stored state instead of
+per-read rebuilds, a refusal that names what it looked for, and a done criterion
+that says how the failure shows up.
 
-1. **One structured record per run**: what ran, the ids to join on (item key, run
-   id, head sha), start, end, duration, outcome, and the reason whenever the
-   outcome is not success.
-2. **A wait or a queue records since when and why**, and a rule or a digest
-   reads it. A stall nobody is told about is a defect of the code that waits.
-3. **Store what is asked often; update it on the event that changes it.** A
-   count, a status or an alert lives in a table or a state file. A read never
-   rebuilds it from the full history.
-4. **A refusal names what it looked for and what it found**, so the next step is
-   visible without a debugger.
-5. **Done includes visible**: the done criteria of an item that adds a job, a
-   gate or a unit say how its failure shows up, and a test or a live readback
-   proves that it does.
+Read [references/telemetry.md](references/telemetry.md) when you add or change a
+command, job, unit, gate, queue or alert.
 
-| Red flag | Reality |
-|---|---|
-| "It logs to the journal" | Free text nobody queries. Write the record with its ids and outcome. |
-| "We can recompute it when someone asks" | That is a full pass per question, and the answer comes after the incident. Store it. |
-| "It exits non-zero, that is enough" | The caller sees a number. Name the reason and what was expected. |
-| "Monitoring is a later item" | Then the first failure is found by a person asking why nothing moved. |
-
-## Checklist
-
-At the start of any implementation, refactor, or bugfix:
-
-- [ ] Loaded project context from memory/graph (Principle 6).
-- [ ] Wrote a failing test before implementation (Principle 2).
-- [ ] Placed each new fact/logic in exactly one home (Principle 1).
-- [ ] Each new unit has a single responsibility (Principle 3).
-- [ ] Documented the *why* in the same change (Principle 4).
-- [ ] Committed small; logged the change / ADR for backtracking (Principle 5).
-- [ ] Kept repository clean; created scratch files only in connected `scratch/` folders (Principle 7).
-- [ ] Named what derives from / points at the thing being changed, and moved it in the same change (Principle 8).
-- [ ] Selected by the condition that makes records wrong, not by the symptom already seen (Principle 8).
-- [ ] Verified through the branch production actually takes, not a convenient fallback (Principle 9).
-- [ ] Iterated on synthetic data and a small, varied real batch; ran the full data at most once, at the end (Principle 10).
-- [ ] Every new path writes its run record, a wait says since when and why, and stored state is not rebuilt per read (Principle 11).
+Read [references/checklist.md](references/checklist.md) before you report work done.
 
 ## Learn as you go
 

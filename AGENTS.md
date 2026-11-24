@@ -57,6 +57,7 @@ skill text names the role in its first lines: follow that role's skill.
 - `skills/structured-memory/SKILL.md`: at session start and end, to load and store
   decisions, rules and conventions in the Omnigraph graph.
 - `skills/mcp-servers-setup/SKILL.md`: when an MCP server is missing or misbehaves.
+- `skills/skill-writer/SKILL.md`: before you write a new skill or change an existing one.
 - `skills/evidence-acquisition/SKILL.md`: before and after a change that is meant to raise
   throughput, speed, cost efficiency or quality, to measure its effect.
 - `skills/evidence-article/SKILL.md`: when you write up such a change in the evidence folder.
