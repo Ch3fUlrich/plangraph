@@ -37,7 +37,7 @@ mod tests {
 
     #[test]
     fn a_configured_data_drive_target_is_what_the_session_builds_into() {
-        let home = Path::new("/home/worker");
+        let home = Path::new("/srv/fixture-home");
         let cwd = Path::new("/work/tree");
         let env = target_env(None, Some(OsStr::new("/mnt/data/cargo-target")), home, cwd).unwrap();
         assert_eq!(
@@ -52,17 +52,17 @@ mod tests {
         );
         let home_relative =
             target_env(None, Some(OsStr::new("~/cache/target")), home, cwd).unwrap();
-        assert_eq!(pairs(home_relative)[0].1, "/home/worker/cache/target");
+        assert_eq!(pairs(home_relative)[0].1, "/srv/fixture-home/cache/target");
     }
 
     #[test]
     fn the_default_is_the_shared_target_and_a_caller_setting_wins() {
-        let home = Path::new("/home/worker");
+        let home = Path::new("/srv/fixture-home");
         let cwd = Path::new("/work/tree");
         let env = target_env(None, None, home, cwd).unwrap();
         assert_eq!(
             pairs(env)[0].1,
-            "/home/worker/.cache/plangraph/cargo-target"
+            "/srv/fixture-home/.cache/plangraph/cargo-target"
         );
         let kept = target_env(
             Some(OsStr::new("/already/set")),
