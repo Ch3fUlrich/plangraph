@@ -39,6 +39,7 @@ impl Model {
                 Disposition::Target => t.parts.len() >= self.policy.target as usize,
                 Disposition::Cap => t.parts.len() >= self.policy.cap as usize,
                 Disposition::Conflict => t.conflicted.contains(&part),
+                Disposition::Dropped => p.status == Status::Dropped,
                 Disposition::Descendant { of } => {
                     of != part && !t.parts.contains(&of) && self.descends_from(part, of)
                 }

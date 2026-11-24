@@ -69,7 +69,8 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         trains,
     )?;
     if let Some(out) = flags.get("records-out") {
-        append(out, &records_of(&d, need(flags, "day")?))?;
+        let rebased = need(flags, "head")? != &old.head;
+        append(out, &records_of(&d, need(flags, "day")?, rebased))?;
     }
     Ok(lines(&d))
 }

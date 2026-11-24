@@ -53,6 +53,8 @@ pub enum Disposition {
     Cap,
     /// Left out: its merge conflicts and no resolution was admitted.
     Conflict,
+    /// Left out: it was dropped.
+    Dropped,
     /// Left out: `of`, a part below it in its stack, is not in this train.
     Descendant { of: PartId },
 }
@@ -216,6 +218,12 @@ pub enum Event {
     },
     StartRetry,
     Conflict {
+        train: TrainId,
+        part: PartId,
+    },
+    /// The resolution of a conflicting part is adopted: it and what waited on it ride again; refused
+    /// once CI has started.
+    Adopt {
         train: TrainId,
         part: PartId,
     },

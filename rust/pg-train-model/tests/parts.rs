@@ -102,3 +102,21 @@ fn a_revert_frees_held_descendants_at_every_depth() {
     assert_eq!(m.landed(), 0);
     assert!(m.pending_groups().is_empty());
 }
+
+#[test]
+fn a_join_cannot_push_an_open_train_past_the_cap() {
+    let mut pol = Policy::every_ready_rides(Order::Oldest);
+    pol.cap = 3;
+    let mut m = Model::new(pol, disjoint(4));
+    register_all(&mut m, 0..4);
+    ok(&mut m, Event::Select);
+    assert_eq!(m.left_out(0), [(3, Disposition::Cap)]);
+    assert_eq!(
+        denied(&mut m, Event::Join { part: 3, train: 0 }),
+        Denied::Phase
+    );
+    // With room again the same join is allowed.
+    ok(&mut m, Event::Drop { part: 0 });
+    ok(&mut m, Event::Join { part: 3, train: 0 });
+    assert_eq!(m.train_parts(0), [1, 2, 3]);
+}

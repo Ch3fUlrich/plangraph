@@ -165,7 +165,8 @@ pub enum RedKind {
 
 /// A red is a flake when every failing test also fails without the patch or hung. Unknown is genuine.
 pub fn classify_red(r: &Red) -> RedKind {
-    let flake = !r.failing.is_empty()
+    // A red whose only failures are hung tests is a flake; no failure recorded at all is unknown.
+    let flake = (!r.failing.is_empty() || !r.hung.is_empty())
         && r.failing
             .iter()
             .all(|t| r.failing_without_patch.contains(t) || r.hung.contains(t));
@@ -216,9 +217,12 @@ impl Record {
     }
 }
 
-/// The log lines one rebase decision produces.
-pub fn records_of(d: &Decision, day: &str) -> Vec<Record> {
-    let mut out = vec![Record::new(day, Kind::Rebase)];
+/// The log lines of one decision; `rebased` is true when the head changed, which is what a rebase is.
+pub fn records_of(d: &Decision, day: &str, rebased: bool) -> Vec<Record> {
+    let mut out = Vec::new();
+    if rebased {
+        out.push(Record::new(day, Kind::Rebase));
+    }
     match &d.accept {
         Accept::Carried { old_head, new_head } => out.push(Record::new(
             day,

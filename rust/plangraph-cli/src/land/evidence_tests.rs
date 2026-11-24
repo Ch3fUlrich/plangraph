@@ -175,6 +175,8 @@ fn a_flake_does_not_void_an_accept_but_a_genuine_red_does() {
         RedKind::Genuine
     );
     assert_eq!(classify_red(&red(&[], &[], &[])), RedKind::Genuine);
+    // A hung test with no other failure is a flake too.
+    assert_eq!(classify_red(&red(&[], &[], &["t9"])), RedKind::Flake);
     assert!(!voids_accept(RedKind::Flake));
     assert!(voids_accept(RedKind::Genuine));
 }
@@ -197,8 +199,8 @@ fn the_report_counts_per_day_and_every_carry_names_old_and_new_head() {
         &facts(key("pid1", &["a.txt", "b.txt"]), &[], false, 2),
     );
     let void = decide(&evidence(1), &facts(key("x", &[]), &[], false, 2));
-    let mut recs = records_of(&carried, "2026-11-24");
-    recs.extend(records_of(&void, "2026-11-24"));
+    let mut recs = records_of(&carried, "2026-11-24", true);
+    recs.extend(records_of(&void, "2026-11-24", true));
     recs.push(Record::new("2026-11-25", Kind::FixRoundAfterRebase));
     let days = daily(&recs).unwrap();
     let d24 = &days["2026-11-24"];
@@ -362,6 +364,7 @@ fn the_cli_prints_the_verdicts_naming_both_heads_and_the_daily_report() {
     let lines: Vec<String> = records_of(
         &assess(&fx, &recorded(&fx, &base, &head), &main1, &new_head, 1),
         "2026-11-24",
+        true,
     )
     .iter()
     .map(|r| serde_json::to_string(r).unwrap())
@@ -381,11 +384,15 @@ fn a_void_condition_without_a_prior_accept_has_nothing_to_void_and_no_re_review_
     let d = decide(&e, &facts(key("other", &["a.txt", "b.txt"]), &[], false, 0));
     assert_eq!(d.accept, Accept::None);
     assert_eq!(d.ci, Ci::Rerun(CiRerun::Void(Void::PatchIdChanged)));
-    let kinds: Vec<Kind> = records_of(&d, "2026-11-24")
-        .into_iter()
-        .map(|r| r.kind)
-        .collect();
-    assert_eq!(kinds, [Kind::Rebase]);
+    let kinds = |rebased| -> Vec<Kind> {
+        records_of(&d, "2026-11-24", rebased)
+            .into_iter()
+            .map(|r| r.kind)
+            .collect()
+    };
+    // Only an actual rebase is a rebase; an assessment of an unchanged head is not.
+    assert_eq!(kinds(true), [Kind::Rebase]);
+    assert!(kinds(false).is_empty());
 }
 
 fn flags(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
@@ -421,6 +428,10 @@ fn assess_appends_its_records_and_the_record_command_adds_a_rebase_fix_round() {
     ]);
     super::evidence_cli::assess_cli(&assess).unwrap();
     super::evidence_cli::assess_cli(&assess).unwrap();
+    // The same head again (main moved, nothing rebased) carries but is not a rebase.
+    let mut same = assess.clone();
+    same.insert("head".into(), head.clone());
+    super::evidence_cli::assess_cli(&same).unwrap();
     let rec = flags(&[
         ("records-out", log.to_str().unwrap()),
         ("day", "2026-11-25"),
@@ -438,7 +449,7 @@ fn assess_appends_its_records_and_the_record_command_adds_a_rebase_fix_round() {
     assert_eq!(
         out,
         [
-            "2026-11-24 rebases 2 accepts_carried 2 ci_carried 2 re_reviews 0 fix_rounds_after_rebase 0",
+            "2026-11-24 rebases 2 accepts_carried 3 ci_carried 3 re_reviews 0 fix_rounds_after_rebase 0",
             "2026-11-25 rebases 0 accepts_carried 0 ci_carried 0 re_reviews 0 fix_rounds_after_rebase 1",
         ]
     );
