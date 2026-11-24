@@ -4,8 +4,10 @@
 //! The statement is a label (`cause:`, `size:`, `time:`) anywhere in the text. The evidence is a
 //! `Measured:` field (the label starts a line, a table cell or a sentence; `Unmeasured:` is not
 //! one) whose text, up to the end of its line or table cell, holds a number and names one of our
-//! own data sources (keeper, telemetry, ledger, CI, a query, journal or log). Other companies'
-//! practice never satisfies it: a number beside only a company name has no source of ours.
+//! own data sources (keeper, telemetry, ledger, CI, a query, journal or log), an anchor that
+//! identifies the result (a date or date range, a decision id, a pull request or a run id) and a
+//! measured value besides the anchor, and says it found something. Other companies' practice
+//! never satisfies it, and neither does a query that ran with no result yet.
 
 const LABELS: [&str; 3] = ["cause", "size", "time"];
 const MEASURED: &str = "measured:";
@@ -24,6 +26,55 @@ const OWN_SOURCES: [&str; 12] = [
     "db",
     "pg",
 ];
+
+/// Phrases of a measurement that produced nothing.
+const EMPTY: [&str; 7] = [
+    "no result",
+    "no data",
+    "n/a",
+    "none",
+    "not yet",
+    "pending",
+    "unknown",
+];
+
+/// Whether one token identifies a result: a date or date range, a decision id, a pull request
+/// number or a run id.
+fn anchor(token: &str) -> bool {
+    let b = token.as_bytes();
+    let date = b.len() >= 10
+        && b[..10].iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                *c == b'-'
+            } else {
+                c.is_ascii_digit()
+            }
+        });
+    date || token.starts_with("run-")
+        || token
+            .strip_prefix("d-")
+            .or_else(|| token.strip_prefix('#'))
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+}
+
+/// Whether the text of one `Measured:` field is evidence: one of our sources, an anchor, a value
+/// that is not part of an anchor, and no statement that nothing was found.
+fn measured_field(cell: &str) -> bool {
+    if EMPTY.iter().any(|phrase| cell.contains(phrase)) {
+        return false;
+    }
+    let tokens: Vec<&str> = cell
+        .split(|c: char| c.is_whitespace() || ",;()".contains(c))
+        .map(|t| t.trim_matches(|c: char| !(c.is_alphanumeric() || c == '#')))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let source = tokens.iter().any(|t| OWN_SOURCES.contains(t));
+    let anchored = tokens.iter().any(|t| anchor(t));
+    let value = tokens
+        .iter()
+        .any(|t| !anchor(t) && t.bytes().any(|c| c.is_ascii_digit()));
+    source && anchored && value
+}
 
 /// Positions of `label:` as a whole word (so `runtime:` and `timeout:` do not count).
 fn labelled(lower: &str, label: &str) -> bool {
@@ -61,10 +112,7 @@ pub fn ruling_refusal(text: &str) -> Option<&'static str> {
             .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-');
         let rest = &lower[at + MEASURED.len()..];
         let cell = rest.split(['\n', '|']).next().unwrap_or("");
-        let words = || cell.split(|c: char| !(c.is_alphanumeric() || c == '-'));
-        own_field
-            && cell.bytes().any(|b| b.is_ascii_digit())
-            && words().any(|word| OWN_SOURCES.contains(&word))
+        own_field && measured_field(cell)
     });
     (!evidence).then_some(
         "ruling_no_measured: a cause, size or time needs a 'Measured:' line with our own numbers and their source",
@@ -127,6 +175,10 @@ mod tests {
             "cause: slow CI\nUnmeasured: 2 estimates from the keeper",
             "cause: slow CI\nMeasured: GitHub 42 trains",
             "size: 4 parts\nMeasured: Zuul and Chromium CQ practice, 5 trains",
+            "cause: slow CI\nMeasured: GitHub CI ran 42 trains",
+            "cause: slow CI\nMeasured: Our keeper query ran on 2026-11-24; no results yet",
+            "cause: slow CI\nMeasured: keeper query 2026-11-24",
+            "cause: slow CI\nMeasured: keeper query, 14 trains, none on 2026-11-24",
         ] {
             assert!(ruling_refusal(row).is_some(), "{row}");
         }
