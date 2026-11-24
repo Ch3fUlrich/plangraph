@@ -123,4 +123,42 @@ mod tests {
                      5: FLOCK  ADVISORY  READ 80 08:02:500 0 EOF\n";
         assert_eq!(holders_in(table, 8, 1, 500), vec![77]);
     }
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = crate::git_test_support::command(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    #[test]
+    fn a_lease_lock_beside_the_checkout_target_never_dirties_the_tree() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let tree = tempfile::tempdir().unwrap();
+        git(tree.path(), &["init", "-q"]);
+        for ignore in [".gitignore", "rust/.gitignore"] {
+            let destination = tree.path().join(ignore);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::copy(root.join(ignore), destination).unwrap();
+        }
+        let target = tree.path().join("rust/target");
+        git(tree.path(), &["add", "."]);
+        git(tree.path(), &["commit", "-qm", "fresh checkout"]);
+        let shared = writer_lease(&target).unwrap();
+        ensure_lease_file(&target).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("built"), b"x").unwrap();
+        assert!(lease_file(&target).unwrap().exists());
+        let status = git(tree.path(), &["status", "--porcelain"]);
+        assert!(
+            status.trim().is_empty(),
+            "the lock dirtied the tree: {status}"
+        );
+        drop(shared);
+    }
 }
