@@ -1,0 +1,1 @@
+Add `plangraph claim-heartbeat`: renew exactly the claims the orchestrator principal holds on items of live native runs, Claude writer sessions and open pull requests, report each renewal and refusal with its item key, and never lease a merged key.
