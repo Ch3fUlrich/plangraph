@@ -6,5 +6,5 @@ text=$(printf 'head %s\nresult green\ncheck fake-fast-checks rc=0 wall=0.100\n' 
 printf '%s\n' "$text" > "$common/plangraph-state/fast-checks/$head"
 blob=$(printf '%s\n' "$text" | git hash-object -w --stdin)
 tree=$(printf '100644 blob %s\t%s\n' "$blob" "$head" | git mktree)
-commit=$(git -c user.name=t -c user.email=t@example.invalid commit-tree "$tree" -m receipt)
+commit=$(GIT_AUTHOR_NAME=plangraph GIT_AUTHOR_EMAIL=plangraph@localhost GIT_COMMITTER_NAME=plangraph GIT_COMMITTER_EMAIL=plangraph@localhost git commit-tree "$tree" -m "fast-checks receipt")
 git update-ref "refs/plangraph/receipts/$head" "$commit"
