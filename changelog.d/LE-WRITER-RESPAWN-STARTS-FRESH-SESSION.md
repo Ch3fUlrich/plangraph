@@ -1,0 +1,1 @@
+`pg-spawnd session` respawns a numbered worker session (a role in the host policy's `worker_roles`) with `--resume <saved session_id>` and the saved `-n`/`--remote-control` name, so a fix round reaches the writer that holds the batch context; and a launcher counts the host it runs on as local by kernel hostname as well as by policy name.

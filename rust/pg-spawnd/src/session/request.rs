@@ -8,6 +8,12 @@ use super::{
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+/// The saved session a worker respawn continues: its own name and transcript id.
+pub(super) struct Resume {
+    pub name: String,
+    pub session_id: String,
+}
+
 pub(super) struct Request {
     pub args: Arguments,
     pub spec: Value,
@@ -15,6 +21,7 @@ pub(super) struct Request {
     pub legacy_respawn: bool,
     pub override_cap: Option<Value>,
     pub restart: Option<Restart>,
+    pub resume: Option<Resume>,
 }
 
 impl Request {
@@ -52,6 +59,28 @@ impl Request {
             legacy_respawn,
             override_cap,
             restart: None,
+            resume: None,
+        })
+    }
+
+    /// A respawn of a numbered worker session continues the saved transcript under the same
+    /// name; any other respawn starts a fresh session from its handoff.
+    pub fn resume_target(&self, worker: bool) -> Option<Resume> {
+        let args = &self.args;
+        let source = args.option("session").unwrap_or(&args.name);
+        let id = self.spec["session_id"].as_str()?;
+        let plain = |c: char| c.is_ascii_alphanumeric() || c == '-';
+        (args.respawn
+            && worker
+            && source != args.role
+            && role_of(source) == args.role
+            && basename(source)
+            && !id.starts_with('-')
+            && !id.is_empty()
+            && id.chars().all(plain))
+        .then(|| Resume {
+            name: source.to_owned(),
+            session_id: id.to_owned(),
         })
     }
 }

@@ -17,6 +17,7 @@ pub(super) struct Placement {
     hostname: String,
     hosts: Vec<Host>,
     worker: bool,
+    worker_roles: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -107,11 +108,18 @@ impl Placement {
                 .and_then(|p| p["worker_roles"].as_array())
                 .is_some_and(|roles| roles.iter().any(|candidate| candidate == role))
         });
+        let worker_roles = policy
+            .and_then(|p| p["worker_roles"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r.as_str().map(str::to_owned))
+            .collect();
         Self {
             local,
             hostname,
             hosts,
             worker,
+            worker_roles,
         }
     }
 
@@ -167,8 +175,16 @@ impl Placement {
         Ok((here.clone(), notices))
     }
 
+    pub fn is_worker_role(&self, role: &str) -> bool {
+        self.worker_roles.iter().any(|r| r == role)
+    }
+
+    /// The host this process runs on, by policy name (`FLEET_LOCAL_HOST`), kernel hostname or its
+    /// short name, so a launcher on the target host selects it without the policy name set.
     pub fn local(&self, host: &Host) -> bool {
         host.name() == self.local
+            || host.name() == self.hostname
+            || self.hostname.split('.').next() == Some(host.name())
             || (host.name() == ["coding", "vm"].join(".")
                 && matches!(self.local.split('.').next(), Some("coding" | "code")))
     }

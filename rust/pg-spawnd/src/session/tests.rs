@@ -146,3 +146,27 @@ fn subprocess_capture_times_out_without_waiting_for_exit() {
     assert_eq!(error.kind(), ErrorKind::TimedOut);
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn launcher_on_the_target_host_counts_it_as_local_by_kernel_name() {
+    use placement::Placement;
+    let policy = serde_json::json!({"hosts": [
+        {"name": "target", "memory_floor_gib": 2},
+        {"name": "other", "memory_floor_gib": 2}
+    ]});
+    let host = |placement: &Placement, name: &str| {
+        let (host, _) = placement.fallback(Some(name), |_| Err(())).unwrap();
+        placement.local(&host)
+    };
+    // The policy name is unset or foreign; the kernel name (full or short) names the target.
+    for kernel_name in ["target", "target.example"] {
+        let placement = Placement::with_hostname(
+            Some(&policy),
+            None,
+            "unset-policy-name".into(),
+            kernel_name.into(),
+        );
+        assert!(host(&placement, "target"), "{kernel_name}");
+        assert!(!host(&placement, "other"), "{kernel_name}");
+    }
+}

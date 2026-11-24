@@ -25,6 +25,9 @@ mod remote;
 #[path = "fleet_launch/restart.rs"]
 mod restart;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/resume.rs"]
+mod resume;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/sandbox.rs"]
 mod sandbox;
 #[cfg(target_os = "linux")]
@@ -86,6 +89,7 @@ fn check(launcher: &sandbox::Launcher) {
     remote::check(launcher);
     if matches!(launcher, sandbox::Launcher::Rust(_)) {
         restart::check(launcher);
+        resume::check(launcher);
         records::check_router_prompt(launcher);
         records::check_batch_prompt(launcher);
     }

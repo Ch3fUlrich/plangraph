@@ -135,6 +135,7 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
     let host_policy = std::env::var_os("FLEET_HOST_POLICY").map_or(policy_path, PathBuf::from);
     let host_policy = policy::load(&host_policy);
     let placement = Placement::new(&request, host_policy.as_ref());
+    request.resume = request.resume_target(placement.is_worker_role(&request.args.role));
     let host = match placement.choose(&request, forwarded) {
         Ok(host) => host,
         Err(error) => {
@@ -244,7 +245,15 @@ fn local(
     } else {
         None
     };
-    let seq = if args.dry {
+    let resumed = request.resume.as_ref();
+    let seq = if let Some(resume) = resumed {
+        resume
+            .name
+            .rsplit('-')
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+    } else if args.dry {
         0
     } else if let Some(given) = var("FLEET_SESSION_SEQ")
         .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
@@ -255,7 +264,7 @@ fn local(
     } else {
         storage::next_seq(&paths.state)?
     };
-    let name = format!("{}-{seq:04}", args.role);
+    let name = resumed.map_or_else(|| format!("{}-{seq:04}", args.role), |r| r.name.clone());
     let hard = admission.caps.caps.hard;
     let settings = match settings::prepare(paths, &args.role, admission.caps.caps, !args.dry) {
         Ok(settings) => settings,
@@ -271,30 +280,39 @@ fn local(
     } else {
         "Artifact,SendFeedback,Workflow,ReportFindings,AskUserQuestion"
     };
+    let mcp_text = mcp.to_string_lossy();
+    let settings_text = settings.path.to_string_lossy();
+    let resume_flags: &[&str] = match resumed {
+        Some(resume) => &["--resume", &resume.session_id],
+        None => &[],
+    };
     let argv = [
-        "claude",
-        "--bg",
-        "--strict-mcp-config",
-        "--mcp-config",
-        &mcp.to_string_lossy(),
-        "--remote-control",
-        &name,
-        "-n",
-        &name,
-        "--model",
-        &args.model,
-        "--effort",
-        &args.effort,
-        "--permission-mode",
-        "bypassPermissions",
-        "--settings",
-        &settings.path.to_string_lossy(),
-        "--disallowed-tools",
-        deny,
-        "--append-system-prompt",
-        style,
-        &prompt,
-    ];
+        &["claude", "--bg"][..],
+        resume_flags,
+        &[
+            "--strict-mcp-config",
+            "--mcp-config",
+            &mcp_text,
+            "--remote-control",
+            &name,
+            "-n",
+            &name,
+            "--model",
+            &args.model,
+            "--effort",
+            &args.effort,
+            "--permission-mode",
+            "bypassPermissions",
+            "--settings",
+            &settings_text,
+            "--disallowed-tools",
+            deny,
+            "--append-system-prompt",
+            style,
+            &prompt,
+        ],
+    ]
+    .concat();
     if args.dry {
         eprintln!("fleet-launch: admission allowed{admission_suffix}");
         if settings.generated {
