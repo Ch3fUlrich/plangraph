@@ -21,7 +21,7 @@ from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
 from .host_ready import harness_path
-from .review_slot import drop_review_slot
+from .host_ready_source import drop_review_slot
 from .inline_diff import InlineDiffError
 from .resolver import host_skip_reason_async, admitted_by_render
 from .service import SpawnService
