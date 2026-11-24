@@ -222,8 +222,8 @@ def _default_fetch(url, headers, timeout):
 def _build(body, now):
     data = json.loads(body)
     rows = data.get("connections") if isinstance(data, dict) else data
-    if not isinstance(rows, list) or not rows:
-        raise ValueError
+    if not isinstance(rows, list) or (not rows and not (isinstance(data, dict) and "connections" in data)):
+        raise ValueError   # only an explicit empty "connections" list is a valid empty snapshot
     states = {}
     for row in rows:
         if not isinstance(row, dict):

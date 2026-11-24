@@ -488,29 +488,40 @@ def routing_status(status):
     return status
 
 
-def gateway_url(leg, path=None):
-    """Base URL a direct provider prefix sends requests to, or None when it names none.
+def gateway_url(leg, path=None, env=None):
+    """Endpoint a direct provider prefix is launched against, or None when none is known.
 
-    The shared gateway prefix has no entry: its snapshot already proves the gateway answers,
-    and each host's own opencode config says where it listens.
+    A gateway provider (mimo) is launched against the gateway endpoint the opencode
+    renderer resolves, so admission uses that same resolution. The shared ``omniroute``
+    prefix has no entry: its snapshot already proves the gateway answers. A missing,
+    unreadable or malformed provider config, or an invalid URL, names no endpoint.
     """
     from .opencode_overlay import load_root_providers
+    from .opencode_render import _is_valid_url, _normalize_gateway_url, configured_gateway_url
     prefix = leg.split('/')[0] if '/' in leg else ''
-    provider = ((load_root_providers(path) or {}) if prefix not in ('', 'omniroute') else {}).get(prefix)
-    url = ((provider or {}).get('settings') or {}).get('baseURL') if isinstance(provider, dict) else None
-    return url if isinstance(url, str) and url else None
+    providers = load_root_providers(path) if prefix not in ('', 'omniroute') else None
+    if not isinstance(providers, dict) or not isinstance(providers.get(prefix), dict):
+        return None
+    if prefix == 'mimo' and (url := configured_gateway_url(providers, os.environ if env is None else env)):
+        return url
+    settings = providers[prefix].get('settings')
+    url = settings.get('baseURL') if isinstance(settings, dict) else None
+    return _normalize_gateway_url(url) if isinstance(url, str) and _is_valid_url(url) else None
 
 
 def tcp_gateway_probe(url, timeout=1.0):
     """True when something accepts a TCP connection at the URL's host and port."""
     import socket
     from urllib.parse import urlsplit
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        port = parts.port or (443 if parts.scheme == 'https' else 80)
+    except ValueError:
+        return False
     if not parts.hostname:
         return False
     try:
-        socket.create_connection((parts.hostname, parts.port or (443 if parts.scheme == 'https' else 80)),
-                                 timeout=timeout).close()
+        socket.create_connection((parts.hostname, port), timeout=timeout).close()
     except OSError:
         return False
     return True
@@ -523,6 +534,9 @@ def _gateway_pool(states, leg):
     whose name starts the model name, else any row of the answering gateway. An available
     row wins over an unavailable one.
     """
+    from .quota_snapshots import pool_of
+    if (pool := pool_of(identity_model(leg))) is not None:
+        return states.get(pool)   # a known alias pool never borrows another pool's state
     name = identity_model(leg).split('/', 1)[-1]
     named = [row for key, row in states.items()
              if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-'))]
@@ -603,7 +617,7 @@ class LegAdapter:
                 self._states, self._served = states, served
                 self._quarantined.clear()
                 self._gateway.clear()
-                self._error = None if states else 'unreachable'
+                self._error = None if states else 'unreachable'   # an empty provider list names no pool
             except OmniRouteAuthRefused as exc:
                 self._error = str(exc)
                 self._auth_error = exc.evidence
@@ -611,7 +625,9 @@ class LegAdapter:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
         if self._error:
-            return dict(state='down' if self._auth_error else 'unknown', reason=self._error,
+            # A valid empty snapshot excludes the leg explicitly; only a failed read stays unknown.
+            return dict(state='down' if self._auth_error or self._error == 'unreachable' else 'unknown',
+                        reason=self._error,
                         evidence=dict(self._auth_error) if self._auth_error else None)
         identity = self.identity(leg)
         if identity in self._quarantined and self.store is not None:

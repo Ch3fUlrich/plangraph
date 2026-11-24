@@ -275,8 +275,10 @@ def test_production_reader_applies_the_snapshot_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(flag, 'default_reader', _production_reader)
     flag.default_reader.cache_clear()
     monkeypatch.setattr(leg_state, '_default_store', lambda: LegStateStore(tmp_path / 'state'))
-    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
-    monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: []))
+    # A provider list that names the pools: an empty one is an explicit exclusion, not a fallback.
+    pools = {name: quota_snapshots.ProviderState(name, True, '', '') for name in ('codex', 'openrouter')}
+    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=lambda: pools))
+    monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: [SOL, 'openrouter/free']))
     monkeypatch.setattr(quota_snapshots, 'fetch_snapshot_rows', lambda: [_row(0, '2099-01-01T00:00:00Z')])
     try:
         reader = flag.default_reader()

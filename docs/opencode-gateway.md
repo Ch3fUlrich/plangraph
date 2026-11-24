@@ -15,6 +15,7 @@ provider URL already present in `OPENCODE_CONFIG_CONTENT`, including a
 `gateway_url` supplied to `build_child_env` in the spawner/keeper config.
 Only when no valid child URL is present does it consider `OMNIROUTE_BASE_URL`,
 `PLANGRAPH_GATEWAY_URL`, then the transitional `AUTOOS_OMNIROUTE_URL`.
+The resolution is one function (`configured_gateway_url`), so leg-state admission probes the same endpoint a mimo launch uses (`docs/spawner-leg-state.md`).
 When building a new child config, `OMNIROUTE_BASE_URL` takes precedence over
 `PLANGRAPH_GATEWAY_URL`, then the config's `gateway_url`.
 The overlay preserves that resolved child URL instead of replacing it with the
