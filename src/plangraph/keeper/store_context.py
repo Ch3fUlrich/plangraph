@@ -262,9 +262,9 @@ class ContextMixin:
         """Work indexes of every scanned repository.
 
         A fresh read (the claim guard) refreshes only *projects* from origin, and
-        shares one refresh per repository between the keys of a batch and across
-        claims inside ``claim_index_window_s``; the other repositories serve their
-        last built index.
+        shares one refresh per repository between the keys of a batch and between
+        claims running at the same time; the other repositories serve their last
+        built index.
         """
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
@@ -275,8 +275,7 @@ class ContextMixin:
         missing = tuple(sorted(set(projects) - indexes.keys()))
         if missing:
             indexes.update(timing.share_inflight(
-                ("work indexes", id(git), missing), lambda: self._claim_work_indexes(
-                    git, missing, self.claim_index_window_s),
+                ("work indexes", id(git), missing), lambda: self._claim_work_indexes(git, missing),
                 step=f"work index for {missing[0]}" if len(missing) == 1 else "work indexes"))
         return {name: indexes[name] if name in projects else timing.share_inflight(
                     ("cached work", id(git), name), lambda name=name: src.work_index_cached(git, name),
@@ -284,7 +283,7 @@ class ContextMixin:
                 for name in sorted(names)}
 
     @staticmethod
-    def _claim_work_indexes(git, names, window=0):
+    def _claim_work_indexes(git, names):
         groups = {}
         for name in names:
             repo, _ = src._repo_ref(git, name)
@@ -293,7 +292,7 @@ class ContextMixin:
         def load(group):
             return {name: timing.share_inflight(
                 ("work", id(git), name),
-                lambda: src.work_index(git, name, fresh=True, window=window),
+                lambda: src.work_index(git, name, fresh=True),
                 step=f"work index for {name}") for name in group}
 
         if len(groups) == 1:

@@ -637,9 +637,9 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch,
     print("HTTP p95", round(samples[-1], 3),
           "phase maxima", {name: round(max(values), 4) for name, values in phases.items()})
     assert samples[-1] < 5
-    # Every claim is in the item's repository, which is refreshed once for all of them;
-    # each other repository is built once and then served from its cache.
-    assert len(phases["index"]) == len(names)
+    # Claims running together share one in-flight refresh of the item's repository; a claim that
+    # starts later refreshes it again. Each other repository is built once, then served from its cache.
+    assert len(names) <= len(phases["index"]) <= len(names) + len(keys[:8])
     assert peak_indexes <= 2
 
 

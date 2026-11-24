@@ -12,8 +12,6 @@ import time
 clock = time.monotonic
 THRESHOLD_MS = 250
 DEFAULT_CLAIM_PREFLIGHT_S = 30
-#: a claim reuses its repository's index when that finished refreshing this recently.
-DEFAULT_CLAIM_INDEX_WINDOW_S = 5
 _LATENCY_VERBS = frozenset({"show", "ready", "snapshot", "close_merged", "close_merged_auto",
                             "claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
 _parts = ContextVar("keeper_timing_parts", default=None)

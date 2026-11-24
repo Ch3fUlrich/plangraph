@@ -389,10 +389,10 @@ batch before writing. Overlapping claims share in-flight authority lookups and
 can wait up to the earlier of the leader's deadline and their own deadline. A
 lookup error is shared with waiting claims. A deadline refusal names the
 preflight step that ran out of time. A claim refreshes only the item's own
-repository from origin; other repositories serve their last built index. A claim
-reuses an index that finished refreshing less than `claim_index_window_s` seconds
-ago (default 5, 0 refreshes every claim), so a batch, or claims in quick
-succession, cost one origin refresh per repository. `GET /v1/health` reports
+repository from origin; other repositories serve their last built index. The
+keys of one `claim-batch` share that refresh, so a batch costs one origin refresh
+per repository; a later claim refreshes repository authority again, even when a
+previous work index is recent. `GET /v1/health` reports
 `claim_preflight_s`; the CLI bounds `claim` and `claim-batch` by that budget plus
 15 seconds instead of a fixed 15 seconds.
 

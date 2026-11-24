@@ -53,21 +53,14 @@ def test_claim_batch_runs_one_fresh_preflight_per_repository(w, tmp_path, monkey
     assert [call for call in calls if call[1]] == [("demo", True)]
 
 
-def test_sequential_claims_share_one_origin_refresh_inside_the_window(w, tmp_path, monkeypatch):
-    keys = _claim_lanes(w, tmp_path, 3)
-    builds = _count_index_builds(monkeypatch)
-    for key in keys:
-        assert w.store.claim(w.p("l1main"), key)["epoch"] == 1
-    assert builds["demo"] == 1
-
-
-def test_claims_refresh_again_once_the_window_is_zero(w, tmp_path, monkeypatch):
+def test_each_claim_refreshes_only_its_own_repository_again(w, tmp_path, monkeypatch):
     keys = _claim_lanes(w, tmp_path, 2)
-    w.store.claim_index_window_s = 0
     builds = _count_index_builds(monkeypatch)
     for key in keys:
         w.store.claim(w.p("l1main"), key)
+    # The item's repository is rebuilt for every claim; the other one is built once and served from cache.
     assert builds["demo"] == 2
+    assert builds["related"] == 1
 
 
 def test_health_reports_the_claim_budget_and_the_cli_timeout_follows_it(srv, w, monkeypatch):

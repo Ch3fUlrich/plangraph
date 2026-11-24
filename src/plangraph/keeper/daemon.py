@@ -78,7 +78,6 @@ def _make_store(conn, cfg):
                   batch_roots=cfg.batch_roots)
     store.default_lease = cfg.default_lease
     store.claim_preflight_s = cfg.claim_preflight_s
-    store.claim_index_window_s = cfg.claim_index_window_s
     store.merge_close_decision = cfg.merge_close_decision
     store.lease_warn_s = cfg.lease_warn_s
     store.review_overdue_s = cfg.review_overdue_s
