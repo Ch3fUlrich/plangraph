@@ -8,7 +8,8 @@ the always-on plan: one orchestrator role on the digest wait of `plangraph state
 clock, no new dependency. **It switches nothing live**: no hook, unit, watchdog or launcher
 changes, and no wait or wake path is removed until a reviewed design is accepted and a role has its
 GO (rule 5.9). This slice (CUTOVER-MODEL-S1-URGENT-TIMING) holds the state, time, parameters and
-invariants. Recycle, adoption, session slots, direct messages and the digest window are slice 2.
+invariants. Recycle, adoption, session slots, direct messages and the digest window are the next
+slice (CUTOVER-MODEL-S2-RECYCLE-ADOPT-SLOTS), as the brief of this slice states.
 
 ## Actors and state
 
@@ -17,8 +18,8 @@ wake; sources (hung or not, last read); urgent events of six classes (future, oc
 in a digest, received; age; escalated; alarmed); the supervisor; the role switch (off, shadow,
 active) with its gates. `Model::apply` is one atomic transition; a refused event changes nothing.
 `Tick` is 10 s and is refused while an obligation is due, so a scan, wake, takeover, alarm or
-supervisor pass cannot be skipped by letting time pass. Time passes while a session works: only
-the zero-time steps of a wake (fire the wait, begin the turn) are due at once.
+supervisor pass cannot be skipped by letting time pass. Time passes while a session works and
+while a wake is queued: delivery can be late or lost (`WakeLost`), and the supervisor owes a pass.
 
 ## Time budgets (`Params`, `Budget`)
 
@@ -32,22 +33,48 @@ beyond 2000 s, which the counters would not hold. At most 64 events, two sources
 | Step | At the earliest | The supervisor must have done it by |
 | --- | --- | --- |
 | `Escalate`: today's wake path takes over, the session is woken | takeover age | takeover + 20 s |
-| `Alarm`: the operator is told and holds the event | alarm age | alarm + 20 s, never after the bound |
+| `Alarm`: the operator is told and is the first reader; the event stays pending for the session | alarm age | alarm + 20 s, never after the bound |
+| `Nudge`: an idle session without an armed wait is woken again | | every 20 s while it stays unattended |
 | a source is read (`Scan`) | | every 60 s, a hung read is visible at once |
 
 ## Invariants (`Model::violations`)
 
 | Invariant | Requirement of plan section 4 A3 |
 | --- | --- |
-| `UrgentBound`: no urgent event is unread past its class bound. A woken session that keeps working, a hung source, an escalated event and a dead role are not exempt: the alarm hands the event to the operator, which is a reader | 1, 4 |
+| `UrgentBound`: no binding urgent event is without a first reader past its class bound, in any mode. A woken session that keeps working, a hung source, an escalated event and a dead role are not exempt: the alarm makes the operator its first reader | 1, 4 |
+| `LateReceipt`: the first reader of a binding event held it by the bound; a late receipt stays visible after it happened | 1 |
 | `Unattended`: an active role is never idle with nothing armed or woken for more than one supervisor pass | 4 |
-| `ReceivedUnread`: an event is received only by a session's receipt or the alarm; a scan never acknowledges | 6 |
+| `ReceivedUnread`: an event is received only by a session's receipt; a scan or an alarm never acknowledges | 6 |
 | `ActivationGate`: active needs shadow sign-off, a fence, deployed recovery and a live GO | 7, 7a |
 
-`Activate` is refused (`Overdue`) while an urgent event is already past its alarm age, so a role
-never starts, or restarts after a rollback, with its bound already broken. `Rollback` and
-`RevokeGo` hand every unread event to today's wake path. A role that is not switched keeps today's
-path: its events are escalated and the session woken at once.
+An event is binding when it occurs while the role is active, or is pending when the role is
+switched on. Rollback and a lost GO do not release it: its takeover and alarm stay due in every
+mode. `Activate` is refused (`Overdue`) while an event is past its alarm age without an alarm.
+A role that is not switched keeps today's path: its events are escalated and the session woken.
+
+## Transitions
+
+| Event | Guard | Effect |
+| --- | --- | --- |
+| `Occur(e)` | event not yet occurred | occurred, age 0; binding if active; otherwise escalated and the session woken |
+| `Scan(s)` | role shadow or active | healthy: occurred events of `s` become detected; hung: `blind(s)`; never reads another source |
+| `Hang(s)`, `Heal(s)` | | source `s` hangs or recovers |
+| `WaiterFire` | active, wait armed, an event detected | wait fired, wake queued |
+| `WaiterDie` | wait armed | wait dead |
+| `WakeLost` | wake queued | wake dropped |
+| `BeginTurn` | idle, wake queued | in a turn |
+| `EndTurn` | in a turn | idle |
+| `Arm` | in a turn, role active, wait not armed | wait armed |
+| `Receive` | in a turn | every escalated event and, if active, every detected one: received, first reader recorded |
+| `Crash` | session live | stopped, wait dead |
+| `Escalate(e)` | binding, pending, not escalated, takeover age | escalated, session woken |
+| `Alarm(e)` | binding, pending, no alarm yet, alarm age | alarmed, first reader recorded; stays pending |
+| `Nudge` | active, idle session without an armed wait | wake queued, supervisor pass restarts |
+| `StartShadow`, `SignOffShadow` | off; shadow | shadow; sign-off |
+| `DeployFence`, `DeployRecovery`, `GrantGo` | | gate set |
+| `Activate` | shadow, all gates, no event past its alarm age unalarmed | active; pending events binding |
+| `Rollback`, `RevokeGo` | not off; (active) | off; pending events escalated, session woken, wait dead |
+| `Tick` | no obligation due: takeover, alarm, scan, supervisor pass | ages, scan and unattended clocks advance |
 
 ## Findings as scenarios (`tests/scenarios_timing.rs`, `scenarios_switch.rs`)
 
@@ -57,6 +84,9 @@ path: its events are escalated and the session woken at once.
 | round 3 HIGH time.rs:155: a fired wake freezes time while the session works | `a_woken_session_that_keeps_working_does_not_freeze_time_...` |
 | round 3 HIGH transition.rs:177: reactivation with an overdue event | `activation_is_refused_with_an_urgent_event_...`, `reactivation_after_a_rollback_...` |
 | round 3 MED params.rs:26: one budget for all classes | `each_urgent_class_has_its_own_budget_...` |
+| round 4 HIGH time.rs:95: an alarm closed the event of a dead role | `a_dead_role_hands_the_event_...` (it stays pending) |
+| round 4 HIGH invariants.rs:15: rollback and a lost GO released the bound | `rollback_and_a_lost_go_keep_the_deadline_...` |
+| round 4 HIGH time.rs:126: a queued wake froze time | `a_delayed_or_lost_wake_does_not_stop_time_...` |
 | state r2 C3/R1, alwayson r2: hung adapter, failed wake, five-minute supervisor | `an_unread_event_on_a_hung_source_...`, `a_failed_wake_is_recovered_...`, `a_hung_adapter_does_not_delay_...`, `a_five_minute_supervisor_...` |
 | alwayson r3: activation, rollback, per-role GO | `activation_needs_shadow_fence_...`, `rollback_and_a_lost_go_...` |
 

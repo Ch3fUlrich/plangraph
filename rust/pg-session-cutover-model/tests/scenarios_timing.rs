@@ -63,9 +63,9 @@ fn each_urgent_class_has_its_own_budget_and_none_may_exceed_the_ruling() {
     assert_eq!(m.apply(Event::Alarm(1)), Err(Denied::Guard));
     run(&mut m, &[Event::Alarm(0)]);
     assert_eq!(
-        (m.stage(0), m.age_secs(0)),
-        (Stage::Received, 40),
-        "go row closed at its alarm age"
+        (m.alarmed(0), m.reader_secs(0)),
+        (true, Some(40)),
+        "go row held by the operator at its alarm age"
     );
     pass(&mut m, 20);
     run(&mut m, &[Event::Alarm(1)]);
@@ -129,11 +129,16 @@ fn a_woken_session_that_keeps_working_does_not_freeze_time_and_the_alarm_holds_t
     pass(&mut m, 20);
     // At 60 s the session has still not read it: the operator is told, which is a reader.
     run(&mut m, &[Event::Alarm(0)]);
+    assert_eq!((m.alarmed(0), m.reader_secs(0)), (true, Some(60)));
     assert_eq!(
-        (m.stage(0), m.alarmed(0), m.age_secs(0)),
-        (Stage::Received, true, 60)
+        m.stage(0),
+        Stage::Detected,
+        "the alarm leaves it pending for the session"
     );
-    pass(&mut m, 60);
+    pass(&mut m, 40);
+    // The session reads it at 100 s: late for the session, but the operator held it at 60 s.
+    run(&mut m, &[Event::Receive]);
+    assert_eq!((m.stage(0), m.reader_secs(0)), (Stage::Received, Some(60)));
     // A session that reads in time closes the event itself and the alarm has nothing to do.
     let mut m = armed_idle(params(vec![go(0)]));
     run(
@@ -175,11 +180,14 @@ fn a_dead_role_hands_the_event_to_the_operator_by_the_bound_not_at_recovery() {
     run(&mut m, &[Event::Escalate(0)]);
     pass(&mut m, 20);
     run(&mut m, &[Event::Alarm(0)]);
+    assert_eq!((m.alarmed(0), m.reader_secs(0)), (true, Some(60)));
     assert_eq!(
-        (m.stage(0), m.alarmed(0), m.age_secs(0)),
-        (Stage::Received, true, 60)
+        m.stage(0),
+        Stage::Detected,
+        "no session read it: it stays pending for one"
     );
     pass(&mut m, 60);
+    assert_eq!((m.stage(0), m.life()), (Stage::Detected, Life::Stopped));
     // The old exemption (an escalated event of a dead role is fine) lets it pass 100 s unread.
     let mut late = armed_idle(params(vec![go(0)])).with_defect(Defect::NoAlarm);
     run(&mut late, &[Event::Occur(0), Event::Scan(0), Event::Crash]);
@@ -250,4 +258,63 @@ fn a_scan_is_not_a_receipt() {
         Stage::Detected,
         "read into the digest, not acknowledged"
     );
+}
+
+#[test]
+fn rollback_and_a_lost_go_keep_the_deadline_of_an_event_that_occurred_while_active() {
+    // invariants.rs:15 (round 4): a mode change must not release a binding event.
+    for off in [Event::Rollback, Event::RevokeGo] {
+        let mut m = armed_idle(params(vec![go(0)]));
+        run(&mut m, &[Event::Occur(0), off, Event::BeginTurn]);
+        assert_eq!(m.mode(), Mode::Off);
+        // Off, with the session working unread: the deadline still runs and the alarm still comes.
+        ticks(&mut m, 60);
+        run(&mut m, &[Event::Alarm(0)]);
+        assert_eq!((m.alarmed(0), m.reader_secs(0)), (true, Some(60)));
+        ticks(&mut m, 40);
+        run(&mut m, &[Event::Receive]);
+        assert_eq!((m.stage(0), m.reader_secs(0)), (Stage::Received, Some(60)));
+        // With no alarm the receipt at 100 s is visible as late, after it happened too.
+        let mut late = armed_idle(params(vec![go(0)])).with_defect(Defect::NoAlarm);
+        run(&mut late, &[Event::Occur(0), off, Event::BeginTurn]);
+        ticks(&mut late, 100);
+        assert_eq!(late.violations(), vec![Invariant::UrgentBound]);
+        assert_eq!(late.apply(Event::Receive), Ok(Outcome::Applied));
+        assert_eq!(late.violations(), vec![Invariant::LateReceipt]);
+    }
+}
+
+#[test]
+fn a_delayed_or_lost_wake_does_not_stop_time_and_the_fallback_keeps_the_original_deadline() {
+    // time.rs:126 (round 4): a queued wake is not an obligation; delivery may be late or lost.
+    let mut m = armed_idle(params(vec![go(0)]));
+    run(
+        &mut m,
+        &[Event::Occur(0), Event::Scan(0), Event::WaiterFire],
+    );
+    assert!(m.notified() && m.life() == Life::Idle);
+    ticks(&mut m, 10);
+    run(&mut m, &[Event::WakeLost]);
+    ticks(&mut m, 10);
+    assert_eq!(
+        m.apply(Event::Tick),
+        Err(Denied::Deadline),
+        "the supervisor owes a pass"
+    );
+    run(&mut m, &[Event::Nudge]);
+    ticks(&mut m, 20);
+    // t=40 s: the takeover wakes the session again, and that wake is lost too.
+    run(&mut m, &[Event::Escalate(0), Event::WakeLost, Event::Nudge]);
+    ticks(&mut m, 20);
+    // t=60 s: still unread, so the operator holds it by the alarm age of the original deadline.
+    assert_eq!(m.apply(Event::Tick), Err(Denied::Deadline));
+    scan_all(&mut m);
+    run(&mut m, &[Event::Alarm(0), Event::Nudge]);
+    assert_eq!(
+        (m.alarmed(0), m.reader_secs(0), m.age_secs(0)),
+        (true, Some(60), 60)
+    );
+    // The last wake arrives late: the session begins its turn and receives.
+    run(&mut m, &[Event::BeginTurn, Event::Receive]);
+    assert_eq!((m.stage(0), m.reader_secs(0)), (Stage::Received, Some(60)));
 }

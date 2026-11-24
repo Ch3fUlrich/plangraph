@@ -54,7 +54,7 @@ pub enum Stage {
     Occurred,
     /// Read by the collector into a digest (the scan cursor); a pending wake until a receipt.
     Detected,
-    /// Held by a reader: the session by its receipt, or the operator by the alarm.
+    /// Acknowledged by the session's receipt. An alarm does not close an event.
     Received,
 }
 
@@ -66,10 +66,16 @@ pub(crate) struct Evt {
     pub age: u8,
     /// Also handed to today's wake path (takeover, rollback, or a role not yet switched).
     pub escalated: bool,
-    /// The operator was told; the event is closed for the model.
+    /// The operator was told. The event stays pending until a session receives it.
     pub alarmed: bool,
     /// A session's receipt covered it.
     pub seen: bool,
+    /// Its deadline holds in every mode: it occurred while active, or the role was switched on
+    /// with it pending. Rollback and a lost GO do not release it.
+    pub binding: bool,
+    /// Age, in ticks, at which the first reader (the session, or the operator by the alarm)
+    /// held it. Kept as evidence of a late receipt.
+    pub reader: Option<u8>,
 }
 
 impl Evt {
@@ -87,6 +93,8 @@ pub enum Event {
     Heal(u8),
     WaiterFire,
     WaiterDie,
+    /// The queued wake is dropped before the session begins a turn.
+    WakeLost,
     BeginTurn,
     EndTurn,
     Arm,
@@ -126,10 +134,13 @@ pub enum Denied {
 pub enum Invariant {
     /// Req 7a: an active role has fence, recovery, a live GO and a passed shadow.
     ActivationGate,
-    /// Req 1: no urgent event is unread past its class bound; the fallback, the alarm and
-    /// a dead role are not exempt.
+    /// Req 1: no binding urgent event is unheld past its class bound, in any mode; a woken
+    /// session that keeps working and a dead role are not exempt.
     UrgentBound,
-    /// An event is received only by a session's receipt or by the alarm, never by a scan.
+    /// Req 1: the first reader of a binding event held it by the bound; a late receipt stays
+    /// visible after it happened.
+    LateReceipt,
+    /// An event is received only by a session's receipt, never by a scan or an alarm.
     ReceivedUnread,
     /// Req 4: no active role stays asleep with nothing armed or woken beyond one supervisor pass.
     Unattended,

@@ -18,6 +18,7 @@ impl Model {
         ev.stage = Stage::Occurred;
         // A role that is not switched keeps today's wake path, which carries it at once.
         ev.escalated = mode != Mode::Active;
+        ev.binding = mode == Mode::Active;
         if mode != Mode::Active {
             self.wake();
         }
@@ -60,6 +61,7 @@ impl Model {
         for e in &mut self.events {
             if e.open() && (e.escalated || (active && e.stage == Stage::Detected)) {
                 (e.stage, e.seen) = (Stage::Received, true);
+                e.reader.get_or_insert(e.age);
             }
         }
     }
@@ -75,7 +77,7 @@ impl Model {
     pub(crate) fn escalate(&mut self, e: u8) -> Result<(), Denied> {
         let ev = *self.events.get(usize::from(e)).ok_or(Denied::Index)?;
         let takeover = Params::ticks(self.p.budget(ev.class).takeover_secs);
-        if self.mode != Mode::Active || !ev.open() || ev.escalated || ev.age < takeover {
+        if !ev.binding || !ev.open() || ev.escalated || ev.age < takeover {
             return Err(Denied::Guard);
         }
         self.events[usize::from(e)].escalated = true;
@@ -84,27 +86,31 @@ impl Model {
     }
 
     /// The supervisor tells the operator about an event still unread at its alarm age. The
-    /// operator holds it from then on, so the bound is kept whatever the session does.
+    /// operator is its first reader from then on, so the bound is kept whatever the session does;
+    /// the event stays pending until a session receives it.
     pub(crate) fn alarm(&mut self, e: u8) -> Result<(), Denied> {
         let ev = *self.events.get(usize::from(e)).ok_or(Denied::Index)?;
         let alarm = Params::ticks(self.p.budget(ev.class).alarm_secs);
-        if self.mode != Mode::Active || self.has(Defect::NoAlarm) || !ev.open() || ev.age < alarm {
+        let held = !ev.binding || !ev.open() || ev.alarmed;
+        if self.has(Defect::NoAlarm) || held || ev.age < alarm {
             return Err(Denied::Guard);
         }
         let ev = &mut self.events[usize::from(e)];
-        (ev.alarmed, ev.escalated, ev.stage) = (true, true, Stage::Received);
+        (ev.alarmed, ev.escalated) = (true, true);
+        ev.reader.get_or_insert(ev.age);
         Ok(())
     }
 
     pub(crate) fn nudge_target(&self) -> bool {
         let s = &self.session;
-        s.life == Life::Idle && !s.notify && s.waiter != Waiter::Armed
+        s.life == Life::Idle && s.waiter != Waiter::Armed
     }
 
-    /// The session is working, armed or woken.
+    /// The session is working or has a wait armed. A queued wake is not enough: it can be late
+    /// or lost, and then the supervisor must still act.
     fn attended(&self) -> bool {
         let s = &self.session;
-        s.live() && (s.life == Life::Active || s.waiter == Waiter::Armed || s.notify)
+        s.live() && (s.life == Life::Active || s.waiter == Waiter::Armed)
     }
 
     pub(crate) fn unattended(&self) -> bool {
@@ -115,18 +121,15 @@ impl Model {
     fn overdue(&self, step: impl Fn(&Budget) -> u16, skip: impl Fn(&Evt) -> bool) -> bool {
         self.events.iter().any(|e| {
             let due = Params::ticks(step(&self.p.budget(e.class))) as u16 + self.sup_ticks();
-            e.open() && !skip(e) && u16::from(e.age) + 1 > due
+            e.binding && e.open() && !skip(e) && u16::from(e.age) + 1 > due
         })
     }
 
     /// An obligation that must run before time may pass.
     fn due(&self) -> bool {
-        let active = self.mode == Mode::Active;
-        let s = &self.session;
-        let instant = self.fire_enabled() || (s.life == Life::Idle && s.notify);
-        let takeover = active && self.overdue(|b| b.takeover_secs, |e| e.escalated);
-        let alarm =
-            active && !self.has(Defect::NoAlarm) && self.overdue(|b| b.alarm_secs, |_| false);
+        // Delivery of a wake is not an obligation: it can be late or lost while time passes.
+        let takeover = self.overdue(|b| b.takeover_secs, |e| e.escalated);
+        let alarm = !self.has(Defect::NoAlarm) && self.overdue(|b| b.alarm_secs, |e| e.alarmed);
         let scan = u16::from(Params::ticks(self.p.scan_secs));
         let scans =
             self.mode != Mode::Off && self.since_scan.iter().any(|s| u16::from(*s) + 1 > scan);
@@ -134,7 +137,7 @@ impl Model {
             && self.unattended()
             && self.nudge_target()
             && u16::from(self.asleep_age) + 1 > self.sup_ticks();
-        instant || takeover || alarm || scans || asleep
+        takeover || alarm || scans || asleep
     }
 
     pub(crate) fn tick(&mut self) -> Result<(), Denied> {

@@ -9,16 +9,23 @@ impl Model {
         if active && !(g.fence && g.recovery && g.go && g.shadow_ok) {
             out.push(Invariant::ActivationGate);
         }
-        // The bound runs from occurrence to a reader, whatever the session does: a woken session
-        // that keeps working, a hung source or a dead role are handed to the operator by the alarm.
-        let late = |e: &&Evt| e.open() && e.age > self.bound_ticks(e.class);
-        if active && self.events.iter().filter(late).count() > 0 {
+        // The bound runs from occurrence to a first reader, in every mode and whatever the
+        // session does: a woken session that keeps working, a hung source or a dead role are
+        // handed to the operator by the alarm, which leaves the event pending for the session.
+        let unheld = |e: &&Evt| {
+            e.binding && e.open() && e.reader.is_none() && e.age > self.bound_ticks(e.class)
+        };
+        if self.events.iter().filter(unheld).count() > 0 {
             out.push(Invariant::UrgentBound);
+        }
+        let late = |e: &&Evt| e.binding && e.reader.is_some_and(|a| a > self.bound_ticks(e.class));
+        if self.events.iter().filter(late).count() > 0 {
+            out.push(Invariant::LateReceipt);
         }
         if self
             .events
             .iter()
-            .any(|e| e.stage == Stage::Received && !e.seen && !e.alarmed)
+            .any(|e| e.stage == Stage::Received && !e.seen)
         {
             out.push(Invariant::ReceivedUnread);
         }
