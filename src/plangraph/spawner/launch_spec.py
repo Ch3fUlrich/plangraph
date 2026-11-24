@@ -119,18 +119,19 @@ def build(request: dict) -> dict:
         codex, missing_client = codex_review_client(leg.harness, request['role'], request['run_id'], env=env)
         if missing_client:
             raise LaunchRefused('client_missing', missing_client)
-    from plangraph.planner.route_policy import codex_leg_effort
+    from plangraph.planner.route_policy import codex_leg_effort, refuse_card_sandbox
     from .target import admit_leg, quota_paused
     if quota_paused(request['state'], request['role'], leg):
         raise LaunchRefused('quota_pause', 'quota pause')
     from plangraph.routing_errors import SpawnRefused
     try:
         admit_leg(leg)
+        refuse_card_sandbox(request['card'])
         if request['role'] in ('implement', 'review'):
             leg = codex_leg_effort(leg, request['card'])
     except SpawnRefused as exc:
         reason = str(exc)
-        raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith('effort_') else 'leg_inactive', reason) from None
+        raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith(('effort_', 'sandbox_refused')) else 'leg_inactive', reason) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     if request['role'] == 'research' and request['card'].get('web_required') and not leg.has_web_tools:

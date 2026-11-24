@@ -162,8 +162,13 @@ case "$7" in
     sandbox_workspace_write.writable_roots=*'/repository/.git"'*'/repository/.git/worktrees/worktree"'*) ;;
     *) exit 2 ;;
 esac
+# The credential-isolation profile follows: the default permission profile and its map.
+case "$*" in
+    *'default_permissions="plangraph_isolated"'*'/.config/plangraph"="none"'*) ;;
+    *) exit 3 ;;
+esac
 shift 7
-[ "$1" = -- ]
+while [ "$1" != -- ]; do shift; done
 shift
 exec "$@"
 "#,

@@ -210,3 +210,15 @@ def codex_leg_effort(leg, card):
                 or not isinstance(decision, str) or not re.fullmatch(r'D-[0-9]+', decision)):
             raise SpawnRefused('effort_needs_decision: elevated GPT effort requires matching card.effort and card.effort_decision D-<n>')
     return replace(leg, effort=effort)
+
+
+def refuse_card_sandbox(card):
+    """Refuse a card that names a sandbox wider than the writer sandbox (workspace-write)."""
+    from plangraph.routing_errors import SpawnRefused
+    mode = card.get('sandbox')
+    if mode is None or mode == 'workspace-write':
+        return
+    if mode == 'danger-full-access':
+        raise SpawnRefused('sandbox_refused: danger-full-access is never granted to a spawned run; '
+                           'the run gets workspace-write with the secret paths denied')
+    raise SpawnRefused(f'sandbox_refused: card.sandbox {mode!r} is not supported; only workspace-write is granted')
