@@ -55,11 +55,11 @@ def test_missing_harness_is_its_own_host_reason():
 
 
 def test_digest_line_lists_legs_served_per_host():
-    hosts = {"ws": host_served_legs([GLM, DEEPSEEK], ["opencode-go/deepseek-v4.1-flash"]),
-             "coding.vm": host_served_legs([GLM, DEEPSEEK], [GLM.model, DEEPSEEK.model])}
+    hosts = {"host-b": host_served_legs([GLM, DEEPSEEK], ["opencode-go/deepseek-v4.1-flash"]),
+             "host-a": host_served_legs([GLM, DEEPSEEK], [GLM.model, DEEPSEEK.model])}
     line = served_digest(hosts)
-    assert line == ("legs served per host: coding.vm 2/2; "
-                    f"ws 1/2 (not served: {GLM.id} not_listed: {GLM.model})")
+    assert line == ("legs served per host: host-a 2/2; "
+                    f"host-b 1/2 (not served: {GLM.id} not_listed: {GLM.model})")
 
 
 def _row(**extra):

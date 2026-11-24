@@ -51,9 +51,9 @@ def test_mimo_provider_takes_the_omniroute_base_url_and_key_env():
 
 def test_rendered_mimo_provider_follows_the_omniroute_endpoint():
     config = {"providers": json.loads(REGISTRY.read_text())["providers"]}
-    env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config), "OMNIROUTE_BASE_URL": "http://127.0.0.1:20128/v1"}
+    env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config), "OMNIROUTE_BASE_URL": "http://127.0.0.1:19999/v1"}
     config["providers"]["omniroute"]["settings"].pop("baseURL")
     env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config)
     assert render_gateway_providers(env, "mimo/mimo-v2.6-pro") is None
     rendered = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
-    assert rendered["mimo"]["settings"]["baseURL"] == rendered["omniroute"]["settings"]["baseURL"] == "http://127.0.0.1:20128/v1"
+    assert rendered["mimo"]["settings"]["baseURL"] == rendered["omniroute"]["settings"]["baseURL"] == "http://127.0.0.1:19999/v1"
