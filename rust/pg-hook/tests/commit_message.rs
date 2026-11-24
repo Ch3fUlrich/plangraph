@@ -430,3 +430,82 @@ fn class_search_below_the_scissors_line_git_generated_is_not_checked_and_the_sav
     );
     assert!(!output.status.success(), "{output:?}");
 }
+
+const BAD: &str = "Class-Search: fixture -> 1 hit, 1 changed (prose)";
+const MARKER: &str = "# ------------------------ >8 ------------------------";
+
+fn saved_body(root: &Path) -> String {
+    String::from_utf8(git(root, &["log", "-1", "--format=%B"]).stdout).unwrap()
+}
+
+#[test]
+fn the_hook_follows_the_cutoff_git_applies_to_a_literal_scissors_marker() {
+    let dir = repo();
+    let root = dir.path();
+    // Verbatim -m keeps a marker with a copied hint and everything below it: the bad line is refused.
+    let message = format!(
+        "x\n\nWriter: codex\n\n{MARKER}\n# Do not modify or remove the line above.\n{BAD}\n"
+    );
+    let output = git(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "--cleanup=verbatim",
+            "-m",
+            &message,
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    // `--verbose -m` discards the tail below a literal marker: the same text commits and is not kept.
+    let message = format!(
+        "x\n\nClass-Search: fixture -> 1 hit, 1 changed\n\nWriter: codex\n\n{MARKER}\n{BAD}\n"
+    );
+    let output = git(
+        root,
+        &["commit", "--allow-empty", "--verbose", "-m", &message],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let body = saved_body(root);
+    assert!(
+        body.contains("Class-Search: fixture -> 1 hit, 1 changed\n") && !body.contains("prose"),
+        "{body}"
+    );
+    // A line above the marker of a verbose message is still refused.
+    let message = format!("x\n\n{BAD}\n\nWriter: codex\n\n{MARKER}\n");
+    let output = git(
+        root,
+        &["commit", "--allow-empty", "--verbose", "-m", &message],
+    );
+    assert!(!output.status.success(), "{output:?}");
+}
+
+#[test]
+fn an_edited_scissors_hint_does_not_make_the_hook_refuse_a_discarded_tail() {
+    let dir = repo();
+    let root = dir.path();
+    std::fs::write(root.join("staged.txt"), "z").unwrap();
+    assert!(git(root, &["add", "staged.txt"]).status.success());
+    let editor = format!(
+        "sh -c 'sed -i \"s/Do not modify or remove the line above./changed hint/\" \"$1\"; printf \"{BAD}\\n\" >> \"$1\"' --"
+    );
+    let output = pg_worker_core::git_test_support::command(root)
+        .args([
+            "commit",
+            "--edit",
+            "--verbose",
+            "-m",
+            "hint\n\nWriter: codex",
+        ])
+        .env("GIT_EDITOR", editor)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!saved_body(root).contains("Class-Search"));
+}

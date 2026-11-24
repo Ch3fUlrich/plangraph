@@ -95,35 +95,118 @@ fn scissors_marker<'a>(
         })
 }
 
-/// Where Git discards the message tail: the scissors line it generated for `--verbose` or an editor
-/// message, which it always follows with its own two-line hint. A literal look-alike in a `-m`
-/// message has no hint and is kept (also under commit.cleanup=scissors), so it is not a cut.
-fn generated_scissors_offset(raw: &[u8]) -> Option<usize> {
-    let hint = b" Do not modify or remove the line above.";
-    let mut lines = raw
-        .split_inclusive(|b| *b == b'\n')
-        .scan(0, |offset, line| {
-            let start = *offset;
-            *offset += line.len();
-            Some((start, line.strip_suffix(b"\n").unwrap_or(line)))
-        });
-    let mut previous = lines.next()?;
-    for current in lines {
-        if let Some(prefix) = previous.1.strip_suffix(SCISSORS).filter(|p| !p.is_empty()) {
-            if current.1.strip_prefix(prefix) == Some(hint) {
-                return Some(previous.0);
-            }
-        }
-        previous = current;
-    }
-    None
+/// The `--verbose` and `--cleanup` settings of the `git commit` that runs this hook, from its own
+/// command line (`None` when the parent is not a readable `git commit`).
+struct CommitFlags {
+    verbose: Option<bool>,
+    cleanup: Option<String>,
 }
 
-/// Refusals for the Class-Search lines Git can keep: the whole message file except the tail below the
-/// scissors line Git generated. The lines are read before whitespace cleanup, because
+fn commit_flags() -> Option<CommitFlags> {
+    #[cfg(unix)]
+    {
+        let parent = std::fs::read(format!(
+            "/proc/{}/cmdline",
+            std::os::unix::process::parent_id()
+        ))
+        .ok()?;
+        let argv: Vec<String> = parent
+            .split(|b| *b == 0)
+            .filter(|arg| !arg.is_empty())
+            .map(|arg| String::from_utf8_lossy(arg).into_owned())
+            .collect();
+        if !argv
+            .first()
+            .is_some_and(|git| git.rsplit('/').next() == Some("git"))
+        {
+            return None;
+        }
+        let mut args = argv[argv.iter().position(|arg| arg == "commit")? + 1..].iter();
+        let mut flags = CommitFlags {
+            verbose: None,
+            cleanup: None,
+        };
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                break;
+            }
+            if let Some(long) = arg.strip_prefix("--") {
+                match long.split_once('=') {
+                    _ if long == "verbose" => flags.verbose = Some(true),
+                    _ if long == "no-verbose" => flags.verbose = Some(false),
+                    Some(("cleanup", mode)) => flags.cleanup = Some(mode.to_owned()),
+                    None if long == "cleanup" => flags.cleanup = args.next().cloned(),
+                    None if [
+                        "message",
+                        "file",
+                        "reuse-message",
+                        "reedit-message",
+                        "template",
+                        "author",
+                        "date",
+                        "fixup",
+                        "squash",
+                        "trailer",
+                        "pathspec-from-file",
+                    ]
+                    .contains(&long) =>
+                    {
+                        args.next();
+                    }
+                    _ => {}
+                }
+            } else if let Some(cluster) = arg.strip_prefix('-').filter(|c| !c.is_empty()) {
+                for (index, flag) in cluster.char_indices() {
+                    match flag {
+                        'v' => flags.verbose = Some(true),
+                        'm' | 'F' | 'C' | 'c' | 't' => {
+                            if index + 1 == cluster.len() {
+                                args.next();
+                            }
+                            break;
+                        }
+                        'S' | 'u' => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Some(flags)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// Whether Git cuts the message at its scissors line: with `--verbose` or `commit.verbose`, or for an
+/// editor message under `--cleanup=scissors` / `commit.cleanup=scissors` (without an editor that
+/// mode falls back to whitespace cleanup). `None` when the command line is unknown.
+fn git_cuts_at_scissors() -> Result<Option<bool>, Box<dyn std::error::Error>> {
+    let Some(flags) = commit_flags() else {
+        return Ok(None);
+    };
+    let verbose = match flags.verbose {
+        Some(verbose) => verbose,
+        None => config_value("commit.verbose")?.is_some_and(|v| {
+            matches!(v.to_lowercase().as_str(), "true" | "yes" | "on")
+                || v.parse::<i64>().is_ok_and(|n| n > 0)
+        }),
+    };
+    let editor = std::env::var_os("GIT_EDITOR").as_deref() != Some(std::ffi::OsStr::new(":"));
+    let cleanup = match flags.cleanup {
+        Some(mode) => Some(mode),
+        None => config_value("commit.cleanup")?,
+    };
+    Ok(Some(
+        verbose || (editor && cleanup.as_deref() == Some("scissors")),
+    ))
+}
+
+/// Refusals for the Class-Search lines Git can keep (`kept`: the message file up to the scissors line
+/// Git cuts at, when it cuts). The lines are read before whitespace cleanup, because
 /// `--cleanup=verbatim` keeps trailing whitespace that the range check then refuses.
-fn class_search_violations(raw: &[u8]) -> Vec<String> {
-    let kept = &raw[..generated_scissors_offset(raw).unwrap_or(raw.len())];
+fn class_search_violations(kept: &[u8]) -> Vec<String> {
     let mut violations = Vec::new();
     for (index, line) in kept.split(|b| *b == b'\n').enumerate() {
         let line = String::from_utf8_lossy(line.strip_suffix(b"\r").unwrap_or(line));
@@ -157,9 +240,13 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let raw = std::fs::read(message)?;
     let strip_comments = strips_comments()?;
     let configured = config_value("core.commentString")?.or(config_value("core.commentChar")?);
-    let marker = scissors_marker(&raw, strip_comments, configured.as_deref());
+    // Git's own cutoff decides which tail is discarded; an unknown command line cuts where comments
+    // are stripped (as before) and checks every Class-Search line.
+    let cuts = git_cuts_at_scissors()?;
+    let marker = scissors_marker(&raw, cuts.unwrap_or(strip_comments), configured.as_deref());
     let cut = marker.map_or(raw.len(), |(offset, _)| offset);
-    let class_search = class_search_violations(&raw);
+    let class_search =
+        class_search_violations(&raw[..if cuts == Some(true) { cut } else { raw.len() }]);
     if merge.status.success() {
         // A merge needs no attribution, but its Class-Search lines reach the same range check.
         for violation in &class_search {
