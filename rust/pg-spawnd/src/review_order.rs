@@ -82,8 +82,8 @@ fn final_leg(record: &Value) -> Option<&str> {
 }
 
 /// What the stored prompt shows about its order. `Closing`: the `=== REVIEW OUTPUT` heading and
-/// the contract line are the last content (stable-first). `Leading`: the contract line has no
-/// heading and any `=== ` evidence section (item context, inline diff, review material) follows it.
+/// the contract line are the last content (stable-first). `Leading`: the contract line, marked
+/// or not, is followed by any `=== ` evidence section (item context, inline diff, review material) follows it.
 /// Anything else carries no unambiguous layout.
 #[derive(Clone, Copy, PartialEq)]
 enum Layout {
@@ -102,7 +102,7 @@ fn layout_of(text: &str) -> Layout {
     let nothing_after = lines[at + 1..].iter().all(|l| l.trim().is_empty());
     match (headed, evidence_after, nothing_after) {
         (true, false, true) => Layout::Closing,
-        (false, true, _) => Layout::Leading,
+        (_, true, _) => Layout::Leading,
         _ => Layout::Unknown,
     }
 }
@@ -188,8 +188,8 @@ pub(crate) fn compare(
     hosts: &[String],
 ) -> Value {
     let mut tallies: BTreeMap<&str, Stratum> = BTreeMap::new();
-    let (mut unlaunched, mut no_prompt, mut no_start, mut unknown, mut unchanged) =
-        (0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut unlaunched, mut no_prompt, mut no_start, mut unknown, mut unchanged, mut no_evidence) =
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
     let layouts: Vec<Option<Layout>> = records
         .iter()
         .map(|r| {
@@ -201,7 +201,9 @@ pub(crate) fn compare(
     // layout dispatched after it was not reordered by the rollout and is no before sample.
     let mut rollout: BTreeMap<&str, f64> = BTreeMap::new();
     for (record, layout) in records.iter().zip(&layouts) {
-        if let (Some(Layout::Closing), Some(started)) = (layout, record["started"].as_f64()) {
+        if let (Some(Layout::Closing), Some(started), Some(_)) =
+            (layout, record["started"].as_f64(), final_leg(record))
+        {
             let at = rollout
                 .entry(record["host"].as_str().unwrap_or("unknown"))
                 .or_insert(started);
@@ -236,11 +238,17 @@ pub(crate) fn compare(
                 no_prompt += 1;
                 continue;
             }
-            Some(Layout::Leading) if rollout.get(host).is_some_and(|&at| started >= at) => {
-                unchanged += 1;
-                continue;
-            }
-            Some(Layout::Leading) => 0,
+            Some(Layout::Leading) => match rollout.get(host) {
+                Some(&at) if started < at => 0,
+                Some(_) => {
+                    unchanged += 1; // dispatched after the host was reordered, yet not reordered
+                    continue;
+                }
+                None => {
+                    no_evidence += 1; // no reordered prompt on this host: exposure unverified
+                    continue;
+                }
+            },
             Some(Layout::Closing) => 1,
             Some(Layout::Unknown) => {
                 unknown += 1;
@@ -294,7 +302,8 @@ pub(crate) fn compare(
         leg); cohort = prompt order read from the stored prompt.txt: after when the \
         === REVIEW OUTPUT heading and the contract line are the last content, before when the \
         contract line has no heading and an === section follows it and the host had not yet produced a \
-        reordered prompt (a later one is post_rollout_unreordered), otherwise unknown_layout and \
+        reordered prompt (a later one is post_rollout_unreordered, a host with none is \
+        no_rollout_evidence), otherwise unknown_layout and \
         excluded; --host keeps the named hosts; no_verdict = review result other than verdict; cached share = cached / total input \
         tokens summed over live.log usage frames. Runs with more than one launched attempt and no \
         archived live-attempt log share one live.log: counted in mixed_leg_excluded, left out of \
@@ -304,7 +313,7 @@ pub(crate) fn compare(
         "strata":strata, "unmatched":unmatched,
         "excluded":{"unlaunched":unlaunched,
             "no_prompt":no_prompt, "unknown_layout":unknown,
-            "post_rollout_unreordered":unchanged, "no_start_time":no_start},
+            "post_rollout_unreordered":unchanged, "no_rollout_evidence":no_evidence, "no_start_time":no_start},
         "matched_total":{"before":sum_before.view("before"), "after":sum_after.view("after")}})
 }
 

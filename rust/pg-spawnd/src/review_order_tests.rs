@@ -225,35 +225,42 @@ fn layouts_come_from_prompt_structure_and_unknown_ones_are_reported_apart() {
     store("run-nocontract", "brief only\n");
     // a contract with no heading and nothing after it carries no layout evidence
     store("run-contractlast", &format!("brief\n{CONTRACT}"));
-    // heading and contract followed by more material is not a closing contract
+    // a marked prompt whose evidence still follows the contract is the order the policy reorders
     store(
         "run-trailing",
         &format!("brief\n=== REVIEW OUTPUT\n{CONTRACT}\n=== ITEM CONTEXT\nx\n"),
     );
+    let closing = cohort_run(s, "run-closing", 90, "w", true, true, &step(1, 1));
+    let records: Vec<_> = records.into_iter().chain([closing]).collect();
     let report = compare(s, &records, WINDOW, &[], &[]);
-    assert_eq!(report["strata"]["w"]["before"]["reviews"], 2); // mention + shortdiff
-    assert_eq!(report["strata"]["w"]["after"]["reviews"], 0);
-    assert_eq!(report["excluded"]["unknown_layout"], 3);
+    assert_eq!(report["strata"]["w"]["before"]["reviews"], 3); // mention + shortdiff + marked old
+    assert_eq!(report["strata"]["w"]["after"]["reviews"], 1);
+    assert_eq!(report["excluded"]["unknown_layout"], 2);
 }
 
 #[test]
 fn strata_report_host_and_harness_provenance_and_filter_by_host() {
     let state = tempfile::tempdir().unwrap();
     let s = state.path();
+    let leg = json!({"id":"w", "harness":"opencode", "roles":["review","implement"]});
     let mut one = cohort_run(s, "run-h1", 10, "w", true, false, &step(1, 1));
     one["host"] = json!("host-a");
-    one["chosen_leg"] = json!({"id":"w", "harness":"opencode", "roles":["review","implement"]});
+    one["chosen_leg"] = leg.clone();
     let mut two = cohort_run(s, "run-h2", 11, "w", true, true, &step(1, 1));
     two["host"] = json!("host-b");
-    two["chosen_leg"] = json!({"id":"w", "harness":"opencode", "roles":["review","implement"]});
-    let report = compare(s, &[one.clone(), two.clone()], WINDOW, &[], &[]);
+    two["chosen_leg"] = leg.clone();
+    let mut three = cohort_run(s, "run-h3", 20, "w", true, true, &step(1, 1));
+    three["host"] = json!("host-a");
+    three["chosen_leg"] = leg;
+    let all = [one, two, three];
+    let report = compare(s, &all, WINDOW, &[], &[]);
     let prov = &report["strata"]["w"]["provenance"];
-    assert_eq!(prov["hosts"], json!({"host-a":1, "host-b":1}));
-    assert_eq!(prov["harnesses"], json!({"opencode":2}));
+    assert_eq!(prov["hosts"], json!({"host-a":2, "host-b":1}));
+    assert_eq!(prov["harnesses"], json!({"opencode":3}));
     assert_eq!(prov["leg_roles"], json!(["implement", "review"]));
-    let only_a = compare(s, &[one, two], WINDOW, &[], &["host-a".into()]);
+    let only_a = compare(s, &all, WINDOW, &[], &["host-a".into()]);
     assert_eq!(only_a["strata"]["w"]["before"]["reviews"], 1);
-    assert_eq!(only_a["strata"]["w"]["after"]["reviews"], 0);
+    assert_eq!(only_a["strata"]["w"]["after"]["reviews"], 1);
 }
 
 fn store_prompt(s: &Path, id: &str, text: &str) {
@@ -287,13 +294,14 @@ fn a_leading_layout_after_the_host_first_closing_prompt_was_not_reordered() {
     // same old layout, dispatched after this host already produced a reordered prompt
     let mut unchanged = cohort_run(s, "run-late", 40, "w", true, false, &step(1, 1));
     unchanged["host"] = json!("h1");
-    // another host has no reordered prompt yet: its old layout is not exposed either way
+    // another host has no reordered prompt: exposure cannot be verified, so it counts nowhere
     let mut other = cohort_run(s, "run-other", 50, "w", true, false, &step(1, 1));
     other["host"] = json!("h2");
     let report = compare(s, &[early, first_new, unchanged, other], WINDOW, &[], &[]);
-    assert_eq!(report["strata"]["w"]["before"]["reviews"], 2); // early + other
+    assert_eq!(report["strata"]["w"]["before"]["reviews"], 1); // early
     assert_eq!(report["strata"]["w"]["after"]["reviews"], 1);
     assert_eq!(report["excluded"]["post_rollout_unreordered"], 1);
+    assert_eq!(report["excluded"]["no_rollout_evidence"], 1);
 }
 
 #[test]
@@ -336,4 +344,29 @@ fn provenance_comes_from_the_attempt_used_for_grouping() {
     assert_eq!(prov["harnesses"]["opencode"], 1);
     assert!(prov["harnesses"]["agy"].is_null());
     assert_eq!(prov["leg_roles"], json!(["implement", "review"]));
+}
+
+#[test]
+fn an_old_layout_needs_a_reordered_prompt_on_its_host_to_count_as_before() {
+    let state = tempfile::tempdir().unwrap();
+    let s = state.path();
+    let mut lone = cohort_run(s, "run-lone", 10, "w", true, false, &step(1, 1));
+    lone["host"] = json!("h-none"); // this host never produced a reordered prompt
+    let report = compare(s, &[lone], WINDOW, &[], &[]);
+    assert!(report["strata"]["w"].is_null());
+    assert_eq!(report["excluded"]["no_rollout_evidence"], 1);
+}
+
+#[test]
+fn a_skipped_only_run_does_not_set_the_rollout_cutoff() {
+    let state = tempfile::tempdir().unwrap();
+    let s = state.path();
+    let before = cohort_run(s, "run-before", 10, "w", true, false, &step(1, 1));
+    let mut skipped_only = cohort_run(s, "run-skip", 5, "w", true, true, &step(1, 1));
+    skipped_only["attempts"] = attempts(&[("w", "skipped")]);
+    let first_launched = cohort_run(s, "run-first", 30, "w", true, true, &step(1, 1));
+    let report = compare(s, &[before, skipped_only, first_launched], WINDOW, &[], &[]);
+    assert_eq!(report["strata"]["w"]["before"]["reviews"], 1);
+    assert_eq!(report["strata"]["w"]["after"]["reviews"], 1);
+    assert_eq!(report["excluded"]["unlaunched"], 1);
 }

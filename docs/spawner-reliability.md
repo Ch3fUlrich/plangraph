@@ -90,11 +90,14 @@ Recovery metrics retain full corrected history, and leg metadata is chronologica
 [--state PATH]` measures the stable-first prompt order from recorded review runs started in
 `[since, until)`. The cohort of a review is read from the structure of its stored
 `prompt.txt`: `after` when the `=== REVIEW OUTPUT` heading and the line starting `Name each
-finding as file:line.` are the last content; `before` when that contract line has no heading and an `=== ` section follows it and the host
-had not yet dispatched a reordered prompt. An old layout dispatched after the host's first
-reordered prompt was not changed by the rollout and is `excluded.post_rollout_unreordered`;
+finding as file:line.` are the last content; `before` when that contract line, marked or not, is followed by an `=== ` section and the host
+had already shown that the rollout reorders prompts only by dispatching a reordered one later:
+the host's first reordered prompt is its rollout point. An old layout dispatched after that
+point was not changed by the rollout and is `excluded.post_rollout_unreordered`; on a host with
+no reordered prompt the exposure cannot be verified and it is `excluded.no_rollout_evidence`;
 any other prompt is `excluded.unknown_layout`, a launched run with no stored prompt is
-`excluded.no_prompt`, and a review with attempts but no launch is `excluded.unlaunched`.
+`excluded.no_prompt`, and a review with attempts but no launch is `excluded.unlaunched` (it
+also never sets a rollout point).
 A review is grouped by its
 last launched leg (a leg is an object or a bare string). Per leg (matched only with reviews
 in both cohorts) it prints reviews, no-verdict share, cached-input-token share with its token
@@ -107,7 +110,8 @@ and they are counted in `mixed_leg_excluded` only, not in `missing_usage`. Read-
 Measured 2026-11-24 on one workstation state, exact command `pg-spawnd health review-order
 --state <state> --since 2026-11-11T00:00:00Z --until 2026-11-25T00:00:00Z` (run without
 `--leg` so every leg is listed; one matched leg, all others have reviews in one cohort only).
-Excluded: 63 unlaunched, 132 unknown layout, 0 post-rollout unreordered, 0 without a prompt.
+Excluded: 63 unlaunched, 132 unknown layout, 0 post-rollout unreordered, 0 without rollout
+evidence, 0 without a prompt.
 Matched leg `opencode-go-deepseek-v4-flash` (catalog roles implement, research and review,
 opencode harness); its 56 counted reviews come from one host, whose name stays out of the
 repository. Run records carry no coding-worker designation for a host or a leg, so this
