@@ -32,6 +32,8 @@ SQLite schema v22 and PostgreSQL migration 21 add `landing_claim_bases` to pin t
 
 The lander checks dependencies before merging. When settlement verifies a merge on main, the keeper records the actual included parts and keeps the first unmet dependency as `dependency_warning` in the landing journal. Settlement can then finish and the warning remains visible in the journal.
 
+The `land` action `recent` (router or system, `limit` 1 to 100) lists the newest landed, not abandoned trains with their batch key and merge commit; `plangraph landing report OWNER/REPO --last N` reads each train's `timeline` from it and prints the critical path and slowest stage per train and over the last N trains.
+
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
 `items(key PK, project, id, title, kind, track, owner, estimate_h, estimate_src, done_criteria, evidence_kinds json, operator,

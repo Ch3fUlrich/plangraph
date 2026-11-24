@@ -84,33 +84,88 @@ fn the_report_names_the_slowest_stage_per_train_and_over_the_last_trains() {
         .starts_with("slowest stage over 3 trains: review"));
 }
 
-#[test]
-fn ci_jobs_become_stages_with_their_runner_and_result() {
-    let jobs = vec![
-        json!({"name": "Rust on Windows", "runner_name": "win-1", "conclusion": "failure",
-               "started_at": "2026-11-21T07:26:00Z", "completed_at": "2026-11-21T07:41:54Z"}),
-        json!({"name": "queued", "started_at": null, "completed_at": null}),
-    ];
-    let stages = ci_stages("train1", "abc", &jobs);
-    assert_eq!(stages.len(), 1, "a job that never ran has no stage");
-    assert_eq!(
-        (
-            stages[0].stage.as_str(),
-            stages[0].host.as_str(),
-            stages[0].result.as_str()
-        ),
-        ("ci:Rust on Windows", "win-1", "failure")
-    );
-    assert_eq!(stages[0].secs(), 954);
+/// A recorded landed train as the keeper's `timeline` action returns it (milliseconds): the stage rows of
+/// the train and its CI jobs. The whole-run `ci` row is replaced by the jobs.
+fn keeper_reply(base_s: i64, review_s: i64) -> serde_json::Value {
+    let row = |stage: &str, head: &str, start: i64, end: i64| {
+        json!({"stage": stage, "head": head, "attempt": 1,
+               "started_at_ms": (base_s + start) * 1000, "ended_at_ms": (base_s + end) * 1000})
+    };
+    let job = |name: &str, conclusion: &str, start: i64, end: i64| {
+        json!({"name": name, "head": "h", "conclusion": conclusion,
+               "started_at_ms": (base_s + start) * 1000, "ended_at_ms": (base_s + end) * 1000})
+    };
+    json!({
+        "stages": [
+            row("fast_checks", "h", 0, 300),
+            row("push", "h", 400, 2200),
+            row("ci", "h", 2250, 3250),
+            row("review", "h", 3300, 3300 + review_s),
+            row("go", "h", 3300 + review_s, 3900 + review_s),
+            row("merge", "h", 3900 + review_s, 3960 + review_s),
+            row("host_sync", "h", 3960 + review_s, 4100 + review_s),
+        ],
+        "jobs": [
+            job("Rust on Windows", "failure", 2300, 3250),
+            job("worker crate", "success", 2300, 2890),
+        ],
+    })
 }
 
 #[test]
-fn the_ledger_round_trips_and_a_missing_one_is_empty() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("sub/ledger.jsonl");
-    assert!(load(&path).unwrap().is_empty());
-    for s in fixture_train("t1", 0) {
-        append(&path, &s).unwrap();
+fn a_keeper_timeline_becomes_stages_with_jobs_in_place_of_the_ci_run() {
+    let stages = from_keeper("train-1", &keeper_reply(0, 1500));
+    let names: Vec<&str> = stages.iter().map(|s| s.stage.as_str()).collect();
+    assert!(!names.contains(&"ci"), "{names:?}");
+    let win = stages
+        .iter()
+        .find(|s| s.stage == "ci:Rust on Windows")
+        .unwrap();
+    assert_eq!(
+        (win.host.as_str(), win.result.as_str(), win.secs()),
+        ("github", "failure", 950)
+    );
+    assert!(missing(&stages).is_empty(), "{:?}", missing(&stages));
+}
+
+#[test]
+fn a_landed_train_report_names_the_slowest_stage_per_train_and_over_the_last_trains() {
+    let mut stages = Vec::new();
+    for (name, base, review) in [
+        ("train-1", 0, 1500),
+        ("train-2", 100_000, 1400),
+        ("train-3", 200_000, 9000),
+    ] {
+        stages.extend(from_keeper(name, &keeper_reply(base, review)));
     }
-    assert_eq!(load(&path).unwrap(), fixture_train("t1", 0));
+    let r = report(&stages, 10);
+    let by = |n: &str| r.trains.iter().find(|t| t.subject == n).unwrap();
+    assert_eq!(by("train-1").bottleneck, ("push".to_owned(), 1800));
+    assert_eq!(by("train-3").bottleneck, ("review".to_owned(), 9000));
+    assert!(r.trains.iter().all(|t| t.missing.is_empty()));
+    assert_eq!(r.top_stages[0].0, "review");
+    let lines = render(&r);
+    assert!(
+        lines
+            .last()
+            .unwrap()
+            .starts_with("slowest stage over 3 trains: review"),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_train_with_a_missing_stage_is_reported_incomplete() {
+    let mut reply = keeper_reply(0, 100);
+    reply["stages"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| r["stage"] != "host_sync" && r["stage"] != "go");
+    let stages = from_keeper("train-9", &reply);
+    assert_eq!(missing(&stages), vec!["go", "host_sync"]);
+    let lines = render(&report(&stages, 5));
+    assert!(
+        lines[0].contains("incomplete: no go, host_sync"),
+        "{lines:?}"
+    );
 }
