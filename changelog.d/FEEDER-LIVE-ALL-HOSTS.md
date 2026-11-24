@@ -23,3 +23,4 @@ A live tick cuts a batch to the members whose claims and releases fit the remain
 The quota timer reads the policy file the worker's feeder actually uses (FEEDER_POLICY in the per-worker env file, plangraph quota --push --worker-policy PATH).
 A hand lane's card names only whole plangraph:ID tokens as held items.
 An empty or truncated spawner answer after a launch is looked up in the spawner's run list before any claim is released; only a positive not-started releases.
+The batch size limit is applied during related-item selection, and a tick that runs short of time mid-batch launches the members already checked instead of giving the whole batch back.

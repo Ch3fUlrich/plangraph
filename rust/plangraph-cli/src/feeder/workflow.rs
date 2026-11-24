@@ -67,7 +67,12 @@ fn claim_batch(
         // This claim may succeed, so its release must fit too; out of time, give back what is
         // held and let the tick stop (the next tick takes the work).
         if !call_fits(launch, budget, claimed.len() + 1) {
-            return Ok(out_of_time(&claimed, item, launch, dropped));
+            // Out of time for another claim: the members claimed so far still make a batch.
+            if claimed.is_empty() {
+                return Ok(out_of_time(&claimed, item, launch, dropped));
+            }
+            dropped.push(json!({"item_key":item.key,"reason":"tick_budget"}));
+            break;
         }
         match launch.claim(&item.key) {
             Ok(epoch) => claimed.push((item.clone(), epoch)),
@@ -93,7 +98,18 @@ fn claim_batch(
         if !call_fits(launch, budget, pending) {
             let mut all = held.clone();
             all.extend(claimed[at..].iter().cloned());
-            return Ok(out_of_time(&all, item, launch, dropped));
+            // The seed itself is unchecked: nothing to launch, give everything back.
+            if at == 0 {
+                return Ok(out_of_time(&all, item, launch, dropped));
+            }
+            // The checked members are a batch of their own: give back only the unchecked ones.
+            for (task, _) in &claimed[at..] {
+                dropped.push(json!({"item_key":task.key,"reason":"tick_budget"}));
+            }
+            for (key, error) in release_held(&claimed[at..], launch) {
+                dropped.push(json!({"item_key":key,"reason":format!("release failed: {error}")}));
+            }
+            break;
         }
         match launch.rival(&item.key, &item.files, &own) {
             Ok(None) => held.push((item.clone(), *epoch)),
@@ -322,10 +338,19 @@ pub fn tick(
             break;
         }
         attempt_started = Some(now);
-        let mut batch = pick_batch(&ready, &sim_runs, policy);
-        if !dry {
-            batch.truncate(claims_that_fit(now, policy.tick_budget_seconds));
-        }
+        // The size limit is part of the selection, not a cut after it: a member that connects
+        // two otherwise unrelated items is chosen before the limit is reached.
+        let limited = Policy {
+            batch_max_items: if dry {
+                policy.batch_max_items
+            } else {
+                policy
+                    .batch_max_items
+                    .min(claims_that_fit(now, policy.tick_budget_seconds))
+            },
+            ..policy.clone()
+        };
+        let batch = pick_batch(&ready, &sim_runs, &limited);
         let Some(seed) = batch.first() else { break };
         if let Admission::Refuse(reason) = admit(&sim_facts, policy) {
             if rows.is_empty() {
