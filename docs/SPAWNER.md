@@ -663,13 +663,6 @@ maintenance. Fixture Git failures retain stderr; Windows fixture subprocesses
 use CREATE_NO_WINDOW. The cache-survival assertion also runs in a 50-iteration
 stress test. Windows CI and recorded reruns provide platform evidence.
 
-Native writer progress admission: [run contract](native-writer-progress-admission.md).
-The native writer's `cargo` shim holds the shared Cargo lease per command
-(read-only lock open; preflight and fast checks set `PLANGRAPH_CARGO_LEASE_HELD`),
-and cap/trim refusals name holder pids from `/proc/locks`. Before the protected
-push the host supervisor reclaims an over-cap target (or leaves `push_pending`
-for a push-only retry); `native_spawn` holds no supervisor-lifetime lease.
-Disk floor guards, allocated Cargo cap accounting and cleanup-before-refusal:
-[disk admission](operations/spawner-disk-admission.md).
+Native writer progress admission: [run contract](native-writer-progress-admission.md). Disk floor guards, allocated Cargo cap accounting, the per-command Cargo lease and cleanup-before-refusal: [disk admission](operations/spawner-disk-admission.md).
 
 [Per-item checkpoint and status notes](checkpoints/), e.g. [keeper-refused completion deliveries](checkpoints/LE-KEEPER-REFUSED-CALL-LOOPS.md). Add new notes there, one file per item, rather than appending here.
