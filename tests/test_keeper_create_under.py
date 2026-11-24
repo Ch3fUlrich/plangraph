@@ -507,3 +507,19 @@ def test_define_writer_slices_requires_the_sliced_item_key(w, tmp_path):
         assert w.store._item("plangraph:LESSONS-ENFORCE")["depends_on"] == ["plangraph:FOLLOWUP"]
     finally:
         doors.close()
+
+
+def test_deploy_blocker_items_of_a_train_are_accepted_by_define(w):
+    """The file ``plangraph land-train deploy-plan --blockers-out`` writes is a valid ``pg define`` payload.
+
+    The fixture is also compared with the Rust output (rust/plangraph-cli/src/land/deploy_tests.rs), so the
+    two cannot drift: an item without ``id`` or with a kind the keeper does not know is refused here.
+    """
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parents[1] / "rust/plangraph-cli/tests/fixtures/deploy-blocker-items.json"
+    items = json.loads(fixture.read_text())["items"]
+    w.store.create_items(w.p("router"), [defn("LESSONS-ENFORCE", project="plangraph", kind="goal")])
+    out = w.store.create_items(w.p("router"), items)
+    assert out["created"] == ["plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-BETA"]
+    assert out["attached"] == [{"key": out["created"][0], "under": "plangraph:LESSONS-ENFORCE"}]
