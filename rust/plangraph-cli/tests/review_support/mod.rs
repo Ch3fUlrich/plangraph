@@ -198,6 +198,12 @@ while not (run / "release").exists() and time.monotonic() < deadline:
         sys.exit(0)
 
     live_log.write_text(reply, encoding="utf-8")
+    if MODE == "harness_refused":
+        rec = {{"run_id": run_id, "status": "failed", "exit_code": 1, "chosen_leg": None,
+               "reason": "harness_not_found opencode /usr/bin:/bin"}}
+        (run_dir / "record.json").write_text(json.dumps(rec), encoding="utf-8")
+        print(json.dumps(rec))
+        sys.exit(1)
     rec = {{
         "run_id": run_id,
         "status": "completed",

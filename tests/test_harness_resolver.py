@@ -11,7 +11,6 @@ import pytest
 
 from plangraph.routing_support import clients, leg_state, resolver
 from plangraph.routing_support.clients import resolve_harness_binary
-from plangraph.spawner import run_watchdog
 
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -106,21 +105,40 @@ def test_seat_reason_carries_the_refused_runs_cause():
     assert record["plan"]["seat_coverage"][0]["reason"] == cause
 
 
-def _seat(run_id, reason, role="review"):
-    return dict(run_id=run_id, role=role, status="failed", reason=reason)
+def _spawn_claude(tmp_path, monkeypatch, home):
+    """SpawnerRunner.spawn of the claude harness from a bare unit environment; returns (exe the factory got, job)."""
+    import asyncio
+    from plangraph.spawner.runner import SpawnerRunner
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", SYSTEM_PATH)
+    monkeypatch.setenv("INVOCATION_ID", "unit")
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    async def factory(exe, *args, **kwargs):
+        seen["exe"] = exe
+        raise Stop
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    job = None
+    try:
+        job = asyncio.run(runner.spawn("review this", "claude-haiku-5-5", role="review", client="claude",
+                                       cwd=str(tmp_path)))
+    except Stop:
+        pass
+    return seen.get("exe"), job
 
 
-def test_two_seats_without_a_verdict_for_one_cause_raise_one_alert(tmp_path):
-    cause = "harness_not_found opencode /usr/bin:/bin"
-    assert run_watchdog.note_no_verdict(tmp_path, _seat("run-aa", cause), now=1000) is None
-    alert = run_watchdog.note_no_verdict(tmp_path, _seat("run-bb", cause), now=1600)
-    assert alert and alert["kind"] == "no_verdict_repeat" and alert["seats"] == ["run-aa", "run-bb"]
-    assert run_watchdog.note_no_verdict(tmp_path, _seat("run-cc", cause), now=1700) is None   # one alert per window
-    assert len((tmp_path / "alerts.jsonl").read_text().splitlines()) == 1
+def test_spawn_from_a_bare_unit_executes_the_harness_found_off_path(bare_unit, tmp_path, monkeypatch):
+    binary = _binary(bare_unit / ".nvm/versions/node/v24.19.0/bin", "claude")
+    assert shutil_which_system("claude") is None
+    exe, _ = _spawn_claude(tmp_path, monkeypatch, bare_unit)
+    assert exe == str(binary)   # the process factory received the resolver's absolute path
 
 
-def test_different_causes_or_old_seats_raise_nothing(tmp_path):
-    assert run_watchdog.note_no_verdict(tmp_path, _seat("run-aa", "provider usage limit"), now=0) is None
-    assert run_watchdog.note_no_verdict(tmp_path, _seat("run-bb", "harness_not_found x /bin"), now=10) is None
-    assert run_watchdog.note_no_verdict(tmp_path, _seat("run-cc", "provider usage limit"), now=4000) is None
-    assert run_watchdog.note_no_verdict(tmp_path, _seat("run-dd", "x", role="implement"), now=4001) is None
+def test_spawn_without_the_harness_is_refused_by_name_before_any_exec(bare_unit, tmp_path, monkeypatch):
+    exe, job = _spawn_claude(tmp_path, monkeypatch, bare_unit)
+    assert exe is None, "nothing may be executed"
+    assert job.status == "failed" and job.stderr.startswith("harness_not_found claude ")

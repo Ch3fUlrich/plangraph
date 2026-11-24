@@ -102,6 +102,7 @@ pub(super) fn evaluate_seat_record(
         format!("{}..+{}files", paths[0], paths.len() - 1)
     };
 
+    let reason = if passed { None } else { refusal_reason(record) };
     SeatOutcome {
         index,
         total,
@@ -116,5 +117,34 @@ pub(super) fn evaluate_seat_record(
         test_gaming,
         paths_summary,
         passed,
+        reason,
     }
+}
+
+/// The cause the spawner recorded for a run that did not finish as a verdict, on one line.
+fn refusal_reason(record: &Value) -> Option<String> {
+    let text = ["reason", "error"]
+        .iter()
+        .find_map(|key| record[*key].as_str())
+        .or_else(|| {
+            record["attempts"].as_array().and_then(|attempts| {
+                attempts
+                    .iter()
+                    .find_map(|attempt| attempt["skip_reason"].as_str())
+            })
+        })
+        .or_else(|| {
+            record
+                .pointer("/plan/seat_coverage/0/reason")
+                .and_then(Value::as_str)
+        })
+        .filter(|text| !text.trim().is_empty())?;
+    Some(
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(240)
+            .collect(),
+    )
 }
