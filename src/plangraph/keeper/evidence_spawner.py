@@ -49,10 +49,15 @@ def _tests_reported(text):
             fence = None if fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) else fence or marker[1]
         elif fence is None and line.startswith("TESTS:"):
             body = line[6:].strip().lower()
-    zero = re.search(r"\b0\s+(?:passed|failed|selected|collected|ran|tests?)\b|\bno tests\b", body or "")
-    return bool(body) and not re.search(r"requires approval|not permitted|denied|disallowed", body) \
-        and not re.match(r"(?:none|no|not|n/a|skipped|could not|cannot|can not|did not)\b", body) \
-        and not (zero and not re.search(r"\b[1-9][0-9]*\s+(?:passed|failed|selected|collected|ran|tests?)\b", body))
+    executed = re.search(r"\b[1-9][0-9]*\s+(?:passed|failed|ran|ok)\b|\btests?\s+(?:passed|ok)\b", body or "")
+    return bool(body) and bool(executed) and not re.search(r"requires approval|not permitted|denied|disallowed|collect[- ]only|--co\b|--no-run", body) \
+        and not re.match(r"(?:none|no|not|n/a|skipped|could not|cannot|can not|did not)\b", body)
+
+
+def _declared_head(text, head):
+    """True when every standalone ``HEAD:`` line of the review names *head*, and at least one does."""
+    named = re.findall(r"(?im)^[ \t]*[*_`]*HEAD[*_`]*[ \t]*:[ \t]*[*_`]*([0-9a-f]{7,40})(?![0-9a-f])", text)
+    return bool(named) and all(sha.lower() == head.lower() for sha in named)
 
 
 def _record_names_item(record, key):
@@ -77,7 +82,7 @@ def _recorded_harness_seat(record, completion, text, head):
             or leg.get("harness") not in (None, harness) or not leg.get("family") or not model_family(model)
             or not isinstance(text, str) or not has_files_read(text)
             or not isinstance(head, str) or not head
-            or not re.search(rf"(?<![0-9a-fA-F]){re.escape(head)}(?![0-9a-fA-F])", text, re.I)
+            or not _declared_head(text, head)
             or (harness == "opencode" and not _tests_reported(text))):
         return None
     return {"model": model, "harness": harness, "witness": "recorded-harness"}
