@@ -373,3 +373,113 @@ fn the_cli_prints_the_verdicts_naming_both_heads_and_the_daily_report() {
         ["2026-11-24 rebases 1 accepts_carried 1 ci_carried 1 re_reviews 0 fix_rounds_after_rebase 0"]
     );
 }
+
+#[test]
+fn a_void_condition_without_a_prior_accept_has_nothing_to_void_and_no_re_review_is_logged() {
+    let mut e = evidence(0);
+    e.accept = false;
+    let d = decide(&e, &facts(key("other", &["a.txt", "b.txt"]), &[], false, 0));
+    assert_eq!(d.accept, Accept::None);
+    assert_eq!(d.ci, Ci::Rerun(CiRerun::Void(Void::PatchIdChanged)));
+    let kinds: Vec<Kind> = records_of(&d, "2026-11-24")
+        .into_iter()
+        .map(|r| r.kind)
+        .collect();
+    assert_eq!(kinds, [Kind::Rebase]);
+}
+
+fn flags(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()
+}
+
+#[test]
+fn assess_appends_its_records_and_the_record_command_adds_a_rebase_fix_round() {
+    let fx = Fx::new();
+    let base = fx.base();
+    let head = fx.commit(&base, "a.txt", "a\n");
+    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
+    let new_head = rebased(&fx, &head, &main1);
+    let dir = tempfile::tempdir().unwrap();
+    let ev = dir.path().join("ev.json");
+    std::fs::write(
+        &ev,
+        serde_json::to_vec(&recorded(&fx, &base, &head)).unwrap(),
+    )
+    .unwrap();
+    let log = dir.path().join("log.jsonl");
+    let assess = flags(&[
+        ("repo", fx.path().to_str().unwrap()),
+        ("evidence", ev.to_str().unwrap()),
+        ("main", &main1),
+        ("head", &new_head),
+        ("trains-now", "1"),
+        ("records-out", log.to_str().unwrap()),
+        ("day", "2026-11-24"),
+    ]);
+    super::evidence_cli::assess_cli(&assess).unwrap();
+    super::evidence_cli::assess_cli(&assess).unwrap();
+    let rec = flags(&[
+        ("records-out", log.to_str().unwrap()),
+        ("day", "2026-11-25"),
+        ("kind", "fix-round-after-rebase"),
+    ]);
+    super::evidence_cli::record_cli(&rec).unwrap();
+    assert!(super::evidence_cli::record_cli(&flags(&[
+        ("records-out", "x"),
+        ("day", "d"),
+        ("kind", "nope")
+    ]))
+    .is_err());
+    let out =
+        super::evidence_cli::report_cli(&flags(&[("records", log.to_str().unwrap())])).unwrap();
+    assert_eq!(
+        out,
+        [
+            "2026-11-24 rebases 2 accepts_carried 2 ci_carried 2 re_reviews 0 fix_rounds_after_rebase 0",
+            "2026-11-25 rebases 0 accepts_carried 0 ci_carried 0 re_reviews 0 fix_rounds_after_rebase 1",
+        ]
+    );
+}
+
+#[test]
+fn the_red_command_classifies_a_flake_and_leaves_the_merge_to_ci_and_main() {
+    let dir = tempfile::tempdir().unwrap();
+    let red = dir.path().join("red.json");
+    let write =
+        |p: &std::path::Path, v: serde_json::Value| std::fs::write(p, v.to_string()).unwrap();
+    write(
+        &red,
+        serde_json::json!({"failing": ["t1"], "failing_without_patch": ["t1"], "hung": []}),
+    );
+    let main = dir.path().join("main.json");
+    write(&main, serde_json::json!({"state": "green"}));
+    let run = |ci: &str| {
+        super::evidence_cli::red_cli(&flags(&[
+            ("red", red.to_str().unwrap()),
+            ("ci-green", ci),
+            ("main-state", main.to_str().unwrap()),
+        ]))
+        .unwrap()
+    };
+    assert_eq!(
+        run("false"),
+        [
+            "RED flake: a carried ACCEPT stays",
+            "MERGE refused required_ci_not_green"
+        ]
+    );
+    assert_eq!(
+        run("true"),
+        ["RED flake: a carried ACCEPT stays", "MERGE ok"]
+    );
+    write(
+        &red,
+        serde_json::json!({"failing": ["t2"], "failing_without_patch": [], "hung": []}),
+    );
+    assert_eq!(run("false")[0], "RED genuine: a carried ACCEPT is void");
+    write(&main, serde_json::json!({"state": "pending"}));
+    assert_eq!(run("true")[1], "MERGE refused main_pending");
+}
