@@ -14,9 +14,14 @@ import re
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
+from .context_sources import decision_ids
 from .item_fields import (MODEL_FIELDS, SMALL_FIELDS, check_choices, check_design_ref, check_host, check_kg_refs, check_kind, check_model_fields,
                           check_wait, kind_defaults)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
+
+#: ``session`` is item_created metadata: validated here, recorded on the creation
+#: event, never folded into ``note`` (which is premise text) and never a column.
+SESSION_CAP = 200
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
 # ``estimate_src`` is the audit-meta provenance marker (PG-ESTIMATE-SRC-EDIT):
@@ -33,6 +38,17 @@ _LEGACY_SLICE_CRITERIA = re.compile(r"^Slice of [\w.-]+:[\w.-]+:")
 
 def _unfinished_dependencies(keys, items):
     return {key for key in keys if items.get(key, {}).get("state") not in ("done", "cancelled")}
+
+
+def citing_premise(values, names):
+    """The premise fields among *names* whose text cites a decision, as they are.
+
+    Definition events carry the premise text the decision clock reads.  Only a
+    field that cites an id is carried: the clock needs nothing else, and an event
+    of an item that cites none keeps the payload (and hash) it always had.
+    """
+    return {name: values[name] for name in names
+            if isinstance(values.get(name), str) and decision_ids(values[name])}
 
 
 def _defined_payload(fields):
@@ -53,6 +69,7 @@ def _defined_payload(fields):
     for name in SMALL_FIELDS:
         if name in fields:
             payload[name] = fields[name]
+    payload.update(citing_premise(fields, ("title", "note")))   # done_criteria rides in before/after
     for name in ("estimate_h", "estimate_src"):
         if name in fields:
             payload[name] = fields[name]
@@ -209,8 +226,13 @@ class InputMixin:
             if not isinstance(slice_parent, str) or not slice_parent.strip():
                 raise Refused("validation", f"{key}: slice_parent must be a non-empty key")
             slice_parent = self._qualify(project, slice_parent)
+        session = raw.get("session")
+        if session is not None and (not isinstance(session, str) or not session.strip()
+                                    or len(session) > SESSION_CAP or "\n" in session):
+            raise Refused("validation", f"{key}: session must be a one-line string "
+                          f"of at most {SESSION_CAP} characters")
         return {
-            "key": key, "project": project, "id": identifier,
+            "key": key, "project": project, "id": identifier, "session": session,
             "title": raw.get("title", ""), "description": raw.get("description"),
             "host": raw.get("host"), "wait": wait, "kind": kind,
             **{name: raw.get(name) for name in MODEL_FIELDS},

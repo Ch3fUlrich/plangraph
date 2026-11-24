@@ -42,19 +42,16 @@ from .evidence_decisions import decision_book, decisions_naming
 from .evidence_pr import landing_record
 from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
+from .item_fields import PREMISE_FIELDS
 from .schema import DEFINITION_EVENTS
 
-__all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX", "PREMISE_FIELDS"]
+__all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
 
 STALE_DAYS = 7
 _CLAIM_INDEX_WORKERS = 4
 #: Legacy public constant; ready now checks every row through the shared index.
 READY_GIT_LIMIT = 25
 FORCE_STALE_MAX = 500
-#: The item fields that form its premise; the decision watermark and the
-#: ``cited`` set read these and nothing else.  The item's own ``source`` is one
-#: of them, so a decision that is the item's source is cited, never "newer".
-PREMISE_FIELDS = ("title", "description", "done_criteria", "note", "source")
 BRIEF_DECISIONS = 6
 BRIEF_STALE_MAX = 240
 
@@ -227,14 +224,8 @@ class ContextMixin:
                     ",".join(sorted(corrected[k]))
             return {"key": k, "state": index.get(k, {}).get("state"), "reason": why}
 
-        cited = src.decision_ids(*self._texts(item))
-        naming = src.decisions_naming(inputs["book"], key)
-        mark = self._watermark(item, inputs["clock"], cited)
-        confirmed = inputs["clock"]["reconfirmed"].get(key, -1)
-        newer = [d for d in naming if d not in cited
-                 and mark is not None and mark < _num(d) and confirmed < _num(d)]
-        superseded = {old: new for old, new in inputs["book"]["superseded"].items()
-                      if confirmed < _num(new)}
+        cited, naming, newer, superseded = self._premise_state(
+            item, inputs["book"], inputs["clock"])
         ctx = {
             "dep_states": [entry(k) for k in deps],
             "dependents": [entry(k) for k in dependents],
@@ -251,6 +242,26 @@ class ContextMixin:
             ctx["superseded_contract"] = contract
         ctx["stale"] = self._stale_reason(item, ctx)
         return ctx
+
+    def _premise_state(self, item, book, clock):
+        """``(cited, naming, newer, superseded)`` of the item's premise: the one
+        reading every claim path shares (ordinary, system lease, ready).
+
+        ``newer`` is the decisions naming the item that are newer than its
+        watermark and than its confirmation floor; ``superseded`` the retired
+        decisions it cites that were retired above the floor.  The item's own
+        ``source`` is a premise field, so a source decision is cited, never newer.
+        """
+        key = item["key"]
+        cited = src.decision_ids(*self._texts(item))
+        naming = src.decisions_naming(book, key)
+        mark = self._watermark(item, clock, cited)
+        confirmed = clock["reconfirmed"].get(key, -1)
+        newer = [d for d in naming if d not in cited
+                 and mark is not None and mark < _num(d) and confirmed < _num(d)]
+        superseded = {old: new for old, new in book["superseded"].items()
+                      if confirmed < _num(new)}
+        return cited, naming, newer, superseded
 
     def _stale_reason(self, item, ctx):
         why = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
@@ -472,7 +483,7 @@ class ContextMixin:
         longer refuse a claim (ordinary, system lease or ready); a later one does.
         """
         def record(now):
-            self._require_role(principal, "l1", "router")
+            self._require_role(principal, "router")
             did = re.fullmatch(r"D-0*(\d+)", decision.strip()) if isinstance(decision, str) else None
             if did is None:
                 raise Refused("validation", "decision must be a D-NNN id")
@@ -526,12 +537,10 @@ class ContextMixin:
             if work["commits"]:
                 head = work["commits"][0]
                 facts.append(f"already merged: {head.get('source', 'Plan-Item commit')} {head['sha'][:8]}")
-            # A system lease skips the freshness reads, never a retired premise; the
-            # confirmation floor is the one an ordinary claim reads.
-            confirmed = self._decision_clock()["reconfirmed"].get(item["key"], -1)
-            facts += [f"premise {d} superseded by {book['superseded'][d]}"
-                      for d in src.decision_ids(*self._texts(item))
-                      if d in book["superseded"] and confirmed < _num(book["superseded"][d])]
+            # A system lease skips the git freshness reads, never the premise: the
+            # watermark, retired premises and floor are the ones an ordinary claim reads.
+            cited, _, newer, superseded = self._premise_state(item, book, self._decision_clock())
+            facts += self._premise_facts({d: superseded[d] for d in cited if d in superseded}, newer)
             override = self._stale_override(item["key"], reason, facts)
             if unknown:
                 raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
@@ -696,8 +705,7 @@ class ContextMixin:
     def _claim_staleness(ctx):
         """Shared refusal facts for claim and ready; informational age is separate."""
         facts = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
-        facts += [f"premise {old} superseded by {new}"
-                  for old, new in sorted(ctx["superseded_premises"].items())]
+        facts += ContextMixin._premise_facts(ctx["superseded_premises"], ctx["newer_decisions"])
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
         if commits and (not lanes or commits[0].get("source")):
@@ -707,10 +715,16 @@ class ContextMixin:
                 f"already merged: {head.get('source', 'Plan-Item commit')} {head['sha'][:8]} ({head['date']})"
                 + (f" via PR #{merge['pr']}" if merge.get("pr") else "")
                 + " is on the default branch; attach evidence/submit instead")
-        if ctx["newer_decisions"]:
-            facts.append("premise outdated: " + ",".join(ctx["newer_decisions"])
+        return facts
+
+    @staticmethod
+    def _premise_facts(superseded, newer):
+        """The refusal facts of a retired or outdated premise (one wording for every path)."""
+        facts = [f"premise {old} superseded by {new}" for old, new in sorted(superseded.items())]
+        if newer:
+            facts.append("premise outdated: " + ",".join(newer)
                          + " names this item after its definition; re-confirm"
-                         " (edit the item to cite it) first")
+                         " (edit the item to cite it, or `reconfirm KEY D-NNN`) first")
         return facts
 
     def _not_open_facts(self, item, index):

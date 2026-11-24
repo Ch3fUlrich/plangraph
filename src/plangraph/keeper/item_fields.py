@@ -104,6 +104,10 @@ def check_wait(value, key=None):
 #: Optional columns folded from ``item_created``/``item_defined`` payloads.
 SMALL_FIELDS = ("description", "host", "wait", "layer", "role", "agent_id",
                 "phase_kind", "fixes", "choices", "kg_refs", "design_ref")
+#: The item fields that form its premise: the decision watermark and the cited-decision set
+#: read these and nothing else.  Definition events carry the ones that cite a decision
+#: (``store_input.citing_premise``), so the decision clock is rebuilt from events alone.
+PREMISE_FIELDS = ("title", "description", "done_criteria", "note", "source")
 #: The MODEL-KINDS subset of ``SMALL_FIELDS``.
 MODEL_FIELDS = ("layer", "role", "agent_id", "phase_kind")
 
