@@ -109,7 +109,10 @@ and both of the remaining changes in schema v24. PostgreSQL migration 25 and SQL
 
 For a batch that advances the keeper schema, copy the GO request's standalone
 `MIGRATION <version>` field into the GO decision for the exact batch head.
-The landing command requires that field on the same GO statement.
+The landing command requires that field on the same GO statement, and `land-train go-verify`
+refuses a train that raises the schema without it (`migration_missing`). A schema rise is deployed
+only through `plangraph keeper-restart`: a plain `systemctl --user restart` leaves the keeper down,
+because it never migrates and the runtime role has no DDL.
 
 For the merged-unit restart, the access owner provisions a regular file owned by
 the deploy user with mode `0600`. It holds the migration role's DSN for the same

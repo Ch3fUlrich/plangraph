@@ -423,6 +423,7 @@ def test_keeper_migration_needs_a_head_bound_go_marker(env):
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 0, result.stderr
     assert "; MIGRATION 2;" in result.stdout
+    assert "plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE, never a plain restart" in result.stdout
 
     approval = env.tmp / "approval.txt"
     approval.write_text(f"HEAD: {head}\nVERDICT: PASS\n")
