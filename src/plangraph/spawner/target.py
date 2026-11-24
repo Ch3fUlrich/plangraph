@@ -99,6 +99,13 @@ def resolve_launch_target(target, *, chosen=None, client=None):
     if chosen is not None:
         return resolve_target(target, chosen=chosen)
     model, leg = resolve_target(target)
+    if leg is not None and client is not None and leg.harness != client:
+        # Two legs can serve one model (claude-sonnet-5-5-high: claude and agy): the pinned client's own leg wins.
+        from plangraph.planner.legs import spawnable_legs
+        own = next((l for l in spawnable_legs() if l.model == leg.model and l.harness == client), None)
+        if own is not None:
+            admit_leg(own)
+            return own.model, own
     if leg is None or leg.family != 'gpt' or leg.harness != 'codex':
         return model, leg
     from plangraph.planner.legs import own_harness_enabled, resolve_harness
