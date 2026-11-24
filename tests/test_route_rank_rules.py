@@ -129,9 +129,11 @@ def test_an_imputed_row_ranks_at_mean_minus_one_sd():
 
 @pytest.mark.parametrize("imputed_speed", [10.0, 50.0, 5000.0])
 def test_an_imputed_row_never_ranks_above_a_measured_row_of_equal_mean(imputed_speed):
-    ranked = rank_candidates([cand("imputed", imputed=1, score_se=0.0, verified_tok_per_s=imputed_speed),
-                              cand("measured", verified_tok_per_s=50.0)])
-    assert [c["model_id"] for c in ranked] == ["measured", "imputed"]
+    imputed = cand("imputed", imputed=1, score_se=0.0, verified_tok_per_s=imputed_speed)
+    measured = cand("measured", verified_tok_per_s=50.0)
+    assert score_model(imputed) == score_model(measured)       # a zero sd is charged as zero: a true tie
+    for order in ([imputed, measured], [measured, imputed]):    # only the measured-first tie-break decides
+        assert [c["model_id"] for c in rank_candidates(order)] == ["measured", "imputed"]
 
 
 def test_the_route_orders_an_imputed_row_behind_a_measured_one():
@@ -261,3 +263,33 @@ def test_the_coding_index_reaches_the_utility_row_without_touching_the_catalog_c
     leg = replace(BY_ID["opencode-go-muse-spark"], effort=None)
     utility = benchmark_for_leg(rows, leg)
     assert utility is not None and utility["coding_index"] == rows[leg.model]["coding_index"] == 75.8
+
+
+def test_price_and_served_model_rules_fire_from_catalog_and_measurement_rows(tmp_path):
+    """The production path: catalog rows (cost_per_task_usd, upstream_id) against a recorded measurement."""
+    from datetime import datetime, timezone
+    from plangraph.planner.benchmarks import benchmark_rows_from_db
+    from plangraph.routing_support.catalog_db import CatalogDB
+    leg = replace(BY_ID["mimo-v2.6-pro"], effort=None, roles=("orchestrate",))
+    path = tmp_path / "catalog.sqlite"
+    with CatalogDB(path) as db:
+        db.init_and_seed()
+        current = next(r for r in db.list_models() if r["id"] == leg.model)
+
+        def judged(price, served_model):
+            record = json.dumps({"price": price, "served_model": served_model})
+            with db.conn:
+                db.conn.execute("DELETE FROM catalog_benchmark_measurements WHERE model_id=?", (leg.model,))
+                db.conn.execute(
+                    "INSERT INTO catalog_benchmark_measurements (model_id, effort, harness, origin, score, n_runs,"
+                    " measured_at, source_record) VALUES (?, '', ?, 'own', 60, 30, ?, ?)",
+                    (leg.model, leg.harness, datetime.now(timezone.utc).strftime("%Y-%m-%d"), record))
+            rows, errors = benchmark_rows_from_db(path)
+            assert not errors
+            return plan_spawn(dict(CARD, risk="high"), role="orchestrate", legs=(leg,), leg_reader=OK,
+                              benchmark=rows, catalog_rows=db.list_models())
+        same = (current["cost_per_task_usd"], current["upstream_id"])
+        assert judged(*same).first_leg is not None
+        for price, served, why in ((same[0] + 1.0, same[1], "price"), (same[0], "other-upstream", "served_model")):
+            result = judged(price, served)
+            assert result.first_leg is None and result.skipped[0]["evidence"]["why"] == why
