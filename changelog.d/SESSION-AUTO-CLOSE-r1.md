@@ -1,0 +1,1 @@
+- **SESSION-AUTO-CLOSE:** Findings written after DONE are still sent, only the newest stopped record of a lane resumes (round claimed before launch, one lock per tick), a Claude job is stopped only when its job state is done with no tasks, Codex/OpenCode stops check pid start time, and the lane gets a `<lane>.resume.json`. A systemd tick timer is added (not enabled).

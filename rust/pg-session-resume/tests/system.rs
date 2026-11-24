@@ -19,14 +19,11 @@ fn job_state_reads_state_and_running_tasks() {
 
 #[test]
 fn the_transcript_dir_replaces_every_non_alphanumeric_with_a_dash() {
-    let p = transcript_path(
-        Path::new("/h"),
-        "/home/u/code/p/.claude/worktrees/x_y",
-        "sid",
-    );
+    let base = Path::new("base");
+    let p = transcript_path(base, "/a/b/.claude/worktrees/x_y", "sid");
     assert_eq!(
         p,
-        Path::new("/h/.claude/projects/-home-u-code-p--claude-worktrees-x-y/sid.jsonl")
+        base.join(".claude/projects/-a-b--claude-worktrees-x-y/sid.jsonl")
     );
 }
 
