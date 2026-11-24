@@ -22,3 +22,4 @@ The feeder reads the spawner's receipt from stdout only (stderr of any size cann
 A live tick cuts a batch to the members whose claims and releases fit the remaining deadline before claiming, so larger batches make progress.
 The quota timer reads the policy file the worker's feeder actually uses (FEEDER_POLICY in the per-worker env file, plangraph quota --push --worker-policy PATH).
 A hand lane's card names only whole plangraph:ID tokens as held items.
+An empty or truncated spawner answer after a launch is looked up in the spawner's run list before any claim is released; only a positive not-started releases.

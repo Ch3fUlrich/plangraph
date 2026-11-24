@@ -147,11 +147,20 @@ fn post(env: &Env, verb: &str, body: Option<Value>, max_time_secs: u32) -> Resul
     }
     http_response(&out.stdout)
 }
+/// Why a spawner answer is not an admitted run. `Rejected` is the spawner saying it did not start
+/// one; `Unreadable` is an empty, truncated or unrecognised answer, after which a detached
+/// writer may still have been admitted: the outcome is unknown, not a failure.
+#[derive(Debug)]
+enum ReceiptError {
+    Rejected(String),
+    Unreadable(String),
+}
 /// Parse the receipt before interpreting exit status: queued (5) and unknown (1)
-/// are durable admissions. Missing/unparseable admission receipts are failures.
-fn receipt(raw: &[u8], exit: Option<i32>) -> Result<Value, String> {
-    let run: Value =
-        serde_json::from_slice(raw).map_err(|_| "spawner failed without a JSON run receipt")?;
+/// are durable admissions.
+fn receipt(raw: &[u8], exit: Option<i32>) -> Result<Value, ReceiptError> {
+    let run: Value = serde_json::from_slice(raw).map_err(|_| {
+        ReceiptError::Unreadable("spawner gave no readable JSON run receipt".into())
+    })?;
     if run["run_id"].as_str().is_some_and(|s| !s.is_empty())
         && matches!(
             run["status"].as_str(),
@@ -173,11 +182,13 @@ fn receipt(raw: &[u8], exit: Option<i32>) -> Result<Value, String> {
                 | "dry_run"
         )
     ) {
-        return Err("spawner rejected or ended the run".into());
+        return Err(ReceiptError::Rejected(
+            "spawner rejected or ended the run".into(),
+        ));
     }
-    Err(format!(
-        "spawner failed without an admitted run receipt (exit {exit:?})"
-    ))
+    Err(ReceiptError::Unreadable(format!(
+        "spawner gave no admitted run receipt (exit {exit:?})"
+    )))
 }
 fn pin_local(cmd: &mut Command, dir: &Path) -> Result<(), String> {
     let path = dir.join("placement.json");
@@ -264,6 +275,52 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         Ok(None)
     }
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, StartError> {
+        self.start_run(card, brief)
+    }
+}
+/// What the spawner's own run list says about a launch whose receipt was unreadable.
+enum Launched {
+    Found(Value),
+    NotFound,
+    Unavailable,
+}
+impl<T: Transport> Adapters<'_, T> {
+    /// The run the spawner lists for the card's item, started since `since`, as a receipt.
+    fn launched_run(&self, card: &Value, since: f64) -> Launched {
+        let mut cmd = python(self.env, &self.repo);
+        cmd.args(["-m", "plangraph.spawner.cli", "ps"]);
+        let Some(data) =
+            pg_worker_core::host_command::output(&mut cmd, std::time::Duration::from_secs(20))
+                .ok()
+                .and_then(|out| serde_json::from_slice::<Value>(&out).ok())
+        else {
+            return Launched::Unavailable;
+        };
+        let Some(rows) = data["runs"].as_array() else {
+            return Launched::Unavailable;
+        };
+        let Some(key) = card["item_key"].as_str() else {
+            return Launched::Unavailable;
+        };
+        let holds = |row: &Value| {
+            row["item_key"] == key
+                || row["card"]["item_key"] == key
+                || row["item_keys"]
+                    .as_array()
+                    .is_some_and(|keys| keys.iter().any(|k| k == key))
+        };
+        rows.iter()
+            .find(|row| holds(row) && row["started"].as_f64().is_none_or(|at| at >= since))
+            .map_or(Launched::NotFound, |row| {
+                // A listed run counts as admitted unless it is itself a rejected or ended one.
+                match receipt(row.to_string().as_bytes(), None) {
+                    Ok(run) => Launched::Found(run),
+                    Err(ReceiptError::Rejected(_)) => Launched::NotFound,
+                    Err(ReceiptError::Unreadable(_)) => Launched::Unavailable,
+                }
+            })
+    }
+    fn start_run(&mut self, card: &Value, brief: &str) -> Result<Value, StartError> {
         let dir = tempfile::Builder::new()
             .prefix("launch-")
             .tempdir_in(&self.state)
@@ -286,6 +343,7 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         .arg("--prompt-file")
         .arg(prompt_path)
         .args(["--wait", "0"]);
+        let began = chrono::Utc::now().timestamp() as f64 - 5.0;
         // Stdout holds the receipt; stderr is not read, so a noisy spawner cannot lose one. Past
         // the deadline, or with an unreadable stdout, the spawner may have admitted a run: the
         // claims stay (`Uncertain`). A spawner that cannot start admitted nothing.
@@ -299,12 +357,33 @@ impl<T: Transport> Launch for Adapters<'_, T> {
                     std::io::ErrorKind::InvalidData => {
                         StartError::Uncertain("spawner stdout unreadable".into())
                     }
-                    _ => StartError::Failed("cannot execute spawner".into()),
+                    // Only a spawner that could not be started admitted nothing; any other
+                    // failure after it ran leaves the outcome unknown.
+                    std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::InvalidInput => {
+                        StartError::Failed("cannot execute spawner".into())
+                    }
+                    _ => StartError::Uncertain("spawner outcome unreadable".into()),
                 },
             )?,
             None => cmd.output().map_err(|_| "cannot execute spawner")?,
         };
-        let mut run = receipt(&out.stdout, out.status.code())?;
+        let mut run = match receipt(&out.stdout, out.status.code()) {
+            Ok(run) => run,
+            Err(ReceiptError::Rejected(why)) => return Err(StartError::Failed(why)),
+            // The spawner ran but its answer is unusable: ask it whether a run holds the item
+            // before anything is released. Only "no such run" is a positive not-started.
+            Err(ReceiptError::Unreadable(why)) => match self.launched_run(card, began) {
+                Launched::Found(run) => run,
+                Launched::NotFound => return Err(StartError::Failed(why)),
+                Launched::Unavailable => {
+                    return Err(StartError::Uncertain(format!(
+                        "{why}; could not tell whether a run was admitted"
+                    )))
+                }
+            },
+        };
         if run["host"].as_str().is_none_or(str::is_empty) {
             run["host"] = json!(self.host);
         }
@@ -562,6 +641,54 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
         );
         let mut a = adapters(&env, d.path(), Some(std::time::Duration::from_secs(30)));
         assert_eq!(a.start(&card, "brief").unwrap()["status"], "queued");
+    }
+    /// A spawner stand-in that answers `spawn` and `ps` (the third argument) separately.
+    #[cfg(unix)]
+    fn spawner(dir: &Path, spawn: &str, ps: &str) -> Env {
+        fake_python(
+            dir,
+            &format!("case \"$3\" in\n  spawn) {spawn} ;;\n  ps) {ps} ;;\nesac"),
+        )
+    }
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_receipt_looks_the_writer_up_before_anything_is_released() {
+        let card = json!({"item_key":"plangraph:A","files":[]});
+        let listed = "printf '{\"runs\":[{\"run_id\":\"run-x\",\"status\":\"running\",\"item_key\":\"plangraph:A\",\"started\":%s}]}' \"$(date +%s)\"";
+        let empty = "printf '{\"runs\":[]}'";
+        let run = |spawn: &str, ps: &str| {
+            let d = tempfile::tempdir().unwrap();
+            let env = spawner(d.path(), spawn, ps);
+            let mut a = adapters(&env, d.path(), Some(std::time::Duration::from_secs(30)));
+            a.start(&card, "brief")
+        };
+        // The CLI died after its supervisor admitted a writer: empty and truncated answers.
+        for died in [
+            "exit 1",
+            "printf '{\"run_id\":\"run-x\",\"sta'; exit 1",
+            "exit 0",
+        ] {
+            let run = run(died, listed).expect("the listed writer is the admitted run");
+            assert_eq!(run["run_id"], "run-x");
+            assert_eq!(run["item_key"], "plangraph:A");
+        }
+        // Positive not-started: the spawner lists no run for the item.
+        assert!(matches!(run("exit 1", empty), Err(StartError::Failed(_))));
+        // Cannot tell: the run list is unavailable, so the claims must stay.
+        assert!(matches!(
+            run("exit 1", "exit 3"),
+            Err(StartError::Uncertain(_))
+        ));
+        assert!(matches!(
+            run("exit 1", "printf 'not json'"),
+            Err(StartError::Uncertain(_))
+        ));
+        // An explicit refusal is a positive not-started and never consults the run list.
+        let refused = "printf '{\"run_id\":\"run-r\",\"status\":\"refused\"}'; exit 2";
+        assert!(matches!(run(refused, "exit 3"), Err(StartError::Failed(_))));
+        // A listed run that itself ended as failed was not admitted either.
+        let failed = "printf '{\"runs\":[{\"run_id\":\"run-f\",\"status\":\"failed\",\"item_key\":\"plangraph:A\"}]}'";
+        assert!(matches!(run("exit 1", failed), Err(StartError::Failed(_))));
     }
     struct Snapshot(Value);
     impl Transport for Snapshot {
