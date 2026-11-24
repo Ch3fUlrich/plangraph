@@ -131,15 +131,20 @@ def _spawn_claude(tmp_path, monkeypatch, home):
     return seen.get("exe"), job
 
 
-def test_spawn_from_a_bare_unit_executes_the_harness_found_off_path(bare_unit, tmp_path, monkeypatch):
-    """The production process factory runs the fixture: its output and exit status come back."""
+def test_spawn_executes_a_harness_that_only_the_host_table_names(bare_unit, tmp_path, monkeypatch):
+    """The production process factory runs a fixture in a host-configured directory that no PATH
+    expansion reaches: its output and exit status come back (the pinned base cannot find it)."""
     import asyncio
     from plangraph.spawner.runner import SpawnerRunner
-    directory = bare_unit / ".nvm/versions/node/v24.19.0/bin"
-    directory.mkdir(parents=True)
-    binary = directory / "claude"
+    pinned = tmp_path / "opt-harness"
+    pinned.mkdir()
+    binary = pinned / "claude"
     binary.write_text("#!/bin/sh\necho harness-ran-ok\n")
     binary.chmod(0o755)
+    config = tmp_path / "config/plangraph"
+    config.mkdir(parents=True)
+    (config / "hosts.json").write_text(json.dumps(
+        {"self": "h1", "hosts": [{"id": "h1", "harness_bins": {"claude": str(binary)}}]}))
     assert shutil_which_system("claude") is None
     monkeypatch.setenv("HOME", str(bare_unit))
     monkeypatch.setenv("PATH", SYSTEM_PATH)

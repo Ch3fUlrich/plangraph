@@ -126,8 +126,9 @@ def sync_seat(record, held_families=()):
         own[0].pop('reason', None)
     elif record.get('ended') is not None:
         plan['review_seats'] = []
-        detail = '; '.join(dict.fromkeys(a['skip_reason'] for a in record.get('attempts', [])
-                                        if a.get('skip_reason')))
+        skips = list(dict.fromkeys(a['skip_reason'] for a in record.get('attempts', []) if a.get('skip_reason')))
+        detail = '; '.join(skips)
+        refused_host = next((text for text in skips if text.startswith('harness_not_found ')), None)
         status = record.get('status')
         attempts = record.get('attempts') or ()
         exhausted = bool(attempts) and all(
@@ -137,8 +138,8 @@ def sync_seat(record, held_families=()):
         else:
             reason = 'distinct_family_unavailable: no eligible leg of a family not held by another seat'
             reason += ': ' + (detail or record.get('error') or 'no leg launched')
-            if 'harness_not_found' in detail:
-                reason = detail   # the host fault names itself; it is not a family problem
+            if refused_host:
+                reason = refused_host   # the host fault names itself, as the whole statement form; not a family problem
             reason = own[0].get('reason') or reason
             if status not in ('failed', 'refused'):
                 record['error'] = reason
