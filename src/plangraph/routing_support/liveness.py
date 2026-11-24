@@ -26,7 +26,7 @@ def unavailable(state):
 def provider_exhausted(skipped):
     """Check whether the remaining eligible capacity is exhausted."""
     reasons = [s['reason'] for s in skipped]
-    capacity_reasons = {'limited', 'down', 'expired', 'provider_busy', 'model_unavailable'}
+    capacity_reasons = {'limited', 'down', 'expired', 'provider_busy', 'model_unavailable', 'quota_probe_pending'}
     policy = {'banned_family', 'off_family', 'paused_harness', 'excluded_family',
               'inline_only_needs_diff', 'no_verdict_seat', 'explicit_only',
               'review_route_excluded', 'low_risk_only', 'claude_requires_gpt_and_hydrogen_limits',

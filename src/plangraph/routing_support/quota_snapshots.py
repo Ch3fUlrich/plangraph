@@ -3,10 +3,11 @@
 Rows are omniroute ``quota_snapshots`` (provider, connection_id, window_key,
 remaining_percentage, is_exhausted, next_reset_at, created_at; camelCase keys
 also read). A leg whose provider pool has every account at/below the threshold reads
-``limited`` until its stated reset and ``reprobe`` (eligible for a probe, not ``ok``)
-after it, until a positive fact arrives: a newer row of the window that is not exhausted,
-or a successful probe newer than the snapshot. A reset time alone never clears it, and
-a row without an observation time counts as the oldest observation. A missing, unreadable
+``limited`` until a positive fact arrives: a newer row of the window that is not exhausted,
+or a successful probe newer than the snapshot. A reset time alone never clears it (after
+it the skip reason is ``quota_probe_pending``): until then only a probe run is admitted,
+and probe runs never read this gate. A row without an observation time is the oldest
+observation (``observed_at``). A missing, unreadable
 or malformed source never blocks routing.
 """
 from __future__ import annotations
@@ -61,6 +62,15 @@ def _get(row, *names):
     return next((row[n] for n in names if row.get(n) is not None), None)
 
 
+def observed_at(row):
+    """When a snapshot row was observed (epoch); a row without a time is the oldest possible observation (0.0).
+
+    The one reading of the observation time: ``pool_down_until`` orders rows by it and ``pool_seen_at``
+    compares a probe with it, so every reader and every process instance treats an undated row alike.
+    """
+    return _ts(_get(row, 'created_at', 'createdAt', 'timestamp')) or 0.0
+
+
 def pool_down_until(rows, provider, *, min_pct=1.0):
     """The one recovery rule of an exhausted snapshot.
 
@@ -68,8 +78,8 @@ def pool_down_until(rows, provider, *, min_pct=1.0):
     recorded as exhausted (at/below ``min_pct`` percent): the epoch of the earliest account
     reset the rows state, 0.0 when none does. That state ends only by a positive fact: a newer
     row of the window that is not exhausted, or a successful probe newer than the rows
-    (``QuotaGate.apply``). A reset time that has passed is no such fact; it only makes the leg
-    eligible for a probe (``QuotaGate.apply`` reads it as ``reprobe``).
+    (``QuotaGate.apply``). A reset time that has passed is no such fact: the pool stays exhausted and only a
+    probe run is admitted.
     """
     latest = {}
     for row in rows if isinstance(rows, list) else ():
@@ -80,7 +90,7 @@ def pool_down_until(rows, provider, *, min_pct=1.0):
             name, account = name.split(':', 1)
         if name != provider:
             continue
-        seen = _ts(_get(row, 'created_at', 'createdAt', 'timestamp')) or 0.0   # undated: the oldest observation
+        seen = observed_at(row)
         key = (account, _get(row, 'window_key', 'windowKey'))
         if key not in latest or seen >= latest[key][0]:
             latest[key] = (seen, row)
@@ -107,7 +117,7 @@ def pool_seen_at(rows, provider):
             continue
         name = str(row.get('provider') or '').split(':', 1)[0]
         if name == provider:
-            seen = max(seen, _ts(_get(row, 'created_at', 'createdAt', 'timestamp')) or 0.0)
+            seen = max(seen, observed_at(row))
     return seen
 
 
@@ -155,12 +165,19 @@ def _min_pct():
         return 1.0
 
 
+#: Skip reason of a pool whose exhausted snapshot is still the last word after its reset passed.
+PROBE_PENDING = 'quota_probe_pending'
+
+
 def skip_reason(status):
     """The same reset-bearing reason in route and launch read-back."""
     evidence = status.get('evidence') or {}
     reset = evidence.get('reset_at')
-    if status['state'] == 'limited' and evidence.get('caller') == 'quota-snapshot' and reset:
-        return 'quota_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset))
+    if status['state'] == 'limited' and evidence.get('caller') == 'quota-snapshot':
+        if evidence.get('awaiting_probe'):
+            return PROBE_PENDING
+        if reset:
+            return 'quota_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset))
     return None
 
 
@@ -175,7 +192,7 @@ class QuotaGate:
 
     def __init__(self, rows=None, *, clock=time.time, ttl_s=CACHE_S, probe_ts=None):
         self.rows, self.clock, self.ttl_s, self.probe_ts = rows, clock, ttl_s, probe_ts
-        self._at, self._cached, self._observed = None, [], {}
+        self._at, self._cached = None, []
 
     def _snapshot(self):
         if self._at is None or self.clock() - self._at >= self.ttl_s:
@@ -185,17 +202,6 @@ class QuotaGate:
                 for row in rows if isinstance(rows, list) else ():
                     if not isinstance(row, dict):
                         continue
-                    key = (row.get('provider'), _get(row, 'connection_id', 'connectionId'), _get(row, 'window_key', 'windowKey'))
-                    try:
-                        down = float(_get(row, 'remaining_percentage', 'remainingPercentage', 'remainingPct')) <= _min_pct()
-                    except (TypeError, ValueError):
-                        down = False
-                    down |= _get(row, 'is_exhausted', 'isExhausted') in (1, True, '1', 'true')
-                    if not down or _get(row, 'next_reset_at', 'nextResetAt', 'resetAt') is not None:
-                        self._observed.pop(key, None)
-                    elif _get(row, 'created_at', 'createdAt', 'timestamp') is None:
-                        first = self._observed.setdefault(key, self.clock())
-                        row = dict(row, created_at=datetime.fromtimestamp(first, timezone.utc).isoformat())
                     self._cached.append(row)
             except Exception:
                 self._cached = []   # missing or unreadable: routing proceeds as without the gate
@@ -220,13 +226,12 @@ class QuotaGate:
         passed = self._probe_pass(model)
         if passed is not None and passed > pool_seen_at(rows, provider):
             return status
-        if until <= now:   # the stated reset passed (or none was stated): eligible for a probe, never ok
-            return dict(state='reprobe', reason='quota_snapshot_reprobe', evidence=dict(
-                status=429, body_excerpt=f'omniroute {provider} pool exhausted, reset passed, awaiting recovery',
-                reset_at=until or None, ts=now, caller='quota-snapshot'))
+        awaiting = until <= now   # the stated reset passed (or none was stated): a probe is next, not work
+        body = (f'omniroute {provider} pool exhausted, reset passed, only a probe run is admitted' if awaiting
+                else f'omniroute {provider} pool at 0%, resets at {until:.0f}')
         return dict(state='limited', reason='quota_snapshot', evidence=dict(
-            status=429, body_excerpt=f'omniroute {provider} pool at 0%, resets at {until:.0f}',
-            reset_at=until, ts=now, caller='quota-snapshot'))
+            status=429, body_excerpt=body, reset_at=until or None, ts=now, caller='quota-snapshot',
+            awaiting_probe=awaiting))
 
 
 TTL_ENV_VAR = "PLANGRAPH_OMNIROUTE_STATE_TTL_S"
