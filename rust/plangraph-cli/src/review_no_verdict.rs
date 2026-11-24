@@ -99,38 +99,60 @@ pub fn note(dir: &Path, run_id: &str, reason: &str, now: i64) -> Option<Value> {
         json!({"ts": now, "run_id": run_id, "reason": cause})
     )
     .ok()?;
-    let mut ids: Vec<String> = Vec::new();
+    // The alert decision is a function of the booked seats alone, never of the booking order:
+    // same-cause seats are clustered chronologically, a cluster spans at most one window from
+    // its first seat, and a cluster of REPEAT seats is one incident stamped with its latest
+    // terminal time. An incident is announced once: an alert within one window of that time
+    // suppresses it.
+    let mut same: Vec<(i64, String)> = Vec::new();
     for row in rows(&seats) {
-        // By terminal time, whichever seat was booked first: within the window on either side.
-        let recent = row["ts"]
-            .as_i64()
-            .is_some_and(|ts| (now - ts).abs() <= WINDOW_S);
         let id = row["run_id"].as_str().unwrap_or_default().to_owned();
-        if recent && row["reason"] == cause.as_str() && !ids.contains(&id) {
-            ids.push(id);
+        if let (true, Some(ts)) = (row["reason"] == cause.as_str(), row["ts"].as_i64()) {
+            if !same.iter().any(|(_, seen)| *seen == id) {
+                same.push((ts, id));
+            }
         }
     }
-    let alerted = rows(&alerts).iter().any(|row| {
-        row["reason"] == cause.as_str()
-            && row["ts"]
-                .as_i64()
-                .is_some_and(|ts| (now - ts).abs() <= WINDOW_S)
-    });
-    if ids.len() < REPEAT || alerted {
-        return None;
+    same.sort();
+    let mut first_alert = None;
+    let mut start = 0;
+    while start < same.len() {
+        let end = same[start..]
+            .iter()
+            .take_while(|(ts, _)| ts - same[start].0 <= WINDOW_S)
+            .count()
+            + start;
+        let cluster = &same[start..end];
+        start = end;
+        if cluster.len() < REPEAT {
+            continue;
+        }
+        let latest = cluster[cluster.len() - 1].0;
+        let announced = rows(&alerts).iter().any(|row| {
+            row["reason"] == cause.as_str()
+                && row["ts"]
+                    .as_i64()
+                    .is_some_and(|ts| (latest - ts).abs() <= WINDOW_S)
+        });
+        if announced {
+            continue;
+        }
+        let ids: Vec<&String> = cluster.iter().map(|(_, id)| id).collect();
+        let alert =
+            json!({"ts": latest, "kind": "no_verdict_repeat", "reason": cause, "seats": ids});
+        let mut out = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&alerts)
+            .ok()?;
+        writeln!(out, "{alert}").ok()?;
+        eprintln!(
+            "no_verdict_alert {} review seats ended without a verdict: {cause}",
+            ids.len()
+        );
+        first_alert.get_or_insert(alert);
     }
-    let alert = json!({"ts": now, "kind": "no_verdict_repeat", "reason": cause, "seats": ids});
-    let mut out = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(&alerts)
-        .ok()?;
-    writeln!(out, "{alert}").ok()?;
-    eprintln!(
-        "no_verdict_alert {} review seats ended without a verdict: {cause}",
-        ids.len()
-    );
-    Some(alert)
+    first_alert
 }
 
 #[cfg(test)]
@@ -164,6 +186,72 @@ mod tests {
         assert!(note(dir.path(), "run-aa", CAUSE, 2999).is_none());
         assert!(note(dir.path(), "run-bb", CAUSE, 3000).is_none());
         assert!(!dir.path().join("alerts.jsonl").exists());
+    }
+
+    #[test]
+    fn one_incident_is_announced_once_in_every_booking_order() {
+        // Seats ended at 1000, 2800 and 2801: the seat at 2801 is not within 30 minutes of the one
+        // at 1000, so there is one incident however the seats arrive. Which pair names it depends
+        // on what had arrived when the first pair qualified; the incident count, the stamp (its
+        // latest terminal time) and the span (at most one window) never do.
+        let seats = [("run-a", 1000), ("run-b", 2800), ("run-c", 2801)];
+        for order in [
+            [0, 1, 2],
+            [1, 0, 2],
+            [2, 1, 0],
+            [1, 2, 0],
+            [0, 2, 1],
+            [2, 0, 1],
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            for index in order {
+                note(dir.path(), seats[index].0, CAUSE, seats[index].1);
+            }
+            let alerts = fs::read_to_string(dir.path().join("alerts.jsonl")).unwrap();
+            let rows: Vec<Value> = alerts
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
+            assert_eq!(rows.len(), 1, "order {order:?}: {alerts}");
+            let times: Vec<i64> = rows[0]["seats"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| seats.iter().find(|(name, _)| id == name).unwrap().1)
+                .collect();
+            let (first, latest) = (*times.iter().min().unwrap(), *times.iter().max().unwrap());
+            assert_eq!(
+                rows[0]["ts"],
+                json!(latest),
+                "order {order:?}: stamped with its latest seat"
+            );
+            assert!(
+                latest - first <= WINDOW_S && times.len() >= REPEAT,
+                "order {order:?}: {alerts}"
+            );
+        }
+        // the chronological arrival names the 1000 and 2800 seats
+        let dir = tempfile::tempdir().unwrap();
+        for (id, ts) in seats {
+            note(dir.path(), id, CAUSE, ts);
+        }
+        let alerts = fs::read_to_string(dir.path().join("alerts.jsonl")).unwrap();
+        assert!(
+            alerts.contains("\"ts\":2800") && alerts.contains("run-a"),
+            "{alerts}"
+        );
+    }
+
+    #[test]
+    fn a_reported_incident_never_spans_more_than_one_window() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(note(dir.path(), "run-a", CAUSE, 1000).is_none());
+        let alert = note(dir.path(), "run-b", CAUSE, 2500).expect("1500 s apart is one incident");
+        assert_eq!(alert["seats"], json!(["run-a", "run-b"]));
+        // 4000 is 1500 s after 2500 but 3000 s after the incident's first seat: not part of it
+        assert!(note(dir.path(), "run-c", CAUSE, 4000).is_none());
+        let alerts = fs::read_to_string(dir.path().join("alerts.jsonl")).unwrap();
+        assert_eq!(alerts.lines().count(), 1, "{alerts}");
     }
 
     #[test]
