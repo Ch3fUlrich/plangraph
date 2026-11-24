@@ -22,10 +22,11 @@ pub fn classify(first: &str, second: &str) -> Vec<(String, &'static str, bool)> 
     failed_ids(first)
         .into_iter()
         .map(|id| {
-            let result = if passed.contains(&id) {
-                "passed"
-            } else if failed.contains(&id) {
+            // An error or failure outranks a pass: pytest prints PASSED for the call and ERROR for a failed teardown.
+            let result = if failed.contains(&id) {
                 "failed"
+            } else if passed.contains(&id) {
+                "passed"
             } else {
                 "missing"
             };
@@ -170,6 +171,19 @@ mod tests {
             (record["verdict"].clone(), record["result"].clone()),
             ("fail-fail".into(), "red".into())
         );
+        assert!(record["keeper_items"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_teardown_error_after_a_pass_is_a_failure_not_a_flake() {
+        // pytest prints PASSED for the call and ERROR for the teardown of the same test id.
+        let record = record(
+            &run(),
+            "FAILED t.py::a - x\n",
+            "PASSED t.py::a\nERROR t.py::a - teardown\n",
+        );
+        assert_eq!(record["verdict"], "fail-fail");
+        assert_eq!(record["tests"][0]["second"], "failed");
         assert!(record["keeper_items"].as_array().unwrap().is_empty());
     }
 
