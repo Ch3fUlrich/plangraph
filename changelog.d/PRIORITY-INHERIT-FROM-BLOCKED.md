@@ -1,0 +1,1 @@
+An item that blocks a higher-priority item is ordered at that priority: `ready`, the feeder and the web table sort by an effective priority (the stored value never changes, shown as `8->10 via KEY`); `reap` records the daily count of raised items and the longest chain.
