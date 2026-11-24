@@ -691,6 +691,8 @@ def test_an_unreadable_secondary_drive_does_not_stop_a_healthy_one():
 
 def test_build_drives_set_the_cargo_target_and_enforce_their_floor(monkeypatch, tmp_path):
     monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    for name in 'ab':
+        (tmp_path / name).mkdir()
     policy = {'build_drives': [{'path': str(tmp_path / 'a'), 'disk_floor_gb': 20},
                                {'path': str(tmp_path / 'b'), 'disk_floor_gb': 20}]}
     free = {str(tmp_path / 'a'): 30.0, str(tmp_path / 'b'): 90.0}
@@ -705,11 +707,40 @@ def test_build_drives_set_the_cargo_target_and_enforce_their_floor(monkeypatch, 
     assert h.shared_cargo_target(policy) == tmp_path / 'env'
 
 
+def test_a_missing_build_mount_is_not_measured_through_its_parent(monkeypatch, tmp_path):
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 500.0)
+    policy = {'build_drives': [{'path': str(tmp_path / 'absent'), 'disk_floor_gb': 20}]}
+    with pytest.raises(OSError, match='absent: not mounted'):
+        h.shared_cargo_target(policy)
+
+
+def test_an_extra_check_failure_on_one_drive_does_not_stop_a_healthy_one():
+    def check(path):
+        if path == '/bad':
+            raise OSError('check failed')
+    free = _free({'/bad': 30.0, '/ok': 20.0})
+    assert source.select_drive([('/bad', 5.0), ('/ok', 5.0)], lambda: None, free,
+                               check=check) == ('/ok', None)
+
+
+def test_admission_resolves_the_target_from_the_checkouts_policy(monkeypatch, tmp_path):
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    (tmp_path / 'g').mkdir()
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 10.0)
+    policy = {'build_drives': [{'path': str(tmp_path / 'g'), 'disk_floor_gb': 20}]}
+    with pytest.raises(OSError, match='disk_low: no build drive meets its floor'):
+        h._target_for(policy)
+    monkeypatch.setattr(h, 'shared_cargo_target', lambda: tmp_path / 'default')
+    assert h._target_for({}) == tmp_path / 'default'
+
+
 def test_the_workstation_config_puts_the_cargo_target_on_g(monkeypatch):
     from pathlib import Path
     from plangraph.settings import _policy_data
     monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
     monkeypatch.setenv('PLANGRAPH_SETTINGS', 'deploy/workstation/work-drives.json')
     monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100.0)
+    monkeypatch.setattr(Path, 'is_dir', lambda self: str(self).startswith('/mnt/work-g'))
     policy = _policy_data(Path(__file__).resolve().parents[1])
     assert str(h.shared_cargo_target(policy)) == '/mnt/work-g/plangraph/build/cargo-target'

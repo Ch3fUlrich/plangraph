@@ -8,25 +8,32 @@ use std::{
 
 #[derive(Default)]
 pub(crate) struct Inventory {
-    /// Running runs whose recorded process still exists, and queued runs the host still holds.
+    /// Running runs whose recorded process still exists.
     pub live: BTreeSet<String>,
+    /// Queued runs the host still holds; no session exists yet.
+    pub queued: BTreeSet<String>,
+    /// Running runs whose record carries no process identity: neither live nor dead.
+    pub unverified: BTreeSet<String>,
     /// Runs recorded as running whose process (pid and start time) is gone.
     pub dead: BTreeSet<String>,
     /// Persisted terminal records: status, end time and exit code.
     pub terminal: BTreeMap<String, Value>,
 }
 
-/// The recorded process of the run's last attempt, or of the run itself.
+/// The recorded process of the run, in the form its runner writes: an attempt `proc`
+/// or the run's own `proc` (supervised runs), or top-level `pid` and `pid_start`
+/// (native writers).
 fn identity(row: &Value) -> Option<(u32, u64)> {
     let attempt = row["attempts"].as_array().and_then(|a| a.last());
     let proc = attempt
         .map(|attempt| &attempt["proc"])
         .filter(|proc| proc.is_object())
-        .unwrap_or(&row["proc"]);
-    Some((
-        u32::try_from(proc["pid"].as_u64()?).ok()?,
-        proc["start_time"].as_u64()?,
-    ))
+        .or_else(|| Some(&row["proc"]).filter(|proc| proc.is_object()));
+    let (pid, start) = match proc {
+        Some(proc) => (&proc["pid"], &proc["start_time"]),
+        None => (&row["pid"], &row["pid_start"]),
+    };
+    Some((u32::try_from(pid.as_u64()?).ok()?, start.as_u64()?))
 }
 
 #[cfg(target_os = "linux")]
@@ -57,15 +64,19 @@ pub(crate) fn scan(
         let id = id.to_owned();
         match row["status"].as_str() {
             Some("queued") => {
-                found.live.insert(id);
+                found.queued.insert(id);
             }
-            Some("running" | "unknown") => {
-                if identity(&row).is_some_and(|(pid, start)| alive(pid, start)) {
+            Some("running" | "unknown") => match identity(&row) {
+                Some((pid, start)) if alive(pid, start) => {
                     found.live.insert(id);
-                } else {
+                }
+                Some(_) => {
                     found.dead.insert(id);
                 }
-            }
+                None => {
+                    found.unverified.insert(id);
+                }
+            },
             Some(status) if Status::parse(status).is_some_and(Status::is_terminal) => {
                 found.terminal.insert(
                     id,
@@ -112,21 +123,37 @@ mod tests {
             json!({"status": "running", "attempts": [{"proc": {"pid": 8, "start_time": 80}}]}),
         );
         write(state, "run-unproven", json!({"status": "running"}));
+        write(
+            state,
+            "run-native",
+            json!({"status": "running", "pid": 9, "pid_start": 90}),
+        );
+        write(
+            state,
+            "run-nativegone",
+            json!({"status": "running", "pid": 9, "pid_start": 91}),
+        );
         write(state, "run-queued", json!({"status": "queued"}));
         write(
             state,
             "run-done",
             json!({"status": "completed", "ended": 5.0, "exit_code": 0}),
         );
-        let found = scan(state, |_| true, |pid, start| (pid, start) == (7, 70));
+        let found = scan(
+            state,
+            |_| true,
+            |pid, start| matches!((pid, start), (7, 70) | (9, 90)),
+        );
         assert_eq!(
             found.live,
-            ["run-alive", "run-queued"].map(String::from).into()
+            ["run-alive", "run-native"].map(String::from).into()
         );
+        assert_eq!(found.queued, ["run-queued"].map(String::from).into());
         assert_eq!(
             found.dead,
-            ["run-gone", "run-unproven"].map(String::from).into()
+            ["run-gone", "run-nativegone"].map(String::from).into()
         );
+        assert_eq!(found.unverified, ["run-unproven"].map(String::from).into());
         assert_eq!(found.terminal["run-done"]["exit_code"], 0);
     }
 }

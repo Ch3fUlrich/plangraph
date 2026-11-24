@@ -12,8 +12,10 @@ use std::{collections::BTreeSet, fmt, io};
 pub enum RunFate {
     /// Ended while unreachable: collect the result and report it.
     Finished,
-    /// Still running: re-attach to its session.
+    /// Still running with its session: the host's reconciler follows it.
     Live,
+    /// Still queued on the host; it has no session yet and the record stays as it is.
+    Queued,
     /// Gone without a result: release its claim and lane.
     Dead,
 }

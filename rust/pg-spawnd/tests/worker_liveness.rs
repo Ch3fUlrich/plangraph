@@ -169,7 +169,8 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
             "env":{"PG_INSTALL_BINARY":"/opt/pg-spawnd","PG_INSTALL_STAMP":"/opt/pg-spawnd.stamp",
                    "PLANGRAPH_WORK_MOUNTS":"/mnt/work",
                    "PG_REJOIN_LEG_PROBES":"{\"codex\":[\"leg-probe\",\"codex\"]}",
-                   "PG_INSTALL_HOOKS":"{\"turn\":\"/opt/hook\"}"}
+                   "PG_INSTALL_HOOKS":"{\"turn\":\"/opt/hook\"}",
+                   "PG_REJOIN_REAP_APPROVAL":"D-1","PG_REJOIN_REAP_PLAN":"/tmp/a plan.ndjson"}
         })
     };
     fs::write(
@@ -194,15 +195,15 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
     .unwrap();
     fs::write(
         dead.join("record.json"),
-        r#"{"run_id":"run-dead","host":"worker","status":"running","item_key":"plangraph:ITEM","events":[]}"#,
+        r#"{"run_id":"run-dead","host":"worker","status":"running","item_key":"plangraph:ITEM","claim_epoch":11,"events":[]}"#,
     )
     .unwrap();
     pg_worker_core::executable_test_support::write_private_executable(
         bin.join("keeper-cli"),
         r#"#!/bin/sh
 case "$1" in
-release) echo "$2" > "$FIXTURE_ROOT/released";;
-show) if [ -f "$FIXTURE_ROOT/released" ]; then echo '{"state":"open"}'; else echo '{"state":"claimed"}'; fi;;
+release) echo "$2 $PG_EPOCH" > "$FIXTURE_ROOT/released";;
+show) if [ -f "$FIXTURE_ROOT/stuck" ] || [ ! -f "$FIXTURE_ROOT/released" ]; then echo '{"state":"claimed","epoch":11}'; else echo '{"state":"open"}'; fi;;
 esac
 "#,
     );
@@ -212,8 +213,9 @@ esac
 # Any command the gate was not expected to run fails the rejoin.
 case "$*" in
 *check-install*) echo '{"event":"pg_spawnd_install","status":"stale","reason":"source_sha_mismatch"}';;
-*worker-active-runs*) echo '{"host":"worker","runs":[],"live":["run-live"],"dead":["run-dead"],"terminal":{"run-example":{"status":"completed","ended":123.5,"exit_code":0},"run-queued":{"status":"limited","ended":null,"exit_code":null}}}';;
+*worker-active-runs*) echo '{"host":"worker","runs":[],"queued":[],"unverified":[],"live":["run-live"],"dead":["run-dead"],"terminal":{"run-example":{"status":"completed","ended":123.5,"exit_code":0},"run-queued":{"status":"limited","ended":null,"exit_code":null}}}';;
 *"sha256sum /opt/hook"*) echo "bbbb  /opt/hook";;
+*"--approval D-1 --plan '/tmp/a plan.ndjson'"*) : > "$FIXTURE_ROOT/approved";;
 *"--reap"*) ;;
 *"rev-parse origin/main"*) echo bbbb;;
 *"leg-probe codex"*) ;;
@@ -256,12 +258,23 @@ esac
             .env("PATH", &bin)
             .env("FIXTURE_ROOT", root)
             .env("PG_KEEPER_CLI", bin.join("keeper-cli"))
-            .env("PG_MAIN_HOOK_SHA256", r#"{"turn":"aaaa"}"#)
+            .env("PG_MAIN_HOOK_SHA256", r#"{"turn":"aaaa","extra":"cccc"}"#)
             .env("PG_MAIN_SHA", "a".repeat(40))
             .env("PG_MAIN_SHA256", "b".repeat(64))
             .output()
             .unwrap()
     };
+    // A claim that stays held keeps the run unsettled and the host rejoining.
+    fs::write(root.join("stuck"), "").unwrap();
+    let stuck = rejoin();
+    assert!(!stuck.status.success());
+    assert!(String::from_utf8_lossy(&stuck.stderr).contains("still held"));
+    let unsettled: Value =
+        serde_json::from_slice(&fs::read(dead.join("record.json")).unwrap()).unwrap();
+    assert_eq!(unsettled["status"], "running");
+    assert_eq!(store.phase().unwrap(), Phase::Rejoining);
+    fs::remove_file(root.join("stuck")).unwrap();
+    fs::remove_file(root.join("synced")).unwrap();
     let result = rejoin();
     assert!(result.status.success(), "{result:?}");
     let record: Value = serde_json::from_slice(&result.stdout).unwrap();
@@ -287,12 +300,15 @@ esac
     assert!(record["flags"][0]
         .as_str()
         .unwrap()
-        .contains("stale hooks: turn"));
+        .contains("stale hooks: extra, turn"));
     // The dead run's Keeper claim was released and read back.
     assert_eq!(
         fs::read_to_string(root.join("released")).unwrap().trim(),
-        "plangraph:ITEM"
+        "plangraph:ITEM 11"
     );
+    // The approved reaper plan path with a space reached the host as one argument.
+    assert!(root.join("approved").exists());
+    assert!(record["flags"][0].as_str().unwrap().contains("extra"));
     assert_eq!(store.phase().unwrap(), Phase::Ready);
     let settled: Value =
         serde_json::from_slice(&fs::read(row.join("record.json")).unwrap()).unwrap();

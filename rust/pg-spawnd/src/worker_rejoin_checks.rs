@@ -92,28 +92,39 @@ impl Ssh<'_> {
         })
     }
 
-    /// Installed hooks named in the host's `PG_INSTALL_HOOKS` (JSON of name to path) are
-    /// compared with the main build's `PG_MAIN_HOOK_SHA256` (JSON of name to sha256).
+    /// Every hook of the main build manifest (`PG_MAIN_HOOK_SHA256`, JSON of name to
+    /// sha256) must be installed at its path in the host's `PG_INSTALL_HOOKS` (JSON of
+    /// name to path) with the same hash; a hook with no path, no manifest entry or a
+    /// different hash is stale.
     fn stale_hooks(&self) -> io::Result<Vec<String>> {
-        let Some(raw) = self.host.env.get("PG_INSTALL_HOOKS") else {
-            return Ok(Vec::new());
+        let object = |value: Option<String>, what: &str| -> io::Result<BTreeMap<String, String>> {
+            value.map_or_else(
+                || Ok(BTreeMap::new()),
+                |raw| {
+                    serde_json::from_str(&raw)
+                        .map_err(|_| io::Error::other(format!("{what} is not a JSON object")))
+                },
+            )
         };
-        let paths: BTreeMap<String, String> = serde_json::from_str(raw)
-            .map_err(|_| io::Error::other("PG_INSTALL_HOOKS is not a JSON object of paths"))?;
-        let main: BTreeMap<String, String> = std::env::var("PG_MAIN_HOOK_SHA256")
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
+        let paths = object(
+            self.host.env.get("PG_INSTALL_HOOKS").cloned(),
+            "PG_INSTALL_HOOKS",
+        )?;
+        let main = object(
+            std::env::var("PG_MAIN_HOOK_SHA256").ok(),
+            "PG_MAIN_HOOK_SHA256",
+        )?;
         let mut stale = Vec::new();
-        for (name, path) in paths {
-            let out = self.ok(&["sha256sum", &path], 60)?;
+        let names: std::collections::BTreeSet<_> = paths.keys().chain(main.keys()).collect();
+        for name in names {
+            let (Some(path), Some(want)) = (paths.get(name), main.get(name)) else {
+                stale.push(name.clone());
+                continue;
+            };
+            let out = self.ok(&["sha256sum", path], 60)?;
             let sum = String::from_utf8_lossy(&out);
-            let sum = sum.split_whitespace().next().unwrap_or_default();
-            if main
-                .get(&name)
-                .is_none_or(|want| !want.eq_ignore_ascii_case(sum))
-            {
-                stale.push(name);
+            if !want.eq_ignore_ascii_case(sum.split_whitespace().next().unwrap_or_default()) {
+                stale.push(name.clone());
             }
         }
         Ok(stale)
