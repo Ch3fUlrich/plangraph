@@ -44,7 +44,9 @@ Collectors may also supply `hosts` (an omitted list defaults to empty for compat
 Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
 `origin_main_head`, `behind_commits`, and `age_hours`. Collectors can add
 `work_used_percent`, an array of usage percentages for configured work mounts.
-`host-disk` alerts once per host when any sampled filesystem exceeds 85% used.
+`host-disk` alerts once per host when any sampled filesystem exceeds 85% used. A collector can add
+`top_consumers` (`{path, bytes}` rows); the alert text names the five largest, and the dedupe key
+holds only the host so moving sizes do not re-alert.
 `host-code` alerts when the spawner checkout
 is behind origin/main by more than 10 commits **or** 24 hours. The collector must
 provide the ancestry-based behind count and age in hours since the first missing

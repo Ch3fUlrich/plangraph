@@ -109,6 +109,7 @@ fn simultaneous_protections_have_stable_precedence() {
     f.in_use_by_unit = true;
     f.has_claim = true;
     f.live_run = true;
+    f.pinned = true;
     f.open_pr = true;
     for reason in [
         "clone-path",
@@ -116,6 +117,7 @@ fn simultaneous_protections_have_stable_precedence() {
         "unit-in-use",
         "claim",
         "live-run",
+        "pinned",
         "open-pr",
         "same-branch-worktree",
     ] {
@@ -126,6 +128,7 @@ fn simultaneous_protections_have_stable_precedence() {
             "unit-in-use" => f.in_use_by_unit = false,
             "claim" => f.has_claim = false,
             "live-run" => f.live_run = false,
+            "pinned" => f.pinned = false,
             "open-pr" => f.open_pr = false,
             _ => (),
         }
@@ -211,7 +214,7 @@ fn each_protection_beats_every_eligible_rule() {
     let trees = parse_porcelain("worktree /main\nbare\n\nworktree /a\nHEAD abc\nbranch refs/heads/lane/a\n\nworktree /b\nHEAD def\nbranch refs/heads/lane/a\n").unwrap();
     for (clean, merged) in [(true, true), (true, false), (false, true), (false, false)] {
         for reason in
-            "clone-path process-in-use unit-in-use claim live-run open-pr same-branch-worktree"
+            "clone-path process-in-use unit-in-use claim live-run pinned open-pr same-branch-worktree"
                 .split_whitespace()
         {
             let mut f = facts();
@@ -222,6 +225,7 @@ fn each_protection_beats_every_eligible_rule() {
                 "unit-in-use" => f.in_use_by_unit = true,
                 "claim" => f.has_claim = true,
                 "live-run" => f.live_run = true,
+                "pinned" => f.pinned = true,
                 "open-pr" => f.open_pr = true,
                 _ => (),
             }

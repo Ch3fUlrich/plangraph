@@ -209,3 +209,39 @@ def test_review_pytest_paths_are_judged_by_text_not_platform_path_text(
 
     monkeypatch.setattr(claude_seat, "Path", BackslashPath)
     assert claude_seat._review_command(command, tmp_path) is allowed
+
+
+def test_review_seat_without_worker_target_builds_in_the_capped_pool(tmp_path, monkeypatch):
+    """No seat target falls under /tmp: it resolves inside the pool trimmed to the cargo cap."""
+    from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
+    from plangraph.routing_support import claude_seat
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", "/tmp/plangraph-review-shared-cargo-target")
+    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
+    leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
+    argv, env, run_dirs = claude_access_args("review"), {}, {}
+    claude_seat.configure_review_tests(argv, env, leg, "review", run_dirs, "job1")
+
+    pool = home / ".cache/plangraph/cargo-target-pool"
+    target = Path(env["CARGO_TARGET_DIR"])
+    assert target == pool / "slot-review-job1" / "target"
+    assert Path(env["PLANGRAPH_CARGO_TARGET_DIR"]) == target
+    assert Path(env["TMPDIR"]).parent == target.parent
+    assert run_dirs["job1"] == target.parent
+    sandbox = json.loads(argv[argv.index("--settings") + 1])["sandbox"]
+    assert sandbox["filesystem"]["allowWrite"] == [str(target.parent)]
+    # The pool's own slot glob (what the cap trims) sees the seat's slot.
+    from plangraph.spawner.host_ready_source import pool_slot_roots
+    assert target.parent in pool_slot_roots(pool.with_name("cargo-target"))
+
+
+def test_review_seat_pool_follows_a_configured_target_outside_tmp(tmp_path, monkeypatch):
+    from plangraph.spawner.host_ready import review_cargo_slot
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(tmp_path / "cache/cargo-target"))
+    monkeypatch.setattr("plangraph.spawner.host_ready._under_system_temp", lambda _: False)
+    assert review_cargo_slot("j2") == tmp_path / "cache/cargo-target-pool/slot-review-j2"

@@ -178,12 +178,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for message in &s.idle_messages {
                 println!("{message}");
             }
-            messages.extend(hosts::messages(&s.hosts));
+            let host_alerts = hosts::messages(&s.hosts);
             let legacy = findings(s).join(",");
             if !legacy.is_empty() {
                 messages.insert(0, legacy);
             }
             let mut alerts: Vec<Alert> = messages.into_iter().map(Alert::from).collect();
+            alerts.extend(host_alerts.into_iter().map(|(active, message)| Alert {
+                active,
+                message,
+                recipient: None,
+            }));
             alerts.extend(s.idle_messages.iter().map(|message| Alert {
                 active: format!("host-idle {}", message.split_whitespace().nth(1).unwrap()),
                 message: message.clone(),

@@ -120,6 +120,22 @@ impl Guards {
                 || c.as_os_str().to_string_lossy().starts_with("live-")
         })
     }
+    /// An unfinished run owns `path`: its checkout is the path or sits inside it. A run whose
+    /// working directory is an ancestor (the repository root) does not own the trees below it.
+    pub fn live_run_owns(&self, path: &Path) -> bool {
+        self.live.iter().any(|p| {
+            let p = p.canonicalize().unwrap_or_else(|_| p.clone());
+            p.starts_with(path)
+        })
+    }
+    /// A pin, a reserved name or a pinned path nested in `path` protects it. Pins are not runs.
+    pub fn pin_protects(&self, path: &Path) -> bool {
+        Self::protected_name(path)
+            || self.pinned.iter().any(|p| {
+                let p = p.canonicalize().unwrap_or_else(|_| p.clone());
+                path.starts_with(&p) || p.starts_with(path)
+            })
+    }
     pub fn protects(&self, path: &Path) -> bool {
         if Self::protected_name(path) {
             return true;

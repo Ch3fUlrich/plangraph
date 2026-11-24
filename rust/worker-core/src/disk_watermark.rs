@@ -8,6 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The alert names this many of the largest roots (rule 9.23).
+const TOP_CONSUMERS: usize = 5;
+
 #[derive(Debug, Deserialize, Serialize)]
 struct Directory {
     path: PathBuf,
@@ -52,7 +55,7 @@ fn observe(
                 })
                 .collect();
             directories.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
-            directories.truncate(3);
+            directories.truncate(TOP_CONSUMERS);
             entry.insert(Alert {
                 free,
                 total,
@@ -175,12 +178,14 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
-    fn watermark_ranks_three_same_filesystem_roots_and_rearms_below_85() {
+    fn watermark_ranks_five_same_filesystem_roots_and_rearms_below_85() {
         let roots = BTreeMap::from([
             (PathBuf::from("/fixture/worktrees"), 1),
             (PathBuf::from("/fixture/build"), 1),
             (PathBuf::from("/fixture/scratch"), 1),
             (PathBuf::from("/fixture/pool"), 1),
+            (PathBuf::from("/fixture/tmp"), 1),
+            (PathBuf::from("/fixture/cache"), 1),
             (PathBuf::from("/offline/build"), 2),
         ]);
         let free = Cell::new(16);
@@ -206,6 +211,8 @@ mod tests {
                         "scratch" => 30,
                         "worktrees" => 20,
                         "pool" => 10,
+                        "tmp" => 50,
+                        "cache" => 5,
                         _ => panic!("root on a separate filesystem"),
                     }
                 },
@@ -228,9 +235,11 @@ mod tests {
                 .map(|row| (row.path.as_path(), row.bytes))
                 .collect::<Vec<_>>(),
             [
+                (Path::new("/fixture/tmp"), 50),
                 (Path::new("/fixture/build"), 40),
                 (Path::new("/fixture/scratch"), 30),
                 (Path::new("/fixture/worktrees"), 20),
+                (Path::new("/fixture/pool"), 10),
             ]
         );
     }
