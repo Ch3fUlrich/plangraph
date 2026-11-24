@@ -337,6 +337,8 @@ fn execute(args: &[String]) -> Result<()> {
         }
         command
             .env("CARGO_TARGET_DIR", &target.path)
+            // The pool slot's lease is ours: a Cargo shim on PATH must not wait for it.
+            .env(cargo_cache::LEASE_HELD_ENV, &target.path)
             .env("CARGO_INCREMENTAL", "0")
             .env("PG_JAIL_BIN", jail_binary(&target.path));
         if step.label == "pg-worker/test" {
