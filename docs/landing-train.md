@@ -17,6 +17,10 @@
   snapshot names the previously checked seat as `receipt: {run_id, head}`. The builder requires its exact part head and
   replay checks that the manifest carries the receipt from the independently supplied READY snapshot. Merges run in a private shared
   clone with no user, system or repository configuration and no `info/attributes`; attributes come only from the recorded file.
+- **Review gate** (`accept.rs`): `land-train build` takes `--accept-dir DIR`, the reviewers' answers. A part needs a file there with a
+  `FILES READ:` line, a full `HEAD:` sha equal to the part head and `VERDICT: ACCEPT` as its last line. A writer status file, a
+  REQUEST_CHANGES answer or an ACCEPT on an older head never counts; the refusal names the part and head, and the output carries one
+  `accept #PR head SHA file NAME` line per part for the PR body table.
 - **Verification** (`verify_manifest`, `verify_result`): the registered head and parent of every part, the whole first-parent
   chain (one merge per part with exactly the two expected parents), a clean replay of every merge under the recorded inputs, and
   the exact set of introduced commits. A build result must account for every part of its snapshot; a `conflict` is repeated at

@@ -1,0 +1,1 @@
+`plangraph land-train build` takes `--accept-dir` and refuses a part that has no counted review ACCEPT file whose `HEAD:` line is the part head; the refusal names the part and its head, and the output lists the ACCEPT file of every part.
