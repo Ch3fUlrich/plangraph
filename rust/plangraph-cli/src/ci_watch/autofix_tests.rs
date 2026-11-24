@@ -226,8 +226,8 @@ fn a_run_that_is_no_longer_red_is_never_fixed_nor_reserved() {
         "o/r",
         &tasks,
         lookup,
-        |run| {
-            assert_eq!(run, 0, "the run id of the task");
+        |sha| {
+            assert_eq!(sha, "abc", "the head commit of the task");
             Ok(false)
         },
         |_: &Request, _: &Path| -> Result<Outcome, String> { panic!("a green run is never fixed") },
@@ -238,13 +238,33 @@ fn a_run_that_is_no_longer_red_is_never_fixed_nor_reserved() {
     assert!(!ledger.contains("o/r@abc"), "{ledger}");
 }
 
-struct Run(&'static str);
-impl super::github::Github for Run {
+/// Runs of one head as GitHub lists them: (run id, conclusion).
+struct Runs(Vec<(u64, &'static str)>);
+impl super::github::Github for Runs {
     fn pages(&mut self, _: &str, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
         unreachable!()
     }
-    fn page(&mut self, _: &str, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
-        unreachable!()
+    fn page(
+        &mut self,
+        endpoint: &str,
+        field: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        assert!(
+            endpoint.contains("head_sha=abc") && field == Some("workflow_runs"),
+            "{endpoint}"
+        );
+        Ok(self
+            .0
+            .iter()
+            .map(|(id, conclusion)| {
+                let conclusion = if conclusion.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!(conclusion)
+                };
+                serde_json::json!({"id": id, "head_sha": "abc", "conclusion": conclusion})
+            })
+            .collect())
     }
     fn log(&mut self, _: u64) -> Result<String, String> {
         unreachable!()
@@ -252,23 +272,25 @@ impl super::github::Github for Run {
     fn rerun(&mut self, _: u64) -> Result<(), String> {
         unreachable!()
     }
-    fn value(&mut self, endpoint: &str) -> Result<serde_json::Value, String> {
-        assert_eq!(endpoint, "actions/runs/7");
-        Ok(
-            serde_json::json!({"conclusion": serde_json::Value::String(self.0.into()), "status": "completed"}),
-        )
-    }
 }
 
 #[test]
-fn only_a_run_whose_latest_attempt_concluded_red_is_red() {
-    assert!(run_is_red(&mut Run("failure"), 7).unwrap());
-    assert!(run_is_red(&mut Run("timed_out"), 7).unwrap());
-    assert!(!run_is_red(&mut Run("success"), 7).unwrap());
+fn only_the_newest_run_of_the_head_decides_whether_it_is_red() {
+    assert!(head_is_red(&mut Runs(vec![(5, "failure")]), "abc").unwrap());
+    assert!(head_is_red(&mut Runs(vec![(5, "success"), (6, "timed_out")]), "abc").unwrap());
+    // A newer green run on the same commit makes the older red run ineligible.
+    assert!(!head_is_red(&mut Runs(vec![(5, "failure"), (9, "success")]), "abc").unwrap());
     assert!(
-        !run_is_red(&mut Run(""), 7).unwrap(),
-        "a rerun in flight has no conclusion"
+        !head_is_red(&mut Runs(vec![(5, "failure"), (9, "")]), "abc").unwrap(),
+        "a run in flight is not red"
     );
+    assert!(head_is_red(&mut Runs(vec![]), "abc").is_err());
+}
+
+#[test]
+fn the_push_and_the_commit_override_no_hook() {
+    // A fresh clone has no repository hooks installed; whatever the operator configured for git must run.
+    assert!(!include_str!("autofix.rs").contains("core.hooksPath"));
 }
 
 struct Recorded(serde_json::Value, usize);
@@ -515,4 +537,49 @@ fn the_fix_command_cannot_read_the_trusted_clone_or_a_file_of_the_watcher_nor_wr
     );
     assert!(!escape.exists(), "the command wrote outside its checkout");
     assert!(!scratch.join("trusted/rust/b.txt").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_fix_command_sees_no_network_interface_and_no_file_of_etc_beyond_the_loader_files() {
+    // Needs unprivileged user namespaces; a host without them cannot show it (the real run refuses there).
+    let namespaces = Command::new("unshare")
+        .args(["--user", "--map-current-user", "--net", "true"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !namespaces {
+        eprintln!("skipped: no unprivileged user namespaces on this host");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let head = remote(root.path());
+    // A plain file: a link into /usr would be readable through its target.
+    let etc = ["/etc/hosts", "/etc/shells", "/etc/hostname", "/etc/fstab"]
+        .into_iter()
+        .find(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
+        .expect("a readable file in /etc");
+    // `read` is a builtin, so /proc/self is the jailed process itself.
+    let script = format!(
+        "{{ while read -r line; do echo \"net:$line\"; done < /proc/self/net/dev; \
+           while read -r line; do echo \"etc:$line\"; done < {etc} 2>/dev/null; echo end; }} > a.txt"
+    );
+    let scratch = root.path().join("scratch");
+    let outcome = apply(&scratch, &request(&head, &["sh", "-c", &script])).unwrap();
+    assert!(matches!(outcome, Outcome::Pushed(_)), "{outcome:?}");
+    let seen = git(
+        &root.path().join("remote.git"),
+        &["show", "feature:rust/a.txt"],
+    );
+    let interfaces: Vec<&str> = seen
+        .lines()
+        .filter_map(|l| l.strip_prefix("net:"))
+        .filter(|l| l.contains(':') && !l.contains('|'))
+        .collect();
+    assert_eq!(interfaces.len(), 1, "only loopback is left: {seen}");
+    assert!(interfaces[0].trim_start().starts_with("lo:"), "{seen}");
+    assert!(
+        !seen.contains("etc:"),
+        "a file of /etc outside the loader set was readable: {seen}"
+    );
+    assert!(seen.contains("end"), "{seen}");
 }

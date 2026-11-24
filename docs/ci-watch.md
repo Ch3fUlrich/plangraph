@@ -96,10 +96,12 @@ class; all else goes to a narrow fix writer. `plangraph ci-watch --autofix` (the
 scan (`ci_watch/autofix.rs`), for the failures of that scan only: a scratch clone of the pull request head (a fork
 or a moved head is refused), the command run in a sandbox copy under a Landlock jail (`pg-jail`: it reads the system, the toolchain and
 the dependency caches and writes only its own checkout and scratch directories; the trusted clone, the watcher's
-HOME and credentials are denied by the kernel) with an emptied environment and `CARGO_NET_OFFLINE`, a host that
+HOME and credentials are denied by the kernel) with an emptied environment, `CARGO_NET_OFFLINE` and an empty network namespace (only loopback), of `/etc`
+only the loader, user and time-zone files, and the watcher's credential paths (`PG_TOKEN_FILE`, `~/.config/gh`,
+`~/.ssh`, `~/.cargo/credentials*` ...) named to the jail so that a grant covering one refuses the fix; a host that
 cannot enforce the jail leaves the fix to the writer, the copy's files staged and checked by the trusted clone (its `.git` is never run), one commit `Hand-Edit: ci-watch <class> fix of failed job <id>` and one plain push. A fix of more than 50
 lines, one that touches a path the commit gate protects for Hand-Edit commits (its `AUTH_DOOR_PATHS` and `GATE_PATHS`, held equal by a test) or one that changes nothing is dropped and left to the writer, whose task
-stays. Before a fix the run's outcome is read again (a rerun or a concurrent scan may have made it green). The commit and the push run in the trusted clone with whatever hooks the operator configured for git: the clone's own repository hooks are not installed in a fresh clone, and the repository's pre-push gate would build the pull request's code outside the jail. The (repository, head SHA, class) is reserved in `autofix.json` under a lock before the fix runs, with the job id
+stays. Before a fix the newest pull-request run of the head commit is read again (a rerun, a newer run or a concurrent scan may have made it green; a run in flight is not red). The commit and the push run in the trusted clone with whatever hooks the operator configured for git: the clone's own repository hooks are not installed in a fresh clone, and the repository's pre-push gate would build the pull request's code outside the jail. The (repository, head SHA, class) is reserved in `autofix.json` under a lock before the fix runs, with the job id
 and result, and the head a fix produced is entered too, so a fix that stays red is never fixed again while a later
 head of a person gets its own. A closed or merged pull request is read once, recorded in the same file and never touched again.
 

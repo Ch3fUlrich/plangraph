@@ -188,7 +188,7 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
             &repo,
             &tasks,
             |pr| autofix::pr_head(&mut gh, &repo, pr),
-            |run| autofix::run_is_red(&mut Gh { repo: repo.clone() }, run),
+            |sha| autofix::head_is_red(&mut Gh { repo: repo.clone() }, sha),
             |request, scratch| autofix::apply(scratch, request),
         )?);
     }

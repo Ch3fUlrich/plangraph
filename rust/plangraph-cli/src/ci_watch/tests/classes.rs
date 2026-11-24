@@ -155,7 +155,8 @@ fn the_report_keeps_two_head_commits_of_one_pull_request_apart_and_counts_real_f
         json!({"done": {
             "o/r@aaa:fmt": "job 1: pushed deadbeef",
             "o/r@deadbeef:fmt": "produced by the fix of job 1",
-            "o/r@bbb:fmt": "job 2: 80 lines; left to the fix writer"
+            "o/r@bbb:fmt": "job 2: 80 lines; left to the fix writer",
+            "o/r@ccc:clippy": "job 3: started"
         }})
         .to_string(),
     )
@@ -169,9 +170,15 @@ fn the_report_keeps_two_head_commits_of_one_pull_request_apart_and_counts_real_f
         out["red_runs_per_head_sha_by_class"]["pr-9@bbb"]["fmt"], 1,
         "{out}"
     );
-    assert_eq!(out["automatic_fixes_by_class"]["fmt"]["pushed"], 1, "{out}");
+    let fixes = &out["automatic_fixes_by_head_sha_and_class"];
+    assert_eq!(fixes["aaa"]["fmt"], "pushed", "{out}");
+    assert_eq!(fixes["bbb"]["fmt"], "left_to_writer", "{out}");
+    assert!(
+        fixes["deadbeef"].is_null(),
+        "a loop-guard entry is no fix round: {out}"
+    );
     assert_eq!(
-        out["automatic_fixes_by_class"]["fmt"]["left_to_writer"], 1,
-        "{out}"
+        fixes["ccc"]["clippy"], "pending",
+        "a reservation in flight is not a result: {out}"
     );
 }

@@ -170,18 +170,7 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
         ],
     )?;
     let refspec = format!("HEAD:refs/heads/{}", head.branch);
-    run(
-        &trusted,
-        "git",
-        &[
-            "-c",
-            "core.hooksPath=/dev/null",
-            "push",
-            "--quiet",
-            "origin",
-            &refspec,
-        ],
-    )?;
+    run(&trusted, "git", &["push", "--quiet", "origin", &refspec])?;
     Ok(Outcome::Pushed(
         run(&trusted, "git", &["rev-parse", "HEAD"])?
             .trim()
@@ -209,7 +198,7 @@ pub fn pass(
     repo: &str,
     tasks: &BTreeMap<String, Task>,
     mut lookup: impl FnMut(u64) -> Result<PrHead>,
-    mut still_red: impl FnMut(u64) -> Result<bool>,
+    mut still_red: impl FnMut(&str) -> Result<bool>,
     mut fix: impl FnMut(&Request, &Path) -> Result<Outcome>,
 ) -> Result<Vec<String>> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -266,7 +255,7 @@ pub fn pass(
         }
         // The tasks were read before this pass took the lock: a rerun or a concurrent scan may have turned the
         // run green since, so its outcome is read again at the source before anything is reserved or pushed.
-        match still_red(task.run_id) {
+        match still_red(&task.head_sha) {
             Ok(true) => {}
             Ok(false) => continue,
             Err(error) => {
@@ -342,11 +331,21 @@ pub fn pass(
     Ok(rows)
 }
 
-/// True while the latest attempt of run `run_id` has concluded red (a rerun in flight or a green one is not).
-pub fn run_is_red(gh: &mut impl Github, run_id: u64) -> Result<bool> {
-    let run = gh.value(&format!("actions/runs/{run_id}"))?;
+/// True while the newest pull-request run of the workflow on head commit `sha` has concluded red. A newer run on
+/// the same commit (a rerun, a run a label or an edit started) decides, whatever run the task came from; a run
+/// in flight has no conclusion and is not red.
+pub fn head_is_red(gh: &mut impl Github, sha: &str) -> Result<bool> {
+    let runs = gh.page(
+        &format!("actions/workflows/tests.yml/runs?head_sha={sha}&event=pull_request&per_page=30"),
+        Some("workflow_runs"),
+    )?;
+    let newest = runs
+        .iter()
+        .filter(|run| run["head_sha"] == sha)
+        .max_by_key(|run| run["id"].as_u64().unwrap_or(0))
+        .ok_or("no run of this head")?;
     Ok(matches!(
-        run["conclusion"].as_str(),
+        newest["conclusion"].as_str(),
         Some("failure" | "timed_out" | "startup_failure")
     ))
 }

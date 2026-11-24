@@ -63,19 +63,28 @@ pub fn report(dir: &Path) -> Result<Value> {
         }
     }
     let autofix: super::autofix::Ledger = super::read(&dir.join("autofix.json"))?;
-    // What the automatic fixes did, by class: the ledger key is `repo@sha:class`, the value ends in the outcome.
-    let mut fixes: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
+    // What the automatic fixes did, by head commit and class: the ledger key is `repo@sha:class`, the value ends
+    // in the outcome. A reservation still `started` is pending, not a result.
+    let mut fixes: BTreeMap<String, BTreeMap<&str, &str>> = BTreeMap::new();
     for (key, outcome) in &autofix.done {
         if outcome.contains("produced by the fix") {
             continue; // the head a fix made, entered only as a loop guard
         }
-        let class = key.rsplit_once(':').map_or("", |(_, class)| class);
-        let result = if outcome.contains(": pushed ") {
+        let Some((head, class)) = key.rsplit_once(':') else {
+            continue;
+        };
+        let head = head.rsplit_once('@').map_or(head, |(_, sha)| sha);
+        let result = if outcome.ends_with(": started") {
+            "pending"
+        } else if outcome.contains(": pushed ") {
             "pushed"
         } else {
             "left_to_writer"
         };
-        *fixes.entry(class).or_default().entry(result).or_default() += 1;
+        fixes
+            .entry(head.to_owned())
+            .or_default()
+            .insert(class, result);
     }
     Ok(json!({
         "red_runs": rows.len(),
@@ -83,6 +92,6 @@ pub fn report(dir: &Path) -> Result<Value> {
         "red_runs_per_head_sha_by_class": heads,
         "red_runs_without_class": unclassified,
         "red_runs_without_task": untasked,
-        "automatic_fixes_by_class": fixes,
+        "automatic_fixes_by_head_sha_and_class": fixes,
     }))
 }
