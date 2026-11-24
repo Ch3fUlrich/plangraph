@@ -391,6 +391,13 @@ def main(argv: list[str] | None = None) -> int:
     if enforce_dates:
         enforce_after = None if None in enforce_dates else min(d for d in enforce_dates if d is not None)
         is_enforced = (enforce_after is None) or (today >= enforce_after)
+        # Newly added item fragments stand in for their area's reference document.
+        fragment_docs = {"contributing": "CONTRIBUTING.md", "keeper": "docs/KEEPER.md",
+                         "spawner": "docs/SPAWNER.md"}
+        covered = set(raw_paths)
+        for path in added.stdout.split("\0"):
+            if match := re.fullmatch(r"docs/(contributing|keeper|spawner)/[A-Z][A-Z0-9_-]*\.md", path):
+                covered.add(fragment_docs[match[1]])
         compiled = [(glob_to_regex(g), g, d) for _, g, d in rules]
         # Shared workspace metadata follows head mappings, not retired crate rules.
         head_rules = {(g, tuple(d)) for _, g, d in parse_docs_map(map_text or "")[1]}
@@ -399,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
                 if rx.match(path):
                     if path in ("rust/Cargo.toml", "rust/Cargo.lock") and (glob_pat, tuple(target_docs)) not in head_rules:
                         continue
-                    if not any(d in raw_paths for d in target_docs):
+                    if not covered.intersection(target_docs):
                         docs_str = ", ".join(target_docs)
                         if is_enforced:
                             docs_map_errors += 1
