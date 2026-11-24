@@ -112,6 +112,34 @@ def _reset_seconds(body):
         pos, seen = pair.end(), True
 
 
+_TRY_AGAIN_AT = re.compile(
+    r"try again at\s+(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:(\d{4})\s+)?)?"
+    r"(\d{1,2}):(\d{2})\s*([ap]m)", re.I)
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def _try_again_at(body, now):
+    """The wall-clock reset of a Codex usage-limit reply ("try again at Nov 27th, 2026 8:24 PM"), in the
+    host's local zone as the Codex client prints it; a time without a date is the next such time."""
+    match = _TRY_AGAIN_AT.search(body)
+    if match is None:
+        return None
+    month, day, year, hour, minute, meridiem = match.groups()
+    hour = int(hour) % 12 + (12 if meridiem.lower() == "pm" else 0)
+    if month is not None and month.lower() not in _MONTHS:
+        return None
+    local = time.localtime(now)
+    try:
+        if month is None:
+            stamp = time.mktime((local.tm_year, local.tm_mon, local.tm_mday, hour, int(minute), 0, 0, 0, -1))
+            return stamp if stamp > now else stamp + 86400
+        stamp = time.mktime((int(year or local.tm_year), _MONTHS.index(month.lower()) + 1, int(day),
+                             hour, int(minute), 0, 0, 0, -1))
+    except (ValueError, OverflowError):
+        return None
+    return stamp if stamp > now else None
+
+
 def _elapsed_cooldown(headers, body):
     """True for an explicitly elapsed cooldown (D-3685): nothing to book.
 
@@ -155,6 +183,8 @@ def _reset(headers, body, now):
         if total is not None:
             # "reset after 0s": the cooldown already elapsed, nothing to book.
             reset = now + total if total > 0 else None
+        else:
+            reset = _try_again_at(body, now)
     return reset if reset is not None and math.isfinite(reset) else None
 
 

@@ -29,7 +29,7 @@ the callback. A harness quota line (D-3257) or a failed liveness probe marks the
 
 The exact `(provider/model, account, combo)` tuple defines scope; omitted
 dimensions are not wildcards. Retry-After seconds/date, x-ratelimit-reset epoch
-seconds/date, and body “resets in N seconds/minutes/hours” give an explicit reset.
+seconds/date, and body “resets in N seconds/minutes/hours” give an explicit reset, as does a Codex “try again at Nov 27th, 2026 8:24 PM” (host-local wall time), booked on every Codex leg.
 At that reset the leg is eligible automatically. Without reset information the
 leg is limited for ten minutes then eligible with `reprobe` evidence until a
 real successful provider response clears it. Queries never update the database.
