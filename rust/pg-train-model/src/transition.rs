@@ -181,7 +181,12 @@ impl Model {
                     return Err(Denied::Phase);
                 }
                 // After two red rounds the builder stops fixing in place: it drops or splits.
-                if t.red_rounds + 1 >= 2 {
+                // The rounds of the whole lineage count: a retry group already has its parent train's.
+                let prior = match t.kind {
+                    Kind::Retry { round, .. } => round,
+                    _ => 0,
+                };
+                if t.red_rounds + prior + 1 >= 2 {
                     return Err(Denied::TwoRounds);
                 }
                 t.red_rounds += 1;
