@@ -94,10 +94,14 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     )?;
     let measurement = if let Some((cpus, load)) = load {
         let free_ram_bytes = facts.free_ram_bytes;
-        capacity::apply(&mut facts, &mut policy, cpus, load)?;
+        let budget = capacity::apply(&mut facts, &mut policy, cpus, load)?;
         Some(json!({
             "host":facts.host, "cpus":cpus, "load1":load, "running_writers":facts.running_writers,
-            "free_ram_bytes":free_ram_bytes, "free_disk_bytes":facts.free_disk_bytes,
+            "free_ram_bytes":free_ram_bytes, "ram_floor_bytes":policy.ram_floor_bytes,
+            "ram_per_writer_bytes":policy.ram_per_run_bytes,
+            "slots_by_ram":budget.slots_by_ram, "new_writers_allowed":budget.new_writers_allowed,
+            "load_paced":budget.load_paced, "writer_limit":budget.limit,
+            "free_disk_bytes":facts.free_disk_bytes,
             "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
         }))
     } else {
@@ -208,22 +212,55 @@ pub fn run(home: &Path, env: &Env, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn live_capacity_budget_changes_with_load_and_reserves_memory_floor() {
-        let mut facts: HostFacts = serde_json::from_value(json!({
-            "host":"worker", "free_ram_bytes":7000000000u64,
+    fn live_facts(running: usize, free_ram: u64) -> HostFacts {
+        serde_json::from_value(json!({
+            "host":"worker", "free_ram_bytes":free_ram,
             "free_disk_bytes":20000000000u64, "quota_remaining_percent":80,
-            "observed_at":1000, "now":1000, "running_writers":5
+            "observed_at":1000, "now":1000, "running_writers":running
         }))
-        .unwrap();
+        .unwrap()
+    }
+    #[test]
+    fn live_slots_follow_free_ram_above_the_floor_not_load() {
         let mut policy = Policy::default();
-        super::super::capacity::apply(&mut facts, &mut policy, 12, 0.5).unwrap();
-        assert_eq!(admit(&facts, &policy), Admission::Admit);
+        // 7 GB free - 3 GB floor = 4 GB = one 4 GB writer on top of the 5 running.
+        let mut facts = live_facts(5, 7_000_000_000);
+        let b = super::super::capacity::apply(&mut facts, &mut policy, 12, 0.5).unwrap();
+        assert_eq!((b.slots_by_ram, b.limit, b.load_paced), (1, 6, false));
         assert_eq!(facts.free_ram_bytes, 4_000_000_000);
-        facts.running_writers = 6;
         assert_eq!(admit(&facts, &policy), Admission::Admit);
-        facts.free_ram_bytes = 7_000_000_000;
-        super::super::capacity::apply(&mut facts, &mut policy, 12, 11.5).unwrap();
+        facts.running_writers = 6;
+        assert_eq!(
+            admit(&facts, &policy),
+            Admission::Refuse("max_writers".into())
+        );
+        // Load 11.5 on 12 cpus changes nothing: only RAM sets the slots.
+        let mut facts = live_facts(5, 7_000_000_000);
+        let b = super::super::capacity::apply(&mut facts, &mut policy, 12, 11.5).unwrap();
+        assert_eq!(b.limit, 6);
+        assert_eq!(admit(&facts, &policy), Admission::Admit);
+    }
+    #[test]
+    fn a_loaded_host_with_free_ram_admits_by_ram_and_paces_to_one_new_writer() {
+        // The workstation of 2026-11-24: 32 cpus, load1 ~100, 86 GB free, no writer.
+        let mut policy = Policy::default();
+        let mut facts = live_facts(0, 86_000_000_000);
+        let b = super::super::capacity::apply(&mut facts, &mut policy, 32, 100.0).unwrap();
+        assert_eq!(b.slots_by_ram, 20);
+        assert_eq!((b.new_writers_allowed, b.load_paced, b.limit), (1, true, 1));
+        assert_eq!(admit(&facts, &policy), Admission::Admit);
+        facts.running_writers = 1;
+        assert_eq!(
+            admit(&facts, &policy),
+            Admission::Refuse("max_writers".into())
+        );
+    }
+    #[test]
+    fn no_free_ram_above_the_floor_gives_no_slot_whatever_the_load() {
+        let mut policy = Policy::default();
+        let mut facts = live_facts(0, 3_500_000_000);
+        let b = super::super::capacity::apply(&mut facts, &mut policy, 32, 0.0).unwrap();
+        assert_eq!((b.slots_by_ram, b.limit), (0, 0));
         assert_eq!(
             admit(&facts, &policy),
             Admission::Refuse("max_writers".into())

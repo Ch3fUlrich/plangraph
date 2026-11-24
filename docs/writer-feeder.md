@@ -128,10 +128,14 @@ active writers with no host refuse instead of silently counting zero.
 `--live-facts` is the feeder service's Linux and WSL mode. It samples available
 memory, one-minute load, effective CPU count, and disk space on the run-state
 and existing Cargo target filesystems. It uses the spawner host identity from
-`PLANGRAPH_HOST_NAME` or the host registry. A launch needs one CPU of headroom
-and enough available memory for the per-run estimate above the configured
-`ram_floor_bytes`. Every decision with an available sample, including an idle
-tick, records its capacity and current writer count in the event log.
+`PLANGRAPH_HOST_NAME` or the host registry. Hosts admit by free RAM (D-5122), not load: the writer limit of a host is
+the writers it already runs plus (free RAM - `ram_floor_bytes`) / `ram_per_run_bytes`
+(rounded down). Load never refuses; at or above one-minute load of the CPU count
+the host starts one new writer per tick, so running builds get room first. Every
+decision with an available sample, including an idle tick, records the numbers in its
+`capacity` object: `free_ram_bytes`, `ram_floor_bytes`, `ram_per_writer_bytes`,
+`slots_by_ram`, `new_writers_allowed`, `load_paced`, `writer_limit`, `cpus`, `load1`
+and `running_writers`.
 
 `--facts PATH` defaults to `~/.config/plangraph/feeder-facts.json` when live facts
 are disabled. Supply current

@@ -36,20 +36,48 @@ pub(super) fn sample(
     ))
 }
 
+/// The writer budget of one live sample: the slots free RAM allows, the pacing that load adds,
+/// and the numbers behind both, so the decision line shows why a host admits or refuses.
+#[derive(Debug, PartialEq)]
+pub(super) struct Budget {
+    pub slots_by_ram: usize,
+    pub new_writers_allowed: usize,
+    pub load_paced: bool,
+    pub limit: usize,
+}
+
+/// Hosts admit by free RAM (D-5122): new writer slots = (free RAM - floor) / RAM per writer.
+/// Load never refuses; a host whose load1 is at or above its cpu count only starts one new
+/// writer per tick, so builds already running get room before the next one starts.
 pub(super) fn apply(
     facts: &mut HostFacts,
     policy: &mut Policy,
     cpus: usize,
     load: f64,
-) -> Result<(), String> {
+) -> Result<Budget, String> {
     if facts.host.is_empty() || cpus == 0 || !load.is_finite() || load < 0.0 {
         return Err("invalid live host capacity".into());
     }
-    let free_cores = (cpus as f64 - load).max(0.0).floor() as usize;
-    policy.max_writers.insert(
-        facts.host.clone(),
-        facts.running_writers.saturating_add(free_cores),
-    );
     facts.free_ram_bytes = facts.free_ram_bytes.saturating_sub(policy.ram_floor_bytes);
-    Ok(())
+    let slots_by_ram = usize::try_from(
+        facts
+            .free_ram_bytes
+            .checked_div(policy.ram_per_run_bytes)
+            .unwrap_or(0),
+    )
+    .unwrap_or(usize::MAX);
+    let load_paced = load >= cpus as f64;
+    let new_writers_allowed = if load_paced {
+        slots_by_ram.min(1)
+    } else {
+        slots_by_ram
+    };
+    let limit = facts.running_writers.saturating_add(new_writers_allowed);
+    policy.max_writers.insert(facts.host.clone(), limit);
+    Ok(Budget {
+        slots_by_ram,
+        new_writers_allowed,
+        load_paced,
+        limit,
+    })
 }
