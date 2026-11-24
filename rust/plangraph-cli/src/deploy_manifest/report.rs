@@ -208,18 +208,15 @@ pub fn run_local(home: &Path, args: &[String]) -> Result<(Vec<String>, usize), S
             "--repo" => repo = it.next().ok_or("--repo needs a path")?.into(),
             "--no-ledger" => write_ledger = false,
             "--summary" => return Ok((vec![digest_line_local()], 0)),
-            other => return Err(format!(
+            other => {
+                return Err(format!(
                 "usage: plangraph deploy-status [--repo PATH] [--no-ledger | --summary] ({other})"
-            )),
+            ))
+            }
         }
     }
-    let xdg = |key: &str, rel: &str| {
-        std::env::var_os(key)
-            .filter(|v| !v.is_empty())
-            .map_or_else(|| home.join(rel), PathBuf::from)
-    };
-    let state_dir = xdg("XDG_STATE_HOME", ".local/state").join("plangraph");
-    let config = xdg("XDG_CONFIG_HOME", ".config").join("plangraph");
+    let state_dir = state_dir(home);
+    let config = xdg(home, "XDG_CONFIG_HOME", ".config").join("plangraph");
     let roles = this_host_roles(&config)?;
     let facts = LocalFacts {
         repo: repo.clone(),
