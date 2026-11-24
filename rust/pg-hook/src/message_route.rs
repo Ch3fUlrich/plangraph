@@ -1,5 +1,6 @@
 //! PreToolUse routing for `SendMessage`: routine status lines to the routing role go to the
 //! inbox file the router reads instead of waking it. Every error fails open (exit 0).
+use crate::message_time;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
@@ -10,15 +11,8 @@ use std::path::{Path, PathBuf};
 const ROUTINE: [&str; 5] = ["ACK", "DONE", "FILED", "MERGED", "STATUS"];
 const ROUTING_ROLE: &str = "routing";
 
-fn home_state() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/state")))?;
-    Some(base)
-}
-
 /// The routing state dir, as `fleet-name` finds it: `ROUTING_STATE_DIR`, else `<state>/routing`.
+/// It holds the launch records the sender name comes from, not the inbox.
 fn state_dir() -> Option<PathBuf> {
     match std::env::var_os("ROUTING_STATE_DIR").filter(|v| !v.is_empty()) {
         Some(dir) => Some(PathBuf::from(dir)),
@@ -26,12 +20,20 @@ fn state_dir() -> Option<PathBuf> {
     }
 }
 
-/// The inbox directory the router heartbeat reads, as `routerctl` finds it:
-/// `ROUTER_INBOX_DIR`, else `<routing state>/inbox`.
-fn inbox_dir(state: &Path) -> PathBuf {
+/// `$XDG_STATE_HOME`, else `~/.local/state`.
+fn home_state() -> Option<PathBuf> {
+    std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/state")))
+}
+
+/// The inbox directory the router heartbeat reads, as `routerctl` finds it: `ROUTER_INBOX_DIR`,
+/// else `<XDG state home>/routing/inbox`, whatever `ROUTING_STATE_DIR` says.
+fn inbox_dir() -> Option<PathBuf> {
     match std::env::var_os("ROUTER_INBOX_DIR").filter(|v| !v.is_empty()) {
-        Some(dir) => PathBuf::from(dir),
-        None => state.join("inbox"),
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => Some(home_state()?.join("routing/inbox")),
     }
 }
 
@@ -73,23 +75,37 @@ fn role_of(name: &str) -> &str {
 
 /// The `L0.md` the router heartbeat reads, or None when this host does not feed the router.
 ///
-/// `routerctl` keeps `offsets.json` in the inbox directory and starts a file it has no offset for
-/// at its end, skipping what was already in it. The file is therefore used only once that
-/// `offsets.json` names it; until then it is created empty so the next heartbeat records its
-/// offset, and the message is sent as usual.
+/// `routerctl` keeps `offsets.json` in the inbox directory. It starts a file it has no offset
+/// for, or whose saved offset is beyond the file size, at the end and so skips whatever was
+/// filed before. The file is therefore used only while `offsets.json` holds a usable offset
+/// (a number up to the current size) for it; with no entry it is created empty so the next
+/// heartbeat records its offset. In both other cases the message is sent as usual.
 fn router_inbox(dir: &Path) -> Option<PathBuf> {
     let offsets: Value = serde_json::from_slice(&fs::read(dir.join("offsets.json")).ok()?).ok()?;
+    let offsets = offsets.as_object()?;
     let inbox = dir.join("L0.md");
-    let known = offsets.as_object()?.keys().any(|key| {
-        Path::new(key)
-            .file_name()
-            .is_some_and(|name| name == "L0.md")
-    });
-    if !known {
+    // routerctl looks up the full path first, then any key with the same file name.
+    let saved: Vec<&Value> = match offsets.get(inbox.to_str()?) {
+        Some(offset) => vec![offset],
+        None => offsets
+            .iter()
+            .filter(|(key, _)| {
+                Path::new(key)
+                    .file_name()
+                    .is_some_and(|name| name == "L0.md")
+            })
+            .map(|(_, offset)| offset)
+            .collect(),
+    };
+    if saved.is_empty() {
         let _ = OpenOptions::new().create(true).append(true).open(&inbox);
         return None;
     }
-    Some(inbox)
+    let size = fs::metadata(&inbox).ok()?.len();
+    saved
+        .iter()
+        .all(|offset| offset.as_u64().is_some_and(|offset| offset <= size))
+        .then_some(inbox)
 }
 
 /// Append one line to the inbox; the line is the delivery. The diversion row is accounting and
@@ -119,9 +135,9 @@ fn divert(
 }
 
 pub fn hook(input: impl BufRead, diagnostic: &mut impl Write) -> i32 {
-    match state_dir() {
-        Some(state) => hook_in(input, diagnostic, &state, &inbox_dir(&state), Utc::now()),
-        None => 0,
+    match (state_dir(), inbox_dir()) {
+        (Some(state), Some(inbox)) => hook_in(input, diagnostic, &state, &inbox, Utc::now()),
+        _ => 0,
     }
 }
 
@@ -150,6 +166,10 @@ pub fn hook_in(
     let Some(word) = routine_word(message) else {
         return 0;
     };
+    // A message the time guard refuses is never filed: it would reach routing later by hand.
+    if message_time::refusal(message, now).is_some() {
+        return 0;
+    }
     let Some(inbox) = router_inbox(inbox_dir) else {
         return 0;
     };

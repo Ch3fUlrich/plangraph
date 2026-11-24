@@ -33,7 +33,8 @@ fn run_registered(home: &Path, state: &Path, to: &str, message: &str) -> Vec<Opt
             let mut child = Command::new("sh")
                 .args(["-c", command])
                 .env("HOME", home)
-                .env("ROUTING_STATE_DIR", state)
+                .env("XDG_STATE_HOME", state)
+                .env("ROUTING_STATE_DIR", state.join("routing"))
                 .env_remove("ROUTER_INBOX_DIR")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
@@ -58,7 +59,7 @@ fn both_guards_are_registered_on_sendmessage_and_refuse_through_the_registration
     let home = tempfile::tempdir().unwrap();
     install(home.path());
     let state = tempfile::tempdir().unwrap();
-    let inbox = state.path().join("inbox");
+    let inbox = state.path().join("routing/inbox");
     std::fs::create_dir_all(&inbox).unwrap();
     let key = inbox.join("L0.md");
     std::fs::write(&key, "").unwrap();
@@ -86,6 +87,16 @@ fn both_guards_are_registered_on_sendmessage_and_refuse_through_the_registration
         run_registered(home.path(), state.path(), "routing", "BLOCKED review"),
         [Some(0), Some(0)]
     );
+    // A routine line with a placeholder time is refused by the time guard and never filed.
+    let filed = std::fs::read_to_string(&key).unwrap();
+    assert_eq!(filed.lines().count(), 1, "{filed}");
+    assert_eq!(
+        run_registered(home.path(), state.path(), "routing", "DONE at 05:4xZ"),
+        [Some(2), Some(0)]
+    );
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), filed);
+    let rows = std::fs::read_to_string(inbox.join("diversions.jsonl")).unwrap();
+    assert_eq!(rows.lines().count(), 1, "{rows}");
 }
 
 #[test]
