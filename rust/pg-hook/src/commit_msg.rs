@@ -1,7 +1,4 @@
 //! Git entry point. Trailer block parsing and value policy live in ci_commit_gate.py.
-#[path = "commit_args.rs"]
-mod commit_args;
-
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
@@ -53,120 +50,6 @@ fn config_value(key: &str) -> Result<Option<String>, Box<dyn std::error::Error>>
     }
 }
 
-const SCISSORS: &[u8] = b" ------------------------ >8 ------------------------";
-
-/// The mode Git cleans this message with: the `--cleanup` option over `commit.cleanup`.
-fn cleanup_mode(
-    args: Option<&commit_args::CommitArgs>,
-) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    match args.and_then(|a| a.cleanup.clone()) {
-        Some(mode) => Ok(mode),
-        None => config_value("commit.cleanup"),
-    }
-}
-
-/// Whether Git opens an editor: from the command line, else from the GIT_EDITOR=: sentinel Git sets
-/// when it opens none (an explicit `:` editor is told apart by the command line).
-fn editor_used(args: Option<&commit_args::CommitArgs>) -> bool {
-    args.map_or_else(
-        || std::env::var_os("GIT_EDITOR").as_deref() != Some(std::ffi::OsStr::new(":")),
-        commit_args::CommitArgs::uses_editor,
-    )
-}
-
-/// Whether Git strips comments of this commit: always for strip and scissors cleanup, never for
-/// whitespace and verbatim, and for the default mode when an editor is used.
-fn strips_comments(cleanup: Option<&str>, editor: bool) -> bool {
-    match cleanup {
-        Some("strip" | "scissors") => true,
-        Some("whitespace" | "verbatim") => false,
-        _ => editor,
-    }
-}
-
-/// The comment character Git chose for `core.commentChar=auto`. With an editor the generated comment
-/// block holds standalone prefix lines (the last identifies the choice); without one Git picks the
-/// first candidate that starts no message line, so a literal marker line never carries it.
-fn auto_comment_char(raw: &[u8], editor: bool) -> Option<&[u8]> {
-    if !editor {
-        return None;
-    }
-    raw.split(|b| *b == b'\n')
-        .rev()
-        .find(|line| line.len() == 1 && b"#;@!$%^&|:".contains(&line[0]))
-}
-
-/// The first scissors line Git will cut at, as (offset, comment prefix): the line is the comment
-/// string followed by the fixed scissors text. A one-character comment character is the only
-/// prefix; `auto` is the character Git chose (`auto_char`). A literal look-alike is kept by Git.
-fn scissors_marker<'a>(
-    raw: &'a [u8],
-    cuts: bool,
-    configured: Option<&str>,
-    auto_char: Option<&[u8]>,
-) -> Option<(usize, &'a [u8])> {
-    let prefix_ok = |prefix: &[u8]| match configured {
-        None => prefix == b"#",
-        Some("auto") => Some(prefix) == auto_char,
-        // Git before 2.45 ignores a multi-character core.commentString and picks a character itself.
-        Some(configured) if configured.len() > 1 => {
-            prefix == configured.as_bytes()
-                || (prefix.len() == 1 && b"#;@!$%^&|:".contains(&prefix[0]))
-        }
-        Some(explicit) => prefix == explicit.as_bytes(),
-    };
-    raw.split_inclusive(|b| *b == b'\n')
-        .scan(0, |offset, line| {
-            let start = *offset;
-            *offset += line.len();
-            Some((start, line))
-        })
-        .find_map(|(start, line)| {
-            let line = line.strip_suffix(b"\n").unwrap_or(line);
-            let prefix = line.strip_suffix(SCISSORS)?;
-            (cuts && prefix_ok(prefix)).then_some((start, prefix))
-        })
-}
-
-/// Whether Git cuts the message at its scissors line: with `--verbose` or `commit.verbose`, or for an
-/// editor message under scissors cleanup (without an editor that mode falls back to whitespace
-/// cleanup). `None` when the command line of the parent `git commit` is unknown.
-fn git_cuts_at_scissors(
-    args: Option<&commit_args::CommitArgs>,
-    cleanup: Option<&str>,
-    editor: bool,
-) -> Result<Option<bool>, Box<dyn std::error::Error>> {
-    let Some(args) = args else {
-        return Ok(None);
-    };
-    let verbose = match args.verbose {
-        Some(verbose) => verbose,
-        None => config_value("commit.verbose")?.is_some_and(|v| {
-            matches!(v.to_lowercase().as_str(), "true" | "yes" | "on")
-                || v.parse::<i64>().is_ok_and(|n| n > 0)
-        }),
-    };
-    Ok(Some(verbose || (editor && cleanup == Some("scissors"))))
-}
-
-/// Refusals for the Class-Search lines Git can keep (`kept`: the message file up to the scissors line
-/// Git cuts at, when it cuts). The lines are read before whitespace cleanup, because
-/// `--cleanup=verbatim` keeps trailing whitespace that the range check then refuses.
-fn class_search_violations(kept: &[u8]) -> Vec<String> {
-    let mut violations = Vec::new();
-    for (index, line) in kept.split(|b| *b == b'\n').enumerate() {
-        let line = String::from_utf8_lossy(line.strip_suffix(b"\r").unwrap_or(line));
-        if line.starts_with("Class-Search:") && pg_policy::parse(&line).is_none() {
-            violations.push(format!(
-                "line {}: malformed Class-Search: {}",
-                index + 1,
-                pg_policy::refusal(&line)
-            ));
-        }
-    }
-    violations
-}
-
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let message = std::env::args_os().nth(1).ok_or("missing message file")?;
     if message == "--install" {
@@ -183,31 +66,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let merge = Command::new("git")
         .args(["rev-parse", "--verify", "-q", "MERGE_HEAD"])
         .output()?;
-    let raw = std::fs::read(message)?;
-    let args = commit_args::parent();
-    let editor = editor_used(args.as_ref());
-    let cleanup = cleanup_mode(args.as_ref())?;
-    let strip_comments = strips_comments(cleanup.as_deref(), editor);
-    let configured = config_value("core.commentString")?.or(config_value("core.commentChar")?);
-    let auto_char = auto_comment_char(&raw, editor);
-    // Git's own cutoff decides which tail is discarded; an unknown command line cuts where comments
-    // are stripped (as before) and checks every Class-Search line.
-    let cuts = git_cuts_at_scissors(args.as_ref(), cleanup.as_deref(), editor)?;
-    let marker = scissors_marker(
-        &raw,
-        cuts.unwrap_or(strip_comments),
-        configured.as_deref(),
-        auto_char,
-    );
-    let cut = marker.map_or(raw.len(), |(offset, _)| offset);
-    let class_search =
-        class_search_violations(&raw[..if cuts == Some(true) { cut } else { raw.len() }]);
     if merge.status.success() {
-        // A merge needs no attribution, but its Class-Search lines reach the same range check.
-        for violation in &class_search {
-            eprintln!("commit-msg: {violation}");
-        }
-        return Ok(i32::from(!class_search.is_empty()));
+        return Ok(0);
     }
     if merge.status.code() != Some(1) {
         return Err("cannot inspect merge state".into());
@@ -227,10 +87,40 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     };
     // Git removes editor comments after this hook runs. Validate that same
     // message, honoring core.commentChar, without rewriting the user's file.
+    let raw = std::fs::read(message)?;
+    // Git sets GIT_EDITOR=: when no editor is used (-m/-F/--no-edit).
+    // Its default cleanup then preserves comments, unlike editor commits.
+    let editor = std::env::var_os("GIT_EDITOR").as_deref() != Some(std::ffi::OsStr::new(":"));
+    let strip_comments = match config_value("commit.cleanup")?.as_deref() {
+        Some("strip" | "scissors") => true,
+        Some("whitespace" | "verbatim") => false,
+        _ => editor,
+    };
+    // Git chooses the prefix for commentString/auto. The scissors suffix is
+    // fixed; do not second-guess its choice by reading only commentChar.
+    let scissors = b" ------------------------ >8 ------------------------";
+    let marker = raw
+        .split_inclusive(|b| *b == b'\n')
+        .scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len();
+            Some((start, line))
+        })
+        .find(|(_, line)| line.strip_suffix(b"\n").unwrap_or(line).ends_with(scissors))
+        .filter(|_| strip_comments);
+    let cut = marker.map_or(raw.len(), |(offset, _)| offset);
     let mut command = Command::new("git");
-    let marker_prefix = marker.map(|(_, prefix)| prefix);
+    let marker_prefix = marker.map(|(_, line)| {
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        &line[..line.len() - scissors.len()]
+    });
+    let configured = config_value("core.commentString")?.or(config_value("core.commentChar")?);
+    // With auto and no verbose diff, Git's generated comment block includes
+    // standalone prefix lines. The last such line identifies its chosen char.
     let auto_prefix = if strip_comments && configured.as_deref() == Some("auto") {
-        auto_char
+        raw.split(|b| *b == b'\n')
+            .rev()
+            .find(|line| line.len() == 1 && b"#;@!$%^&|:".contains(&line[0]))
     } else {
         None
     };
@@ -317,8 +207,6 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
         remaining -= 1;
     }
-    // The range check of fast checks reads the same parser: a bad line fails here, not at review.
-    violations.extend(class_search);
     for violation in &violations {
         eprintln!("commit-msg: {violation}");
     }

@@ -2348,7 +2348,6 @@ name = "pg-hook"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "pg-policy",
  "pg-worker-core",
  "regex",
  "serde",
