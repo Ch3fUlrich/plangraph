@@ -307,7 +307,7 @@ Result/status/cancel accept `run_id`; legacy job-id operations remain available.
 MCP `ps` is compact (all running/queued runs, the newest 20 ended, `total`, `omitted`); use `result` or CLI `ps` for full records.
 After the Python MCP source changes on disk, reconnect before running a probe
 or starting a run or session. Status, result, steer and cancel remain available
-in the existing process.
+in the existing process. CLI `resume RUN_ID` (prompt on stdin) routes a native writer's fix round to its owning host.
 No JSON-RPC notification is answered or dispatched. A reply over 8 MiB becomes a `ReplyTooLarge` error (code -32000, same request id); stdio keeps serving.
 Only actual probe results write liveness state. Gateway adapters call
 `runner.provider_response` with actual captured responses.

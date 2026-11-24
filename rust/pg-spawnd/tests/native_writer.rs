@@ -362,6 +362,20 @@ async def check():
     assert len(rows) == 2 and rows[0]['tokens'] == rows[1]['tokens'] == 1234, rows
     assert not pathlib.Path(record['cwd']).is_relative_to(pathlib.Path(card['repo'])), record
     assert subprocess.check_output(['git','-C',card['repo'],'status','--porcelain'], text=True) == ''
+    # A fix round routed to the owning host (`resume-local`, prompt on stdin) resumes the same
+    # session detached, and its commit lands on the same checkout.
+    routed = subprocess.run([os.environ['NATIVE_BINARY'], 'resume-local', run['run_id'],
+        '--state', str(root/'state')], input='brief marker external fix routed', capture_output=True, text=True)
+    assert json.loads(routed.stdout)['resumed'] is True, (routed.stdout, routed.stderr)
+    for _ in range(600):
+        again = service.result(run['run_id'])
+        if again.get('resume_number') == 2 and again['status'] in ('completed', 'failed'):
+            break
+        await asyncio.sleep(0.1)
+    assert again['status'] == 'completed' and again['final_head'] != fixed['final_head'], again
+    assert again['session_id'] == fixed['session_id'] and again['cwd'] == fixed['cwd'], again
+    assert again['resume_from']['head'] == fixed['final_head'], again
+    assert subprocess.check_output(['git','-C',again['cwd'],'rev-parse','HEAD'], text=True).strip() == again['final_head']
     subprocess.run(['git','-C',card['repo'],'branch','local-only'], check=True)
     for ref, exit_code in [('refs/heads/local-only', 0), ('refs/heads/absent', 5)]:
         card['base_ref'] = ref

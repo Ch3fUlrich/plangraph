@@ -393,11 +393,16 @@ def native_receipt(record):
     return record
 
 
+# Verbs whose text travels on standard input to `pg-spawnd <verb>-local` on the owning host.
+STDIN_VERBS = ('steer', 'resume')
+_RECEIPT_FLAG = dict(steer='steered', resume='resumed')
+
+
 def native_result(record, *, verb='result', message=None):
     """Refresh a native overflow receipt with target-host terminal evidence."""
     from plangraph.keeper.credential_guard import mask
     try:
-        if verb not in ('result', 'cancel', 'steer'):
+        if verb not in ('result', 'cancel', 'steer', 'resume'):
             raise ValueError('unsupported native control verb')
         from .overflow import placement_config, registry_caps
         host = placement_config(registry_caps())['hosts'][record['host']]
@@ -411,19 +416,19 @@ def native_result(record, *, verb='result', message=None):
             command += 'set -a && . ' + shlex.quote(host['env_file']) + ' >/dev/null 2>&1 && set +a && '
         command += "printf '%s\\n' " + shlex.quote(begin) + ' && '
         state_args = ['--state', host['state_dir']] if host.get('state_dir') else []
-        argv = (['pg-spawnd', 'steer-local', run_id, *state_args] if verb == 'steer' else
+        argv = (['pg-spawnd', f'{verb}-local', run_id, *state_args] if verb in STDIN_VERBS else
                 ['python3', '-m', 'plangraph.spawner.cli', *state_args, verb, run_id])
         command += 'PYTHONPATH=' + shlex.quote(host['spawner_src']) + ' ' + shlex.join(argv)
         command += "; printf '\\n%s\\n' " + shlex.quote(end)
         step = {'argv': argv, 'env': {'PYTHONPATH': host['spawner_src']},
                 'receipt': {'begin': begin, 'end': end}}
-        if verb == 'steer':
+        if verb in STDIN_VERBS:
             step['stdin_text'] = message
         plan = {'cwd': host['repo'], 'steps': [step]}
         if host.get('env_file'):
             plan['env_file'] = host['env_file']
         command, body = invocation(host, command, plan.pop('steps'), **plan)
-        if body is None and verb == 'steer':
+        if body is None and verb in STDIN_VERBS:
             body = message.encode()
         reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                                 '--', host['ssh'], command], capture_output=True, timeout=10,
@@ -439,9 +444,9 @@ def native_result(record, *, verb='result', message=None):
         remote = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
         if not isinstance(remote, dict):
             raise ValueError('invalid receipt')
-        if verb == 'steer':
+        if verb in STDIN_VERBS:
             if remote.get('run_id') != run_id or type(remote.get('ok')) is not bool:
-                raise ValueError('steer receipt mismatch')
+                raise ValueError(f'{verb} receipt mismatch')
             return remote
         if (remote.get('run_id') != run_id or remote.get('host') != record.get('host') or remote.get('run_kind') != record.get('run_kind')
                 or remote.get('role') != record.get('role')):
@@ -449,40 +454,55 @@ def native_result(record, *, verb='result', message=None):
         return native_receipt(dict(remote, host=record['host'], overflow_remote=True,
                     overflow_reason=record.get('overflow_reason'), placement=record.get('placement')))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        if verb == 'steer':
-            return dict(run_id=record['run_id'], ok=False, steered=False, error='steer host route failed')
+        if verb in STDIN_VERBS:
+            return dict(run_id=record['run_id'], ok=False, **{_RECEIPT_FLAG[verb]: False},
+                        error=f'{verb} host route failed')
         return native_receipt(dict(record, remote_query_error='host query failed'))
 
 
 def steer_run(service, run_id, message, host=None):
     """Route a steer to its target using the native run receipt or named host."""
+    if not isinstance(message, str) or not message.strip() or len(message.encode()) > 16384 or '\0' in message:
+        return dict(run_id=run_id, ok=False, steered=False,
+                    error='steer message must contain between 1 byte and 16 KiB of text')
+    return _route_native(service, run_id, message, host, 'steer')
+
+
+def resume_run(service, run_id, prompt, host=None):
+    """Route a fix-round prompt to the host that owns the native run and resume its saved session."""
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode()) > 1 << 20 or '\0' in prompt:
+        return dict(run_id=run_id, ok=False, resumed=False,
+                    error='resume prompt must contain between 1 byte and 1 MiB of text')
+    return _route_native(service, run_id, prompt, host, 'resume')
+
+
+def _route_native(service, run_id, message, host, verb):
     from plangraph.fleet_snapshot import _projection_binary
-    refused = lambda reason: dict(run_id=run_id, ok=False, steered=False, error=reason)
+    flag = _RECEIPT_FLAG[verb]
+    refused = lambda reason: {'run_id': run_id, 'ok': False, flag: False, 'error': reason}
     if not isinstance(run_id, str) or not re.fullmatch(r'run-[A-Za-z0-9]{1,64}', run_id):
         return refused('unknown run id')
-    if not isinstance(message, str) or not message.strip() or len(message.encode()) > 16384 or '\0' in message:
-        return refused('steer message must contain between 1 byte and 16 KiB of text')
     try:
         record = service.result(run_id)
     except ValueError:
         record = None
     if record and not (record.get('overflow_remote') or record.get('origin_receipt')) and host in (None, record.get('host')):
-        reply = subprocess.run([_projection_binary(), 'steer-local', run_id, '--state', str(service.state)],
+        reply = subprocess.run([_projection_binary(), f'{verb}-local', run_id, '--state', str(service.state)],
                                input=message.encode(), capture_output=True, timeout=10)
         if reply.returncode:
-            return refused('local steer command failed')
+            return refused(f'local {verb} command failed')
         try:
             return json.loads(reply.stdout)
         except ValueError:
-            return refused('local steer command returned no receipt')
+            return refused(f'local {verb} command returned no receipt')
     if host is None and record:
         host = record.get('host')
     if host is None:
         hosts = {row['host'] for row in list_runs([]) if row.get('run_id') == run_id}
         if len(hosts) != 1:
-            return refused('steer host is ambiguous' if hosts else 'unknown run id')
+            return refused(f'{verb} host is ambiguous' if hosts else 'unknown run id')
         host = hosts.pop()
-    return native_result(dict(run_id=run_id, host=host), verb='steer', message=message)
+    return native_result(dict(run_id=run_id, host=host), verb=verb, message=message)
 
 
 def collect_local(state):

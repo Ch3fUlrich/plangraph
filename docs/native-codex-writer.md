@@ -140,8 +140,11 @@ usage limit: the run does not relaunch, books the limit for every routed Codex l
 the committed head and sets `status_line` to `QUOTA <reset>` (`quota_limited` holds the
 message and reset time); a resume clears these fields.
 
-Run `pg-spawnd resume RUN_ID --prompt-file PATH` on the writer's host for an
-external fix round. Use `--state PATH` when the run has a custom state root.
+Run `pg-spawnd resume RUN_ID --prompt-file PATH` for an external fix round. On the
+origin of a placed run (or with `--host NAME`) it sends the prompt through the spawner
+(`python3 -m plangraph.spawner.cli resume RUN_ID`) to `pg-spawnd resume-local` on the
+owning host, which stores it and starts the same resume detached; the receipt reports
+`resumed`/`queued`. Use `--state PATH` when the run has a custom state root.
 The run must have ended and its worktree must still match its recorded head.
 The command reuses the recorded Codex session, tool PATH, worktree and review
 directory. It runs the same gates and exact-head review before publishing the

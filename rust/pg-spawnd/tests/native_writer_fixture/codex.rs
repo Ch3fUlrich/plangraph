@@ -62,6 +62,9 @@ if 'resume' in sys.argv:
         record = json.loads((pathlib.Path.cwd().parent/'record.json').read_text())
         assert os.environ['PATH'] == record['tool_path']
         assert 'sandbox_mode="workspace-write"' in sys.argv
+        # The resumed turn can commit: the linked worktree's git dir is a writable root.
+        roots = next(a for a in sys.argv if a.startswith('sandbox_workspace_write.writable_roots='))
+        assert git_dir in json.loads(roots.split('=', 1)[1]) and '/.git/worktrees/' in git_dir, (roots, git_dir)
     else:
         assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
         expected = 'reject marker' in original and not pathlib.Path('fix.txt').exists()

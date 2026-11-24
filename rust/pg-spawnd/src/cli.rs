@@ -6,10 +6,10 @@ use std::io::Write;
 
 #[cfg(target_os = "linux")]
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local|session|hand-run> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|resume-local|writer-stop|writer-resume|steer-local|session|hand-run> [args]";
 #[cfg(not(target_os = "linux"))]
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|worker-liveness|worker-maintenance|resume|writer-stop|writer-resume|steer-local> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|worker-liveness|worker-maintenance|resume|resume-local|writer-stop|writer-resume|steer-local> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -211,6 +211,9 @@ pub(crate) fn execute(
     }
     if verb.as_deref() == Some("resume") {
         return crate::native_writer_host::resume(rest, out);
+    }
+    if verb.as_deref() == Some("resume-local") {
+        return crate::native_writer_remote_resume::local_cli(&rest, std::io::stdin(), out);
     }
     if verb.as_deref() == Some("steer-local") {
         return crate::native_steer::local_cli(&rest, std::io::stdin(), out);

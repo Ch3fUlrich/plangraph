@@ -265,7 +265,7 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
 }
 
 pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), String> {
-    let usage = "usage: pg-spawnd resume RUN_ID --prompt-file PATH [--state PATH]";
+    let usage = "usage: pg-spawnd resume RUN_ID --prompt-file PATH [--state PATH] [--host NAME]";
     let mut args = args.iter().map(String::as_str);
     let id = args.next().ok_or(usage)?;
     if id == "--help" || id == "-h" {
@@ -273,8 +273,10 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
     }
     let mut prompt_path = None;
     let mut state = None;
+    let mut host = None;
     while let Some(flag) = args.next() {
         match flag {
+            "--host" if host.is_none() => host = Some(args.next().ok_or(usage)?),
             "--prompt-file" if prompt_path.is_none() => {
                 prompt_path = Some(args.next().ok_or(usage)?)
             }
@@ -284,6 +286,16 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
     }
     let state = crate::state::resolve_state(state, |key| std::env::var_os(key))?;
     let prompt = Path::new(prompt_path.ok_or(usage)?);
+    // A run owned by another host resumes there: the spawner carries the prompt to its host.
+    if host.is_some() || crate::native_writer_remote_resume::is_origin_receipt(&state, id) {
+        return crate::native_writer_remote_resume::route(
+            &state,
+            id,
+            host,
+            &read_prompt(prompt)?,
+            output,
+        );
+    }
     let directory = run_dir(&state, id).map_err(|_| "unknown run id")?;
     if !directory.join("record.json").exists() {
         return Err("unknown run id".into());
