@@ -772,6 +772,11 @@ denies:
   never through the Bash tool). `claude -p`/`--print`, `claude --bg --resume
   <uuid|hex>` / `-r <uuid|hex>` without `-n`/`--name`, `claude --resume`,
   `claude agents`, and `claude stop <id>` stay allowed.
+- `cargo build|check|test|nextest|clippy|run|bench|doc` (also via `pgtest`/`pgtest.py` and
+  wrappers) whose target (`--target-dir`, `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET_DIR`, else cwd/`cd`/
+  `-C`/`--manifest-path`) lands in a main checkout (`.git` dir, not `~`) or `.claude/worktrees`:
+  denied from any cwd, naming `PLANGRAPH_CARGO_TARGET_DIR` or `~/.cache/plangraph/cargo-target`.
+  Other linked worktrees and `cargo fmt` stay allowed.
 - A while or until condition where a literal `pgrep -f` pattern can match the
   shell running the loop. Wait on the PID or unit, or put the original command
   in the Bash tool's background mode.
