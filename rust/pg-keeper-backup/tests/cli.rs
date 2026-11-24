@@ -11,6 +11,10 @@ const DAY: u64 = 1_794_000_000;
 const SECRET: &str = "s3ntinel-pw";
 
 fn run(args: &[&str], log: &Path, collide: bool) -> Output {
+    run_env(args, log, collide, &[])
+}
+
+fn run_env(args: &[&str], log: &Path, collide: bool, env: &[(&str, &str)]) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_pg-keeper-backup"));
     cmd.args(args)
         .args(["--docker", env!("CARGO_BIN_EXE_fake-docker")])
@@ -20,6 +24,7 @@ fn run(args: &[&str], log: &Path, collide: bool) -> Output {
     if collide {
         cmd.env("FAKE_DOCKER_COLLIDE", "1");
     }
+    cmd.envs(env.iter().copied());
     cmd.output().unwrap()
 }
 
@@ -153,4 +158,71 @@ fn restore_test_rejects_an_archive_whose_content_is_older_than_its_name() {
     let calls = std::fs::read_to_string(&log).unwrap();
     assert!(!calls.contains("CREATE DATABASE"), "{calls}");
     assert!(!calls.contains("-d pgkb_scratch_"), "{calls}");
+}
+
+#[test]
+fn dump_verify_follows_the_live_table_count_and_fails_on_a_different_listing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, log) = (tmp.path().join("backups"), tmp.path().join("docker.log"));
+    let args = ["dump", "--verify", "--dir", dir.to_str().unwrap()];
+    let ok = run_env(&args, &log, false, &[("FAKE_DOCKER_TABLES", "65")]);
+    assert!(ok.status.success(), "{}", text(&ok));
+    assert!(text(&ok).contains("verified=yes"), "{}", text(&ok));
+    // the live read is one SELECT of max(seq) and the table count, nothing is written
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        calls.matches("information_schema.tables").count(),
+        1,
+        "{calls}"
+    );
+    assert!(
+        !calls.contains("INSERT") && !calls.contains("UPDATE"),
+        "{calls}"
+    );
+
+    let bad_dir = tmp.path().join("bad");
+    let bad_args = ["dump", "--verify", "--dir", bad_dir.to_str().unwrap()];
+    let bad = run_env(
+        &bad_args,
+        &log,
+        false,
+        &[
+            ("FAKE_DOCKER_TABLES", "65"),
+            ("FAKE_DOCKER_ARCHIVE_TABLES", "43"),
+        ],
+    );
+    assert!(!bad.status.success());
+    assert!(
+        text(&bad).contains("listing has 43 tables, expected 65"),
+        "{}",
+        text(&bad)
+    );
+}
+
+#[test]
+fn restore_test_defaults_to_the_live_count_and_tables_overrides_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("docker.log");
+    let file = tmp.path().join(names::dump_name(19200, DAY));
+    std::fs::write(&file, "PGDMP seq=19200").unwrap();
+    let f = file.to_str().unwrap();
+    let env = [
+        ("FAKE_DOCKER_TABLES", "65"),
+        ("FAKE_DOCKER_ARCHIVE_TABLES", "43"),
+    ];
+    let by_catalog = run_env(&["restore-test", "--file", f], &log, false, &env);
+    assert!(!by_catalog.status.success());
+    assert!(
+        text(&by_catalog).contains("expected 65"),
+        "{}",
+        text(&by_catalog)
+    );
+    let forced = run_env(
+        &["restore-test", "--file", f, "--tables", "43"],
+        &log,
+        false,
+        &env,
+    );
+    assert!(forced.status.success(), "{}", text(&forced));
+    assert!(text(&forced).contains("tables 43"), "{}", text(&forced));
 }
