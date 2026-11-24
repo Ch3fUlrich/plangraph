@@ -27,7 +27,8 @@
     var parts = [];
 
     // Sort
-    var isDefSort = st.sort.length === 1 && st.sort[0].col === "priority" && st.sort[0].dir === "desc";
+    var isDefSort = st.sort.length === 2 && st.sort[0].col === "category" && st.sort[0].dir === "asc" &&
+      st.sort[1].col === "priority" && st.sort[1].dir === "desc";
     if (!isDefSort && st.sort.length) {
       parts.push("t_sort=" + st.sort.map(function (s) {
         return enc(s.col) + ":" + enc(s.dir);
@@ -53,7 +54,7 @@
     }
 
     // Filter facets
-    var facets = ["project", "phase", "state", "owner", "priority", "kind"];
+    var facets = ["project", "phase", "state", "owner", "priority", "kind", "category"];
     facets.forEach(function (f) {
       var arr = st.filters[f];
       if (arr && arr.length) {
@@ -146,6 +147,13 @@
    * absent). */
   PlanUI.effectivePriority = function (r) {
     return Number(r.effective_priority != null ? r.effective_priority : r.priority) || 0;
+  };
+
+  /* A row's place in the keeper's ranked category list (none and unknown sort last). */
+  PlanUI.categoryRank = function (r) { return r.category_rank == null ? 9999 : Number(r.category_rank) || 0; };
+  /* The shared order: category rank, then effective priority (highest first). */
+  PlanUI.rankOrder = function (a, b) {
+    return (PlanUI.categoryRank(a) - PlanUI.categoryRank(b)) || (PlanUI.effectivePriority(b) - PlanUI.effectivePriority(a));
   };
 
   PlanUI.tableUrlEncode = tableUrlEncode;

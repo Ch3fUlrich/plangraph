@@ -50,7 +50,7 @@ def _defined_payload(fields):
         payload["criteria_ledger"] = True
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
-    for name in SMALL_FIELDS + ("supersedes",):
+    for name in SMALL_FIELDS + ("supersedes", "category"):
         if name in fields:
             payload[name] = fields[name]
     for name in ("estimate_h", "estimate_src"):
@@ -209,13 +209,16 @@ class InputMixin:
             if not isinstance(slice_parent, str) or not slice_parent.strip():
                 raise Refused("validation", f"{key}: slice_parent must be a non-empty key")
             slice_parent = self._qualify(project, slice_parent)
+        category = raw.get("category")
+        if category is not None and not isinstance(category, str):
+            raise Refused("validation", f"{key}: category must be a name or null")
         supersedes = [self._qualify(project, k) for k in self._key_list(raw.get("supersedes"), key)]
         similar = raw.get("similar")
         if similar is not None:
             check_similar_answers(similar, key)
             similar = {self._qualify(project, k): v for k, v in similar.items()}
         return {
-            "supersedes": supersedes, "similar": similar,
+            "supersedes": supersedes, "similar": similar, "category": category,
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
             "host": raw.get("host"), "wait": wait, "kind": kind,
@@ -243,6 +246,16 @@ class InputMixin:
             raise Refused("validation", f"{key}: supersedes must be a list of item keys")
         return list(value)
 
+    def _checked_ref(self, field, key, value, index, project):
+        """The checked value of an edited ``supersedes`` list or ``category``."""
+        return (self._checked_category(key, value, project) if field == "category"
+                else self._checked_supersedes(key, value, index, project))
+
+    def _checked_category(self, key, value, project):
+        if value is not None and value not in self._category_list(project):
+            raise Refused("validation", f"{key}: category must be one of {self._category_list(project)}")
+        return value
+
     def _checked_supersedes(self, key, value, index, project):
         """Qualified, existing, acyclic ``supersedes`` list (edit and create)."""
         out = sorted({self._qualify(project, k) for k in self._key_list(value, key)})
@@ -261,6 +274,7 @@ class InputMixin:
         index = {item["key"]: item for item in before}
         warnings = []
         for definition in defs:
+            self._checked_category(definition["key"], definition.get("category"), definition["project"])
             key, answers = definition["key"], definition.get("similar") or {}
             matches = similar_items(definition, before)
             if legacy:   # existing data must stay loadable: say, never refuse

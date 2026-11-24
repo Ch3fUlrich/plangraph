@@ -202,6 +202,13 @@ fn effective(item: &Task) -> i64 {
         .and_then(Value::as_i64)
         .unwrap_or(item.priority)
 }
+/// The keeper's category rank (0 = most important); a row without one sorts last.
+fn category_rank(item: &Task) -> i64 {
+    item.fields
+        .get("category_rank")
+        .and_then(Value::as_i64)
+        .unwrap_or(i64::MAX)
+}
 fn age(item: &Task) -> i64 {
     item.created_at
         .as_deref()
@@ -235,6 +242,7 @@ fn eligible(ready: &Value, runs: &[Run]) -> Option<Vec<Task>> {
     items.sort_by(|a, b| {
         class(a)
             .cmp(&class(b))
+            .then(category_rank(a).cmp(&category_rank(b)))
             .then(effective(b).cmp(&effective(a)))
             .then(age(a).cmp(&age(b)))
             .then(a.key.cmp(&b.key))

@@ -101,6 +101,33 @@ fn whole_tick_dry_run_does_not_touch_claim_or_spawner() {
     assert!(f.calls.is_empty());
 }
 #[test]
+fn feeder_orders_by_category_rank_before_priority() {
+    let mut v = ready();
+    v["items"][4]["context"]["newer_decisions"] = json!(["D-123"]);
+    v["items"][3]["context"]["newer_decisions"] = json!(["D-124"]);
+    // LOW-OLD (priority 1) is a speed item; the p9 items have no category
+    v["items"][0]["category_rank"] = json!(0);
+    v["items"][1]["category_rank"] = json!(1);
+    assert_eq!(
+        pick(&v, &[], &Policy::default()).unwrap().key,
+        "plangraph:LOW-OLD"
+    );
+    // changing the rank list changes the pick
+    v["items"][0]["category_rank"] = json!(2);
+    assert_eq!(
+        pick(&v, &[], &Policy::default()).unwrap().key,
+        "plangraph:HIGH-NEW"
+    );
+    // no category anywhere: priority decides as before
+    let mut v = ready();
+    v["items"][4]["context"]["newer_decisions"] = json!(["D-123"]);
+    v["items"][3]["context"]["newer_decisions"] = json!(["D-124"]);
+    assert_eq!(
+        pick(&v, &[], &Policy::default()).unwrap().key,
+        "plangraph:HIGH-OLD"
+    );
+}
+#[test]
 fn feeder_orders_by_effective_priority() {
     let mut v = ready();
     // LOW-OLD (priority 1) blocks a p10 item: the keeper sends effective 10

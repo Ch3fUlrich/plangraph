@@ -384,7 +384,7 @@ def test_pg_v25_upgrade_records_and_protects_criteria_amendments(tmp_path, monke
                     step for step in schema_pg.MIGRATIONS if step.version <= 25))
                 with closing(db.open_db(path, create=True, **options)) as conn:
                     auth.add_principal(conn, "router", "router", [])
-            assert db_pg.migrate(raw, name) == [26, 27, 28]
+            assert db_pg.migrate(raw, name) == [26, 27, 28, 29]
             with closing(db.open_db(path, **options)) as conn:
                 store = Store(conn)
                 router = auth.get_principal(conn, "router")

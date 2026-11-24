@@ -7,11 +7,11 @@
 
   var PlanUI = (global.PlanUI = global.PlanUI || {});
 
-  var FACETS = ["state", "owner", "priority", "kind"];
-  var LABELS = { state: "State", owner: "Owner", priority: "Prio", kind: "Kind" };
+  var FACETS = ["state", "owner", "priority", "kind", "category"];
+  var LABELS = { state: "State", owner: "Owner", priority: "Prio", kind: "Kind", category: "Category" };
   var STATE_ORDER = ["ready", "blocked", "claimed", "in_review", "open", "done", "cancelled"];
 
-  var state = { filters: { state: [], owner: [], priority: [], kind: [], op: false }, hide: {}, sort: null };
+  var state = { filters: { state: [], owner: [], priority: [], kind: [], category: [], op: false }, hide: {}, sort: null };
   var base = "", openSet = {};
 
   function el(tag, cls, text) {
@@ -31,13 +31,14 @@
     if (f.owner.length && f.owner.indexOf(String(r.owner || "")) < 0) return false;
     if (f.priority.length && f.priority.indexOf(Number(r.priority) || 0) < 0) return false;
     if (f.kind.length && f.kind.indexOf(String(r.kind || "")) < 0) return false;
+    if (f.category.length && f.category.indexOf(String(r.category || "")) < 0) return false;
     if (f.op && !operatorNeeded(r)) return false;
     return true;
   }
   function colOn(id) { return id === "task" ? true : !state.hide[id]; }
 
   function reset() {
-    state.filters = { state: [], owner: [], priority: [], kind: [], op: false };
+    state.filters = { state: [], owner: [], priority: [], kind: [], category: [], op: false };
     state.hide = {};
     return state;
   }
@@ -53,9 +54,9 @@
     var st = {
       filters: {
         state: f.state.slice(), owner: f.owner.slice(), priority: f.priority.slice(),
-        kind: f.kind.slice(), op: !!f.op, project: [], phase: []
+        kind: f.kind.slice(), category: f.category.slice(), op: !!f.op, project: [], phase: []
       },
-      cols: PlanUI.tableDefaults ? PlanUI.tableDefaults().cols : [], sort: [{ col: "priority", dir: "desc" }],
+      cols: PlanUI.tableDefaults ? PlanUI.tableDefaults().cols : [], sort: PlanUI.tableDefaults ? PlanUI.tableDefaults().sort : [],
       group: "project>phase", collapsed: [], search: ""
     };
     var q = PlanUI.tableUrlMerge ? (PlanUI.tableUrlMerge(base, st) || "") : "";
@@ -81,7 +82,7 @@
     var trimmed = raw;
     if (trimmed.charAt(0) === "?" || trimmed.charAt(0) === "#") trimmed = trimmed.slice(1);
     base = trimmed.split("&").filter(function (p) { return p && p.indexOf("t_") !== 0; }).join("&");
-    state.filters = { state: [], owner: [], priority: [], kind: [], op: false };
+    state.filters = { state: [], owner: [], priority: [], kind: [], category: [], op: false };
     state.hide = {};
     state.sort = null;
     if (PlanUI.tableUrlDecode) {
@@ -125,6 +126,7 @@
       if (key === "state") v = disp(r);
       else if (key === "owner") v = String(r.owner || "");
       else if (key === "kind") v = String(r.kind || "");
+      else if (key === "category") v = String(r.category || "");
       else v = Number(r.priority) || 0;
       k = String(v);
       if (!map[k]) { map[k] = { v: v, n: 0 }; keys.push(k); }

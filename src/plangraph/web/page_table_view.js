@@ -15,7 +15,7 @@
   var ROLE = { planning: "◇", implementation: "▭", review: "⬡" };
   var ROLE_LABEL = { planning: "Planning", implementation: "Implementation", review: "Review" };
   var MAX_ROWS = 300;                                   // per group, "show more" beyond
-  var view = { group: "project", sort: { col: "task", dir: "asc" }, collapsed: {}, more: {} };
+  var view = { group: "project", sort: { col: "category", dir: "asc" }, collapsed: {}, more: {} };
   var urlLoaded = false;
 
   function el(tag, cls, text) {
@@ -113,6 +113,7 @@
     { id: "prev", label: "Previous", val: function (r) { return pick(r, "prev").length; }, num: true, group: function (r) { var n = pick(r, "prev").length; return n ? "has previous" : "no previous"; } },
     { id: "next", label: "Next", val: function (r) { return pick(r, "next").length; }, num: true, group: function (r) { var n = pick(r, "next").length; return n ? "has next" : "no next"; } },
     { id: "links", label: "Decisions & questions", val: function (r) { return (r._links || []).length; }, num: true, group: function (r) { var n = (r._links || []).length; return n ? "has decisions/questions" : "none"; } },
+    { id: "category", label: "Category", val: function (r) { return global.PlanUI.categoryRank(r); }, num: true, group: function (r) { return r.category || "(none)"; } },
     { id: "prio", label: "Prio", val: function (r) { return global.PlanUI.effectivePriority(r); }, num: true },
     { id: "kind", label: "Kind", val: function (r) { return r.kind || ""; } },
     { id: "op", label: "Op", val: function (r) { return global.PlanUI.TableCtl && global.PlanUI.TableCtl.operatorNeeded(r) ? 1 : 0; }, num: true }
@@ -131,7 +132,8 @@
     var cmpN = PlanUI.naturalCmp || function (x, y) { return String(x).localeCompare(String(y), undefined, { numeric: true }); };
     var c = COL[view.sort.col] || COL.task, va = c.val(a), vb = c.val(b);
     var d = c.num ? (va - vb) : cmpN(String(va), String(vb));
-    return view.sort.dir === "desc" ? -d : d;
+    d = view.sort.dir === "desc" ? -d : d;
+    return d || PlanUI.rankOrder(a, b);   /* ties: category rank, then effective priority */
   }
 
   function setSort(col, dir) {
@@ -196,6 +198,7 @@
     (r._links || []).forEach(function (l) { tdL.appendChild(linkChip(l)); });
     tr.appendChild(tdL);
     var raised = r.priority_via && r.effective_priority != null && r.effective_priority !== r.priority;
+    tr.appendChild(el("td", null, r.category || "—"));
     var tdP = el("td", null, r.priority == null ? "" : String(r.priority) + (raised ? " \u2192 " + r.effective_priority : ""));
     if (raised) tdP.title = "raised from " + r.priority + " to " + r.effective_priority + " via " + r.priority_via;
     tr.appendChild(tdP);
@@ -302,6 +305,12 @@
     var ca = el("button", "tt-btn", "Collapse all"); ca.type = "button";
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";
     box.appendChild(bar);
+    if ((vm.categories || []).length) {
+      var rk = el("p", "tt-rank", "Category order: " + vm.categories.map(function (c) { return c.name; }).join(" > ") +
+        (vm.uncategorised ? " (" + vm.uncategorised + " without category, last)" : ""));
+      rk.setAttribute("aria-label", "Category rank order");
+      box.appendChild(rk);
+    }
     if (global.PlanUI.TableCtl) box.appendChild(global.PlanUI.TableCtl.bar(all, render));
 
     var groups = [], map = {};
