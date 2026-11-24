@@ -17,7 +17,7 @@ import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_busy_reason, host_load, planned_test_binaries, running_test_binary, rust_bound
-from pgtest import run_test_process as run_bounded_test, selected_count, test_environment
+from pgtest import deliver_landing_stage, run_test_process as run_bounded_test, selected_count, test_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb,
@@ -650,6 +650,7 @@ def _main(argv, root, cleanup):
         trim_shared_target(root)
     for family, commands in families:
         start = time.monotonic()
+        started_ms = time.time_ns() // 1_000_000
         status = "SKIP"
         if family == "tests" and scrub_bad and not stopped:
             print("tests: SKIP: scrub failed, push is refused anyway", flush=True)
@@ -763,6 +764,9 @@ def _main(argv, root, cleanup):
                 stopped = args.fail_fast
         summary.append(f"{status} {family} {time.monotonic() - start:.3f}")
         print(summary[-1], flush=True)
+        if status != "SKIP":   # a family that did not run has no stage; the others name their sub-stage
+            deliver_landing_stage("fast_checks", started_ms, time.time_ns() // 1_000_000,
+                                  "ok" if status == "PASS" else "failed", family)
     if sys.platform.startswith('linux') and shared_cargo_target().is_dir():
         spawnd = shutil.which('pg-spawnd', path=env.get('PATH'))
         if spawnd is None:

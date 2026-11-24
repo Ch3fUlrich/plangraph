@@ -236,3 +236,27 @@ def run_keeper_postgres(root, changed, env, *, runner=subprocess.run, search=POS
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def deliver_landing_stage(stage, started_ms, ended_ms, result, detail=""):
+    """Report one push-gate stage to the keeper's landing timeline when a lander named its batch.
+
+    The lander sets PG_LANDING_REPO, PG_LANDING_BATCH and PG_LANDING_STAGE_HEAD for its push. A failed
+    delivery only prints: timing never blocks a push. ``detail`` names a sub-stage (a preflight family)."""
+    import socket
+
+    repo, batch, head = (os.environ.get(name) for name in
+                         ("PG_LANDING_REPO", "PG_LANDING_BATCH", "PG_LANDING_STAGE_HEAD"))
+    if not (repo and batch and head):
+        return
+    payload = {"action": "stage", "repo": repo, "batch_key": batch, "head": head, "stage": stage,
+               "attempt": started_ms, "started_at_ms": started_ms, "ended_at_ms": max(started_ms, ended_ms),
+               "host": socket.gethostname()[:64], "result": result, "detail": detail}
+    try:
+        receipt = subprocess.run(["plangraph", "landing", "journal"], input=json.dumps(payload),
+                                 text=True, stdout=subprocess.DEVNULL, timeout=35)
+        failed = receipt.returncode != 0
+    except (OSError, subprocess.TimeoutExpired):
+        failed = True
+    if failed:
+        print("landing timing pending keeper delivery", file=sys.stderr)

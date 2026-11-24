@@ -222,3 +222,68 @@ def test_a_nested_merge_carrying_the_item_must_be_covered_by_a_cited_part(batch)
     result = batch.store.close_merged_auto(batch.p("system"))
     assert "demo:A" not in {c["key"] for c in result["closed"]}
     assert any(r["key"] == "demo:A" and "NO-WITNESS" in r["reason"] for r in result["listed"])
+
+
+def test_recent_trains_are_ordered_by_landing_time_not_pull_request_number(tmp_path):
+    w = World(tmp_path, backend="sqlite")
+    try:
+        seed(w, [("A", []), ("B", [])])
+        router = w.p("router")
+        repo = "example/repo"
+        lease = w.store.land(router, dict(repo=repo, action="acquire", owner="fixture"))
+
+        def journal(pr, action, **fields):
+            return w.store.land(router, dict(lease, repo=repo, pr=pr, action=action, **fields))
+
+        # #5 lands first (merge stage ends at 1000 ms), #3 lands later (2000 ms), #4 never records a stage.
+        for pr, key, merge, ended in ((5, "demo:A", "d" * 40, 1000), (3, "demo:B", "e" * 40, 2000), (4, None, "f" * 40, None)):
+            head = str(pr) * 40
+            journal(pr, "prepare", base="0" * 40, head=head, mode="train-pr-merge", batch_key=f"batch-{pr}",
+                    parts=[dict(pr=pr * 10, head="b" * 40, items=[key or "demo:A"])])
+            journal(pr, "landed", merge=merge, included=[pr * 10])
+            if ended:
+                w.store.land(router, dict(repo=repo, action="stage", batch_key=f"batch-{pr}", stage="merge",
+                                          head=merge, attempt=1, started_at_ms=ended - 5, ended_at_ms=ended))
+        recent = w.store.land(router, dict(repo=repo, action="recent", limit=10))["trains"]
+        assert [train["pr"] for train in recent] == [3, 5, 4]
+        assert [train["landed_at_ms"] for train in recent] == [2000, 1000, None]
+        assert [t["pr"] for t in w.store.land(router, dict(repo=repo, action="recent", limit=1))["trains"]] == [3]
+    finally:
+        w.close()
+
+
+def test_a_stage_row_keeps_its_host_result_and_sub_stage_and_an_old_database_gains_them(tmp_path):
+    import sqlite3
+    w = World(tmp_path, backend="sqlite")
+    try:
+        router, repo, head = w.p("router"), "example/repo", "a" * 40
+        stage = dict(batch_key="b-1", head=head, stage="fast_checks", attempt=5, started_at_ms=1000, ended_at_ms=9000,
+                     host="dell", result="failed", detail="rust")
+        w.store.land(router, dict(repo=repo, action="stage", **{k: v for k, v in stage.items() if k != "batch_key"},
+                                  batch_key="b-1"))
+        w.store.land(router, dict(repo=repo, action="stage", batch_key="b-1", head=head, stage="push", attempt=1,
+                                  started_at_ms=0, ended_at_ms=10))
+        rows = w.store.land(router, dict(repo=repo, action="timeline", batch_key="b-1"))["stages"]
+        by_stage = {row["stage"]: row for row in rows}
+        assert (by_stage["fast_checks"]["host"], by_stage["fast_checks"]["result"], by_stage["fast_checks"]["detail"]) == (
+            "dell", "failed", "rust")
+        assert (by_stage["push"]["host"], by_stage["push"]["result"], by_stage["push"]["detail"]) == ("", "", "")
+        for bad in (dict(detail="has space"), dict(host="h" * 65), dict(result="r" * 33), dict(host=7)):
+            with pytest.raises(Refused):
+                w.store.land(router, dict(repo=repo, action="stage", batch_key="b-2", head=head, stage="push",
+                                          attempt=1, started_at_ms=0, ended_at_ms=1, **bad))
+    finally:
+        w.close()
+    # A database made before the columns existed gains them when it is opened again.
+    old = tmp_path / "old.db"
+    conn = sqlite3.connect(old)
+    conn.executescript("""CREATE TABLE landing_stages (repo TEXT NOT NULL, batch_key TEXT NOT NULL, stage TEXT NOT NULL,
+        attempt BIGINT NOT NULL, head TEXT NOT NULL, started_at_ms BIGINT NOT NULL, ended_at_ms BIGINT NOT NULL,
+        PRIMARY KEY (repo, batch_key, stage, attempt));
+        INSERT INTO landing_stages VALUES ('r/x','b','push',1,'%s',1,2);""" % ("a" * 40))
+    conn.commit()
+    from plangraph.keeper import db
+    db._upgrade(conn)
+    row = conn.execute("SELECT host, result, detail FROM landing_stages").fetchone()
+    assert tuple(row) == ("", "", "")
+    conn.close()

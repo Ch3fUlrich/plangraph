@@ -158,10 +158,13 @@ fn last_trains(
         .iter()
         .flat_map(|(key, timeline)| timeline::from_keeper(key, timeline))
         .collect();
-    let report = timeline::report(&stages, n);
+    // The keeper's roster, newest landing first: a train with no telemetry stays in the report as incomplete.
+    let roster: Vec<String> = trains.iter().map(|(key, _)| key.clone()).collect();
+    let report = timeline::report_roster(&roster, &stages, n);
     Ok(json!({
         "trains": report.trains.iter().map(|t| json!({
-            "subject": t.subject, "wall_secs": t.wall_secs, "bottleneck": t.bottleneck,
+            "subject": t.subject, "wall_secs": t.wall_secs, "post_merge_secs": t.post_merge_secs,
+            "bottleneck": t.bottleneck,
             "idle_secs": t.idle_secs, "critical_path": t.critical_path, "missing": t.missing,
         })).collect::<Vec<_>>(),
         "top_stages": report.top_stages,

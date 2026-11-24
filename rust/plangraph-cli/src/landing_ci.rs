@@ -101,7 +101,8 @@ pub fn import(keeper: &dyn Transport, args: &[String]) -> Result<Value, String> 
         "action": "ci_timings", "repo": repo, "batch_key": batch,
         "run_id": run_id, "run_attempt": attempt, "run_conclusion": conclusion,
         "stage": {"stage": "ci", "head": head, "attempt": stage_attempt,
-                  "started_at_ms": start, "ended_at_ms": end},
+                  "started_at_ms": start, "ended_at_ms": end,
+                  "host": "github", "result": conclusion},
         "jobs": jobs,
     });
     if !fixture {

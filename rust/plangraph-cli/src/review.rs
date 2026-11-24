@@ -694,20 +694,39 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+/// The landing stage a review run records: the writer's review of an item, or the delta review that
+/// follows an approval; a dry run records none.
+fn review_stage(parsed: &ReviewArgs) -> Option<&'static str> {
+    if parsed.dry_run || parsed.item.is_none() {
+        return None;
+    }
+    Some(if parsed.approval.is_some() {
+        "delta_review"
+    } else {
+        "review"
+    })
+}
+
 fn timed_review(parsed: &ReviewArgs) -> Result<i32, String> {
     let started = chrono::Utc::now().timestamp_millis();
     let result = execute(parsed);
-    if let (Ok(repo), Some(batch), true) = (
+    if let (Ok(repo), Some(batch), Some(stage)) = (
         std::env::var("PG_LANDING_REPO"),
         parsed.item.as_deref(),
-        parsed.approval.is_some() && !parsed.dry_run,
+        review_stage(parsed),
     ) {
         let end = chrono::Utc::now().timestamp_millis().max(started);
+        let outcome = match &result {
+            Ok(0) => "ok".to_owned(),
+            Ok(code) => format!("exit-{code}"),
+            Err(_) => "error".to_owned(),
+        };
         let body = json!({"action":"stage", "repo":repo, "batch_key":batch,
-            "head":parsed.head, "stage":"delta_review", "attempt":started,
-            "started_at_ms":started, "ended_at_ms":end});
+            "head":parsed.head, "stage":stage, "attempt":started,
+            "started_at_ms":started, "ended_at_ms":end,
+            "host":crate::landing::local_host(), "result":outcome});
         if crate::landing::deliver_from_env(body).is_err() {
-            eprintln!("delta review timing pending keeper delivery");
+            eprintln!("{stage} timing pending keeper delivery");
         }
     }
     result
@@ -716,6 +735,30 @@ fn timed_review(parsed: &ReviewArgs) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_review_records_a_review_stage_and_an_approved_one_a_delta_review_stage() {
+        let mut parsed = ReviewArgs {
+            repo: PathBuf::new(),
+            head: "h".into(),
+            base: "b".into(),
+            item: None,
+            focus: None,
+            approval: None,
+            state: None,
+            wait_s: 0,
+            no_fetch: false,
+            dry_run: false,
+            seats: false,
+        };
+        assert_eq!(review_stage(&parsed), None);
+        parsed.item = Some("k:A".into());
+        assert_eq!(review_stage(&parsed), Some("review"));
+        parsed.approval = Some(PathBuf::from("approval.txt"));
+        assert_eq!(review_stage(&parsed), Some("delta_review"));
+        parsed.dry_run = true;
+        assert_eq!(review_stage(&parsed), None);
+    }
 
     #[test]
     fn group_prompt_names_its_commits_and_a_plain_prompt_does_not() {

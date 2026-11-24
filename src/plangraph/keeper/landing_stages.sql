@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS landing_stages (
     head          TEXT NOT NULL CHECK (length(head) IN (40, 64)),
     started_at_ms BIGINT NOT NULL,
     ended_at_ms   BIGINT NOT NULL CHECK (ended_at_ms >= started_at_ms),
+    host          TEXT NOT NULL DEFAULT '',
+    result        TEXT NOT NULL DEFAULT '',
+    detail        TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (repo, batch_key, stage, attempt)
 );
 CREATE INDEX IF NOT EXISTS idx_landing_stages_timeline

@@ -332,6 +332,8 @@ def migrate(raw, schema: str) -> list:
                     " check_kind TEXT COLLATE \"C\" NOT NULL DEFAULT 'change'")
         raw.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS"
                     " check_reads TEXT COLLATE \"C\" NOT NULL DEFAULT '[]'")
+        for column in ("host", "result", "detail"):
+            raw.execute(f"ALTER TABLE landing_stages ADD COLUMN IF NOT EXISTS {column} TEXT COLLATE \"C\" NOT NULL DEFAULT ''")
         raw.execute("COMMIT")
     except BaseException:
         raw.execute("ROLLBACK")

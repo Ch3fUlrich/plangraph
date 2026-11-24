@@ -276,3 +276,19 @@ for bad in (0, 101, True, '5'):
 "#,
     );
 }
+
+#[test]
+fn a_landed_train_with_no_telemetry_is_listed_as_incomplete() {
+    let result = report(
+        &["--last", "10"],
+        &json!({"trains": [{"batch_key": "silent", "timeline": {"stages": [], "jobs": []}}]}),
+    );
+    let trains = result["trains"].as_array().unwrap();
+    assert_eq!(trains.len(), 1);
+    assert_eq!(trains[0]["subject"], "silent");
+    assert!(trains[0]["missing"].as_array().unwrap().len() >= 7);
+    assert!(result["lines"][0]
+        .as_str()
+        .unwrap()
+        .contains("incomplete: no fast_checks"));
+}

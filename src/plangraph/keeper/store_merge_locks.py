@@ -130,6 +130,16 @@ def _timing(row):
     return start, end
 
 
+def _stage_facts(stage):
+    """The host, result and sub-stage a producer reports with a stage; empty when it reports none."""
+    host = _text("stage host", stage.get("host", ""), cap=64)
+    result = _text("stage result", stage.get("result", ""), cap=32)
+    detail = _text("stage detail", stage.get("detail", ""), cap=64)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]*", detail):
+        raise Refused("validation", "stage detail must be a short name")
+    return host, result, detail
+
+
 def _host_receipts(value, merge):
     if not isinstance(value, list) or len(value) != 3:
         raise Refused("validation", "host sync requires three verification receipts")
@@ -169,10 +179,14 @@ class MergeLocksMixin:
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise Refused("validation", "recent landed trains need a limit from 1 to 100")
             rows = self.conn.execute(
-                "SELECT * FROM landing_trains WHERE repo=? AND merged IS NOT NULL AND abandoned=0"
-                " ORDER BY pr DESC LIMIT ?", (repo, limit))
-            return {"trains": [{"pr": data["pr"], "batch_key": data["batch_key"], "merge": data["merge"]}
-                               for data in map(_landing_data, rows)]}
+                "SELECT * FROM landing_trains WHERE repo=? AND merged IS NOT NULL AND abandoned=0", (repo,))
+            landed_at = {row["batch_key"]: row["ended_at_ms"] for row in self.conn.execute(
+                "SELECT batch_key, MAX(ended_at_ms) AS ended_at_ms FROM landing_stages"
+                " WHERE repo=? AND stage='merge' GROUP BY batch_key", (repo,))}
+            trains = sorted(map(_landing_data, rows),
+                            key=lambda data: (landed_at.get(data["batch_key"], 0), data["pr"]), reverse=True)
+            return {"trains": [{"pr": data["pr"], "batch_key": data["batch_key"], "merge": data["merge"],
+                                "landed_at_ms": landed_at.get(data["batch_key"])} for data in trains[:limit]]}
         if action == "pending":
             rows = self.conn.execute(
                 "SELECT * FROM landing_trains WHERE repo=? AND abandoned=0 AND cursor<? ORDER BY pr",
@@ -335,7 +349,8 @@ class MergeLocksMixin:
         if not isinstance(stage, dict) or not isinstance(stage.get("stage"), str) or stage["stage"] not in _STAGE_NAMES:
             raise Refused("validation", "unknown landing stage")
         head = _land_sha(stage.get("head"))
-        row = (repo, batch, stage["stage"], _land_number(stage.get("attempt")), head, *_timing(stage))
+        row = (repo, batch, stage["stage"], _land_number(stage.get("attempt")), head, *_timing(stage),
+               *_stage_facts(stage))
         with self._write():
             self.conn.execute(_STAGE_SQL, row)
             if action == "ci_timings":
