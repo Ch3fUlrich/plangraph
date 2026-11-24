@@ -204,6 +204,16 @@ def test_export_replaces_the_previous_tree_completely(tmp_path):
     assert sorted(p.name for p in Path(res["tree"]).iterdir()) == ["a.txt"]
 
 
+def test_export_replaces_a_broken_symlink_at_the_render_tree_path(tmp_path):
+    cfg, fake = _exporting(tmp_path, {"a.txt": b"new"})
+    link = Path(cfg.state).parent / "render-tree"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(tmp_path / "nowhere")
+    res = export_tree(cfg, fake)
+    assert res["status"] == "verified"
+    assert not link.is_symlink() and (link / "a.txt").read_bytes() == b"new"
+
+
 @pytest.mark.parametrize("case", ["unverified_head", "no_state", "archive_failed", "traversal"])
 def test_export_refuses_and_keeps_the_previous_tree(tmp_path, case):
     kwargs = {"unverified_head": dict(head=HEAD), "no_state": dict(recorded=None),
