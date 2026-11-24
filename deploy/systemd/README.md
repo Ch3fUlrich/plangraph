@@ -5,21 +5,33 @@ a root system service and timer.
 
 ## 0. The deploy manifest
 
-`deploy/manifest.toml` is the one table of what runs where: every Git-tracked unit file under `deploy/` (any depth;
-service, timer, socket, target, mount, path and the other systemd unit types) and every binary target of the
-workspace crates is named there. Coverage names a unit file by its path under `deploy/` (`systemd/foo.service`,
-`pganchor/pganchor.socket`), so the same file name in two directories needs two entries (`dir = "<subdir>"`
-outside `deploy/systemd`). A unit family lists its files, scope, host roles (`keeper`, `worker`, `wsl`, `all`), the
-env file names it reads (never values; `%i` for the instance of a template) and its first-run check. A binary lists
-its package, bin, host roles and, in `install_paths`, every path a consumer runs it from, each with its roles; no
-list means only `~/.local/bin/<bin>`, and a binary run from two places lists both. A host lists its roles in
-`PG_HOST_ROLES` or in `~/.config/plangraph/host-roles`; the manifest holds no host names. A unit or binary that
-should not run anywhere gets an entry with `not_deployed = "<reason>"`, the only way to leave one out.
-`cargo test -p plangraph-cli deploy_manifest` (unit tests and the integration tests of the same name) fails for a
-unit file or binary target the manifest does not name, for an entry whose file is not tracked, for an
-`ExecStart` path or `EnvironmentFile` of a tracked unit that its entry does not declare, and for a workspace
-member the scan cannot resolve. Nothing in them reads systemd. The tables below describe the units; the manifest
-decides where they are installed.
+`deploy/manifest.toml` is the one table of what runs where. Every Git-tracked unit file under `deploy/` (any depth;
+service, timer, socket, target, mount, path and the other systemd unit types, and their `*.in` templates) and every
+binary target Cargo lists for the `rust/` workspace is named there. Coverage names a unit file by its path under
+`deploy/` (`systemd/foo.service`, `pganchor/pganchor.socket`, `foo.service` for `deploy/foo.service`), so the same
+file name in two directories needs two entries (`dir = "<subdir>"` outside `deploy/systemd`, `dir = "."` for
+`deploy/` itself).
+
+- A unit family lists its files, scope, host roles (`keeper`, `worker`, `wsl`, `all`), the env file names it reads
+  (never values; `%i` for the instance of a template) and its first-run check. A family whose files are templates
+  (`*.in`, or `@ROOT@` placeholders) names its `[unit.installer]`: the script in the tree (`via`), the command it
+  runs (`step`) and the unit names it writes (`renders`).
+- A binary lists its package, bin, host roles and, in `install_paths`, every path a consumer runs it from, each with
+  its roles; no list means only `~/.local/bin/<bin>`, and a binary run from two places lists both.
+- A host lists its roles in `PG_HOST_ROLES` or in `~/.config/plangraph/host-roles`; the manifest holds no host names.
+- `not_deployed = "<reason>"` is the only way to leave a unit or binary out.
+
+Two commands check it, and both are needed because the first filter matches test names only:
+
+```sh
+cargo test --offline --locked --manifest-path rust/Cargo.toml -p plangraph-cli deploy_manifest
+cargo test --offline --locked --manifest-path rust/Cargo.toml -p plangraph-cli --test deploy_manifest
+```
+
+They fail for a unit file or binary target the manifest does not name, for an entry whose file is not tracked, for a
+program a unit runs (`Exec*`, any directory) from a path its binary entry does not declare for the unit's roles, for an
+`EnvironmentFile` its entry omits, and for a template without an installer. Nothing in them reads systemd. The
+tables below describe the units; the manifest decides where they are installed.
 
 ## 1. Files
 

@@ -5,7 +5,8 @@
 # worker host) and `all`. A host lists its roles in PG_HOST_ROLES or in ~/.config/plangraph/host-roles.
 # env_family names the `host-sync --install-env` family that creates the env files from documented defaults;
 # without it a missing env file is reported by name for the operator (secrets are never created).
-# dir names the directory under deploy/ that holds the unit files when it is not deploy/systemd.
+# dir names the directory under deploy/ that holds the unit files when it is not deploy/systemd ("." is deploy/ itself).
+# installer names the script and step that render a template unit (*.in, or @ROOT@ placeholders) into the installed units.
 # install_paths on a binary lists every path a consumer runs it from, each with the roles it applies to;
 # no list means only ~/.local/bin/<bin>, and a binary used from two places lists both.
 # env_files are file names under ~/.config/plangraph (or /etc/plangraph for system units), never values;
@@ -44,8 +45,27 @@ not_deployed = "needs a host collector that refreshes ~/.local/state/plangraph/f
 name = "stall-watchdog"
 dir = "watchdog"
 files = ["watchdog.service", "watchdog.timer"]
+hosts = ["all"]
 env_files = ["watchdog.env"]
-not_deployed = "carries @ROOT@ and @PYTHON@ placeholders: `python -m plangraph.spawner.stall_watchdog install` renders and installs it (deploy/bootstrap.sh), so a verbatim copy would be wrong"
+first_run = "systemctl --user is-active plangraph-stall-watchdog.timer; the unit files carry @ROOT@ and @PYTHON@ placeholders, so the installer renders them and a verbatim copy would be wrong"
+
+[unit.installer]
+via = "deploy/bootstrap.sh"
+step = "python -m plangraph.spawner.stall_watchdog install --host linux"
+renders = ["plangraph-stall-watchdog.service", "plangraph-stall-watchdog.timer", "plangraph-remote-probe.service", "plangraph-remote-probe.timer"]
+
+[[unit]]
+name = "ctx-watchdog"
+dir = "ctx-watchdog"
+files = ["ctx-watchdog.service.in", "ctx-watchdog.timer.in"]
+enable = "ctx-watchdog.timer.in"
+hosts = ["all"]
+first_run = "systemctl --user is-enabled ctx-watchdog.timer after bootstrap with ctx-watchdog.json filled in (deploy/ctx-watchdog/config.example.json); the unit files carry @ROUTER_DIR@, so the installer renders them"
+
+[unit.installer]
+via = "deploy/bootstrap.sh"
+step = "install_ctx_watchdog renders ctx-watchdog.service and ctx-watchdog.timer into the user unit directory"
+renders = ["ctx-watchdog.service", "ctx-watchdog.timer"]
 
 [[unit]]
 name = "pg-feeder"
@@ -243,8 +263,7 @@ first_run = "pg-spawnd --version prints and `pg-spawnd host` answers"
 [[binary]]
 package = "pg-spawnd"
 bin = "ci-temporal"
-hosts = ["all"]
-first_run = "ci-temporal runs a trivial command against its isolated dev server"
+not_deployed = "CI helper: .github/workflows/tests.yml runs it with cargo run; no host runs it"
 
 [[binary]]
 package = "plangraph-cli"

@@ -115,22 +115,37 @@ def test_deployment_inputs_read_by_rust_are_explicitly_selected(name):
     assert ci_select.select([path])["rust"]
 
 
-def test_deploy_manifest_is_a_registered_rust_input():
-    # rust/plangraph-cli/tests/deploy_manifest.rs reads it through the MANIFEST_PATH constant, a join the
-    # literal scan above does not see, so the entry is checked here.
+def rust_unit_extensions():
+    text = (ROOT / "rust/plangraph-cli/src/deploy_manifest/scan.rs").read_text(encoding="utf-8")
+    block = re.search(r"UNIT_EXTENSIONS: \[&str; \d+\] = \[(.*?)\];", text, re.DOTALL)
+    assert block, "UNIT_EXTENSIONS not found in scan.rs"
+    return re.findall(r'"(\.[a-z]+)"', block.group(1))
+
+
+def test_deploy_coverage_inputs_are_registered():
+    # The manifest is read through the MANIFEST_PATH constant, a join the literal scan above does not
+    # see; the unit files are scanned by suffix. Both are registered explicitly, not left to the
+    # unknown-path fallback (which a documentation-looking name such as CHANGELOG.service escapes).
     assert (ROOT / "deploy/manifest.toml").is_file()
     assert "deploy/manifest.toml" in ci_select.RUST_INPUTS
-    assert "deploy/manifest.toml" in (ROOT / "rust/plangraph-cli/src/deploy_manifest/mod.rs").read_text()
+    extensions = rust_unit_extensions()
+    assert extensions and set(extensions) == set(ci_select.DEPLOY_UNIT_SUFFIXES)
+    for suffix in extensions:
+        for tail in ("", ".in"):
+            for path in (f"deploy/x{suffix}{tail}", f"deploy/systemd/x{suffix}{tail}",
+                         f"deploy/a/b/x{suffix}{tail}", f"deploy/systemd/CHANGELOG{suffix}{tail}"):
+                assert any(fnmatchcase(path, pattern) for pattern in ci_select.RUST_INPUTS), path
+                assert ci_select.select([path])["rust"], path
+    assert ci_select.select(["deploy/manifest.toml"])["rust"]
 
 
 @pytest.mark.parametrize("path", [
-    "deploy/manifest.toml", "deploy/systemd/pg-feeder.timer", "deploy/pganchor/pganchor.socket",
-    "deploy/systemd/new.target", "deploy/systemd/new.mount", "deploy/watchdog/nested/new.path",
+    "deploy/systemd/CHANGELOG.service", "deploy/watchdog/CHANGELOG.timer.in", "deploy/CHANGELOG.socket",
 ])
-def test_deploy_manifest_and_unit_files_select_the_full_suite_with_rust(path):
-    # deploy/ is not in KNOWN_PREFIXES: any change there runs every suite, Rust included.
-    selected = ci_select.select([path])
-    assert selected["rust"] and selected["full"], path
+def test_deploy_unit_files_named_like_documentation_still_select_rust(path):
+    # _is_docs_class makes these known paths, so only the RUST_INPUTS registration selects Rust CI.
+    assert ci_select._is_docs_class(path)
+    assert ci_select.select([path])["rust"]
 
 
 def test_schema_change_cli_outputs(tmp_path, monkeypatch, capsys):
