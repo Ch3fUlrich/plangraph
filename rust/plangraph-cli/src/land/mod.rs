@@ -5,6 +5,8 @@ mod build_tests;
 mod chain;
 pub mod cli;
 pub(crate) mod counted_receipt;
+#[cfg(all(test, unix))]
+mod counted_receipt_tests;
 pub mod delta;
 pub mod deploy;
 mod deploy_probe;

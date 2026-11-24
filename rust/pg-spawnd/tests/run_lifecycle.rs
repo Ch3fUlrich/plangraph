@@ -209,3 +209,67 @@ with patch.dict(os.environ):
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn fleet_health_cli_uses_review_activity_and_keeper_acceptance_at_replay_boundary() {
+    let state = tempfile::tempdir().unwrap();
+    let adapter = state.path().join("adapter");
+    pg_worker_core::executable_test_support::write_private_executable(
+        &adapter,
+        r#"#!/bin/sh
+case "$3" in
+    runs) cat "$2/page.json" ;;
+    review-receipts) cat "$2/receipts.json" ;;
+    *) exit 1 ;;
+esac
+"#,
+    );
+    let page = json!({
+        "local":{"rows":[],"more":false,"review_projection":1},
+        "hosts":{"other":{"rows":[{
+            "phase":"ended","run_id":"run-other","role":"review","started":1,"ended":7200,
+            "review_activity":true
+        }],"more":false,"review_projection":1}},
+        "next_cursor":{"local":0,"hosts":{"other":1}}
+    });
+    std::fs::write(state.path().join("page.json"), page.to_string()).unwrap();
+    let receipts = |acceptances| {
+        std::fs::write(
+            state.path().join("receipts.json"),
+            json!({"complete":true,"keeper_seats":[],"head_acceptances":acceptances}).to_string(),
+        )
+        .unwrap()
+    };
+    receipts(json!([]));
+    let replay = |since, until| {
+        let output = command(state.path())
+            .env("PG_SPAWND_ADAPTER", &adapter)
+            .args([
+                "health", "report", "--fleet", "--json", "--since", since, "--until", until,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["review_acceptance"]["coverage"]["complete"], true);
+        assert!(report["review_acceptance_digest"].is_array());
+        report["review_acceptance"]["alerts"].clone()
+    };
+    let start = "1970-01-01T00:00:00Z";
+    assert_eq!(replay(start, "1970-01-01T02:00:00Z"), json!([]));
+    assert_eq!(
+        replay(start, "1970-01-01T02:00:01Z"),
+        json!([{"kind":"no_head_accepted","at":7200.0}])
+    );
+    assert_eq!(
+        replay("1970-01-01T02:00:00Z", "1970-01-01T04:30:00Z"),
+        json!([])
+    );
+    receipts(json!([{"head":"a".repeat(40),"accepted_at":3600,"seat_runs":["run-other"]}]));
+    assert_eq!(replay(start, "1970-01-01T02:00:01Z"), json!([]));
+}

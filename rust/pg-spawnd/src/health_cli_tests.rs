@@ -163,16 +163,14 @@ fn review_acceptance_report_uses_serving_leg_and_replays_alarm() {
                                 {"status":"skipped","leg":{"id":"never-served"}}],
                     "stdout_tail":if pass {"VERDICT: ACCEPT"} else {"VERDICT: REQUEST_CHANGES"}}),
             );
-            if pass {
-                let writer = format!("run-writer{seat}{i}");
-                save(
-                    &writer,
-                    serde_json::json!({"run_id":writer,"role":"implement","run_kind":"native-codex",
-                        "review_rounds":2,"reviews":[{"run_id":"unjoined","head":"old",
-                            "verdict":"REQUEST_CHANGES"},{"run_id":id,"head":head,"leg":seat,
-                            "verdict":"ACCEPT","accepted_at":ended}]}),
-                );
-            }
+            let writer = format!("run-writer{seat}{i}");
+            save(
+                &writer,
+                serde_json::json!({"run_id":writer,"role":"implement","run_kind":"native-codex",
+                    "review_rounds":2,"reviews":[{"run_id":"unjoined","head":"old",
+                        "verdict":"REQUEST_CHANGES"},{"run_id":id,"head":head,"leg":seat,
+                        "verdict":if pass {"ACCEPT"} else {"REQUEST_CHANGES"},"accepted_at":if pass {Some(ended)} else {None}}]}),
+            );
         }
     }
     save(
@@ -182,13 +180,19 @@ fn review_acceptance_report_uses_serving_leg_and_replays_alarm() {
             "started":start,"ended":start+1,"review_result":"verdict","chosen_leg":{"id":"strict"}
         }),
     );
-    save(
-        "run-unadmitted",
-        serde_json::json!({
-            "run_id":"run-unadmitted","role":"review","status":"completed","head_sha":"a".repeat(40),
-            "started":start,"ended":start+2,"stdout_tail":"VERDICT: ACCEPT","chosen_leg":{"id":"strict"}
-        }),
-    );
+    for (id, verdict) in [
+        ("run-unadmitted-pass", "ACCEPT"),
+        ("run-unadmitted-changes", "REQUEST_CHANGES"),
+    ] {
+        save(
+            id,
+            serde_json::json!({
+                "run_id":id,"role":"review","status":"completed","head_sha":"a".repeat(40),
+                "started":start,"ended":start+2,"stdout_tail":format!("VERDICT: {verdict}"),
+                "chosen_leg":{"id":"strict"}
+            }),
+        );
+    }
     save(
         "run-active",
         serde_json::json!({
@@ -236,22 +240,43 @@ fn review_acceptance_report_uses_serving_leg_and_replays_alarm() {
     assert!(alerts.iter().any(|a| a["kind"] == "low_acceptance"
         && a["leg"] == "strict"
         && a["at"].as_f64() == Some((start + 600 + 9 * 60) as f64)));
-    assert!(alerts.iter().any(|a| a["kind"] == "no_head_accepted"));
-    for (until, alarm) in [
-        ("2026-11-24T16:59:59Z", false),
-        ("2026-11-24T17:00:01Z", true),
-    ] {
-        let replay = report("2026-11-24T15:00:00Z", until);
-        assert_eq!(
-            replay["alerts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|a| a["kind"] == "no_head_accepted"),
-            alarm
-        );
-    }
-    std::fs::remove_dir_all(state.path().join("runs/run-active")).unwrap();
-    let no_activity = report("2026-11-24T15:00:00Z", "2026-11-24T21:00:00Z");
-    assert!(no_activity["alerts"].as_array().unwrap().is_empty());
+    assert_eq!(first["strict"]["unknown_verdicts"], 2);
+    assert!(!alerts.iter().any(|a| a["kind"] == "no_head_accepted"));
+    assert_eq!(day["coverage"]["complete"], false);
+    assert_eq!(day["coverage"]["scope"], "local");
+}
+
+#[test]
+fn local_health_report_cannot_establish_fleet_silence() {
+    let state = tempfile::tempdir().unwrap();
+    let start = timestamp("2026-11-24T15:00:00Z").unwrap();
+    let path = state.path().join("runs/run-active");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(
+        path.join("record.json"),
+        serde_json::json!({
+            "run_id":"run-active","role":"review","status":"running","started":start,
+            "attempts":[{"leg":{"id":"strict"},"status":"running"}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let args = [
+        "report",
+        "--state",
+        state.path().to_str().unwrap(),
+        "--since",
+        "2026-11-24T15:00:00Z",
+        "--until",
+        "2026-11-24T17:00:01Z",
+        "--json",
+    ];
+    let mut out = Vec::new();
+    execute(args.map(String::from).to_vec(), &mut out).unwrap();
+    let report: Value = serde_json::from_slice(&out).unwrap();
+    assert!(report["review_acceptance"]["alerts"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(report["review_acceptance"]["coverage"]["complete"], false);
 }

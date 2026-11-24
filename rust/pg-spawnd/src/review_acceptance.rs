@@ -14,12 +14,17 @@ const SILENCE: f64 = 2.0 * 3600.0;
 struct Seat {
     verdicts: u64,
     accepts: u64,
+    unknown_verdicts: u64,
     rounds: Vec<u64>,
     first_low_at: Option<(f64, u64, u64)>,
 }
 
 impl Seat {
-    fn add(&mut self, pass: bool, round: Option<u64>) {
+    fn add(&mut self, outcome: Option<(bool, Option<u64>)>) {
+        let Some((pass, round)) = outcome else {
+            self.unknown_verdicts += 1;
+            return;
+        };
         self.verdicts += 1;
         self.accepts += u64::from(pass);
         if let Some(round) = round.filter(|_| pass) {
@@ -39,7 +44,8 @@ impl Seat {
             Some((self.rounds[(n - 1) / 2] as f64 + self.rounds[n / 2] as f64) / 2.0)
         };
         json!({"verdicts":self.verdicts, "accepts":self.accepts,
-               "accept_rate":self.accepts as f64 / self.verdicts as f64,
+               "unknown_verdicts":self.unknown_verdicts,
+               "accept_rate":(self.verdicts > 0).then(|| self.accepts as f64 / self.verdicts as f64),
                "median_rounds_to_accept":median,"known_accept_rounds":self.rounds.len()})
     }
 }
@@ -220,23 +226,27 @@ pub(crate) fn report(
             }
         }
         if (from..to).contains(&ended) {
-            let (pass, round) = if terminal["keeper_bound"] == true || keep.is_some() {
-                match keep {
-                    Some(receipt) if receipt["pass"].is_boolean() => {
-                        (receipt["pass"] == true, receipt["round"].as_u64())
-                    }
-                    _ => continue,
-                }
+            let outcome = if terminal["keeper_bound"] == true || keep.is_some() {
+                keep.and_then(|receipt| {
+                    Some((receipt["pass"].as_bool()?, receipt["round"].as_u64()))
+                })
             } else if let Some(review) = evidence {
-                (review["verdict"] == "ACCEPT", review["round"].as_u64())
-            } else if key.is_some_and(|key| contributing_runs.contains(&key)) {
-                (true, None)
-            } else if terminal["verdict"] == "changes" {
-                (false, None)
+                match review["verdict"].as_str() {
+                    Some("ACCEPT") => Some((true, review["round"].as_u64())),
+                    Some("REQUEST_CHANGES") => Some((false, review["round"].as_u64())),
+                    _ => None,
+                }
             } else {
+                key.filter(|key| contributing_runs.contains(key))
+                    .map(|_| (true, None))
+            };
+            if outcome.is_some() || matches!(terminal["verdict"].as_str(), Some("pass" | "changes"))
+            {
+                outcomes.push((ended, leg, id, outcome));
+            }
+            let Some((pass, round)) = outcome else {
                 continue;
             };
-            outcomes.push((ended, leg, id, pass, round));
             if let (Some(sha), Some(revision)) = (
                 sha,
                 row["counted_review"]["selection"]["seat"]["revision"].as_str(),
@@ -255,20 +265,20 @@ pub(crate) fn report(
     let mut three_hours = Seats::new();
     let mut daily = Seats::new();
     let mut alerts = Vec::new();
-    for (ended, leg, _, pass, round) in outcomes {
+    for (ended, leg, _, outcome) in outcomes {
         let start = bucket(ended, THREE_HOURS);
         let seat = three_hours
             .entry(start)
             .or_default()
             .entry(leg)
             .or_default();
-        seat.add(pass, round);
+        seat.add(outcome);
         daily
             .entry(bucket(ended, DAY))
             .or_default()
             .entry(leg)
             .or_default()
-            .add(pass, round);
+            .add(outcome);
         if seat.below_threshold() && seat.first_low_at.is_none() {
             seat.first_low_at = Some((ended, seat.verdicts, seat.accepts));
         }
@@ -295,8 +305,7 @@ pub(crate) fn report(
         sample.as_object_mut().unwrap().remove("seat_pass");
         comparison_samples.push(sample);
     }
-    let complete = fleet.is_null() || fleet["coverage"]["complete"] == true;
-    if complete {
+    if fleet["coverage"]["scope"] == "fleet" && fleet["coverage"]["complete"] == true {
         alerts.extend(silence_alerts(
             from,
             to,
@@ -306,7 +315,7 @@ pub(crate) fn report(
     }
     alerts.sort_unstable_by(|a, b| a["at"].as_f64().partial_cmp(&b["at"].as_f64()).unwrap());
     json!({"windows_3h":windows(three_hours, THREE_HOURS), "days":windows(daily, DAY),
-        "alerts":alerts, "comparison_samples":comparison_samples, "coverage": if fleet.is_null() { json!({"scope":"local"}) }
+        "alerts":alerts, "comparison_samples":comparison_samples, "coverage": if fleet.is_null() { json!({"scope":"local","complete":false,"incomplete_sources":["fleet collection not requested"]}) }
                                      else { fleet["coverage"].clone() }})
 }
 
@@ -332,10 +341,18 @@ mod tests {
         );
         assert_eq!(view["alerts"], json!([]));
         fleet["coverage"]["complete"] = json!(true);
+        assert_eq!(
+            report(state.path(), &[], &fleet, 0, 7200)["alerts"],
+            json!([])
+        );
         let view = report(state.path(), &[], &fleet, 0, 9000);
         assert_eq!(
             view["alerts"],
             json!([{"kind":"no_head_accepted","at":7200.0}])
+        );
+        assert_eq!(
+            report(state.path(), &[], &fleet, 30, 8000)["alerts"],
+            json!([])
         );
         fleet["head_acceptances"] = json!([{"head":head,"accepted_at":5000,
                                             "seat_runs":["run-1"]}]);

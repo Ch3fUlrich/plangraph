@@ -477,3 +477,32 @@ def test_seeded_silent_run_publishes_stall_episode(tmp_path, monkeypatch):
     assert w.main(['tick']) == 0
     assert len(list((tmp_path / 'watchdog/outbox').glob('*.json'))) == 1
     assert len(list((tmp_path / 'watchdog/alerts').glob('*.json'))) == 1
+
+
+
+@pytest.mark.parametrize("failure", [None, "command", "invalid-schema", "invalid-json"])
+def test_review_acceptance_digest_uses_the_json_health_report(tmp_path, monkeypatch, failure):
+    from types import SimpleNamespace
+    from plangraph.spawner import remote_ps
+
+    lines = ["Review seat seat-a 1/20 accepts", "ALERT review seat seat-a below 15%"]
+    monkeypatch.setattr(w.time, "time", lambda: 1795534800)  # 2026-11-24 18:20 UTC
+    calls = []
+
+    def report(state, *args, **kwargs):
+        calls.append((state, args, kwargs))
+        if failure == "command":
+            raise subprocess.CalledProcessError(1, args)
+        if failure == "invalid-json":
+            return SimpleNamespace(stdout="health report unavailable")
+        payload = "invalid" if failure == "invalid-schema" else lines
+        return SimpleNamespace(stdout=json.dumps({"review_acceptance_digest": payload}, indent=2))
+
+    monkeypatch.setattr(remote_ps, "lifecycle_command", report)
+    expected = ["Review acceptance coverage incomplete (health report unavailable)"] if failure else lines
+    assert w.review_acceptance_digest(tmp_path) == expected
+    (state, args, kwargs), = calls
+    assert state == tmp_path
+    assert args[:4] == ("health", "report", "--fleet", "--json")
+    assert args[4::2] == ("--since", "--until")
+    assert kwargs == {"timeout": 35, "capture_output": True, "text": True}

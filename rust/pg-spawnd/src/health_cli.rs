@@ -59,7 +59,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         Value::Null
     };
     let acceptance = crate::review_acceptance::report(&state, &records, &fleet, since, until);
-    if report && !flags.contains_key("--json") {
+    if report {
         result["review_acceptance_digest"] = serde_json::json!(digest(&acceptance));
     }
     result["review_acceptance"] = acceptance;
@@ -101,11 +101,14 @@ fn digest(report: &Value) -> Vec<String> {
     if let Some(window) = report["windows_3h"].as_array().and_then(|rows| rows.last()) {
         if let Some(seats) = window["seats"].as_object() {
             for (leg, seat) in seats {
+                let rate = seat["accept_rate"].as_f64().map_or_else(
+                    || "unknown".to_owned(),
+                    |rate| format!("{:.1}%", rate * 100.0),
+                );
                 lines.push(format!(
-                    "Review seat {leg} {}/{} accepts ({:.1}%) in the window starting {}, median rounds {}",
-                    seat["accepts"], seat["verdicts"],
-                    seat["accept_rate"].as_f64().unwrap_or_default() * 100.0,
-                    stamp(&window["since"]), seat["median_rounds_to_accept"]
+                    "Review seat {leg} {}/{} accepts ({rate}) in the window starting {}, median rounds {}, unknown verdicts {}",
+                    seat["accepts"], seat["verdicts"], stamp(&window["since"]),
+                    seat["median_rounds_to_accept"], seat["unknown_verdicts"]
                 ));
             }
         }

@@ -428,11 +428,14 @@ def review_acceptance_digest(state):
     since = (now // 10800 - 1) * 10800
     stamp = lambda t: datetime.fromtimestamp(t, UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
     try:
-        result = lifecycle_command(state, 'health', 'report', '--fleet',
+        result = lifecycle_command(state, 'health', 'report', '--fleet', '--json',
                                    '--since', stamp(since), '--until', stamp(now),
                                    timeout=35, capture_output=True, text=True)
-        return json.loads(result.stdout.splitlines()[0])['review_acceptance_digest']
-    except (IndexError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        lines = json.loads(result.stdout)['review_acceptance_digest']
+        if not isinstance(lines, list) or not all(isinstance(line, str) for line in lines):
+            raise ValueError('invalid review acceptance digest')
+        return lines
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
         return ['Review acceptance coverage incomplete (health report unavailable)']
 
 
@@ -530,7 +533,7 @@ def main(argv=None, *, hung_config=None):
     if error:
         text += ('\n' if text else '') + '! stall watchdog error ' + error
     if os.environ.get('PLANGRAPH_REVIEW_ACCEPTANCE') == '1':
-        text = '\n'.join([text, *review_acceptance_digest(state)])
+        text = '\n'.join(filter(None, (text, *review_acceptance_digest(state))))
     from plangraph.spawner.private_io import atomic_write_private
     atomic_write_private(state / 'watchdog/status.txt', text + ('\n' if text else ''))
     print(text)

@@ -1,2 +1,3 @@
 - Report counted review acceptance by serving leg in three-hour and daily windows. Fleet replay joins lifecycle pages, native review history, and exact-run Keeper receipts, with alerts for low seat acceptance and review activity without an accepted head.
 - Add a routing-owned three-lane canary with evidence-based promotion and lane-bound review receipts at launch and landing. Live rollout through the external train scripts requires their counted-seat integration.
+- Require exact-run admission for both passing and change-request verdicts, and complete fleet coverage for silence alarms. Verify the Rust landing gates across promotion and rollback and consume the watchdog digest through the JSON report.

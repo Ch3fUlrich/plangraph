@@ -155,5 +155,7 @@ revision that no longer applies to the lane.
 The merge-batch CLI, Keeper prepare, router GO row, and READY train build use
 this policy when configured. A counted GO row part includes `item_key` and
 its seat includes `run_id`. A READY train receipt includes the mirror's
-`counted_review` binding. Live rollout to the external train scripts depends
+`counted_review` binding. Keeper records train head acceptance at the first
+successful prepare, when all cited seats have been verified. A separate
+Keeper review outcome may record that head's acceptance earlier. Live rollout to the external train scripts depends
 on `TRAIN-SCRIPTS-ACCEPT-DIR-SINGLE-SEAT` applying the same policy.

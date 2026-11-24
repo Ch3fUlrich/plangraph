@@ -135,5 +135,6 @@ writer and requires overlapping review activity.
 
 Fleet collection resumes from independent host bookmarks. Missing host pages,
 outdated host projections, and unavailable Keeper receipts show incomplete coverage.
-The fleet silence alarm requires complete coverage. Without `--fleet` the report
-uses local records.
+The fleet silence alarm requires complete fleet coverage. Local reports provide
+seat rates from local records and mark coverage incomplete. Parsed verdicts with
+missing admission evidence appear as unknown and stay outside the acceptance rate.
