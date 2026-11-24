@@ -1,0 +1,1 @@
+Add `land::go_publish`: publish a computed GO as one row of the protected decisions branch through a row-only PR, retry on a colliding D-id after a staleness check, and read the row back through the canonical reader (fixture-tested; no live publish).
