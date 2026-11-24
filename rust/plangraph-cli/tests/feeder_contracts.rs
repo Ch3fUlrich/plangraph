@@ -65,14 +65,21 @@ fn tick_tries_next_after_item_refusal_but_stops_for_infrastructure_or_start_fail
     let row = drive(&ready(), &mut f, false);
     assert_eq!(row["item_key"], "plangraph:BUILD-CI-FIX");
     assert_eq!(row["skipped"][0]["item_key"], "plangraph:PATCH-PR");
+    // The refused item is skipped and the next one starts; the host's second slot then takes
+    // the next disjoint item the same way.
     assert_eq!(
-        f.calls,
+        f.calls[..3],
         [
             "claim plangraph:PATCH-PR",
             "claim plangraph:BUILD-CI-FIX",
             "start plangraph:BUILD-CI-FIX"
         ]
     );
+    assert_eq!(
+        f.calls[3..],
+        ["claim plangraph:HIGH-OLD", "start plangraph:HIGH-OLD"]
+    );
+    assert_eq!(row["slots"], 2);
     let mut f = Fake {
         unavailable: true,
         ..Fake::default()
