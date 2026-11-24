@@ -213,3 +213,13 @@ fn critical_idle_follows_the_stall_rule_in_both_directions() {
     let (snapshot, gaps) = collect(unread);
     assert!(snapshot.get("critical_idle_hours").is_none() && !gaps.is_empty());
 }
+
+#[test]
+fn a_claim_without_a_lease_does_not_drop_the_stuck_rows() {
+    let mut value = readings();
+    value["items"][4]["lease_until"] = Value::Null;
+    let (snapshot, gaps) = collect(value);
+    assert!(gaps.is_empty(), "{gaps:?}");
+    assert_eq!(snapshot["lapsed_leases"], json!([]));
+    assert_eq!(snapshot["merged_reviews"][0]["item"], "demo:F");
+}

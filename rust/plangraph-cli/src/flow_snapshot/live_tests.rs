@@ -106,3 +106,41 @@ fn units_compare_installed_files_and_skip_templates_and_missing_ones() {
         assert_eq!(same, row["name"] == "same.service", "{row}");
     }
 }
+
+#[test]
+fn usage_reads_the_result_envelope_and_fails_on_no_result() {
+    let ok = br#"{"result":{"day":"d","weighted":4.5,"budget_per_day":9.0,"over_pace":false},"visibility":"v"}"#;
+    assert_eq!(
+        parse_usage(true, ok).unwrap(),
+        json!({"weighted":4.5,"budget_per_day":9.0})
+    );
+    let none = br#"{"status":"no result","reason":"nothing","visibility":"v"}"#;
+    assert!(parse_usage(false, none).unwrap_err().contains("nothing"));
+    assert!(
+        parse_usage(true, none).is_err(),
+        "a top-level shape is not a reading"
+    );
+    assert!(parse_usage(true, br#"{"result":{"weighted":null,"budget_per_day":1}}"#).is_err());
+    assert!(parse_usage(true, b"not json").is_err());
+}
+
+#[test]
+fn usage_of_the_real_tool_without_transcripts_is_a_failed_reading() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let empty = tempfile::tempdir().unwrap();
+    assert!(usage_with(&root, Some(empty.path())).is_err());
+}
+
+#[test]
+fn ci_rows_without_a_string_time_or_conclusion_are_not_counted() {
+    let rows = vec![
+        json!({"conclusion":"success","createdAt":"2026-01-01T00:00:00Z"}),
+        json!({"conclusion":"failure","createdAt":null}),
+        json!({"conclusion":"","createdAt":5}),
+        json!({"conclusion":null,"createdAt":"2026-01-01T00:00:00Z"}),
+    ];
+    assert_eq!(
+        ci_rows(rows),
+        json!([{"conclusion":"success","created":"2026-01-01T00:00:00Z"}])
+    );
+}

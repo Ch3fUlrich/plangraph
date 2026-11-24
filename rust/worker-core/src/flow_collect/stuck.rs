@@ -69,10 +69,10 @@ pub fn rows(r: &Readings) -> Fields {
     let waiting = ready(items);
     let mut lapsed = Vec::new();
     for item in items.iter().filter(|i| i.state == "claimed") {
-        let lease = item
-            .lease_until
-            .as_deref()
-            .ok_or_else(|| format!("{} has no lease", item.key))?;
+        // A claim without a lease (legacy or reaped rows) has nothing to lapse.
+        let Some(lease) = item.lease_until.as_deref() else {
+            continue;
+        };
         let over = r.now - parse_time(lease)?;
         if over > 0.0 {
             let who = item.claimed_by.clone().unwrap_or_else(|| owner(item));

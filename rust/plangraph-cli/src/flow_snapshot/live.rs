@@ -73,14 +73,39 @@ fn used_percent(path: &str) -> Result<f64, String> {
 }
 
 fn usage(root: &Path) -> Result<Value, String> {
-    let out = Command::new("python3")
+    usage_with(root, None)
+}
+
+fn usage_with(root: &Path, projects: Option<&Path>) -> Result<Value, String> {
+    let mut command = Command::new("python3");
+    command
         .arg(root.join("tools/claude_usage.py"))
-        .args(["pace", "--json"])
-        .output()
-        .map_err(|e| e.to_string())?;
+        .args(["pace", "--json"]);
+    if let Some(projects) = projects {
+        command.arg("--projects").arg(projects);
+    }
+    let out = command.output().map_err(|e| e.to_string())?;
+    parse_usage(out.status.success(), &out.stdout)
+}
+
+/// `claude_usage.py pace --json` prints `{"result": {...}}` on success; on rc 3 it prints
+/// `{"status": "no result", ...}`. Only finite numbers from a successful run are a reading.
+fn parse_usage(success: bool, stdout: &[u8]) -> Result<Value, String> {
     let body: Value =
-        serde_json::from_slice(&out.stdout).map_err(|_| "claude_usage pace gave no JSON")?;
-    Ok(json!({"weighted": body["weighted"], "budget_per_day": body["budget_per_day"]}))
+        serde_json::from_slice(stdout).map_err(|_| "claude_usage pace gave no JSON")?;
+    if !success {
+        return Err(format!(
+            "claude_usage pace failed: {}",
+            body["reason"].as_str().unwrap_or("no result")
+        ));
+    }
+    let number = |name: &str| {
+        body["result"][name]
+            .as_f64()
+            .filter(|n| n.is_finite())
+            .ok_or_else(|| format!("claude_usage pace has no finite {name}"))
+    };
+    Ok(json!({"weighted": number("weighted")?, "budget_per_day": number("budget_per_day")?}))
 }
 
 fn ci() -> Result<Value, String> {
@@ -96,12 +121,17 @@ fn ci() -> Result<Value, String> {
         ],
     )?;
     let rows: Vec<Value> = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    Ok(Value::Array(
+    Ok(ci_rows(rows))
+}
+
+/// Finished runs only; a row without a string conclusion and creation time is not counted.
+fn ci_rows(rows: Vec<Value>) -> Value {
+    Value::Array(
         rows.into_iter()
-            .filter(|r| r["conclusion"].is_string())
+            .filter(|r| r["conclusion"].is_string() && r["createdAt"].is_string())
             .map(|r| json!({"conclusion": r["conclusion"], "created": r["createdAt"]}))
             .collect(),
-    ))
+    )
 }
 
 fn host_name(env: &BTreeMap<String, String>) -> Result<String, String> {
