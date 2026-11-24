@@ -69,8 +69,8 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     // Rule 3.66 (f10): the smart legs lead; a Hydrogen limit moves the first leg to Argon, both limits to the weak pair.
     for (stage, first) in [
         ("initial", "gemini-4-hydrogen-high"),
-        ("hydrogen", "gemini-4-argon-low"),
-        ("argon", "claude-sonnet-5-5-high"),
+        ("hydrogen", "opencode-go/deepseek-v4.1-flash"),
+        ("argon", "opencode-go/deepseek-v4.1-flash"),
     ] {
         assert_eq!(result[stage]["first_leg"]["model"], first);
     }
@@ -87,23 +87,29 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
             "gemini-4-neon-medium"
         ]
     );
-    // The Hydrogen limit removes only its seat. The Argon limit then
-    // removes both Argon efforts while keeping the existing Hydrogen limit.
-    let without_hydrogen: Vec<&str> = initial
-        .iter()
-        .copied()
-        .filter(|model| *model != "gemini-4-hydrogen-high")
-        .collect();
-    assert_eq!(models_of("hydrogen"), without_hydrogen);
-    let without_argon: Vec<&str> = without_hydrogen
-        .iter()
-        .copied()
-        .filter(|model| !model.starts_with("gemini-4-argon"))
-        .collect();
-    // With both Gemini smart legs out, Sonnet (the writer is not Claude) is the smart leg ahead of the weak pair.
-    let mut with_sonnet = vec!["claude-sonnet-5-5-high"];
-    with_sonnet.extend(&without_argon);
-    assert_eq!(models_of("argon"), with_sonnet);
+    // Rule 3.66 (f10) clause 6: a limited Hydrogen hands the head to the weak pair, which then leads the
+    // route; the Argon legs stay behind it. With Argon limited too, Sonnet (writer is not Claude) follows the pair.
+    assert_eq!(
+        models_of("hydrogen"),
+        [
+            "opencode-go/deepseek-v4.1-flash",
+            "opencode-go/glm-5.3-flash",
+            "gemini-4-argon-low",
+            "gemini-4-argon-medium",
+            "opencode/deepseek-v4.1-flash-free",
+            "gemini-4-neon-medium"
+        ]
+    );
+    assert_eq!(
+        models_of("argon"),
+        [
+            "opencode-go/deepseek-v4.1-flash",
+            "opencode-go/glm-5.3-flash",
+            "claude-sonnet-5-5-high",
+            "opencode/deepseek-v4.1-flash-free",
+            "gemini-4-neon-medium"
+        ]
+    );
     let argon_states = &result["argon"]["agy_quota_states"];
     assert_eq!(argon_states["agy:gemini-4-hydrogen"]["state"], "limited");
     assert_eq!(argon_states["agy:gemini-4-argon"]["state"], "limited");
@@ -126,14 +132,10 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
         result["sonnet_only"]["first_leg"]["model"],
         "gemini-4-argon-low"
     );
-    // Rule 3.66 (f10): Argon alone is one counted smart seat.
-    assert!(result["sonnet_only"]["error"].is_null());
+    // Clause 6: Hydrogen and the pair limited, Argon alone is not a counted seat (one family).
     assert_eq!(
-        result["sonnet_only"]["review_seats"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+        result["sonnet_only"]["error"],
+        "two distinct review families unavailable"
     );
     let states = &result["hydrogen"]["agy_quota_states"];
     assert_eq!(states["agy:gemini-4-hydrogen"]["state"], "limited");

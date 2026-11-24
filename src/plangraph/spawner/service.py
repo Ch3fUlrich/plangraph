@@ -229,6 +229,19 @@ class SpawnService(SeatSpawnMixin):
                 raise TimeoutError('run wait timed out: ' + run_id)
             await asyncio.sleep(.02)
 
+    def busy_review_legs(self):
+        """Smart review legs whose parallel review slots (route policy ``review_parallel_slots``) are all taken."""
+        from plangraph.planner.route_policy import load_route_policy
+        caps = load_route_policy().review_parallel_slots
+        if not caps:
+            return ()
+        running = {}
+        for record in self.ps()['runs']:
+            leg = (record.get('chosen_leg') or {}).get('id')
+            if record.get('role') == 'review' and record.get('status') in ('running', 'queued') and leg in caps:
+                running[leg] = running.get(leg, 0) + 1
+        return tuple(leg for leg, cap in caps.items() if running.get(leg, 0) >= cap)
+
     def ps(self):
         from .stall_watchdog import read_runs
         from .exit_outcome import with_stale
@@ -279,6 +292,8 @@ class SpawnService(SeatSpawnMixin):
         probe = service_probe(self)
         if probe is not None:
             extra['installed'] = probe
+        if role == 'review' and (busy := self.busy_review_legs()):
+            extra['busy_legs'] = busy
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench, **extra)
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
         ordered = witness_order(card, role, live(plan.legs), down)

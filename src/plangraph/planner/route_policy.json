@@ -5,6 +5,8 @@
   "review_allowed_families": [],
   "_review_tools_denied_reason": "OpenCode review isolation denies repository and shell tools. Park MiMo Pro until a real PR review with file access is verified.",
   "review_tools_denied_legs": ["mimo-v2.6-pro"],
+  "_review_parallel_slots_reason": "Rule 3.66 (f10) clause 6 (D-6787): a smart leg whose parallel review runs are all busy gives its head to the deepseek and glm pair; the cap is the number of review runs the leg serves at once.",
+  "review_parallel_slots": {"agy-gemini-4-hydrogen-high": 2},
   "paused_harnesses": {
     "qodercli": {"allowed_roles": []},
     "agy": {"allowed_roles": ["implement", "orchestrate", "review", "research"]}
