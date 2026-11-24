@@ -67,14 +67,14 @@ fn run_python(
 }
 
 /// The versioned review brief (`plangraph.review.prompt.render_brief("review", context,
-/// rules=rules)`): its fixed prefix, then `rules`, then the item-context block for the fields
-/// `context` names.
+/// rules=rules, require_item_context=True)`): its fixed prefix, then `rules`, then the item-context
+/// block; a missing or empty public-symbol, caller or test-output field is refused by name.
 pub fn render_review_brief(
     context: &Value,
     rules: &str,
     python: &dyn Fn() -> Command,
 ) -> Result<String, String> {
-    const CODE: &str = "import json, sys; from plangraph.review.prompt import render_brief; a = json.load(sys.stdin); sys.stdout.write(render_brief('review', a['context'], rules=a['rules']))";
+    const CODE: &str = "import json, sys; from plangraph.review.prompt import render_brief; a = json.load(sys.stdin); sys.stdout.write(render_brief('review', a['context'], rules=a['rules'], require_item_context=True))";
     let payload = serde_json::to_vec(&serde_json::json!({"context": context, "rules": rules}))
         .map_err(|e| format!("serialize brief context: {e}"))?;
     let out = run_python(python, CODE, payload, "review brief")?;

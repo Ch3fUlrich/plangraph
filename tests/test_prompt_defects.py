@@ -223,3 +223,35 @@ def test_review_brief_limits_included_writer_artifact(tmp_path, artifact_size):
         assert evidence.endswith("é\n> EXCLUDED TAIL")
     else:
         assert evidence == "> " + "x" * (limit - 1) + "\n> [artifact truncated at 32 KiB]"
+
+
+FULL_CONTEXT = {"item_key": "demo:CTX", "public_symbols": "run_seat", "callers": "seat.py:9 run_seat",
+                "test_output_paths": "logs/fast.log"}
+
+
+@pytest.mark.parametrize("field", ["public_symbols", "callers", "test_output_paths"])
+@pytest.mark.parametrize("bad", [None, "", "  ", "unavailable (request before acceptance)", "$callers"])
+def test_lane_head_review_brief_refuses_empty_item_context(field, bad):
+    from plangraph.review.prompt import ItemContextError, render_brief
+
+    context = dict(FULL_CONTEXT, **{field: bad})
+    if bad is None:
+        del context[field]
+    with pytest.raises(ItemContextError, match=field) as raised:
+        render_brief("review", context, require_item_context=True)
+    assert raised.value.fields == [field]
+    # The default keeps the optional-context entry points (seat, judge) working.
+    assert "unavailable (request before acceptance)" in render_brief("review", {"item_key": "x"})
+
+
+def test_lane_head_review_brief_accepts_verified_empty_and_renders_block():
+    from plangraph.review.prompt import item_context_defects, render_brief, verified_empty
+
+    context = dict(FULL_CONTEXT, public_symbols=verified_empty("docs-only diff"), callers=verified_empty("no public symbol"))
+    brief = render_brief("review", context, require_item_context=True)
+    assert "Changed public symbols: none (verified empty: docs-only diff)" in brief
+    assert "Affected test output (paths): logs/fast.log" in brief
+    assert item_context_defects(brief) == []
+    assert item_context_defects(render_brief("review", {"item_key": "x"})) == [
+        "public_symbols", "callers", "test_output_paths"]
+    assert item_context_defects("no block at all") == ["public_symbols", "callers", "test_output_paths"]

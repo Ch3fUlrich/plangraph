@@ -36,6 +36,8 @@ from seat_record import check_record_permissions, evidence_from_record, RecordPe
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
 EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 3, 4
+# Only process diagnostics block the seat: nothing is posted, the orchestrator repairs the prompt.
+EXIT_PROCESS = 5
 
 # (regex on the lowercased model name without any "vendor/" prefix, family)
 FAMILIES = (
@@ -156,6 +158,32 @@ def findings(text, idx, limit=600):
     after = "\n".join(lines[idx + 1:]).strip()
     return (after or "\n".join(lines[:idx]).strip())[:limit]
 
+def _process_diagnostics(seat_dir, text, evidence, cwd=None):
+    """Classify findings against the seat's saved final prompt and its dispatched diff scope."""
+    try:
+        from plangraph.review import verdict as classifier
+    except ImportError:  # run from a checkout without an installed package
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from plangraph.review import verdict as classifier
+    try:
+        prompt = (seat_dir / "prompt.txt").read_text("utf-8")
+    except (OSError, ValueError):
+        prompt = ""
+    found = classifier.classify_findings(
+        text, prompt=prompt, changed_paths=classifier.diff_paths(prompt, cwd))
+    return {"lines": list(found.process), "blocking": found.blocking,
+            "prompt_sha256": evidence.get("prompt_sha256")}
+
+
+def _save_process(seat_dir, key, evidence, process):
+    """Persist the diagnostic against the seat run and head for the orchestrator."""
+    doc = dict(process, key=key, run_id=evidence.get("run_id"), head_sha=evidence.get("head_sha"))
+    try:
+        (seat_dir / "process.json").write_text(json.dumps(doc, indent=2) + "\n", "utf-8")
+    except OSError as exc:
+        print(f"seat_verdict: cannot save process.json: {type(exc).__name__}", file=sys.stderr)
+
+
 def verdict_payload(key, ok, reason):
     """The exact JSON body the keeper's verdict route takes."""
     assert type(ok) is bool, "ok must be a JSON boolean, never a string"
@@ -232,7 +260,7 @@ def read_record_identity(seat_dir, key=None):
         raise ValueError("cannot read record identity")
     if key is not None and "item_key" in record and record["item_key"] != key:
         raise ValueError("record item_key does not match --key")
-    identity = {field: record[field] for field in ("item_key", "head_sha") if field in record}
+    identity = {field: record[field] for field in ("item_key", "head_sha", "cwd") if field in record}
     request = record.get("request")
     if isinstance(request, dict) and "verdict_binding" in request:
         identity["binding"] = request["verdict_binding"]
@@ -392,6 +420,15 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     if ok is None:
         print("seat_verdict: no parseable VERDICT line", file=sys.stderr)
         return EXIT_NO_VERDICT
+    process = _process_diagnostics(args.seat_dir, text, evidence,
+                                  identity.get("cwd") if isinstance(identity.get("cwd"), str) else None)
+    if process["lines"]:
+        _save_process(args.seat_dir, args.key, evidence, process)
+        if ok is False and not process["blocking"]:
+            print(json.dumps({"process": process}, indent=2) if args.dry_run else
+                  "seat_verdict: only process findings about the review prompt; not posted "
+                  f"(see {args.seat_dir / 'process.json'})", file=sys.stdout if args.dry_run else sys.stderr)
+            return EXIT_PROCESS
     if ok and re.match(r"claude-sonnet-5-5(?:$|[-@])", str(model).rsplit("/", 1)[-1],
                        re.I) and not _reported_tests(text):
         print("seat_verdict: pass refused (Sonnet review tests unavailable)", file=sys.stderr)
