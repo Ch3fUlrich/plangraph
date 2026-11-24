@@ -22,6 +22,9 @@ fn directories(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// First bytes of the `CACHEDIR.TAG` cargo writes at the root of every target directory.
+pub(crate) const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
 #[cfg(target_os = "linux")]
 fn cargo_output(root: &Path) -> bool {
     let marker = |name| {
@@ -32,8 +35,7 @@ fn cargo_output(root: &Path) -> bool {
             .flatten()
     };
     !root.join(".git").exists()
-        && (marker("CACHEDIR.TAG")
-            .is_some_and(|tag| tag.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55"))
+        && (marker("CACHEDIR.TAG").is_some_and(|tag| tag.starts_with(CACHEDIR_SIGNATURE))
             || marker(".rustc_info.json").is_some_and(|info| {
                 serde_json::from_slice::<serde_json::Value>(&info)
                     .is_ok_and(|value| value.get("rustc_fingerprint").is_some())
@@ -113,6 +115,10 @@ fn build_units(parent: &Path) -> io::Result<Vec<(String, PathBuf, bool)>> {
     Ok(units)
 }
 
+/// A build-script variant or incremental dir untouched for this long is evictable:
+/// a build that holds one rewrites its mtime well inside the hour.
+pub(crate) const STALE_AFTER: Duration = Duration::from_secs(3600);
+
 /// Includes target-triple/profile layouts; never follows directory symlinks.
 pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBuf, u64)>> {
     let mut profiles = directories(root)?;
@@ -153,9 +159,8 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
             }
         }
     }
-    candidates.retain(|(newest, _, _)| {
-        now.duration_since(*newest).unwrap_or_default() > Duration::from_secs(6 * 3600)
-    });
+    candidates
+        .retain(|(newest, _, _)| now.duration_since(*newest).unwrap_or_default() > STALE_AFTER);
     candidates.sort();
     Ok(candidates
         .into_iter()
@@ -272,6 +277,39 @@ mod tests {
         rows.sort();
         expected.sort();
         assert_eq!(rows, expected);
+    }
+
+    #[test]
+    fn fifty_variants_past_the_hour_go_oldest_first_and_a_running_build_keeps_its_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = SystemTime::now();
+        let mut stale = vec![];
+        for n in 0..50u64 {
+            let age = (61 + n) * 60;
+            let name = format!("pg-worker-core-{n:016x}");
+            let path = tmp.path().join("debug/build").join(&name);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("build-script-build"), [0; 42]).unwrap();
+            let modified = now - Duration::from_secs(age);
+            for p in [path.join("build-script-build"), path.clone()] {
+                fs::File::open(p).unwrap().set_modified(modified).unwrap();
+            }
+            stale.push(path);
+        }
+        // A build still running rewrote its unit minutes ago: never a candidate.
+        let live = tmp
+            .path()
+            .join("debug/build/pg-worker-core-ffffffffffffffff");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("build-script-build"), [0; 42]).unwrap();
+        let rows = candidates(tmp.path(), now).unwrap();
+        // The live unit is the crate's retained newest; all 50 stale ones go, oldest first.
+        let expected: Vec<_> = stale.iter().rev().cloned().collect();
+        assert_eq!(
+            rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
+            expected
+        );
+        assert!(rows.iter().all(|(p, _)| p != &live));
     }
 
     #[test]

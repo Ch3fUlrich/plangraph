@@ -243,3 +243,32 @@ fn check_enforcement(launcher: &Launcher) {
     );
     assert!(!s.path("child.json").exists());
 }
+
+/// A target setting that cannot resolve refuses the launch before the durable "starting" row
+/// and before any run is registered.
+pub fn check_cargo_target(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let out = s
+        .launch("review")
+        .env("PLANGRAPH_CARGO_TARGET_DIR", "~nouser-fixture-zz/x")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(s.normalize(&out.stdout).is_empty());
+    let stderr = s.normalize(&out.stderr);
+    assert!(
+        stderr.contains("fleet-launch: shared cargo target:"),
+        "{stderr}"
+    );
+    assert!(!s.path("child.json").exists());
+    assert!(!s.path("state/fleet-launch-fallback.jsonl").exists());
+    let ledger = records::ledger(&s, "ledger");
+    assert_eq!(ledger.len(), 1, "{ledger:?}");
+    assert_eq!(ledger[0]["result"], "refused");
+    let leftovers = fs::read_dir(s.path("state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("run") && name != "role-locks")
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
