@@ -34,6 +34,14 @@ _DID = re.compile(r"D-[0-9]+")
 _RELAY = re.compile(r"(?:\([^)]*\)\s*)?OPERATOR \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z, relayed by \S")
 
 
+def _releases(decision, key):
+    """True when the cell affirmatively releases *key*: a ``Lifts-Gate`` list naming it, or the
+    recorded statement ``DECISION: the operator step of <key> (...) is lifted``.  A cell that
+    merely names the key ("keep <key> blocked") releases nothing."""
+    statement = re.compile(rf"DECISION: the operator step of {re.escape(key)}(?: \([^)]*\))? is lifted(?!\w)")
+    return key in _lifted_keys(decision) or statement.search(decision) is not None
+
+
 def _field_values(decision, name):
     """The values of the ``;``-separated fields of a decision cell that open with ``name:``."""
     for field in decision.split(";"):
@@ -106,7 +114,8 @@ class KindMixin:
         decision row that lifted the gate: a ``Lifts-Gate: <key> ...`` field whose whole
         value is a list of item keys, not superseded, from an OPERATOR row or with an
         ``Operator-Answer: D-n`` field naming a relayed operator answer (``_RELAY``
-        attribution or BY OPERATOR) that is not superseded either.  A row that only names
+        attribution or BY OPERATOR) that is not superseded either and itself releases the
+        key (a ``Lifts-Gate`` list or ``DECISION: the operator step of <key> ... is lifted``).  A row that only names
         the key may keep the gate closed and does not count.  The decisions are read once,
         before any lock (a batch reads them for all its lifts before its transaction;
         ``snapshot`` is that read); the check under the write is pure, and the item and
@@ -185,5 +194,5 @@ class KindMixin:
             raise Refused("evidence_unverified",
                           f"{decision_id} is not an OPERATOR decision and names no relayed operator answer")
         live(ref_id)
-        if not re.search(rf"(?<![^\s(\"'])({re.escape(key)})(?![\w:.-])", ref.get("decision", "")):
-            raise Refused("evidence_unverified", f"{ref_id} does not name {key}")
+        if not _releases(ref.get("decision", ""), key):
+            raise Refused("evidence_unverified", f"{ref_id} does not release {key}")

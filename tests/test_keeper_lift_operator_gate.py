@@ -42,6 +42,12 @@ ROWS = (
     "| D-34 | demo | Lifts-Gate: demo:GATE | router (sonnet 5.5) | e |\n"
     "| D-35 | demo | Lifts-Gate: Do not lift demo:GATE until reviewed | OPERATOR | 2026-11-24 |\n"
     "| D-36 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-99 | router (sonnet 5.5) | e |\n"
+    # the answer behind an Operator-Answer link must itself release the exact item
+    + "| D-40 | demo | (06:xxZ) OPERATOR 2026-11-24T05:59:56.804Z, relayed by relay-session: \"keep it\" DECISION: keep demo:GATE blocked until review | router (sonnet 5.5) | e |\n"
+    "| D-41 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-40 | router (sonnet 5.5) | e |\n"
+    "| D-42 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-14 | router (sonnet 5.5) | e |\n"
+    "| D-43 | demo | Lifts-Gate: demo:GATE; apply now | OPERATOR | 2026-11-24 |\n"
+    "| D-44 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-43 | router (sonnet 5.5) | e |\n"
     "| D-37 | demo | Lifts-Gate: demo:GATE demo:NEW; apply now | OPERATOR | 2026-11-24 |\n")
 
 
@@ -88,7 +94,9 @@ def test_the_router_clears_the_flags_with_an_operator_decision_and_logs_it(w):
     ("D-31", "evidence_unverified"),      # the relayed answer names another item
     ("D-32", "evidence_unverified"),      # Operator-Answer names a router row that is no relay
     ("D-33", "evidence_unverified"),      # the relayed answer was superseded
-    ("D-36", "evidence_unverified"),      # Operator-Answer names an absent row
+    ("D-36", "evidence_unverified"),
+    ("D-41", "evidence_unverified"),      # a relayed answer that keeps the gate blocked (names the key)
+    ("D-42", "evidence_unverified"),      # an OPERATOR row that keeps it blocked, linked as the answer      # Operator-Answer names an absent row
     ("D-16", "evidence_unverified"),      # prose that mentions the token is no release field
     ("D-17", "evidence_unverified"),      # a release a later row supersedes
     ("D-14", "evidence_unverified"),      # an OPERATOR row that names the key but keeps it blocked
@@ -114,6 +122,15 @@ def test_the_recorded_relay_format_lifts_through_a_structured_router_row(w):
     assert out["decision_id"] == "D-30" and _flags(w) == (False, False)
     (event,) = _lifted(w)
     assert event["payload"] == {"decision_id": "D-30", "operator": False}
+
+
+def test_an_operator_row_with_a_release_field_is_a_valid_answer_behind_the_link(w):
+    assert w.store.lift_operator_gate(w.p("router"), KEY, "D-44")["decision_id"] == "D-44"
+
+
+def test_a_denying_answer_behind_the_link_refuses_over_http_too(w, doors):
+    status, _ = doors.http("router", "POST", "/v1/lift_operator_gate", {"key": KEY, "decision_id": "D-41"})
+    assert status == 400 and _flags(w) == (True, True) and _lifted(w) == []
 
 
 def test_a_release_list_may_name_several_keys(w):
