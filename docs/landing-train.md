@@ -71,7 +71,8 @@ post-merge step. `--plan` is the `--plan-out` file; `--go` is the GO row's `depl
 passing targets it names are installed. `CMD install|read|disable HOST NAME` installs a family, prints one
 run of it as JSON (`is_active`, and for a oneshot `result` and `exec_main_exit_timestamp`) or disables a
 unit; `CMD KEY` receives the keeper `deploy` row as JSON on stdin. A row is written for each item of the
-family's parts only after the first run is good. A failed first run disables the unit's timer, writes no
+family's parts only after the first run is good; a good oneshot service also needs its `.timer` active
+(the keeper gate), so the step reads it, writes its row, and runs shipped timers first. A failed first run disables the unit's timer, writes no
 row and stops the step; later targets are listed as not attempted. `--state` records finished targets, so
 a rerun after an interruption skips them (the hook LAND-RESUMABLE-AFTER-MERGE builds on); a recorded
 failure refuses the rerun until the state file is cleared.
