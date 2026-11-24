@@ -19,6 +19,13 @@ if (mode === "rows") {
   rows.forEach(function (r, i) { ctx.rowIdx.set(r, i); });
   var out = PlanUI.tableSort(rows, { sort: IN.sort }, ctx);
   emit(out.map(function (r) { return r.key; }));
+} else if (mode === "reorder") {
+  var order = ["speed", "efficiency-tokens", "cleanup"];
+  var moved = PlanUI.moveCategory(order, "cleanup", -2);
+  var ranks = IN.rows.map(function (r) { return PlanUI.categoryRank(r); });
+  PlanUI.categoryOrder = moved;
+  emit({ moved: moved, clamped: PlanUI.moveCategory(order, "speed", -5), unknown: PlanUI.moveCategory(order, "zzz", 1),
+         before: ranks, after: IN.rows.map(function (r) { return PlanUI.categoryRank(r); }) });
 } else if (mode === "defaults") {
   var rows = IN.rows, ctx = { rows: rows, projIdx: {}, rowIdx: new Map() };
   rows.forEach(function (r, i) { ctx.rowIdx.set(r, i); });
@@ -83,3 +90,23 @@ emit({ category: rec.category, rank: rec.category_rank, list: vm.categories });
 """
     got = run_node(tmp_path, runner, "x", {"snapshot": str(path), "key": snap["items"][0]["key"]})
     assert got == {"category": "speed", "rank": 0, "list": [{"name": "speed", "rank": 0}]}
+
+
+@need_node
+def test_equal_rank_and_priority_rows_sort_oldest_first_in_the_default_order(tmp_path):
+    rows = [{"key": "new", "priority": 5, "category": "speed", "category_rank": 0, "createdAt": "2026-06-01T00:00:00Z"},
+            {"key": "undated", "priority": 5, "category": "speed", "category_rank": 0},
+            {"key": "old", "priority": 5, "category": "speed", "category_rank": 0, "createdAt": "2026-01-01T00:00:00Z"}]
+    got = run_node(tmp_path, RUNNER, "defaults", {"rows": rows})
+    assert got["sorted"] == ["old", "new", "undated"]
+
+
+@need_node
+def test_the_reorder_control_moves_a_category_and_the_rank_follows_the_working_order(tmp_path):
+    rows = [{"key": "a", "category": "speed", "category_rank": 0},
+            {"key": "b", "category": "cleanup", "category_rank": 2},
+            {"key": "c"}]
+    got = run_node(tmp_path, RUNNER, "reorder", {"rows": rows})
+    assert got["moved"] == ["cleanup", "speed", "efficiency-tokens"]
+    assert got["clamped"] == ["speed", "efficiency-tokens", "cleanup"] and got["unknown"] == got["clamped"]
+    assert got["before"] == [0, 2, 9999] and got["after"] == [1, 0, 9999]

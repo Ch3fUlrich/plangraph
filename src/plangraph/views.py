@@ -271,7 +271,7 @@ def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies
     that principal; *agent* drops what waits on the operator (``operator`` flag
     or an operator kind), so a heartbeat never picks a human step (D-953).
 
-    Sorted by ``(category_rank, -effective priority, -unblocks, estimate_h, key)`` (see :func:`effective_priorities`).  Gates and goals are
+    Sorted by ``(category_rank, -effective priority, created_at (oldest first), -unblocks, estimate_h, key)`` (see :func:`effective_priorities`).  Gates and goals are
     included when open and unblocked: closing them is a valid action.
     """
     idx = index(items)
@@ -286,7 +286,8 @@ def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies
            and not (agent and (it.get("operator") or it.get("kind") in OPERATOR_KINDS))
            and dependencies_ready(it)]
     eff = effective_priorities(items)[0]
-    out.sort(key=lambda it: (it.get("category_rank", NO_CATEGORY_RANK), -eff[it["key"]]["effective"], -ub.get(it["key"], 0), _est(it), it["key"]))
+    out.sort(key=lambda it: (it.get("category_rank", NO_CATEGORY_RANK), -eff[it["key"]]["effective"],
+                           it.get("created_at") or "~", -ub.get(it["key"], 0), _est(it), it["key"]))
     return out
 
 

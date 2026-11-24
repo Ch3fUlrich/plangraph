@@ -32,10 +32,13 @@ __all__ = ["load_dir", "export_yaml"]
 _FIELD_ORDER = (
     "project", "id", "key", "title", "description", "host", "wait", "layer", "role",
     "agent_id", "phase_kind", "fixes", "kind", "track", "owner", "state",
-    "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria", "design_ref",
-    "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
+    "estimate_h", "estimate_src", "depends_on", "corrects", "supersedes", "category",
+    "done_criteria", "design_ref", "evidence_kinds", "operator", "priority", "review_tier",
+    "source", "note",
 )
-_FIELDS = frozenset(_FIELD_ORDER)
+#: ``similar`` answers a near-copy refusal on import; it is never exported (an answer, not state).
+_FIELDS = frozenset(_FIELD_ORDER) | {"similar"}
+_OPTIONAL = ("supersedes", "category")
 _IMPORT_STATES = ("open", "claimed", "in_review")
 REQUIRED = ("project", "id")
 
@@ -122,6 +125,12 @@ def _normalise_item(raw, where):
     else:
         fixes = _qualify(project, fixes)
     kinds = _string_list(raw, "evidence_kinds", key) or ["any"]
+    supersedes = sorted(_qualify(project, k) for k in _string_list(raw, "supersedes", key))
+    category = _string(raw, "category", key)
+    similar = raw.get("similar")
+    if similar is not None and (not isinstance(similar, dict)
+                                or any(not isinstance(k, str) for k in similar)):
+        raise _bad(key, "similar must map item keys to supersedes, depends_on or distinct")
 
     title = _string(raw, "title", key) or ""
     host = check_host(_string(raw, "host", key), key)
@@ -150,12 +159,15 @@ def _normalise_item(raw, where):
         "owner": _string(raw, "owner", key), "state": state,
         "estimate_h": estimate, "estimate_src": _string(raw, "estimate_src", key),
         "depends_on": depends, "corrects": corrects,
+        "supersedes": supersedes, "category": category,
         "done_criteria": _string(raw, "done_criteria", key), "design_ref": design_ref,
         "evidence_kinds": kinds, "operator": operator, "priority": priority,
         "review_tier": review_tier,
         "source": _string(raw, "source", key), "note": note,
     }
-    return {field: values[field] for field in _FIELD_ORDER}
+    out = {field: values[field] for field in _FIELD_ORDER
+           if field not in _OPTIONAL or values[field]}
+    return {**out, "similar": similar} if similar else out
 
 
 def load_dir(path):
@@ -212,6 +224,10 @@ def _read_items(source):
         item["evidence_kinds"] = kinds
         item["operator"] = bool(item.get("operator"))
         item["depends_on"] = sorted(deps.get(item["key"], []))
+        try:
+            item["supersedes"] = json.loads(item.get("supersedes") or "[]")
+        except (ValueError, TypeError):
+            item["supersedes"] = []
         out.append(item)
     return out
 
@@ -222,7 +238,7 @@ def _export_record(item):
         value = item.get(field)
         if value is None and not (field == "wait" and item.get("kind") in KIND_DEFAULTS):
             continue  # a kind with a default wait keeps an explicit null
-        if field == "depends_on":
+        if field in ("depends_on", "supersedes"):
             if not value:
                 continue
             value = sorted(value)

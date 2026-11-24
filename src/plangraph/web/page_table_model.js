@@ -180,7 +180,7 @@
         var cmp = compareValues(sortKeys[k].col, sortKeys[k].dir, itemA.r, itemB.r, safeCtx);
         if (cmp !== 0) return cmp;
       }
-      return itemA.orig - itemB.orig;
+      return PlanUI.ageOrder(itemA.r, itemB.r) || (itemA.orig - itemB.orig);
     });
     return decorated.map(function (d) { return d.r; });
   }

@@ -153,3 +153,13 @@ def test_text_after_a_truncated_title_is_kept_in_the_description():
     (entry,) = mp.parse_questions(text)
     assert "end." in entry.description
     assert entry.title[len("Q: "):] + " " + entry.description == ("word " * 60 + "end.")
+
+
+def test_the_similar_token_carries_near_copy_answers_and_leaves_the_description():
+    import md_sync_parse as mp
+    text = ("| Prio | ID | why | step | where |\n|---|---|---|---|---|\n"
+            "| P1 | OS-901 | Reduce the latency of the ready read | Do it. Similar: routing:EXIST=distinct, OS-5=supersedes | here |\n")
+    entry = mp.parse_questions(text)[0]
+    assert entry.similar == {"routing:EXIST": "distinct", "OS-5": "supersedes"}
+    assert entry.description == "Do it — here"
+    assert mp.parse_questions(text.replace(" Similar: routing:EXIST=distinct, OS-5=supersedes", ""))[0].similar is None

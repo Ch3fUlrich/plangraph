@@ -476,8 +476,8 @@ BEGIN SELECT RAISE(ABORT, 'criteria amendments are append-only'); END;
 #: ITEM-CATEGORY-RANKED: the ranked category list as data.  Project ``*`` is the
 #: default list; a project that ranks its own gets its own rows.  A category
 #: is added by one verb, so the start list below is only the seed.
-START_CATEGORIES = ("speed", "efficiency-tokens", "efficiency-quality", "reliability",
-                    "security", "network", "ui-ux", "feature", "cleanup")
+START_CATEGORIES = ("speed", "efficiency-tokens", "efficiency-quality", "bug-fix", "reliability",
+                    "telemetry", "security", "network", "planning", "ui-ux", "feature", "cleanup")
 CATEGORIES_TABLE = """
 CREATE TABLE IF NOT EXISTS categories (
     project TEXT NOT NULL,

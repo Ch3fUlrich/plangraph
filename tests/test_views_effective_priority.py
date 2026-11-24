@@ -58,3 +58,11 @@ def test_an_item_without_a_category_rank_sorts_after_every_ranked_one():
     last = {**_it("RANKED", 1), "category_rank": 7}
     none = _it("NONE", 10)          # no rank key at all: the offline snapshot door
     assert [i["key"] for i in views.ready([none, last, top])] == ["d:TOP", "d:RANKED", "d:NONE"]
+
+
+def test_equal_rank_and_priority_rows_are_ordered_by_age_before_unblocks():
+    old = {**_it("OLD", 5), "created_at": "2026-01-01T00:00:00Z"}
+    new = {**_it("NEW", 5), "created_at": "2026-06-01T00:00:00Z"}
+    blocker = _it("TOP", 1, ["NEW"])          # NEW unblocks more, yet OLD is older
+    undated = _it("UNDATED", 5)
+    assert [i["key"] for i in views.ready([undated, new, old, blocker])][:3] == ["d:OLD", "d:NEW", "d:UNDATED"]

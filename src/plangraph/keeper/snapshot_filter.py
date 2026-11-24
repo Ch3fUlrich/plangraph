@@ -19,7 +19,7 @@ FIELDS = tuple((
     "run_ids created_at done_at reviewed merged answer incidents supersedes superseded_by "
     "effective_priority priority_via category category_rank"
 ).split()) + tuple(MODEL_FIELDS)
-BLOCKS = ("items", "aliases", "activity", "decision_text", "progress")
+BLOCKS = ("items", "aliases", "activity", "decision_text", "progress", "categories")
 PARAMS = ("open", "closed", "since", "fields", "blocks")
 _INSTANT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z\Z")
 
@@ -92,7 +92,8 @@ def build(store, now, **params):
     if values["blocks"] is not None:
         for name in BLOCKS:
             if name not in values["blocks"]:
-                del body[name]
+                for key in (("categories", "uncategorised", "category_overrides") if name == "categories" else (name,)):
+                    body.pop(key, None)
     body["filter"] = {**values, "total": total, "returned": len(body.get("items", []))}
     return body
 
@@ -113,21 +114,19 @@ def _selected(item, done_at, values):
     return not values["since"] or bool(stamps) and max(map(_instant, stamps)) >= _instant(values["since"])
 
 
-def _category_block(store, items):
-    """The ranked list and the uncategorised count, once any item has a category."""
-    if not any(item.get("category") for item in items):
-        return {}
+def _category_block(store, items, table):
+    """The ranked list and the uncategorised count (also when no item has a category yet)."""
     live = [i for i in items if i["state"] not in ("done", "cancelled")]
-    own = {p: store._category_list(p) for p in sorted({r["project"] for r in store.conn.execute(
-        "SELECT DISTINCT project FROM categories WHERE project<>'*'")})}
-    return {"categories": [{"name": n, "rank": r} for r, n in enumerate(store._category_list("*"))],
+    own = {p: store._category_order(table, p) for p in sorted(table) if p != "*"}
+    return {"categories": [{"name": n, "rank": r} for r, n in enumerate(store._category_order(table, "*"))],
             "uncategorised": sum(1 for i in live if not i.get("category")),
             **({"category_overrides": own} if own else {})}
 
 
 def _full(store, now, values=None):
     from .store_read import _decode_models, _decode_run_ids
-    items = store._rank_items(store._all_items())
+    table = store._category_table()
+    items = store._rank_items(store._all_items(), table)
     corrected, fixed = {}, {}
     superseded = _superseded_map({item["key"]: item for item in items})
     eff = views.effective_priorities(items)[0]
@@ -209,4 +208,4 @@ def _full(store, now, values=None):
             "activity": store._activity(now),
             "decision_text": store._decision_text(selected, now, evidence),
             "progress": progress(progress_items),
-            **_category_block(store, items)}   # PROGRESS-PANEL: the page's static panel
+            **_category_block(store, items, table)}   # PROGRESS-PANEL: the page's static panel

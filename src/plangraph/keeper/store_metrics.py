@@ -21,10 +21,13 @@ _METRICS_MAX_ROWS = 1000
 _CATEGORY_RULES = tuple((c, re.compile(p, re.I)) for c, p in (
     ("security", r"SECURITY|SECRET|CREDENTIAL|SCRUB|\bAUTH"),
     ("network", r"NETWORK|PROXY|\bDNS\b|FIREWALL|\bTLS\b|\bNET-"),
+    ("telemetry", r"TELEMETRY|METRIC|COUNTER|DASHBOARD|\bALERT"),
     ("speed", r"SPEED|LATENCY|PERF|SLOW|THROUGHPUT|FASTER|\bFAST\b"),
     ("efficiency-tokens", r"TOKEN|COST|PROMPT-SIZE"),
     ("efficiency-quality", r"QUALITY|ACCURACY|PRECISION"),
     ("reliability", r"RELIAB|FLAKE|FLAKY|WATCHDOG|RETRY|RECOVER|STUCK|HANG|DEAD-SESSION"),
+    ("bug-fix", r"\bBUG|DEFECT|REGRESSION|\bFIX\b|-FIX\b"),
+    ("planning", r"\bPLAN|ROADMAP|DESIGN|RESEARCH"),
     ("ui-ux", r"\bUI\b|\bUX\b|WEB-|\bPAGE\b|TABLE-VIEW"),
     ("cleanup", r"CLEANUP|REMOVE|PRUNE|DEAD-CODE|ARCHIVE")))
 _START_KINDS = frozenset(("planner", "expert", "judge", "answer", "worker_leg"))
@@ -157,28 +160,30 @@ class MetricsMixin:
                     (self._iso(now)[:10], name, float(n), "count", self._iso(now)))
 
     # ------------------------------------------------ ITEM-CATEGORY-RANKED
+    def _category_table(self):
+        """``{project: [names in rank order]}`` for ``*`` and each project with its own rows: one query."""
+        rows = {}
+        for r in self.conn.execute("SELECT project, name, rank FROM categories ORDER BY rank, name"):
+            rows.setdefault(r["project"], []).append(r["name"])
+        return rows
+
+    @staticmethod
+    def _category_order(table, project):
+        """Ranked names of *project*: its own order first, then every shared category it has
+        not placed (a category added later is available everywhere)."""
+        default, own = table.get("*", []), table.get(project, []) if project != "*" else []
+        return own + [n for n in default if n not in own]
+
     def _category_list(self, project):
-        """Ranked category names of *project* (its own list, else the default ``*`` list)."""
-        for scope in (project, "*"):
-            names = [r["name"] for r in self.conn.execute(
-                "SELECT name FROM categories WHERE project=? ORDER BY rank, name", (scope,))]
-            if names:
-                return names
-        return []
+        return self._category_order(self._category_table(), project)
 
-    def _category_ranks(self):
-        """``{project: {name: rank}}`` for every project that ranks its own list, plus ``*``."""
-        out = {}
-        for r in self.conn.execute("SELECT project, name, rank FROM categories"):
-            out.setdefault(r["project"], {})[r["name"]] = r["rank"]
-        return out
-
-    def _rank_items(self, items):
+    def _rank_items(self, items, table=None):
         """Give each item ``category_rank``: its place in its project's list, none last."""
-        ranks = self._category_ranks()
+        table = self._category_table() if table is None else table
+        ranks = {p: {n: i for i, n in enumerate(self._category_order(table, p))} for p in {*table, "*"}}
         for item in items:
-            table = ranks.get(item["project"]) or ranks.get("*") or {}
-            item["category_rank"] = table.get(item.get("category"), len(table))
+            mine = ranks.get(item["project"]) or ranks["*"]
+            item["category_rank"] = mine.get(item.get("category"), len(mine))
         return items
 
     def categories(self, principal, project=None):
@@ -227,14 +232,21 @@ class MetricsMixin:
         return self._run(principal, "rank_categories", None, rank)
 
     def backfill_categories(self, principal, project, dry_run=False):
-        """Set the category of live uncategorised items by key and track rules;
-        the unmatched keys are returned for a model pass with a sampled check."""
+        """Set the category of OPEN uncategorised items by key and track rules.
+
+        Items in any other state are listed under ``skipped`` (an active item's
+        definition is not the backfill's to edit); an edit that is refused is listed
+        under ``failed``, so the result names what happened to every item; the
+        ``unmatched`` keys are for a model pass with a sampled check."""
         def fill(now):
             self._require_role(principal, "router")
-            chosen, unmatched = {}, []
+            chosen, unmatched, skipped, failed = {}, [], {}, {}
             for item in self._all_items():
                 if (item["project"] != project or item["state"] in ("done", "cancelled")
                         or item.get("category") or item["kind"] in ("goal", "gate")):
+                    continue
+                if item["state"] != "open":
+                    skipped[item["key"]] = item["state"]
                     continue
                 text = f"{item['id']} {item.get('track') or ''}"
                 match = next((c for c, rule in _CATEGORY_RULES if rule.search(text)), None)
@@ -243,29 +255,42 @@ class MetricsMixin:
                 else:
                     unmatched.append(item["key"])
             if not dry_run:
-                for key, name in chosen.items():
-                    self._edit(principal, key, {"category": name}, now)
-            return {"set": chosen, "unmatched": unmatched, "dry_run": bool(dry_run)}
+                for key, name in list(chosen.items()):
+                    try:
+                        self._edit(principal, key, {"category": name}, now)
+                    except Refused as exc:
+                        failed[key] = f"{exc.code}: {exc.msg}"
+                        del chosen[key]
+            return {"set": chosen, "unmatched": unmatched, "skipped": skipped,
+                    "failed": failed, "dry_run": bool(dry_run)}
         return self._run(principal, "backfill_categories", None, fill)
 
     def _record_categories(self, items, now):
-        """EXPERIMENT (rule 3.76): per-day ready and done counts per category, and a
-        finding for a category whose ready items waited over 48 h with no item done."""
+        """EXPERIMENT (rule 3.76): per-day ready counts and verified merges per category
+        (explicit zeros), and a finding for a category whose ready items waited over
+        48 h with no verified merge.  An item is ready since its last dependency was
+        done (its creation when it has none)."""
         stamp, day, cutoff = self._iso(now), self._iso(now)[:10], self._iso(now - 48 * 3600)
-        done = self._snapshot_run_meta()[1]
+        created, done, _, merged_keys = self._snapshot_run_meta()
         cat = {i["key"]: i.get("category") for i in items}
-        waiting, ready, merged, recent = {}, {}, {}, set()
+        names = sorted({*self._category_list("*"), *(c for c in cat.values() if c)})
+        ready, merged = {n: 0 for n in names}, {n: 0 for n in names}
+        recent, waiting = set(), {}
         for item in views.ready(items):
             name = item.get("category")
-            if name:
-                ready[name] = ready.get(name, 0) + 1
-                if (item.get("created_at") or stamp) <= cutoff:
-                    waiting.setdefault(name, item["key"])
+            if not name:
+                continue
+            ready[name] += 1
+            since = max([item.get("created_at") or created.get(item["key"]) or stamp]
+                        + [done[d] for d in item.get("depends_on") or [] if d in done])
+            if since <= cutoff and (name not in waiting or since < waiting[name][0]):
+                waiting[name] = (since, item["key"])
         for key, ts in done.items():
-            if cat.get(key) and ts[:10] == day:
-                merged[cat[key]] = merged.get(cat[key], 0) + 1
-            if cat.get(key) and ts >= cutoff:
-                recent.add(cat[key])
+            if cat.get(key) and key in merged_keys:       # a verified commit merge, not any closure
+                if ts[:10] == day:
+                    merged[cat[key]] += 1
+                if ts >= cutoff:
+                    recent.add(cat[key])
         for kind, counts in (("ready", ready), ("merged", merged)):
             for name, value in counts.items():
                 self.conn.execute(
@@ -273,12 +298,12 @@ class MetricsMixin:
                     " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
                     "computed_at=excluded.computed_at",
                     (day, f"category_{kind}.{name}", float(value), "reap", stamp))
-        starved = {key: name for name, key in waiting.items() if name not in recent}
+        starved = {key: name for name, (_, key) in waiting.items() if name not in recent}
         code = "category_starved"
         previous = {r["key"] for r in self.conn.execute(
             "SELECT key FROM alerts WHERE code=? AND state='open'", (code,))}
         for key, name in starved.items():
             self._alerts_raise_finding(
-                key, code, f"category {name}: ready items waited over 48h with none done", now)
+                key, code, f"category {name}: ready items waited over 48h with no verified merge", now)
         for key in sorted(previous - starved.keys()):
             self._alerts_resolve(key, now, code=code)

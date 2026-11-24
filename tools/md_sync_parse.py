@@ -3,8 +3,8 @@ import re
 import unicodedata
 from collections import namedtuple
 
-Question = namedtuple("Question", "id kind title description heading wait choices parent options_malformed",
-                      defaults=(None, None, False))
+Question = namedtuple("Question", "id kind title description heading wait choices parent options_malformed similar",
+                      defaults=(None, None, False, None))
 Answer = namedtuple("Answer", "id decisions date text")
 Skipped = namedtuple("Skipped", "id reason")
 
@@ -275,6 +275,21 @@ _PARENT_RE = re.compile(r"(?:^|\s)Parent:\s*(?P<key>[A-Za-z0-9_-]+(?::[A-Za-z0-9
                         re.IGNORECASE)
 
 
+#: optional ``Similar: KEY=supersedes|depends_on|distinct, ...`` token at the end of the step cell:
+#: the answers to a near-copy refusal of the keeper (ITEM-SUPERSEDE-GATE); stripped from the description.
+_SIMILAR_RE = re.compile(r"(?:^|\s)Similar:\s*(?P<pairs>[A-Za-z0-9_:.-]+=[a-z_]+(?:\s*,\s*[A-Za-z0-9_:.-]+=[a-z_]+)*)\s*\.?\s*$",
+                         re.IGNORECASE)
+
+
+def parse_similar(step):
+    """``(step without the Similar token, {key: answer} or None)``."""
+    match = _SIMILAR_RE.search(step or "")
+    if not match:
+        return step, None
+    pairs = [p.split("=", 1) for p in match.group("pairs").split(",")]
+    return step[:match.start()].rstrip(" .;:"), {k.strip(): v.strip().lower() for k, v in pairs}
+
+
 def has_options_block(step):
     """Whether the step cell carries an ``Options:`` block (valid or not)."""
     return bool(re.search(r"(?i)(?:^|\s)Options:", step or ""))
@@ -352,6 +367,7 @@ def parse_questions(text):
         step, choices = parse_options(step, why)
         malformed = has_options_block(raw_step) and choices is None
         step, token_parent = parse_parent(step)
+        step, similar = parse_similar(step)
         parent = (parent_cell.strip() if parent_cell and parent_cell.strip()
                   else token_parent)
         if step and where:
@@ -361,7 +377,7 @@ def parse_questions(text):
         wait = (_KIND_CELLS[kind_cell] if kind_cell
                 else _classify_wait(ident, kind, full_title, why))
         tables.append(Question(ident, kind, full_title, description, heading, wait, choices,
-                               parent, malformed))
+                               parent, malformed, similar))
     return tables + bullets
 
 

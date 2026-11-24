@@ -241,3 +241,47 @@ def test_stored_decision_only_import_still_requires_router(tmp_path, who):
         assert world.store._item("demo:LEGACY") is None
     finally:
         world.close()
+
+
+LONG_TITLE = "Reduce the feeder ready latency by caching the decision book between reads"
+
+
+def _plan_dir(tmp_path, *items):
+    import yaml
+    directory = tmp_path / "plan"
+    directory.mkdir()
+    (directory / "t.yaml").write_text(yaml.safe_dump({"items": list(items)}), encoding="utf-8")
+    return directory
+
+
+def _item(ident, **extra):
+    return {"project": "demo", "id": ident, "title": f"title {ident}", "kind": "lane", "track": "T0",
+            "owner": "o", "estimate_h": 1, "done_criteria": "c", "evidence_kinds": ["any"], **extra}
+
+
+def test_supersedes_and_category_survive_yaml_export_and_import(tmp_path):
+    world = World(tmp_path)
+    world.store.create_items(world.p("router"), [
+        defn("OLD"), defn("NEW", supersedes=["demo:OLD"], category="speed"),
+        defn("GOAL", ["OLD", "NEW"], kind="goal")])
+    export_yaml(world.store, tmp_path / "out")
+    items = {it["key"]: it for it in load_dir(tmp_path / "out")}
+    assert items["demo:NEW"]["supersedes"] == ["demo:OLD"] and items["demo:NEW"]["category"] == "speed"
+    assert "supersedes" not in items["demo:OLD"] and "category" not in items["demo:OLD"]
+    assert "supersedes" not in (items["demo:NEW"].get("note") or "")        # not folded into the note
+
+
+def test_a_plan_import_of_a_near_copy_is_refused_until_answered(tmp_path):
+    world = World(tmp_path)
+    world.store.create_items(world.p("router"), [
+        defn("ORIG", title=LONG_TITLE, description=LONG_TITLE), defn("GOAL", ["ORIG"], kind="goal")])
+    goal = {"project": "demo", "id": "COPYGOAL", "title": "Copy goal", "kind": "goal", "owner": "o",
+            "depends_on": ["COPY"], "evidence_kinds": ["any"]}
+    copy = _item("COPY", title=LONG_TITLE + " today", description=LONG_TITLE)
+    with pytest.raises(Refused) as exc:
+        world.store.import_items(world.p("router"), load_dir(_plan_dir(tmp_path, copy, goal)))
+    assert "demo:ORIG" in exc.value.msg
+    (tmp_path / "again").mkdir()
+    answered = _plan_dir(tmp_path / "again", {**copy, "similar": {"demo:ORIG": "distinct"}}, goal)
+    world.store.import_items(world.p("router"), load_dir(answered))
+    assert world.store.show(world.p("router"), "demo:COPY")["state"] == "open"

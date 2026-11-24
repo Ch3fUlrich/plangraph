@@ -306,3 +306,35 @@ def test_projector_tables_are_counted_and_copied_verbatim(source, cfg_path, caps
         import psycopg
         with psycopg.connect(DSN, autocommit=True) as pg:
             pg.execute(f'DROP SCHEMA IF EXISTS "{db_pg.derive_schema(cfg.db)}" CASCADE')
+
+
+def test_a_fresh_targets_seed_categories_are_replaced_not_counted_as_data(tmp_path):
+    from plangraph.keeper.schema import CATEGORIES_DDL, START_CATEGORIES
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(CATEGORIES_DDL)
+    copy_to_pg._clear_seed_categories(conn)
+    assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0
+    conn.executescript(CATEGORIES_DDL)
+    conn.execute("UPDATE categories SET rank=rank+100 WHERE name='speed'")      # the owner ranked it
+    copy_to_pg._clear_seed_categories(conn)
+    assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == len(START_CATEGORIES)
+
+
+@needs_pg
+def test_apply_copies_the_source_category_rows_over_the_seed(source, cfg_path, capsys):
+    from plangraph.keeper import db_pg
+    cfg = config.load_config(cfg_path)
+    with sqlite3.connect(source) as raw:
+        raw.execute("INSERT INTO categories(project,name,rank) VALUES('demo','speed',0)")
+    try:
+        assert copy(cfg_path, "--apply", "--src", str(source)) == 0
+        conn = kdb.open_db(cfg.db, backend="postgres", dsn=DSN)
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == len(
+                13)
+        finally:
+            conn.close()
+    finally:
+        import psycopg
+        with psycopg.connect(DSN, autocommit=True) as raw:
+            raw.execute(f'DROP SCHEMA IF EXISTS "{db_pg.derive_schema(cfg.db)}" CASCADE')

@@ -306,11 +306,24 @@
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";
     box.appendChild(bar);
     if ((vm.categories || []).length) {
-      var own = vm.categoryOverrides || {};
-      var rk = el("p", "tt-rank", "Default category order: " + vm.categories.map(function (c) { return c.name; }).join(" > ") +
-        Object.keys(own).map(function (p) { return "; " + p + ": " + own[p].join(" > "); }).join("") +
-        (vm.uncategorised ? " (" + vm.uncategorised + " without category, last)" : ""));
+      /* The page is read-only (no fetch): the buttons reorder the table at once and show the verb that stores the order. */
+      var cats = global.PlanUI.categoryOrder || vm.categories.map(function (c) { return c.name; });
+      var rk = el("div", "tt-rank");
       rk.setAttribute("aria-label", "Category rank order");
+      rk.appendChild(el("span", null, "Default category order:"));
+      cats.forEach(function (name) {
+        var chip = el("span", "tt-chip", " " + name + " ");
+        [["◀", -1, "Move " + name + " up"], ["▶", 1, "Move " + name + " down"]].forEach(function (m) {
+          var mb = el("button", "tt-btn", m[0]); mb.type = "button"; mb.setAttribute("aria-label", m[2]);
+          mb.addEventListener("click", function () { global.PlanUI.categoryOrder = global.PlanUI.moveCategory(cats, name, m[1]); render(); });
+          chip.appendChild(mb);
+        });
+        rk.appendChild(chip);
+      });
+      var own = vm.categoryOverrides || {};
+      Object.keys(own).forEach(function (p) { rk.appendChild(el("span", null, "; " + p + ": " + own[p].join(" > "))); });
+      if (vm.uncategorised) rk.appendChild(el("span", null, " (" + vm.uncategorised + " without category, last)"));
+      if (global.PlanUI.categoryOrder) rk.appendChild(el("code", null, " pg rank-categories PROJECT " + cats.join(" ")));
       box.appendChild(rk);
     }
     if (global.PlanUI.TableCtl) box.appendChild(global.PlanUI.TableCtl.bar(all, render));

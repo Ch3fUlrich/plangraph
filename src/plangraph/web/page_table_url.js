@@ -150,10 +150,26 @@
   };
 
   /* A row's place in the keeper's ranked category list (none and unknown sort last). */
-  PlanUI.categoryRank = function (r) { return r.category_rank == null ? 9999 : Number(r.category_rank) || 0; };
+  PlanUI.categoryRank = function (r) {
+    var o = PlanUI.categoryOrder;       /* the reorder control's working order, when the user moved a category */
+    if (o) { var i = r.category ? o.indexOf(r.category) : -1; return i < 0 ? 9999 : i; }
+    return r.category_rank == null ? 9999 : Number(r.category_rank) || 0;
+  };
+  /* A copy of *order* with *name* moved by *delta* places (clamped); unknown names change nothing. */
+  PlanUI.moveCategory = function (order, name, delta) {
+    var out = order.slice(), i = out.indexOf(name), j = Math.max(0, Math.min(out.length - 1, i + delta));
+    if (i < 0) return out;
+    out.splice(i, 1); out.splice(j, 0, name);
+    return out;
+  };
   /* The shared order: category rank, then effective priority (highest first). */
   PlanUI.rankOrder = function (a, b) {
-    return (PlanUI.categoryRank(a) - PlanUI.categoryRank(b)) || (PlanUI.effectivePriority(b) - PlanUI.effectivePriority(a));
+    return (PlanUI.categoryRank(a) - PlanUI.categoryRank(b)) || (PlanUI.effectivePriority(b) - PlanUI.effectivePriority(a)) || PlanUI.ageOrder(a, b);
+  };
+  /* Oldest first; an undated row after the dated ones. */
+  PlanUI.ageOrder = function (a, b) {
+    var x = a.createdAt || a.created_at || "~", y = b.createdAt || b.created_at || "~";
+    return x < y ? -1 : x > y ? 1 : 0;
   };
 
   PlanUI.tableUrlEncode = tableUrlEncode;

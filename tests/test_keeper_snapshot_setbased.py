@@ -76,7 +76,10 @@ def _legacy_snapshot(store, now):
             "aliases": {a["old"]: a["new"] for a in store._aliases()},
             "activity": store._activity(now),
             "decision_text": store._decision_text(items, now),
-            "progress": progress(out)}
+            "progress": progress(out),
+            "categories": [{"name": n, "rank": r} for r, n in enumerate(store._category_list("*"))],
+            "uncategorised": sum(1 for i in store._all_items() if i["state"] not in ("done", "cancelled")
+                                 and not i.get("category"))}
 
 
 class _Counting:

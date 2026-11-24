@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from keeper_util import World, defn
+from keeper_util import World, defn, to_done
 from plangraph.keeper.errors import Refused
 
-START = ["speed", "efficiency-tokens", "efficiency-quality", "reliability", "security",
-         "network", "ui-ux", "feature", "cleanup"]
+START = ["speed", "efficiency-tokens", "efficiency-quality", "bug-fix", "reliability", "telemetry",
+         "security", "network", "planning", "ui-ux", "feature", "cleanup"]
 
 
 @pytest.fixture
@@ -56,7 +56,7 @@ def test_changing_the_rank_list_changes_the_order(w):
 
 def test_a_new_category_is_added_by_one_verb_without_a_code_change(w):
     w.store.add_category(w.p("router"), "docs")
-    assert w.store.categories(w.p("reader"))["categories"][-1] == {"name": "docs", "rank": 9}
+    assert w.store.categories(w.p("reader"))["categories"][-1] == {"name": "docs", "rank": len(START)}
     _seed(w, D=(5, "docs"), F=(5, "feature"))
     assert _order(w) == ["demo:F", "demo:D"]
     with pytest.raises(Refused):
@@ -120,6 +120,12 @@ def test_reap_records_the_per_category_experiment_counts_and_alerts_a_starved_ca
     assert "category speed" in found["demo:A"] and "category security" in found["demo:B"]
 
 
+def test_an_uncategorised_snapshot_still_carries_the_list_and_the_count(w):
+    _seed(w, A=(1, None))
+    snap = w.store._snapshot(w.clock())
+    assert [c["name"] for c in snap["categories"]] == START and snap["uncategorised"] == 2
+
+
 def test_the_snapshot_names_a_project_that_ranks_its_own_list(w):
     _seed(w, A=(1, "speed"))
     assert "category_overrides" not in w.store._snapshot(w.clock())
@@ -127,3 +133,47 @@ def test_the_snapshot_names_a_project_that_ranks_its_own_list(w):
     snap = w.store._snapshot(w.clock())
     assert snap["category_overrides"]["demo"][:2] == ["cleanup", "speed"]
     assert [c["name"] for c in snap["categories"]][:2] == ["speed", "efficiency-tokens"]   # the default list
+
+
+def test_a_category_added_later_is_available_in_a_project_with_its_own_order(w):
+    w.store.rank_categories(w.p("router"), "demo", ["cleanup", "speed"])
+    w.store.add_category(w.p("router"), "docs")
+    names = [c["name"] for c in w.store.categories(w.p("reader"), "demo")["categories"]]
+    assert names[:2] == ["cleanup", "speed"] and names[-1] == "docs" and len(names) == len(START) + 1
+    _seed(w, D=(5, "docs"), S=(5, "speed"))                       # define with it is accepted
+    assert _order(w) == ["demo:S", "demo:D"]
+
+
+def test_backfill_names_every_item_and_does_not_half_apply_over_a_claimed_one(w):
+    w.store.create_items(w.p("router"), [
+        defn("SPEED-A"), defn("SPEED-B"), defn("BUG-C"),
+        defn("GOAL", ["SPEED-A", "SPEED-B", "BUG-C"], kind="goal")])
+    w.store.claim(w.p("l1main"), "demo:SPEED-B")
+    got = w.store.backfill_categories(w.p("router"), "demo")
+    assert got["set"] == {"demo:SPEED-A": "speed", "demo:BUG-C": "bug-fix"}
+    assert got["skipped"] == {"demo:SPEED-B": "claimed"} and got["failed"] == {}
+    assert w.store.show(w.p("router"), "demo:SPEED-A")["category"] == "speed"
+    assert w.store.show(w.p("router"), "demo:SPEED-B").get("category") is None
+
+
+def test_telemetry_writes_zeros_counts_verified_merges_and_measures_the_ready_wait(w):
+    w.store.create_items(w.p("router"), [defn("A", category="speed"),
+                                         defn("B", ["A"], category="security"),
+                                         defn("GOAL", ["B"], kind="goal")])
+    w.clock.advance(100 * 3600)
+    to_done(w, "demo:A")                         # B becomes ready only now
+    w.store.reap(w.p("system"))
+    metrics = {r["metric"]: r["value"] for r in w.conn.execute(
+        "SELECT metric, value FROM metrics WHERE metric LIKE 'category_%'")}
+    assert metrics["category_ready.security"] == 1.0 and metrics["category_ready.speed"] == 0.0
+    assert metrics["category_ready.network"] == 0.0 and metrics["category_merged.speed"] == 0.0   # no verified merge
+    found = [f for f in w.store.alerts(w.p("router"))["findings"] if f["code"] == "category_starved"]
+    assert found == []      # B was created 100 h ago but has been ready for seconds
+    w.clock.advance(49 * 3600)
+    w.store.reap(w.p("system"))
+    assert [f["key"] for f in w.store.alerts(w.p("router"))["findings"]
+            if f["code"] == "category_starved"] == ["demo:B"]
+    w.store.cancel(w.p("router"), "demo:B", "x")                 # the last ready item leaves
+    w.store.reap(w.p("system"))
+    assert w.conn.execute("SELECT value FROM metrics WHERE metric='category_ready.security'"
+                          " ORDER BY computed_at DESC LIMIT 1").fetchone()[0] == 0.0

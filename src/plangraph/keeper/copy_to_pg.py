@@ -188,11 +188,24 @@ def _advance_identities(conn, tables):
                              (table, col, top))
 
 
+def _clear_seed_categories(conn):
+    """A fresh target already holds the start category list (migration 29); replace it
+    with the source's rows.  A list the target's owner changed is not a seed: it stays
+    and makes the target non-empty."""
+    from .schema import START_CATEGORIES
+    rows = [tuple(r) for r in conn.execute(
+        "SELECT project, name, rank FROM categories ORDER BY rank, name")]
+    if rows == [("*", name, rank) for rank, name in enumerate(START_CATEGORIES)]:
+        conn.execute("DELETE FROM categories")
+
+
 def _apply(src, tables, source_counts, source_head, cfg_db, opts):
     conn = kdb.open_db(cfg_db, create=True, **opts)       # creates / migrates the schema
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if "categories" in tables:
+                _clear_seed_categories(conn)
             filled = [t for t in tables if _count(conn, t)]
             if filled:
                 raise CopyError("target is not empty (" + ", ".join(filled)

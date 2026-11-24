@@ -242,7 +242,9 @@ def contract_sort(records, spec, proj_idx):
             d = one_cmp(s["col"], s.get("dir", "asc"), x, y, proj_idx)
             if d:
                 return d
-        return order[x["key"]] - order[y["key"]]
+        # ties: oldest first (an undated row last), then the ctx index
+        ax, ay = x.get("createdAt") or "~", y.get("createdAt") or "~"
+        return (-1 if ax < ay else 1 if ax > ay else 0) or order[x["key"]] - order[y["key"]]
 
     return [r["key"] for r in sorted(records, key=functools.cmp_to_key(cmp))]
 

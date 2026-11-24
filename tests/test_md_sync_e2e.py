@@ -383,3 +383,29 @@ def test_sync_md_import_questions_are_question_kind_and_land_in_answers(world, s
     snap = {i["key"]: i for i in world.store.snapshot(reader)["items"]}
     assert snap["routing:Q-ALPHA"]["answer"]["decision_id"] == alpha["decision_id"]
     assert snap["routing:Q-GHOST"]["answer"] is None
+
+
+TITLE = "Reduce the feeder ready latency by caching the decision book between reads"
+TABLE = ("| Prio | ID | why | step | where |\n|---|---|---|---|---|\n"
+         "| P1 | OS-900 | " + TITLE + " | Do the work.{similar} | the keeper |\n")
+
+
+def test_md_sync_refuses_a_near_copy_until_the_markdown_answers_it(world, srv, token, site):
+    r = world.p("router")
+    world.store.create_items(r, [defn("EXIST", project="routing", title="Q: " + TITLE, description=TITLE,
+                                      under="routing:GOAL")])
+    (site / "QUESTIONS.md").write_text(TABLE.format(similar=""), encoding="utf-8")
+    (site / "EMPTY-ANSWERS.md").write_text("", encoding="utf-8")
+    rc, out, err = sync(site, srv, token, "--apply", answers="EMPTY-ANSWERS.md")
+    assert "routing:EXIST" in out + err and "distinct" in out + err and "refused routing:OS-900" in out
+    assert rows(world, "SELECT COUNT(*) FROM items WHERE key='routing:OS-900'")[0][0] == 0
+    # the same Markdown retried regenerates the same refusal ...
+    rc, out, err = sync(site, srv, token, "--apply", answers="EMPTY-ANSWERS.md")
+    assert "refused routing:OS-900" in out and rows(world, "SELECT COUNT(*) FROM items WHERE key='routing:OS-900'")[0][0] == 0
+    # ... until the row carries its answer
+    (site / "QUESTIONS.md").write_text(TABLE.format(similar=" Similar: routing:EXIST=distinct"), encoding="utf-8")
+    rc, out, err = sync(site, srv, token, "--apply", answers="EMPTY-ANSWERS.md")
+    assert rows(world, "SELECT COUNT(*) FROM items WHERE key='routing:OS-900'")[0][0] == 1, out + err
+    created = [e for e in __import__("plangraph.keeper.events", fromlist=["x"]).read_events(world.conn)
+               if e["key"] == "routing:OS-900" and e["type"] == "item_created"]
+    assert created[0]["payload"]["similar"] == {"routing:EXIST": "distinct"}

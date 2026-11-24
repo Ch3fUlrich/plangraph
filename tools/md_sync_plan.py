@@ -192,6 +192,8 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                 lane["wait"] = want_create
             if desc:
                 lane["description"] = desc
+            if getattr(entry, "similar", None):      # answers to a near-copy refusal (project-qualified)
+                lane["similar"] = {k if ":" in k else f"{project}:{k}": v for k, v in entry.similar.items()}
             choices = _masked_choices(entry_choices, plan)
             if choices:
                 lane["choices"] = choices
