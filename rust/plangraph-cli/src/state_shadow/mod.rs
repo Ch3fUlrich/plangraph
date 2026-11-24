@@ -165,6 +165,21 @@ fn scan(
     Ok(())
 }
 
+/// The settings `state wait` reads before it starts; the host install dry run checks the same ones.
+pub const REQUIRED_ENV: [&str; 2] = ["PG_URL", "PG_TOKEN_FILE"];
+/// The variable that moves the role configuration file.
+pub const CONFIG_ENV: &str = "PLANGRAPH_STATE_CONFIG";
+/// The configuration fields that name paths which must already exist (the others are created).
+pub const CONFIG_READS: [&str; 2] = ["transcript", "data_repo"];
+
+/// The role configuration file: the configured path, else the role's file below the user config.
+pub fn config_path(home: &std::path::Path, role: &str, configured: Option<&str>) -> PathBuf {
+    configured.map(PathBuf::from).unwrap_or_else(|| {
+        home.join(".config/plangraph/state-shadow")
+            .join(format!("{role}.json"))
+    })
+}
+
 pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
     let [wait, role_flag, role, rest @ ..] = args else {
         return Err("usage: plangraph state wait --role ROLE [--once]".into());
@@ -176,13 +191,7 @@ pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
     {
         return Err("usage: plangraph state wait --role ROLE [--once]".into());
     }
-    let config_path = env
-        .get("PLANGRAPH_STATE_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            home.join(".config/plangraph/state-shadow")
-                .join(format!("{role}.json"))
-        });
+    let config_path = config_path(home, role, env.get(CONFIG_ENV).map(String::as_str));
     let config: Config = serde_json::from_slice(
         &std::fs::read(&config_path).map_err(|_| "shadow configuration unavailable")?,
     )

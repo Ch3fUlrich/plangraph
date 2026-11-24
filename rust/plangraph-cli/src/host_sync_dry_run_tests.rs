@@ -269,3 +269,74 @@ fn a_bare_exec_name_is_found_in_the_manager_search_path_or_the_unit_path() {
     assert!(check("c.service").is_empty());
     assert_eq!(check("d.service"), ["binary ./relative"]);
 }
+
+fn shadow_host(home: &Path, env: &str, config: Option<&str>) {
+    put(home, ".local/bin/plangraph", "", 0o755);
+    put(
+        home,
+        ".config/plangraph/state-shadow/routing.env",
+        env,
+        0o600,
+    );
+    if let Some(config) = config {
+        put(
+            home,
+            ".config/plangraph/state-shadow/routing.json",
+            config,
+            0o600,
+        );
+    }
+}
+
+#[test]
+fn the_checked_in_state_shadow_unit_needs_its_token_config_and_read_paths() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/systemd");
+    let instance = format!("plangraph-state-shadow{}routing.service", '@');
+    let needs = plan(&instance, &root, None).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path().display();
+    // Nothing configured: the unit file names its env file, and the program's own settings are required too.
+    shadow_host(home.path(), "OTHER=1\n", None);
+    let found = missing(&needs, home.path());
+    for want in [
+        "env PG_TOKEN_FILE",
+        "env PG_URL",
+        "file ~/.config/plangraph/state-shadow/routing.json",
+    ] {
+        assert!(found.contains(&want.to_owned()), "{found:?}");
+    }
+    // Everything named, but the token, the transcript and the data repository are absent.
+    let env = format!("PG_URL=http://k\nPG_TOKEN_FILE={h}/token\n");
+    let config = format!("{{\"transcript\": \"{h}/t.jsonl\", \"data_repo\": \"{h}/data\"}}");
+    shadow_host(home.path(), &env, Some(&config));
+    assert_eq!(
+        missing(&needs, home.path()),
+        ["path ~/data", "path ~/t.jsonl", "path ~/token"]
+    );
+    put(home.path(), "token", "x", 0o600);
+    put(home.path(), "t.jsonl", "", 0o600);
+    fs::create_dir_all(home.path().join("data")).unwrap();
+    assert!(missing(&needs, home.path()).is_empty());
+    // A configuration that is not JSON is a missing file, and PLANGRAPH_STATE_CONFIG moves it.
+    put(
+        home.path(),
+        ".config/plangraph/state-shadow/routing.json",
+        "not json",
+        0o600,
+    );
+    assert_eq!(
+        missing(&needs, home.path()),
+        ["file ~/.config/plangraph/state-shadow/routing.json"]
+    );
+    let moved = format!("{env}PLANGRAPH_STATE_CONFIG={h}/other.json\n");
+    shadow_host(home.path(), &moved, None);
+    put(home.path(), "other.json", &config, 0o600);
+    assert!(missing(&needs, home.path()).is_empty());
+}
+
+#[test]
+fn a_plain_state_wait_unit_name_is_not_needed_for_other_units() {
+    let dir = units(&[("a.service", "[Service]\nExecStart=/bin/true\n")]);
+    let needs = plan("a.service", dir.path(), None).unwrap();
+    assert!(needs.programs.is_empty());
+}
