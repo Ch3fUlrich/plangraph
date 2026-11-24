@@ -1,0 +1,1 @@
+- **LE-ATTEMPT-ROWS-MISSING-ON-MOST-SPAWN-PATHS:** one fixture per spawn path (seat review, spawner implement, native-codex ok and crash, fleet-launch session, hand writer and review, workstation host) now pins that its terminal run projects one attempt row with task class, leg, harness, host and exit class.
