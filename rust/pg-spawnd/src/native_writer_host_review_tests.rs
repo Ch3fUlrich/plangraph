@@ -236,6 +236,7 @@ fn native_sonnet_pass_requires_reported_tests() {
 /// A PATH whose `plangraph` stands in for the shared exact-head fast checks (the real command is
 /// tested in plangraph-cli): it publishes a receipt through the same files and refs the producer
 /// uses, so the host's use of it (run, read green, copy to its stamp, push) is what is tested.
+#[cfg(unix)]
 pub(super) fn fake_plangraph_path(dir: &Path) -> String {
     let bin = dir.join("fake-bin");
     fs::create_dir_all(&bin).unwrap();
@@ -249,8 +250,15 @@ pub(super) fn fake_plangraph_path(dir: &Path) -> String {
     format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
 }
 
+/// Windows has no shell to stand in for the command: the host tests that need it are unix-only.
+#[cfg(not(unix))]
+pub(super) fn fake_plangraph_path(_: &Path) -> String {
+    std::env::var("PATH").unwrap()
+}
+
 /// The fast-check receipt is the shared producer's (structured, in the shared state and as one
 /// parentless commit), and the push sends the head and its per-lane receipt ref in one atomic push.
+#[cfg(unix)]
 pub(super) fn assert_shared_receipt_and_push(host: &mut Host, dir: &Path, head: &str) {
     let cwd = host.cwd.clone();
     let receipt = fs::read_to_string(host.stamp(head).unwrap()).unwrap();

@@ -1,4 +1,5 @@
-//! `plangraph wait` against a fake `gh` on PATH and real git remotes.
+//! `plangraph wait` against a fake `gh` on PATH and real git remotes (a shell stands in for `gh`: unix only).
+#![cfg(unix)]
 use std::{fs, path::Path, process::Command};
 
 /// A `gh` that answers `run list` and `pr view` and fails on anything else, logging every call.

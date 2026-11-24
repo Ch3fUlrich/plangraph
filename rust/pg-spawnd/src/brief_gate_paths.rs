@@ -64,7 +64,7 @@ mod tests {
     fn the_list_equals_what_python_reads_from_this_tree() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let ours = read(root.to_str().unwrap()).unwrap().unwrap();
-        let out = std::process::Command::new("python3")
+        let out = crate::test_python::command()
             .current_dir(root.join("tools"))
             .args([
                 "-c",

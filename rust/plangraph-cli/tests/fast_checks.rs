@@ -493,6 +493,7 @@ fn a_receipt_pushed_with_the_lane_head_is_read_green_from_a_second_clone() {
 /// moves alone, and the consumer (`--stamp-green`) then refuses that head. The guarantee is
 /// scoped to the managed atomic publisher; nothing on the receiving side of a plain push can
 /// enforce more.
+#[cfg(unix)]
 #[test]
 fn an_atomic_push_moves_both_refs_or_neither_and_a_split_lane_has_no_green_receipt() {
     let dir = tempfile::tempdir().unwrap();
