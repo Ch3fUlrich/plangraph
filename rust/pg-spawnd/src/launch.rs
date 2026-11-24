@@ -23,6 +23,9 @@ pub(crate) struct LaunchSpec {
     pub stdin: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
+    /// The review build slot the adapter allocated for this launch; the supervisor owns it.
+    #[serde(default)]
+    pub review_slot: Option<PathBuf>,
     pub warnings: Option<Vec<String>>,
     pub events: Option<Vec<serde_json::Map<String, Value>>>,
 }

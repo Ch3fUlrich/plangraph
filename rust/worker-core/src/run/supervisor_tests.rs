@@ -32,6 +32,7 @@ fn spec(dir: &Path, n: usize, script: &str) -> RunSpec {
         events: vec![],
         finish: None,
         allow_shas: Default::default(),
+        review_slot: None,
     }
 }
 fn until(mut f: impl FnMut() -> bool) {
@@ -362,16 +363,23 @@ fn cancellation_during_finish_blocks_continuation_and_releases_slot() {
     assert_eq!(s.counts().running, 0);
 }
 
+fn review_slot(dir: &Path, name: &str) -> std::path::PathBuf {
+    let slot = dir
+        .join("cargo-target-pool")
+        .join(format!("slot-review-{name}"));
+    std::fs::create_dir_all(slot.join("target")).unwrap();
+    std::fs::write(slot.join("target/object"), "build").unwrap();
+    slot
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_review_slot_stays_leased_while_its_run_lives_and_goes_with_it() {
     let d = tempfile::tempdir().unwrap();
-    let slot = d.path().join("cargo-target-pool/slot-review-seat");
-    std::fs::create_dir_all(slot.join("target")).unwrap();
-    std::fs::write(slot.join("target/object"), "build").unwrap();
+    let slot = review_slot(d.path(), "seat");
     let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
     let mut run = spec(d.path(), 70, HOLD);
-    run.env = vec![("CARGO_TARGET_DIR".into(), slot.join("target").into())];
+    run.review_slot = Some(slot.clone());
     s.start(run).unwrap();
     until(|| s.counts().running == 1);
     // Hygiene's exclusive lease on the slot is refused while the run is alive.
@@ -381,25 +389,94 @@ fn a_review_slot_stays_leased_while_its_run_lives_and_goes_with_it() {
     std::fs::write(d.path().join("go"), "").unwrap();
     assert!(s.wait_finished("run-70", Duration::from_secs(2)));
     until(|| !slot.exists());
-    assert!(crate::cargo_cache::try_exclusive_lease(&slot)
+    // The slot's name belongs to this run alone, so its lock file is removed with it.
+    until(|| {
+        !d.path()
+            .join("cargo-target-pool/slot-review-seat.plangraph-lock")
+            .exists()
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_slot_hygiene_is_reclaiming_is_refused_and_the_child_never_starts() {
+    let d = tempfile::tempdir().unwrap();
+    let slot = review_slot(d.path(), "reclaimed");
+    let reclaiming = crate::cargo_cache::try_exclusive_lease(&slot)
         .unwrap()
-        .is_some());
+        .unwrap();
+    let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
+    let mut run = spec(d.path(), 71, "touch child-ran");
+    run.review_slot = Some(slot.clone());
+    s.start(run).unwrap();
+    assert!(s.wait_finished("run-71", Duration::from_secs(2)));
+    let record = read(&s, 71);
+    assert_eq!(record["status"], "failed", "{record}");
+    assert!(
+        record["reason"].as_str().unwrap().contains("review slot"),
+        "{record}"
+    );
+    assert!(
+        !d.path().join("child-ran").exists(),
+        "the child must not start unleased"
+    );
+    drop(reclaiming);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_retry_that_switches_slots_leases_its_own_and_both_slots_go_with_the_run() {
+    let d = tempfile::tempdir().unwrap();
+    let (first_slot, second_slot) = (review_slot(d.path(), "one"), review_slot(d.path(), "two"));
+    let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
+    let mut second = spec(d.path(), 72, HOLD);
+    second.review_slot = Some(second_slot.clone());
+    let mut first = spec(d.path(), 72, "exit 0");
+    first.review_slot = Some(first_slot.clone());
+    first.finish = Some(Box::new(move |_, _| Some(second)));
+    s.start(first).unwrap();
+    until(|| {
+        s.counts().running == 1
+            && d.path()
+                .join("cargo-target-pool/slot-review-two.plangraph-lock")
+                .exists()
+    });
+    // The second leg runs in its own slot, which hygiene cannot take; the first leg's is free.
+    assert!(crate::cargo_cache::try_exclusive_lease(&second_slot)
+        .unwrap()
+        .is_none());
+    std::fs::write(d.path().join("go"), "").unwrap();
+    assert!(s.wait_finished("run-72", Duration::from_secs(3)));
+    until(|| !first_slot.exists() && !second_slot.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_directory_the_run_did_not_allocate_is_never_leased_or_removed() {
+    let d = tempfile::tempdir().unwrap();
+    // CARGO_TARGET_DIR has the shape of a review slot's target, but no slot is declared owned.
+    let slot = review_slot(d.path(), "foreign");
+    let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
+    let mut run = spec(d.path(), 73, "exit 0");
+    run.env = vec![("CARGO_TARGET_DIR".into(), slot.join("target").into())];
+    s.start(run).unwrap();
+    assert!(s.wait_finished("run-73", Duration::from_secs(2)));
+    assert!(slot.join("target/object").exists());
 }
 
 #[test]
 fn only_a_review_slot_of_a_pool_is_recognized() {
-    use crate::cargo_pool::review_slot_of;
-    let ok = Path::new("/c/cargo-target-pool/slot-review-a/target");
-    assert_eq!(
-        review_slot_of(ok),
-        Some("/c/cargo-target-pool/slot-review-a".into())
-    );
+    use crate::cargo_pool::is_review_slot;
+    assert!(is_review_slot(Path::new(
+        "/c/cargo-target-pool/slot-review-a"
+    )));
     for other in [
         "/c/cargo-target-pool/slot-1",
-        "/c/cargo-target/slot-review-a/target",
-        "/c/cargo-target-pool/slot-review-a",
-        "/tmp/plain/target",
+        "/c/cargo-target/slot-review-a",
+        "/c/cargo-target-pool/slot-review-a/target",
+        "/c/cargo-target-pool",
+        "/tmp/plain",
     ] {
-        assert_eq!(review_slot_of(Path::new(other)), None, "{other}");
+        assert!(!is_review_slot(Path::new(other)), "{other}");
     }
 }

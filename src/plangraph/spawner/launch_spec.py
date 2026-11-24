@@ -226,9 +226,11 @@ def build(request: dict) -> dict:
                 if name.lower() not in {key.lower() for key in env}:
                     raise WindowsEnvIncomplete(name)
         events.append(dict(event='launch_spec', python_job_id=job.job_id))
+        slot = allocated_review_slot(service.runner._ocdata_dirs.get(job.job_id), env)
         if request['dry_run']:
-            drop_review_slot(env)  # nothing will run, so nothing will release the slot later
-        return dict(argv=argv, cwd=os.path.abspath(request['cwd']), env=env,
+            drop_review_slot(slot)  # nothing will run, so nothing will release the slot later
+            slot = None
+        return dict(review_slot=slot, argv=argv, cwd=os.path.abspath(request['cwd']), env=env,
                     prompt=job.task_prompt,  # REMOVE-AT-R10: Rust redacts the final prompt.
                     stdin=payload.decode('utf-8') if payload is not None else None,
                     warnings=[w for w in rec['warnings'] if isinstance(w, str)], events=events)
@@ -236,11 +238,22 @@ def build(request: dict) -> dict:
         tempfile.tempdir = previous
 
 
-def drop_review_slot(env):
-    """Remove the review seat's build slot named by ``env``; a real launch hands it to the supervisor."""
+def allocated_review_slot(allocated, env):
+    """The review build slot this launch allocated (recorded by the allocator, not guessed from env), or None."""
+    if not allocated:
+        return None
+    slot = Path(allocated)
     target = Path(env.get('CARGO_TARGET_DIR') or '/')
-    if target.parent.name.startswith('slot-review-') and target.parent.parent.name.endswith('-pool'):
-        shutil.rmtree(target.parent, ignore_errors=True)
+    named = slot.name.startswith('slot-review-') and slot.parent.name.endswith('-pool')
+    return str(slot) if named and target.parent == slot else None
+
+
+def drop_review_slot(slot):
+    """Remove the review slot this launch allocated; only a path ``allocated_review_slot`` returned is removed."""
+    if slot:
+        shutil.rmtree(slot, ignore_errors=True)
+        # The slot's name is unique to this launch and its lease is closed, so its lock file goes too.
+        Path(slot + '.plangraph-lock').unlink(missing_ok=True)
 
 
 class WindowsEnvIncomplete(Exception):

@@ -307,3 +307,25 @@ fn review_seats_leave_a_temp_shared_target_for_the_default_pool_and_hygiene_list
         .collect();
     assert_eq!(names, ["slot-review-a", "slot-review-b"]);
 }
+
+#[test]
+fn orphan_review_slot_locks_go_only_when_old_and_without_their_slot() {
+    use pg_worker_core::cargo_pool::reap_orphan_review_locks;
+    let pool = tempfile::tempdir().unwrap();
+    let lock = |name: &str| pool.path().join(format!("{name}.plangraph-lock"));
+    let touch = |path: &std::path::Path, age_secs: u64| {
+        fs::write(path, "").unwrap();
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+        fs::File::open(path).unwrap().set_modified(past).unwrap();
+    };
+    touch(&lock("slot-review-old-orphan"), 7200);
+    touch(&lock("slot-review-young-orphan"), 60);
+    touch(&lock("slot-review-live"), 7200);
+    fs::create_dir(pool.path().join("slot-review-live")).unwrap();
+    touch(&lock("slot-1"), 7200);
+    assert_eq!(reap_orphan_review_locks(pool.path()), 1);
+    assert!(!lock("slot-review-old-orphan").exists());
+    for kept in ["slot-review-young-orphan", "slot-review-live", "slot-1"] {
+        assert!(lock(kept).exists(), "{kept}");
+    }
+}

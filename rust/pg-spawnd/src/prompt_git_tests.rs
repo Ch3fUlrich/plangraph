@@ -73,6 +73,7 @@ fn review_fixture() -> (
     let mut repos = std::collections::BTreeMap::new();
     repos.insert("repo".into(), repo);
     let launch = crate::launch::LaunchSpec {
+        review_slot: None,
         argv: vec!["native".into()],
         cwd: root.clone(),
         env: Default::default(),
@@ -421,6 +422,7 @@ fn inline_only_tool_mode_inlines_without_env_and_refuses_oversized_with_reason()
 
     // Within leg limit: inlines full diff with NO-tools header even when enabled=false.
     let mut fits = crate::launch::LaunchSpec {
+        review_slot: None,
         argv: vec!["opencode".into()],
         cwd: root.clone(),
         env: Default::default(),
@@ -444,6 +446,7 @@ fn inline_only_tool_mode_inlines_without_env_and_refuses_oversized_with_reason()
     // Exceeds leg limit: refuses with named prompt_too_large reason, never cuts silently.
     for tokens in [5_u64, 150_u64] {
         let mut oversized = crate::launch::LaunchSpec {
+            review_slot: None,
             argv: vec!["opencode".into()],
             cwd: root.clone(),
             env: Default::default(),

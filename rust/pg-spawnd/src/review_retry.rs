@@ -324,6 +324,7 @@ fn advance(
             group,
         )),
         allow_shas,
+        review_slot: launch.review_slot,
     })
 }
 
@@ -406,6 +407,7 @@ mod tests {
         let args = json!({"role":"review","card":{}});
         let args = args.as_object().unwrap().clone();
         let mut launch = crate::launch::LaunchSpec {
+            review_slot: None,
             argv: vec!["opencode".into()],
             cwd: state.path().into(),
             env: Default::default(),

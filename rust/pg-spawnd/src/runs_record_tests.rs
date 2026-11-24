@@ -33,6 +33,7 @@ fn spawned_writer_and_seat_publish_effort_and_route() {
                     "task_class":"small_change","bucket":"S1","risk_band":"high"}}),
                 |_, _| {
                     Ok(crate::launch::LaunchSpec {
+                        review_slot: None,
                         argv: vec!["/bin/cat".into()],
                         cwd: state.path().to_path_buf(),
                         env: BTreeMap::new(),
@@ -118,6 +119,7 @@ fn missing_seat_events(role: &str, dry: bool, capture_refused: bool) {
             events: vec![],
             finish: None,
             allow_shas: Default::default(),
+            review_slot: None,
         })
         .unwrap();
     let args = json!({"prompt":"p","card":{"item_key":"invalid"},"dry_run":dry,
@@ -134,6 +136,7 @@ fn missing_seat_events(role: &str, dry: bool, capture_refused: bool) {
             assert_eq!(request["writer_families"], json!(["openai"]));
             assert_eq!(request["review_of"], "run-writer");
             Ok(crate::launch::LaunchSpec {
+                review_slot: None,
                 argv: vec!["/bin/true".into()],
                 cwd: dir.clone(),
                 env: BTreeMap::new(),
@@ -435,6 +438,7 @@ fn empty_prompt_and_metadata() {
     let dir = std::env::temp_dir().join(new_run_id());
     let secret = format!("sk-{}", "a".repeat(24));
     let mut launch = crate::launch::LaunchSpec {
+        review_slot: None,
         argv: vec!["fake".into()],
         cwd: dir.clone(),
         env: BTreeMap::new(),

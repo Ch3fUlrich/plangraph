@@ -264,21 +264,44 @@ def test_review_seat_never_builds_under_tmp_and_cleanup_enumerates_where_it_does
         tmp_path, monkeypatch, "/tmp/plangraph-review-shared-cargo-target", False)
     target = Path(env["CARGO_TARGET_DIR"])
     assert target == home / ".cache/plangraph/cargo-target-pool/slot-review-job1/target"
-    assert not str(target).startswith("/tmp/")
+    # Not beside the configured /tmp directory, wherever pytest put its own temp root.
+    assert "plangraph-review-shared-cargo-target-pool" not in str(target)
     assert target.parent in host_ready._shared_cache_roots()
     leases["job1"].close()
 
 
-def test_a_dry_launch_drops_the_review_slot_it_created(tmp_path):
-    from plangraph.spawner.launch_spec import drop_review_slot
+def test_only_the_allocated_review_slot_is_returned_and_dropped(tmp_path):
+    from plangraph.spawner.launch_spec import allocated_review_slot, drop_review_slot
 
     slot = tmp_path / "cargo-target-pool" / "slot-review-job1"
     (slot / "target").mkdir(parents=True)
-    drop_review_slot({"CARGO_TARGET_DIR": str(slot / "target")})
-    assert not slot.exists()
-    # Anything that is not a review slot of a pool stays.
-    plain = tmp_path / "plain" / "target"
-    plain.mkdir(parents=True)
-    drop_review_slot({"CARGO_TARGET_DIR": str(plain)})
-    drop_review_slot({})
-    assert plain.exists()
+    env = {"CARGO_TARGET_DIR": str(slot / "target")}
+    assert allocated_review_slot(str(slot), env) == str(slot)
+    # What the allocator did not record is never claimed: no record, another path, a plain dir.
+    assert allocated_review_slot(None, env) is None
+    assert allocated_review_slot(str(tmp_path / "other"), env) is None
+    plain = tmp_path / "plain"
+    (plain / "target").mkdir(parents=True)
+    assert allocated_review_slot(str(plain), {"CARGO_TARGET_DIR": str(plain / "target")}) is None
+    drop_review_slot(None)
+    assert plain.exists() and slot.exists()
+    lock = Path(str(slot) + ".plangraph-lock")
+    lock.write_text("")
+    drop_review_slot(allocated_review_slot(str(slot), env))
+    assert not slot.exists() and not lock.exists()
+
+
+def test_the_native_adapters_tempdir_does_not_hide_the_hosts_tmpdir(tmp_path, monkeypatch):
+    """launch_spec swaps tempfile.tempdir for its run directory; the pool choice must not follow it."""
+    import tempfile
+
+    from plangraph.spawner.host_ready_source import review_pool
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TMPDIR", "/srv/plangraph-fixture/tmp")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "state/launch/run"))
+    primary = Path("/srv/plangraph-fixture/tmp/cargo-target")
+    assert review_pool(primary) == tmp_path / "home/.cache/plangraph/cargo-target-pool"
+    # A target outside every temp root keeps its own pool.
+    elsewhere = Path("/srv/plangraph-fixture/cache/cargo-target")
+    assert review_pool(elsewhere) == Path("/srv/plangraph-fixture/cache/cargo-target-pool")

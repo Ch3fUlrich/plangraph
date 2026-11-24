@@ -21,6 +21,7 @@ fn spec() -> RunSpec {
         events: vec![],
         finish: None,
         allow_shas: Default::default(),
+        review_slot: None,
     }
 }
 fn runtime(dir: &std::path::Path) -> std::sync::Arc<Runtime> {

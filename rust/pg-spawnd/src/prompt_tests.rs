@@ -2,6 +2,7 @@ use super::*;
 use serde_json::json;
 fn launch(prompt: &str) -> LaunchSpec {
     LaunchSpec {
+        review_slot: None,
         argv: vec!["native".into()],
         cwd: ".".into(),
         env: BTreeMap::new(),

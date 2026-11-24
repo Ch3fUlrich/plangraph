@@ -30,6 +30,9 @@ pub struct RunSpec {
     pub events: Vec<Value>,
     pub finish: Option<FinishHook>,
     pub allow_shas: BTreeSet<String>,
+    /// The `slot-review-*` directory this run allocated for its build, if any: leased for each
+    /// attempt and removed with the run. Nothing else is ever deleted for it.
+    pub review_slot: Option<PathBuf>,
 }
 pub struct Config {
     pub state_dir: PathBuf,
@@ -230,31 +233,7 @@ pub fn start(rt: &Arc<Runtime>, mut spec: RunSpec) -> Result<RunHandle, StartErr
         .name(id.clone())
         .spawn(move || {
             let (spec, record) = work.lock().unwrap().take().unwrap();
-            // A review seat's build slot stays leased from queueing to the end of its run, so a
-            // trim never takes a running build; once the run has ended the slot goes with it.
-            let slot = spec
-                .env
-                .iter()
-                .find(|(key, _)| key == "CARGO_TARGET_DIR")
-                .and_then(|(_, target)| {
-                    crate::cargo_pool::review_slot_of(std::path::Path::new(target))
-                });
-            #[cfg(target_os = "linux")]
-            let lease = slot
-                .as_deref()
-                .and_then(|slot| crate::cargo_cache::writer_lease(slot).ok());
-            let (state, run_id) = (runtime.cfg.state_dir.clone(), spec.run_id.clone());
             super::monitor::monitor(runtime, spec, record, flag);
-            if let Some(slot) = slot {
-                let finished = RunRecord::read(&state, &run_id)
-                    .map(|r| crate::sweep_runs::finished(&r.to_value()).unwrap_or(false))
-                    .unwrap_or(false);
-                if finished {
-                    let _ = std::fs::remove_dir_all(slot);
-                }
-            }
-            #[cfg(target_os = "linux")]
-            drop(lease);
         })
         .map_err(|e| {
             if let Some((mut spec, mut r)) = pending.lock().unwrap().take() {

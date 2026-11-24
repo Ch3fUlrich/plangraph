@@ -110,8 +110,9 @@ def legacy_cache_roots():
 
 
 def _under_system_temp(path):
-    import tempfile
-    roots = {Path(root).resolve() for root in ('/tmp', '/var/tmp', tempfile.gettempdir())}
+    """Under /tmp, /var/tmp or the host's TMPDIR. The launch adapter swaps ``tempfile.tempdir`` for
+    its own run directory, so only the environment names the host's temp root (as hygiene sees it)."""
+    roots = {Path(root).resolve() for root in ('/tmp', '/var/tmp', os.environ.get('TMPDIR') or '/tmp')}
     resolved = Path(path).resolve()
     return any(resolved == root or root in resolved.parents for root in roots)
 
