@@ -237,25 +237,123 @@ fn scheduled_close_refreshes_then_reads_each_project_page_in_order() {
     keeper.assert_finished();
 }
 
+const SKIP: &str = "merge-close: skip, merge index refresh still running (next run retries)\n";
+
+fn zero_wait() -> ScheduleTiming {
+    ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400))
+}
+
 #[test]
-fn scheduled_close_stops_at_the_refresh_deadline_without_paging() {
+fn a_refresh_still_running_after_the_wait_skips_the_close_pass() {
     let control = Script::new([
         (json!({"refresh":"start"}), json!({"scan":"running"})),
         (json!({"refresh":"status"}), json!({"scan":"running"})),
     ]);
     let keeper = Script::new([]);
-    let error = run_scheduled_with(
+    let outcome =
+        run_scheduled_with(&keeper, &control, None, true, None, false, zero_wait()).unwrap();
+    assert_eq!(outcome.text, SKIP);
+    control.assert_finished();
+    keeper.assert_finished();
+}
+
+#[test]
+fn reporting_modes_keep_a_still_running_refresh_as_an_error() {
+    for deployment_only in [false, true] {
+        let control = Script::new([
+            (json!({"refresh":"start"}), json!({"scan":"running"})),
+            (json!({"refresh":"status"}), json!({"scan":"running"})),
+        ]);
+        let keeper = Script::new([]);
+        let error = run_scheduled_with(
+            &keeper,
+            &control,
+            None,
+            false,
+            None,
+            deployment_only,
+            zero_wait(),
+        )
+        .unwrap_err();
+        assert_eq!(error, "merge index refresh is still running");
+        keeper.assert_finished();
+    }
+}
+
+#[test]
+fn other_refresh_errors_still_fail_the_pass() {
+    let refused = "keeper request refused or unreachable";
+    for steps in [
+        vec![(json!({"refresh":"start"}), json!(refused))],
+        vec![
+            (json!({"refresh":"start"}), json!({"scan":"running"})),
+            (json!({"refresh":"status"}), json!(refused)),
+        ],
+        vec![
+            (json!({"refresh":"start"}), json!({"scan":"running"})),
+            (json!({"refresh":"status"}), json!({"scan":"broken"})),
+        ],
+    ] {
+        let last = steps.last().unwrap().1.clone();
+        let control = Script(RefCell::new(steps.into()));
+        let keeper = Script::new([]);
+        let error = run_scheduled_with(&keeper, &control, None, true, None, false, zero_wait())
+            .unwrap_err();
+        assert_eq!(
+            error,
+            last.as_str()
+                .unwrap_or("keeper reply has no valid merge index status")
+        );
+        control.assert_finished();
+    }
+}
+
+#[test]
+fn a_refresh_that_finishes_inside_the_wait_continues_the_close() {
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            json!({"apply":true,"project":"demo"}),
+            json!({"closed":[{"key":"demo:A"}],"merged_not_done":0}),
+        ),
+    ]);
+    let timing = ScheduleTiming::new(Duration::from_secs(30), Duration::from_secs(400));
+    let outcome =
+        run_scheduled_with(&keeper, &keeper, None, true, Some("demo"), false, timing).unwrap();
+    assert!(outcome.text.starts_with("closed\tdemo:A\t\n"));
+    assert!(!outcome.text.contains("skip"));
+    keeper.assert_finished();
+}
+
+#[test]
+fn expiry_before_first_close_skips_without_retrying() {
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            json!({"apply":true,"project":"demo"}),
+            json!("merge_index_expired"),
+        ),
+        // Recovery refreshes once; the index is still being rebuilt by another run.
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"running"})),
+    ]);
+    let outcome = run_scheduled_with(
         &keeper,
-        &control,
+        &keeper,
         None,
         true,
-        None,
+        Some("demo"),
         false,
-        ScheduleTiming::new(Duration::ZERO, Duration::from_secs(400)),
+        zero_wait(),
     )
-    .unwrap_err();
-    assert_eq!(error, "merge index refresh is still running");
-    control.assert_finished();
+    .unwrap();
+    assert!(outcome.text.ends_with(SKIP), "{}", outcome.text);
+    assert_eq!(outcome.text.matches("skip,").count(), 1);
+    assert!(!outcome.text.contains("closed\t"));
+    // The script has no further page call: the expired cursor was not retried.
     keeper.assert_finished();
 }
 
@@ -370,6 +468,8 @@ fn expiry_after_a_close_exits_successfully_if_refresh_cannot_finish() {
     .unwrap();
     assert!(out.text.contains("closed\tdemo:A\t\n"));
     assert!(out.text.contains("continue\t2 projects remaining\t"));
+    assert!(out.text.ends_with(SKIP), "{}", out.text);
+    assert_eq!(out.text.matches("skip,").count(), 1);
     keeper.assert_finished();
 }
 
@@ -511,6 +611,21 @@ fn scheduled_preview_fails_if_the_selected_project_scan_is_incomplete() {
         "incomplete merge scan: {\"demo\": \"origin fetch failed\"}"
     );
     keeper.assert_finished();
+}
+
+#[test]
+fn reconcile_keeps_a_still_running_refresh_as_an_error_and_writes_no_state() {
+    use plangraph_cli::merge_close::reconcile_with;
+    let control = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"running"})),
+    ]);
+    let keeper = Script::new([]);
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("watch.json");
+    let error = reconcile_with(&keeper, &control, None, &state, Duration::ZERO).unwrap_err();
+    assert_eq!(error, "merge index refresh is still running");
+    assert!(!state.exists());
 }
 
 #[test]

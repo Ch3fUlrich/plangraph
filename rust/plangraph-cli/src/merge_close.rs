@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 const MAX_TIME_SECS: u32 = 300;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(95);
 const REFRESH_STILL_RUNNING: &str = "merge index refresh is still running";
+const SKIP_LINE: &str = "merge-close: skip, merge index refresh still running (next run retries)";
 // Leave time for process overhead and logging before the service's 420 s timeout.
 const PASS_BUDGET: Duration = Duration::from_secs(400);
 const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
@@ -262,6 +263,10 @@ impl Transport for DeadlineKeeper<'_> {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
         self.call_with(Instant::now(), |keeper| keeper.call(verb, body))
     }
+
+    fn call_until(&self, verb: &str, body: Option<Value>, until: Instant) -> Result<Value, String> {
+        self.call_by(Instant::now(), until, |keeper| keeper.call(verb, body))
+    }
 }
 
 impl DeadlineKeeper<'_> {
@@ -270,7 +275,18 @@ impl DeadlineKeeper<'_> {
         now: Instant,
         request: impl FnOnce(SlowKeeper<'_>) -> Result<Value, String>,
     ) -> Result<Value, String> {
-        let remaining = self.deadline.saturating_duration_since(now);
+        self.call_by(now, self.deadline, request)
+    }
+
+    /// Run one request that must end by the earlier of `until` and the pass deadline.
+    fn call_by(
+        &self,
+        now: Instant,
+        until: Instant,
+        request: impl FnOnce(SlowKeeper<'_>) -> Result<Value, String>,
+    ) -> Result<Value, String> {
+        let deadline = self.deadline.min(until);
+        let remaining = deadline.saturating_duration_since(now);
         if remaining.is_zero() {
             return Err(MERGE_INDEX_EXPIRED.into());
         }
@@ -282,7 +298,7 @@ impl DeadlineKeeper<'_> {
             max_time_secs: request_limit.min(remaining_secs) as u32,
         });
         match result {
-            Err(_) if remaining_secs <= request_limit && Instant::now() >= self.deadline => {
+            Err(_) if remaining_secs <= request_limit && Instant::now() >= deadline => {
                 Err(MERGE_INDEX_EXPIRED.into())
             }
             result => result,
@@ -327,7 +343,13 @@ pub fn run_scheduled_with(
         refresh_timeout,
         deadline,
     } = timing;
-    refresh_index(control, refresh_timeout)?;
+    if refresh_index(control, refresh_timeout)? == Refresh::Pending {
+        return if apply {
+            Ok(skipped(String::new(), 0))
+        } else {
+            Err(REFRESH_STILL_RUNNING.into())
+        };
+    }
     let mut pass = ClosePass {
         deployment_count: Some(0),
         ..ClosePass::default()
@@ -344,6 +366,7 @@ pub fn run_scheduled_with(
             .map(|project| project.as_str().ok_or("keeper project name is not text"))
             .collect::<Result<_, _>>()?
     };
+    let mut refresh_pending = false;
     for (index, project) in projects.iter().enumerate() {
         let result = pass.collect(seats, apply, Some(project), |body| {
             let call = || {
@@ -357,12 +380,10 @@ pub fn run_scheduled_with(
                     if apply && error == MERGE_INDEX_EXPIRED && Instant::now() < deadline =>
                 {
                     let remaining = deadline.saturating_duration_since(Instant::now());
-                    if let Err(reason) = refresh_index(control, refresh_timeout.min(remaining)) {
-                        return if reason == REFRESH_STILL_RUNNING {
-                            Err(error)
-                        } else {
-                            Err(reason)
-                        };
+                    // An expired cursor is never retried on the old index.
+                    if refresh_index(control, refresh_timeout.min(remaining))? == Refresh::Pending {
+                        refresh_pending = true;
+                        return Err(error);
                     }
                     call()
                 }
@@ -370,14 +391,25 @@ pub fn run_scheduled_with(
             }
         });
         if let Err(error) = result {
-            if !apply || !pass.closed_any || error != MERGE_INDEX_EXPIRED {
+            let skip = apply && refresh_pending;
+            if !apply || error != MERGE_INDEX_EXPIRED || !(pass.closed_any || skip) {
                 return Err(error);
             }
-            let remaining = projects.len() - index;
-            let _ = writeln!(
-                pass.text,
-                "continue\t{remaining} projects remaining\t{error}"
-            );
+            if pass.closed_any {
+                let remaining = projects.len() - index;
+                let _ = writeln!(
+                    pass.text,
+                    "continue\t{remaining} projects remaining\t{error}"
+                );
+            }
+            if skip {
+                // Keep the rows the earlier pages closed and say why the pass stopped.
+                let Outcome {
+                    text,
+                    merged_not_done,
+                } = pass.finish(deployment_only);
+                return Ok(skipped(text, merged_not_done));
+            }
             break;
         }
     }
@@ -387,17 +419,50 @@ pub fn run_scheduled_with(
     Ok(pass.finish(deployment_only))
 }
 
-fn refresh_index(control: &dyn Transport, timeout: Duration) -> Result<(), String> {
+/// How a bounded wait for the merge index refresh ended.
+#[derive(Debug, PartialEq)]
+enum Refresh {
+    Ready,
+    /// Another run's refresh was still running when the wait ended.
+    Pending,
+}
+
+/// The finished text of a pass that stopped on a running refresh, with the skip line last.
+fn skipped(mut text: String, merged_not_done: u64) -> Outcome {
+    let _ = writeln!(text, "{SKIP_LINE}");
+    Outcome {
+        text,
+        merged_not_done,
+    }
+}
+
+/// Start a refresh and wait for it until `timeout` has passed. Every request ends by then.
+fn refresh_index(control: &dyn Transport, timeout: Duration) -> Result<Refresh, String> {
     let deadline = Instant::now() + timeout;
-    control.call("close_merged_auto", Some(json!({"refresh": "start"})))?;
+    let request = |refresh: &str| {
+        match control.call_until(
+            "close_merged_auto",
+            Some(json!({ "refresh": refresh })),
+            deadline,
+        ) {
+            // A request cut off by the wait's own deadline ends the wait, not the pass.
+            Err(error) if error == MERGE_INDEX_EXPIRED && Instant::now() >= deadline => Ok(None),
+            result => result.map(Some),
+        }
+    };
+    if request("start")?.is_none() {
+        return Ok(Refresh::Pending);
+    }
     loop {
-        let reply = control.call("close_merged_auto", Some(json!({"refresh": "status"})))?;
+        let Some(reply) = request("status")? else {
+            return Ok(Refresh::Pending);
+        };
         match reply["scan"].as_str() {
-            Some("ready") => return Ok(()),
+            Some("ready") => return Ok(Refresh::Ready),
             Some("running") => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
-                    return Err(REFRESH_STILL_RUNNING.into());
+                    return Ok(Refresh::Pending);
                 }
                 std::thread::sleep(remaining.min(Duration::from_secs(1)));
             }
@@ -482,7 +547,10 @@ pub fn reconcile_with(
     state: &std::path::Path,
     refresh_timeout: Duration,
 ) -> Result<String, String> {
-    refresh_index(control, refresh_timeout)?;
+    // The watcher state is only written from a fresh index, so a refresh that is still running fails.
+    if refresh_index(control, refresh_timeout)? == Refresh::Pending {
+        return Err(REFRESH_STILL_RUNNING.into());
+    }
     let mut request = json!({"apply": false, "watch": true});
     if let Some(required) = seats {
         request["require_seats"] = json!(required);
@@ -608,5 +676,25 @@ mod tests {
         };
         let reply = transport.call_with(deadline, |_| panic!("request started at the deadline"));
         assert_eq!(reply, Err(MERGE_INDEX_EXPIRED.into()));
+    }
+
+    #[test]
+    fn a_request_ends_by_the_earlier_of_the_refresh_and_pass_deadlines() {
+        let env = Env::new();
+        let now = Instant::now();
+        let transport = DeadlineKeeper {
+            keeper: SlowKeeper {
+                env: &env,
+                max_time_secs: 10,
+            },
+            deadline: now + Duration::from_secs(400),
+        };
+        let reply = transport.call_by(now, now + Duration::from_secs(3), |keeper| {
+            assert_eq!(keeper.max_time_secs, 3);
+            Ok(json!({}))
+        });
+        assert_eq!(reply, Ok(json!({})));
+        let late = transport.call_by(now, now, |_| panic!("request started at the wait deadline"));
+        assert_eq!(late, Err(MERGE_INDEX_EXPIRED.into()));
     }
 }

@@ -34,6 +34,17 @@ pub(super) fn quota_snapshots(env: &Env, repo: &Path) -> Result<Value, String> {
 }
 pub trait Transport {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String>;
+
+    /// Like [`Transport::call`], but the request must also end by `until`. A transport
+    /// without its own time bound ignores the limit.
+    fn call_until(
+        &self,
+        verb: &str,
+        body: Option<Value>,
+        _until: std::time::Instant,
+    ) -> Result<Value, String> {
+        self.call(verb, body)
+    }
 }
 pub(super) struct Keeper<'a> {
     pub env: &'a Env,
