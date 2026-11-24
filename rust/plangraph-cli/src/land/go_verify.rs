@@ -92,6 +92,16 @@ pub struct Approval {
     pub repo: String,
     pub pr: u64,
     pub head: String,
+    /// The standalone `MIGRATION <version>` field of the GO statement, when it has one.
+    #[serde(default)]
+    pub migration: Option<u32>,
+}
+
+/// The keeper schema version at the train base and at its head (`land-train keeper-schema`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeeperSchema {
+    pub base: u32,
+    pub head: u32,
 }
 
 /// The accepted review of the train delta, as `land-train admit` proved it.
@@ -127,6 +137,8 @@ pub struct Evidence {
     pub changed_paths: Vec<String>,
     pub grants: Vec<Grant>,
     pub main: State,
+    /// Required, so evidence that does not state the schema versions is refused as unreadable.
+    pub keeper_schema: KeeperSchema,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +174,16 @@ fn granted(e: &Evidence, path: &str) -> bool {
 fn valid_d_id(id: &str) -> bool {
     id.strip_prefix("D-")
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn migration_approved(e: &Evidence) -> bool {
+    e.approvals.iter().any(|a| {
+        a.repo == e.repo
+            && a.pr == e.pr
+            && a.head == e.head
+            && valid_d_id(&a.d_id)
+            && a.migration == Some(e.keeper_schema.head)
+    })
 }
 
 /// Every reason the evidence does not prove a GO; empty when it does.
@@ -232,6 +254,21 @@ pub fn verify(e: &Evidence, pins: &Pins) -> Vec<Refusal> {
                 format!("{path} needs a Gate-Edit grant for this head"),
             ));
         }
+    }
+    let schema = &e.keeper_schema;
+    if schema.head < schema.base {
+        out.push(no(
+            "migration_regressed",
+            format!("keeper schema goes from {} to {}", schema.base, schema.head),
+        ));
+    } else if schema.head > schema.base && !migration_approved(e) {
+        out.push(no(
+            "migration_missing",
+            format!(
+                "keeper schema rises {} -> {}: the GO for this head needs `MIGRATION {}`, and the deploy is `plangraph keeper-restart`, not a plain restart",
+                schema.base, schema.head, schema.head
+            ),
+        ));
     }
     if let Some(word) = e.main.refusal() {
         out.push(no("main_not_green", word));

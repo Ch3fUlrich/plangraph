@@ -1,0 +1,1 @@
+`land-train go-verify` refuses a train that raises the keeper schema version unless the approval of the exact head carries the matching `MIGRATION` value (`migration_missing`); the train GO-REQ and the batch GO-REQ name `plangraph keeper-restart` with the migration DSN file instead of a plain restart. `land-train keeper-schema` prints the base and head versions for the evidence.

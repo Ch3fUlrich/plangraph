@@ -64,14 +64,18 @@ part's items (`--declared`, item key to hosts), else the `Deploy:` trailers of i
 authorized. `CMD HOST FAMILY` is the host install dry run: exit 0 with no output passes, and it prints one
 `MISSING binary|file|env|path NAME` line per absent thing. The command prints `deploy: unit@host, ...` for
 the GO-REQ (only passing targets) and one `blocker` line per refused target; `--blockers-out` writes a
-`pg define` file with a blocker item for each.
+`pg define` file with a blocker item for each. When a part raises the keeper schema version (the
+`MIGRATIONS` of `schema_pg.py`), the line also carries the standalone `MIGRATION <version>` field and names
+`plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE`, never a plain unit restart.
+`plangraph land-train keeper-schema --repo DIR --base SHA --head SHA` prints both versions for the evidence.
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this
 binary's `tests.yml` digest and job matrix, binds repository, pull request, base, head, tree, manifest,
 run and attempt, and lists every refusal: `moved_head`, `stale_base`, `replay_mismatch`, `job_missing`,
 `job_not_green`, `mixed_attempt`, `stale_attempt`, `workflow_unpinned`, `ci_unbound`, `approval_missing`,
-`delta_missing`, `operator_path_unauthorized` (a gate path without a `Gate-Edit` grant for this head) and
+`delta_missing`, `migration_missing` (the keeper schema rises and no approval of this head carries the
+matching `migration` value), `migration_regressed`, `operator_path_unauthorized` (a gate path without a `Gate-Edit` grant for this head) and
 `main_not_green`.
 
 ## Push a built train

@@ -62,6 +62,7 @@ fn green() -> Evidence {
             repo: "owner/name".into(),
             pr: 9,
             head: HEAD.into(),
+            migration: None,
         }],
         delta: Some(DeltaAcceptance {
             run_id: format!("run-{}", "ab".repeat(16)),
@@ -72,6 +73,7 @@ fn green() -> Evidence {
         changed_paths: vec!["rust/plangraph-cli/src/lib.rs".into(), "docs/x.md".into()],
         grants: vec![],
         main: State::Green,
+        keeper_schema: KeeperSchema { base: 27, head: 27 },
     }
 }
 
@@ -266,4 +268,42 @@ fn the_cli_prints_one_line_for_green_evidence_and_every_refusal_otherwise() {
         err.contains("stale_base") && err.contains("delta_missing"),
         "{err}"
     );
+}
+
+#[test]
+fn a_keeper_schema_rise_needs_the_matching_migration_on_the_approval_of_this_head() {
+    let mut e = green();
+    e.keeper_schema.head = 29;
+    assert_eq!(codes(&e), ["migration_missing"]);
+    let detail = verify(&e, &pins())[0].detail.clone();
+    assert!(
+        detail.contains("MIGRATION 29") && detail.contains("keeper-restart"),
+        "{detail}"
+    );
+    for wrong in [Some(27), Some(28), Some(30)] {
+        e.approvals[0].migration = wrong;
+        assert_eq!(codes(&e), ["migration_missing"], "{wrong:?}");
+    }
+    e.approvals[0].migration = Some(29);
+    assert_eq!(codes(&e), Vec::<&str>::new());
+    // A field on an approval of another head does not count.
+    e.approvals[0].head = "c".repeat(40);
+    assert_eq!(codes(&e), ["approval_missing", "migration_missing"]);
+}
+
+#[test]
+fn a_regressed_schema_is_refused_and_unchanged_needs_no_field() {
+    let mut e = green();
+    e.keeper_schema.head = 26;
+    assert_eq!(codes(&e), ["migration_regressed"]);
+    e.keeper_schema.head = 27;
+    e.approvals[0].migration = Some(30);
+    assert_eq!(codes(&e), Vec::<&str>::new());
+}
+
+#[test]
+fn evidence_without_the_schema_versions_does_not_parse() {
+    let mut value = serde_json::to_value(green()).unwrap();
+    value.as_object_mut().unwrap().remove("keeper_schema");
+    assert!(serde_json::from_value::<Evidence>(value).is_err());
 }
