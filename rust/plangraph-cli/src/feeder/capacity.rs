@@ -1,4 +1,4 @@
-use super::{Env, HostFacts, Policy};
+use super::{writer_limit, Env, HostFacts, Policy};
 use pg_worker_core::{disk_runtime, host_probe};
 use std::path::Path;
 
@@ -73,7 +73,10 @@ pub(super) fn apply(
         slots_by_ram
     };
     let limit = facts.running_writers.saturating_add(new_writers_allowed);
-    policy.max_writers.insert(facts.host.clone(), limit);
+    // Only a host the policy lists runs writers; an unlisted host keeps refusing by name.
+    if writer_limit(&facts.host, policy).is_some() {
+        policy.max_writers.insert(facts.host.clone(), limit);
+    }
     Ok(Budget {
         slots_by_ram,
         new_writers_allowed,

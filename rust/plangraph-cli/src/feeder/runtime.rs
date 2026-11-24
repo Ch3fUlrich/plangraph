@@ -214,7 +214,7 @@ mod tests {
     use super::*;
     fn live_facts(running: usize, free_ram: u64) -> HostFacts {
         serde_json::from_value(json!({
-            "host":"worker", "free_ram_bytes":free_ram,
+            "host":"dell", "free_ram_bytes":free_ram,
             "free_disk_bytes":20000000000u64, "quota_remaining_percent":80,
             "observed_at":1000, "now":1000, "running_writers":running
         }))
@@ -253,6 +253,17 @@ mod tests {
         assert_eq!(
             admit(&facts, &policy),
             Admission::Refuse("max_writers".into())
+        );
+    }
+    #[test]
+    fn a_host_the_policy_does_not_list_refuses_by_name_even_with_free_ram() {
+        let mut policy = Policy::default();
+        let mut facts = live_facts(0, 86_000_000_000);
+        facts.host = "mystery".into();
+        super::super::capacity::apply(&mut facts, &mut policy, 32, 1.0).unwrap();
+        assert_eq!(
+            admit(&facts, &policy),
+            Admission::Refuse("unknown_host:mystery".into())
         );
     }
     #[test]

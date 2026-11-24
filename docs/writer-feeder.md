@@ -116,7 +116,7 @@ started before the sample are already reflected in free RAM. Reserve one run's
 estimate for the next launch, plus a full estimate for each local writer whose
 start is at/after the sample (or unknown). This prevents repeated two-minute ticks
 from reusing a pre-launch measurement to over-admit.
-Unknown hosts refuse. The facts host must be the spawner's configured host name.
+Unknown hosts refuse with their name (`unknown_host:<name>`), also under `--live-facts`: a host runs writers only when the policy lists it. The shipped policy lists `coding`, `dell` and `workstation`. The facts host must be the spawner's configured host name.
 Policy lookup tries that full name, then its first DNS label, so fully qualified
 coding host names use the public `coding` alias. Keep private full-name overrides
 in a local policy file. Counting uses the same case-insensitive DNS/alias identity
