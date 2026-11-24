@@ -50,6 +50,9 @@
 # See docs/rust-hooks.md for the ledger contract. Register PreToolUse
 # for SendMessage and Bash (or exec_command) with:
 #   sh -c 'test -x "$1" || exit 1; exec "$1" message-time' _ DEST/pg-hook
+# Register PreToolUse for Bash, Read and Grep (matcher 'Bash|Read|Grep', onFailure block) with
+# the print guard that refuses cat, head, grep and the like on key, token and env files:
+#   sh -c 'test -x "$1" || exit 1; exec "$1" secret-read' _ DEST/pg-hook
 #
 # Usage:
 #   tools/hooks/install_hooks.sh --session-rust # include the Rust session guards

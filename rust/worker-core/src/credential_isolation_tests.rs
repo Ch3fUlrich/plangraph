@@ -155,3 +155,14 @@ fn the_child_open_verdicts_name_denied_readable_and_absent_without_reading() {
     assert_eq!(child_open(dir.path()), "readable");
     assert_eq!(child_open(&dir.path().join("missing")), "absent");
 }
+
+#[test]
+fn the_session_guard_list_adds_the_codex_auth_file_to_the_sandbox_list() {
+    let home = Path::new("/fixture/user");
+    let guard = session_guard_paths(home, None);
+    assert!(guard.contains(&PathBuf::from("/fixture/user/.codex/auth.json")));
+    assert!(deny_read_paths(home, None)
+        .iter()
+        .all(|path| guard.contains(path)));
+    assert!(!deny_read_paths(home, None).contains(&PathBuf::from("/fixture/user/.codex/auth.json")));
+}

@@ -5,6 +5,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
+globset = "0.4"
+pg-worker-core = { path = "../worker-core" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 regex = "1"
 shlex = "1"

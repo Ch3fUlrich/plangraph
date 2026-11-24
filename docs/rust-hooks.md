@@ -76,6 +76,18 @@ Run `tools/hooks/install_hooks.sh --session-rust` with the shared
 and its checksum manifest. Register the guarded commands printed by the
 installer's `--help` in the harness settings.
 
+### Secret print guard
+
+`pg-hook secret-read` is a PreToolUse guard for Bash, Read and Grep. It resolves each path of the
+call (tilde, `$HOME`, `$XDG_CONFIG_HOME`, relative, `..`, globs against the file system) and
+exits 2 with `secret-read: refused: ...` naming the file when a printing verb (cat, head, tail,
+less, sed, awk, grep without -l/-c/-q, source, `< file`, `find -exec`, and the like) or a Read of
+it would put a file of `src/plangraph/config/secret_paths.json` plus the Codex auth file into the
+session output. `ls`, `stat`, `test -s` and `wc -c` stay allowed. It reads command text only:
+a script that opens the file itself is out of scope. Register it as printed by
+`tools/hooks/install_hooks.sh --help`; a session that printed a secret writes
+`SECRET-PRINTED <file>` to its status file.
+
 ### Lesson Stop hook
 
 Register `pg-hook lesson-stop` for `Stop`, including continuation Stop

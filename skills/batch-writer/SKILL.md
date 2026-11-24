@@ -96,6 +96,9 @@ Use grep for text that is not a symbol.
   commit STATUS_FILE. Never put a hostname, key, real user path or private project name
   into the repository.
 - Never start another agent except through REVIEW_CMD.
+- Never print a config directory or a key, token or env file (`cat`, `head`, `grep`, a Read, a
+  glob such as `~/.config/plangraph/*`): list names with `ls` and check a file with `test -s`,
+  `stat` or `wc -c`. If you printed one, write `SECRET-PRINTED <file>` to STATUS_FILE the same turn.
 - Never sleep, poll or wait for a quota or a person. If you cannot continue (rate limit,
   missing access, refused tool), write `BLOCKED <reason>` to STATUS_FILE and end.
 
