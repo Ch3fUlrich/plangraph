@@ -111,7 +111,11 @@ RULE_33_CLASSES: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = tupl
         # much review a change needs. A change to either is as sensitive as a gate file.
         ("gate-files", r"^(?:.*/)?tools/seat_[^/]+\.py$", ()),
         ("gate-files", r"^(?:.*/)?src/plangraph/routing_support/risk\.py$", ()),
-        ("gate-files", r"^(?:.*/)?src/plangraph/spawner/(?:opencode_isolation|runner)\.py$", ()),
+        ("gate-files", r"^(?:.*/)?src/plangraph/spawner/(?:opencode_isolation|runner|service|prompt_input)\.py$", ()),
+        # The writer-family resolver decides which review seats a head excludes and whether a gpt review
+        # counts alone at train admission.
+        ("gate-files", r"^(?:.*/)?src/plangraph/review/family\.py$", ()),
+        ("gate-files", r"^(?:.*/)?rust/worker-core/src/writer_families[^/]*\.rs$", ()),
         ("gateway", r"(?:^|/)[^/]*gateway[^/]*(?:/|\.[a-z]+$)", ()),
         ("deploy-config", r"^(?:.*/)?(?:deployment|deploy|deployments)/[^/]+$", ("live-step",)),
         ("installer", r"^(?:.*/)?setup/[^/]+\.(?:sh|ps1|py|toml|ya?ml)$", ("live-step",)),
