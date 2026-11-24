@@ -269,3 +269,26 @@ def test_an_export_that_is_not_the_shared_target_leaves_the_build_refused(repos,
     main, _ = repos
     result = hook(command, main)
     assert result.returncode == 2, (command, result.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "cargo test -- CARGO_TARGET_DIR=/var/cache/shared",
+    "cargo build -- CARGO_TARGET_DIR=/var/cache/shared",
+    "nice cargo test -- CARGO_TARGET_DIR=/var/cache/shared",
+    "cargo test --no-fail-fast CARGO_TARGET_DIR=/var/cache/shared",
+])
+def test_an_assignment_shaped_argument_after_cargo_is_not_an_environment_setting(repos, command):
+    main, _ = repos
+    result = hook(command, main / "rust")
+    assert result.returncode == 2, (command, result.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "CARGO_TARGET_DIR=/var/cache/shared cargo test",
+    "env CARGO_TARGET_DIR=/var/cache/shared cargo test -- --nocapture",
+    "nice env CARGO_TARGET_DIR=/var/cache/shared cargo build",
+    "env CARGO_TARGET_DIR=/var/cache/shared bash -c 'cargo build'",
+])
+def test_assignments_before_the_command_still_set_the_target(repos, command):
+    main, _ = repos
+    assert hook(command, main / "rust").returncode == 0, command
