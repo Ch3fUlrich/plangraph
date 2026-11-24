@@ -272,6 +272,13 @@ def sandbox_refusal(row):
 REMOTE_PLACEMENT_CLOSED = 'remote placement closed'
 
 
+def remote_open(config, local):
+    """Whether any host but `local` may take remote work (hand-written configs are always open)."""
+    return not config.get('registry') or any(
+        row.get('remote_placement') is True
+        for name, row in config.get('hosts', {}).items() if name != local)
+
+
 def ready_records(config, role='implement'):
     records = {}
     registry = registry_caps()

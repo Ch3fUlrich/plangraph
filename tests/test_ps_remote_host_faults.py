@@ -168,14 +168,14 @@ def shared_target_registry(config):
     (config / 'hosts.json').write_text(json.dumps({'version': 1, 'self': 'controller', 'hosts': [
         dict(base, id='ws', os='windows', repos={'plangraph': {'root': 'C:/pg'}}),
         dict(base, id='ws-wsl', os='linux', wsl_distro='Ubuntu', aliases=['Ws-Guest'],
-             repos={'plangraph': {'root': '/home/g/pg'}})]}))
+             repos={'plangraph': {'root': '/srv/guest/pg'}})]}))
 
 
 def test_ps_source_alias_match_ignores_case(config):
     shared_target_registry(config)
     write(config, [dict(name='WS-GUEST', target='elsewhere', src='/stale/src')])
     (config / 'hosts.json').write_text((config / 'hosts.json').read_text())
-    assert remote_ps.configured_hosts()[0]['src'] == '/home/g/pg/src'
+    assert remote_ps.configured_hosts()[0]['src'] == '/srv/guest/pg/src'
 
 
 def test_ps_shared_target_never_turns_windows_into_wsl(config):
@@ -204,5 +204,5 @@ def test_doctor_probe_gets_the_registry_resolved_hosts_and_slow_budget(config, m
     monkeypatch.setattr(doctor, 'mcp', mcp)
     asyncio.run(doctor.diagnose())
     (host,) = json.loads(seen['env']['PLANGRAPH_PS_HOSTS_JSON'])['hosts']
-    assert (host['src'], host['wsl_distro']) == ('/home/g/pg/src', 'Ubuntu')
+    assert (host['src'], host['wsl_distro']) == ('/srv/guest/pg/src', 'Ubuntu')
     assert seen['timeout'] == remote_ps.host_timeout(host) + doctor.TIMEOUT
