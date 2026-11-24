@@ -303,6 +303,7 @@ fn env_files_may_be_names_or_absolute_or_home_paths() {
         "/srv/other/c.env",
         "%h/other/c.env",
         "a.env|/srv/b.env",
+        "/srv/q dir/x.env",
     ] {
         assert!(Manifest::parse(&with(ok)).is_ok(), "{ok}");
     }
@@ -310,7 +311,6 @@ fn env_files_may_be_names_or_absolute_or_home_paths() {
         "/srv/../c.env",
         "c.conf",
         "//c.env",
-        "a b.env",
         "a=b.env",
         "%h/../c.env",
     ] {

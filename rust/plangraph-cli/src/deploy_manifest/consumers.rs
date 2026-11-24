@@ -107,8 +107,14 @@ impl Manifest {
             let Some(installer) = &unit.installer else {
                 continue;
             };
+            // Tracked in the index and still on disk: a script deleted but not yet staged is not usable.
             match super::scan::tracked(repo, &installer.via) {
-                Ok(files) if files.contains(&installer.via) => {}
+                Ok(files)
+                    if files.contains(&installer.via) && repo.join(&installer.via).is_file() => {}
+                Ok(files) if files.contains(&installer.via) => problems.push(format!(
+                    "unit {}: installer via {} is tracked but missing from the working tree",
+                    unit.name, installer.via
+                )),
                 Ok(_) => problems.push(format!(
                     "unit {}: installer via {} is not a tracked file of the repository",
                     unit.name, installer.via

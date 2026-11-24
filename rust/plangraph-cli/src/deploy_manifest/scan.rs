@@ -89,23 +89,64 @@ const EXEC_KEYS: [&str; 7] = [
     "ExecStopPost",
 ];
 
-/// The program of an `Exec*` value: the first command word after systemd's prefix characters
-/// (`@ - : + !`), quoted words read to their closing quote so a path may hold spaces.
+/// The program of an `Exec*` value, read as systemd reads the first word: whitespace ends it unless
+/// quoted, `"` and `'` quote (also inside a word), C escapes decode (`\x2f`, `\057`, `\s`, `\"`), and only
+/// then do the prefix characters (`@ - : + !`) come off the decoded word.
 fn first_word(value: &str) -> String {
-    let value = value.trim_start_matches(['@', '-', ':', '+', '!', ' ', '\t']);
-    let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) else {
-        return value.split_whitespace().next().unwrap_or("").to_owned();
-    };
     let mut word = String::new();
-    let mut chars = value[1..].chars();
+    let mut quote: Option<char> = None;
+    let mut chars = value.trim_start().chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\\' => word.extend(chars.next()),
-            c if c == quote => break,
+            '\\' => word.push_str(&unescape(&mut chars)),
+            c if quote == Some(c) => quote = None,
+            '"' | '\'' if quote.is_none() => quote = Some(c),
+            c if c.is_whitespace() && quote.is_none() => break,
             c => word.push(c),
         }
     }
-    word
+    word.trim_start_matches(['@', '-', ':', '+', '!'])
+        .to_owned()
+}
+
+/// One escape sequence after a backslash: `\a \b \f \n \r \t \v \s`, `\xHH`, three octal digits, and a
+/// quoted or backslash character as itself. An unknown escape stays as written.
+fn unescape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
+    let digits = |chars: &mut std::iter::Peekable<std::str::Chars<'_>>, radix: u32, max: usize| {
+        let mut out = String::new();
+        while out.len() < max && chars.peek().is_some_and(|c| c.is_digit(radix)) {
+            out.extend(chars.next());
+        }
+        out
+    };
+    match chars.next() {
+        None => "\\".to_owned(),
+        Some('a') => "\x07".to_owned(),
+        Some('b') => "\x08".to_owned(),
+        Some('f') => "\x0c".to_owned(),
+        Some('n') => "\n".to_owned(),
+        Some('r') => "\r".to_owned(),
+        Some('t') => "\t".to_owned(),
+        Some('v') => "\x0b".to_owned(),
+        Some('s') => " ".to_owned(),
+        Some(c @ ('\\' | '"' | '\'')) => c.to_string(),
+        Some('x') => {
+            let hex = digits(chars, 16, 2);
+            match u8::from_str_radix(&hex, 16) {
+                Ok(byte) if hex.len() == 2 => char::from(byte).to_string(),
+                _ => format!("\\x{hex}"),
+            }
+        }
+        Some(c @ '0'..='3') => {
+            let mut oct = c.to_string();
+            oct.push_str(&digits(chars, 8, 2));
+            match u8::from_str_radix(&oct, 8) {
+                Ok(byte) if oct.len() == 3 => char::from(byte).to_string(),
+                _ => format!("\\{oct}"),
+            }
+        }
+        Some(c) => format!("\\{c}"),
+    }
 }
 
 /// One program a unit runs: the unit's coverage key, the program's file name and its path as written
@@ -149,8 +190,8 @@ pub fn consumers(repo: &Path, unit_files: &BTreeSet<String>) -> Result<BTreeSet<
 }
 
 /// The env files the tracked unit files read: `(unit key, file name)` of every `EnvironmentFile=` line
-/// the file name relative to `%h/.config/plangraph/` or `/etc/plangraph/` (any other path as written), with the
-/// leading `-` (optional file) dropped and `%i` kept as written.
+/// the file name relative to `%h/.config/plangraph/` or `/etc/plangraph/` (any other path as written, quotes and
+/// spaces included: systemd does not unquote it), with the leading `-` (optional file) dropped and `%i` kept.
 pub fn unit_env_files(
     repo: &Path,
     unit_files: &BTreeSet<String>,
@@ -165,7 +206,8 @@ pub fn unit_env_files(
             else {
                 continue;
             };
-            let value = value.trim_start_matches('-').trim_matches(['"', '\'']);
+            // systemd reads the rest of the line as the path, spaces included and quotes not special.
+            let value = value.trim_start_matches('-');
             if value.is_empty() {
                 continue; // an empty setting only clears the list
             }

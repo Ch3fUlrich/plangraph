@@ -13,7 +13,7 @@ file name in two directories needs two entries (`dir = "<subdir>"` outside `depl
 `deploy/` itself).
 
 - A unit family lists its files, scope, host roles (`keeper`, `worker`, `wsl`, `all`), the env file names it reads
-  (never values; `%i` for the instance of a template; a file outside the config directories as its absolute or `%h` path) and its first-run check. A family whose files are templates
+  (never values; `%i` for the instance of a template; a file outside the config directories as its absolute or `%h` path, spaces allowed: systemd reads the rest of the line as the path and does not unquote it) and its first-run check. A family whose files are templates
   (`*.in`, or `@ROOT@` placeholders) names its `[unit.installer]`: the tracked script (`via`), the command it runs (`step`), the unit names it writes
   (`renders`) and the installed timer or service it enables (`enable`); the family's `files` are sources, `enable`
   and `renders` are the installed names.
