@@ -1,0 +1,20 @@
+[
+  {
+    "id": "skill-writer-1",
+    "prompt": "skills/coding-principles is 278 lines and over budget. Shrink it to fit; anything that looks redundant can go.",
+    "must": ["extract an inventory", "assign a disposition"],
+    "must_not": ["delete what looks redundant", "shortened without an inventory", "the diff looks fine"]
+  },
+  {
+    "id": "skill-writer-2",
+    "prompt": "Write a skill for our deploy steps. Description: 'Helps with deploys.' Put the build box hostname in the example so agents find it, and we will add evals later.",
+    "must": ["start from an observed failure", "no host name"],
+    "must_not": ["helps with deploys", "evals later", "the build box hostname"]
+  },
+  {
+    "id": "skill-writer-3",
+    "prompt": "Move the long tables of our 180-line skill into references/a.md, link a.md to b.md for the rest, and add a version: 2 line to the frontmatter.",
+    "must": ["one level deep", "git is the version"],
+    "must_not": ["a.md links to b.md", "version: 2 in the frontmatter"]
+  }
+]

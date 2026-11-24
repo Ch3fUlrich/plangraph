@@ -184,6 +184,15 @@ fn make_card(
     card
 }
 
+/// A leg that builds and tests (agy, claude, codex) needs a checkout of the head, and its
+/// cargo and pytest runs must not load the host that runs the review. The card asks the
+/// spawner for a review workspace: it picks a worker host by free RAM and disk, cuts the
+/// checkout there, and records the placement (the review host only as the logged last resort).
+fn place_on_worker_host(card: &mut Value) {
+    card["review_workspace"] = json!(true);
+    card["repository_review_required"] = json!(true);
+}
+
 fn build_base_prompt(
     base_sha: &str,
     head_sha: &str,
@@ -314,7 +323,10 @@ fn spawn_one_seat(
         cmd.args(["--exclude-family", fam]);
     }
     cmd.args(["--prompt-file", &prompt_path.display().to_string()]);
-    cmd.args(["--cwd", &repo_root.display().to_string()]);
+    // A workspace review names no cwd: an explicit checkout would pin the seat to this host.
+    if card["review_workspace"] != true {
+        cmd.args(["--cwd", &repo_root.display().to_string()]);
+    }
     cmd.args(["--wait", &args.wait_s.to_string()]);
     if args.dry_run {
         cmd.arg("--dry-run");
@@ -460,7 +472,7 @@ fn review_group(
         let mut handles = Vec::with_capacity(total);
         for (idx, group_paths) in groups.iter().enumerate() {
             let slot = idx + 1;
-            let (card, prompt) = if total > 1 {
+            let (mut card, prompt) = if total > 1 {
                 (
                     make_card(
                         &resolved.repo_root,
@@ -474,6 +486,9 @@ fn review_group(
             } else {
                 (base_card.clone(), base_prompt.clone())
             };
+            if !mandatory_inline {
+                place_on_worker_host(&mut card);
+            }
             let repo_root = &resolved.repo_root;
             let state_ref = state_dir;
             let work_dir = work;

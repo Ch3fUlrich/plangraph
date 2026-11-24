@@ -388,9 +388,25 @@ JSON integer. The daemon applies it at startup to claim, worker claim, and claim
 batch before writing. Overlapping claims share in-flight authority lookups and
 can wait up to the earlier of the leader's deadline and their own deadline. A
 lookup error is shared with waiting claims. A deadline refusal names the
-preflight step that ran out of time. Independent checkouts refresh in parallel,
-with up to four workers per scan. A later claim refreshes repository authority
-again, even when a previous work index is recent.
+preflight step that ran out of time. A claim refreshes the item's own
+repository from origin, and in parallel any other repository whose last built
+index is older than ten seconds (or was never built); a recent one is served as
+built. The keys of one `claim-batch` and claims running at the same time share
+those refreshes, so a batch costs one origin refresh per repository; a later
+claim refreshes repository authority again, even when a previous work index is
+recent. `GET /v1/health` reports
+`claim_preflight_s`; the CLI bounds `claim` and `claim-batch` by that budget plus
+15 seconds instead of a fixed 15 seconds.
+
+The automatic merge close (`close_merged_auto`, `pg merge-close`) records a `landing` object in its
+`commit` evidence: the standing `authority` (the operator decision named by the config setting
+`merge_close_decision`, a `D-NNN` id, with whether the decisions file holds it), one entry per landed PR
+with the forge's merged PR, its pre-merge head and the CI verdict and check names of that head, and the
+GO rows that name the item and bind a landed PR. A squash merge closes the same way: the forge names its
+PR by the squash commit and the head that was reviewed. The forge is asked once per landing by the warm
+scan, outside the lock, and the record is kept. A missing standing decision, an unverified check set or a
+missing GO row never refuses a proved landing: it is listed under `flags` in `landing` and as
+`landing_flags` in the close result.
 
 `pg define` and `pg define --edit` refuse review clauses in `done_criteria`
 or `description` that pin a model or leg from the routing catalog. Ask for

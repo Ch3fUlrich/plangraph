@@ -171,8 +171,7 @@ UNIT_SETTING='configured value' exec "$@"
 "#,
         ),
     ] {
-        fs::write(&path, script).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(&path, script);
     }
     let config = root.path().join("keeper.json");
     let dsn_file = root.path().join("migration.dsn");
@@ -302,4 +301,58 @@ UNIT_SETTING='configured value' exec "$@"
         );
         assert_eq!(output.status.success(), failure.is_empty());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn baseline_runs_the_sibling_pg_telemetry_before_the_one_on_path() {
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+
+    let program = |name: &str| {
+        ["/usr/bin", "/bin"]
+            .map(|d| Path::new(d).join(name))
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap()
+    };
+    let root = tempfile::tempdir().unwrap();
+    let install = root.path().join("install");
+    let on_path = root.path().join("path");
+    fs::create_dir_all(&install).unwrap();
+    fs::create_dir_all(&on_path).unwrap();
+    // A copy of plangraph, so that "next to the running binary" is a directory the test owns.
+    let plangraph = install.join("plangraph");
+    fs::copy(env!("CARGO_BIN_EXE_plangraph"), &plangraph).unwrap();
+    let baseline = |args: &[&str]| {
+        Command::new(&plangraph)
+            .env_clear()
+            .env("HOME", root.path())
+            .env("PATH", &on_path)
+            .arg("baseline")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    // Neither a sibling nor a PATH entry: the fixed refusal.
+    let output = baseline(&["--keeper-only"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .starts_with("baseline: cannot start pg-telemetry:"));
+    // PATH only: it runs, and its exit code is returned.
+    symlink(program("true"), on_path.join("pg-telemetry")).unwrap();
+    assert_eq!(baseline(&["--keeper-only"]).status.code(), Some(0));
+    // A sibling wins over PATH.
+    symlink(program("false"), install.join("pg-telemetry")).unwrap();
+    assert_eq!(baseline(&["--keeper-only"]).status.code(), Some(1));
+}
+
+#[test]
+fn the_usage_line_names_baseline() {
+    let root = tempfile::tempdir().unwrap();
+    let output = cli(root.path(), &["no-such-command"]);
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("baseline --keeper-only [--since RFC3339]"));
 }

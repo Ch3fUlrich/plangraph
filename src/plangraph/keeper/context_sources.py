@@ -337,6 +337,15 @@ _REFRESHING = set()
 _REFRESH_LOCK = threading.Lock()
 
 
+def work_index_expired(git, project):
+    """True when *project*'s index was never built or is older than the ready read's TTL."""
+    repo, ref = _repo_ref(git, project)
+    if repo is None:
+        return False
+    hit = getattr(git, "_context_work_index", {}).get((repo, ref))
+    return hit is None or time.monotonic() - hit[0] >= _REFS_TTL
+
+
 def work_index_cached(git, project):
     """The ready read's index: never rebuilt inside a request once one exists.
 

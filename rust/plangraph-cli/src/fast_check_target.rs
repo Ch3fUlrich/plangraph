@@ -1,6 +1,9 @@
 use super::Result;
 use pg_worker_core::cargo_pool;
 use pg_worker_core::cargo_pool::{LockWaitSample, LockWaitTracker};
+#[cfg(all(test, unix))]
+use pg_worker_core::executable_test_support;
+use pg_worker_core::stall::spawn_retrying;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -31,10 +34,10 @@ pub(super) fn run_step(
     lease: &cargo_pool::SlotLease,
 ) -> std::io::Result<std::process::ExitStatus> {
     if Path::new(program).file_name().and_then(|n| n.to_str()) != Some("cargo") {
-        return command.status();
+        return spawn_retrying(command)?.wait();
     }
     let started = Instant::now();
-    let mut child = command.stderr(Stdio::piped()).spawn()?;
+    let mut child = spawn_retrying(command.stderr(Stdio::piped()))?;
     let stderr = child.stderr.take().expect("piped stderr");
     let reader = std::thread::spawn(move || {
         let mut tracker = LockWaitTracker::default();
@@ -240,14 +243,11 @@ fn run_step_records_lock_wait_sample_only_for_cargo_steps() {
 
     let bin = tmp.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let fake = bin.join("cargo");
-    std::fs::write(
-        &fake,
+    let fake = executable_test_support::write_script(
+        &bin,
+        "cargo",
         "#!/bin/sh\necho 'Blocking waiting for file lock on build directory' >&2\nsleep 0.2\necho '   Compiling x' >&2\n",
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let mut command = Command::new(&fake);
     let status = run_step(&mut command, fake.to_str().unwrap(), &lease).unwrap();
     assert!(status.success());
@@ -292,4 +292,45 @@ fn jail_binary_uses_the_built_helper_without_a_target_override() {
         jail_binary(&root.join("cache")),
         root.join("cache").join(suffix)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn executable_fixture_keeps_an_existing_staging_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let other = tmp.path().join(".cargo.tmp");
+    std::fs::write(&other, "sibling fixture").unwrap();
+
+    let script = executable_test_support::write_script(tmp.path(), "cargo", "#!/bin/sh\nexit 0\n");
+
+    assert_eq!(std::fs::read_to_string(other).unwrap(), "sibling fixture");
+    assert!(executable_test_support::spawn(&mut Command::new(script))
+        .unwrap()
+        .wait()
+        .unwrap()
+        .success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn executable_fixture_retries_when_its_write_descriptor_is_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = executable_test_support::write_script(tmp.path(), "busy", "#!/bin/sh\nexit 0\n");
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&script)
+        .unwrap();
+    let mut command = Command::new(script);
+    assert!(pg_worker_core::stall::is_text_busy(
+        &command.spawn().unwrap_err()
+    ));
+
+    let closer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(70));
+        drop(writer);
+    });
+    let child = executable_test_support::spawn(&mut command);
+    closer.join().unwrap();
+
+    assert!(child.unwrap().wait().unwrap().success());
 }

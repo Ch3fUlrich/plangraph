@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import bisect
 import json
+import re
 import time
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 
@@ -36,6 +38,9 @@ from .. import views
 from . import context_sources as src, timing
 from .brief import ensure_cap, superseded_contract
 from .errors import Refused
+from .evidence_decisions import decision_book, decisions_naming
+from .evidence_pr import landing_record
+from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
 from .schema import DEFINITION_EVENTS
 
@@ -255,18 +260,30 @@ class ContextMixin:
 
     # -------------------------------------------------------------- ready
     def _work_indexes(self, projects, *, fresh=False, shared=None):
+        """Work indexes of every scanned repository.
+
+        A fresh read (the claim guard) refreshes *projects* from origin, plus any other
+        repository whose last built index is expired (older than the ready read's TTL, or
+        never built): a recent one is served as built. The refreshes run in parallel under
+        the claim deadline; the keys of a batch and claims running at the same time share
+        them.
+        """
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
         names = {*projects, *(scan() if scan is not None else ())}
         if not fresh:
             return {name: src.work_index_cached(git, name) for name in sorted(names)}
         indexes = {} if shared is None else shared
-        missing = tuple(sorted(names - indexes.keys()))
+        stale = {name for name in names - set(projects) if src.work_index_expired(git, name)}
+        missing = tuple(sorted((set(projects) | stale) - indexes.keys()))
         if missing:
             indexes.update(timing.share_inflight(
                 ("work indexes", id(git), missing), lambda: self._claim_work_indexes(git, missing),
                 step=f"work index for {missing[0]}" if len(missing) == 1 else "work indexes"))
-        return {name: indexes[name] for name in sorted(names)}
+        return {name: indexes[name] if name in indexes else timing.share_inflight(
+                    ("cached work", id(git), name), lambda name=name: src.work_index_cached(git, name),
+                    step=f"work index for {name}")
+                for name in sorted(names)}
 
     @staticmethod
     def _claim_work_indexes(git, names):
@@ -489,6 +506,124 @@ class ContextMixin:
         if unknown:
             facts.append("work index unverified: open PR inventory unavailable: " + ", ".join(unknown))
         return self._stale_override(item["key"], reason, facts)
+
+    # ----------------------------------------------- automatic close: landing evidence
+    #: The operator decision (a ``D-NNN`` row) that stands behind every automatic merge close;
+    #: the keeper config sets it. It is recorded in the close evidence, never required to close.
+    merge_close_decision = None
+    _LANDING_MISS_S = 600
+
+    def _landing_for(self, project, sha):
+        """The forge's cached record of the landing at *sha*, or ``None`` when it proves nothing.
+
+        A record whose checks are verified never changes and is kept for good. "No merged PR" and a
+        check set that read but is not green are kept for ``_LANDING_MISS_S``; a check set that could
+        not be read is asked again on the next run. The forge is asked outside the keeper lock
+        (``warm_merge_scan``); a frozen run reads only what is cached.
+        """
+        cache = self.__dict__.setdefault("_landings", {})
+        frozen = self.__dict__.get("_frozen_lanes")
+        now = self.now()
+        if found := cache.get((project, sha)):
+            record, at = found
+            checks = record["checks"] if record else None
+            unreadable = bool(checks) and checks["detail"] == "check_runs_unavailable"
+            if frozen or (checks and checks["verified"]) or (now - at < self._LANDING_MISS_S and not unreadable):
+                return record
+        ci, git = self._adapter("ci"), self._adapter("git")
+        if (frozen or not valid_commit_ref(sha)
+                or not callable(getattr(ci, "merged_pr_for", None)) or git is None):
+            return None
+        try:
+            record = landing_record(ci, project, sha, git.repo_ref(project))
+        except Exception:  # noqa: BLE001 - an unreadable forge proves nothing
+            return None
+        cache[(project, sha)] = (record, now)
+        return record
+
+    def _warm_landings(self, project, commits):
+        """Ask the forge for each landing of *commits*, outside the keeper lock."""
+        for commit in commits:
+            self._landing_for(project, (commit.get("merge") or {}).get("sha") or commit.get("sha"))
+
+    def _decision_snapshot(self, keys):
+        """The decisions the landing evidence reads, captured once: ``None`` when unreadable.
+
+        ``{"book", "texts", "standing"}``: the decision book, the text of every row naming one of
+        *keys*, and whether the standing decision exists. The scan takes it outside the keeper lock
+        (the document may be read from origin); a frozen close reads this copy and never the file.
+        """
+        decisions = self._adapter("decisions")
+        if decisions is None:
+            return None
+        snapshot = getattr(decisions, "snapshot", None)   # one read of the document serves every lookup below
+        try:
+            with snapshot() if callable(snapshot) else nullcontext():
+                # Strict read: the plain book turns an unreadable source into an empty one.
+                book = decision_book(decisions, fresh=True)
+                texts = {did: decisions.text(did) for key in keys for did in decisions_naming(book, key)}
+                standing = bool(decisions.has(self.merge_close_decision)) if self.merge_close_decision else None
+        except Exception:  # noqa: BLE001 - an unreadable document proves and names nothing
+            return None
+        return {"book": book, "texts": texts, "standing": standing}
+
+    def _snapshot_landing_decisions(self, candidates):
+        self.__dict__["_landing_decisions"] = self._decision_snapshot([key for key, _ in candidates])
+
+    def _landing_evidence(self, item, proofs, now):
+        """Standing authority, pre-merge required checks and GO rows of an automatic close.
+
+        A gap is a flag, never a refusal: the merge itself is the proved landing.
+        """
+        flags, landings, project = {}, [], self._merge_project(item)
+        snapshot = (self.__dict__.get("_landing_decisions") if self.__dict__.get("_frozen_lanes")
+                    else self._decision_snapshot([item["key"]]))
+        decision = self.merge_close_decision
+        authority = None
+        if decision:
+            known = bool(snapshot and snapshot["standing"])
+            authority = {"decision": decision, "verified": known}
+            if not known:
+                flags["standing_authority_unverified"] = decision
+        else:
+            flags["standing_authority_missing"] = True
+        unverified = []
+        for proof in proofs:
+            record = self._landing_for(project, proof["merge_sha"])
+            checks = record["checks"] if record else None
+            landings.append({"pr": proof["pr"], "merge_sha": proof["merge_sha"], "head": proof["head"],
+                             "merged_at": record["merged_at"] if record else proof["merged_at"],
+                             "checks": checks})
+            if checks is None:
+                unverified.append({"pr": proof["pr"], "detail": "forge_record_unavailable"})
+            elif not checks["verified"]:
+                unverified.append({"pr": proof["pr"], "detail": checks["detail"]})
+        if unverified:
+            flags["required_checks_unverified"] = unverified
+        go_rows = self._landing_go_rows(item, proofs, snapshot)
+        if snapshot is None:   # an unreadable decisions document is not a missing row
+            flags["go_rows_unverified"] = True
+        elif missing := [p["pr"] for p in proofs if p["pr"] not in {row["pr"] for row in go_rows}]:
+            flags["go_row_missing"] = {"prs": missing}
+        return {"authority": authority, "landings": landings, "go_rows": go_rows, "flags": flags}
+
+    def _landing_go_rows(self, item, proofs, snapshot):
+        """``[{decision_id, pr}]``: the GO rows that name this item and bind a landed PR or head."""
+        from .store_waiver import (_go_binding as go_binding, _go_leading_head as go_leading_head,
+                                   _go_statement as go_statement, _names_item as names_item)
+
+        projects, rows = {self._merge_project(item), item["project"]}, []   # a Merge-Repo item may be named by either
+        for did in decisions_naming(snapshot["book"], item["key"]) if snapshot else ():
+            statement = go_statement(snapshot["texts"].get(did))
+            if statement is None or not names_item(statement, item["key"]):
+                continue
+            pr, head = next((b for b in (go_binding(statement, p) for p in sorted(projects)) if b[0]), (None, None))
+            bound = go_leading_head(statement)
+            # A row bound to a PR counts only for the PR that merged with exactly that head.
+            rows += [{"decision_id": did, "pr": p["pr"]} for p in proofs
+                     if (pr is not None and p["pr"] == pr and p["head"].startswith(head))
+                     or (pr is None and bound and p["head"].startswith(bound.lower()))]
+        return rows
 
     @staticmethod
     def _stale_override(key, reason, facts):

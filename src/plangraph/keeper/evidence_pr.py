@@ -96,6 +96,42 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
     return None
 
 
+def landing_record(ci, project, merge_sha, target_ref):
+    """The forge's record of one landing and its pre-merge required checks, or ``None``.
+
+    The merged PR is found by its ``merge_commit_sha``, so a merge commit and a squash merge
+    resolve alike; the squash commit is not the PR head, which the forge reports as ``head.sha``.
+    ``checks`` holds the CI verdict of that PR head, judged by the same newest-run-per-group
+    rule as the ``commit+ci`` verifier: ``verified`` is true only when it is green.  A forge
+    error on the check-runs leaves ``checks`` unverified with a fixed reason; it never raises
+    for them.  Returns ``None`` when the forge names no merged PR for the commit.
+    """
+    pr = ci.merged_pr_for(project, merge_sha, target_ref)
+    if not isinstance(pr, Mapping):
+        return None
+    head_ref = pr.get("head")
+    head = head_ref.get("sha") if isinstance(head_ref, Mapping) else None
+    number = pr.get("number")
+    record = {"pr": number if type(number) is int else None, "merge_sha": merge_sha,
+              "head": head if valid_commit_ref(head) else None,
+              "merged_at": pr.get("merged_at"),
+              "checks": {"head": None, "verified": False, "detail": "pr_head_unknown", "names": []}}
+    if record["head"] is None:
+        return record
+    from .evidence import _ci_conclusion
+
+    try:
+        runs = ci.check_runs(ci.mode(project), record["head"])
+        verdict = _ci_conclusion(runs, record["head"])
+        names = sorted({str(r.get("name")) for r in runs if isinstance(r, Mapping) and r.get("name")})
+        record["checks"] = {"head": record["head"], "verified": verdict is None,
+                            "detail": verdict or "CI green", "names": names}
+    except Exception:  # noqa: BLE001 - adapter text may hold paths or tokens
+        record["checks"] = {"head": record["head"], "verified": False,
+                            "detail": "check_runs_unavailable", "names": []}
+    return record
+
+
 def non_pr_merge(ctx, project, merge_sha, target_ref):
     """Opt-in local topology proof; repository policy is router-owned config."""
     from .evidence_git import valid_ref

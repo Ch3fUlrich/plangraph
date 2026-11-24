@@ -84,6 +84,12 @@ def _go_binding(statement, project):
     return int(named[1]), heads[0].lower()
 
 
+def _go_leading_head(statement):
+    """The 8 to 64 hex digits a GO statement leads with (``GO <head>``), else ``None``."""
+    bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", statement)
+    return bound[1] if bound else None
+
+
 def _names_item(statement, key):
     """True when the statement names the item by full key or bare id (whole token)."""
     if (scope := go_key_scope(statement)) is not None:
@@ -207,8 +213,8 @@ class WaiverMixin:
             if re.search(r"(?i)\b(?:no|not)\b.*\bgo\b", text):
                 raise Refused("evidence_unverified",
                               f"go_row_not_go: {decision_id} discusses a NO GO (merged heads {looked})")
-            bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", text)
-            bounds = [bound[1]] if bound else []
+            bound = _go_leading_head(text)
+            bounds = [bound] if bound else []
         matched = {head for head in heads if len(bounds) == 1
                    and head.startswith(bounds[0].lower())}
         if len(matched) != 1:
@@ -650,8 +656,10 @@ class WaiverMixin:
             return result
         # Free-form Live criteria are reported alongside a close. Only shipped units gate it.
         witnessed, flags = self._auto_seats(pinned, proofs, now, require_seats) if seated else ([], None)
+        landing = self._landing_evidence(pinned, proofs, now)
+        gaps = {"landing_flags": landing["flags"]} if landing["flags"] else {}
         if not apply:
-            return {**result, "key": key, "state": item["state"], "prs": proofs, **self._flags_of(flags)}
+            return {**result, "key": key, "state": item["state"], "prs": proofs, **self._flags_of(flags), **gaps}
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
@@ -669,7 +677,7 @@ class WaiverMixin:
             head = proofs[0]["head"]
             ref = {"sha": head, "merged_head": head, "prs": proofs, "families": seats,
                    "caller": principal.name, "source": "merge-close", "require_seats": require_seats,
-                   **self._flags_of(flags)}
+                   "landing": landing, **self._flags_of(flags)}
             if not self._deploy_scan_current(fresh, token):
                 raise Refused("conflict", "merged_on_default_changed")
             timing.check_io_deadline("merge close evidence")
@@ -677,7 +685,7 @@ class WaiverMixin:
                                      fresh["state"] != "in_review", ("commit", ref, Result(True, "merged on default")),
                                      f"merge close: merged {head}", now, release=True, flags=flags)
             return {**result, "key": key, "state": done["state"], "prs": proofs, "seats": seats,
-                    **self._flags_of(flags)}
+                    **self._flags_of(flags), **gaps}
 
     def _live_evidence_missing(self, item, proofs):
         criteria = item.get("done_criteria") or ""
@@ -699,7 +707,10 @@ class WaiverMixin:
             pr, head, date = self._merged_commit_proof(git, project, commit)
             merge = commit.get("merge") or {}
             sha = merge.get("sha")
-            if pr is None or not valid_commit_ref(sha):
+            if pr is None and not merge and (squash := self._landing_for(project, commit.get("sha"))):
+                # A squash merge has no merge commit: the forge names its PR and the head that was reviewed.
+                pr, head, date, sha = squash["pr"], squash["head"], squash["merged_at"], commit["sha"]
+            if pr is None or not valid_commit_ref(sha) or not valid_commit_ref(head):
                 raise Refused("evidence_unverified", "merged_pr_missing")
             if all(p["head"] != head for p in proofs):
                 proofs.append({"pr": pr, "head": head, "decision_id": None,

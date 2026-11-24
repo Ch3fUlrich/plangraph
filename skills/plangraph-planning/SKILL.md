@@ -234,6 +234,14 @@ answer first, then the evidence (report file and line), the proposal as items (t
 keeper key, or a new item with its done check), the measurement that will show the effect, the
 risks, and the decisions left to the operator.
 
+**Data or experiment (rule 3.76).** Every proposal, plan decision, priority, cap, threshold and
+cause names its data and its reasoning: the source (telemetry query, keeper read, git range,
+report file and line) and the number. Where the data is missing, the decision is marked
+`EXPERIMENT` with a measurement plan: what is measured, for how long, and which result keeps it
+and which drops it. A value with neither is not written into a plan, an item or a ruling. A cause
+of slow or failed work is claimed only from this system's own numbers; a cause read in a web
+source or remembered from another system is a hypothesis to measure.
+
 **Review rounds**
 1. Strong seats of non-Claude families review the plan, each in its native harness with
    read access to the code and the rules. The number of seats is the review count of the
@@ -243,7 +251,8 @@ risks, and the decisions left to the operator.
    revised plan, also after a part was split out, so the reviewer checks its own findings.
 3. A finding reads `SEVERITY (HIGH|MED|LOW) <part or file:line> - defect, evidence, proposed
    change`; the review ends with `FILES READ` and `VERDICT`. The reviewer verifies claims in the
-   code and the rules before it judges them.
+   code and the rules before it judges them. A decision that carries neither data nor an
+   `EXPERIMENT` label with a measurement plan is a finding, at least MED (rule 3.76).
 4. Rounds continue until no HIGH and no MED finding is left. The no-progress stop is the one
    `skills/batch-writer/SKILL.md` step 10 states for fix rounds: 3 rounds in a row that do not
    bring HIGH plus MED below the best count so far end the loop and force a replan. A plan
@@ -268,6 +277,9 @@ its effect, or it is not ready.
 relay to the router for those decisions. Watching landings, hosts and close passes belongs to
 the orchestrator session, not to the planner. An accepted plan becomes keeper items as in
 section 5, step 5.
+Then the session stays on as the overseer (`skills/plangraph-oversight/SKILL.md`): it checks
+every beat that the change reaches code, production, the keeper and the agents, and turns every
+gap into an item in the same turn.
 
 ## 6. Readiness
 
@@ -323,6 +335,7 @@ research and review. If only Claude is available, record that coverage in the re
 - [ ] Intent written at Layer 1; planning phase(s) scheduled by the operator
 - [ ] Plan graph read first; question batch and conflict follow-up before routed research; refinement recorded
 - [ ] Large plan (section 5a): two families per topic, reports as files, baselines measured, review rounds in one resumed session until no HIGH and no MED, checkpoint card written
+- [ ] Every decision, priority, cap and cause names its source and number, or is marked EXPERIMENT with a measurement plan (rule 3.76)
 - [ ] For a plan that aims at throughput, speed, cost or quality: baselines recorded as evidence before the work; each change it lands written up as an evidence article
 - [ ] Every task passes the section 3 contract; file scopes disjoint; toolchain in each brief
 - [ ] Every task item has a card in the same batch; cards relative-pathed, risk tags explicit
@@ -331,3 +344,4 @@ research and review. If only Claude is available, record that coverage in the re
 - [ ] Readiness and routing left to the keeper; refused cards answered from the planner queue
 - [ ] Reviewers cheap and cross-family; failures become fix-tasks (max 2) then escalate
 - [ ] Done reports, error records and the phase digest filed; plan-graph states updated
+- [ ] Accepted plan: the session switches to oversight (`skills/plangraph-oversight/SKILL.md`)
