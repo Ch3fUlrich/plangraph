@@ -174,8 +174,9 @@ def fold(events, unknown=None):
             for field in ("priority", "model", "review_tier") + SMALL_FIELDS:
                 if field in payload:
                     item[field] = payload[field]
-        elif kind == "incident_appended":
-            # The incident ledger is read directly from events by show, snapshot and card.
+        elif kind in ("incident_appended", "premise_reconfirmed"):
+            # Read directly from events: the incident ledger (show, snapshot, card) and
+            # the decision clock's per-item confirmation floor.
             pass
         elif kind == "exec_owner_changed":
             # Ownership has its own audit events; lifecycle replay is unchanged.
