@@ -82,7 +82,7 @@ Use grep for text that is not a symbol.
     to step 7. Stop by the one stop rule of `rust/pg-spawnd/src/round_progress.rs`: when 3
     rounds in a row do not bring the HIGH+MED count below the best count so far, when from
     round 3 on the count is still above half of the round-1 count, or after round 8
-    (ROUND_CAP is at most 8). After ACCEPT make no further commit.
+    (ROUND_CAP is at most 8); a stall also queues a replan record in the spawner. After ACCEPT make no further commit.
 
 ## Never
 

@@ -22,6 +22,8 @@ pub(crate) mod tests;
 pub(crate) const SLICE_TARGET_LINES: u64 = 1500;
 /// Refusal reasons of the admission that start a replan.
 pub(crate) const TRIGGERS: [&str; 2] = ["no_progress", "round_cap"];
+/// The reason of a replan queued by an escalation: the round goes on, stronger, on the same PR.
+pub(crate) const ESCALATED: &str = "escalated";
 
 /// One leg of the spawner route as the job sees it.
 #[derive(Clone, Debug, PartialEq)]
@@ -133,6 +135,10 @@ fn job_path(state: &Path, item: &str, pr: &str) -> PathBuf {
     let id = Sha256::digest(format!("{item}\n{pr}").as_bytes());
     job_dir(state).join(format!("replan-{:x}.json", id))
 }
+fn escalation_path(state: &Path, item: &str, pr: &str, level: u64) -> PathBuf {
+    let id = Sha256::digest(format!("{item}\n{pr}\n{ESCALATED}\n{level}").as_bytes());
+    job_dir(state).join(format!("replan-{:x}.json", id))
+}
 fn save(path: &Path, job: &Value) -> Result<(), ToolError> {
     atomic_write_private(path, job.to_string().as_bytes())
         .map_err(|_| parameter("replan_state_unavailable: job file not written"))
@@ -157,6 +163,30 @@ pub(crate) fn enqueue(state: &Path, item: &str, pr: &str, reason: &str) -> Resul
         return Ok(false);
     }
     let job = json!({"item":item, "pr":pr, "reason":reason, "plan":null,
+        "defined":[], "closed":false, "report":"pending", "error":null});
+    save(&path, &job)?;
+    Ok(true)
+}
+
+/// Queue the replan record of an escalation to `level`: the slices of the PR are planned and
+/// reported, nothing is defined and the PR stays open because the stronger writer continues on
+/// it. Returns true when this call created the job.
+pub(crate) fn enqueue_escalation(
+    state: &Path,
+    item: &str,
+    pr: &str,
+    level: u64,
+) -> Result<bool, ToolError> {
+    if pr.trim().is_empty() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(job_dir(state))
+        .map_err(|_| parameter("replan_state_unavailable: job directory missing"))?;
+    let path = escalation_path(state, item, pr, level);
+    if path.exists() {
+        return Ok(false);
+    }
+    let job = json!({"item":item, "pr":pr, "reason":ESCALATED, "level":level, "plan":null,
         "defined":[], "closed":false, "report":"pending", "error":null});
     save(&path, &job)?;
     Ok(true)
@@ -215,8 +245,12 @@ fn plan_step(job: &mut Value, ports: &dyn Ports) -> Result<(), ToolError> {
 /// The idempotency key of the job's routing line: 32 lowercase hex characters, stable per item
 /// and PR, so every retry of the same report carries the same key.
 fn report_key(job: &Value) -> String {
+    let level = job["level"]
+        .as_u64()
+        .map(|l| format!("\n{l}"))
+        .unwrap_or_default();
     let id = Sha256::digest(format!(
-        "replan-report\n{}\n{}",
+        "replan-report\n{}\n{}{level}",
         job["item"].as_str().unwrap_or(""),
         job["pr"].as_str().unwrap_or("")
     ));
@@ -251,7 +285,8 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         .as_array()
         .cloned()
         .unwrap_or_default();
-    for slice in &slices {
+    let keep_open = job["reason"] == ESCALATED;
+    for slice in slices.iter().filter(|_| !keep_open) {
         let key = slice["key"].clone();
         if job["defined"].as_array().is_some_and(|d| d.contains(&key)) {
             continue;
@@ -260,15 +295,20 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         job["defined"].as_array_mut().unwrap().push(key);
         save(path, job)?;
     }
-    if job["closed"] != true {
+    if job["closed"] != true && !keep_open {
         ports.close_pr_unmerged(job["pr"].as_str().unwrap_or(""))?;
         job["closed"] = json!(true);
         save(path, job)?;
     }
     if job["report"] == "pending" {
         let keys: Vec<_> = slices.iter().filter_map(|s| s["key"].as_str()).collect();
+        let state = if keep_open {
+            "kept open"
+        } else {
+            "closed unmerged"
+        };
         let line = format!(
-            "REPLAN {} {} | PR {} closed unmerged | slices {}",
+            "REPLAN {} {} | PR {} {state} | slices {}",
             job["item"].as_str().unwrap_or(""),
             job["reason"].as_str().unwrap_or(""),
             job["pr"].as_str().unwrap_or(""),
