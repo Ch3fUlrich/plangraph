@@ -13,6 +13,30 @@ impl fmt::Display for ClaimError {
         }
     }
 }
+/// Why a launch did not return an admitted run. `Uncertain` means the spawner may have admitted
+/// one (it was cut off at its deadline or its receipt was unreadable): the claims must be kept.
+#[derive(Debug)]
+pub enum StartError {
+    Failed(String),
+    Uncertain(String),
+}
+impl From<String> for StartError {
+    fn from(e: String) -> Self {
+        Self::Failed(e)
+    }
+}
+impl From<&str> for StartError {
+    fn from(e: &str) -> Self {
+        Self::Failed(e.into())
+    }
+}
+impl fmt::Display for StartError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Failed(e) | Self::Uncertain(e) => f.write_str(e),
+        }
+    }
+}
 #[derive(Debug)]
 pub enum SpawnError {
     Claim(ClaimError),
@@ -255,6 +279,8 @@ pub fn tick(
     let mut sim_facts = facts.clone();
     let mut rows: Vec<Value> = Vec::new();
     let mut stopped = "no_eligible_item".to_string();
+    // Set when the deadline, not the work or admission, ended the tick.
+    let mut over_budget = false;
     // The refusal row of a tick that already started batches still lists them.
     let failed = |mut row: Value, rows: &[Value]| {
         if !rows.is_empty() {
@@ -277,6 +303,7 @@ pub fn tick(
             last_attempt = now.saturating_sub(begun);
         }
         if !dry && !attempt_fits(now, last_attempt, policy.tick_budget_seconds) {
+            over_budget = true;
             stopped = format!(
                 "tick_budget: {}s of {}s used",
                 now.as_secs(),
@@ -336,6 +363,7 @@ pub fn tick(
                 let mut gone = Vec::new();
                 out_of_time(&held, &held[0].0, launch, &mut gone);
                 skipped.extend(gone);
+                over_budget = true;
                 stopped = "tick_budget: no time left to launch".into();
                 break;
             }
@@ -350,9 +378,9 @@ pub fn tick(
                     }
                     rows.push(row);
                 }
-                // A launch cut off at its deadline may have been admitted: keep the claims
-                // until their lease ends instead of releasing items a run may hold.
-                Err(e) if e.starts_with("launch_timeout") => {
+                // A launch that may have been admitted keeps its claims until their lease ends
+                // instead of releasing items a run may hold.
+                Err(StartError::Uncertain(e)) => {
                     return failed(
                         json!({"decision":"refused","item_key":items[0].key,"reason":format!("{e}; claims retained"),"skipped":skipped,"error":true}),
                         &rows,
@@ -401,7 +429,7 @@ pub fn tick(
         row["stopped"] = json!(stopped);
         return row;
     }
-    if stopped.starts_with("tick_budget") {
+    if over_budget {
         return json!({"decision":"refused","reason":stopped,"skipped":skipped});
     }
     json!({"decision":"idle","reason":"no_eligible_item","skipped":skipped})

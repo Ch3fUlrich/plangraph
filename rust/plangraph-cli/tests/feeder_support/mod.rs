@@ -61,6 +61,8 @@ pub struct Host {
     pub launch_limit: Option<std::time::Duration>,
     /// Every start fails with this error.
     pub start_error: Option<String>,
+    /// That error may have been admitted (the claims must stay).
+    pub start_uncertain: bool,
 }
 impl Host {
     pub fn new(registry: &Arc<Mutex<Registry>>, items: &[Value]) -> Self {
@@ -89,6 +91,7 @@ impl Host {
             rival_secs: 0,
             launch_limit: None,
             start_error: None,
+            start_uncertain: false,
         }
     }
 }
@@ -147,10 +150,14 @@ impl Launch for Host {
             })
             .map(|(other, _)| other.clone()))
     }
-    fn start(&mut self, card: &Value, _: &str) -> Result<Value, String> {
+    fn start(&mut self, card: &Value, _: &str) -> Result<Value, StartError> {
         self.clock += self.start_secs;
         if let Some(e) = &self.start_error {
-            return Err(e.clone());
+            return Err(if self.start_uncertain {
+                StartError::Uncertain(e.clone())
+            } else {
+                StartError::Failed(e.clone())
+            });
         }
         let started = self.registry.lock().unwrap().started.len();
         if self.fail_start || self.fail_start_after.is_some_and(|n| started >= n) {

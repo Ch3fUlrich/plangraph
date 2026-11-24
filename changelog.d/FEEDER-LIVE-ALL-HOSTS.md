@@ -18,3 +18,4 @@ Publishing the quota snapshot uses the reading worker's quota_max_age_seconds (p
 The shipped feeder policy test now pins the tick budget below the service timeout.
 A live feeder tick checks the remaining deadline before each claim, reservation check and launch, reserves time to release the held claims, bounds the spawner launch, and keeps the claims of a launch cut off at its deadline.
 The remote spawner ps projection keeps run_kind, so the feeder splits a remote fleet-session row's whole-card item_key as it does a local one.
+The feeder reads the spawner's receipt from stdout only (stderr of any size cannot lose it), keeps the claims of a launch that may have been admitted, and reports launch and quota-stale outcomes as typed values instead of matching message text.

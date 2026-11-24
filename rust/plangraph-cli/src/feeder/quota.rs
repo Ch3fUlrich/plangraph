@@ -112,6 +112,14 @@ fn has_codex_rows(rows: &Value) -> bool {
     })
 }
 
+/// The center's quota snapshot is missing, unreadable, too old or holds no usable observation.
+/// The text is the refusal reason shown to the operator, with the age where one is known.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct StaleQuota(pub String);
+fn stale(why: impl std::fmt::Display) -> StaleQuota {
+    StaleQuota(format!("quota_stale: {why}"))
+}
+
 /// Parse the center's quota snapshot file (`{"observed_at":<unix s>,"rows":[..]}`, the rows in
 /// the reader's own format) and accept it only while it is at most `max_age` seconds old.
 /// A missing, unreadable or stale file refuses as `quota_stale` and names its age.
@@ -120,33 +128,33 @@ fn center_rows(
     now: i64,
     max_age: i64,
     observation_max_age: i64,
-) -> Result<Value, String> {
+) -> Result<Value, StaleQuota> {
     let doc: Value = text
         .and_then(|t| serde_json::from_str(t).ok())
-        .ok_or("quota_stale: no readable center quota snapshot (age unknown)")?;
+        .ok_or_else(|| stale("no readable center quota snapshot (age unknown)"))?;
     let at = doc["observed_at"]
         .as_i64()
-        .ok_or("quota_stale: center quota snapshot has no observed_at (age unknown)")?;
+        .ok_or_else(|| stale("center quota snapshot has no observed_at (age unknown)"))?;
     let age = now.saturating_sub(at);
     if at > now || age > max_age {
-        return Err(format!(
-            "quota_stale: center quota snapshot is {age}s old (limit {max_age}s)"
-        ));
+        return Err(stale(format!(
+            "center quota snapshot is {age}s old (limit {max_age}s)"
+        )));
     }
     let rows = doc
         .get("rows")
         .filter(|rows| rows.is_array())
         .cloned()
-        .ok_or("quota_stale: center quota snapshot has no rows (age unknown)")?;
+        .ok_or_else(|| stale("center quota snapshot has no rows (age unknown)"))?;
     // A fresh envelope around old or empty observations is still stale quota: say how old.
     if remaining(&rows, now, observation_max_age).is_none() {
         let newest = newest_codex_age(&rows, now).map_or_else(
             || "no codex observation".to_string(),
             |a| format!("newest {a}s old"),
         );
-        return Err(format!(
-            "quota_stale: center quota snapshot is {age}s old but holds no usable codex observation ({newest}, limit {observation_max_age}s)"
-        ));
+        return Err(stale(format!(
+            "center quota snapshot is {age}s old but holds no usable codex observation ({newest}, limit {observation_max_age}s)"
+        )));
     }
     Ok(rows)
 }
@@ -219,7 +227,7 @@ pub(super) fn rows_for_host(
     now: i64,
     max_age: i64,
     observation_max_age: i64,
-) -> Result<Option<Value>, String> {
+) -> Result<Option<Value>, StaleQuota> {
     if supplied.is_some() || local.as_ref().is_some_and(has_codex_rows) {
         return Ok(local);
     }
@@ -452,7 +460,7 @@ mod tests {
         let stale = center_rows(Some(&doc(now - 5_400)), now, 900, 10_800).unwrap_err();
         assert_eq!(
             stale,
-            "quota_stale: center quota snapshot is 5400s old (limit 900s)"
+            StaleQuota("quota_stale: center quota snapshot is 5400s old (limit 900s)".into())
         );
         for bad in [
             None,
@@ -462,6 +470,7 @@ mod tests {
         ] {
             assert!(center_rows(bad, now, 900, 10_800)
                 .unwrap_err()
+                .0
                 .starts_with("quota_stale:"));
         }
         assert!(center_rows(Some(&doc(now + 5)), now, 900, 10_800).is_err());
@@ -473,11 +482,11 @@ mod tests {
         let old = json!([{"provider":"codex:a","windowKey":"5h","timestamp":now - 20_000,"remainingPct":70}]);
         let err = center_rows(Some(&wrap(old.clone())), now, 900, 10_800).unwrap_err();
         assert_eq!(
-            err,
+            err.0,
             "quota_stale: center quota snapshot is 30s old but holds no usable codex observation (newest 20000s old, limit 10800s)"
         );
         let err = center_rows(Some(&wrap(json!([]))), now, 900, 10_800).unwrap_err();
-        assert!(err.contains("no codex observation"), "{err}");
+        assert!(err.0.contains("no codex observation"), "{err:?}");
         // The center refuses to publish either, so the worker's file keeps aging instead.
         assert!(publishable(&old, now, 10_800)
             .unwrap_err()
@@ -519,7 +528,7 @@ mod tests {
         let file = dir.path().join("quota-facts.json");
         let local = Some(json!([]));
         let err = rows_for_host(local.clone(), None, &file, now, 900, 10_800).unwrap_err();
-        assert!(err.starts_with("quota_stale:"), "{err}");
+        assert!(err.0.starts_with("quota_stale:"), "{err:?}");
         std::fs::write(&file, doc(now - 60)).unwrap();
         let rows = rows_for_host(local.clone(), None, &file, now, 900, 10_800)
             .unwrap()

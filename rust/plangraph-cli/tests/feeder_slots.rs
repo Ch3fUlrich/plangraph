@@ -237,7 +237,8 @@ fn a_launch_cut_off_at_its_deadline_keeps_its_claims() {
     let items = vec![item("ALPHA-1", 9, &["src/a.rs"])];
     let registry: Arc<Mutex<Registry>> = Arc::default();
     let mut host = Host::new(&registry, &items);
-    host.start_error = Some("launch_timeout: spawner exceeded 32s".into());
+    host.start_error = Some("spawner exceeded 32s".into());
+    host.start_uncertain = true;
     let row = drive(&ready(items), &mut host, "dell", 1, false);
     assert_eq!(row["error"], true);
     assert!(row["reason"].as_str().unwrap().contains("claims retained"));

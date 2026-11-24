@@ -282,7 +282,7 @@ impl Launch for Fake {
             Ok(7)
         }
     }
-    fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String> {
+    fn start(&mut self, card: &Value, brief: &str) -> Result<Value, StartError> {
         self.calls.push(format!(
             "spawn {} {brief}",
             card["item_key"].as_str().unwrap()

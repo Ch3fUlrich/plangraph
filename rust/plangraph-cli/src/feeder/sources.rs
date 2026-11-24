@@ -266,17 +266,14 @@ fn finish_facts(
     now: i64,
     off: bool,
     local: Option<&str>,
-    quota: Result<Option<Value>, String>,
+    quota: Result<Option<Value>, super::quota::StaleQuota>,
 ) -> Result<FactsOutcome, String> {
     match quota {
         Ok(rows) => {
             apply_facts(f, runs, p, now, off, local, rows.as_ref()).map(FactsOutcome::Ready)
         }
-        Err(reason) if reason.starts_with("quota_stale") => {
-            apply_facts(f, runs, p, now, off, local, None)
-                .map(|facts| FactsOutcome::QuotaStale { reason, facts })
-        }
-        Err(e) => Err(e),
+        Err(super::quota::StaleQuota(reason)) => apply_facts(f, runs, p, now, off, local, None)
+            .map(|facts| FactsOutcome::QuotaStale { reason, facts }),
     }
 }
 pub(super) fn facts(
@@ -458,10 +455,11 @@ mod tests {
         .unwrap();
         let p = Policy::default();
         let stale = "quota_stale: center quota snapshot is 5400s old (limit 900s)".to_string();
+        let stale_err = || super::super::quota::StaleQuota(stale.clone());
         let fresh_rows =
             json!([{"provider":"codex:a","windowKey":"5h","timestamp":1500,"remainingPct":70}]);
         let outcome =
-            finish_facts(f.clone(), &runs, &p, 1600, false, None, Err(stale.clone())).unwrap();
+            finish_facts(f.clone(), &runs, &p, 1600, false, None, Err(stale_err())).unwrap();
         let ready = finish_facts(f, &runs, &p, 1600, false, None, Ok(Some(fresh_rows))).unwrap();
         let (FactsOutcome::QuotaStale { reason, facts: s }, FactsOutcome::Ready(r)) =
             (outcome, ready)
@@ -475,11 +473,6 @@ mod tests {
             (r.running_writers, r.free_ram_bytes)
         );
         assert_eq!(r.quota_remaining_percent, Some(70.0));
-        // Other quota errors stay faults.
-        let f2: HostFacts = serde_json::from_value(json!({"host":"dell","free_ram_bytes":1,
-            "free_disk_bytes":1,"quota_remaining_percent":null,"observed_at":1000}))
-        .unwrap();
-        assert!(finish_facts(f2, &[], &p, 1600, false, None, Err("other".into())).is_err());
     }
     #[test]
     fn a_spawner_row_holding_the_whole_card_is_split_into_its_keys() {

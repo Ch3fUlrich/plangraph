@@ -5,7 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 pub type Env = BTreeMap<String, String>;
 pub(super) fn python(env: &Env, repo: &Path) -> Command {
-    let mut cmd = Command::new("python3");
+    // `PLANGRAPH_PYTHON` selects another interpreter (a virtualenv's, or a stand-in in tests).
+    let mut cmd = Command::new(
+        env.get("PLANGRAPH_PYTHON")
+            .map_or("python3", String::as_str),
+    );
     cmd.current_dir(repo).envs(env);
     // Use the adapter revision from this checkout, not an unrelated editable
     // installation. Preserve additional caller module paths after that source.
@@ -259,7 +263,7 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         }
         Ok(None)
     }
-    fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String> {
+    fn start(&mut self, card: &Value, brief: &str) -> Result<Value, StartError> {
         let dir = tempfile::Builder::new()
             .prefix("launch-")
             .tempdir_in(&self.state)
@@ -282,14 +286,22 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         .arg("--prompt-file")
         .arg(prompt_path)
         .args(["--wait", "0"]);
+        // Stdout holds the receipt; stderr is not read, so a noisy spawner cannot lose one. Past
+        // the deadline, or with an unreadable stdout, the spawner may have admitted a run: the
+        // claims stay (`Uncertain`). A spawner that cannot start admitted nothing.
         let out = match self.launch_limit {
-            Some(limit) => pg_worker_core::host_command::capture(&mut cmd, limit).map_err(|e| {
-                if e.kind() == std::io::ErrorKind::TimedOut {
-                    format!("launch_timeout: spawner exceeded {}s", limit.as_secs())
-                } else {
-                    "cannot execute spawner".to_string()
-                }
-            })?,
+            Some(limit) => pg_worker_core::host_command::capture_stdout(&mut cmd, limit).map_err(
+                |e| match e.kind() {
+                    std::io::ErrorKind::TimedOut => StartError::Uncertain(format!(
+                        "spawner exceeded its {}s launch limit and was stopped",
+                        limit.as_secs()
+                    )),
+                    std::io::ErrorKind::InvalidData => {
+                        StartError::Uncertain("spawner stdout unreadable".into())
+                    }
+                    _ => StartError::Failed("cannot execute spawner".into()),
+                },
+            )?,
             None => cmd.output().map_err(|_| "cannot execute spawner")?,
         };
         let mut run = receipt(&out.stdout, out.status.code())?;
@@ -431,6 +443,121 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
                 )
             ]
         );
+    }
+    /// An interpreter stand-in: the script is run as `python3 -m plangraph.spawner.cli spawn ...`.
+    #[cfg(unix)]
+    fn fake_python(dir: &Path, script: &str) -> Env {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("fake-python");
+        fs::write(&bin, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        Env::from([("PLANGRAPH_PYTHON".into(), bin.to_string_lossy().into())])
+    }
+    #[cfg(unix)]
+    fn adapters<'a>(
+        env: &'a Env,
+        dir: &Path,
+        limit: Option<std::time::Duration>,
+    ) -> Adapters<'a, Fake> {
+        Adapters {
+            keeper: Fake(RefCell::new(vec![])),
+            env,
+            repo: dir.into(),
+            state: dir.into(),
+            host: "dell".into(),
+            launch_limit: limit,
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_spawner_past_its_launch_limit_is_stopped_and_its_claims_are_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let pid_file = d.path().join("pid");
+        let env = fake_python(
+            d.path(),
+            &format!("echo $$ > {}\nexec sleep 60", pid_file.display()),
+        );
+        let limit = std::time::Duration::from_secs(2);
+        let mut a = adapters(&env, d.path(), Some(limit));
+        let card = json!({"item_key":"plangraph:A","files":[]});
+        let began = std::time::Instant::now();
+        let err = a.start(&card, "brief").unwrap_err();
+        assert!(matches!(err, StartError::Uncertain(_)), "{err}");
+        assert!(began.elapsed() < std::time::Duration::from_secs(20));
+        // The spawner process is gone, not left running past the deadline.
+        let pid: u32 = fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
+        // Through a whole tick: the claim is kept, never released.
+        let ready = json!({"items":[{"key":"plangraph:A","title":"t","priority":9,"state":"open",
+            "created_at":"2026-01-01T00:00:00Z","note":"files: []"}]});
+        let facts: HostFacts = serde_json::from_value(json!({"host":"dell",
+            "free_ram_bytes":8000000000u64,"free_disk_bytes":20000000000u64,
+            "quota_remaining_percent":80,"observed_at":1000,"now":1001}))
+        .unwrap();
+        // The tick sets its own (long) limit; this wrapper clamps it so the test stays short.
+        struct Clamped<'a>(Adapters<'a, Fake>, std::time::Duration);
+        impl Launch for Clamped<'_> {
+            fn set_launch_limit(&mut self, _: std::time::Duration) {
+                let limit = self.1;
+                self.0.set_launch_limit(limit);
+            }
+            fn claim(&mut self, k: &str) -> Result<u64, ClaimError> {
+                self.0.claim(k)
+            }
+            fn start(&mut self, c: &Value, b: &str) -> Result<Value, StartError> {
+                self.0.start(c, b)
+            }
+            fn release(&mut self, k: &str, e: u64) -> Result<(), String> {
+                self.0.release(k, e)
+            }
+        }
+        let mut a = Clamped(adapters(&env, d.path(), None), limit);
+        let row = tick(
+            &ready,
+            &[],
+            &facts,
+            &Policy::default(),
+            "rules",
+            "/repo",
+            "/reviews",
+            false,
+            &mut a,
+        );
+        assert_eq!(row["error"], true, "{row}");
+        assert!(row["reason"].as_str().unwrap().contains("claims retained"));
+        let verbs: Vec<String> =
+            a.0.keeper
+                .0
+                .borrow()
+                .iter()
+                .map(|(v, _)| v.clone())
+                .collect();
+        assert!(verbs.iter().any(|v| v.starts_with("claim")));
+        assert!(!verbs.iter().any(|v| v.starts_with("release")), "{verbs:?}");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_receipt_survives_more_than_a_mebibyte_of_stderr() {
+        let d = tempfile::tempdir().unwrap();
+        let env = fake_python(
+            d.path(),
+            "head -c 2097152 /dev/zero >&2\nprintf '{\"run_id\":\"run-x\",\"status\":\"running\"}'",
+        );
+        let mut a = adapters(&env, d.path(), Some(std::time::Duration::from_secs(30)));
+        let card = json!({"item_key":"plangraph:A","files":[]});
+        let run = a.start(&card, "brief").unwrap();
+        assert_eq!(run["run_id"], "run-x");
+        // A receipt printed with a nonzero exit (queued) is read the same way.
+        let env = fake_python(
+            d.path(),
+            "head -c 2097152 /dev/zero >&2\nprintf '{\"run_id\":\"run-q\",\"status\":\"queued\"}'\nexit 5",
+        );
+        let mut a = adapters(&env, d.path(), Some(std::time::Duration::from_secs(30)));
+        assert_eq!(a.start(&card, "brief").unwrap()["status"], "queued");
     }
     struct Snapshot(Value);
     impl Transport for Snapshot {

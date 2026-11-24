@@ -17,7 +17,7 @@ pub use selection::{decode_task, pick, pick_batch, prepare_ready, validate_ready
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-pub use workflow::{tick, ClaimError, SpawnError};
+pub use workflow::{tick, ClaimError, SpawnError, StartError};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Task {
@@ -274,7 +274,7 @@ pub trait Launch {
     /// The longest the next `start` may run; an adapter without a limit ignores it.
     fn set_launch_limit(&mut self, _limit: std::time::Duration) {}
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError>;
-    fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String>;
+    fn start(&mut self, card: &Value, brief: &str) -> Result<Value, StartError>;
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String>;
     /// After `key` is claimed: the key of another claimed item (outside `batch`) whose files
     /// overlap `files`. The claimant yields to any such claim, so two hosts claiming at once
@@ -295,6 +295,9 @@ pub fn spawn(card: &Value, brief: &str, claim: &mut impl Launch) -> Result<Value
     let epoch = claim.claim(key).map_err(SpawnError::Claim)?;
     match claim.start(card, brief) {
         Ok(run) => Ok(run),
+        Err(StartError::Uncertain(e)) => Err(SpawnError::Start(format!(
+            "launch uncertain; claim retained: {e}"
+        ))),
         Err(e) => match claim.release(key, epoch) {
             Ok(()) => Err(SpawnError::Start(format!(
                 "spawn failed; claim released: {e}"

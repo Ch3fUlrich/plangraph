@@ -83,6 +83,22 @@ pub fn capture(command: &mut Command, timeout: Duration) -> io::Result<Output> {
     })
 }
 
+/// Run one command within the deadline and return its exit status and stdout. Stderr is
+/// discarded, so diagnostics of any size cannot invalidate a receipt printed on stdout. A
+/// deadline passed is `TimedOut`; stdout past the cap is `InvalidData`; a command that cannot
+/// start is the spawn error. After either of the first two the command may have acted.
+pub fn capture_stdout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+    let stdout = tempfile::tempfile()?;
+    command.stdout(stdout.try_clone()?).stderr(Stdio::null());
+    let status = run_bounded(command, timeout)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "command timed out"))?;
+    Ok(Output {
+        status,
+        stdout: read_bounded(stdout).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        stderr: Vec::new(),
+    })
+}
+
 fn run_bounded(
     command: &mut Command,
     timeout: Duration,
@@ -129,6 +145,41 @@ fn read_bounded(mut file: File) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_stdout_keeps_stdout_and_status_whatever_stderr_holds() {
+        // 2 MiB on stderr (past the 1 MiB cap) beside a small receipt and a nonzero exit.
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "head -c 2097152 /dev/zero >&2; printf receipt; exit 5",
+        ]);
+        let out = capture_stdout(&mut command, Duration::from_secs(20)).unwrap();
+        assert_eq!(out.stdout, b"receipt");
+        assert_eq!(out.status.code(), Some(5));
+        assert!(out.stderr.is_empty());
+        // `capture` on the same command fails on the oversized stderr: the case this avoids.
+        assert!(capture(&mut command, Duration::from_secs(20)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_stdout_names_a_deadline_and_an_oversized_stdout() {
+        let mut slow = Command::new("sleep");
+        slow.arg("30");
+        let start = Instant::now();
+        let err = capture_stdout(&mut slow, Duration::from_millis(300)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(start.elapsed() < Duration::from_secs(10));
+        let mut big = Command::new("head");
+        big.args(["-c", "2097152", "/dev/zero"]);
+        let err = capture_stdout(&mut big, Duration::from_secs(20)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let err = capture_stdout(&mut Command::new("/nonexistent/x"), Duration::from_secs(1))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
 
     #[test]
     fn ssh_routes_preserve_destination_after_option_terminator() {

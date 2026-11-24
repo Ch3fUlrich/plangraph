@@ -29,7 +29,7 @@ impl Launch for Fake {
             Ok(9)
         }
     }
-    fn start(&mut self, c: &Value, _: &str) -> Result<Value, String> {
+    fn start(&mut self, c: &Value, _: &str) -> Result<Value, StartError> {
         self.calls
             .push(format!("start {}", c["item_key"].as_str().unwrap()));
         if self.fail_start {
