@@ -124,3 +124,32 @@ fn nothing_removable_names_every_kept_path_with_its_reason() {
     assert_eq!(report.skipped.len(), 3, "one reason line per kept path");
     assert!(stalled_alert(&[]).contains("no Cargo target candidate"));
 }
+
+#[test]
+fn a_symlinked_parent_never_redirects_removal_outside_the_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let outside = root.join("outside");
+    let external = target(&outside, 700, true);
+    let tree = root.join("tree");
+    fs::create_dir_all(&tree).unwrap();
+    // tree/rust -> outside/rust, so tree/rust/target is the external target.
+    std::os::unix::fs::symlink(outside.join("rust"), tree.join("rust")).unwrap();
+    let candidate = Candidate {
+        target: tree.join("rust/target"),
+        owner: tree.clone(),
+    };
+    let mut report = report();
+    let kept = reclaim(
+        &[candidate],
+        &Guards::default(),
+        &[],
+        (0, 10_000),
+        SystemTime::now(),
+        true,
+        &mut report,
+    );
+    assert!(external.target.join("debug/deps/object").exists());
+    assert_eq!(report.freed_bytes, 0);
+    assert!(kept[0].reason.contains("outside"), "{}", kept[0].reason);
+}

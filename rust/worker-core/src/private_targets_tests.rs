@@ -436,3 +436,25 @@ fn a_build_elsewhere_on_the_host_does_not_keep_an_idle_target_but_one_in_its_tre
     assert!(!idle.exists(), "{:?}", report.actions);
     assert!(busy.exists());
 }
+
+#[test]
+fn a_fast_check_target_named_by_a_build_elsewhere_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().canonicalize().unwrap();
+    fixture(&cache.join("fc-used"), true);
+    fixture(&cache.join("fc-idle"), true);
+    let mut report = report();
+    // A build whose cwd is another checkout reports the target through CARGO_TARGET_DIR.
+    let refs = vec![cache.join("fc-used"), tmp.path().join("elsewhere/checkout")];
+    sweep_fast_check_using(
+        &cache,
+        &Guards::default(),
+        SystemTime::now(),
+        true,
+        &mut report,
+        || Ok((refs.clone(), true)),
+    )
+    .unwrap();
+    assert!(cache.join("fc-used").exists());
+    assert!(!cache.join("fc-idle").exists());
+}

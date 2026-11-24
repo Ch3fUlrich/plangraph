@@ -122,6 +122,10 @@ fn keep_reason(
         .owner
         .canonicalize()
         .unwrap_or_else(|_| candidate.owner.clone());
+    // A symlinked parent (a worktree's `rust` pointing elsewhere) must not redirect removal.
+    if !canonical.starts_with(&owner) {
+        return Ok(Err((0, "resolves outside its worktree".into())));
+    }
     let (bytes, newest) = scan(target)?;
     if let Some(process) = refs
         .iter()
