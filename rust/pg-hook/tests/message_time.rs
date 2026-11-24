@@ -69,8 +69,14 @@ fn only_send_text_is_subject_to_the_time_check() {
 }
 
 #[test]
-fn placeholders_require_about() {
-    for (text, code) in [("Created about 00:0xZ", 0), ("Created 00:0xZ", 2)] {
+fn placeholders_are_refused_with_or_without_about() {
+    for (text, code) in [
+        ("Created about 00:0xZ", 2),
+        ("Created 00:0xZ", 2),
+        ("Created 05:4xZ", 2),
+        ("Created about 05:2xZ", 2),
+        ("No stamp here", 0),
+    ] {
         assert_eq!(
             run("SendMessage", json!({"message": text})).status.code(),
             Some(code)
@@ -158,7 +164,7 @@ assert "message-time: 2099-01-01T04:02:00Z" in result["content"][0]["text"], res
 }
 
 #[test]
-fn a_stamp_ten_minutes_ahead_is_refused_and_the_current_minute_passes() {
+fn a_stamp_ten_minutes_off_either_way_is_refused_and_the_current_minute_passes() {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -171,6 +177,13 @@ fn a_stamp_ten_minutes_ahead_is_refused_and_the_current_minute_passes() {
     )
     .status
     .success());
+    let behind = stamp((now + 86400 - 600) % 86400);
+    let stale = run(
+        "SendMessage",
+        json!({"message": format!("Merged at {behind}")}),
+    );
+    assert_eq!(stale.status.code(), Some(2));
+    assert!(String::from_utf8(stale.stderr).unwrap().contains(&behind));
     if now < 86400 - 720 {
         let ahead = stamp(now + 600);
         let refused = run(
