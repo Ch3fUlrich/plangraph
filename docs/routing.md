@@ -271,9 +271,9 @@ of the form `D-<number>`. Native Codex package sessions pass
 A 1M spawn route uses the declared request bound of a leg that supports that class.
 Sol and Astra declare 1,000,000 tokens, including effort variants and native sessions.
 Smaller spawn routes use 55% of declared leg context. Legs without a bound and keeper budgets use the 55% class share.
-After the required OpenCode seats, the standard review order prefers
-`agy-gemini-4-hydrogen-high` and then `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
-available in their configured order, and the Argon review legs stay last. Repository-required reviews admit OpenCode Go DeepSeek and GLM tools legs, which get checkout reads and scoped test commands.
+After the smart legs (`agy-gemini-4-hydrogen-high`, the Argon legs, Sonnet) and the weak pair, the
+standard review order prefers `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
+available in their configured order. Repository-required reviews admit OpenCode Go DeepSeek and GLM tools legs, which get checkout reads and scoped test commands.
 A missing verdict or a diff-only acceptance cannot complete a repository review. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`

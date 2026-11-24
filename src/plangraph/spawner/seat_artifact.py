@@ -75,7 +75,12 @@ def reserve_seat_families(plan, writers):
     spares, next_slot = [[] for _ in plan.review_seats], 0
     for spare in plan.legs:
         family = seat_family(spare.family)
-        if family in writers or family in seat_families:
+        if family in writers:
+            continue
+        if family in seat_families:
+            # Rule 3.66 (f10): a lone smart seat falls to its own family's next leg (hydrogen to argon).
+            if len(plan.review_seats) == 1 and spare.id != plan.review_seats[0].id:
+                spares[owners[family]].append(spare)
             continue
         if family not in owners:
             owners[family] = next_slot % len(plan.review_seats)

@@ -52,3 +52,38 @@ def test_the_seat_poster_accepts_every_key_of_the_part(tmp_path, key, ok):
     else:
         with pytest.raises(ValueError, match='does not match'):
             sv.read_record_identity(seat, key)
+
+
+def test_the_seat_poster_posts_a_seat_of_a_part_under_its_second_key(tmp_path, capsys):
+    """evidence_from_record copies item_key; the poster must still accept the part's other key."""
+    import json
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'tools'))
+    import seat_verdict as sv
+    from test_seat_record_fixes import HEAD40, rec_dir
+    seat = rec_dir(tmp_path, 'run-' + '1' * 32, item_key=A, item_keys=[A, B])
+    argv = ['--key', B, '--seat-dir', str(seat), '--writer-family', 'deepseek',
+            '--token-dir', str(tmp_path), '--dry-run', '--head', HEAD40]
+    assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)['body']['key'] == B
+    argv[1] = 'plangraph:OTHER'
+    assert sv.main(argv) == sv.EXIT_REFUSED
+
+
+def test_the_run_record_verifier_accepts_every_key_of_a_part():
+    from plangraph.keeper.evidence_spawner import _record_keys
+    record = seat_record({'item_keys': [A, B]})
+    assert B in _record_keys(record) and A in _record_keys(record)
+
+
+def test_backfill_discovery_finds_a_part_seat_under_its_second_key(tmp_path):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parents[1] / 'tools'))
+    import seat_record as sr
+    from test_seat_backfill import ITEM, record
+    record(tmp_path, item_key=A, item_keys=[A, B])
+    seats, reasons = sr.eligible_records(dict(ITEM, key=B), tmp_path)
+    assert len(seats) == 1, reasons
+    assert sr.eligible_records(dict(ITEM, key='plangraph:OTHER'), tmp_path)[0] == []
