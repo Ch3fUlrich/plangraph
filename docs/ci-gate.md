@@ -87,7 +87,7 @@ times serially and once with `-n auto` (the full-worker run); each Rust test run
 threads. Every log is kept with `replay.json` (`python-run-N.log`, `cargo-run-N.log`) under `--replay-dir`, by default
 `<telemetry>/entry-replay/<head>` (`PLANGRAPH_TELEMETRY_DIR`). A test that passed and failed among the runs is printed as
 `entry-set: FLAKY: <test id> (logs <failing log> and <passing log>)`; a test that fails every run, or a run with no test outcome, is `FAIL`.
-A run that reports no outcome for a changed test file or Rust test is `incomplete`, so five invocations that skipped the test are no receipt. Either one makes the entry run fail. The receipt covers the invoking environment only; Postgres-backed Python tests and the native Windows Rust run are a follow-up slice. `replay.json` is the receipt bound to the head: `merge_batch build` readiness (`ready_problems`) needs a
+A run that reports no outcome for any collected test id of a changed file (not just one id of it) or for a changed Rust test is `incomplete`, so five invocations that skipped the test are no receipt. Either one makes the entry run fail. The receipt covers the invoking environment only; Postgres-backed Python tests and the native Windows Rust run are a follow-up slice. `replay.json` is the receipt bound to the head: `merge_batch build` readiness (`ready_problems`) needs a
 passing five-run receipt for the exact head of every part that changes a test or Rust file, and names `FLAKY: <test id> (logs ...)` from it.
 Green CI alone never stands for the replay.
 
@@ -102,10 +102,10 @@ Green CI alone never stands for the replay.
   `PYTEST_SHARD_DURATIONS_OUT` and uploads `durations-<suite>-<shard>`. On a full run `ci-gate` merges them per suite (`ci-flake
   combine-durations`) into the `pytest-durations-combined` artifact; committing that file is the pin for the next train.
 - **Same-SHA retry.** A red pytest or `cargo test` step stays red. A step after it reruns the failed test ids once on the same SHA
-  (`.github/actions/pytest-retry`, the Rust step; the affected path of a pull request too, its first log is the one kept) and `ci-flake classify` writes `flake-record.json` (runner, run, attempt, SHA, test ids, both
+  (`.github/actions/pytest-retry`, `.github/actions/cargo-retry` for the workspace, worker and native Windows Rust jobs; the affected path of a pull request too: CI sets `CI_CLASSIFY_RETRY`, which turns off the reruns of `tools/affected_tests.py`, so there is exactly one retry and the first log is kept). The retry's own exit status is captured and the classification always runs and `ci-flake classify` writes `flake-record.json` (runner, run, attempt, SHA, test ids, both
   logs) and `flake-items.json` (a priority-10 Keeper item definition per fail-then-pass test) into the `flake-*` artifact and the job summary.
   Fail-pass and fail-fail are both red; more than 50 failures are not retried. A test whose retry reports a pass and a teardown error is a failure; an xdist `@group` suffix is not part of the test id. The Rust blocking run excludes an active entry by package and test (that package runs alone with `--skip`).
 - **Quarantine.** Every run pins one UTC timestamp (`select` output `as-of`) and the ledger `.github/pytest-quarantine.json` of the pull
-  request's base (`.github/actions/quarantine-ledger`; a shallow checkout fetches the base, and a base that cannot be read fails the job, only a base without a ledger file means none). The blocking pytest and `cargo test` steps leave out the active entries; shard 0
+  request's or merge group's base (`.github/actions/quarantine-ledger`; a shallow checkout fetches the base, and a base that cannot be read fails the job, only a base without a ledger file means none). The blocking pytest and `cargo test` steps leave out the active entries; shard 0
   (and the `rust` and native Windows jobs, which skip an entry of their own package in the blocking run) runs only them in a reporting step that never blocks (bounded like every pytest step); `ci-gate` publishes the owner and expiry of every entry in its
   summary. An entry past its expiry blocks again. A Rust entry is `cargo:<package>:<test path>`.

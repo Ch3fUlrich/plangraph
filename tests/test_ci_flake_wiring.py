@@ -23,7 +23,9 @@ NONBLOCKING = {
     "Retry the failed tests once at the same SHA", "Upload the same-SHA retry logs and record",
     "Quarantined tests (reporting, never blocking)", "Retry the failed Rust tests once at the same SHA",
     "Quarantined Rust tests (reporting, never blocking)", "Quarantined Rust tests on Windows (reporting, never blocking)",
-    "Carry ci-full evidence to a reworded head",
+    "Retry the failed pg-spawnd tests once at the same SHA", "Retry the failed pg-worker-core tests once at the same SHA",
+    "Upload the same-SHA retry logs and record (Windows)", "Retry the failed worker tests once at the same SHA",
+    "Quarantined worker tests (reporting, never blocking)", "Carry ci-full evidence to a reworded head",
     "Quarantine ledger in the gate summary", "Publish the quarantine ledger", "Download shard timings",
     "Combine shard timings per suite", "Upload the combined shard timings", "Post ci-full evidence",
 }
@@ -338,7 +340,7 @@ def test_the_native_windows_blocking_run_skips_only_its_own_package_entries(tmp_
         "PATH": f"{bin_dir}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(target), "GITHUB_WORKSPACE": str(tmp_path),
         "PYTEST_QUARANTINE_FILE": "l", "PYTEST_QUARANTINE_AS_OF": "t"}, tmp_path)
     assert done.returncode == 0, done.stderr
-    assert (tmp_path / "calls").read_text().strip() == f"cargo test -p {package} -- --exact --skip {skip}"
+    assert (tmp_path / "calls").read_text().strip() == f"cargo test --no-fail-fast -p {package} -- --exact --skip {skip}"
     assert other not in (tmp_path / "calls").read_text()
 
 
@@ -347,3 +349,68 @@ def test_the_windows_job_pins_the_same_ledger_and_runs_the_reporting_step_withou
     report = named("rust-windows", "Quarantined Rust tests on Windows (reporting, never blocking)")
     assert report["continue-on-error"] is True and "--mode quarantine" in report["run"]
     assert index("rust-windows", "Quarantine ledger and run timestamp") < index("rust-windows", "cargo test -p pg-spawnd")
+
+
+def test_every_ledger_pin_reads_the_trusted_base_for_pull_requests_and_merge_groups():
+    pins = [step for job in JOBS.values() for step in job["steps"] if step.get("uses") == "./.github/actions/quarantine-ledger"]
+    assert len(pins) == 6   # pytest, pytest-postgres, rust, rust-windows, rust-worker, ci-gate
+    for step in pins:
+        base = step["with"]["base-sha"]
+        assert "github.event.pull_request.base.sha" in base and "github.event.merge_group.base_sha" in base, step["name"]
+
+
+def test_ci_pytest_steps_leave_the_classification_to_the_one_retry():
+    assert named("pytest", "pytest")["env"]["CI_CLASSIFY_RETRY"] == "1"
+    assert named("pytest-postgres", "pytest (contract suite + keeper storage tests on Postgres)")["env"]["CI_CLASSIFY_RETRY"] == "1"
+
+
+@pytest.mark.parametrize("job,step", [("rust", "Retry the failed Rust tests once at the same SHA"),
+                                       ("rust-worker", "Retry the failed worker tests once at the same SHA"),
+                                       ("rust-windows", "Retry the failed pg-spawnd tests once at the same SHA"),
+                                       ("rust-windows", "Retry the failed pg-worker-core tests once at the same SHA")])
+def test_every_rust_runner_path_is_classified_by_the_shared_retry_action(job, step):
+    retry = named(job, step)
+    assert retry["uses"] == "./.github/actions/cargo-retry" and retry["continue-on-error"] is True
+    assert "failure()" in retry["if"] and ".outcome == 'failure'" in retry["if"]
+    assert retry["with"]["command"].startswith(("cargo test --no-fail-fast", "cargo run --manifest-path ../Cargo.toml"))
+
+
+def test_the_worker_job_skips_only_its_own_package_entries_and_keeps_the_log(tmp_path):
+    target = tmp_path / "target"
+    (target / "debug").mkdir(parents=True)
+    stub(target / "debug/ci-flake", "printf '%s\\n' 'pg-worker a::b' 'pg-spawnd c::d'\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub(bin_dir / "cargo", 'echo "cargo $*" >> "$RUNNER_TEMP/calls"\n')
+    done, _, _ = run_script(named("rust-worker", "cargo test")["run"], tmp_path, {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(target),
+        "PYTEST_QUARANTINE_FILE": "l", "PYTEST_QUARANTINE_AS_OF": "t"}, tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert "-- cargo test --no-fail-fast -- --exact --skip a::b" in (tmp_path / "calls").read_text()
+    assert "c::d" not in (tmp_path / "calls").read_text() and (tmp_path / "cargo-worker-first.log").is_file()
+
+
+def test_a_failing_retry_still_reaches_the_classification_in_both_retry_actions(tmp_path):
+    """The action steps run under bash -e: the retry's own failure must not stop the classification."""
+    work, bin_dir = retry_fixture(tmp_path, 2)
+    stub(bin_dir / "python", 'echo "python $*" >> "$RUNNER_TEMP/calls"\nexit 1\n')
+    done, _, _ = run_script(action_script("pytest-retry"), work, {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}", "SUITE": "sqlite", "FIRST_LOG": str(tmp_path / "first.log"), "RUN_ID": "9",
+        "RUN_ATTEMPT": "1", "RUNNER_ID": "r", "HEAD_SHA": "b" * 40}, tmp_path)
+    assert done.returncode == 0, done.stderr
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert calls[0].startswith("python -m pytest") and calls[1].startswith("classify")
+    assert "retry exit status: 1" in (tmp_path / "flake-sqlite/second.log").read_text()
+    # the Rust action: the same shape with a cargo that fails
+    rust = tmp_path / "rust"
+    (rust / "rust").mkdir(parents=True)
+    stub(bin_dir / "cargo", 'echo "cargo $*" >> "$RUNNER_TEMP/calls"\nexit 101\n')
+    (tmp_path / "calls").unlink()
+    script = yaml.safe_load((ROOT / ".github/actions/cargo-retry/action.yml").read_text())["runs"]["steps"][0]["run"]
+    done, _, _ = run_script(script, rust, {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}", "SUITE": "cargo", "FIRST_LOG": str(tmp_path / "first.log"), "RETRY_COMMAND": "cargo test --no-fail-fast",
+        "FLAKE_BIN": str(work / "rust/target/release/ci-flake"), "WORKDIR": "rust", "RUN_ID": "9", "RUN_ATTEMPT": "1", "RUNNER_ID": "r", "HEAD_SHA": "c" * 40}, tmp_path)
+    assert done.returncode == 0, done.stderr
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert calls[0] == "cargo test --no-fail-fast -- --exact tests/t.py::t0 tests/t.py::t1" and calls[1].startswith("classify")
+    assert "retry exit status: 101" in (tmp_path / "flake-cargo/second.log").read_text()

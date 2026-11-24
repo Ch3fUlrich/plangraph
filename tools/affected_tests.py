@@ -780,7 +780,7 @@ def main(root=None):
             print(f"affected wall seconds: {time.monotonic() - start:.3f}")
             failed = sorted(nodeid for nodeid, outcome in first.items() if outcome == "failed")
             # Exit 1 only: a collection or usage error (2, 3, 4) is not a test failure.
-            if code == 1 and 0 < len(failed) <= MAX_RERUN_FAILURES:
+            if code == 1 and 0 < len(failed) <= MAX_RERUN_FAILURES and not os.environ.get("CI_CLASSIFY_RETRY"):   # CI: one same-SHA retry classifies
                 hashes.append(tree_hash(root))
                 serial = ["-n", "0"] if parallel else []
                 _, low, _ = pytest([*serial, *QUIET_FLAGS, *failed], capture=True)
