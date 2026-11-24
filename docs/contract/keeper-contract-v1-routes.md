@@ -177,7 +177,9 @@ principal or a run token; the event carries `merged_open`. The router endpoint a
 granted batch path keep their own rules and need no trailer.
 
 ### `POST /v1/add_evidence_router`
-Router. `{key, kind, ref}`; item must be `claimed` or `in_review`. [Evidence].
+Router. `{key, kind, ref}`; item must be `claimed` or `in_review`, except kind `deploy`, which
+an `open` item also takes with no Plan-Item trailer check and no `merged_open` audit field. The
+granted batch op `add_evidence` runs the same code and has the same exception. [Evidence].
 
 ### `POST /v1/submit`
 Claimant, delegate or writer run token. `{key, epoch[, source_round]}`. A writer

@@ -172,6 +172,8 @@ def test_merged_open_deploy_evidence_over_http(env, doors):  # noqa: F811
     env.tokens["runw"] = env.store.mint_run_token(env.p("l1main"), "demo:B", "writer", "other")["token"]
     status, err = doors.http("runw", "POST", "/v1/add_evidence", body)
     assert status == 403 and err["error"] == "forbidden" and _events(env) == []
+    assert "bound to another item" in err["msg"]
+    assert env.conn.execute("SELECT COUNT(*) AS n FROM evidence WHERE key=?", (KEY,)).fetchone()["n"] == 0
     assert other_epoch and env.store._item("demo:B")["state"] == "claimed"
     status, out = doors.http("l1other", "POST", "/v1/add_evidence", body)
     assert status == 403 and _events(env) == []
@@ -241,5 +243,28 @@ def test_merged_open_deploy_refuses_merge_body_only(env):  # noqa: F811
     with pytest.raises(Refused) as exc:
         env.store.add_evidence(env.p("l1main"), KEY, _epoch(env), "deploy", PROOF)
     assert exc.value.code == "bad_state" and "no Plan-Item commit" in exc.value.msg
+    assert _events(env) == []
+    assert env.conn.execute("SELECT COUNT(*) AS n FROM evidence WHERE key=?", (KEY,)).fetchone()["n"] == 0
+
+
+def test_merged_open_deploy_refuses_a_definition_edited_during_verification(env, monkeypatch):  # noqa: F811
+    """A Merge-Repo edit that keeps the epoch must not keep a verdict from the old text."""
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    _land_with_unit(env.repo.root)
+    epoch = _epoch(env)
+    real, fired = env.store._verify_evidence, []
+
+    def verify_then_edit(*args, **kwargs):
+        out = real(*args, **kwargs)
+        if not fired:
+            fired.append(True)
+            env.store.edit_definition(env.p("router"), KEY, {"note": "Merge-Repo: other"})
+        return out
+
+    monkeypatch.setattr(env.store, "_verify_evidence", verify_then_edit)
+    with pytest.raises(Refused) as exc:
+        env.store.add_evidence(env.p("l1main"), KEY, epoch, "deploy", PROOF)
+    assert fired and _epoch(env) == epoch
+    assert exc.value.code == "conflict" and "edited" in exc.value.msg
     assert _events(env) == []
     assert env.conn.execute("SELECT COUNT(*) AS n FROM evidence WHERE key=?", (KEY,)).fetchone()["n"] == 0

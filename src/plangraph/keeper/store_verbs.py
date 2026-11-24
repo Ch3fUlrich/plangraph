@@ -144,6 +144,10 @@ class VerbsMixin:
             self._epoch_ok(fresh, epoch)
             if fresh["state"] != "open":
                 raise Refused("conflict", f"{key} is {fresh['state']}, not open")
+            # The verifier read the description and note (Merge-Repo, Deploy-Hosts): an edit that
+            # does not move the epoch must not keep a verdict reached against the old text.
+            if any(fresh.get(field) != item.get(field) for field in ("description", "note")):
+                raise Refused("conflict", f"{key} was edited while the deploy proof was verified; retry")
             self._guarded_touch(key, ("open",), epoch)
             return self._record_evidence(principal, fresh, "deploy", ref, now, result,
                                          merged_open=commits[0]["sha"])
