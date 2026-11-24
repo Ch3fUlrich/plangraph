@@ -332,3 +332,61 @@ def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
     assert v.parse_test_gaming(
         'TEST-GAMING: no - searched the "batch in" stamp: 3 hits'
     )[0] != "no"
+
+
+BRIEF_FINDING = ("MED src/plangraph/review/review_brief.md:26 - the supplied brief still omits the "
+                 "required per-item public symbols, callers and affected test-output paths")
+EMPTY_PROMPT = "=== ITEM CONTEXT\nItem key: x\nChanged public symbols: \n"
+LANE_DIFF = "diff --git a/src/a.py b/src/a.py\n+x\n"
+
+
+def test_finding_about_the_review_brief_is_process_not_med():
+    review = f"FILES READ: src/a.py\n{BRIEF_FINDING}\nVERDICT: REQUEST_CHANGES\n"
+    found = v.classify_findings(review, prompt=EMPTY_PROMPT + LANE_DIFF,
+                                changed_paths=v.diff_paths(LANE_DIFF))
+    assert (found.high, found.med, found.blocking) == (0, 0, 0)
+    assert found.process == (BRIEF_FINDING,)
+
+
+def test_process_class_needs_the_defect_in_the_prompt_and_an_untouched_file():
+    review = f"{BRIEF_FINDING}\nHIGH src/a.py:3 - real\nVERDICT: REQUEST_CHANGES\n"
+    ok_prompt = EMPTY_PROMPT.replace("symbols: \n", "symbols: run\n")
+    ok_prompt += "Callers of changed public symbols: a\nAffected test output (paths): l\n"
+    # the prompt carries the block: the finding is an ordinary MED
+    assert v.classify_findings(review, prompt=ok_prompt + LANE_DIFF,
+                               changed_paths={"src/a.py"}).med == 1
+    # unknown diff scope fails closed
+    assert v.classify_findings(review, prompt=EMPTY_PROMPT, changed_paths=None).med == 1
+    # the head changes the brief: a finding about it is a real finding
+    touched = {"src/plangraph/review/review_brief.md"}
+    assert v.classify_findings(review, prompt=EMPTY_PROMPT, changed_paths=touched).blocking == 2
+    # mixed: the real HIGH stays, the brief finding goes to PROCESS
+    mixed = v.classify_findings(review, prompt=EMPTY_PROMPT, changed_paths={"src/a.py"})
+    assert (mixed.high, mixed.med, len(mixed.process)) == (1, 0, 1)
+
+
+def test_typed_process_line_that_fails_verification_counts_as_med():
+    review = "PROCESS skills/review/SKILL.md:1 - rubric missing\n> MED quoted a.py:1 - x\n"
+    assert v.classify_findings(review).med == 1
+    found = v.classify_findings(review, prompt=EMPTY_PROMPT, changed_paths={"a.py"})
+    assert (found.med, len(found.process)) == (0, 1)
+
+
+def test_diff_paths_reads_the_dispatched_git_diff_in_the_seat_checkout(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                               *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    (tmp_path / "a.txt").write_text("1")
+    git("add", "."); git("commit", "-qm", "one")
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "b.txt").write_text("2")
+    git("add", "."); git("commit", "-qm", "two")
+    head = git("rev-parse", "HEAD")
+    prompt = f"read the review diff, run:\ngit diff {base} {head}\n"
+    assert v.diff_paths(prompt, str(tmp_path)) == {"b.txt"}
+    assert v.diff_paths(prompt) is None  # no checkout: scope unknown, fail closed
+    assert v.diff_paths("no diff here") is None
