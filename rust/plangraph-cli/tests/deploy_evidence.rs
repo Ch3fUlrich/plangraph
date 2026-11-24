@@ -215,3 +215,47 @@ fn a_saved_report_ages_with_the_clock_and_stops_being_accepted() {
     // Past an hour the report itself is refused.
     assert!(gate(&report, &json!([]), NOW + 3601, MAX_AGE_HOURS).is_err());
 }
+
+#[test]
+fn a_merge_time_ahead_of_the_clock_is_unknown_not_new() {
+    let future = json!([{"key": "demo:H", "state": "done", "merged_at": "2026-11-30T00:00:00Z",
+        "age_hours": 0, "missing": ["host-a:new.service"]}]);
+    let report = build_report(future.as_array().unwrap(), &Host, NOW);
+    let decision = gate(&report, &json!([]), NOW, MAX_AGE_HOURS).unwrap();
+    assert_eq!(decision["go"], false);
+    assert_eq!(decision["blockers"][0]["age_hours"], Value::Null);
+    // Within the clock skew it is a merge that just happened.
+    let near = json!([{"key": "demo:H", "state": "done", "merged_at": "2026-11-24T12:02:00Z",
+        "age_hours": 0, "missing": ["host-a:new.service"]}]);
+    let report = build_report(near.as_array().unwrap(), &Host, NOW);
+    assert_eq!(
+        gate(&report, &json!([]), NOW, MAX_AGE_HOURS).unwrap()["go"],
+        true
+    );
+}
+
+#[test]
+fn the_command_refuses_a_report_at_the_edge_of_the_clock_range_with_exit_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let report = build_report(&rows(), &Host, NOW);
+    for (name, made, now) in [
+        ("max", json!(i64::MAX), NOW),
+        ("min", json!(i64::MIN), NOW),
+        ("late", json!(NOW), i64::MAX),
+        ("early", json!(NOW), i64::MIN),
+    ] {
+        let mut edited = report.clone();
+        edited["generated_at"] = made;
+        let path = dir.path().join(format!("{name}.json"));
+        std::fs::write(&path, edited.to_string()).unwrap();
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .env_clear()
+            .env("HOME", dir.path())
+            .args(["deploy-evidence", "gate", "--report"])
+            .arg(&path)
+            .args(["--now", &now.to_string()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{name}: {output:?}");
+    }
+}

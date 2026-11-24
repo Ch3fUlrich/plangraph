@@ -35,7 +35,10 @@ Every target blocks. Only the keeper's verified `deploy` evidence of the item's 
 its last merge (the tagged merges and the merge a `Merge-Repo:` line names), clears a row; an older row does not.
 The deployment scan runs before the close checks, so an item the automatic close refuses (a sensitive card, an
 unset review tier) still gets its row. A unit that starts after its item closed is recorded with the router
-verb `add_evidence_router` (kind `deploy`), which also takes a completed item and no other kind of proof.
+verb `add_evidence_router` (kind `deploy`), which also takes a completed item and no other kind of proof:
+the key lock (SQLite triggers; Postgres migration 28) lets that one evidence row and its `evidence_added` event
+through on a closed item, never on a cancelled one. An item delivered only by a `Merge-Repo:` merge, open or
+completed, has a row too, aged from that merge; the row keeps the `Live:` clause and every refusal of the close.
 
 `--rows FILE` reads keeper rows from a file instead of the keeper (fixtures).
 

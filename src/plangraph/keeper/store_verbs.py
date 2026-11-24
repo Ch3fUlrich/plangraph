@@ -69,7 +69,12 @@ class VerbsMixin:
             if fresh["state"] not in states:
                 raise Refused("conflict",
                               f"{fresh['key']} is {fresh['state']}")
-            self._guarded_touch(fresh["key"], states, fresh["epoch"])
+            if fresh["state"] == "done":
+                # The item row is frozen: only the epoch is rechecked, no row is touched.
+                if fresh["epoch"] != item["epoch"]:
+                    raise Refused("conflict", f"{key} changed under the transaction")
+            else:
+                self._guarded_touch(fresh["key"], states, fresh["epoch"])
             return self._record_evidence(principal, fresh, kind, ref, now,
                                          result)
 
