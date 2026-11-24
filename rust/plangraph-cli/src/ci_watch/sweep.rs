@@ -104,12 +104,23 @@ pub(super) fn sweep(
             None => {
                 format!("pull request #{pr} is closed or is a draft, CI probe or landing train")
             }
-            Some(now) => match failing_sha(gh, &task) {
-                Some(then) if &then != now => {
-                    format!("pull request #{pr} head moved on from the failing run's head")
+            Some(now) => {
+                let then = failing_sha(gh, &task);
+                // A row from before the head was stored keeps what the run told us, so the scan can
+                // tell a new run on the same head from a moved head.
+                if task.sha.is_none() && then.is_some() && !dry {
+                    if let Some(row) = tasks.get_mut(&task.key) {
+                        row.sha = then.clone();
+                        changed = true;
+                    }
                 }
-                _ => continue,
-            },
+                match then {
+                    Some(then) if &then != now => {
+                        format!("pull request #{pr} head moved on from the failing run's head")
+                    }
+                    _ => continue,
+                }
+            }
         };
         output.push(format!(
             "{}cancel: {} ({reason})",

@@ -104,3 +104,21 @@ fn active_card_is_reused_and_closed_parent_is_reported() {
         .contains("must be active"));
     assert!(keeper.creates.is_empty());
 }
+#[test]
+fn a_create_whose_reply_is_lost_leaves_the_attempted_key_on_the_row() {
+    let mut task = task();
+    let mut keeper = Recorded::default();
+    keeper.items.insert(PARENT.into(), json!({"state":"open"}));
+    keeper.items.insert(
+        task.key.clone(),
+        json!({"state":"done","description":"[ci-watch-run:899]"}),
+    );
+    keeper.lose_reply = true;
+    assert!(deliver(&mut keeper, &mut task).is_err());
+    // The item exists under the successor key and the row still names it.
+    assert!(keeper.items.contains_key("plangraph:CI-FIX-example-R900"));
+    assert_eq!(
+        task.keeper_key.as_deref(),
+        Some("plangraph:CI-FIX-example-R900")
+    );
+}

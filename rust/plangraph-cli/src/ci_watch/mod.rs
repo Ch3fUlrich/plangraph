@@ -267,7 +267,11 @@ fn scan_with_owner(
             continue;
         }
         let sha = text(&pr["head"], "sha")?.to_owned();
-        heads.insert(sha, (number(&pr, "number")?, lane == sweep::Lane::Owner));
+        // One commit can head several pull requests (a train and an ordinary one): each keeps its entry.
+        heads
+            .entry(sha)
+            .or_insert_with(Vec::new)
+            .push((number(&pr, "number")?, lane == sweep::Lane::Owner));
     }
     let workflow = "actions/workflows/tests.yml/runs?status=completed&per_page=100";
     // Only the newest completed run per head/event is used and GitHub lists
@@ -282,123 +286,173 @@ fn scan_with_owner(
     let mut output = Vec::new();
     for run in runs {
         let sha = text(&run, "head_sha")?;
-        let (pr, owner_only) = match heads.get(sha) {
-            Some((pr, owner_only)) => (Some(*pr), *owner_only),
-            None => (None, false),
-        };
         let event = text(&run, "event")?;
-        let head = if let Some(pr) = pr {
-            format!("pr-{pr}")
-        } else if run["head_branch"] == "main"
+        let mut targets: Vec<(Option<u64>, bool)> = heads
+            .get(sha)
+            .map(|prs| prs.iter().map(|(pr, owner)| (Some(*pr), *owner)).collect())
+            .unwrap_or_default();
+        if targets.is_empty()
+            && run["head_branch"] == "main"
             && event != "pull_request"
             && event != "pull_request_target"
         {
-            "main".into()
-        } else {
-            continue;
-        };
-        let run_id = number(&run, "id")?;
-        let selection = format!("{repo}/{head}/{event}");
-        // Our rerun temporarily disappears from the completed-only response.
-        // Never walk backwards into older failures while that attempt runs.
-        if reruns.newest.get(&selection).is_some_and(|id| *id > run_id)
-            || !seen.insert((head.clone(), event.to_owned()))
-        {
-            continue;
+            targets.push((None, false));
         }
-        if !dry && reruns.newest.get(&selection) != Some(&run_id) {
-            reruns.newest.insert(selection, run_id);
-            save(&dir.join("reruns.json"), &reruns)?;
-        }
-        if !failed(&run) {
-            continue;
-        }
-        let jobs = gh
-            .pages(
-                &format!("actions/runs/{run_id}/jobs?filter=latest&per_page=100"),
-                Some("jobs"),
-            )
-            .unwrap_or_default();
-        let mut failures = Vec::new();
-        for job in jobs {
-            if !failed(&job) {
+        for (pr, owner_only) in targets {
+            let head = match pr {
+                Some(pr) => format!("pr-{pr}"),
+                None => "main".to_owned(),
+            };
+            let run_id = number(&run, "id")?;
+            let selection = format!("{repo}/{head}/{event}");
+            // Our rerun temporarily disappears from the completed-only response.
+            // Never walk backwards into older failures while that attempt runs.
+            if reruns.newest.get(&selection).is_some_and(|id| *id > run_id)
+                || !seen.insert((head.clone(), event.to_owned()))
+            {
                 continue;
             }
-            let name = logs::scrub(text(&job, "name")?);
-            let log = gh
-                .log(number(&job, "id")?)
-                .unwrap_or_else(|_| "Job log unavailable; inspect the failed job on GitHub".into());
-            for (test, excerpt) in logs::failures(&log) {
-                failures.push((name.clone(), logs::scrub(&test), excerpt));
+            if !dry && reruns.newest.get(&selection) != Some(&run_id) {
+                reruns.newest.insert(selection, run_id);
+                save(&dir.join("reruns.json"), &reruns)?;
             }
-        }
-        if failures.is_empty() {
-            failures.push((
-                "<workflow>".into(),
-                "<job-failure>".into(),
-                "No failing job logs available".into(),
-            ));
-        }
-        let known: BTreeSet<_> = failures
-            .iter()
-            .filter_map(|(_, test, _)| flakes.get(test).cloned())
-            .collect();
-        let attempted =
-            run["run_attempt"].as_u64().unwrap_or(1) > 1 || reruns.runs.contains(&run_id);
-        let mut rerun_failed = false;
-        if !known.is_empty() {
-            let action = if attempted {
-                "recurrence"
-            } else {
-                "rerun failed jobs"
-            };
-            let sighting = format!(
-                "{run_id}:{}:{action}",
-                run["run_attempt"].as_u64().unwrap_or(1)
-            );
-            let new_sighting = !reruns.sightings.contains(&sighting);
-            if new_sighting {
-                output.push(format!(
-                    "{action}: {head} run {run_id} {}",
-                    known.iter().cloned().collect::<Vec<_>>().join(", ")
+            if !failed(&run) {
+                continue;
+            }
+            let jobs = gh
+                .pages(
+                    &format!("actions/runs/{run_id}/jobs?filter=latest&per_page=100"),
+                    Some("jobs"),
+                )
+                .unwrap_or_default();
+            let mut failures = Vec::new();
+            for job in jobs {
+                if !failed(&job) {
+                    continue;
+                }
+                let name = logs::scrub(text(&job, "name")?);
+                let log = gh.log(number(&job, "id")?).unwrap_or_else(|_| {
+                    "Job log unavailable; inspect the failed job on GitHub".into()
+                });
+                for (test, excerpt) in logs::failures(&log) {
+                    failures.push((name.clone(), logs::scrub(&test), excerpt));
+                }
+            }
+            if failures.is_empty() {
+                failures.push((
+                    "<workflow>".into(),
+                    "<job-failure>".into(),
+                    "No failing job logs available".into(),
                 ));
             }
-            if !dry {
-                // Reserve before requesting: a lost response must not cause another rerun.
-                if !attempted {
-                    reruns.runs.insert(run_id);
-                    save(&dir.join("reruns.json"), &reruns)?;
-                    if gh.rerun(run_id).is_err() {
-                        rerun_failed = true;
-                        output.push(format!(
-                            "rerun request failed: {head} run {run_id}; creating fix tasks"
-                        ));
+            let known: BTreeSet<_> = failures
+                .iter()
+                .filter_map(|(_, test, _)| flakes.get(test).cloned())
+                .collect();
+            let attempted =
+                run["run_attempt"].as_u64().unwrap_or(1) > 1 || reruns.runs.contains(&run_id);
+            let mut rerun_failed = false;
+            if !known.is_empty() {
+                let action = if attempted {
+                    "recurrence"
+                } else {
+                    "rerun failed jobs"
+                };
+                let sighting = format!(
+                    "{run_id}:{}:{action}",
+                    run["run_attempt"].as_u64().unwrap_or(1)
+                );
+                let new_sighting = !reruns.sightings.contains(&sighting);
+                if new_sighting {
+                    output.push(format!(
+                        "{action}: {head} run {run_id} {}",
+                        known.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                if !dry {
+                    // Reserve before requesting: a lost response must not cause another rerun.
+                    if !attempted {
+                        reruns.runs.insert(run_id);
+                        save(&dir.join("reruns.json"), &reruns)?;
+                        if gh.rerun(run_id).is_err() {
+                            rerun_failed = true;
+                            output.push(format!(
+                                "rerun request failed: {head} run {run_id}; creating fix tasks"
+                            ));
+                        }
+                    }
+                    if new_sighting {
+                        let line = serde_json::json!({"run_id":run_id,"head":head,"action":action,"keepers":known,"at":chrono::Utc::now().to_rfc3339()});
+                        let path = dir.join("recurrences.jsonl");
+                        let mut bytes = match fs::read(&path) {
+                            Ok(b) => b,
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                            Err(e) => return Err(e.to_string()),
+                        };
+                        bytes.extend(serde_json::to_vec(&line).map_err(|e| e.to_string())?);
+                        bytes.push(b'\n');
+                        atomic::write(&path, &bytes).map_err(|e| e.to_string())?;
+                        reruns.sightings.insert(sighting);
+                        save(&dir.join("reruns.json"), &reruns)?;
                     }
                 }
-                if new_sighting {
-                    let line = serde_json::json!({"run_id":run_id,"head":head,"action":action,"keepers":known,"at":chrono::Utc::now().to_rfc3339()});
-                    let path = dir.join("recurrences.jsonl");
-                    let mut bytes = match fs::read(&path) {
-                        Ok(b) => b,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-                        Err(e) => return Err(e.to_string()),
-                    };
-                    bytes.extend(serde_json::to_vec(&line).map_err(|e| e.to_string())?);
-                    bytes.push(b'\n');
-                    atomic::write(&path, &bytes).map_err(|e| e.to_string())?;
-                    reruns.sightings.insert(sighting);
-                    save(&dir.join("reruns.json"), &reruns)?;
+            }
+            for (job, test, excerpt) in failures {
+                if !attempted && !rerun_failed && flakes.contains_key(&test) {
+                    continue;
                 }
-            }
-        }
-        for (job, test, excerpt) in failures {
-            if !attempted && !rerun_failed && flakes.contains_key(&test) {
-                continue;
-            }
-            let digest = Sha256::digest(format!("{repo}\0{head}\0{test}").as_bytes());
-            let key = format!("plangraph:CI-FIX-{digest:x}");
-            if owner_only {
-                let mut task = Task {
+                let digest = Sha256::digest(format!("{repo}\0{head}\0{test}").as_bytes());
+                let key = format!("plangraph:CI-FIX-{digest:x}");
+                if owner_only {
+                    let mut task = Task {
+                        key: key.clone(),
+                        head: head.clone(),
+                        pr,
+                        run_id,
+                        job,
+                        test,
+                        excerpt,
+                        priority: 10,
+                        keeper_defined: false,
+                        keeper_key: None,
+                        sha: Some(sha.to_owned()),
+                    };
+                    if dry {
+                        output.push(format!("would route train failure: {key}"));
+                    } else {
+                        match owner(&mut task) {
+                            Ok(true) => {
+                                output.push(format!("routed train failure to its batch: {key}"))
+                            }
+                            Ok(false) => {
+                                output.push(format!("train failure has no recorded batch: {key}"))
+                            }
+                            Err(error) => output.push(format!(
+                                "keeper delivery pending: {key}: {}",
+                                logs::scrub(&error)
+                            )),
+                        }
+                    }
+                    continue;
+                }
+                // The sweep could not cancel the item of an older head (keeper down): keep that row, and
+                // its keeper lane, for the next pass instead of reusing the lane for the new head. A row
+                // that never stored its head counts as moved when it was filed by another run.
+                if let Some(old) = tasks.get(&key) {
+                    let moved = match &old.sha {
+                        Some(then) => then != sha,
+                        None => old.run_id != run_id,
+                    };
+                    if !dry && pr.is_some() && moved {
+                        output.push(format!("cancel pending: {key}"));
+                        continue;
+                    }
+                }
+                let old_defined = tasks
+                    .get(&key)
+                    .is_some_and(|t| t.keeper_defined && t.run_id == run_id);
+                let keeper_key = tasks.get(&key).and_then(|t| t.keeper_key.clone());
+                let task = Task {
                     key: key.clone(),
                     head: head.clone(),
                     pr,
@@ -407,65 +461,18 @@ fn scan_with_owner(
                     test,
                     excerpt,
                     priority: 10,
-                    keeper_defined: false,
-                    keeper_key: None,
+                    keeper_defined: old_defined,
+                    keeper_key,
                     sha: Some(sha.to_owned()),
                 };
-                if dry {
-                    output.push(format!("would route train failure: {key}"));
-                } else {
-                    match owner(&mut task) {
-                        Ok(true) => {
-                            output.push(format!("routed train failure to its batch: {key}"))
-                        }
-                        Ok(false) => {
-                            output.push(format!("train failure has no recorded batch: {key}"))
-                        }
-                        Err(error) => output.push(format!(
-                            "keeper delivery pending: {key}: {}",
-                            logs::scrub(&error)
-                        )),
-                    }
+                output.push(format!(
+                    "{}task: {}",
+                    if dry { "would upsert " } else { "" },
+                    serde_json::to_string(&task).map_err(|e| e.to_string())?
+                ));
+                if !dry {
+                    store_task(&task_path, &mut tasks, task, &mut define, &mut output)?;
                 }
-                continue;
-            }
-            // The sweep could not cancel the item of an older head (keeper down): keep that row, and
-            // its keeper lane, for the next pass instead of reusing the lane for the new head. A row
-            // that never stored its head counts as moved when it was filed by another run.
-            if let Some(old) = tasks.get(&key) {
-                let moved = match &old.sha {
-                    Some(then) => then != sha,
-                    None => old.run_id != run_id,
-                };
-                if !dry && pr.is_some() && moved {
-                    output.push(format!("cancel pending: {key}"));
-                    continue;
-                }
-            }
-            let old_defined = tasks
-                .get(&key)
-                .is_some_and(|t| t.keeper_defined && t.run_id == run_id);
-            let keeper_key = tasks.get(&key).and_then(|t| t.keeper_key.clone());
-            let task = Task {
-                key: key.clone(),
-                head: head.clone(),
-                pr,
-                run_id,
-                job,
-                test,
-                excerpt,
-                priority: 10,
-                keeper_defined: old_defined,
-                keeper_key,
-                sha: Some(sha.to_owned()),
-            };
-            output.push(format!(
-                "{}task: {}",
-                if dry { "would upsert " } else { "" },
-                serde_json::to_string(&task).map_err(|e| e.to_string())?
-            ));
-            if !dry {
-                store_task(&task_path, &mut tasks, task, &mut define, &mut output)?;
             }
         }
     }

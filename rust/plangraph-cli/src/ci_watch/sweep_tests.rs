@@ -561,3 +561,152 @@ fn an_item_whose_create_reply_was_lost_is_cancelled_under_every_key_before_its_r
     .unwrap();
     assert!(tasks(temp.path()).is_empty());
 }
+
+/// A later run replaces the row of an item whose create reply was lost: the older successor key is
+/// still closed when the pull request goes.
+#[test]
+fn an_older_successor_key_survives_a_later_run_replacing_the_row() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut world = World {
+        prs: vec![live(5, "s5")],
+    };
+    // The create for the successor lane of run 102 succeeded; its reply was lost.
+    scan(
+        &mut world,
+        "o/r",
+        temp.path(),
+        &BTreeMap::new(),
+        false,
+        |task| {
+            task.keeper_key = Some(format!("{}-R{}", task.key, task.run_id));
+            Err("reply lost".into())
+        },
+    )
+    .unwrap();
+    let first = tasks(temp.path()).remove(0);
+    assert_eq!(
+        first.keeper_key.as_deref(),
+        Some(&*format!("{}-R{}", first.key, first.run_id))
+    );
+    // The same head fails again in a newer run, replacing the row; delivery still has not succeeded.
+    let mut row = tasks(temp.path()).remove(0);
+    row.run_id += 50;
+    let mut all = BTreeMap::new();
+    all.insert(row.key.clone(), row.clone());
+    save_tasks(&temp.path().join("tasks.jsonl"), &all).unwrap();
+    let mut asked = Vec::new();
+    sweep(&mut World { prs: vec![] }, temp.path(), false, |key, _| {
+        asked.push(key.to_owned());
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        asked.contains(&format!("{}-R{}", first.key, first.run_id)),
+        "{asked:?}"
+    );
+}
+
+#[test]
+fn a_new_run_on_an_unchanged_head_does_not_leave_a_legacy_row_pending() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut cancelled = Vec::new();
+    pass(
+        &mut World {
+            prs: vec![live(5, "s5")],
+        },
+        temp.path(),
+        &mut cancelled,
+        true,
+    );
+    let path = temp.path().join("tasks.jsonl");
+    let mut all = load_tasks(&path).unwrap();
+    let old_run = tasks(temp.path())[0].run_id;
+    for task in all.values_mut() {
+        task.sha = None;
+    }
+    save_tasks(&path, &all).unwrap();
+    // GitHub resolves the stored run to the head the pull request still has; a newer run fails on it.
+    struct Same(World, u64);
+    impl Github for Same {
+        fn pages(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>> {
+            self.0.pages(e, f)
+        }
+        fn page(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>> {
+            let mut runs = self.0.page(e, f)?;
+            for run in &mut runs {
+                run["id"] = json!(self.1);
+            }
+            Ok(runs)
+        }
+        fn log(&mut self, j: u64) -> Result<String> {
+            self.0.log(j)
+        }
+        fn rerun(&mut self, r: u64) -> Result<()> {
+            self.0.rerun(r)
+        }
+        fn value(&mut self, _: &str) -> Result<Value> {
+            Ok(json!({"head_sha": "s5"}))
+        }
+    }
+    let rows = scan_and_sweep(
+        &mut Same(
+            World {
+                prs: vec![live(5, "s5")],
+            },
+            old_run + 7,
+        ),
+        "o/r",
+        temp.path(),
+        &BTreeMap::new(),
+        false,
+        |task| {
+            task.keeper_key = Some(format!("lane-{}", task.run_id));
+            Ok(true)
+        },
+        |_| Ok(false),
+        |_, _| panic!("the head did not move"),
+    )
+    .unwrap();
+    assert!(
+        !rows.iter().any(|r| r.starts_with("cancel pending")),
+        "{rows:?}"
+    );
+    let now = tasks(temp.path());
+    assert_eq!(
+        (now[0].run_id, now[0].sha.as_deref()),
+        (old_run + 7, Some("s5"))
+    );
+}
+
+/// A train and an ordinary pull request on one commit each keep their own path.
+#[test]
+fn a_train_and_an_ordinary_pull_request_on_one_commit_are_both_handled() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("owners.json"),
+        json!({"prs": {"5": "batch-a"}, "writers": {}}).to_string(),
+    )
+    .unwrap();
+    let mut defined = Vec::new();
+    // The train is #5 (owned), the ordinary pull request #6; both head commit shared.
+    let rows = scan_and_sweep(
+        &mut World {
+            prs: vec![train(5, "shared"), live(6, "shared")],
+        },
+        "o/r",
+        temp.path(),
+        &BTreeMap::new(),
+        false,
+        |task| {
+            defined.push(task.pr);
+            Ok(true)
+        },
+        |task| route_owned(temp.path(), task, 100),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(defined, [Some(6)], "{rows:?}");
+    let records = load_failures(temp.path()).unwrap();
+    assert_eq!(records.len(), 1, "{rows:?}");
+    assert_eq!((records[0].pr, records[0].batch.as_str()), (5, "batch-a"));
+}

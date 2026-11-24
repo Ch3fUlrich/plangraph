@@ -147,8 +147,10 @@ fn deliver(keeper: &mut impl Keeper, task: &mut Task) -> Result<bool> {
     if terminal(&parent)? {
         return Err("keeper parent plangraph:PH-ORCH-SETUP must be active".into());
     }
+    // The key is kept on the row before the create: a reply lost after the item exists must not lose
+    // the key the sweep has to close.
+    task.keeper_key = Some(key.clone());
     keeper.create(definition(task, &key))?;
-    task.keeper_key = Some(key);
     Ok(true)
 }
 
