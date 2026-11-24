@@ -56,15 +56,23 @@ outside the delta's writer families, and the run must match the exact train head
 
 ## Deploy table and computed GO
 
-`plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD
-[--declared FILE] [--blockers-out FILE]` derives what each part ships from the part's own commits and
-diff: a unit added or changed under `deploy/systemd`, or an added host binary, is a family of that part
-alone, so a unitless part never waits on another part's unit. Hosts come from the `Deploy-Hosts:` of the
-part's items (`--declared`, item key to hosts), else the `Deploy:` trailers of its commits, and each must be
-authorized. `CMD HOST FAMILY` is the host install dry run: exit 0 with no output passes, and it prints one
-`MISSING binary|file|env|path NAME` line per absent thing. The command prints `deploy: unit@host, ...` for
-the GO-REQ (only passing targets) and one `blocker` line per refused target; `--blockers-out` writes a
-`pg define` file with a blocker item for each.
+`plangraph land-train deploy-plan --repo DIR (--manifest FILE | --spans FILE) (--authorized-hosts A,B |
+--registry FILE) --probe-cmd CMD [--declared FILE] [--blockers-out FILE]` derives what each part ships from
+the part's own commits and diff: a unit added or changed under `deploy/systemd`, or an added host binary, is
+a family of that part alone, so a unitless part never waits on another part's unit. `--spans` is a JSON array
+of `{pr, from, head}` for a build without a manifest; `--registry` authorizes every host id and alias of the
+hosts registry. Hosts come from the `Deploy-Hosts:` of the part's items (`--declared`, item key to hosts),
+else the `Deploy:` trailers of its commits, and each must be authorized. `CMD HOST FAMILY` is the host install
+dry run, `plangraph host-sync --install-dry-run [--registry FILE] [--repo DIR] HOST FAMILY`: it checks the
+unit source, the `ExecStart` binary, the `EnvironmentFile` files and keys and the paths they name on the host
+(over ssh for a remote host), or for `bin:NAME` the built binary and `~/.local/bin`. It exits 0 with no output
+when the host has everything, else prints one `MISSING binary|file|env|path NAME` line per absent thing and
+exits 1. The deploy plan prints `deploy: unit@host, ...` for the GO-REQ (only passing targets), then one
+block per family and host that can be quoted as is: `READY unit@host parts #N`, or `NOT READY unit@host parts
+#N blocker KEY` followed by its `MISSING` or `REFUSED` lines. `--blockers-out` writes a `pg define` file with
+a blocker item for each refused target. `merge_batch.py go-req` runs it over the batch's parts and puts the
+blocks into the GO-REQ line (`deploy: unchecked` when there is no hosts registry); it files the blocker items
+with `pg define --file` when the keeper is configured.
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this
