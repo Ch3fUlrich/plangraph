@@ -259,3 +259,31 @@ fn attribution_paragraphs_and_misplaced_known_trailers() {
         }
     }
 }
+
+#[test]
+fn a_malformed_class_search_line_is_refused_with_the_expected_form() {
+    let dir = repo();
+    for line in [
+        "Class-Search: fixture -> 1 hit, 1 changed (prose after the count)",
+        "Class-Search: fixture -> 1 hits, 2 changed",
+        "Class-Search: fixture -> some hits",
+    ] {
+        let message = format!("x\n\n{line}\n\nWriter: codex");
+        let output = git(dir.path(), &["commit", "--allow-empty", "-m", &message]);
+        assert!(!output.status.success(), "{line}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("line 3: malformed Class-Search")
+                && stderr.contains("expected `Class-Search: <pattern> -> <n> hits, <m> changed`"),
+            "{stderr}"
+        );
+    }
+    for line in [
+        "Class-Search: fixture -> 1 hit, 1 changed",
+        "Class-Search: 0123abcd fixture -> 2 hits, 1 changed",
+    ] {
+        let message = format!("x\n\n{line}\n\nWriter: codex");
+        let output = git(dir.path(), &["commit", "--allow-empty", "-m", &message]);
+        assert!(output.status.success(), "{line}: {output:?}");
+    }
+}

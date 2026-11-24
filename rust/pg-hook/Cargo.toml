@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+pg-policy = { path = "../pg-policy" }
 regex = "1"
 shlex = "1"
 serde = { version = "1", features = ["derive"] }

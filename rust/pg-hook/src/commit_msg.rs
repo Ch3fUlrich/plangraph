@@ -207,6 +207,16 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
         remaining -= 1;
     }
+    // The range check of fast checks reads the same parser: a bad line fails here, not at review.
+    for (index, line) in message.lines().enumerate() {
+        if line.starts_with("Class-Search:") && pg_policy::parse(line).is_none() {
+            violations.push(format!(
+                "line {}: malformed Class-Search: {}",
+                index + 1,
+                pg_policy::refusal(line)
+            ));
+        }
+    }
     for violation in &violations {
         eprintln!("commit-msg: {violation}");
     }
