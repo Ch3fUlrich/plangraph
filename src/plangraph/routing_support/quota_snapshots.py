@@ -3,10 +3,11 @@
 Rows are omniroute ``quota_snapshots`` (provider, connection_id, window_key,
 remaining_percentage, is_exhausted, next_reset_at, created_at; camelCase keys
 also read). A leg whose provider pool has every account at/below the threshold reads
-``limited`` until its pool recovers: a fresher snapshot row of the window, or a
-successful probe newer than the snapshot. The stored reset alone does not clear it;
-a source with no fresher row for ``SOURCE_STALE_S`` after the observation and
-reset is blind and never blocks. A missing, unreadable or malformed source never blocks routing.
+``limited`` until its stated reset and ``reprobe`` (eligible for a probe, not ``ok``)
+after it, until a positive fact arrives: a newer row of the window that is not exhausted,
+or a successful probe newer than the snapshot. A reset time alone never clears it, and
+a row without an observation time counts as the oldest observation. A missing, unreadable
+or malformed source never blocks routing.
 """
 from __future__ import annotations
 
@@ -34,8 +35,6 @@ MIN_PCT_ENV = 'PLANGRAPH_QUOTA_MIN_REMAINING_PCT'
 ALIASES = {'cx': 'codex', 'cc': 'claude', 'gc': 'grok-cli', 'gh': 'github'}
 #: The management route may omit resets; prefer QUOTA_SNAPSHOT_DB when available.
 URL_PATH = '/api/usage/utilization?range=7d&aggregateBy=connection'
-#: Hourly snapshots: two missed ones plus jitter (keeper.quota_alarms STALE_HOURS) make the source blind.
-SOURCE_STALE_S = 3 * 3600.0
 CACHE_S = 60.0
 
 
@@ -62,8 +61,16 @@ def _get(row, *names):
     return next((row[n] for n in names if row.get(n) is not None), None)
 
 
-def pool_down_until(rows, provider, now, *, min_pct=1.0):
-    """Epoch until which every account of ``provider`` is at/below ``min_pct`` percent, else None."""
+def pool_down_until(rows, provider, *, min_pct=1.0):
+    """The one recovery rule of an exhausted snapshot.
+
+    None while some account of ``provider`` can serve. Otherwise every account has a window
+    recorded as exhausted (at/below ``min_pct`` percent): the epoch of the earliest account
+    reset the rows state, 0.0 when none does. That state ends only by a positive fact: a newer
+    row of the window that is not exhausted, or a successful probe newer than the rows
+    (``QuotaGate.apply``). A reset time that has passed is no such fact; it only makes the leg
+    eligible for a probe (``QuotaGate.apply`` reads it as ``reprobe``).
+    """
     latest = {}
     for row in rows if isinstance(rows, list) else ():
         if not isinstance(row, dict):
@@ -73,26 +80,23 @@ def pool_down_until(rows, provider, now, *, min_pct=1.0):
             name, account = name.split(':', 1)
         if name != provider:
             continue
-        seen = _ts(_get(row, 'created_at', 'createdAt', 'timestamp')) or 0.0
+        seen = _ts(_get(row, 'created_at', 'createdAt', 'timestamp')) or 0.0   # undated: the oldest observation
         key = (account, _get(row, 'window_key', 'windowKey'))
         if key not in latest or seen >= latest[key][0]:
             latest[key] = (seen, row)
-    accounts = {}   # account -> 0.0 while it can serve, else the reset it waits for
+    accounts = {}   # account -> None while it can serve, else the reset its exhausted windows state (0.0: none)
     for (account, _), (seen, row) in latest.items():
-        accounts.setdefault(account, 0.0)
+        accounts.setdefault(account, None)
         try:
             pct = float(_get(row, 'remaining_percentage', 'remainingPercentage', 'remainingPct'))
         except (TypeError, ValueError):
             pct = None
         if _get(row, 'is_exhausted', 'isExhausted') in (1, True, '1', 'true') or (pct is not None and pct <= min_pct):
-            # The stored reset is a prediction. The exhausted observation stays the latest word until
-            # recovery is recorded (a fresher snapshot row of the window, or a passed probe: QuotaGate.apply),
-            # and is dropped when the source itself went blind (no fresher row for SOURCE_STALE_S).
             reset = _ts(_get(row, 'next_reset_at', 'nextResetAt', 'resetAt')) or 0.0
-            until = max(reset, seen + SOURCE_STALE_S if seen else 0.0)
-            if until > now:
-                accounts[account] = max(accounts[account], until)
-    return None if not accounts or 0.0 in accounts.values() else min(accounts.values())
+            accounts[account] = max(accounts[account] or 0.0, reset)
+    if not accounts or None in accounts.values():
+        return None
+    return min(accounts.values())
 
 
 def pool_seen_at(rows, provider):
@@ -210,12 +214,16 @@ class QuotaGate:
             return status
         now = self.clock() if now is None else now
         rows = self._snapshot()   # one read per decision: with ttl 0 a second read could differ
-        until = pool_down_until(rows, provider, now, min_pct=_min_pct())
+        until = pool_down_until(rows, provider, min_pct=_min_pct())
         if until is None:
             return status
         passed = self._probe_pass(model)
         if passed is not None and passed > pool_seen_at(rows, provider):
             return status
+        if until <= now:   # the stated reset passed (or none was stated): eligible for a probe, never ok
+            return dict(state='reprobe', reason='quota_snapshot_reprobe', evidence=dict(
+                status=429, body_excerpt=f'omniroute {provider} pool exhausted, reset passed, awaiting recovery',
+                reset_at=until or None, ts=now, caller='quota-snapshot'))
         return dict(state='limited', reason='quota_snapshot', evidence=dict(
             status=429, body_excerpt=f'omniroute {provider} pool at 0%, resets at {until:.0f}',
             reset_at=until, ts=now, caller='quota-snapshot'))

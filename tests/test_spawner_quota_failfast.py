@@ -84,26 +84,25 @@ def test_429_without_summary_is_a_refusal():
 
 
 def test_resetless_api_refresh_does_not_extend_hold_forever(monkeypatch):
-    """No stated reset: the first-seen exhausted observation holds until recovery is seen or the source is blind."""
+    """No stated reset: eligible for a probe at once, ok only after a fresher row that is not exhausted."""
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     clock = [1000.0]
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: clock[0])
-    stale = quota_snapshots.SOURCE_STALE_S
     data = [dict(provider='codex:a1', remainingPct=0)]
     fetch = lambda *a: (200, json.dumps({'data': data}).encode())
     gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: clock[0])
-    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 1000 + stale
-    clock[0] = 2900   # the old 30-minute clock hold is gone: nothing recorded recovery
-    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 1000 + stale   # a refresh never moves first-seen
-    data[0]['remainingPct'] = 100   # a fresher row showing recovery clears it
-    clock[0] = 3000
+    first = gate.apply(SOL, OK)
+    assert first['state'] == 'reprobe' and first['reason'] == 'quota_snapshot_reprobe'
+    for later in (2900.0, 1000.0 + 10 * 86400):   # a day or a week later, nothing recorded recovery
+        clock[0] = later
+        assert gate.apply(SOL, OK)['state'] == 'reprobe'
+    data[0]['remainingPct'] = 100   # a fresher row showing recovery
+    clock[0] += 100
     assert gate.apply(SOL, OK) == OK
     data[0]['remainingPct'] = 0
-    clock[0] = 3100
-    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 3100 + stale
-    clock[0] = 3100 + stale + 1   # a blind source (no fresher row for SOURCE_STALE_S) never blocks
-    assert gate.apply(SOL, OK) == OK
+    clock[0] += 100
+    assert gate.apply(SOL, OK)['state'] == 'reprobe'
 
 
 def test_db_returns_latest_row_of_each_window_in_id_order(tmp_path):
@@ -161,7 +160,7 @@ def test_read_only_snapshot_source_preserves_reset(tmp_path):
     reset = quota_snapshots._ts('2026-11-19T00:00:00Z')
     gate = QuotaGate(lambda: rows)
     assert gate.apply(SOL, OK, now)['evidence']['reset_at'] == reset
-    assert gate.apply(SOL, OK, reset + 1) == OK
+    assert gate.apply(SOL, OK, reset + 1)['state'] == 'reprobe'   # the stored reset alone never returns ok
 
 
 def test_missing_or_corrupt_snapshot_db_never_blocks_or_creates_file(tmp_path):
@@ -177,12 +176,12 @@ def test_api_reset_and_resetless_observation_holds(monkeypatch):
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: 1000.0)
-    for extra, until in [('', 1000.0 + quota_snapshots.SOURCE_STALE_S), (', "next_reset_at": "1970-01-01T02:00:00Z"', 7200.0)]:
+    for extra, state_before in [('', 'reprobe'), (', "next_reset_at": "1970-01-01T02:00:00Z"', 'limited')]:
         def fetch(*args):
             return 200, ('{"data":[{"provider":"codex:a1","remainingPct":0' + extra + '}]}').encode()
         gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: 1000.0)
-        assert gate.apply(SOL, OK, 1001)['evidence']['reset_at'] == until
-        assert gate.apply(SOL, OK, until + 1) == OK
+        assert gate.apply(SOL, OK, 1001)['state'] == state_before
+        assert gate.apply(SOL, OK, 7201)['state'] == 'reprobe'   # past the stated reset: a probe, never ok
 
 
 def _row(pct, reset, account='a1', window='7d', provider='codex', **extra):
@@ -489,24 +488,30 @@ def test_production_reader_clears_the_snapshot_limit_of_a_sibling_after_a_quota_
         flag.default_reader.cache_clear()
 
 
-def test_an_exhausted_snapshot_does_not_clear_by_the_clock_at_its_stored_reset():
-    """The replay of the review: limited just before the stored reset, still limited at it, until recovery is recorded."""
+def test_an_exhausted_snapshot_never_returns_ok_by_the_clock():
+    """The two reproduced cases of the review, plus the reset itself: only a positive fact returns ok."""
     now = 1_800_000_000.0
-    reset = now + 1000
     iso = lambda t: time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(t))
-    seen = iso(now - 60)
-    row = dict(_row(0, iso(reset)), created_at=seen)
+    reset = now + 1000
+    row = dict(_row(0, iso(reset)), created_at=iso(now - 60))
     gate = QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0)
     assert gate.apply(SOL, OK, reset - 1)['state'] == 'limited'
     at_reset = gate.apply(SOL, OK, reset)
-    assert at_reset['state'] == 'limited' and at_reset['evidence']['reset_at'] > reset   # waits for recovery evidence
-    # (1) a fresher row of the window showing recovery clears it
+    assert at_reset['state'] == 'reprobe' and at_reset['reason'] == 'quota_snapshot_reprobe'
+    # Case 1: the stated reset lies after the old three-hour freshness deadline.
+    far = dict(_row(0, iso(now + 86400)), created_at=iso(now - 60))
+    late = QuotaGate(lambda: [far], clock=lambda: now, ttl_s=0)
+    assert late.apply(SOL, OK, now + 86400 - 1)['state'] == 'limited'
+    assert late.apply(SOL, OK, now + 86400 + 1)['state'] == 'reprobe'
+    assert late.apply(SOL, OK, now + 90 * 86400)['state'] == 'reprobe'   # no clock ever clears it
+    # Case 2: a row without an observation time is the oldest observation.
+    undated = _row(0, iso(reset))
+    undated.pop('created_at')
+    dateless = QuotaGate(lambda: [undated], clock=lambda: now, ttl_s=0)
+    assert dateless.apply(SOL, OK, reset + 1)['state'] == 'reprobe'
+    assert QuotaGate(lambda: [undated], clock=lambda: now, ttl_s=0, probe_ts=lambda m: 1.0).apply(SOL, OK, reset + 1) == OK
+    # Positive facts: a newer row that is not exhausted, or a probe newer than the rows.
     fresh = dict(_row(100, iso(reset + 3600)), created_at=iso(reset + 1))
     assert QuotaGate(lambda: [row, fresh], clock=lambda: now, ttl_s=0).apply(SOL, OK, reset + 5) == OK
-    # (2) a successful probe newer than the snapshot clears it
-    probed = QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0, probe_ts=lambda model: reset + 2)
-    assert probed.apply(SOL, OK, reset + 5) == OK
-    # (3) a blind source (no fresher row for SOURCE_STALE_S) never blocks
-    stale_at = now - 60 + quota_snapshots.SOURCE_STALE_S
-    assert gate.apply(SOL, OK, stale_at - 1)['state'] == 'limited'
-    assert gate.apply(SOL, OK, stale_at + 1) == OK
+    assert QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0, probe_ts=lambda m: reset + 2).apply(SOL, OK, reset + 5) == OK
+    assert QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0, probe_ts=lambda m: now - 120).apply(SOL, OK, reset + 5)['state'] == 'reprobe'

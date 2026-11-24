@@ -266,8 +266,8 @@ the window key; unknown windows are left out); the collector adds the rest. Each
 
 `pool-use-check SAMPLE.json [ROWS.jsonl]` is the same check for digest and scheduler callers.
 A stored usage limit also ends at a successful probe: the quota-snapshot gate stops limiting a
-leg when its last probe passed after the pool's newest snapshot (read once per decision) or a fresher
-snapshot row shows the pool recovered; the stored reset alone no longer clears it, and the
+leg when its last probe passed after the pool's newest snapshot (read once per decision) or a newer
+snapshot row that is not exhausted shows the pool recovered; the stored reset alone never returns `ok` (the leg reads `reprobe`, eligible for a probe), and the
 scheduled review sweep re-probes a leg with a booked Codex 429 once at least ten minutes have passed since the last attempt (agy: one hour). The review timer's nominal cadence is 15 minutes plus up to 30 seconds of random delay; a lifted limit ends at the first eligible sweep whose probe passes. The passing probe records liveness for the probed leg only; the sibling Codex legs of the account lose their provider limits (harness-stderr limits in all scopes, provider-response limits in the verified scope, and the snapshot gate's exhaustion older than the row) through a quota-recovery row that carries no liveness evidence; their probe failures and model-unavailable bookings stand.
 The collector that fills `live`, `waiting` and `admission_slots`, and the dispatcher behind `PLANGRAPH_POOL_START`, are deferred to `plangraph:POOL-USE-COLLECTOR-AND-FILL-DISPATCHER`.
 `plangraph quota pool` averages and resets over the accounts still inside their window only.
