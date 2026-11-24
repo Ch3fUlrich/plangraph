@@ -86,10 +86,11 @@ def _graph(index):
 
 
 def _superseded_map(index):
-    """``{old key: [live superseding keys]}``; a terminal superseder retires nothing."""
+    """``{old key: [superseding keys]}``; only a cancelled superseder retires nothing
+    (a done one keeps the old item retired, so it cannot overwrite its replacement)."""
     out = {}
     for other in index.values():
-        if other.get("state") in views.TERMINAL:
+        if other.get("state") == "cancelled":
             continue
         for old in other.get("supersedes") or []:
             out.setdefault(old, []).append(other["key"])
@@ -562,7 +563,7 @@ class ContextMixin:
         if superseded[item["key"]]:
             raise Refused("bad_state", f"{item['key']} superseded by "
                           + ", ".join(superseded[item["key"]])
-                          + " (cancel the superseding item or drop its supersedes link)")
+                          + " (cancel the superseding item, or drop its supersedes link while it is open)")
         ctx = self._task_context(item, index, inputs={
             "graph": _graph(index), "book": shared["book"], "clock": shared["clock"],
             "superseded": superseded}, git=False)

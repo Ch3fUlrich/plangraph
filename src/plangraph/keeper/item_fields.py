@@ -350,8 +350,9 @@ _TERMINAL = ("done", "cancelled")
 
 def check_similar_answers(value, key=None):
     where = f"{key}: " if key else ""
-    if not isinstance(value, dict) or any(a not in SIMILAR_ANSWERS for a in value.values()):
-        raise Refused("validation", f"{where}similar must map item keys to supersedes, depends_on or distinct")
+    if (not isinstance(value, dict) or any(a not in SIMILAR_ANSWERS for a in value.values())
+            or any(not isinstance(k, str) or not k.strip() for k in value)):
+        raise Refused("validation", f"{where}similar must map item keys (non-empty strings) to supersedes, depends_on or distinct")
     return value
 
 
@@ -369,7 +370,7 @@ def _jaccard(a, b):
 
 
 def similar_items(definition, items):
-    """``[(key, score)]``: open items of the same project and kind that are near
+    """``[(key, score)]``: open items of the same project that are near
     copies of *definition* by title, description and files (the one function
     every creation path shares)."""
     mine = _tokens(definition, "title")
@@ -383,7 +384,6 @@ def similar_items(definition, items):
     for other in items:
         if (other["key"] == definition["key"] or other["key"] in related
                 or other.get("state") in _TERMINAL or other["project"] != definition["project"]
-                or other.get("kind") != definition.get("kind")
                 or definition["key"] in (other.get("depends_on") or [])):
             continue
         # The title carries the weight: boilerplate descriptions alone never match.

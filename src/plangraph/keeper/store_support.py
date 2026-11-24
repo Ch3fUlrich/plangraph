@@ -434,10 +434,10 @@ class SupportMixin:
         return item
 
     def _superseders(self, key):
-        """Keys of live items whose ``supersedes`` names *key*."""
+        """Keys of non-cancelled items whose ``supersedes`` names *key*."""
         return sorted(row["key"] for row in self.conn.execute(
             "SELECT key, supersedes FROM items WHERE supersedes LIKE ?"
-            " AND state NOT IN ('done','cancelled')", (f'%"{key}"%',))
+            " AND state<>'cancelled'", (f'%"{key}"%',))
             if key in _json_list(row["supersedes"]))
 
     def _dep_map(self):

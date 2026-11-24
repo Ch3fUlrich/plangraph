@@ -10,7 +10,7 @@ import sqlite3
 
 import pytest
 
-from keeper_util import World, defn
+from keeper_util import World, defn, to_done
 from plangraph.keeper import events as keeper_events
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
@@ -36,6 +36,8 @@ def w(tmp_path, decisions):
 G = "demo:GOAL"
 LONG = ("Reduce the feeder ready latency by caching the decision book "
         "between repeated reads of the keeper snapshot")
+OTHER_LONG = ("Trim repeated sections from every review prompt card "
+              "before the reviewer seat reads the diff")
 NEAR = ("Reduce the feeder ready latency by caching the decision book "
         "between repeated reads of the keeper snapshot today")
 
@@ -171,11 +173,12 @@ def test_short_or_unrelated_items_are_never_matches(w):
     router = w.p("router")
     w.store.create_items(router, [defn("ORIG", title=LONG, description=LONG),
                                   defn("GOAL", ["ORIG"], kind="goal")])
-    w.store.create_items(router, [defn("T1", under=G), defn("T2", title="Rotate the web token cache", under=G)])
-    # a cancelled item is terminal: no match
+    w.store.create_items(router, [defn("T1", title=OTHER_LONG, description=OTHER_LONG, under=G),
+                                  defn("T2", title="Rotate the web token cache", under=G)])
+    # a cancelled item is terminal: its near copy is no match
     w.store.cancel(router, "demo:T1", "x")
     w.store.cancel(router, "demo:T2", "x")
-    w.store.create_items(router, [defn("T3", title="title T1", under=G)])
+    w.store.create_items(router, [defn("T3", title=OTHER_LONG, description=OTHER_LONG, under=G)])
 
 
 def test_a_database_without_the_new_column_upgrades_and_loads(tmp_path):
@@ -206,3 +209,83 @@ def test_boilerplate_descriptions_and_short_titles_never_match(w):
     w.store.create_items(router, [
         defn("C", title="Rotate the web token cache nightly", description=text, under=G),
         defn("D", title="Split the oversize review prompt builder", description=text, under=G)])
+
+
+def test_a_done_superseder_keeps_the_old_item_retired(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("OLD"), defn("GOAL", ["OLD"], kind="goal")])
+    w.store.create_items(router, [defn("NEW", supersedes=["demo:OLD"], under=G)])
+    to_done(w, "demo:NEW")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:OLD")
+    assert "superseded by demo:NEW" in exc.value.msg
+    assert "demo:OLD" not in [r["key"] for r in _groups(w)["items"]]
+
+
+def test_a_near_copy_of_a_different_kind_is_still_a_match(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("ORIG", kind="goal", title=LONG, description=LONG,
+                                       done_criteria=None)])
+    with pytest.raises(Refused) as exc:
+        w.store.create_items(router, [defn("COPY", title=NEAR, description=NEAR)])
+    assert "demo:ORIG" in exc.value.msg
+
+
+def test_define_edit_of_a_title_into_a_near_copy_is_refused_until_answered(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("ORIG", title=LONG, description=LONG),
+                                  defn("OTHER", title="Unrelated work on the web page cache layer"),
+                                  defn("GOAL", ["ORIG", "OTHER"], kind="goal")])
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(router, "demo:OTHER", {"title": NEAR, "description": NEAR})
+    assert "demo:ORIG" in exc.value.msg and "supersedes, depends_on or distinct" in exc.value.msg
+    assert w.store.show(router, "demo:OTHER")["title"].startswith("Unrelated")   # nothing written
+    with pytest.raises(Refused):                                                   # apply_ops edit too
+        w.store.apply_ops(router, [{"op": "edit", "key": "demo:OTHER",
+                                    "fields": {"title": NEAR, "description": NEAR}}])
+    w.store.edit_definition(router, "demo:OTHER", {"title": NEAR, "description": NEAR,
+                                                   "similar": {"demo:ORIG": "supersedes"}})
+    assert w.store.show(router, "demo:OTHER")["supersedes"] == ["demo:ORIG"]
+    created = [e for e in keeper_events.read_events(w.conn)
+               if e["key"] == "demo:OTHER" and e["type"] == "item_defined"
+               and e["payload"].get("similar")]
+    assert created and created[-1]["payload"]["similar"] == {"demo:ORIG": "supersedes"}
+
+
+def test_define_edit_unrelated_fields_and_distinct_answers_pass(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("ORIG", title=LONG, description=LONG),
+                                  defn("OTHER", title="Unrelated work on the web page cache layer"),
+                                  defn("GOAL", ["ORIG", "OTHER"], kind="goal")])
+    w.store.edit_definition(router, "demo:OTHER", {"owner": "someone"})          # no text change
+    w.store.edit_definition(router, "demo:OTHER", {"title": NEAR, "description": NEAR,
+                                                   "similar": {"demo:ORIG": "distinct"}})
+
+
+def test_a_similar_mapping_with_a_non_string_key_is_a_validation_refusal(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("BASE"), defn("GOAL", ["BASE"], kind="goal")])
+    for bad in ({1: "distinct"}, {"": "distinct"}, ["demo:A"]):
+        with pytest.raises(Refused) as exc:
+            w.store.create_items(router, [defn("X", similar=bad, under=G)])
+        assert exc.value.code == "validation" and "similar" in exc.value.msg
+
+
+def test_a_database_without_the_category_column_upgrades_and_loads(tmp_path):
+    from plangraph.keeper import db as kdb
+    world = World(tmp_path, backend="sqlite")
+    world.store.create_items(world.p("router"), [defn("A"), defn("GOAL", ["A"], kind="goal")])
+    world.conn.close()
+    raw = sqlite3.connect(world.path)
+    raw.execute("ALTER TABLE items DROP COLUMN category")
+    raw.execute("DROP TABLE categories")
+    raw.commit()
+    raw.close()
+    conn = kdb.open_db(world.path, backend="sqlite")
+    try:
+        assert "category" in [r[1] for r in conn.execute("PRAGMA table_info(items)")]
+        assert [r[0] for r in conn.execute(
+            "SELECT name FROM categories WHERE project='*' ORDER BY rank")][:2] == ["speed", "efficiency-tokens"]
+        assert conn.execute("SELECT category FROM items WHERE key='demo:A'").fetchone()[0] is None
+    finally:
+        conn.close()
