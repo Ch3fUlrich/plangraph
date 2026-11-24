@@ -168,6 +168,13 @@ checkout, not at the first status run. The run rewrites `$XDG_STATE_HOME/plangra
 the ledger the landing GO check reads; `pg-deploy-status.timer` reruns it every 15 minutes so the ledger is fresh. `plangraph merge-close --deploy-status` prints the same lines after
 the keeper's list of merged items with no deploy evidence.
 
+## The count in the digests
+
+`plangraph resume-digest JOB` (the orchestrator digest) ends with one line read from the ledgers, no systemd call:
+`deploy-not-live N oldest <host>:<entry> <age>h (H hosts reporting)`, or `deploy-not-live unknown: no host has
+written a deploy-status ledger` (no ledger is never read as zero). `plangraph deploy-status --summary` prints the
+same line alone; the router's daily line to the operator takes it from there.
+
 ## GO check
 
 `plangraph land-train go-verify` adds the deploy part to every GO: it reads the ledgers in

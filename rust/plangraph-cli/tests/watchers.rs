@@ -182,3 +182,30 @@ fn interrupted_admission_does_not_hide_other_watcher_results() {
     assert!(text.contains("completed: exit 0"));
     assert!(text.contains("interrupted: record error:"));
 }
+
+#[test]
+fn resume_digest_ends_with_the_deploy_not_live_line() {
+    let job = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let ledgers = state.path().join("plangraph/deploy-live");
+    std::fs::create_dir_all(&ledgers).unwrap();
+    std::fs::write(
+        ledgers.join("host-a.json"),
+        r#"{"written_at": 1000, "not_live_since": {"unit:pg-feeder": 1000}, "state": {}}"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .env("XDG_STATE_HOME", state.path())
+        .args(["resume-digest", job.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.lines()
+            .last()
+            .unwrap()
+            .starts_with("deploy-not-live 1 oldest host-a:unit:pg-feeder"),
+        "{text}"
+    );
+}
