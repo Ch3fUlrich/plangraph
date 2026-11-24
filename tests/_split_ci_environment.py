@@ -207,3 +207,26 @@ def quarantine_items(items, ledger, mode, now):
         if bool(owner) == (mode == 'quarantine'):
             selected.append(item)
     return selected, matched
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus):
+    """Publish complete, canonical setup/call/teardown timings for this shard."""
+    destination = os.environ.get('PYTEST_SHARD_DURATIONS_OUT')
+    if not destination or exitstatus != pytest.ExitCode.OK:
+        return
+    durations = {}
+    for reports in terminalreporter.stats.values():
+        for report in reports:
+            if isinstance(report, pytest.TestReport):
+                nodeid = _ci_nodeid(report.nodeid)
+                durations[nodeid] = durations.get(nodeid, 0) + report.duration
+    target = Path(destination)
+    fd, name = tempfile.mkstemp(dir=target.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(durations, stream, sort_keys=True)
+            stream.write('\n')
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
