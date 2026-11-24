@@ -775,10 +775,9 @@ denies:
   directory) or a linked worktree under `.claude/worktrees`: the build would fill an uncapped
   `rust/target`. The target is `--target-dir`, then `CARGO_TARGET_DIR` / `CARGO_BUILD_TARGET_DIR`,
   else `target` of the directory cargo runs in (cwd, leading `cd`, `-C`, `--manifest-path`); it is
-  refused from any cwd. The message names the host's shared target: `PLANGRAPH_CARGO_TARGET_DIR` when set (a data drive),
-  else `~/.cache/plangraph/cargo-target`.
-  A repository at the home directory itself is not a main checkout (the shared target lives below
-  it). Other linked worktrees and `cargo fmt` stay allowed.
+  refused from any cwd. The message names the host's shared target: `PLANGRAPH_CARGO_TARGET_DIR`
+  when set (a data drive), else `~/.cache/plangraph/cargo-target`. A repository at the home
+  directory is not a main checkout. Other linked worktrees and `cargo fmt` stay allowed.
 - A while or until condition where a literal `pgrep -f` pattern can match the
   shell running the loop. Wait on the PID or unit, or put the original command
   in the Bash tool's background mode.
