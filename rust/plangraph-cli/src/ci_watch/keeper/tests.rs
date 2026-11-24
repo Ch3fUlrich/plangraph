@@ -39,6 +39,7 @@ fn task() -> Task {
         run_class: "code".into(),
         job_id: 4242,
         head_sha: String::new(),
+        current: false,
     }
 }
 #[test]

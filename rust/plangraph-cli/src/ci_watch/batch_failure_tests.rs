@@ -243,3 +243,25 @@ fn a_batch_failure_record_carries_the_class_job_and_where_to_start() {
         "the delivery command reads the record: {json}"
     );
 }
+
+#[test]
+fn two_jobs_that_failed_without_a_test_id_are_two_records() {
+    let (mut a, mut b) = (task(Some(7)), task(Some(7)));
+    a.test = "<job-failure>".into();
+    a.job = "Rust workspace".into();
+    b.test = "<job-failure>".into();
+    b.job = "Public scrub".into();
+    let mut records = vec![];
+    let first = record_failure(&mut records, &owners(), &a, 5).unwrap();
+    let second = record_failure(&mut records, &owners(), &b, 5).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(records.len(), 2);
+    // A real test keeps its id whatever job names it.
+    let (mut c, mut d) = (task(Some(7)), task(Some(7)));
+    c.job = "x".into();
+    d.job = "y".into();
+    assert_eq!(
+        record_failure(&mut vec![], &owners(), &c, 5),
+        record_failure(&mut vec![], &owners(), &d, 5)
+    );
+}

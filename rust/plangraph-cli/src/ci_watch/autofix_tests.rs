@@ -140,6 +140,7 @@ fn task(head: &str, pr: u64, class: &str, job_id: u64, sha: &str) -> Task {
         class: class.into(),
         job_id,
         head_sha: sha.into(),
+        current: true,
         ..Default::default()
     }
 }
@@ -168,11 +169,11 @@ fn one_automatic_fix_per_pull_request_and_class_then_the_writer() {
         calls.borrow_mut().push(request.trailer.to_owned());
         Ok(Outcome::Pushed("new".into()))
     };
-    let rows = pass(dir.path(), &tasks, lookup, fix).unwrap();
+    let rows = pass(dir.path(), "o/r", &tasks, lookup, fix).unwrap();
     assert_eq!(rows.len(), 2, "fmt once and clippy once: {rows:?}");
     assert!(calls.borrow()[0].starts_with("Hand-Edit: ") && calls.borrow()[0].contains("job 1"));
     assert!(calls.borrow()[1].contains("clippy") && calls.borrow()[1].contains("job 4"));
-    let again = pass(dir.path(), &tasks, lookup, fix).unwrap();
+    let again = pass(dir.path(), "o/r", &tasks, lookup, fix).unwrap();
     assert!(again.is_empty(), "no loop: {again:?}");
     assert_eq!(calls.borrow().len(), 2);
 }
@@ -194,7 +195,7 @@ fn a_moved_head_makes_no_fix_and_keeps_the_class_open_for_the_next_red() {
     let fix = |_: &Request, _: &Path| -> Result<Outcome, String> {
         panic!("a stale head is never fixed")
     };
-    let rows = pass(dir.path(), &tasks, lookup, fix).unwrap();
+    let rows = pass(dir.path(), "o/r", &tasks, lookup, fix).unwrap();
     assert!(rows.is_empty(), "{rows:?}");
     let ledger = std::fs::read_to_string(dir.path().join("autofix.json")).unwrap_or_default();
     assert!(!ledger.contains("pr-9:fmt"), "nothing reserved: {ledger}");
@@ -243,10 +244,14 @@ fn a_closed_pull_request_is_never_cloned_and_is_read_once() {
         lookups.set(lookups.get() + 1);
         pr_head(&mut closed, "o/r", pr)
     };
-    assert!(pass(dir.path(), &tasks, lookup, fix).unwrap().is_empty());
-    assert!(pass(dir.path(), &tasks, |_| panic!("read again"), fix)
+    assert!(pass(dir.path(), "o/r", &tasks, lookup, fix)
         .unwrap()
         .is_empty());
+    assert!(
+        pass(dir.path(), "o/r", &tasks, |_| panic!("read again"), fix)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(lookups.get(), 1, "one read for both tasks");
 }
 
@@ -305,4 +310,97 @@ fn a_fix_touching_the_go_verifier_or_a_gitattributes_file_is_dropped() {
         matches!(go("c", "echo y >> a.txt"), Outcome::Pushed(_)),
         "an ordinary file is still fixed"
     );
+}
+
+#[test]
+fn the_fix_command_runs_without_the_watchers_home_and_cannot_hook_the_commit() {
+    let root = tempfile::tempdir().unwrap();
+    let head = remote(root.path());
+    let marker = root.path().join("hook-ran");
+    // The command writes the HOME it saw, plants a pre-commit and pre-push hook and a credential helper in its
+    // own checkout; none of them may run, and the pushed file must name the scratch HOME.
+    let script = format!(
+        "printf '%s\\n' \"$HOME\" > a.txt; \
+         mkdir -p ../.git/hooks; \
+         printf '#!/bin/sh\\ntouch {m}\\n' > ../.git/hooks/pre-commit; chmod +x ../.git/hooks/pre-commit; \
+         cp ../.git/hooks/pre-commit ../.git/hooks/pre-push; \
+         git -C .. config core.hooksPath hooks; git -C .. config core.fsmonitor 'touch {m}'",
+        m = marker.display()
+    );
+    let scratch = root.path().join("scratch");
+    let outcome = apply(&scratch, &request(&head, &["sh", "-c", &script])).unwrap();
+    assert!(matches!(outcome, Outcome::Pushed(_)), "{outcome:?}");
+    assert!(!marker.exists(), "a hook or fsmonitor of the sandbox ran");
+    let bare = root.path().join("remote.git");
+    let pushed = git(&bare, &["show", "feature:rust/a.txt"]);
+    let real_home = std::env::var("HOME").unwrap_or_default();
+    assert!(pushed.starts_with(scratch.to_str().unwrap()), "{pushed}");
+    assert!(real_home.is_empty() || pushed != real_home);
+    let tracked = git(&bare, &["ls-tree", "-r", "--name-only", "feature"]);
+    assert!(!tracked.contains(".git/"), "{tracked}");
+}
+
+#[test]
+fn a_head_gets_one_fix_per_class_a_later_head_gets_its_own_and_the_fixed_head_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let sha = std::cell::RefCell::new("s1".to_owned());
+    let lookup = |_| {
+        Ok(PrHead {
+            remote: "r".into(),
+            branch: "b".into(),
+            sha: sha.borrow().clone(),
+        })
+    };
+    let pushed = std::cell::RefCell::new(Vec::new());
+    let fix = |_: &Request, _: &Path| {
+        let new = format!("fix{}", pushed.borrow().len());
+        pushed.borrow_mut().push(new.clone());
+        Ok(Outcome::Pushed(new))
+    };
+    let at = |sha: &str, job: u64| -> BTreeMap<String, Task> {
+        [task("pr-9", 9, "fmt", job, sha)]
+            .into_iter()
+            .map(|t| (t.key.clone(), t))
+            .collect()
+    };
+    pass(dir.path(), "o/r", &at("s1", 1), lookup, fix).unwrap();
+    assert_eq!(pushed.borrow().len(), 1);
+    // The head the fix produced is still red with the same class: never fixed again.
+    *sha.borrow_mut() = "fix0".into();
+    assert!(pass(dir.path(), "o/r", &at("fix0", 2), lookup, fix)
+        .unwrap()
+        .is_empty());
+    // A person's newer head that is red the same way gets its own fix.
+    *sha.borrow_mut() = "s2".into();
+    pass(dir.path(), "o/r", &at("s2", 3), lookup, fix).unwrap();
+    assert_eq!(pushed.borrow().len(), 2);
+}
+
+#[test]
+fn a_task_that_is_not_current_is_never_fixed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut old = task("pr-9", 9, "fmt", 1, "abc");
+    old.current = false;
+    let tasks: BTreeMap<_, _> = [(old.key.clone(), old)].into_iter().collect();
+    let rows = pass(
+        dir.path(),
+        "o/r",
+        &tasks,
+        |_| panic!("a green head is not read"),
+        |_: &Request, _: &Path| -> Result<Outcome, String> { panic!("a green head is not fixed") },
+    )
+    .unwrap();
+    assert!(rows.is_empty());
+}
+
+#[test]
+fn the_scheduled_service_runs_the_automatic_fix() {
+    let unit = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/systemd/pg-ci-watch.service"),
+    )
+    .unwrap();
+    let exec = unit.lines().find(|l| l.starts_with("ExecStart=")).unwrap();
+    for flag in ["ci-watch", "--keeper", "--main-freeze", "--autofix"] {
+        assert!(exec.contains(flag), "{flag} missing from {exec}");
+    }
 }
