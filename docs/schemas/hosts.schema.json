@@ -32,6 +32,7 @@
         "ssh_target": { "type": "string", "minLength": 1 },
         "wsl_distro": { "type": "string", "pattern": "^[A-Za-z0-9_.][A-Za-z0-9_.-]*$" },
         "placement_fallback": { "type": "boolean", "default": false },
+        "remote_placement": { "type": "boolean", "default": false, "description": "The spawner may place work on this host from another host; off unless true." },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
         "os": { "enum": ["linux", "windows"] },
         "state_dir": { "type": "string" },
