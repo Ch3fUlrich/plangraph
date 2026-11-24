@@ -23,12 +23,12 @@ on top. Group by `Added / Changed / Fixed / Removed / Deprecated / Security`.
 ## [Unreleased]
 
 ### Removed
-- The Mem0 fallback, entirely — Omnigraph is the only memory layer. The escape hatch
-  was never exercised but kept leaking back into docs as a live option. See
-  docs/decisions/0003-remove-mem0-fallback.md.
+- The polling fallback of the job queue, entirely — events are the only trigger. The
+  escape hatch was never exercised but kept leaking back into docs as a live option.
+  See ADR 0003 (remove the polling fallback).
 
 ### Added
-- `coding-principles` and `structured-memory` skills.
+- `coding-principles` skill.
 ```
 
 Rules:
@@ -47,34 +47,32 @@ Path: `docs/decisions/NNNN-kebab-title.md` (zero-padded, monotonic). The ADR fil
 examples below are illustrative; they are not files in this repository.
 
 ```markdown
-# 0001. Omnigraph over Mem0 for cross-project memory
+# 0001. Event triggers over polling for the job queue
 
 - **Status:** Accepted (2026-07-09)
-- **Context:** We need structured, cross-agent, cross-project memory. Mem0
-  auto-extracts unstructured vector blobs; we want typed, queryable, reviewable
-  memory so rules and decisions stay integrated.
-- **Decision:** Adopt Omnigraph (typed nodes/edges + graph/vector/full-text
-  retrieval) as the default. Replace Mem0's auto-extraction with an explicit
-  structured-memory protocol.
-- **Consequences:** Heavier infra (omnigraph-server + MinIO). Memory now depends
-  on an agent-discipline protocol (treated as a feature). Mem0 kept as fallback.
-- **Switch-back criteria:** If operating Omnigraph proves unsustainable, re-enable
-  the `mem0-fallback` compose profile and layer the structured protocol on top.
+- **Context:** Jobs start from a cron poll every minute. Latency is up to a minute and
+  every poll reads the full table; we want a start on the event that makes work ready.
+- **Decision:** Adopt event triggers as the default. Replace the poll loop with a
+  handler per event type.
+- **Consequences:** A missed event now needs a recovery path (treated as a feature:
+  the handler is idempotent and replayable). Polling kept as fallback.
+- **Switch-back criteria:** If events prove unreliable, re-enable the `polling-fallback`
+  setting and layer the handlers on top.
 ```
 
 **Amend, don't rewrite.** When reality moves on, an ADR is a record of what was decided
 *then* — so leave the text and add a dated note pointing at the ADR that changed it. The
-real 0001 above later had its fallback clause voided; the fix was a header amendment plus
+example 0001 above later had its fallback clause voided; the fix was a header amendment plus
 a `> Superseded by ADR 0003` note above that section — **not** a silent edit. Write the
 new ADR for the new decision (0003 here), and keep the old one findable:
 
 ```markdown
-# 0001. Omnigraph over Mem0 for cross-project memory
+# 0001. Event triggers over polling for the job queue
 
 - **Status:** Accepted (2026-07-09)
-- **Amended (2026-07-16):** the Mem0 fallback below was removed — see
-  docs/decisions/0003-remove-mem0-fallback.md. The decision to adopt Omnigraph stands;
-  only the escape hatch is gone.
+- **Amended (2026-07-16):** the polling fallback below was removed — see
+  ADR 0003 (remove the polling fallback). The decision to adopt event triggers
+  stands; only the escape hatch is gone.
 ```
 
 The same rule applies to memory: supersede an accepted `Decision` with a new node plus a
