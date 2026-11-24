@@ -17,7 +17,11 @@ additional caller module paths are preserved.
 `--dry-run` prints one JSON decision and never claims, spawns, writes a prompt,
 creates feeder state, or appends an event. Normal ticks append one JSON line to
 `~/.local/state/plangraph/feeder/events.jsonl`, including refusals and adapter
-errors. Decisions are `idle`, `refused`, `would_spawn`, `pending` or `spawned`.
+errors. A dry run plays the whole tick: `would_start` lists every batch (item key,
+card, brief) the tick would start, each taking one slot and one run's RAM and avoiding
+the files of the batches before it; `slots` counts them and `stopped` says why the list
+ends (`no_eligible_item` or the admission refusal, e.g. `ram`, `max_writers`). The first
+entry is also the top-level decision fields. Decisions are `idle`, `refused`, `would_spawn`, `pending` or `spawned`.
 Routine admission refusals exit 0 so the timer stays healthy; adapter/envelope/
 start errors carry `error: true` and exit 2.
 There is no LLM in scheduling. Claims never update priority.

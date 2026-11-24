@@ -180,18 +180,44 @@ pub fn tick(
         Ok(v) => v,
         Err(e) => return json!({"decision":"refused","reason":e,"error":true}),
     };
+    // A dry run plays the whole tick: each would-be batch takes a slot and one run's RAM, and
+    // the next pick avoids its files, until admission or the ready list ends the list.
+    let mut sim_runs = runs.to_vec();
+    let mut sim_facts = facts.clone();
+    let mut would: Vec<Value> = Vec::new();
+    let mut stopped = "no_eligible_item".to_string();
     loop {
-        let batch = pick_batch(&ready, runs, policy);
+        let batch = pick_batch(&ready, if dry { &sim_runs } else { runs }, policy);
         let Some(seed) = batch.first() else { break };
-        if let Admission::Refuse(reason) = admit(facts, policy) {
-            return json!({"decision":"refused","item_key":seed.key,"reason":reason,"skipped":skipped});
+        if let Admission::Refuse(reason) = admit(if dry { &sim_facts } else { facts }, policy) {
+            if would.is_empty() {
+                return json!({"decision":"refused","item_key":seed.key,"reason":reason,"skipped":skipped});
+            }
+            stopped = reason;
+            break;
         }
         if dry {
-            let mut row = json!({"decision":"would_spawn",
+            let mut row = json!({"item_key":seed.key,
                 "card":batch_card(&batch, repo, reviews, policy), "brief":batch_brief(&batch, rules, reviews)});
-            row["item_key"] = json!(seed.key);
-            row["skipped"] = json!(skipped);
-            return row;
+            if batch.len() > 1 {
+                row["item_keys"] = json!(batch.iter().map(|t| &t.key).collect::<Vec<_>>());
+            }
+            would.push(row);
+            sim_runs.push(Run {
+                run_id: format!("dry:{}", would.len()),
+                started: None,
+                item_key: seed.key.clone(),
+                host: facts.host.clone(),
+                status: "running".into(),
+                role: "implement".into(),
+                files: batch.iter().flat_map(|t| t.files.clone()).collect(),
+                item_keys: batch.iter().map(|t| t.key.clone()).collect(),
+            });
+            sim_facts.running_writers += 1;
+            sim_facts.free_ram_bytes = sim_facts
+                .free_ram_bytes
+                .saturating_sub(policy.ram_per_run_bytes);
+            continue;
         }
         let mut dropped = Vec::new();
         let claimed = claim_batch(&batch, launch, &mut dropped);
@@ -236,6 +262,15 @@ pub fn tick(
                 return json!({"decision":"refused","item_key":items[0].key,"reason":reason,"skipped":skipped,"error":true});
             }
         }
+    }
+    if let Some(first) = would.first() {
+        let mut row = first.clone();
+        row["decision"] = json!("would_spawn");
+        row["skipped"] = json!(skipped);
+        row["slots"] = json!(would.len());
+        row["would_start"] = json!(would);
+        row["stopped"] = json!(stopped);
+        return row;
     }
     json!({"decision":"idle","reason":"no_eligible_item","skipped":skipped})
 }

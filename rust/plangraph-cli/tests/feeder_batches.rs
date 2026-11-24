@@ -350,6 +350,70 @@ fn dry_run_shows_the_batch_without_claiming() {
     assert!(registry.lock().unwrap().claimed.is_empty());
 }
 
+fn would_keys(row: &Value) -> Vec<String> {
+    row["would_start"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["item_key"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn dry_run_lists_every_batch_the_tick_would_start_with_disjoint_files() {
+    let items = vec![
+        item("AAA-1", 9, &["src/a.rs"]),
+        item("BBB-1", 8, &["src/a.rs"]),
+        item("CCC-1", 7, &["src/c.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    let row = drive(&ready(items), &mut host, "dell", 1, true);
+    // The first decision keeps its fields; the list holds both file-disjoint batches.
+    assert_eq!(row["decision"], "would_spawn");
+    assert_eq!(row["item_key"], "plangraph:AAA-1");
+    assert_eq!(would_keys(&row), ["plangraph:AAA-1", "plangraph:CCC-1"]);
+    assert_eq!(row["slots"], 2);
+    assert_eq!(row["stopped"], "no_eligible_item");
+    for w in row["would_start"].as_array().unwrap() {
+        assert!(w["card"]["item_key"].is_string() && w["brief"].is_string());
+    }
+    assert!(registry.lock().unwrap().claimed.is_empty());
+}
+
+#[test]
+fn dry_run_list_stops_where_admission_refuses_and_names_why() {
+    // 8 GB free with 4 GB per writer: two slots, the third item is refused for RAM.
+    let items = vec![
+        item("AAA-1", 9, &["src/a.rs"]),
+        item("BBB-1", 8, &["src/b.rs"]),
+        item("CCC-1", 7, &["src/c.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    let row = drive(&ready(items), &mut host, "dell", 1, true);
+    assert_eq!(would_keys(&row), ["plangraph:AAA-1", "plangraph:BBB-1"]);
+    assert_eq!(row["stopped"], "ram");
+    // The very first refusal is still a plain refusal, with no list.
+    let items = vec![item("AAA-1", 9, &["src/a.rs"])];
+    let mut host = Host::new(&registry, &items);
+    let mut poor = facts("dell");
+    poor.free_ram_bytes = 1;
+    let refused = tick(
+        &ready(items),
+        &[],
+        &poor,
+        &policy(1),
+        "rules",
+        "/repo",
+        "/reviews",
+        true,
+        &mut host,
+    );
+    assert_eq!(refused["decision"], "refused");
+    assert_eq!(refused["reason"], "ram");
+}
+
 #[test]
 fn a_member_claimed_by_another_host_is_a_rival_not_a_batch_mate() {
     // Another host already holds BETA-1; this host plans [ALPHA-1, BETA-1] on one file.
