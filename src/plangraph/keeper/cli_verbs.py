@@ -536,8 +536,9 @@ def cmd_heartbeat(args, session):
 
 
 def cmd_release(args, session):
+    epoch = getattr(args, "epoch", None)
     return write(session, "release",
-                 {"key": args.key, "epoch": _epoch(session, args.key)})
+                 {"key": args.key, "epoch": epoch if epoch is not None else _epoch(session, args.key)})
 
 
 def cmd_incident(args, session):

@@ -74,9 +74,10 @@ pub(crate) trait Ports {
     fn plan(&self, leg: &Leg, input: &PlanInput) -> Result<Vec<Vec<String>>, ToolError>;
     fn define_slice(&self, slice: &Slice) -> Result<(), ToolError>;
     fn close_pr_unmerged(&self, pr: &str) -> Result<(), ToolError>;
-    /// Release the keeper claim of `item` so a batch sent back without a PR can be taken again;
-    /// a repeat after success must be harmless to the caller (the job saves the step).
-    fn release_claim(&self, item: &str) -> Result<(), ToolError>;
+    /// The epoch of the claim held on `item` now, None when it is not claimed.
+    fn claim_epoch(&self, item: &str) -> Result<Option<u64>, ToolError>;
+    /// Release the claim of `item` at exactly `epoch`: a newer claim is never touched.
+    fn release_claim(&self, item: &str, epoch: u64) -> Result<(), ToolError>;
     /// Deliver `line`; `key` is the same on every retry of this job's report, so a receiver can
     /// drop a repeat. Return Ok only after the receiver or its durable spool took the line.
     fn send_routing(&self, key: &str, line: &str) -> Result<(), ToolError>;
@@ -217,6 +218,7 @@ pub(crate) fn enqueue_return(
     item: &str,
     reason: &str,
     findings: &[String],
+    claim_items: &[String],
 ) -> Result<bool, ToolError> {
     std::fs::create_dir_all(job_dir(state))
         .map_err(|_| parameter("replan_state_unavailable: job directory missing"))?;
@@ -226,6 +228,7 @@ pub(crate) fn enqueue_return(
         return Ok(false);
     }
     let job = json!({"item":item, "pr":"", "reason":reason, "kind":"return", "queued_at":now(),
+        "claim_items":claim_items, "claims":{},
         "plan":{"leg":null, "slices":[], "findings":findings}, "defined":[], "closed":false,
         "report":"pending", "error":null});
     save(&path, &job)?;
@@ -411,10 +414,7 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         save(path, job)?;
     }
     if returned && job["released"] != true {
-        // The batch goes back to the keeper: its claim is released before the report.
-        ports.release_claim(job["item"].as_str().unwrap_or(""))?;
-        job["released"] = json!(true);
-        save(path, job)?;
+        release_claims(path, job, ports)?;
     }
     if job["report"] == "pending" {
         let keys: Vec<_> = slices.iter().filter_map(|s| s["key"].as_str()).collect();
@@ -467,16 +467,50 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
     Ok(())
 }
 
-/// The longest routing line sent, in characters: the fleet bus refuses a text over 2000.
-const LINE_MAX: usize = 1800;
-/// The most JSON bytes the line may take of the bus body (4096 bytes with the envelope).
-const LINE_JSON_MAX: usize = 3000;
+/// Release the keeper claim of every item the returned batch held, each at the epoch seen
+/// before the first try and saved. A retry after a release that was committed but not saved
+/// finds that epoch gone and goes on; a newer claim on the item is never released.
+fn release_claims(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolError> {
+    let items: Vec<String> = job["claim_items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    for item in &items {
+        if job["claims"][item]["released"] == true {
+            continue;
+        }
+        if job["claims"][item].is_null() {
+            let epoch = ports.claim_epoch(item)?;
+            job["claims"][item] = json!({"epoch":epoch, "released":epoch.is_none()});
+            save(path, job)?;
+        }
+        if let Some(epoch) = job["claims"][item]["epoch"].as_u64() {
+            if let Err(error) = ports.release_claim(item, epoch) {
+                if ports.claim_epoch(item)? == Some(epoch) {
+                    return Err(error);
+                }
+            }
+            job["claims"][item]["released"] = json!(true);
+            save(path, job)?;
+        }
+    }
+    job["released"] = json!(true);
+    save(path, job)
+}
 
-/// The JSON bytes of `c` in the worst case (`\uXXXX` for a non-ASCII or control character).
+/// The most characters of a routing line the fleet bus takes (its text cap).
+const LINE_MAX: usize = 2000;
+/// The most JSON bytes of the line: the bus body `{"text":...}` is capped at 4096 bytes.
+const LINE_JSON_MAX: usize = 4096 - 10;
+
+/// The JSON bytes of `c` as the bus client encodes it (ASCII-only JSON).
 fn json_cost(c: char) -> usize {
     match c {
-        '"' | '\\' => 2,
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
         c if c.is_ascii() && !c.is_ascii_control() => 1,
+        '\u{7f}' => 1,
         c if c.len_utf16() == 2 => 12,
         _ => 6,
     }

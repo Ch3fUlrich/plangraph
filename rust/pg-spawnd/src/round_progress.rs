@@ -120,6 +120,22 @@ pub(crate) fn read_json(path: &Path) -> Result<Value, ToolError> {
 /// The writer rounds of `item` that count toward the stop rule (voided and refused attempts
 /// excluded), ordered by round.
 pub(crate) fn round_history(state: &Path, item: &str) -> Result<Vec<Value>, ToolError> {
+    let mut history: Vec<Value> = batch_records(state, item)?
+        .into_iter()
+        .filter(|record| {
+            record["writer_round"].is_u64()
+                && !(record["round_void"] == true
+                    && crate::runs::terminal(record)
+                    && record["status"] != "completed")
+                && !matches!(record["status"].as_str(), Some("dry_run" | "refused"))
+        })
+        .collect();
+    history.sort_by_key(|r| r["writer_round"].as_u64().unwrap());
+    Ok(history)
+}
+
+/// Every implement run record of the batch `item`, whatever its round.
+fn batch_records(state: &Path, item: &str) -> Result<Vec<Value>, ToolError> {
     let mut history = Vec::new();
     match std::fs::read_dir(state.join("runs")) {
         Ok(entries) => {
@@ -139,11 +155,6 @@ pub(crate) fn round_history(state: &Path, item: &str) -> Result<Vec<Value>, Tool
                     .map_err(|_| refused("round_history_unavailable"))?;
                 if record["role"] == "implement"
                     && crate::round_escalate::batch_key(&record) == Some(item)
-                    && record["writer_round"].is_u64()
-                    && !(record["round_void"] == true
-                        && crate::runs::terminal(&record)
-                        && record["status"] != "completed")
-                    && !matches!(record["status"].as_str(), Some("dry_run" | "refused"))
                 {
                     history.push(record);
                 }
@@ -152,7 +163,6 @@ pub(crate) fn round_history(state: &Path, item: &str) -> Result<Vec<Value>, Tool
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(refused("round_history_unavailable")),
     }
-    history.sort_by_key(|r| r["writer_round"].as_u64().unwrap());
     Ok(history)
 }
 
@@ -220,6 +230,15 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         .map_err(|_| refused("round_history_unavailable"))?
         .ok_or_else(|| refused("round_admission_busy"))?;
     let history = round_history(state, item)?;
+    // The initial implementation holds no round number but is still a running writer: no
+    // second initial run and no fix round starts while it runs.
+    if batch_records(state, item)?.iter().any(|r| {
+        r["round_cause"] == crate::round_escalate::INITIAL
+            && !matches!(r["status"].as_str(), Some("dry_run" | "refused"))
+            && !crate::runs::terminal(r)
+    }) {
+        return Err(refused("round_in_flight"));
+    }
     if cause == crate::round_escalate::INITIAL {
         // The first implementation is no fix turn: it takes no round number.
         if !history.is_empty() {
@@ -379,7 +398,21 @@ pub(crate) fn record_refusal(
             let findings =
                 crate::round_replan_ports::last_round_findings_of(state, item, &Value::Null)
                     .unwrap_or_default();
-            match crate::round_replan::enqueue_return(state, item, reason, &findings) {
+            // The keeper claims are on the card's items, not on the ledger key.
+            let claims: Vec<String> = match args["card"]["item_keys"].as_array() {
+                Some(list) => list
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|s| crate::records::valid_item(s))
+                    .map(String::from)
+                    .collect(),
+                None => base["item_key"]
+                    .as_str()
+                    .map(String::from)
+                    .into_iter()
+                    .collect(),
+            };
+            match crate::round_replan::enqueue_return(state, item, reason, &findings, &claims) {
                 Ok(true) => base["replan"] = json!("returned"),
                 Ok(false) => {}
                 Err(e) => base["replan_error"] = json!(e.into_error_data().message),

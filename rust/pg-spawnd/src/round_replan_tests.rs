@@ -16,6 +16,21 @@ fn change(path: &str, lines: u64) -> FileChange {
     }
 }
 
+/// The fleet bus's own text and body caps, written out apart from the production helper:
+/// 2000 characters, and the body `{"text":...}` of at most 4096 bytes in ASCII-only JSON.
+fn bus_accepts(text: &str) -> bool {
+    let mut body = 10;
+    for unit in text.encode_utf16() {
+        body += match unit {
+            0x22 | 0x5c | 0x0a | 0x0d | 0x09 | 0x08 | 0x0c => 2,
+            0x00..=0x1f => 6,
+            0x20..=0x7f => 1,
+            _ => 6,
+        };
+    }
+    text.chars().count() <= 2000 && body <= 4096
+}
+
 #[derive(Default)]
 struct Fixture {
     calls: RefCell<Vec<String>>,
@@ -23,6 +38,8 @@ struct Fixture {
     fail_send: RefCell<bool>,
     lock_only: RefCell<bool>,
     fail_release: RefCell<bool>,
+    crash_after_release: RefCell<bool>,
+    claimed: RefCell<std::collections::BTreeMap<String, u64>>,
     keys: RefCell<Vec<String>>,
     sent_keys: RefCell<Vec<String>>,
 }
@@ -90,10 +107,25 @@ impl Ports for Fixture {
         self.calls.borrow_mut().push(format!("close {pr}"));
         Ok(())
     }
-    fn release_claim(&self, item: &str) -> Result<(), ToolError> {
-        self.calls.borrow_mut().push(format!("release {item}"));
+    fn claim_epoch(&self, item: &str) -> Result<Option<u64>, ToolError> {
+        Ok(self.claimed.borrow().get(item).copied())
+    }
+    fn release_claim(&self, item: &str, epoch: u64) -> Result<(), ToolError> {
+        self.calls
+            .borrow_mut()
+            .push(format!("release {item} at {epoch}"));
         if *self.fail_release.borrow() {
             return Err(parameter("keeper_down: release refused"));
+        }
+        // The keeper takes only the epoch that is held now.
+        if self.claimed.borrow().get(item) != Some(&epoch) {
+            return Err(parameter("keeper_refused: not claimed at that epoch"));
+        }
+        self.claimed.borrow_mut().remove(item);
+        if *self.crash_after_release.borrow_mut() {
+            *self.crash_after_release.borrow_mut() = false;
+            // The release committed and the answer was lost.
+            return Err(parameter("keeper_down: answer lost"));
         }
         Ok(())
     }
@@ -101,6 +133,9 @@ impl Ports for Fixture {
         self.sent_keys.borrow_mut().push(key.to_string());
         if *self.fail_send.borrow() {
             return Err(parameter("routing_down: send refused"));
+        }
+        if !bus_accepts(line) {
+            return Err(parameter("bus_refused: text or body over the cap"));
         }
         // A receiver drops a repeat of a key it has already taken.
         if self.keys.borrow().iter().any(|k| k == key) {
@@ -313,8 +348,11 @@ fn a_plan_that_drops_a_file_is_refused_and_nothing_is_closed() {
         fn define_slice(&self, s: &Slice) -> Result<(), ToolError> {
             self.0.define_slice(s)
         }
-        fn release_claim(&self, i: &str) -> Result<(), ToolError> {
-            self.0.release_claim(i)
+        fn claim_epoch(&self, i: &str) -> Result<Option<u64>, ToolError> {
+            self.0.claim_epoch(i)
+        }
+        fn release_claim(&self, i: &str, epoch: u64) -> Result<(), ToolError> {
+            self.0.release_claim(i, epoch)
         }
         fn close_pr_unmerged(&self, p: &str) -> Result<(), ToolError> {
             self.0.close_pr_unmerged(p)
@@ -448,7 +486,8 @@ fn a_batch_sent_back_without_a_pr_still_gets_one_delivered_routing_line() {
         dir.path(),
         "p:I",
         "no_progress",
-        &["HIGH a/one.rs:3 keep\nit".into()]
+        &["HIGH a/one.rs:3 keep\nit".into()],
+        &[]
     )
     .ok()
     .unwrap());
@@ -456,7 +495,8 @@ fn a_batch_sent_back_without_a_pr_still_gets_one_delivered_routing_line() {
         dir.path(),
         "p:I",
         "no_progress",
-        &["HIGH a/one.rs:3 keep\nit".into()]
+        &["HIGH a/one.rs:3 keep\nit".into()],
+        &[]
     )
     .ok()
     .unwrap());
@@ -511,13 +551,15 @@ fn an_oversized_findings_list_is_cut_to_the_bus_limit_with_a_pointer_to_the_job(
     let findings: Vec<String> = (0..80)
         .map(|n| format!("HIGH file{n}.rs:{n} {}", "x".repeat(60)))
         .collect();
-    assert!(enqueue_return(dir.path(), "p:I", "round_cap", &findings)
-        .ok()
-        .unwrap());
+    assert!(
+        enqueue_return(dir.path(), "p:I", "round_cap", &findings, &[])
+            .ok()
+            .unwrap()
+    );
     let ports = Fixture::default();
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     let line = ports.calls.borrow().last().unwrap().clone();
-    assert!(line.chars().count() < 2000);
+    assert!(bus_accepts(line.trim_start_matches("route ")));
     assert!(line.contains(" ... (full text in replans/replan-"));
     // The job file keeps every finding.
     let job = jobs(dir.path()).pop().unwrap();
@@ -555,55 +597,114 @@ fn a_legacy_job_keeps_one_date_across_retries() {
 }
 
 #[test]
-fn a_return_releases_the_keeper_claim_once_before_it_reports() {
+fn a_return_releases_each_claimed_item_at_its_epoch_before_it_reports() {
     let dir = tempfile::tempdir().unwrap();
-    assert!(enqueue_return(dir.path(), "p:I", "round_cap", &[])
-        .ok()
-        .unwrap());
+    // The ledger key names no claim; the items of the card do.
+    assert!(enqueue_return(
+        dir.path(),
+        "p:Batch",
+        "round_cap",
+        &[],
+        &["p:One".into(), "p:Two".into(), "p:Free".into()]
+    )
+    .ok()
+    .unwrap());
     let ports = Fixture::default();
+    ports.claimed.borrow_mut().insert("p:One".into(), 3);
+    ports.claimed.borrow_mut().insert("p:Two".into(), 7);
     *ports.fail_release.borrow_mut() = true;
     assert!(run_pending(dir.path(), &ports)[0].1.contains("keeper_down"));
     assert_eq!(ports.count("route"), 0);
     *ports.fail_release.borrow_mut() = false;
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
-    let calls = ports.calls.borrow();
-    let release = calls.iter().rposition(|c| c == "release p:I").unwrap();
+    let calls = ports.calls.borrow().clone();
+    assert!(calls.contains(&"release p:One at 3".to_string()));
+    assert!(calls.contains(&"release p:Two at 7".to_string()));
+    assert!(!calls
+        .iter()
+        .any(|c| c.starts_with("release") && (c.contains("p:Batch") || c.contains("p:Free"))));
+    let last_release = calls
+        .iter()
+        .rposition(|c| c.starts_with("release"))
+        .unwrap();
     let route = calls.iter().position(|c| c.starts_with("route")).unwrap();
-    assert!(release < route);
+    assert!(last_release < route);
     assert_eq!(calls.iter().filter(|c| c.starts_with("route")).count(), 1);
-    // One refused release and one that went through; the report waited for the second.
-    assert_eq!(ports.count("release"), 2);
 }
 
 #[test]
-fn the_cutoff_counts_json_bytes_and_a_saved_sending_job_is_cut_before_the_send() {
+fn a_release_committed_before_the_save_is_reconciled_and_a_newer_claim_is_left_alone() {
+    // The release went through and its answer was lost: the retry finds the epoch gone.
+    let dir = tempfile::tempdir().unwrap();
+    enqueue_return(dir.path(), "p:I", "round_cap", &[], &["p:I".into()])
+        .ok()
+        .unwrap();
+    let ports = Fixture::default();
+    ports.claimed.borrow_mut().insert("p:I".into(), 3);
+    *ports.crash_after_release.borrow_mut() = true;
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.count("release p:I at 3"), 1);
+    assert_eq!(ports.count("route"), 1);
+    // A later claim (epoch 4) taken between the failed release and the retry is never released.
+    let dir = tempfile::tempdir().unwrap();
+    enqueue_return(dir.path(), "p:I", "round_cap", &[], &["p:I".into()])
+        .ok()
+        .unwrap();
+    let ports = Fixture::default();
+    ports.claimed.borrow_mut().insert("p:I".into(), 3);
+    *ports.fail_release.borrow_mut() = true;
+    assert!(run_pending(dir.path(), &ports)[0].1.contains("keeper_down"));
+    ports.claimed.borrow_mut().insert("p:I".into(), 4);
+    *ports.fail_release.borrow_mut() = false;
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.claimed.borrow().get("p:I"), Some(&4));
+    assert_eq!(ports.count("release p:I at 4"), 0);
+}
+
+#[test]
+fn a_deliverable_saved_line_is_resent_unchanged_and_only_an_oversized_one_is_cut() {
     // 1200 non-ASCII characters are under the character cap and far over the bus body cap.
     let long = "é".repeat(1200);
     let line = bounded(
         format!("REPLAN p:I x | {long}"),
         Path::new("replan-ab.json"),
     );
-    assert!(line.chars().count() <= LINE_MAX);
-    assert!(line.chars().map(json_cost).sum::<usize>() <= LINE_JSON_MAX);
+    assert!(bus_accepts(&line));
     assert!(line.ends_with("(full text in replans/replan-ab.json)"));
-    // A short line is left alone.
     assert_eq!(bounded("short".into(), Path::new("x.json")), "short");
-    // A job saved as "sending" with an oversized line is cut at the send.
+    let saved = |dir: &Path, name: &str, text: &str| {
+        std::fs::create_dir_all(job_dir(dir)).unwrap();
+        std::fs::write(
+            job_dir(dir).join(name),
+            json!({"item":"p:Old", "pr":"https://forge/p/1", "reason":"escalated", "level":1,
+            "queued_at":5.0, "plan":{"leg":"strong", "slices":[]}, "defined":[],
+            "closed":false, "report":"sending", "report_line":text, "error":null})
+            .to_string(),
+        )
+        .unwrap();
+    };
+    // A 3,3xx-byte body the bus accepted before is resent byte for byte, once.
+    let deliverable = format!("REPLAN p:Old {}", "é".repeat(550));
+    assert!(bus_accepts(&deliverable) && deliverable.len() < 1200);
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(job_dir(dir.path())).unwrap();
-    let path = job_dir(dir.path()).join("replan-old.json");
-    std::fs::write(
-        &path,
-        json!({"item":"p:Old", "pr":"https://forge/p/1", "reason":"escalated", "level":1,
-        "queued_at":5.0, "plan":{"leg":"strong", "slices":[]}, "defined":[], "closed":false,
-        "report":"sending", "report_line":format!("REPLAN p:Old {long}"), "error":null})
-        .to_string(),
-    )
-    .unwrap();
+    saved(dir.path(), "replan-ok.json", &deliverable);
+    let ports = Fixture::default();
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.count(&format!("route {deliverable}")), 1);
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.count("route"), 1);
+    // An oversized one is cut to what the bus validator takes and sent once.
+    let dir = tempfile::tempdir().unwrap();
+    saved(
+        dir.path(),
+        "replan-old.json",
+        &format!("REPLAN p:Old {long}"),
+    );
     let ports = Fixture::default();
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     let sent = ports.calls.borrow().last().unwrap().clone();
-    assert!(sent.chars().count() < 2000);
+    assert!(bus_accepts(sent.trim_start_matches("route ")));
     assert!(sent.contains("(full text in replans/replan-old.json)"));
+    assert_eq!(ports.count("route"), 1);
 }
