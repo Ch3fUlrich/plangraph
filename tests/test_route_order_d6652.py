@@ -123,3 +123,34 @@ def test_the_claude_seat_serves_only_when_no_gemini_smart_leg_is_left():
     assert not any(leg.claude_family for leg in plan.legs)
     # A claude-written diff never gets the Claude seat, even with every Gemini leg out.
     assert not any(leg.claude_family for leg in review(writers=("claude",), down=gemini).legs)
+
+
+GEMINI_SMART = {"gemini-4-hydrogen-high", "gemini-4-argon-low", "gemini-4-argon-medium"}
+
+
+def test_review_route_returns_the_two_required_opencode_seats_with_tools():
+    """Rule 3.66 (f10): with no smart leg served, the two required OpenCode seats seat the head."""
+    plan = review({"repository_review_required": True}, down=GEMINI_SMART | {"claude-sonnet-5-5-high"})
+    assert [leg.id for leg in plan.review_seats] == list(REVIEW_REQUIRED)
+    assert all(leg.harness == "opencode" and leg.tool_mode == "tools" for leg in plan.review_seats)
+    assert [leg.id for leg in plan.legs[:2]] == list(REVIEW_REQUIRED)
+
+
+def test_review_needs_two_seats_on_a_standard_head_too():
+    """The weak pair is two seats on a standard head (f10 fallback); a smart seat is one."""
+    plan = review(down=GEMINI_SMART | {"claude-sonnet-5-5-high"})
+    assert len(plan.review_seats) == 2 and plan.error is None
+
+
+def test_a_credential_diff_keeps_both_required_seats_and_adds_sonnet():
+    """f10: Sonnet is the one counted seat of a credential diff; both required seats stay behind it as fallbacks."""
+    plan = review({"risk_tags": ["secrets"]})
+    ids = [leg.id for leg in plan.legs]
+    assert ids[0] == "claude-sonnet-5-5-high" and set(REVIEW_REQUIRED) <= set(ids)
+    assert [leg.id for leg in plan.review_seats] == ["claude-sonnet-5-5-high"]
+
+
+def test_the_claude_seat_serves_only_when_both_required_seats_are_out():
+    """f10: the Gemini smart legs gate the Claude seat; the required seats being out changes nothing."""
+    assert not any(leg.claude_family for leg in review(down=REQUIRED_MODELS).legs)
+    assert any(leg.id == "claude-sonnet-5-5-high" for leg in review(down=GEMINI_SMART).legs)

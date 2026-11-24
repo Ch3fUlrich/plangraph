@@ -70,3 +70,16 @@ def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
     skipped = next(row for row in limited.skipped if row["leg"] == REVIEW_ARGON_LOW)
     assert skipped["evidence"]["status"] == 429
     assert REVIEW_ARGON_LOW in {leg.id for leg in route("B").legs}
+
+
+def test_review_order_names_gpt_first_then_mimo_deepseek_and_argon_late():
+    """f10: after the smart legs and the weak pair, gpt leads the rest, then mimo and the free deepseek."""
+    assert REVIEW_ORDER[6:9] == ("gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free")
+    assert REVIEW_ORDER.index("agy-gemini-4-argon-medium") < REVIEW_ORDER.index("opencode-go-deepseek-v4-flash")
+
+
+def test_argon_is_the_end_of_the_whole_eligible_route():
+    """f10: argon ends the Gemini smart legs; the weak pair and every other leg follow it."""
+    ids = route("claude")
+    assert ids[:3] == ["agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
+    assert all(ids.index(leg) > 2 for leg in ("opencode-go-deepseek-v4-flash", "gpt-6.2-sol-medium", "cx-gpt-6-luna"))
