@@ -33,7 +33,8 @@ print(json.dumps(_fetch({'name':'remote'},lambda *args:payload)))
         .spawn()
         .unwrap();
     let payload = json!({"runs":[{"run_id":"run-remote","host":"remote","role":"implement",
-        "status":"running","item_key":"plangraph:PATCH-OTHER","started":1000,"stderr":"not public"}]});
+        "status":"running","item_key":"plangraph:PATCH-OTHER","started":1000,"stderr":"not public",
+        "run_kind":"fleet-session"}]});
     child
         .stdin
         .take()
@@ -49,6 +50,8 @@ print(json.dumps(_fetch({'name':'remote'},lambda *args:payload)))
     let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(rows[0]["item_key"], "plangraph:PATCH-OTHER");
     assert!(rows[0].get("stderr").is_none());
+    // The kind survives the projection: the feeder splits a whole-card item_key by it.
+    assert_eq!(rows[0]["run_kind"], "fleet-session");
     let runs: Vec<Run> = serde_json::from_value(rows).unwrap();
     let ready = json!({"items":[{"key":"plangraph:PATCH-A","priority":9},{"key":"plangraph:BUILD-A","priority":1}]});
     assert_eq!(

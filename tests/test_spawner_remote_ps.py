@@ -305,6 +305,14 @@ def test_valid_remote_field_types(ended, exit_code, pid):
                started=1, ended=ended, pid=pid, exit_code=exit_code)
     assert remote_ps._fetch(dict(name='node-a'), lambda *args: json.dumps(
         {'runs': [row]})) == [row]
+def test_fleet_session_rows_keep_run_kind_for_the_feeder_card_split():
+    # The launcher registers a session as one run whose item_key is the whole card; the
+    # feeder splits it by run_kind, so the projection must carry the kind through.
+    row = dict(run_id='run-a', host='node-a', status='running', role='implement', started=1,
+               run_kind='fleet-session', item_key='plangraph:A plangraph:B')
+    assert remote_ps._fetch(dict(name='node-a'), lambda *a: json.dumps({'runs': [row]})) == [row]
+
+
 def test_long_identifiers():
     row = dict(run_id='r' * 256, host='h' * 253, status='running')
     assert remote_ps._fetch(dict(name='node-a'), lambda *a: json.dumps({'runs': [row]})) == [dict(row, host='node-a')]
