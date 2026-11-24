@@ -63,6 +63,39 @@ impl DeployPlan {
         format!("deploy: {}", names.join(", "))
     }
 
+    /// The lines of `deploy-plan`: the GO-REQ line, then one block per family and host that routing can quote:
+    /// `READY family@host parts #N` alone, or `NOT READY family@host parts #N blocker KEY` followed by one
+    /// `MISSING kind name` (or `REFUSED why`) line per reason.
+    pub fn report(&self) -> Vec<String> {
+        let parts = |p: &[u64]| {
+            let list: Vec<_> = p.iter().map(|n| format!("#{n}")).collect();
+            list.join(", ")
+        };
+        let mut lines = vec![self.go_req()];
+        for t in &self.targets {
+            lines.push(format!(
+                "READY {}@{} parts {}",
+                t.family,
+                t.host,
+                parts(&t.parts)
+            ));
+        }
+        for b in &self.blockers {
+            let host = b.host.as_deref().unwrap_or("-");
+            lines.push(format!(
+                "NOT READY {}@{host} parts {} blocker {}",
+                b.family,
+                parts(&b.parts),
+                b.key
+            ));
+            lines.extend(b.reasons.iter().map(|r| match r.strip_prefix("missing ") {
+                Some(thing) => format!("MISSING {thing}"),
+                None => format!("REFUSED {r}"),
+            }));
+        }
+        lines
+    }
+
     /// One keeper definition per blocker, in `pg define --file` format.
     pub fn blocker_items(&self) -> serde_json::Value {
         let items: Vec<_> = self
@@ -83,6 +116,14 @@ impl DeployPlan {
             })
             .collect();
         serde_json::json!({ "items": items })
+    }
+}
+
+/// A dry-run finding as a blocker reason; `report` prints `missing ...` reasons as `MISSING ...` lines.
+fn finding_reason(f: &Finding) -> String {
+    match f.kind.as_str() {
+        "dry-run" => format!("dry run refused: {}", f.name),
+        kind => format!("missing {kind} {}", f.name),
     }
 }
 
@@ -139,17 +180,39 @@ fn trailers(message: &str, name: &str) -> Vec<String> {
         .collect()
 }
 
+/// One part as a commit range: the part's own commits are `from..head`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Span {
+    pub pr: u64,
+    pub from: String,
+    pub head: String,
+}
+
 /// What one part ships, read from its own commits and its own diff only.
 pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, String> {
-    use super::{build::part_base, git};
+    use super::build::part_base;
     let from = part_base(repo, base, part.parent.as_ref());
+    derive_span(
+        repo,
+        &Span {
+            pr: part.pr,
+            from: from.to_owned(),
+            head: part.head.clone(),
+        },
+    )
+}
+
+/// What the part of one commit range ships.
+pub fn derive_span(repo: &Path, span: &Span) -> Result<PartDeploy, String> {
+    use super::git;
+    let (from, head) = (span.from.as_str(), span.head.as_str());
     let log = git::bytes(
         repo,
         &[
             "log",
             "--no-merges",
             "--format=%B%x00",
-            &format!("{from}..{}", part.head),
+            &format!("{from}..{head}"),
         ],
     )?;
     let (mut items, mut hosts) = (BTreeSet::new(), BTreeSet::new());
@@ -167,7 +230,7 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
             "--name-status",
             "-z",
             from,
-            &part.head,
+            head,
             "--",
         ],
     )?;
@@ -184,7 +247,7 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
         })
         .collect();
     Ok(PartDeploy {
-        pr: part.pr,
+        pr: span.pr,
         families,
         items,
         trailer_hosts: hosts,
@@ -198,6 +261,11 @@ pub fn derive(repo: &Path, manifest: &Manifest) -> Result<Vec<PartDeploy>, Strin
         .iter()
         .map(|p| derive_part(repo, &manifest.base, p))
         .collect()
+}
+
+/// Every range of a build that is not a manifest (the batch tool knows its parts by merge commit).
+pub fn derive_spans(repo: &Path, spans: &[Span]) -> Result<Vec<PartDeploy>, String> {
+    spans.iter().map(|s| derive_span(repo, s)).collect()
 }
 
 /// The hosts a part may deploy to: item-level `Deploy-Hosts:` first, else its commits' `Deploy:` trailers.
@@ -231,12 +299,18 @@ pub fn deploy_plan(
 ) -> DeployPlan {
     let mut ok: BTreeMap<(String, String), Vec<u64>> = BTreeMap::new();
     let mut bad: BTreeMap<BlockerKey, (Vec<u64>, Vec<String>)> = BTreeMap::new();
-    let mut refuse = |family: &str, host: Option<&str>, pr: u64, why: String| {
+    let mut refuse = |family: &str, host: Option<&str>, pr: u64, why: Vec<String>| {
         let e = bad
             .entry((family.to_owned(), host.map(str::to_owned)))
             .or_default();
-        e.0.push(pr);
-        e.1.push(why);
+        if !e.0.contains(&pr) {
+            e.0.push(pr);
+        }
+        for reason in why {
+            if !e.1.contains(&reason) {
+                e.1.push(reason);
+            }
+        }
     };
     for part in parts.iter().filter(|p| !p.families.is_empty()) {
         let (allowed, denied) = hosts_of(part, declared, authorized);
@@ -246,7 +320,7 @@ pub fn deploy_plan(
                     family,
                     Some(host),
                     part.pr,
-                    format!("host {host} is not authorized"),
+                    vec![format!("host {host} is not authorized")],
                 );
             }
             if allowed.is_empty() && denied.is_empty() {
@@ -254,7 +328,7 @@ pub fn deploy_plan(
                     family,
                     None,
                     part.pr,
-                    "no Deploy-Hosts or Deploy trailer names a host".into(),
+                    vec!["no Deploy-Hosts or Deploy trailer names a host".into()],
                 );
             }
             for host in &allowed {
@@ -264,11 +338,8 @@ pub fn deploy_plan(
                         .or_default()
                         .push(part.pr),
                     Err(found) => {
-                        let why: Vec<_> = found
-                            .iter()
-                            .map(|f| format!("missing {} {}", f.kind, f.name))
-                            .collect();
-                        refuse(family, Some(host), part.pr, why.join(", "));
+                        let why = found.iter().map(finding_reason).collect();
+                        refuse(family, Some(host), part.pr, why);
                     }
                 }
             }
@@ -296,40 +367,62 @@ pub fn deploy_plan(
     }
 }
 
-/// `land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd "CMD ARGS"
-/// [--declared FILE] [--blockers-out FILE]`: the deploy table of a built train. `--declared` is a JSON
-/// object of item key -> hosts from the items' `Deploy-Hosts:` lines.
+/// `land-train deploy-plan --repo DIR (--manifest FILE | --spans FILE) (--authorized-hosts A,B | --registry FILE)
+/// --probe-cmd "CMD ARGS" [--declared FILE] [--blockers-out FILE]`: the deploy table of a built train.
+/// `--spans` is a JSON array of `{pr, from, head}` (a build the batch tool journaled without a manifest);
+/// `--registry` authorizes every host id and alias of the hosts registry; `--declared` is a JSON object of
+/// item key -> hosts from the items' `Deploy-Hosts:` lines. The lines are `DeployPlan::report`.
 pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
     let read = |p: &str| std::fs::read(p).map_err(|e| format!("{p}: {e}"));
-    let manifest: Manifest =
-        serde_json::from_slice(&read(need("manifest")?)?).map_err(|e| e.to_string())?;
     let declared: BTreeMap<String, Vec<String>> = match flags.get("declared") {
         Some(p) => serde_json::from_slice(&read(p)?).map_err(|e| format!("{p}: {e}"))?,
         None => BTreeMap::new(),
     };
-    let authorized = need("authorized-hosts")?
-        .split(',')
-        .filter(|h| !h.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let mut authorized: BTreeSet<String> = flags
+        .get("authorized-hosts")
+        .map(|list| {
+            list.split(',')
+                .filter(|h| !h.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(path) = flags.get("registry") {
+        let registry = pg_worker_core::hosts::HostRegistry::load(Path::new(path))
+            .map_err(|e| format!("{path}: {e}"))?;
+        for host in &registry.hosts {
+            authorized.insert(host.id.clone());
+            authorized.extend(host.aliases.iter().cloned());
+        }
+    }
+    if authorized.is_empty() {
+        return Err("missing --authorized-hosts or --registry".into());
+    }
     let probe = CommandProbe {
         argv: need("probe-cmd")?
             .split_whitespace()
             .map(str::to_owned)
             .collect(),
     };
-    let parts = derive(Path::new(need("repo")?), &manifest)?;
+    let repo = Path::new(need("repo")?);
+    let parts = match (flags.get("manifest"), flags.get("spans")) {
+        (Some(path), None) => {
+            let manifest: Manifest =
+                serde_json::from_slice(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
+            derive(repo, &manifest)?
+        }
+        (None, Some(path)) => {
+            let spans: Vec<Span> =
+                serde_json::from_slice(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
+            derive_spans(repo, &spans)?
+        }
+        _ => return Err("need exactly one of --manifest and --spans".into()),
+    };
     let plan = deploy_plan(&parts, &declared, &authorized, &probe);
     if let Some(out) = flags.get("blockers-out") {
         let text = serde_json::to_vec_pretty(&plan.blocker_items()).map_err(|e| e.to_string())?;
         std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
     }
-    let mut lines = vec![plan.go_req()];
-    lines.extend(
-        plan.blockers
-            .iter()
-            .map(|b| format!("blocker {}: {}", b.key, b.reasons.join("; "))),
-    );
-    Ok(lines)
+    Ok(plan.report())
 }
