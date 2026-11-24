@@ -20,11 +20,13 @@ one exit decision (a ``decision`` item depending on it).
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
 from .credential_guard import guard
 from .errors import Refused
-from .note_fold import premise_note
+from .note_fold import METADATA_FIELDS, NOTE_CAP, render
 
 _HOW = re.compile(r"^[ \t]*How:[ \t]*(.*?)(?=^[ \t]*(?:Why|Done when|Checked against):|\Z)",
                   re.M | re.S)
@@ -110,43 +112,45 @@ SMALL_FIELDS = ("description", "host", "wait", "layer", "role", "agent_id",
 #: read these and nothing else.  Definition events carry the ones that cite a decision
 #: (``store_input.citing_premise``), so the decision clock is rebuilt from events alone.
 PREMISE_FIELDS = ("title", "description", "done_criteria", "note", "source")
-_CANONICAL_DECISION = re.compile(r"\s*[Dd]-0*\d{1,6}\s*")
-
-
-def premise_text(name, value):
-    """The text of premise field *name* a decision may be cited in, or ``None``.
-
-    ``note`` without its folded metadata lines; ``source`` only as one whole canonical
-    decision reference (a free-text source is not provenance of a decision).
-    """
-    if not isinstance(value, str):
-        return None
-    if name == "note":
-        return premise_note(value)
-    if name == "source":
-        return value if _CANONICAL_DECISION.fullmatch(value) else None
-    return value
-
-
 def premise_texts(values):
     """Every premise text of the mapping *values* (an item row or a definition payload)."""
-    return [text for name in PREMISE_FIELDS
-            if (text := premise_text(name, values.get(name))) is not None]
+    return [values[name] for name in PREMISE_FIELDS if isinstance(values.get(name), str)]
+
+
+def premise_digest(values):
+    """A short digest of the effective premise of *values*: equal text, equal digest."""
+    text = json.dumps([values.get(name) if isinstance(values.get(name), str) else None
+                       for name in PREMISE_FIELDS])
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 SESSION_CAP = 200
+_LINE_SEPARATOR = re.compile("[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
 
 
-def check_session(value, key):
-    """``session`` is item_created metadata: one credential-free line, never premise text."""
-    if value is None:
-        return None
-    if (not isinstance(value, str) or not value.strip() or len(value) > SESSION_CAP
-            or len(value.splitlines()) != 1):
-        raise Refused("validation", f"{key}: session must be a one-line string "
-                      f"of at most {SESSION_CAP} characters")
-    guard("session", value, key)
-    return value
+def check_metadata(raw, key):
+    """The ``METADATA_FIELDS`` of *raw*, validated, as ``{name: value}``.
+
+    Metadata is carried on the creation event and never folded into ``note``: a
+    decision id in it is not a citation of the premise.  ``session`` is one line of
+    at most ``SESSION_CAP`` characters; every value is credential-checked.
+    """
+    out = {}
+    for name in METADATA_FIELDS:
+        value = raw.get(name)
+        if value is None:
+            continue
+        if name == "session" and (
+                not isinstance(value, str) or not value.strip() or len(value) > SESSION_CAP
+                or _LINE_SEPARATOR.search(value)):
+            raise Refused("validation", f"{key}: session must be a one-line string "
+                          f"of at most {SESSION_CAP} characters")
+        text = render(value)
+        if len(text) > NOTE_CAP:
+            raise Refused("validation", f"{key}: {name} exceeds {NOTE_CAP} characters")
+        guard(name, text, key)
+        out[name] = value
+    return out
 
 
 #: The MODEL-KINDS subset of ``SMALL_FIELDS``.
