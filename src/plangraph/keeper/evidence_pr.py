@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import quote
 
+from . import timing
 from .evidence_types import Result, valid_commit_ref
 
 
@@ -17,6 +18,7 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
     gh follows pagination to completion; the subprocess deadline bounds the whole
     lookup, not each page. All pages are validated before considering any match.
     """
+    timing.check_io_deadline("pull request lookup")
     if not valid_commit_ref(merge_sha):
         raise ValueError("PR lookup requires a full lowercase commit sha")
     mode = adapter.mode(project)
@@ -25,7 +27,7 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
     if Path(mode).is_dir():
         origin = subprocess.run(
             [adapter._git, "-C", mode, "remote", "get-url", "origin"],
-            capture_output=True, text=True, timeout=adapter._timeout, check=False,
+            capture_output=True, text=True, timeout=timing.io_timeout(adapter._timeout), check=False,
         )
         from urllib.parse import urlsplit
         remote = origin.stdout.strip()
@@ -47,7 +49,7 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
         if Path(mode).is_dir():
             remotes = subprocess.run(
                 [adapter._git, "-C", mode, "remote"], capture_output=True,
-                text=True, timeout=adapter._timeout, check=False,
+                text=True, timeout=timing.io_timeout(adapter._timeout), check=False,
             )
             if remotes.returncode != 0:
                 raise RuntimeError("cannot resolve target remote")
@@ -60,7 +62,7 @@ def merged_pr_for(adapter, project, merge_sha, target_ref):
         quote(owner, safe=""), quote(repo, safe=""), quote(merge_sha, safe=""))
     proc = subprocess.run(
         [adapter._gh, "api", "--paginate", path],
-        capture_output=True, text=True, timeout=adapter._timeout, check=False,
+        capture_output=True, text=True, timeout=timing.io_timeout(adapter._timeout), check=False,
     )
     if proc.returncode != 0:
         raise RuntimeError("PR lookup failed")
