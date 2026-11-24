@@ -151,6 +151,33 @@ fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
         .map_err(|e| format!("{path}: {e}"))
 }
 
+/// The review gate of `land-train build` from its flags (`--accept-dir`, `--single-seat`, `--seat-meta`).
+/// `reviewed_repo` is the unverified checkout under review: it never supplies the writer-family resolver,
+/// which is the installed plangraph run by an isolated interpreter (`src_root` stays `None`).
+pub(super) fn accept_gate(
+    flags: &std::collections::BTreeMap<String, String>,
+    _reviewed_repo: &Path,
+) -> Result<super::accept::AcceptGate, String> {
+    let dir = flags
+        .get("accept-dir")
+        .ok_or_else(|| format!("{USAGE}\nmissing --accept-dir"))?;
+    Ok(super::accept::AcceptGate {
+        dir: PathBuf::from(dir),
+        single_seat: flags
+            .get("single-seat")
+            .map_or(super::accept::DEFAULT_SINGLE_SEAT, String::as_str)
+            .split(',')
+            .map(|leg| leg.trim().to_ascii_lowercase())
+            .filter(|leg| !leg.is_empty())
+            .collect(),
+        src_root: None,
+        meta: match flags.get("seat-meta") {
+            Some(path) => super::accept::AcceptGate::read_meta(Path::new(path))?,
+            None => Default::default(),
+        },
+    })
+}
+
 pub fn run(home: &Path, args: &[String]) -> i32 {
     let python = || crate::base_fresh::python_command(None);
     match run_inner(home, args, &python) {
@@ -223,21 +250,7 @@ pub(super) fn run_inner(
             let answer = main_gh::answer_for(repo, "main", ledger, &matrix);
             let name = need("name")?;
             let base = need("base")?;
-            let accept = super::accept::AcceptGate {
-                dir: PathBuf::from(need("accept-dir")?),
-                single_seat: flags
-                    .get("single-seat")
-                    .map_or(super::accept::DEFAULT_SINGLE_SEAT, String::as_str)
-                    .split(',')
-                    .map(|leg| leg.trim().to_ascii_lowercase())
-                    .filter(|leg| !leg.is_empty())
-                    .collect(),
-                src_root: None,
-                meta: match flags.get("seat-meta") {
-                    Some(path) => super::accept::AcceptGate::read_meta(Path::new(path))?,
-                    None => Default::default(),
-                },
-            };
+            let accept = accept_gate(&flags, &repo_dir)?;
             let adopted = match flags.get("resolution-log") {
                 Some(p) => adopted_from_log(p, &name)?,
                 None => vec![],

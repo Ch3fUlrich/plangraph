@@ -8,16 +8,22 @@ use std::path::{Path, PathBuf};
 
 const MAX_FILE: u64 = 1 << 20;
 
-/// What one review answer says about the head it names and the run that produced it.
+/// What one review answer file says about the run that produced it and the head it names. A file whose
+/// first line is the launcher's header owns that run id however broken the rest is; text that cannot be
+/// read as one unambiguous answer is `ambiguous` and poisons its run at every head.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Accept {
-    pub head: String,
+    /// The one sha every `HEAD:` line names; `None` when there is none, it is not a full sha or the lines conflict.
+    pub head: Option<String>,
     /// The review leg named by the `[served by LEG via spawner run RUN, ...]` header, lowercased.
     pub leg: String,
     pub run_id: String,
-    /// Whether the answer accepts: `FILES READ:` and `VERDICT: ACCEPT` as its last line. A completed
-    /// answer with another verdict still owns its run id.
+    /// `FILES READ:` and `VERDICT: ACCEPT` as the last line, every `VERDICT:` line agreeing, one head, one
+    /// header, completed: only such an answer can count.
     pub accepted: bool,
+    /// The file repeats or conflicts on header, head or verdict lines, or its run did not complete, or it is
+    /// too large or not text to read whole.
+    pub ambiguous: bool,
 }
 
 /// The two OpenCode seats every head needs when no single-seat leg accepted it (rule 3.66 (f)): the
@@ -115,60 +121,84 @@ fn run_id_ok(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
 }
 
-/// `[served by LEG via spawner run RUN, status completed]`, matched as a whole line. The launcher writes it
-/// as the first line of the answer file; it must be that line and the only line of that form, so text the
-/// reviewer wrote in the body can neither add nor replace it.
-fn served_by(text: &str) -> Option<(String, String)> {
-    let header = |line: &str| -> Option<(String, String)> {
-        let rest = line.trim().strip_prefix("[served by ")?.strip_suffix(']')?;
-        let (leg, rest) = rest.split_once(" via spawner run ")?;
-        let (run, status) = rest.split_once(", status ")?;
-        (status == "completed" && run_id_ok(run) && !leg.contains(' ') && !leg.is_empty())
-            .then(|| (leg.to_ascii_lowercase(), run.to_owned()))
-    };
-    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
-    let found = header(lines.next()?)?;
-    lines
-        .all(|l| !l.trim_start().starts_with("[served by "))
-        .then_some(found)
-}
-
-/// `Some` for a completed review answer: a `served by` header with its run id and one full `HEAD:` sha
-/// (every `HEAD:` line names it; a stale first line and the real last one conflict and refuse).
-/// `accepted` is set only with a `FILES READ:` line and `VERDICT: ACCEPT` as the last non-empty line.
-pub fn parse(text: &str) -> Option<Accept> {
-    let last = text.lines().rev().find(|l| !l.trim().is_empty())?;
-    let accepted =
-        last.trim() == "VERDICT: ACCEPT" && text.lines().any(|l| l.starts_with("FILES READ:"));
-    let (leg, run_id) = served_by(text)?;
-    let mut heads = text
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("HEAD:"))
-        .map(str::trim);
-    let head = heads.next()?;
-    let full = head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit());
-    (full && heads.all(|other| other.eq_ignore_ascii_case(head))).then(|| Accept {
-        head: head.to_ascii_lowercase(),
-        leg,
-        run_id,
-        accepted,
+/// `[served by LEG via spawner run RUN, status STATUS]`, matched as a whole line: (leg, run, completed).
+fn header(line: &str) -> Option<(String, String, bool)> {
+    let rest = line.trim().strip_prefix("[served by ")?.strip_suffix(']')?;
+    let (leg, rest) = rest.split_once(" via spawner run ")?;
+    let (run, status) = rest.split_once(", status ")?;
+    (run_id_ok(run) && !leg.contains(' ') && !leg.is_empty()).then(|| {
+        (
+            leg.to_ascii_lowercase(),
+            run.to_owned(),
+            status == "completed",
+        )
     })
 }
 
+/// `Some` for every file whose first non-empty line is the launcher's header, which is how a run id is
+/// owned; `None` for any other text (it owns no run). The launcher writes the header as the first line, so
+/// a second line of that form in the body, several or conflicting `HEAD:` or `VERDICT:` lines, a run that
+/// did not complete or no single full `HEAD:` sha make the answer `ambiguous`, never absent.
+pub fn parse(text: &str) -> Option<Accept> {
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let (leg, run_id, completed) = header(lines.next()?)?;
+    let body: Vec<&str> = lines.collect();
+    let repeated_header = body
+        .iter()
+        .any(|l| l.trim_start().starts_with("[served by "));
+    let heads: Vec<&str> = body
+        .iter()
+        .filter_map(|l| l.trim().strip_prefix("HEAD:"))
+        .map(str::trim)
+        .collect();
+    let head = heads.first().copied().filter(|h| {
+        h.len() == 40
+            && h.bytes().all(|b| b.is_ascii_hexdigit())
+            && heads.iter().all(|other| other.eq_ignore_ascii_case(h))
+    });
+    let verdicts: Vec<&str> = body
+        .iter()
+        .filter_map(|l| l.trim().strip_prefix("VERDICT:"))
+        .map(str::trim)
+        .collect();
+    let verdict_agrees = verdicts.windows(2).all(|pair| pair[0] == pair[1]);
+    let last_is_accept = body.last().is_some_and(|l| l.trim() == "VERDICT: ACCEPT");
+    let ambiguous = repeated_header || !completed || head.is_none() || !verdict_agrees;
+    Some(Accept {
+        head: head.map(str::to_ascii_lowercase),
+        leg,
+        run_id,
+        accepted: !ambiguous && last_is_accept && body.iter().any(|l| l.starts_with("FILES READ:")),
+        ambiguous,
+    })
+}
+
+/// Every answer file of the directory. A file that is too large or not UTF-8 is still read (its first
+/// `MAX_FILE` bytes, lossily) so that a launcher header at its top keeps owning its run; it is then
+/// ambiguous. A file that cannot be opened at all refuses the whole check.
 fn accepts(dir: &Path) -> Result<Vec<(PathBuf, Accept)>, String> {
+    use std::io::Read;
     let mut found = Vec::new();
     let entries =
         std::fs::read_dir(dir).map_err(|e| format!("accept dir {}: {e}", dir.display()))?;
     for entry in entries {
         let path = entry.map_err(|e| e.to_string())?.path();
-        let small = std::fs::metadata(&path)
-            .map(|m| m.is_file() && m.len() <= MAX_FILE)
-            .unwrap_or(false);
-        if let Some(accept) = small
-            .then(|| std::fs::read_to_string(&path).ok())
-            .flatten()
-            .and_then(|text| parse(&text))
+        if !std::fs::metadata(&path)
+            .map(|m| m.is_file())
+            .unwrap_or(false)
         {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .and_then(|f| f.take(MAX_FILE + 1).read_to_end(&mut bytes))
+            .map_err(|e| format!("accept file {}: {e}", path.display()))?;
+        let whole = bytes.len() as u64 <= MAX_FILE && std::str::from_utf8(&bytes).is_ok();
+        if let Some(mut accept) = parse(&String::from_utf8_lossy(&bytes)) {
+            if !whole {
+                accept.ambiguous = true;
+                accept.accepted = false;
+            }
             found.push((path, accept));
         }
     }
@@ -189,7 +219,11 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
     let mut lines = Vec::new();
     for part in parts {
         let head = part.head.to_ascii_lowercase();
-        let at_head: Vec<_> = found.iter().filter(|(_, a)| a.head == head).collect();
+        // An ambiguous answer names no reliable head, so it claims its run at every head.
+        let at_head: Vec<_> = found
+            .iter()
+            .filter(|(_, a)| a.ambiguous || a.head.as_deref() == Some(head.as_str()))
+            .collect();
         let bound: Vec<_> = at_head
             .iter()
             .filter(|(_, a)| a.run_id == part.receipt.run_id)
@@ -229,7 +263,7 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
                         format!(
                             "{} on {} run {} leg {}",
                             path.file_name().unwrap_or_default().to_string_lossy(),
-                            accept.head,
+                            accept.head.as_deref().unwrap_or("no single head"),
                             accept.run_id,
                             accept.leg
                         )
@@ -237,6 +271,7 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
                     .collect();
                 let why = match bound.len() {
                     0 => "no ACCEPT at this head carries the receipt run",
+                    1 if bound[0].1.ambiguous => "the answer of the receipt run is ambiguous (repeated or conflicting header, head or verdict lines, or not completed)",
                     1 if !bound[0].1.accepted => "the answer of the receipt run does not accept",
                     1 => "neither a single-seat leg meeting its conditions nor both required legs on two runs accepted it",
                     _ => "the receipt run appears in more than one answer at this head",

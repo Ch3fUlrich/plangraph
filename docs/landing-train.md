@@ -26,7 +26,7 @@
   The gpt leg counts alone only through `--seat-meta FILE`, a JSON object of run id to `{effort, effort_decision, writer_families}`
   written by the launcher of the review runs (never read from the answer text): `high`, `D-6804` and a non-empty writer family list in which every entry resolves through the shared
   writer-family resolver (`plangraph.review.family.writer_key` of the installed plangraph, run by an isolated interpreter so the `--repo` checkout cannot supply it, so model ids such as `gpt-6.2-sol` resolve to their family and a blank or
-  unknown entry refuses) to a family other than the reviewer leg's own (D-6804). Each run of the deepseek and glm pair belongs to exactly one completed answer at the head, whatever its verdict. Legs compare whole, never as substrings. A writer status
+  unknown entry refuses) to a family other than the reviewer leg's own (D-6804). Each run of the deepseek and glm pair belongs to exactly one answer file, whatever its verdict: a file whose first line is the launcher's header owns its run even when its body repeats the header, names conflicting `HEAD:` or `VERDICT:` lines, did not complete or is too large or not text to read whole; such an ambiguous file never accepts and claims its run at every head. Legs compare whole, never as substrings. A writer status
   file, a REQUEST_CHANGES answer, an answer for another run, a run id seen in two answers or an ACCEPT on an older head never counts;
   the refusal names the part, head, receipt run and the files found, and the output carries one `accept #PR head SHA run RUN file NAME`
   line per part for the PR body table.
