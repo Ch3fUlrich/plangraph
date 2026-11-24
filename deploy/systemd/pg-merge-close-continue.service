@@ -1,0 +1,15 @@
+[Unit]
+Description=Continue a merge-close pass whose keeper index refresh was still running
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+EnvironmentFile=-%h/.config/plangraph/plangraph.env
+StateDirectory=pg-merge-close
+StateDirectoryMode=0700
+# Does nothing (exit 0, no keeper call) unless pg-merge-close.service left a pending streak less than 240 s ago:
+# the keeper scan then still falls inside its 300 s index age, and this run closes from it.
+ExecStart=%h/.local/bin/plangraph merge-close --scheduled --state %S/pg-merge-close/pending.json --continue
+TimeoutStartSec=420
+UMask=0077
