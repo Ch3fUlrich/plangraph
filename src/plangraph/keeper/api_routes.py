@@ -410,6 +410,8 @@ def _close_merged_auto(store, principal, body, need):
     if type(watch) is not bool or watch and (
             apply is not False or repos_only or project is not None or limit is not None or after is not None):
         raise Refused("validation", "watch requires a complete dry run across all repositories")
+    if watch and body.get("inventory", False) is not False:
+        raise Refused("validation", "watch cannot combine with inventory")
     if not watch and limit is None:
         limit = 25
     with timing.io_budget(90):

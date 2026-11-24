@@ -487,7 +487,9 @@ class CloseMixin:
         per_unit = (self._part_deploy_hosts(git, repo, landed, head, item["key"])
                     if deploy_targets(changes) and not deploy_hosts(item) and hasattr(git, "deploy_part_changes")
                     else {})
-        return (head, tagged, per_unit), changes
+        # The named merge's commit time joins the token: proof older than any landing proves nothing.
+        named_at = (git.commit_time(repo, named["landed"]) or float("inf")) if named else None
+        return (head, tagged, per_unit, named_at), changes
 
     @staticmethod
     def _part_deploy_hosts(git, repo, landed, head, key):
@@ -565,7 +567,7 @@ class CloseMixin:
     def _deploy_scan_current(self, item, token):
         """Keep a scan across first-parent extensions that add no work for this item."""
         git, project = self._adapter("git"), self._merge_project(item)
-        pinned, tagged, _ = token
+        pinned, tagged, *_ = token
         try:
             repo, ref = git.repo_path(project), git.repo_ref(project)
             if self.__dict__.get("_frozen_lanes"):
@@ -743,6 +745,8 @@ class CloseMixin:
                 result = self._auto_close_one(principal, tagged, require_seats, apply, now, inventory)
             except Refused as exc:
                 listed.append({"key": key, "state": item["state"], "reason": f"{exc.code}: {exc.msg}"})
+                if getattr(exc, "deployment", None):
+                    deployments.append({"key": key, "state": item["state"], **exc.deployment})
                 continue
             if deployment := result.pop("deployment_pending", None):
                 deployments.append({"key": key, "state": item["state"], **deployment})

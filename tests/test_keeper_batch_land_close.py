@@ -9,7 +9,8 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_git import GitAdapter
 from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
 from plangraph.keeper.errors import Refused
-from test_keeper_merge_close_auto import Repo, git
+from test_keeper_deploy_gate_paths import _land_with_unit
+from test_keeper_merge_close_auto import Repo, auto, env, git  # noqa: F401 - env is a fixture
 
 
 def seat_record(root, run, key, head):
@@ -222,3 +223,166 @@ def test_a_nested_merge_carrying_the_item_must_be_covered_by_a_cited_part(batch)
     result = batch.store.close_merged_auto(batch.p("system"))
     assert "demo:A" not in {c["key"] for c in result["closed"]}
     assert any(r["key"] == "demo:A" and "NO-WITNESS" in r["reason"] for r in result["listed"])
+
+
+# --- TRAIN-DEPLOYMENT-EVIDENCE-GO-ENFORCEMENT: the inventory also covers completed items ---
+
+
+def _done(env, key, **columns):
+    sets = ", ".join(["state='done'"] + [f"{name}=?" for name in columns])
+    env.store.conn.execute(f"UPDATE items SET {sets} WHERE key=?", (*columns.values(), key))
+
+
+def _inventory(env, **kw):
+    env.store.include_done_in_scan = True
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    return env.store.close_merged_auto(env.p("system"), require_seats=False, apply=False, frozen=True, **kw)
+
+
+def test_a_done_item_that_shipped_a_unit_without_deploy_proof_is_listed(env):  # noqa: F811
+    _land_with_unit(env.repo.root)
+    _done(env, "demo:A", note="Deploy-Hosts: host-a")
+    report = _inventory(env, inventory=True)
+    rows = {row["key"]: row for row in report["deployment_pending"]}
+    assert rows["demo:A"]["missing"] == ["host-a:new.service"]
+    assert rows["demo:A"]["state"] == "done" and rows["demo:A"]["age_hours"] is not None
+    assert report["closed"] == [] and report["would_close"] == [] and report["listed"] == []
+    assert env.store._item("demo:A")["state"] == "done"
+
+
+def test_a_done_item_with_a_live_clause_and_no_live_proof_is_listed(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:B", 42)
+    _done(env, "demo:B", done_criteria="Tests pass. Live: the service answers on host-a")
+    rows = {row["key"]: row for row in _inventory(env, inventory=True)["deployment_pending"]}
+    assert rows["demo:B"]["missing"] == ["live_evidence_missing"]
+
+
+def test_a_done_item_without_units_or_live_clause_is_not_listed(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:C", 43)
+    _done(env, "demo:C")
+    assert _inventory(env, inventory=True)["deployment_pending"] == []
+
+
+def test_the_ordinary_close_never_looks_at_done_items(env):  # noqa: F811
+    _land_with_unit(env.repo.root)
+    _done(env, "demo:A")
+    report = _inventory(env)
+    assert report["deployment_pending"] == [] and report["listed"] == []
+
+
+def test_the_scan_leaves_done_items_out_unless_the_keeper_asks_for_them(env):  # noqa: F811
+    _land_with_unit(env.repo.root)
+    _done(env, "demo:A")
+    assert "demo:A" not in {key for key, _ in env.store.merge_candidates()}
+    env.store.include_done_in_scan = True
+    assert "demo:A" in {key for key, _ in env.store.merge_candidates()}
+
+
+def test_the_keeper_setting_that_scans_done_items_is_a_boolean_and_off_by_default(tmp_path):
+    from plangraph.keeper.config import Config, ConfigError
+    base = {"db": str(tmp_path / "k.db")}
+    assert Config(dict(base), tmp_path).deploy_inventory_done is False
+    assert Config({**base, "deploy_inventory_done": True}, tmp_path).deploy_inventory_done is True
+    with pytest.raises(ConfigError, match="deploy_inventory_done"):
+        Config({**base, "deploy_inventory_done": "yes"}, tmp_path)
+
+
+def test_an_inventory_request_is_refused_while_done_items_are_not_scanned(env):  # noqa: F811
+    with pytest.raises(Refused, match="deploy_inventory_done"):
+        env.store.close_merged_auto(env.p("system"), require_seats=False, apply=False, inventory=True)
+    with pytest.raises(Refused, match="dry run"):
+        env.store.include_done_in_scan = True
+        env.store.close_merged_auto(env.p("system"), require_seats=False, apply=True, inventory=True)
+
+
+def _deploy_row(env, key, at):
+    item = env.store._item(key)
+    env.store.conn.execute(
+        "INSERT INTO evidence(key,epoch,kind,ref,verified,detail,at) VALUES(?,?,?,?,?,?,?)",
+        (key, item["epoch"], "deploy",
+         '{"host":"host-a","is_active":"active","unit":"new.service"}', 1, "fixture", at))
+
+
+def test_only_deploy_proof_recorded_after_the_merge_clears_a_done_item(env):  # noqa: F811
+    _land_with_unit(env.repo.root)
+    _done(env, "demo:A", note="Deploy-Hosts: host-a")
+    _deploy_row(env, "demo:A", "2020-01-01T00:00:00+00:00")  # verified, but before the merge landed
+    rows = {row["key"]: row for row in _inventory(env, inventory=True)["deployment_pending"]}
+    assert rows["demo:A"]["missing"] == ["host-a:new.service"]
+    _deploy_row(env, "demo:A", "2099-01-01T00:00:00+00:00")
+    assert _inventory(env, inventory=True)["deployment_pending"] == []
+
+
+def test_a_sensitive_card_that_shipped_an_undeployed_unit_still_gets_a_deployment_row(env):  # noqa: F811
+    env.store.put_card(env.p("router"), "demo:A", {"outcome": "fixture", "risk_tags": ["auth"]})
+    env.conn.execute("UPDATE items SET note='Deploy-Hosts: host-a' WHERE key='demo:A'")
+    _land_with_unit(env.repo.root)
+    report = auto(env, require_seats=False, apply=False)
+    assert "forbidden" in report["listed"][0]["reason"]
+    assert {row["key"]: row["missing"] for row in report["deployment_pending"]} == {
+        "demo:A": ["host-a:new.service"]}
+
+
+def test_proof_from_before_the_merge_does_not_clear_an_open_item(env):  # noqa: F811
+    env.conn.execute("UPDATE items SET note='Deploy-Hosts: host-a' WHERE key='demo:A'")
+    _land_with_unit(env.repo.root)
+    _deploy_row(env, "demo:A", "2020-01-01T00:00:00+00:00")
+    report = auto(env, require_seats=False, apply=False)
+    assert report["deployment_pending"][0]["missing"] == ["host-a:new.service"]
+    _deploy_row(env, "demo:A", "2099-01-01T00:00:00+00:00")
+    assert auto(env, require_seats=False, apply=False)["deployment_pending"] == []
+
+
+def test_proof_older_than_the_merge_a_merge_repo_line_names_does_not_clear_its_unit(env, monkeypatch):  # noqa: F811
+    """A tagged docs merge, then a named merge that ships the unit; proof between the two is stale."""
+    env.repo.land("docs", "Plan-Item: demo:A", 45)
+    root = env.repo.root
+    git(root, "checkout", "-q", "-b", "unit", "main")
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/new.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "unit without a trailer")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #46 from x/unit", "unit")
+    named = git(root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=?, note='Deploy-Hosts: host-a' WHERE key='demo:A'",
+                     (f"Merge-Repo: demo {named}",))
+    monkeypatch.setattr(env.store.ctx["git"], "commit_time", lambda repo, sha: 2_524_608_000.0)  # 2050
+    _deploy_row(env, "demo:A", "2040-01-01T00:00:00+00:00")  # after the tagged merge, before the named one
+    assert auto(env, require_seats=False, apply=False)["deployment_pending"][0]["missing"] == [
+        "host-a:new.service"]
+    _deploy_row(env, "demo:A", "2099-01-01T00:00:00+00:00")
+    assert auto(env, require_seats=False, apply=False)["deployment_pending"] == []
+
+
+def test_the_public_evidence_verb_takes_deploy_proof_for_a_completed_item(env):  # noqa: F811
+    _land_with_unit(env.repo.root)
+    _done(env, "demo:A", note="Deploy-Hosts: host-a")
+    assert _inventory(env, inventory=True)["deployment_pending"][0]["missing"] == ["host-a:new.service"]
+    from plangraph.keeper.evidence import VERIFIERS
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    env.clock.t = 4_000_000_000.0
+    out = env.store.add_evidence_router(env.p("router"), "demo:A", "deploy", {
+        "host": "host-a", "unit": "new.service", "is_active": "active"})
+    assert out["verified"] is True and env.store._item("demo:A")["state"] == "done"
+    assert _inventory(env, inventory=True)["deployment_pending"] == []
+    with pytest.raises(Refused):  # no other proof lands on a completed item
+        env.store.add_evidence_router(env.p("router"), "demo:A", "decision", {"id": "D-1"})
+
+
+def test_a_completed_item_whose_only_delivery_is_a_named_merge_is_scanned(env):  # noqa: F811
+    _land_with_unit(env.repo.root, tagged=False)
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=?, note='Deploy-Hosts: host-a' WHERE key='demo:A'",
+                     (f"Merge-Repo: demo {merge}",))
+    _done(env, "demo:A")
+    report = _inventory(env, inventory=True)
+    assert report["listed"] == []
+    assert report["deployment_pending"][0]["missing"] == ["host-a:new.service"]
+
+
+def test_a_watch_request_cannot_ask_for_the_inventory(env):  # noqa: F811
+    from plangraph.keeper import api_routes
+    with pytest.raises(Refused, match="watch cannot combine"):
+        api_routes._close_merged_auto(env.store, env.p("system"),
+                                      {"watch": True, "apply": False, "inventory": True}, None)

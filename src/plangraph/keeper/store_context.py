@@ -31,6 +31,7 @@ import json
 import re
 import time
 from contextlib import nullcontext
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 
@@ -674,14 +675,37 @@ class ContextMixin:
 
     def _deploy_inventory_row(self, item, now):
         """``{"deployment_pending": row}`` for merged work without deploy proof, else ``{}``; never closes."""
+        return self._deploy_state(item, now, named_only_ok=True)[3]
+
+    def _deploy_state(self, item, now, named_only_ok=False):
+        """``(pinned item, merge proofs, pending host:unit pairs, {"deployment_pending": row} or {}, scan token)``.
+
+        ``named_only_ok`` (the inventory) lets an item whose only delivery is a ``Merge-Repo:`` merge
+        stand on that merge's commit time, since it has no tagged commit to prove.
+        """
         token, changes = self._auto_deploy_scan(item)
         pinned = dict(item, _close_head=token[0])
-        proofs = self._merged_auto_proofs(pinned)
-        # Only proof recorded after the last merge counts: an older row says nothing of the landed revision.
+        try:
+            proofs = self._merged_auto_proofs(pinned)
+        except Refused as exc:
+            if not (named_only_ok and token[3] is not None and exc.msg == "merged_on_default_missing"):
+                raise
+            at = token[3] if token[3] != float("inf") else None
+            proofs = [{"merged_at": None if at is None else datetime.fromtimestamp(at, timezone.utc).isoformat()}]
+        pending = self._deploy_pending(pinned, changes, token, self._proof_cutoff(proofs, token))
+        missing = self._deploy_missing(item, proofs, pending)
+        return pinned, proofs, pending, (
+            {"deployment_pending": self._deployment_row(missing, proofs, now)} if missing else {}), token
+
+    @staticmethod
+    def _proof_cutoff(proofs, token):
+        """Epoch seconds before which deploy proof says nothing of the landed work: the last merge, tagged
+        or named by ``Merge-Repo:``. An unreadable merge time leaves nothing proven."""
         stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
-        since = float("inf") if None in stamps else max(stamps, default=float("inf"))
-        missing = self._deploy_missing(item, proofs, self._deploy_pending(pinned, changes, token, since))
-        return {"deployment_pending": self._deployment_row(missing, proofs, now)} if missing else {}
+        named = token[3] if len(token) > 3 else None
+        if named is not None:
+            stamps.append(named)
+        return float("inf") if None in stamps or not stamps else max(stamps)
 
     def _deploy_missing(self, item, proofs, pending):
         """The unproven ``host:unit`` pairs, plus ``live_evidence_missing`` for an unproven ``Live:`` clause."""
@@ -727,3 +751,12 @@ class ContextMixin:
                 f"SELECT src,dst FROM edges WHERE src IN ({predicates}) ORDER BY dst", keys):
             deps[edge["src"]].append(edge["dst"])
         return [dict(self._hydrate(dict(row)), depends_on=deps[row["key"]]) for row in rows]
+
+    def _names_merge_in(self, key, project):
+        """True when the item's ``Merge-Repo:`` line names a merge in *project*: it is scanned with no tagged commit."""
+        item = self.__dict__.get("_deploy_inputs", {}).get(key)
+        try:
+            hinted, revision = self._merge_repository(item) if item else (None, None)
+        except Exception:  # noqa: BLE001 - an unreadable hint warms nothing
+            return False
+        return revision is not None and hinted == project

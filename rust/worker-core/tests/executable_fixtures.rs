@@ -206,17 +206,48 @@ fn copies_a_file(line: &str) -> bool {
     !line.trim_start().starts_with("//") && line.contains("fs::copy(")
 }
 
-/// The statement that starts at the first line, up to its `;`.
+/// The code of the statement that starts at the first line, up to its `;`, without comments.
 fn statement(lines: &[&str]) -> String {
-    let end = lines.iter().position(|l| l.contains(';')).unwrap_or(0);
-    lines[..=end.min(lines.len() - 1)].join(" ")
+    let mut text = String::new();
+    for line in lines {
+        let code = line.split("//").next().unwrap_or("");
+        if let Some(end) = code.find(';') {
+            text.push_str(&code[..=end]);
+            break;
+        }
+        text.push_str(code);
+        text.push(' ');
+    }
+    text
+}
+
+/// What is inside the parentheses of the first `fs::copy(`.
+fn copy_arguments(statement: &str) -> &str {
+    let Some(start) = statement.find("fs::copy(").map(|at| at + "fs::copy(".len()) else {
+        return "";
+    };
+    let mut depth = 1;
+    for (offset, ch) in statement[start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &statement[start..start + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    &statement[start..]
 }
 
 /// Copies that are production code or data no test executes. A copied executable belongs on
 /// `write_executable(path, fs::read(source))`; a data exemption names the copied file, so the executable
 /// copy next to it is still refused.
 fn copy_is_not_an_executable(path: &str, statement: &str) -> bool {
-    let data = |name: &str| statement.contains(name);
+    let arguments = copy_arguments(statement);
+    let data = |name: &str| arguments.contains(name);
     match path {
         // Production installers and mirrors.
         "pg-hook/src/commit_msg.rs" | "pg-ctx/src/mirror_backend.rs" => true,
@@ -325,5 +356,19 @@ fn a_data_copy_exemption_does_not_cover_an_executable_copy_in_the_same_file() {
         "    .unwrap();",
     ]);
     assert!(!copy_is_not_an_executable(path, executable));
+    assert!(copy_is_not_an_executable(path, &data));
+}
+
+#[test]
+fn a_comment_naming_a_data_file_does_not_exempt_an_executable_copy() {
+    let path = "pg-hook/tests/commit_message.rs";
+    for lines in [
+        vec!["std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), hook).unwrap(); // ci_commit_gate.py"],
+        vec!["std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), hook)", "// ci_commit_gate.py", ".unwrap();"],
+        vec!["std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), hook).unwrap();", "let gate = \"ci_commit_gate.py\";"],
+    ] {
+        assert!(!copy_is_not_an_executable(path, &statement(&lines)), "{lines:?}");
+    }
+    let data = statement(&["std::fs::copy(tools.join(\"ci_commit_gate.py\"), to).unwrap();"]);
     assert!(copy_is_not_an_executable(path, &data));
 }

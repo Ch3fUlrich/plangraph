@@ -31,8 +31,11 @@ answers for its timer). Per target:
 | `hosts_unnamed` | the item names no `Deploy-Hosts:` |
 | `scan_unverified` | the keeper could not scan the item (`listed` in the inventory pass); it is never silently dropped |
 
-Every target blocks. Only the keeper's verified `deploy` evidence recorded after the item's merge clears a row
-(an older row, from before the merge, does not).
+Every target blocks. Only the keeper's verified `deploy` evidence of the item's current epoch, recorded after
+its last merge (the tagged merges and the merge a `Merge-Repo:` line names), clears a row; an older row does not.
+The deployment scan runs before the close checks, so an item the automatic close refuses (a sensitive card, an
+unset review tier) still gets its row. A unit that starts after its item closed is recorded with the router
+verb `add_evidence_router` (kind `deploy`), which also takes a completed item and no other kind of proof.
 
 `--rows FILE` reads keeper rows from a file instead of the keeper (fixtures).
 
@@ -40,8 +43,9 @@ Every target blocks. Only the keeper's verified `deploy` evidence recorded after
 
 `plangraph deploy-evidence gate --report FILE [--exceptions FILE] [--now EPOCH] [--max-age-hours N]`
 prints a JSON decision and exits 0 (GO), 1 (blocked) or 2 (unreadable or inconsistent input: a wrong schema, no
-`rows` list, a `pending` count that disagrees with the rows, a row without a key, blocking targets or a numeric age). A pending row older than
-24 hours, or of unknown age, blocks. A younger row is listed under `waiting`.
+`rows` list, a `pending` count that disagrees with the rows, a row without a key, blocking targets, or a `merged_at` that is not text or null). A pending row older than
+24 hours, or of unknown age, blocks; the age is counted from `merged_at` when the gate runs, so a saved report
+ages, and a report generated more than an hour before the gate runs is refused (exit 2). A younger row is listed under `waiting`.
 
 A routing exception is one entry of the exceptions file:
 `{"key": "proj:KEY", "decision": "D-1234", "granted": "2026-11-24", "expires": "2026-11-30", "reason": "..."}`.
