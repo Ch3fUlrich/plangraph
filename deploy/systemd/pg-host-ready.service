@@ -1,0 +1,18 @@
+[Unit]
+Description=Probe every registry host with a spawner source and write its host-ready record
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+Environment=PYTHONPATH=%h/code/plangraph/src
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/plangraph/plangraph.env
+# One run probes every placement host of hosts.json in parallel and writes
+# ~/.local/state/plangraph/host-ready/<host>.json for each. Exit 1 only means some
+# host is not ready (the HOST-NOT-READY lines go to the journal, the record says why),
+# so it is a success here; a crash or a registry without candidates exits 2 and fails the unit.
+ExecStart=/usr/bin/python3 -m plangraph.spawner.host_ready
+SuccessExitStatus=1
+TimeoutStartSec=3min
+UMask=0077

@@ -111,6 +111,34 @@ token at `~/.config/plangraph/sweep.token`, run `deploy/bootstrap.sh` to create
 and inspect a dry run before enabling; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)
 for live protection authority, restore records, and remote-deletion opt-in.
 
+## Host-ready timer
+
+`pg-host-ready.timer` runs `pg-host-ready.service` every two minutes on the placement host.
+The service runs `python3 -m plangraph.spawner.host_ready` once: it reads the host registry
+(`registry_caps`, `placement_config`), probes each placement host that has a spawner source in
+parallel, and writes `~/.local/state/plangraph/host-ready/<host>.json` through
+`atomic_write_private`. A host without a spawner source gets no record. The two-minute interval plus the
+probe timeout stays below the freshness limit (`host_ready.MAX_AGE`), so a host that passes always has a
+fresh record. Exit 1 (some host not ready) is a success of the unit; the `HOST-NOT-READY` lines in the
+journal and the record's `failures` say why. Exit 2 (crash, or a registry without candidates) fails it.
+
+Install from the checkout on main (host-sync keeps it there), in the placement user's systemd directory:
+
+```sh
+cd ~/code/plangraph
+install -Dm644 deploy/systemd/pg-host-ready.service ~/.config/systemd/user/pg-host-ready.service
+install -Dm644 deploy/systemd/pg-host-ready.timer ~/.config/systemd/user/pg-host-ready.timer
+systemctl --user daemon-reload
+systemctl --user enable --now pg-host-ready.timer
+systemctl --user start pg-host-ready.service
+```
+
+Check: `systemctl --user show pg-host-ready.service -p Result` prints `Result=success`, and
+`ls ~/.local/state/plangraph/host-ready/` lists one file per placement host. For each host,
+`PYTHONPATH=src python3 -c "from plangraph.spawner import overflow; print(overflow.read_readiness('HOST')['fresh'])"`
+prints `True` when the host passes (`False` plus the record's `failures` otherwise, never a missing file).
+The timer is a persistent live change: install it only with a routing decision id.
+
 ## pg-repo-sync
 
 `pg-repo-sync` discovers direct children of `$HOME/code` with a `.git` entry,

@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the host-ready records every two minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=10s
+Unit=pg-host-ready.service
+
+[Install]
+WantedBy=timers.target

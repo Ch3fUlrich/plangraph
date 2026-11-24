@@ -133,3 +133,105 @@ esac
         assert 'HOST-NOT-READY host-a unreachable other_checks_unknown' in result.stderr
         assert all(r['behind_main'] is None and r['doctor_ok'] is None
                    and r['src_ok'] is None and r['spawner_session'] is None for r in rows)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+UNITS = ROOT / 'deploy' / 'systemd'
+
+
+def unit_options(name, section):
+    """The options of one unit file section, in order (a key may repeat)."""
+    rows, current = [], None
+    for line in (UNITS / name).read_text().splitlines():
+        if line.startswith('['):
+            current = line.strip('[]')
+        elif current == section and '=' in line and not line.startswith('#'):
+            rows.append(tuple(line.split('=', 1)))
+    return rows
+
+
+def seconds(text):
+    units = {'s': 1, 'sec': 1, 'min': 60}
+    number = ''.join(c for c in text if c.isdigit())
+    return int(number) * units[text[len(number):]]
+
+
+def unit_command():
+    """The unit's ExecStart with the interpreter of this test and the unit's PYTHONPATH."""
+    options = unit_options('pg-host-ready.service', 'Service')
+    starts = [value for key, value in options if key == 'ExecStart']
+    assert len(starts) == 1
+    return starts[0].split()
+
+
+def test_host_ready_unit_runs_the_existing_entry_point_often_enough():
+    from plangraph.spawner import host_ready
+    command = unit_command()
+    assert command[1:] == ['-m', host_ready.__name__]
+    assert host_ready.__name__ == 'plangraph.spawner.host_ready'
+    service, timer = (dict(unit_options(f'pg-host-ready.{kind}', section))
+                      for kind, section in (('service', 'Service'), ('timer', 'Timer')))
+    assert dict(unit_options('pg-host-ready.service', 'Service'))['Type'] == 'oneshot'
+    assert timer['Unit'] == 'pg-host-ready.service'
+    interval = seconds(timer['OnUnitActiveSec'])
+    # The longest wait between two records is one interval plus one parallel probe.
+    assert interval + host_ready.HOST_TIMEOUT < host_ready.MAX_AGE
+    assert seconds(service['TimeoutStartSec']) >= host_ready.HOST_TIMEOUT
+    assert dict(unit_options('pg-host-ready.timer', 'Install'))['WantedBy'] == 'timers.target'
+
+
+def test_host_ready_unit_publishes_registry_candidates(tmp_path, monkeypatch):
+    """Run the unit's module on a real registry and its projections; only candidates get records."""
+    from plangraph.fleet_sync import genconfig
+    from plangraph.spawner import overflow
+    config = tmp_path / 'plangraph'
+    config.mkdir()
+    checkouts = {}
+    for name in ('alpha', 'beta', 'gamma'):
+        # A checkout whose src is the real source: the probe imports plangraph from it.
+        (tmp_path / name).mkdir()
+        (tmp_path / name / 'src').symlink_to(ROOT / 'src')
+        checkouts[name] = str(tmp_path / name)
+
+    def host(name, **extra):
+        return dict(id=name, transport='ssh', os='linux', roles=['implement'],
+                    state_dir=str(tmp_path / 'state' / name), caps=dict(mem_floor_mb=3000),
+                    repos={'plangraph': {'root': checkouts[name]}}, **extra)
+    excluded = dict(host('gamma'), repos={})  # no plangraph checkout, so no spawner source
+    registry = {'self': 'coord', 'hosts': [
+        dict(id='coord', transport='local', os='linux', caps=dict(mem_floor_mb=3000), repos={}),
+        host('alpha'), host('beta'), excluded]}
+    (config / 'hosts.json').write_text(json.dumps(registry))
+    genconfig.sync(registry, write=True, directory=config)
+    binary = tmp_path / 'bin'
+    binary.mkdir()
+    ssh = binary / 'ssh'
+    ssh.write_text('''#!/bin/sh
+for arg do script="$arg"; done
+case "$script" in
+  *"echo src_missing"*) exec sh -c "$script";;
+  *"command -v"*|*"codex login"*) echo ok;;
+  *pg-host-readiness*) echo '{"errors":[],"sandbox_ok":true}';;
+  *--test-tools*) echo '{"missing":[],"umask":"0022","unit_umask":null}';;
+  *meminfo*) echo 'MemAvailable: 8000000 kB';;
+  *"df -Pk"*) echo 'fake 9000000 0 5242880 0% /';;
+  *rev-list*) echo 0;;
+  *rev-parse*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;;
+  *"doctor --json"*) echo '{"ok":true,"checks":[{"name":"keeper_whoami","status":"pass"}]}';;
+  *remote_ps*) echo '{"runs":[]}';;
+esac
+''')
+    ssh.chmod(0o755)
+    env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path),
+               PATH=str(binary) + os.pathsep + os.environ['PATH'], PYTHONPATH=str(ROOT / 'src'))
+    env.pop('PLANGRAPH_HOST_NAME', None)
+    command = [sys.executable, *unit_command()[1:]]
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    monkeypatch.setenv('HOME', str(tmp_path))
+    records = {name: overflow.read_readiness(name) for name in ('alpha', 'beta')}
+    assert all(record['fresh'] and record['ok'] for record in records.values()), records
+    with pytest.raises(FileNotFoundError):
+        overflow.read_readiness('gamma')
+    assert sorted(path.name for path in overflow.readiness_dir().iterdir()) == [
+        'alpha.json', 'beta.json']
