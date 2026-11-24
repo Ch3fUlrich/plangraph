@@ -14,6 +14,8 @@ use std::process::Command;
 pub const MAX_AGE_HOURS: u64 = 24;
 /// The longest a routing exception may run.
 pub const MAX_EXCEPTION_DAYS: i64 = 14;
+/// A saved report older than this (seconds) is refused: its ages and host states are stale.
+pub const MAX_REPORT_AGE_SECS: i64 = 3600;
 
 /// Live state of one deploy target on one host.
 pub trait HostProbe {
@@ -127,6 +129,13 @@ fn exception_defect(exception: &Value, today: NaiveDate) -> Option<String> {
     })
 }
 
+/// Hours since the row's merge, read at gate time; unknown (and so blocking) when the merge time is
+/// missing or unreadable. The age the keeper printed is never trusted: a saved report only gets older.
+fn age_hours(row: &Value, now: i64) -> Option<u64> {
+    let merged = DateTime::parse_from_rfc3339(row["merged_at"].as_str()?).ok()?;
+    Some((now - merged.timestamp()).max(0) as u64 / 3600)
+}
+
 /// The GO decision for a report: pending rows older than `max_age_hours` (or of unknown age) block,
 /// unless a valid dated exception names the key.
 pub fn gate(
@@ -135,7 +144,7 @@ pub fn gate(
     now: i64,
     max_age_hours: u64,
 ) -> Result<Value, String> {
-    validate_report(report)?;
+    validate_report(report, now)?;
     if !exceptions.is_array() {
         return Err("exceptions file is not a list".into());
     }
@@ -146,7 +155,7 @@ pub fn gate(
         if row["status"] != "pending" {
             continue;
         }
-        let age = row["age_hours"].as_u64();
+        let age = age_hours(row, now);
         let reasons: Vec<&Value> = row["targets"]
             .as_array()
             .into_iter()
@@ -181,9 +190,17 @@ pub fn gate(
 
 /// A report the gate may trust: the schema, a `rows` list and a `pending` count that agrees with it, and
 /// for every row a key, the `pending` status, an age that is a number or null, and blocking targets.
-pub fn validate_report(report: &Value) -> Result<(), String> {
+pub fn validate_report(report: &Value, now: i64) -> Result<(), String> {
     if report["schema"] != "plangraph.deploy-evidence/1" {
         return Err("not a deploy-evidence report".into());
+    }
+    let made = report["generated_at"]
+        .as_i64()
+        .ok_or("report has no generated_at")?;
+    if now - made > MAX_REPORT_AGE_SECS || made - now > 300 {
+        return Err(format!(
+            "report was generated at {made}, not within an hour of {now}"
+        ));
     }
     let rows = report["rows"].as_array().ok_or("report has no rows list")?;
     if report["pending"].as_u64() != Some(rows.len() as u64) {
@@ -200,8 +217,8 @@ pub fn validate_report(report: &Value) -> Result<(), String> {
         if row["status"] != "pending" {
             return bad("status is not pending");
         }
-        if !(row["age_hours"].is_null() || row["age_hours"].is_u64()) {
-            return bad("age_hours is not a number or null");
+        if !(row["merged_at"].is_null() || row["merged_at"].is_string()) {
+            return bad("merged_at is not text or null");
         }
         let targets = row["targets"].as_array().map_or(&[][..], Vec::as_slice);
         if targets.is_empty()

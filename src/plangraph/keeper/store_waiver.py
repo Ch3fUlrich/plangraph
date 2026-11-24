@@ -630,19 +630,19 @@ class WaiverMixin:
         key = item["key"]
         if inventory:
             return self._deploy_inventory_row(item, now)
-        tier = item.get("review_tier")
-        if tier not in ("standard", "high", "none"):
-            raise Refused("bad_state", "merge close requires review_tier=standard, high or none")
-        if self._card_requires_non_anthropic_seats(item):
-            raise Refused("forbidden", "sensitive_card_needs_router_close: auth/secrets risk tag")
-        self._assert_unlocked(item)
+        # The deployment scan does not depend on whether the close is allowed: a refusal carries its row.
+        pinned, proofs, pending, result, token = self._deploy_state(item, now)
+        try:
+            tier = item.get("review_tier")
+            if tier not in ("standard", "high", "none"):
+                raise Refused("bad_state", "merge close requires review_tier=standard, high or none")
+            if self._card_requires_non_anthropic_seats(item):
+                raise Refused("forbidden", "sensitive_card_needs_router_close: auth/secrets risk tag")
+            self._assert_unlocked(item)
+        except Refused as exc:
+            exc.deployment = result.get("deployment_pending")
+            raise
         seated = tier != "none"
-        token, changes = self._auto_deploy_scan(item)
-        pinned = dict(item, _close_head=token[0])
-        proofs = self._merged_auto_proofs(pinned)
-        pending = self._deploy_pending(pinned, changes, token)
-        missing = self._deploy_missing(item, proofs, pending)
-        result = {"deployment_pending": self._deployment_row(missing, proofs, now)} if missing else {}
         if pending:
             if apply:
                 self._deploy_pending_result(item, pending, now)

@@ -115,7 +115,9 @@ fn a_report_the_gate_cannot_trust_is_refused_not_passed() {
     assert!(bad(
         &|r| r["rows"][0]["targets"][0]["blocking"] = json!(false)
     ));
-    assert!(bad(&|r| r["rows"][0]["age_hours"] = json!("old")));
+    assert!(bad(&|r| r["rows"][0]["merged_at"] = json!(7)));
+    assert!(bad(&|r| r["generated_at"] = json!(NOW - 7200)));
+    assert!(bad(&|r| r["generated_at"] = json!("now")));
     assert!(bad(&|r| r["rows"][0]["key"] = json!("")));
     assert!(gate(&honest, &json!({}), NOW, MAX_AGE_HOURS).is_err());
     let empty = json!({"schema": "plangraph.deploy-evidence/1", "pending": 1});
@@ -195,4 +197,21 @@ fn a_report_with_no_pending_row_is_go() {
         gate(&report, &json!([]), NOW, MAX_AGE_HOURS).unwrap()["go"],
         true
     );
+}
+
+#[test]
+fn a_saved_report_ages_with_the_clock_and_stops_being_accepted() {
+    let rows = [
+        json!({"key": "demo:G", "state": "done", "merged_at": "2026-11-23T13:00:00Z",
+        "age_hours": 1, "missing": ["host-a:new.service"]}),
+    ];
+    let report = build_report(&rows, &Host, NOW);
+    // 23 hours since the merge when written: waiting. An hour later the gate counts 24 and blocks,
+    // whatever age the report printed.
+    let early = gate(&report, &json!([]), NOW, MAX_AGE_HOURS).unwrap();
+    assert_eq!(keys(&early["waiting"]), ["demo:G"]);
+    let later = gate(&report, &json!([]), NOW + 3600, MAX_AGE_HOURS).unwrap();
+    assert_eq!(keys(&later["blockers"]), ["demo:G"]);
+    // Past an hour the report itself is refused.
+    assert!(gate(&report, &json!([]), NOW + 3601, MAX_AGE_HOURS).is_err());
 }
