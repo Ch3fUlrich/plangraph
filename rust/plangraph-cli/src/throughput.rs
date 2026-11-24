@@ -24,8 +24,9 @@ struct Hour {
 struct Arrival {
     sha: String,
     at: i64,
-    parents: Vec<String>,
     commits: u64,
+    /// Every commit the arrival made reachable, oldest first, with its parents.
+    members: Vec<(String, Vec<String>)>,
     items: Vec<String>,
 }
 
@@ -68,10 +69,14 @@ fn arrivals(reference: &str, project: &str, start: i64, end: i64) -> Result<Vec<
             let range = parents
                 .first()
                 .map_or_else(|| sha.to_owned(), |parent| format!("{parent}..{sha}"));
-            let commits = git(&["rev-list", "--count", &range])?
-                .trim()
-                .parse()
-                .map_err(|_| "invalid Git commit count")?;
+            let members: Vec<(String, Vec<String>)> =
+                git(&["rev-list", "--parents", "--reverse", &range])?
+                    .lines()
+                    .map(|line| {
+                        let mut fields = line.split_whitespace().map(str::to_owned);
+                        (fields.next().unwrap_or_default(), fields.collect())
+                    })
+                    .collect();
             let trailers = git(&[
                 "log",
                 "--format=%(trailers:key=Plan-Item,valueonly)",
@@ -93,8 +98,8 @@ fn arrivals(reference: &str, project: &str, start: i64, end: i64) -> Result<Vec<
             Ok(Arrival {
                 sha: sha.into(),
                 at,
-                parents,
-                commits,
+                commits: members.len() as u64,
+                members,
                 items,
             })
         })
