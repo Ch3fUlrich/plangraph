@@ -95,22 +95,25 @@ pub(crate) fn gh(args: &[String], budget: Duration) -> Result<String, String> {
     let status = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => break status,
-            None if started.elapsed() > limit => {
+            None if started.elapsed() >= limit => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(GH_TIMED_OUT.into());
             }
-            None => std::thread::sleep(Duration::from_millis(50)),
+            // Never sleep past the time left: the last nap is the remainder, not 50 ms.
+            None => std::thread::sleep(
+                Duration::from_millis(50).min(limit.saturating_sub(started.elapsed())),
+            ),
         }
     };
     let text = receiver
-        .recv_timeout(
-            limit
-                .saturating_sub(started.elapsed())
-                .max(Duration::from_millis(50)),
-        )
+        .recv_timeout(limit.saturating_sub(started.elapsed()))
         .map_err(|_| GH_TIMED_OUT.to_string())?
         .map_err(|e| e.to_string())?;
+    // Output that arrived after the limit does not count.
+    if started.elapsed() > limit {
+        return Err(GH_TIMED_OUT.into());
+    }
     if status.success() {
         Ok(text)
     } else {
