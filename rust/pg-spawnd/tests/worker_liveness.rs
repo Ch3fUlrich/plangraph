@@ -152,7 +152,8 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
     let bin = root.join("bin");
     let row = state.join("runs/run-example");
     let queued = state.join("runs/run-queued");
-    for dir in [&config, &row, &queued, &bin] {
+    let live = state.join("runs/run-live");
+    for dir in [&config, &row, &queued, &live, &bin] {
         fs::create_dir_all(dir).unwrap();
     }
     let host = |id: &str, transport: &str| {
@@ -161,8 +162,11 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
             "state_dir":state,"session_mb":1,"roles":["implement"],
             "caps":{"max_runs":2,"max_writers":1,"max_seats":1,"max_sessions":1,"mem_floor_mb":1},
             "warmup":{"warmup_s":1,"ramp_mb":{"implement":1}},
-            "repos":{},
-            "env":{"PG_INSTALL_BINARY":"/opt/pg-spawnd","PG_INSTALL_STAMP":"/opt/pg-spawnd.stamp"}
+            "repos":{"plangraph":{
+                "root":"/srv/plangraph","worktrees_root":"/srv/worktrees",
+                "remote":"origin","import_roots":[],"cache_env":{}}},
+            "env":{"PG_INSTALL_BINARY":"/opt/pg-spawnd","PG_INSTALL_STAMP":"/opt/pg-spawnd.stamp",
+                   "PLANGRAPH_WORK_MOUNTS":"/mnt/work"}
         })
     };
     fs::write(
@@ -180,15 +184,25 @@ fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
         r#"{"run_id":"run-queued","host":"worker","status":"queued","events":[]}"#,
     )
     .unwrap();
+    fs::write(
+        live.join("record.json"),
+        r#"{"run_id":"run-live","host":"worker","status":"unknown","events":[]}"#,
+    )
+    .unwrap();
     pg_worker_core::executable_test_support::write_private_executable(
         bin.join("ssh"),
         r#"#!/bin/sh
+# Any command the gate was not expected to run fails the rejoin.
 case "$*" in
 *check-install*) echo '{"event":"pg_spawnd_install","status":"stale","reason":"source_sha_mismatch"}';;
-*worker-active-runs*) echo '{"host":"worker","runs":[]}';;
+*worker-active-runs*) echo '{"host":"worker","runs":["run-live"]}';;
 *--changed-since*) echo '{"rows":[{"run_id":"run-example","status":"completed","phase":"ended"},{"run_id":"run-queued","status":"limited","phase":"ended"}],"next_cursor":1,"more":false}';;
-*work-disk*) echo '"/mnt/work"';;
+*"rev-parse HEAD"*) if [ -f "$FIXTURE_ROOT/synced" ]; then echo bbbb; else echo aaaa; fi;;
+*"start plangraph-host-sync.service"*) : > "$FIXTURE_ROOT/synced";;
+*"start pg-worktree-sweep.service"*) ;;
+*"PLANGRAPH_WORKTREE_MOUNTS=/mnt/work pg-spawnd host work-disk"*) echo '"/mnt/work"';;
 *"probe --host-id"*) echo '{"mem_available_mb":4096}';;
+*) echo "unexpected: $*" >&2; exit 1;;
 esac
 "#,
     );
@@ -204,7 +218,9 @@ esac
                 placed_runs: if ssh {
                     Default::default()
                 } else {
-                    ["run-example".to_string(), "run-queued".to_string()].into()
+                    ["run-example", "run-queued", "run-live"]
+                        .map(String::from)
+                        .into()
                 },
             })
             .unwrap()
@@ -218,6 +234,7 @@ esac
             .env("PLANGRAPH_SPAWN_STATE", &state)
             .env("XDG_CONFIG_HOME", root)
             .env("PATH", &bin)
+            .env("FIXTURE_ROOT", root)
             .env("PG_MAIN_SHA", "a".repeat(40))
             .env("PG_MAIN_SHA256", "b".repeat(64))
             .output()
@@ -230,8 +247,14 @@ esac
         record["runs"],
         json!([
             {"run":"run-example","fate":"finished"},
+            {"run":"run-live","fate":"live"},
             {"run":"run-queued","fate":"finished"}
         ])
+    );
+    // The stale checkout was fast-forwarded by the host sync.
+    assert_eq!(
+        record["steps"][0]["detail"]["fast_forwarded"],
+        json!(["plangraph"])
     );
     // A stale installed binary is flagged with check-install's reason, not blocked.
     assert_eq!(record["flags"][0], "binary: source_sha_mismatch");
@@ -239,6 +262,10 @@ esac
     let settled: Value =
         serde_json::from_slice(&fs::read(row.join("record.json")).unwrap()).unwrap();
     assert_eq!(settled["status"], "completed");
+    // A live run goes back to running with a re-attach event.
+    let live: Value = serde_json::from_slice(&fs::read(live.join("record.json")).unwrap()).unwrap();
+    assert_eq!(live["status"], "running");
+    assert_eq!(live["events"][0]["event"], "REJOIN_REATTACHED");
     // A queued run that ended limited cannot walk queued -> limited; it is settled as failed.
     let queued: Value =
         serde_json::from_slice(&fs::read(queued.join("record.json")).unwrap()).unwrap();
