@@ -50,8 +50,8 @@ def test_layout_order_and_header(tmp_path):
                  "exports: foo, bar", "forbid: secret/", "smoke: smoke a"):
         assert line in t
     order = [t.index(s) for s in (
-        "# CARD", "# CHECK OUTPUT", "# FILE y_write.py (write)", "# FILE z_write.py (write)",
-        "# FILE a_read.py (read)", "# FILE b_read.py (read)")]
+        "# CARD", "# FILE y_write.py (write)", "# FILE z_write.py (write)",
+        "# FILE a_read.py (read)", "# FILE b_read.py (read)", "# CHECK OUTPUT")]
     assert order == sorted(order)
     assert "# FILE y_write.py (write)\n```\nW1\n\n```\n" in t
 
@@ -261,3 +261,42 @@ def test_entry_cap_omissions_recorded(tmp_path):
                   + [(f"wr/g{i:02d}.py", "entry_cap") for i in range(50, 60)])
     assert omitted == want
     assert len(p.files) == 100
+
+
+# ------------------------------------------------------- prompt order: stable prefix first
+def _ordered_card(tmp_path):
+    put(tmp_path, "w.py", "W\n")
+    put(tmp_path, "r.py", "R\n")
+    return card(write_set=["w.py"], read_set=["r.py"])
+
+
+def test_stable_prefix_byte_identical_when_check_output_changes(tmp_path):
+    c = _ordered_card(tmp_path)
+    a = build(tmp_path, c, key="K", check_tail="first failure\nboom")
+    b = build(tmp_path, c, key="K", check_tail="x" * 500 + "\nsecond failure")
+    assert a.text != b.text
+    assert a.prefix_chars == b.prefix_chars > 0
+    assert a.text[:a.prefix_chars] == b.text[:b.prefix_chars]
+    assert "CHECK OUTPUT" not in a.text[:a.prefix_chars]
+    assert a.text[a.prefix_chars:].lstrip().startswith("# CHECK OUTPUT")
+    assert [f.path for f in a.files] == [f.path for f in b.files] == ["w.py", "r.py"]
+
+
+def test_prefix_does_not_depend_on_tail_size_at_budget_edge(tmp_path):
+    put(tmp_path, "w.py", "w\n")
+    put(tmp_path, "r1.py", "a" * 4000)
+    put(tmp_path, "r2.py", "b" * 4000)
+    c = card(write_set=["w.py"], read_set=["r1.py", "r2.py"])
+    small = build(tmp_path, c, budget_tokens=3300, check_tail="x")
+    big = build(tmp_path, c, budget_tokens=3300, check_tail="y" * 100000)
+    assert small.text[:small.prefix_chars] == big.text[:big.prefix_chars]
+    assert small.skipped == big.skipped == (("r2.py", "over_budget"),)
+    assert small.tokens <= 3300 and big.tokens <= 3300
+
+
+def test_pack_tokens_still_reported_with_tail(tmp_path):
+    c = _ordered_card(tmp_path)
+    p = build(tmp_path, c, check_tail="boom")
+    assert p.tokens == estimate_tokens(p.text)
+    assert p.as_dict()["tokens"] == p.tokens
+    assert build(tmp_path, c).prefix_chars == len(build(tmp_path, c).text)
