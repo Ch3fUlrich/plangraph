@@ -498,7 +498,7 @@ def host_served_legs(legs, listing, probe_failures=None):
 
 
 def served_digest(hosts):
-    """One digest line: ``legs served per host: ws 3/5 (not served: id reason; ...); coding.vm 5/5``."""
+    """One digest line: ``legs served per host: host-b 3/5 (not served: id reason; ...); host-a 5/5``."""
     parts = []
     for host in sorted(hosts):
         rows = hosts[host]
