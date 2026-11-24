@@ -1,0 +1,1 @@
+- The router clears the operator flags of a keeper item once the operator lifted the step: `lift_operator_gate` (CLI `lift-operator-gate`, batch op) needs an OPERATOR decision that names the item, and logs one `operator_gate_lifted` event with the D-id.
