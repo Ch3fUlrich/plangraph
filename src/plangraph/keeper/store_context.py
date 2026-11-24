@@ -31,8 +31,6 @@ import json
 import re
 import time
 from contextlib import nullcontext
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 
 from .. import views
 from . import context_sources as src, timing
@@ -47,7 +45,6 @@ from .schema import DEFINITION_EVENTS
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
 
 STALE_DAYS = 7
-_CLAIM_INDEX_WORKERS = 4
 #: Legacy public constant; ready now checks every row through the shared index.
 READY_GIT_LIMIT = 25
 FORCE_STALE_MAX = 500
@@ -285,24 +282,10 @@ class ContextMixin:
 
     @staticmethod
     def _claim_work_indexes(git, names):
-        groups = {}
-        for name in names:
-            repo, _ = src._repo_ref(git, name)
-            groups.setdefault(repo, []).append(name)
-
-        def load(group):
-            return {name: timing.share_inflight(
-                ("work", id(git), name),
-                lambda: src.work_index(git, name, fresh=True),
-                step=f"work index for {name}") for name in group}
-
-        if len(groups) == 1:
-            return load(next(iter(groups.values())))
-        # Each group has its own checkout. Keep fetches for aliases of the
-        # same checkout on one worker, and pass the claim deadline to each worker.
-        with ThreadPoolExecutor(max_workers=_CLAIM_INDEX_WORKERS) as pool:
-            jobs = [pool.submit(copy_context().run, load, group) for group in groups.values()]
-            return {name: index for job in jobs for name, index in job.result().items()}
+        """Refresh *names* from origin under the claim deadline; a claim names only its item's repository."""
+        return {name: timing.share_inflight(
+            ("work", id(git), name), lambda name=name: src.work_index(git, name, fresh=True),
+            step=f"work index for {name}") for name in names}
 
     @staticmethod
     def _indexed_delivery(indexes, key, project, book):

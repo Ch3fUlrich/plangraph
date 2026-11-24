@@ -32,12 +32,12 @@ EXIT_REFUSED = 2
 EXIT_UNREACHABLE = 3
 TIMEOUT = 15.0
 SLOW_TIMEOUT = 120.0  # close_merged reads git and the decisions log before it commits
-#: reads that build the whole plan view on the daemon (ready: 24 s measured on a
-#: 4285-item plan, behind the keeper lock); the 15 s default gave up on a read
-#: the daemon then finished.
 #: seconds on top of the keeper's claim preflight budget for the write that follows it.
 CLAIM_COMMIT_MARGIN_S = 15.0
 CLAIM_VERBS = frozenset({"claim", "claim_batch"})
+#: reads that build the whole plan view on the daemon (ready: 24 s measured on a
+#: 4285-item plan, behind the keeper lock); the 15 s default gave up on a read
+#: the daemon then finished.
 SLOW_READS = frozenset({"ready", "blocked", "waves"})
 NOTICE = "READ-ONLY fallback (keeper unreachable)"
 

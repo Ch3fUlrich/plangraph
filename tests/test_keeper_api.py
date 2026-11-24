@@ -513,55 +513,48 @@ def _claim_checkouts(tmp_path, names):
     return GitAdapter({name: str(repo) for name, repo in repos.items()})
 
 
-@pytest.mark.parametrize("failure", ["refusal", "timeout"])
+@pytest.mark.parametrize(("failure", "force_stale"), [
+    ("refusal", False), ("timeout", False), ("timeout", True),
+])
 def test_parallel_claim_refuses_if_any_work_index_fails(
-        w, tmp_path, monkeypatch, failure):
-    """A refresh of several repositories at once fails whole if one repository fails.
-
-    The claim guard asks for one repository per item; a caller that asks for several
-    gets them in parallel under the one preflight deadline.
-    """
+        srv, w, tmp_path, monkeypatch, failure, force_stale):
+    """A claim whose repository refresh fails or runs out of time is refused and claims nothing."""
     from types import SimpleNamespace
     from keeper_util import Clock
     from plangraph.keeper import context_sources, timing
     from plangraph.keeper.errors import Refused
 
-    git = _claim_checkouts(tmp_path, ("demo", "related"))
-    w.store.ctx = {"git": git}
+    w.store.ctx = {"git": _claim_checkouts(tmp_path, ("demo", "related"))}
     clock = Clock(0)
     monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic=clock))
-    slow_started, good_finished = threading.Event(), threading.Event()
-    read_index = context_sources.work_index
-    share = timing.share_inflight
-    step = "work index for related"
+    request_indexes = []
+    work_indexes = w.store._work_indexes
+    step = "work index for demo"
 
     def read(git, project, **kwargs):
-        if project == "demo":
-            assert slow_started.wait(8)
-            return read_index(git, project, **kwargs)
-        slow_started.set()
-        assert good_finished.wait(8)
+        assert project == "demo"   # the claim refreshes only the item's repository
         if failure == "refusal":
             raise Refused("conflict", f"{step}: refresh refused")
         clock.advance(w.store.claim_preflight_s + 1)
-        return read_index(git, project, **kwargs)
+        return None
 
-    def observe_share(key, fetch, **kwargs):
-        result = share(key, fetch, **kwargs)
-        if key == ("work", id(git), "demo"):
-            assert result is not None and not result["stale"]
-            good_finished.set()
-        return result
+    def observe_indexes(projects, *, fresh=False, shared=None):
+        if fresh:
+            request_indexes.append(shared)
+        return work_indexes(projects, fresh=fresh, shared=shared)
 
     monkeypatch.setattr(context_sources, "work_index", read)
-    monkeypatch.setattr(timing, "share_inflight", observe_share)
+    monkeypatch.setattr(w.store, "_work_indexes", observe_indexes)
+    body = {"key": "demo:A"}
+    if force_stale:
+        body["force_stale"] = "reviewed stale evidence"
+    status, _, raw = call(srv, "/v1/claim", method="POST", body=body, token=w.tok("l1main"))
     message = (f"{step}: refresh refused" if failure == "refusal"
                else f"claim preflight exceeded its deadline during {step}")
-    with timing.io_budget(w.store.claim_preflight_s):
-        with pytest.raises(Refused) as refused:
-            w.store._work_indexes({"demo", "related"}, fresh=True, shared={})
-    assert (refused.value.code, refused.value.msg) == ("conflict", message)
-    assert good_finished.is_set()
+    assert (status, jbody(raw)) == (409, {"error": "conflict", "msg": message})
+    assert request_indexes == [{}]
+    assert w.store._item("demo:A")["state"] == "open"
+    assert not w.conn.execute("SELECT 1 FROM events WHERE type='claimed'").fetchone()
 
 
 def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch, tmp_path):
@@ -767,4 +760,3 @@ def test_claim_rechecks_item_after_waiting_on_authority(srv, w, monkeypatch):
         "error": "conflict", "msg": "demo:A changed while checking claim eligibility"})
     assert w.store._item("demo:A")["state"] == "open"
     assert not w.conn.execute("SELECT 1 FROM events WHERE type='claimed'").fetchone()
-

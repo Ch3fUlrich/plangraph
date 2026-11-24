@@ -178,7 +178,6 @@ _WORK_INDEX_CACHE_LOCK = threading.Lock()
 def work_index(git, project, *, fresh=False, incremental=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
-
     Read all commit trailers and topology together, including hosted open PR
     heads. Fresh reads revalidate the complete log. The merge-close scan may
     reuse immutable commit history when current fetched refs attest PR heads.
