@@ -29,3 +29,5 @@ alphabet for two attempts. One configuration shares a target and the other
 shares an origin. The named traces exercise longer paths and additional evidence.
 `fixtures/transitions.json` version 1 is the R9-S2 replay input. Each scenario
 starts at a fresh attempt and gives expected results for each guarded event.
+
+See also the [session cutover model](../../docs/session-cutover-model.md) for the digest-wait cutover of an orchestrator role.

@@ -2462,6 +2462,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-session-cutover-model"
+version = "0.1.0"
+
+[[package]]
 name = "pg-spawnd"
 version = "0.1.0"
 dependencies = [

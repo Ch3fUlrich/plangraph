@@ -25,3 +25,5 @@ attempt, two callers, two task files and two conversation generations. The
 recovery model separately explores reservations, settlement evidence and
 watchdog interleavings. `fixtures/transitions.json` version 1 contains the
 admission replay vectors for R9-S2, including the expected result at every step.
+
+See also the [session cutover model](../../docs/session-cutover-model.md) for the digest-wait cutover of an orchestrator role.
