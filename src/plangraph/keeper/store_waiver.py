@@ -649,7 +649,7 @@ class WaiverMixin:
         seated = tier != "none"
         token, changes = self._auto_deploy_scan(item)
         pinned = dict(item, _close_head=token[0])
-        proofs = self._merged_auto_proofs(pinned)
+        proofs = self._merged_auto_proofs(pinned, now)
         pending = self._deploy_pending(pinned, changes, token)
         missing = list(pending)
         if self._live_evidence_missing(item, proofs):
@@ -679,7 +679,7 @@ class WaiverMixin:
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
             fresh.update({field: pinned[field] for field in ("_merge_project", "_close_head") if field in pinned})
-            if self._merged_auto_proofs(fresh) != proofs:
+            if self._merged_auto_proofs(fresh, now) != proofs:
                 raise Refused("conflict", "merged_on_default_changed")
             if seated and self._auto_seats(fresh, proofs, now, require_seats) != (witnessed, flags):
                 raise Refused("conflict", "review_witness_changed")
@@ -708,8 +708,34 @@ class WaiverMixin:
         return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
                        and (as_epoch(row["at"]) or 0) >= last_merge for row in self._evidence(item["key"]))
 
-    def _merged_auto_proofs(self, item):
-        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
+    def _lane_merge_decision(self, item, merge, now):
+        """The D-id of a pre-PR lane merge: named in its subject, and its row names this merge sha and the item.
+
+        ``None`` when the subject names no decision (the merge has no proof at all);
+        a refusal in the ``lane_merge_unproven`` class when a named row does not vouch for it.
+        """
+        sha, subject = merge.get("sha"), str(merge.get("subject") or "")
+        ids = list(dict.fromkeys(re.findall(r"\((D-[0-9]+)(?![\w-])", subject)))
+        if not ids or not valid_commit_ref(sha):
+            return None
+        decisions = self._ctx(item, now).decisions
+        for did in ids:
+            try:
+                text = decisions.text(did) if decisions.has(did) else None
+            except Exception:  # noqa: BLE001 - an unreadable row never vouches
+                text = None
+            if (text and re.search(rf"(?<![0-9a-fA-F]){re.escape(sha)}(?![0-9a-fA-F])", text, re.I)
+                    and _names_item(text, item["key"]) and self._verify_evidence(
+                        item, "decision", {"id": did}, now).ok):
+                return did
+        raise Refused("evidence_unverified", f"lane_merge_unproven: {sha[:12]} {', '.join(ids)}")
+
+    def _merged_auto_proofs(self, item, now=None):
+        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open.
+
+        A merge without a PR number counts as a ``lane_merge`` proof when the decision row
+        named in its subject names the merge sha and the item.
+        """
         git, project = self._adapter("git"), self._merge_project(item)
         proofs = []
         # A Merge-Repo hint only names the repository: the item's own trailers and lanes decide.
@@ -717,6 +743,11 @@ class WaiverMixin:
             pr, head, date = self._merged_commit_proof(git, project, commit)
             merge = commit.get("merge") or {}
             sha = merge.get("sha")
+            if pr is None and now is not None and (did := self._lane_merge_decision(item, merge, now)):
+                if all(p["head"] != head for p in proofs):
+                    proofs.append({"pr": None, "head": head, "decision_id": did, "merge_sha": sha,
+                                   "merged_at": date, "kind": "lane_merge"})
+                continue
             if pr is None or not valid_commit_ref(sha):
                 raise Refused("evidence_unverified", "merged_pr_missing")
             if all(p["head"] != head for p in proofs):
