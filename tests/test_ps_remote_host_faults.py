@@ -291,3 +291,76 @@ def test_shared_target_picks_the_entry_of_the_configured_wsl_distribution(config
     assert got == {'q-a': ('/srv/a/src', 'DistroA'), 'q-b': ('/srv/b/src', 'DistroB'),
                    'q-c': ('/stale/src', 'DistroC'), 'q-direct': ('/stale/src', None),
                    'q-win': ('C:/pg/src', None)}
+
+
+STATE = '/srv/spawn state/dell'
+
+
+def test_generated_ps_entry_carries_the_registry_state_dir():
+    from plangraph.fleet_sync import genconfig
+    base = {'caps': {'mem_floor_mb': 1}, 'transport': 'ssh', 'os': 'linux',
+            'repos': {'plangraph': {'root': '/srv/pg'}}}
+    registry = {'self': 'controller', 'hosts': [
+        dict(base, id='kept', state_dir=STATE), dict(base, id='blank', state_dir=''),
+        dict(base, id='absent'),
+        dict(base, id='wsl', state_dir='/srv/wsl-state', wsl_distro='Ubuntu')]}
+    rows = {r['name']: r for r in genconfig.generate(registry)['ps-hosts.json']['hosts']}
+    assert rows['kept']['state_dir'] == STATE and rows['wsl']['state_dir'] == '/srv/wsl-state'
+    assert 'state_dir' not in rows['blank'] and 'state_dir' not in rows['absent']
+
+
+def test_registry_state_dir_replaces_a_stale_one_in_the_configured_host(config):
+    shared_target_registry(config)
+    base = {'caps': {'mem_floor_mb': 1}, 'transport': 'ssh', 'os': 'linux'}
+    (config / 'hosts.json').write_text(json.dumps({'version': 1, 'self': 'controller', 'hosts': [
+        dict(base, id='dell', state_dir=STATE, repos={'plangraph': {'root': '/srv/pg'}})]}))
+    write(config, [dict(name='dell', target='dell', src='/stale/src', state_dir='/stale/state')])
+    (config / 'hosts.json').write_text(json.dumps({'version': 1, 'self': 'controller', 'hosts': [
+        dict(base, id='dell', state_dir=STATE, repos={'plangraph': {'root': '/srv/pg'}})]}))
+    (host,) = remote_ps.configured_hosts()
+    assert (host['src'], host['state_dir']) == ('/srv/pg/src', STATE)
+
+
+@pytest.mark.parametrize('bad', ['relative', '/state;rm', 3, '/a\nb'])
+def test_invalid_state_dir_is_an_invalid_host(config, bad):
+    write(config, [dict(name='dell', target='dell', src='/s/src', state_dir=bad)])
+    assert remote_ps.configured_hosts() == [dict(name='invalid-config', invalid=True)]
+
+
+def test_state_dir_reaches_every_remote_query_form():
+    posix = dict(name='p', target='p', src='/s/src', state_dir=STATE)
+    command, plan = remote_ps.host_invocation(posix, query=True)
+    assert plan is None and "PLANGRAPH_SPAWN_STATE='/srv/spawn state/dell'" in command
+    wsl = dict(posix, wsl_distro='Ubuntu')
+    command, plan = remote_ps.host_invocation(wsl, query=True)
+    assert json.loads(plan)['steps'][-1]['env'] == {
+        'PYTHONPATH': '/s/src', 'PLANGRAPH_SPAWN_STATE': STATE}
+    windows = dict(name='w', target='w', win_src='C:/s/src', state_dir='C:/spawn/state')
+    command, _ = remote_ps.host_invocation(windows, query=True)
+    assert 'set "PLANGRAPH_SPAWN_STATE=C:\\spawn\\state"' in command
+    # No state_dir keeps the command as it was.
+    assert 'PLANGRAPH_SPAWN_STATE' not in remote_ps.host_invocation(
+        dict(posix, state_dir=None), query=True)[0]
+
+
+def test_ps_query_finds_a_run_launched_into_a_nondefault_state_dir(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from plangraph.spawner.service import SpawnService
+    nondefault = tmp_path / 'spawn state'
+    SpawnService(state=nondefault)._save(dict(run_id='run-loop', status='running', role='implement',
+                                              host='h', started=time.time(), pid=os.getpid()))
+    src = str(Path(remote_ps.__file__).resolve().parents[2])
+    env = dict(os.environ, XDG_STATE_HOME=str(tmp_path / 'default-home'),
+               PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'])
+    env.pop('PLANGRAPH_SPAWN_STATE', None)
+
+    def ask(state_dir):
+        host = dict(name='h', target='h', src=src, **({'state_dir': str(nondefault)} if state_dir else {}))
+        command, _ = remote_ps.host_invocation(host, query=True)
+        out = subprocess.run(['sh', '-c', command], env=env, capture_output=True, text=True, timeout=60)
+        return [row['run_id'] for row in json.loads(out.stdout)['runs']]
+    assert ask(False) == []
+    assert ask(True) == ['run-loop']

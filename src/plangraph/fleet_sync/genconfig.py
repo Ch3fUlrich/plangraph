@@ -54,7 +54,9 @@ def generate(registry):
             raise ValueError('invalid WSL distribution')
         src = root.rstrip('/\\') + '/src'
         hop = {'wsl_distro': distro} if distro else {}
-        ps.append(dict(name=name, target=target, **hop, **{'win_src' if windows else 'src': src}))
+        state = host.get('state_dir')  # `ps` reads the spawner state the host's runs are written to
+        ps.append(dict(name=name, target=target, **hop, **{'win_src' if windows else 'src': src},
+                       **({'state_dir': state} if isinstance(state, str) and state else {})))
         if not windows:
             overflow[name] = dict(ssh=target, repo=root, spawner_src=src,
                 floor_mb=host['caps']['mem_floor_mb'], **hop)

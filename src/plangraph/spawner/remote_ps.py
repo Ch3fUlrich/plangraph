@@ -51,6 +51,22 @@ def safe_reason(exc):
 
 
 SRC_MISSING = 44
+STATE_ENV = 'PLANGRAPH_SPAWN_STATE'
+
+
+def state_dir_ok(host):
+    """The optional spawner state directory of a host: an absolute path of its own kind."""
+    state = host.get('state_dir')
+    if state is None:
+        return True
+    pattern = (r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*' if 'win_src' in host
+               else r'/[A-Za-z0-9_ ./-]*')
+    return isinstance(state, str) and re.fullmatch(pattern, state) is not None
+
+
+def state_env(host):
+    """Environment that points a remote spawner command at the host's state directory."""
+    return {STATE_ENV: host['state_dir']} if host.get('state_dir') else {}
 
 
 def source_check(host):
@@ -110,8 +126,9 @@ def host_invocation(host, *, query=False):
     if 'src' in host:
         steps.append({'argv': ['test', '-d', host['src']], 'fail_code': SRC_MISSING})
     if query:
-        steps.append({'argv': module, 'env': {'PYTHONPATH': host['src']}} if 'src' in host
-                     else {'argv': module})
+        steps.append({'argv': module, 'env': {**({'PYTHONPATH': host['src']} if 'src' in host else {}),
+                                              **state_env(host)}}
+                     if 'src' in host or host.get('state_dir') else {'argv': module})
     return invocation(host, host_command(host, query=query), steps)
 
 
@@ -123,12 +140,16 @@ def host_command(host, *, query=False):
         if query:
             command = f'({command})'
             src = host['win_src'].replace('/', '\\')
+            state = host.get('state_dir')
+            if state:
+                command += f' & set "{STATE_ENV}={state.replace("/", chr(92))}"'
             command += (f' & set "PYTHONPATH={src}"&& '
                         'python -m plangraph.spawner.remote_ps')
         return command
     command = source_check(host) if 'src' in host else ''
     if query:
-        command += f'; PYTHONPATH={source_path(host["src"])} {module}' if command else module
+        env = f'{STATE_ENV}={shlex.quote(host["state_dir"])} ' if host.get('state_dir') else ''
+        command += f'; {env}PYTHONPATH={source_path(host["src"])} {module}' if command else env + module
     return command
 
 
@@ -149,7 +170,11 @@ def query_host(host, timeout):
     if argv is None:
         command, plan = host_invocation(host, query=True)
     else:
-        command, plan = invocation(host, shlex.join(argv), [{'argv': argv}])
+        script = shlex.join(argv)
+        if state_env(host) and 'win_src' not in host:
+            script = f'{STATE_ENV}={shlex.quote(host["state_dir"])} {script}'
+        command, plan = invocation(host, script, [{'argv': argv, 'env': state_env(host)}
+                                                   if state_env(host) else {'argv': argv}])
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
@@ -267,7 +292,8 @@ def configured_hosts():
                 or not isinstance(host.get('target'), str)
                 or not re.fullmatch(r'[A-Za-z0-9_@.:-]+', host['target'])
                  or host['target'].startswith('-')
-                 or ('win_src' in host and (
+                 or not state_dir_ok(host)
+                or ('win_src' in host and (
                      not isinstance(host['win_src'], str)
                       or not re.fullmatch(r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*',
                                          host['win_src'])
@@ -288,8 +314,8 @@ def configured_hosts():
     for index, host in enumerate(validated):
         entry = None if host.get('invalid') else _registry_entry(host, sources)
         if entry:
-            keep = {k: v for k, v in host.items() if k not in ('src', 'win_src', 'wsl_distro')}
-            validated[index] = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro')
+            keep = {k: v for k, v in host.items() if k not in ('src', 'win_src', 'wsl_distro', 'state_dir')}
+            validated[index] = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro', 'state_dir')
                                           if k in entry}}
     return validated
 
