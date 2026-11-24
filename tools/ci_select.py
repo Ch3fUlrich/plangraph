@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 from datetime import datetime
 from pathlib import Path
@@ -337,12 +338,11 @@ def landing_evidence(statuses, tree: str, creator_id):
 
 
 def reword_evidence(statuses, run, old_head: str, new_head: str, old_tree: str, new_tree: str):
-    """Evidence text when a commit that only differs in message from ``old_head`` may reuse its green full run.
-
+    """Evidence text when a commit that only differs from ``old_head`` in its message may reuse its green full run.
     Both commits must have the same non-empty Git tree. The newest ``ci-full`` status of the old head must be
     success and name a run and attempt that the verified run record (``run``: the Actions run of the old head)
     confirms: same run id, head ``old_head``, this workflow on a pull request, the latest attempt, concluded
-    success. Anything else, a newer red attempt included, is None and the suite runs again."""
+    success. Anything else is None and the suite runs again."""
     if not new_tree or old_tree != new_tree or not old_head or old_head == new_head:
         return None
     full = _latest(statuses, CI_FULL)
@@ -454,6 +454,61 @@ def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", ro
     return commands
 
 
+# --- entry replay: changed tests run five times on the part's head (LE-CI-FLAKE-ENTRY-REPLAY) -----------------------
+
+_OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (\S+)|test (\S+) \.\.\. (ok|FAILED))", re.M)
+
+
+def changed_tests(root, base: str, head: str) -> dict:
+    """Python test files (not browser) and Rust ``#[test]`` fns the part changed, as [manifest, name]."""
+    git = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, check=True, text=True).stdout  # noqa: E731
+    python = [p for p in git("diff", "--name-only", "--diff-filter=AMR", f"{base}...{head}", "--", "tests").splitlines()
+              if re.fullmatch(r"tests/(?!browser/)(?:\w+/)*test_\w+\.py", p)]
+    rust, path, prev = [], "", ""
+    for line in git("diff", "-U1", "--diff-filter=AM", f"{base}...{head}", "--", "rust").splitlines():
+        if line.startswith("+++ "):
+            path = line[6:] if line.endswith(".rs") else ""
+        elif path and "#[test]" in prev and (m := re.match(r"\+\s*(?:async )?fn (\w+)", line)):
+            owner = Path(path).parent
+            while not (Path(root) / owner / "Cargo.toml").exists() and owner != owner.parent:
+                owner = owner.parent
+            rust.append([f"{owner}/Cargo.toml", m.group(1)])
+        prev = line
+    return {"python": python, "rust": rust}
+
+
+def replay_commands(changed: dict, runs: int = 5, workers: bool = True) -> list[list[str]]:
+    """Each changed test ``runs`` times on one head; the last run uses every worker or thread."""
+    py = [sys.executable, "-m", "pytest", "-q", "-rA", "--no-header", "-p", "no:cacheprovider", *changed["python"]]
+    commands = [py + (["-n", "auto"] if workers and i == runs - 1 else []) for i in range(runs)] if changed["python"] else []
+    for manifest, name in changed["rust"]:
+        commands += [["cargo", "test", "--manifest-path", manifest, name, "--", *(["--test-threads=1"] if i < runs - 1 else [])]
+                     for i in range(runs)]
+    return commands
+
+
+def replay(root, changed: dict, out, workers: bool = True, runs: int = 5) -> dict:
+    """Run the replay, keep every log. FLAKY ids passed and failed among the runs; failed: every run or no outcome."""
+    Path(out).mkdir(parents=True, exist_ok=True)
+    path = os.pathsep.join(filter(None, [str(Path(root) / "src"), os.environ.get("PYTHONPATH")]))
+    seen, failed = {}, []   # test -> {passed: first log}
+    for n, command in enumerate(replay_commands(changed, runs, workers)):
+        done = subprocess.run(command, cwd=root, env=dict(os.environ, PYTHONPATH=path), capture_output=True, text=True)
+        log = Path(out) / f"{'cargo' if command[0] == 'cargo' else 'python'}-run-{n}.log"
+        log.write_text(text := done.stdout + done.stderr, encoding="utf-8")
+        outcomes = [(m[2] or m[3], m[1] == "PASSED" or m[4] == "ok") for m in _OUTCOME.finditer(text)]
+        for test, ok in outcomes:
+            seen.setdefault(test, {}).setdefault(ok, str(log))
+        if done.returncode and not outcomes:
+            failed.append(" ".join(command[:6]))
+    flaky = sorted(t for t, r in seen.items() if len(r) == 2)
+    failed += sorted(t for t, r in seen.items() if True not in r)
+    result = {"flaky": flaky, "failed": failed, "logs": {t: [seen[t][False], seen[t][True]] for t in flaky},
+              "ok": not flaky and not failed, "runs": runs}
+    (Path(out) / "replay.json").write_text(json.dumps(result), encoding="utf-8")
+    return result
+
+
 def attempt_key(attempt):
     return attempt.get("run_id", 0), attempt["attempt"]
 
@@ -526,6 +581,7 @@ def main(argv: list[str] | None = None) -> int:
     entry_parser.add_argument("--head", required=True)
     entry_parser.add_argument("--root", default=".")
     entry_parser.add_argument("--run", action="store_true")
+    entry_parser.add_argument("--replay-dir", default="", help="logs of the five-run replay of changed tests")
     cost_parser = subparsers.add_parser("part-cost", help="append the CI cost of a part head to telemetry")
     cost_parser.add_argument("--jobs-json", required=True, help="file with the jobs of the run (GitHub jobs API)")
     cost_parser.add_argument("--pr", type=int, required=True)
@@ -574,27 +630,20 @@ def main(argv: list[str] | None = None) -> int:
         candidate = full_run_required(args.event, args.base_ref, args.head_ref, labels)
 
     if args.command == "select":
+        everything = {s: True for s in SUITES} | {"full": True}
         if args.full or candidate:
-            selection = {s: True for s in SUITES} | {"full": True}
-        elif args.base is not None or args.head is not None:
-            if args.base is not None and args.head is not None:
-                try:
-                    proc = subprocess.run(
-                        ["git", "diff", "--name-only", "-z", f"{args.base}...{args.head}"],
-                        capture_output=True,
-                        check=True,
-                    )
-                    raw_text = proc.stdout.decode("utf-8", errors="replace")
-                    paths = [p for p in raw_text.split("\0") if p]
-                    selection = select(paths)
-                except Exception:
-                    selection = {s: True for s in SUITES} | {"full": True}
-            else:
-                selection = {s: True for s in SUITES} | {"full": True}
-        elif args.files is not None:
+            selection = everything
+        elif args.base is not None and args.head is not None:
+            try:
+                raw = subprocess.run(["git", "diff", "--name-only", "-z", f"{args.base}...{args.head}"],
+                                     capture_output=True, check=True).stdout.decode("utf-8", errors="replace")
+                selection = select([p for p in raw.split("\0") if p])
+            except Exception:
+                selection = everything
+        elif args.files is not None and args.base is None and args.head is None:
             selection = select(args.files)
         else:
-            selection = {s: True for s in SUITES} | {"full": True}
+            selection = everything
 
         evidence = None
         if args.statuses and (args.event == "push" or (args.event == "pull_request" and args.old_head)):
@@ -638,6 +687,14 @@ def main(argv: list[str] | None = None) -> int:
             if subprocess.run(command, cwd=cwd, env=None if is_cargo else python_env).returncode:
                 print(f"entry-set: FAIL: {' '.join(command[:4])}", file=sys.stderr)
                 failed = 1
+        changed = changed_tests(root, args.base, args.head) if args.run else {}
+        if changed.get("python") or changed.get("rust"):
+            result = replay(root, changed, args.replay_dir or tempfile.mkdtemp(prefix="entry-replay-"))
+            for test in result["flaky"]:
+                print(f"entry-set: FLAKY: {test} (logs {' and '.join(result['logs'][test])})", file=sys.stderr)
+            for test in result["failed"]:
+                print(f"entry-set: FAIL: {test}", file=sys.stderr)
+            failed |= int(not result["ok"])
         return failed
 
     if args.command == "part-cost":
