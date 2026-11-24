@@ -10,6 +10,17 @@ mod process;
 mod remote;
 mod request;
 mod restart;
+pub mod round_cli;
+#[cfg(test)]
+mod round_cli_tests;
+mod round_host;
+pub mod round_store;
+pub mod round_time;
+#[cfg(test)]
+mod round_time_tests;
+pub mod round_watch;
+#[cfg(test)]
+mod round_watch_tests;
 mod settings;
 mod storage;
 #[cfg(test)]

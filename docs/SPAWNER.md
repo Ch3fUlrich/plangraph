@@ -69,7 +69,7 @@ An explicit read request in a tool-less review or judge needs the requested mate
 
 ### MiMo seat timeouts and reasoning-only output
 
-The Python watchdog ends an inline attempt after ten minutes or three failed tool calls, allowing the next leg to run within the shared deadline.
+The Python watchdog ends an inline attempt after ten minutes or three failed tool calls, allowing the next leg to run within the shared deadline. Its tick also runs `pg-spawnd round-watch`: one telemetry row per Claude writer round with the minutes by cause (`--digest` prints the median and shares per host), and a background command a writer has waited on over 15 minutes is ended through its owner process, the writer is told once, and a second such stop in one round records a durable BLOCKED outcome.
 See [MiMo seats](operations/spawner-mimo-seats.md) for reasoning-only output retries (MIMO-VERDICT-TIMEOUTS, MIMO-REASONING-OUTPUT-LIMIT).
 A review card with an empty diff fails once with `empty_diff` before any leg.
 
