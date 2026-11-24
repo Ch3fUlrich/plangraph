@@ -55,7 +55,7 @@ class ReapMixin:
                         overdue.append(item["key"])
             gate_alerts = self._check_gate_capacity(items, now)
             aged = self._age_priorities(principal, now)
-            self._record_inheritance(items, now)
+            self._record_inheritance(self._all_items(), now)   # the graph after aging
             alerts = self._alerts_expire(now)
         if expired or aged or findings or alerts or gate_alerts:
             self._reap_revision = getattr(self, "_reap_revision", 0) + 1
