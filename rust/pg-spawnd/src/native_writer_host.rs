@@ -477,6 +477,8 @@ pub(crate) use commands::{execute, resume, resume_saved};
 mod base;
 #[path = "native_writer_context.rs"]
 mod context;
+#[path = "native_writer_drops.rs"]
+mod drops;
 #[path = "native_writer_review.rs"]
 mod review;
 #[path = "native_writer_review_route.rs"]
