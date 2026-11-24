@@ -242,6 +242,19 @@ fn quota_args(record: &RunRecord, leg: &Value, card: &Value) -> Option<Vec<Strin
     Some(argv)
 }
 
+/// Records the exact head and review text of a completed run whose verdict is not CLI-reported.
+fn bind_unwitnessed(record: &mut RunRecord, head: &str, binding: &Value, text: &str) {
+    record.set("served_model", json!("unwitnessed"));
+    record.set("served_family", json!("unwitnessed"));
+    record.set("stdout_tail", json!(text));
+    record.set("finish_reason", json!("stop"));
+    let mut completion = json!({"head_sha":head,"finish_reason":"stop"});
+    if !binding.is_null() {
+        completion["review_binding"] = binding.clone();
+    }
+    record.set("completion", completion);
+}
+
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, card: &Value) {
     if record.get("role").and_then(Value::as_str) != Some("review")
         || !eligible(leg)
@@ -341,7 +354,12 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, card: 
     let verdict = match verdicts.as_slice() {
         ["PASS"] => "pass",
         ["FAIL"] => "fail",
-        _ => return,
+        _ => {
+            // An ACCEPT / REQUEST_CHANGES review has no CLI witness; the keeper counts it
+            // as an unwitnessed seat (rule 3.26), which needs the head it ran on bound here.
+            bind_unwitnessed(record, head, binding, &text);
+            return;
+        }
     };
     if verdict == "pass"
         && crate::review_test_evidence::required(leg)

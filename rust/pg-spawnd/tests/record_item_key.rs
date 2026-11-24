@@ -175,3 +175,36 @@ fn record_item_key_missing_event_is_persisted() {
         assert_eq!(stored["events"], r["events"]);
     }
 }
+
+#[test]
+fn record_keeps_the_valid_item_keys_of_a_batch_card() {
+    let too_many: Vec<String> = (0..51).map(|n| format!("demo:K{n}")).collect();
+    for (keys, expected) in [
+        (
+            json!(["demo:A", "demo:B", "demo:A"]),
+            json!(["demo:A", "demo:B"]),
+        ),
+        (json!(["demo:A", "bad/item"]), Value::Null),
+        (json!("demo:A"), Value::Null),
+        (json!(too_many), Value::Null),
+    ] {
+        let mut f = Fixture::new(None);
+        let r = payload(f.call(
+            "spawn",
+            json!({"prompt":"p", "card":{"item_keys":keys}, "wait_seconds":5}),
+        ));
+        assert_eq!(r["status"], "completed");
+        let stored: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                f._state
+                    .path()
+                    .join("runs")
+                    .join(r["run_id"].as_str().unwrap())
+                    .join("record.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored.get("item_keys").unwrap_or(&Value::Null), &expected);
+    }
+}
