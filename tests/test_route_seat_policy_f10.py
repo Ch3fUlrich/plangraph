@@ -67,8 +67,9 @@ def test_hydrogen_out_gives_one_argon_seat_not_the_weak_pair():
     assert seats(review(("claude",), down=HYDROGEN)) == [REVIEW_ARGON_LOW]
 
 
-def test_a_credential_diff_on_a_non_claude_head_gets_one_sonnet_seat():
-    assert seats(review(("gpt",), card={"risk_tags": ["secrets"]})) == [REVIEW_SONNET]
+def test_a_credential_diff_on_a_non_claude_head_gets_sonnet_and_keeps_the_weak_pair_for_the_keeper():
+    # The keeper close needs two non-Anthropic families on a credential card, so the pair stays seated.
+    assert seats(review(("gpt",), card={"risk_tags": ["secrets"]})) == [REVIEW_SONNET, *REVIEW_REQUIRED]
 
 
 def test_the_lone_smart_seat_slot_holds_the_next_smart_legs_before_the_weak_pair():

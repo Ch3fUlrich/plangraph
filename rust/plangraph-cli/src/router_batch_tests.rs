@@ -232,13 +232,17 @@ fn a_review_file_that_is_missing_for_another_head_or_not_an_accept_refuses_the_p
 
 #[test]
 fn both_required_opencode_legs_must_be_among_the_seats() {
-    // A gemini seat beside the glm seat is not the two required seats.
-    let mut gemini_glm = part("alpha", H, "claude", "gemini");
-    gemini_glm.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    // Without a smart seat, a gpt seat beside the glm seat is not the two required seats.
+    let mut gpt_glm = part("alpha", H, "claude", "gpt");
+    gpt_glm.seats[0].leg = "gpt-6.2-sol-medium".into();
     assert_eq!(
-        go_row_ok(&go(vec![gemini_glm])).unwrap_err(),
+        go_row_ok(&go(vec![gpt_glm])).unwrap_err(),
         "part alpha: required review seat missing (opencode-go deepseek and glm)"
     );
+    // A smart seat beside the glm seat is the part's one counted seat (rule 3.66 (f10)).
+    let mut gemini_glm = part("alpha", H, "claude", "gemini");
+    gemini_glm.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    assert!(go_row_ok(&go(vec![gemini_glm])).is_ok());
     // Both required legs plus a credential-diff Sonnet seat pass.
     let mut with_sonnet = part("alpha", H, "gpt", "deepseek");
     with_sonnet
@@ -253,9 +257,9 @@ fn both_required_opencode_legs_must_be_among_the_seats() {
     let mut writer_deepseek = part("alpha", H, "deepseek", "gemini");
     writer_deepseek.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
     assert!(go_row_ok(&go(vec![writer_deepseek])).is_ok());
-    // But the glm leg cannot be dropped for it.
+    // But without a smart seat the glm leg cannot be dropped for it.
     let mut no_glm = part("alpha", H, "deepseek", "gemini");
-    no_glm.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    no_glm.seats[0].leg = "mimo-v2.6-pro".into();
     no_glm.seats[1].leg = "gpt-6.2-sol-medium".into();
     assert!(go_row_ok(&go(vec![no_glm])).is_err());
 }
@@ -287,13 +291,24 @@ fn two_seats_need_two_review_files_and_two_keeper_families() {
 }
 
 #[test]
-fn a_part_needs_both_required_seats_to_accept_with_files_read() {
-    // One seat, even a good one, is not a part (rule 3.66 (f)).
+fn a_part_needs_one_smart_seat_or_both_required_seats_to_accept_with_files_read() {
+    // One weak seat, even a good one, is not a part (rule 3.66 (f10)).
     let mut single = part("alpha", H, "claude", "gemini");
     single.seats.truncate(1);
     assert_eq!(
         go_row_ok(&go(vec![single])).unwrap_err(),
-        "part alpha: needs two required review seats"
+        "part alpha: needs one smart review seat or two required review seats"
+    );
+    // One smart seat is the counted seat.
+    let mut smart = part("alpha", H, "claude", "gemini");
+    smart.seats.truncate(1);
+    smart.seats[0].leg = "agy-gemini-4-hydrogen-high".into();
+    assert!(go_row_ok(&go(vec![smart])).is_ok());
+    let mut none = part("alpha", H, "claude", "gemini");
+    none.seats.clear();
+    assert_eq!(
+        go_row_ok(&go(vec![none])).unwrap_err(),
+        "part alpha: needs one smart review seat or two required review seats"
     );
     let two = go(vec![part("alpha", H, "claude", "gemini")]);
     // An ACCEPT without a FILES READ line, or one that read only the diff, is no seat.

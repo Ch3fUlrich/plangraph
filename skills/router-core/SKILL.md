@@ -55,9 +55,9 @@ reply that lists what was applied and what was refused.
    Do not split a batch to get around one entry.
 2. **GO for a batch PR.** Write the input (D-id, project, PR number, batch head, one part per
    writer branch: name, head, CI state, writer family and its `seats`, each the review leg id, a review file and a
-   reviewer family; rule 3.66 (f): the glm-5.3-flash and deepseek-v4-flash legs must both be there) and run
+   reviewer family; rule 3.66 (f10): one smart seat (hydrogen, argon or sonnet), or else the glm-5.3-flash and deepseek-v4-flash legs both) and run
    `plangraph router go-row INPUT.json`. It refuses, naming the part, when a head is not 40
-   hex, CI is not green, a part has fewer than two seats, a family is missing, a reviewer family
+   hex, CI is not green, a part has no smart seat and fewer than two seats, a family is missing, a reviewer family
    is the writer's or two seats share one (families compare as keeper families: gpt and openai are one) or share a review file, or a review file is missing, names another head than
    the part's, does not end in `VERDICT: ACCEPT` or has no `FILES READ` line naming files. It prints the one GO row in the decisions-log columns (`| ID | project |
    decision | by | why |`, the GO and its `GO-HEAD` in the decision cell, the per-part evidence table in

@@ -40,10 +40,17 @@ def _record_keys(record):
 
 
 def _required_seat(record):
-    """D-6652 (rule 3.66 (f)): a record of one of the two required OpenCode seats must name files it read."""
-    from ..planner.legs import REVIEW_REQUIRED
+    """Rule 3.66 (f10): a record of a counted seat (the smart legs, or the weak OpenCode pair) must name files it read."""
+    from ..planner.legs import REVIEW_REQUIRED, REVIEW_SMART
     leg = record.get("chosen_leg")
-    return isinstance(leg, dict) and leg.get("id") in REVIEW_REQUIRED
+    return isinstance(leg, dict) and leg.get("id") in (*REVIEW_REQUIRED, *REVIEW_SMART)
+
+
+def _smart_seat(record):
+    """Rule 3.66 (f10): a record of a smart leg is one counted seat of its head."""
+    from ..planner.legs import REVIEW_SMART
+    leg = record.get("chosen_leg")
+    return isinstance(leg, dict) and leg.get("id") in REVIEW_SMART
 
 
 def _quota_refusal(text):
@@ -218,8 +225,10 @@ class SpawnerRecordAdapter:
                     or (_required_seat(record) and not has_files_read(text))
                     or record.get("served_family", family) != family):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")
-            seats.append({"model": model, "verdict": "pass", "run_id": run_id,
-                          "head": completion["head_sha"]})
+            seat = {"model": model, "verdict": "pass", "run_id": run_id, "head": completion["head_sha"]}
+            if _smart_seat(record):
+                seat["smart"] = True
+            seats.append(seat)
         if not seats and not allow_empty:
             raise ValueError("no cited review witnesses")
         return seats

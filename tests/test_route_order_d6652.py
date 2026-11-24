@@ -103,14 +103,14 @@ def test_a_credential_tagged_diff_gets_the_claude_seat():
     assert "claude-sonnet-5-5-high" not in [leg.id for leg in review().legs]
 
 
-def test_a_credential_diff_gets_one_sonnet_seat_and_the_weak_pair_stays_behind_it():
+def test_a_credential_diff_gets_sonnet_first_and_both_required_seats_beside_it():
     for card in ({"risk_tags": ["secrets"]}, {"paths": ["src/auth/session.rs"]}):
         plan = review(card)
-        assert [leg.id for leg in plan.review_seats] == ["claude-sonnet-5-5-high"] and plan.error is None
-        assert set(REVIEW_REQUIRED) <= {leg.id for leg in plan.legs}
+        assert [leg.id for leg in plan.review_seats] == ["claude-sonnet-5-5-high", *REVIEW_REQUIRED]
+        assert plan.error is None
     # A Claude-written credential diff never gets the Claude seat.
     plan = review({"risk_tags": ["secrets"]}, writers=("claude",))
-    assert [leg.id for leg in plan.review_seats] == ["agy-gemini-4-hydrogen-high"]
+    assert [leg.id for leg in plan.review_seats] == ["agy-gemini-4-hydrogen-high", *REVIEW_REQUIRED]
 
 
 def test_the_claude_seat_serves_only_when_no_gemini_smart_leg_is_left():
@@ -143,11 +143,11 @@ def test_review_needs_two_seats_on_a_standard_head_too():
 
 
 def test_a_credential_diff_keeps_both_required_seats_and_adds_sonnet():
-    """f10: Sonnet is the one counted seat of a credential diff; both required seats stay behind it as fallbacks."""
+    """f10: Sonnet leads a credential diff and both required seats stay seated (the keeper needs two non-Anthropic families)."""
     plan = review({"risk_tags": ["secrets"]})
     ids = [leg.id for leg in plan.legs]
     assert ids[0] == "claude-sonnet-5-5-high" and set(REVIEW_REQUIRED) <= set(ids)
-    assert [leg.id for leg in plan.review_seats] == ["claude-sonnet-5-5-high"]
+    assert [leg.id for leg in plan.review_seats] == ["claude-sonnet-5-5-high", *REVIEW_REQUIRED]
 
 
 def test_the_claude_seat_serves_only_when_both_required_seats_are_out():

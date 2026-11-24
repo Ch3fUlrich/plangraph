@@ -426,7 +426,7 @@ def eligible_records(item, records_dir, known_keys=()):
             covered = item["key"] in (part if isinstance(part, list) else ())   # a part of several items
             if record.get("item_key") != item["key"] and not covered and not (named or item.get("pr_number") in prs): continue
             bound = True
-            if (record.get("item_key") not in (None, item["key"]) and not covered) or keys - {item["key"]}: raise ValueError("item key mismatch")
+            if (record.get("item_key") not in (None, item["key"]) and not covered) or keys - {item["key"], *(part if isinstance(part, list) else ())}: raise ValueError("item key mismatch")
             if prs and item.get("pr_number") and prs != {item["pr_number"]}: raise ValueError("PR number mismatch")
             if (_has_symlink(path, index)
                     or not re.fullmatch(r"run-[0-9a-f]{32}", path.parent.name)

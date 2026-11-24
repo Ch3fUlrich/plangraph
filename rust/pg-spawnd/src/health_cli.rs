@@ -53,6 +53,9 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let mut result = crate::health_report::build_report(&records, &evidence, since, until)
         .map_err(|e| e.to_string())?;
     result["review_legs"] = crate::review_health::report(&state, &records, since, until);
+    let (rows, alerts) = crate::health_report_placement::placement_hourly(&records, since, until);
+    result["placement_hourly"] = serde_json::json!(rows);
+    result["placement_alerts"] = serde_json::json!(alerts);
     if flags.contains_key("--baseline") {
         baseline(&state, since, until, &result)?;
     }
@@ -64,7 +67,11 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
             result["totals"]["launches"], result["totals"]["unusable_run_hours"]
         )
         .map_err(|e| e.to_string())?;
-        for alert in result["witness_alerts"].as_array().into_iter().flatten() {
+        let alerts = ["witness_alerts", "placement_alerts"];
+        for alert in alerts
+            .iter()
+            .flat_map(|k| result[*k].as_array().into_iter().flatten())
+        {
             if let Some(line) = alert.as_str() {
                 writeln!(out, "{line}").map_err(|e| e.to_string())?;
             }

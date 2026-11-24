@@ -29,12 +29,21 @@ pub struct Part {
     pub head: String,
     pub ci: String,
     pub writer_family: String,
-    /// The two required review seats; both must ACCEPT the part head with FILES READ.
+    /// The part's counted seats: one smart seat, or the weak pair when no smart leg served (rule 3.66
+    /// (f10)); every seat must ACCEPT the part head with FILES READ.
     pub seats: Vec<Seat>,
 }
 
-/// Seats every part needs (D-6652, rule 3.66 (f)).
+/// Seats a part needs without a smart seat (D-6652, rule 3.66 (f)): the weak pair.
 const REQUIRED_SEATS: usize = 2;
+/// The smart review legs (`REVIEW_SMART` in `plangraph.planner.legs`): one ACCEPT of any of them is
+/// the part's one counted seat (rule 3.66 (f10)).
+const SMART_LEGS: [&str; 4] = [
+    "agy-gemini-4-hydrogen-high",
+    "agy-gemini-4-argon-low",
+    "agy-gemini-4-argon-medium",
+    "claude-sonnet-5-5-high",
+];
 /// The two required OpenCode review legs with their model family (`REVIEW_REQUIRED` in
 /// `plangraph.planner.legs`). Both must be among a part's seats, except a leg whose family wrote
 /// part of the diff (a writer never reviews its own work; other seats then fill its slot).
@@ -140,14 +149,18 @@ pub fn go_row(
     }
     let mut table = Vec::new();
     for part in &input.parts {
+        let smart = part
+            .seats
+            .iter()
+            .any(|seat| SMART_LEGS.contains(&seat.leg.as_str()));
         let why = if !token(&part.name) {
             Some("name")
         } else if !sha40(&part.head) {
             Some("head is not 40 hex")
         } else if part.ci != "green" {
             Some("CI is not green")
-        } else if part.seats.len() < REQUIRED_SEATS {
-            Some("needs two required review seats")
+        } else if part.seats.is_empty() || (!smart && part.seats.len() < REQUIRED_SEATS) {
+            Some("needs one smart review seat or two required review seats")
         } else if part.seats.iter().any(|seat| !token(&seat.leg)) {
             Some("review leg missing")
         } else if part.seats.iter().any(|seat| !token(&seat.review_file)) {
@@ -174,10 +187,12 @@ pub fn go_row(
                 .any(|b| a.review_file == b.review_file)
         }) {
             Some("review seats share a review file")
-        } else if REQUIRED_LEGS.iter().any(|(leg, model_family)| {
-            family(model_family) != family(&part.writer_family)
-                && !part.seats.iter().any(|seat| seat.leg == *leg)
-        }) {
+        } else if !smart
+            && REQUIRED_LEGS.iter().any(|(leg, model_family)| {
+                family(model_family) != family(&part.writer_family)
+                    && !part.seats.iter().any(|seat| seat.leg == *leg)
+            })
+        {
             Some("required review seat missing (opencode-go deepseek and glm)")
         } else {
             None
