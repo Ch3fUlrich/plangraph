@@ -18,7 +18,7 @@ fn encode(bytes: &[u8]) -> String {
     let alphabet: Vec<u8> = (b'A'..=b'Z')
         .chain(b'a'..=b'z')
         .chain(b'0'..=b'9')
-        .chain([b'+', b'/'])
+        .chain(*b"+/")
         .collect();
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
