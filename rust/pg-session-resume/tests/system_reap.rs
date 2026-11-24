@@ -4,7 +4,7 @@
 use pg_session_resume::engine::{reap_idle, Config};
 use pg_session_resume::host::{Host, Process};
 use pg_session_resume::record::Record;
-use pg_session_resume::system::{parse_job_state, proc_start_ticks, System};
+use pg_session_resume::system::{classify, parse_job_state, proc_start_ticks, System};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Child, Command};
@@ -311,4 +311,36 @@ fn a_zombie_leader_whose_thread_ignores_sigterm_is_not_a_stop() {
     assert!(err.contains("still running"), "{err}");
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+/// A `/proc/<pid>/stat` text with `state` and start time `start` (field 22).
+fn stat_text(state: char, start: u64) -> String {
+    let mut fields = vec!["0".to_owned(); 22];
+    fields[0] = state.to_string();
+    fields[19] = start.to_string();
+    format!("4242 (x y) {}", fields.join(" "))
+}
+
+#[test]
+fn a_zombie_leader_is_gone_only_when_the_kernel_says_every_thread_exited() {
+    // The stat text alone (a zombie leader whose threads a /proc scan would call dead) decides
+    // nothing: a process that is still running stays Live whatever the text says ...
+    let mut running = sh("sleep 30");
+    assert_eq!(
+        classify(&stat_text('Z', 777), running.id()),
+        Process::Live(777)
+    );
+    assert_eq!(
+        classify(&stat_text('X', 777), running.id()),
+        Process::Live(777)
+    );
+    assert_eq!(
+        classify(&stat_text('S', 777), running.id()),
+        Process::Live(777)
+    );
+    // ... and a process the kernel no longer knows is gone.
+    running.kill().unwrap();
+    running.wait().unwrap();
+    assert_eq!(classify(&stat_text('Z', 777), running.id()), Process::Gone);
+    assert_eq!(classify("garbage", running.id()), Process::Unknown);
 }

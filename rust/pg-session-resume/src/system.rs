@@ -78,18 +78,7 @@ impl Host for System {
 
     fn process(&self, pid: u32) -> Process {
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Ok(stat) => match (proc_state(&stat), proc_start_ticks(&stat)) {
-                // A zombie leader whose other threads still run is a running process: only the
-                // kernel's word on the whole thread group (the pidfd) ends it.
-                (Some('Z' | 'X'), Some(start)) => match exited(pid) {
-                    Some(true) => Process::Gone,
-                    Some(false) => Process::Live(start),
-                    None => Process::Unknown,
-                },
-                (Some('Z' | 'X'), None) => Process::Unknown,
-                (Some(_), Some(start)) => Process::Live(start),
-                _ => Process::Unknown,
-            },
+            Ok(stat) => classify(&stat, pid),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Process::Gone,
             Err(_) => Process::Unknown,
         }
@@ -253,6 +242,22 @@ fn exited(pid: u32) -> Option<bool> {
         n if n > 0 => Some(true),
         0 => Some(false),
         _ => None,
+    }
+}
+
+/// What the `/proc/<pid>/stat` text of `pid` says about the process. A zombie leader whose other
+/// threads still run is a running process: only the kernel's word on the whole thread group
+/// (the pidfd) ends it, never the state letter and never a scan of /proc.
+pub fn classify(stat: &str, pid: u32) -> Process {
+    match (proc_state(stat), proc_start_ticks(stat)) {
+        (Some('Z' | 'X'), Some(start)) => match exited(pid) {
+            Some(true) => Process::Gone,
+            Some(false) => Process::Live(start),
+            None => Process::Unknown,
+        },
+        (Some('Z' | 'X'), None) => Process::Unknown,
+        (Some(_), Some(start)) => Process::Live(start),
+        _ => Process::Unknown,
     }
 }
 

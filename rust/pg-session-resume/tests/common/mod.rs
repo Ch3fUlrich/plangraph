@@ -38,6 +38,9 @@ pub struct Fake {
     /// The session starts a turn while its worktree is looked up.
     pub busy_on_head: bool,
     pub busy: std::cell::Cell<bool>,
+    /// The session shows this activity once its worktree has been looked up.
+    pub active_after_head: Option<u64>,
+    pub fresh_activity: std::cell::Cell<Option<u64>>,
     pub children: Option<bool>,
     pub wt_id: Option<String>,
     pub turn_ended: Option<bool>,
@@ -67,6 +70,8 @@ impl Fake {
             jam_on_run: None,
             busy_on_head: false,
             busy: Default::default(),
+            active_after_head: None,
+            fresh_activity: Default::default(),
             children: Some(false),
             wt_id: Some("w1".into()),
             turn_ended: Some(true),
@@ -131,10 +136,11 @@ impl Host for Fake {
     }
     fn git_head(&self, _: &Path) -> Option<String> {
         self.busy.set(self.busy_on_head);
+        self.fresh_activity.set(self.active_after_head);
         self.head.clone()
     }
     fn activity_ts(&self, _: &Record) -> Option<u64> {
-        self.activity
+        self.fresh_activity.get().or(self.activity)
     }
     fn log(&mut self, line: &str) -> bool {
         if self.log_fails {
@@ -195,4 +201,23 @@ pub fn done(r: &Rig, head: &str) {
         "lane-a.status",
         &format!("DONE k abc\nlane-a DONE\nHEAD: {head}\nREVIEW: none\nVERDICT: ACCEPT\n"),
     );
+}
+
+pub fn read(path: &std::path::Path) -> Value {
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+pub fn lane_copy(r: &Rig) -> Value {
+    read(&r.cfg.pr_dir.join("lane-a.resume.json"))
+}
+
+pub fn pending(r: &Rig) -> std::path::PathBuf {
+    r.cfg.launch_dir.join("writer-0644.pending")
+}
+
+pub fn stopped_job() -> Option<JobState> {
+    Some(JobState {
+        state: "stopped".into(),
+        tasks: Some(0),
+    })
 }

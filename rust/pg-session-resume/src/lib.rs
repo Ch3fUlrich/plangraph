@@ -6,5 +6,6 @@ pub mod contract;
 pub mod engine;
 pub mod host;
 pub mod lock;
+pub mod persist;
 pub mod record;
 pub mod system;

@@ -57,12 +57,15 @@ worktree stay null when their lookup failed. `resume.handle` is the "resumable" 
 gets `<lane>.resume.json` with the same handle. A stop belongs to the launch that produced it (`resume.launch_ts`, `launch_run`, `handle`
 must equal the record's `ts`, `run_id` and handle), so a `fleet-launch --respawn` copy of the
 record is a live session again. Before a session is touched, the snapshot of the stop (head, worktree, status head, round,
-reason, time) is written to `<record>.pending` next to the record, and the runtime is looked at
-again right before the signal. The sidecar goes only after the stop line is in the log. A stop
-whose record write or log append fails exits 2, and the next tick, once the runtime shows the
-session stopped, finishes it from that snapshot without a second stop; a sidecar of a session
-that still runs is an attempt that never finished and is removed (one that cannot be removed is
-reported). Each lane keeps the copy of its latest stopped launch, ordered by stop time, then launch, then
+reason, time) is written to `<record>.pending` next to the record (owner-only, 0600, as the
+record and the lane copy are), and the runtime and the clock are checked again right before the
+signal (a turn or child that started, or activity that moved, keeps the session). The sidecar
+carries the phase of the stop: `attempt` (nothing proven), `stopped` (the stop command
+succeeded), `logged` (the stop line is in the log). A stop whose record write or log append
+fails exits 2, and the next tick finishes a `stopped` sidecar from its snapshot whatever the
+runtime reports then, without a second stop and without a second log line; an `attempt` is
+removed, never published (the session is judged afresh), and a sidecar that cannot be removed is
+reported. Each lane keeps the copy of its latest stopped launch, ordered by stop time, then launch, then
 session name: a missing or earlier copy is rewritten (publication and repair alike), a later one
 is left. A kernel lock (flock on
 `<state>/launch/pg-session-resume.lock`) keeps two ticks apart: a second one prints that the

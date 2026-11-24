@@ -135,18 +135,31 @@ impl Record {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        use std::io::Write;
-        let tmp = self.path.with_extension("json.tmp");
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp)?;
-        file.write_all(serde_json::to_string_pretty(&self.value)?.as_bytes())?;
-        file.sync_all()?;
-        std::fs::set_permissions(&tmp, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
-        std::fs::rename(tmp, &self.path)
+        write_private(
+            &self.path,
+            serde_json::to_string_pretty(&self.value)?.as_bytes(),
+        )
     }
+}
+
+/// Replace `path` atomically with `bytes`, readable by the owner only from the first byte on:
+/// the temp file (`<path>.tmp`) is created 0600, whatever the umask. These files carry resume
+/// handles and worktree paths.
+pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    std::fs::rename(tmp, path)
 }
 
 /// Every readable record of the directory in name order; a broken file is skipped.

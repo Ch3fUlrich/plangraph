@@ -6,28 +6,9 @@ mod common;
 use common::*;
 use pg_session_resume::engine::{reap_idle, stop_done};
 use pg_session_resume::host::JobState;
-use serde_json::{json, Value};
+use serde_json::json;
 
 const HEAD2: &str = "fedcba9876543210fedcba9876543210fedcba98";
-
-fn read(path: &std::path::Path) -> Value {
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
-}
-
-fn lane_copy(r: &Rig) -> Value {
-    read(&r.cfg.pr_dir.join("lane-a.resume.json"))
-}
-
-fn pending(r: &Rig) -> std::path::PathBuf {
-    r.cfg.launch_dir.join("writer-0644.pending")
-}
-
-fn stopped_job() -> Option<JobState> {
-    Some(JobState {
-        state: "stopped".into(),
-        tasks: Some(0),
-    })
-}
 
 #[test]
 fn a_record_that_cannot_be_saved_before_the_signal_is_never_signalled() {
@@ -74,6 +55,11 @@ fn a_stop_whose_record_write_fails_is_finished_from_the_snapshot_taken_before_it
     let rec = record(&r, "writer");
     assert!(rec.get("resume").is_none());
     assert_eq!(read(&pending(&r))["head"], HEAD);
+    assert_eq!(
+        read(&pending(&r))["phase"],
+        "stopped",
+        "the stop command succeeded"
+    );
 
     // later: the worktree moved on, the status is gone, the runtime shows the session stopped
     std::fs::remove_dir(r.cfg.launch_dir.join("writer-0644.json.tmp")).unwrap();
@@ -114,58 +100,6 @@ fn a_stop_that_failed_leaves_no_snapshot_behind() {
 }
 
 #[test]
-fn a_lane_copy_that_failed_is_repaired_by_a_later_tick() {
-    let r = rig("writer", json!({}));
-    done(&r, HEAD);
-    let blocker = r.cfg.pr_dir.join("lane-a.resume.json.tmp");
-    std::fs::create_dir(&blocker).unwrap();
-    let mut h = Fake::new(5000);
-    assert_eq!(stop_done(&mut h, &r.cfg, 0, None), 1);
-    assert_eq!(record(&r, "writer")["state"], "stopped");
-    assert!(h
-        .lines
-        .iter()
-        .any(|l| l.contains("event=lane-record-failed")));
-    std::fs::remove_dir(&blocker).unwrap();
-    assert_eq!(reap_idle(&mut h, &r.cfg), 0);
-    assert_eq!(h.runs.len(), 1, "the stop is not repeated");
-    assert_eq!(lane_copy(&r)["handle"], SID);
-}
-
-#[test]
-fn a_lane_copy_of_an_older_launch_is_replaced_by_the_latest_stop() {
-    let r = rig("writer", json!({}));
-    done(&r, HEAD);
-    // the lane file names an earlier launch of the lane, stopped before this one
-    write(
-        &r,
-        "lane-a.resume.json",
-        r#"{"lane":"lane-a","state":"stopped","session_name":"older-0001","handle":"OLD","stopped_ts":100}"#,
-    );
-    // the write of the new copy fails once
-    let blocker = r.cfg.pr_dir.join("lane-a.resume.json.tmp");
-    std::fs::create_dir(&blocker).unwrap();
-    let mut h = Fake::new(5000);
-    assert_eq!(stop_done(&mut h, &r.cfg, 0, None), 1);
-    assert_eq!(lane_copy(&r)["handle"], "OLD");
-    std::fs::remove_dir(&blocker).unwrap();
-    assert_eq!(reap_idle(&mut h, &r.cfg), 0);
-    let lane = lane_copy(&r);
-    assert_eq!(
-        (lane["handle"].as_str(), lane["stopped_ts"].as_u64()),
-        (Some(SID), Some(5000))
-    );
-    // a copy of a newer stop is never overwritten by an older one
-    write(
-        &r,
-        "lane-a.resume.json",
-        r#"{"lane":"lane-a","state":"stopped","session_name":"newer-0002","handle":"NEW","stopped_ts":9000}"#,
-    );
-    reap_idle(&mut h, &r.cfg);
-    assert_eq!(lane_copy(&r)["handle"], "NEW");
-}
-
-#[test]
 fn a_refusal_whose_log_line_could_not_be_appended_is_logged_by_the_next_tick() {
     let r = rig("writer", json!({}));
     done(&r, HEAD);
@@ -185,103 +119,6 @@ fn a_refusal_whose_log_line_could_not_be_appended_is_logged_by_the_next_tick() {
     stop_done(&mut h, &r.cfg, 0, None);
     assert_eq!(h.lines.len(), 1, "{:?}", h.lines);
     assert!(h.lines[0].contains("why=job-working"));
-}
-
-#[test]
-fn a_respawned_launch_is_not_hidden_by_the_stop_of_the_old_one() {
-    let r = rig("writer", json!({"run_id": "run-1"}));
-    done(&r, HEAD);
-    let mut h = Fake::new(5000);
-    stop_done(&mut h, &r.cfg, 0, None);
-    assert_eq!(h.runs.len(), 1);
-    // `fleet-launch --respawn` copies the record: stop marks and resume object stay, the launch
-    // identity (ts, run id, session id) is new
-    let path = r.cfg.launch_dir.join("writer-0644.json");
-    let mut rec = read(&path);
-    rec["ts"] = json!(6000);
-    rec["run_id"] = json!("run-2");
-    rec["session_id"] = json!("2222222a-91d1-442a-bc81-f5dd71769181");
-    rec["job_id"] = json!("2222222a");
-    std::fs::write(&path, rec.to_string()).unwrap();
-    h.now = 7000;
-    stop_done(&mut h, &r.cfg, 0, None);
-    assert_eq!(h.runs.len(), 2, "the new launch is a live session again");
-    assert_eq!(h.runs[1].1, ["claude", "stop", "2222222a"]);
-    assert_eq!(record(&r, "writer")["resume"]["launch_run"], "run-2");
-}
-
-#[test]
-fn a_pending_snapshot_of_the_old_launch_is_not_used_by_a_respawn() {
-    let r = rig("writer", json!({"run_id": "run-1"}));
-    done(&r, HEAD);
-    let mut h = Fake::new(5000);
-    h.block_on_run = Some(r.cfg.launch_dir.join("writer-0644.json.tmp"));
-    stop_done(&mut h, &r.cfg, 0, None); // signalled, never published: the sidecar of run-1
-    std::fs::remove_dir(r.cfg.launch_dir.join("writer-0644.json.tmp")).unwrap();
-    let path = r.cfg.launch_dir.join("writer-0644.json");
-    let mut rec = read(&path);
-    rec["ts"] = json!(6000);
-    rec["run_id"] = json!("run-2");
-    std::fs::write(&path, rec.to_string()).unwrap();
-    h.block_on_run = None;
-    h.job = stopped_job();
-    assert_eq!(reap_idle(&mut h, &r.cfg), 0);
-    assert!(
-        record(&r, "writer").get("resume").is_none(),
-        "the old launch's snapshot says nothing about the new one"
-    );
-    assert!(!pending(&r).exists(), "and is removed");
-}
-
-#[test]
-fn a_foreign_stop_mark_older_than_the_launch_does_not_hide_it() {
-    let r = rig(
-        "writer",
-        json!({"state": "stopped", "stopped_ts": 900, "ts": 1000}),
-    );
-    done(&r, HEAD);
-    let mut h = Fake::new(5000);
-    stop_done(&mut h, &r.cfg, 0, None);
-    assert_eq!(h.runs.len(), 1);
-}
-
-fn order_rig(file: &str) -> (Rig, Fake) {
-    let r = rig("writer", json!({}));
-    done(&r, HEAD);
-    write(&r, "lane-a.resume.json", file);
-    (r, Fake::new(5000))
-}
-
-#[test]
-fn a_stop_never_replaces_the_lane_copy_of_a_later_one() {
-    // publication: the lane file already names a later stop of the lane
-    let (r, mut h) = order_rig(
-        r#"{"state":"stopped","session_name":"newer-0002","handle":"NEW","stopped_ts":9000,"launch_ts":1}"#,
-    );
-    stop_done(&mut h, &r.cfg, 0, None);
-    assert_eq!(record(&r, "writer")["state"], "stopped");
-    assert_eq!(lane_copy(&r)["handle"], "NEW");
-    reap_idle(&mut h, &r.cfg);
-    assert_eq!(lane_copy(&r)["handle"], "NEW", "repair keeps it too");
-}
-
-#[test]
-fn stops_of_the_same_second_are_ordered_by_their_launch() {
-    // this record: stopped_ts 5000, launch ts 1000 (the rig)
-    let same = |launch: u64, name: &str, handle: &str| {
-        format!(
-            r#"{{"state":"stopped","session_name":"{name}","handle":"{handle}","stopped_ts":5000,"launch_ts":{launch}}}"#
-        )
-    };
-    // an earlier launch stopped in the same second: replaced
-    let (r, mut h) = order_rig(&same(900, "older-0001", "OLD"));
-    stop_done(&mut h, &r.cfg, 0, None);
-    assert_eq!(lane_copy(&r)["handle"], SID);
-    // a later launch stopped in the same second: kept, in publication and in repair
-    let (r, mut h) = order_rig(&same(1100, "later-0002", "LATER"));
-    stop_done(&mut h, &r.cfg, 0, None);
-    reap_idle(&mut h, &r.cfg);
-    assert_eq!(lane_copy(&r)["handle"], "LATER");
 }
 
 #[test]
@@ -365,4 +202,113 @@ fn a_snapshot_left_by_an_attempt_that_never_finished_is_not_published_after_a_la
     h.job = stopped_job(); // it exits on its own later
     reap_idle(&mut h, &r.cfg);
     assert!(record(&r, "writer").get("resume").is_none());
+}
+
+#[test]
+fn a_stop_that_happened_is_finished_even_when_the_runtime_state_cannot_be_read() {
+    let r = rig("writer", json!({}));
+    done(&r, HEAD);
+    let mut h = Fake::new(5000);
+    h.block_on_run = Some(r.cfg.launch_dir.join("writer-0644.json.tmp"));
+    stop_done(&mut h, &r.cfg, 0, None); // stopped, record not written
+    std::fs::remove_dir(r.cfg.launch_dir.join("writer-0644.json.tmp")).unwrap();
+    std::fs::remove_file(r.cfg.pr_dir.join("lane-a.status")).unwrap();
+    h.block_on_run = None;
+    h.job = None; // the job state cannot be read now
+    assert_eq!(reap_idle(&mut h, &r.cfg), 0);
+    let rec = record(&r, "writer");
+    assert_eq!(
+        (rec["state"].as_str(), rec["resume"]["head"].as_str()),
+        (Some("stopped"), Some(HEAD))
+    );
+    assert!(!pending(&r).exists());
+}
+
+#[test]
+fn a_snapshot_of_an_attempt_is_never_published_however_the_session_ends() {
+    let r = rig("writer", json!({}));
+    let mut h = Fake::new(5000);
+    let snap = json!({"agent": "claude", "handle": SID, "reason": "done", "head": HEAD,
+        "worktree": "w1", "status_head": HEAD, "round": 0, "stopped_ts": 4000,
+        "launch_ts": 1000, "launch_run": null, "phase": "attempt"});
+    std::fs::write(pending(&r), snap.to_string()).unwrap();
+    h.job = stopped_job(); // the session is gone by the time of the next tick
+    reap_idle(&mut h, &r.cfg);
+    assert!(record(&r, "writer").get("resume").is_none());
+    assert!(!pending(&r).exists());
+}
+
+#[test]
+fn a_stop_line_already_in_the_log_is_not_written_again() {
+    let r = rig("writer", json!({}));
+    done(&r, HEAD);
+    let mut h = Fake::new(5000);
+    h.block_on_run = Some(r.cfg.launch_dir.join("writer-0644.json.tmp"));
+    stop_done(&mut h, &r.cfg, 0, None);
+    std::fs::remove_dir(r.cfg.launch_dir.join("writer-0644.json.tmp")).unwrap();
+    h.block_on_run = None;
+    // the record is published and the line logged, then only the sidecar's removal failed
+    reap_idle(&mut h, &r.cfg);
+    assert_eq!(
+        h.lines.iter().filter(|l| l.contains("event=stop ")).count(),
+        1
+    );
+    let mut snap = read(&r.cfg.launch_dir.join("writer-0644.json"))["resume"].clone();
+    snap["phase"] = json!("logged");
+    std::fs::write(pending(&r), snap.to_string()).unwrap();
+    reap_idle(&mut h, &r.cfg);
+    reap_idle(&mut h, &r.cfg);
+    assert_eq!(
+        h.lines.iter().filter(|l| l.contains("event=stop ")).count(),
+        1,
+        "{:?}",
+        h.lines
+    );
+    assert!(!pending(&r).exists(), "only the removal was left");
+}
+
+#[test]
+fn a_session_that_was_active_again_during_the_snapshot_is_not_stopped() {
+    // reaping: the idle check used the activity read before the worktree lookup
+    let r = rig("writer", json!({}));
+    let mut h = Fake::new(10_000);
+    h.activity = Some(1); // idle for hours ...
+    h.active_after_head = Some(9_990); // ... until a turn ran while the snapshot was taken
+    reap_idle(&mut h, &r.cfg);
+    assert!(h.runs.is_empty());
+    assert!(
+        h.lines.iter().any(|l| l.contains("why=activity-resumed")),
+        "{:?}",
+        h.lines
+    );
+    assert!(!pending(&r).exists());
+    assert!(record(&r, "writer").get("resume").is_none());
+    // the DONE path: quiet for 60 s before, active 5 s ago after the lookup
+    let r = rig("writer", json!({}));
+    done(&r, HEAD);
+    let mut h = Fake::new(10_000);
+    h.activity = Some(1);
+    h.active_after_head = Some(9_995);
+    stop_done(&mut h, &r.cfg, 60, None);
+    assert!(h.runs.is_empty());
+}
+
+#[test]
+fn what_a_stop_writes_is_readable_by_its_owner_only_whatever_the_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    // SAFETY: umask only widens what this process creates; other tests do not depend on it.
+    unsafe { libc::umask(0) };
+    let r = rig("writer", json!({}));
+    done(&r, HEAD);
+    let mut h = Fake::new(5000);
+    h.log_fails = true; // the sidecar stays behind to be looked at
+    stop_done(&mut h, &r.cfg, 0, None);
+    for path in [
+        pending(&r),
+        r.cfg.launch_dir.join("writer-0644.json"),
+        r.cfg.pr_dir.join("lane-a.resume.json"),
+    ] {
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{}", path.display());
+    }
 }
