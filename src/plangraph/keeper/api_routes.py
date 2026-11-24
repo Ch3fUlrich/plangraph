@@ -29,7 +29,7 @@ READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "jev_report", "write_context", "events", "attempts", "spawn_attempt_coverage"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "claim_batch", "delegate", "heartbeat", "heartbeat_batch", "release",
-               "add_evidence", "add_evidence_router", "incident", "submit", "verdict",
+               "add_evidence", "add_evidence_router", "incident", "reconfirm", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "grant_apply", "revoke_apply",
@@ -428,6 +428,8 @@ def _close_merged_auto(store, principal, body, need):
 #: Write verbs whose store method checks the role itself and admits more than the
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
+                      "reconfirm": lambda store, principal, body, need:
+                          store.reconfirm(principal, need(body, "key"), body.get("decision")),
                       "land": lambda store, principal, body, need: store.land(principal, body),
                       "record_spawn_attempt": lambda store, principal, body, need:
                           store.record_spawn_attempt(principal, body),

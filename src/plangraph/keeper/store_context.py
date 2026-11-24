@@ -44,13 +44,17 @@ from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
 from .schema import DEFINITION_EVENTS
 
-__all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
+__all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX", "PREMISE_FIELDS"]
 
 STALE_DAYS = 7
 _CLAIM_INDEX_WORKERS = 4
 #: Legacy public constant; ready now checks every row through the shared index.
 READY_GIT_LIMIT = 25
 FORCE_STALE_MAX = 500
+#: The item fields that form its premise; the decision watermark and the
+#: ``cited`` set read these and nothing else.  The item's own ``source`` is one
+#: of them, so a decision that is the item's source is cited, never "newer".
+PREMISE_FIELDS = ("title", "description", "done_criteria", "note", "source")
 BRIEF_DECISIONS = 6
 BRIEF_STALE_MAX = 240
 
@@ -71,6 +75,19 @@ def _clip(text, limit):
 
 def _num(did):
     return int(did.split("-", 1)[1])
+
+
+def _premise_ids(payload):
+    """The D-ids cited in the premise fields of a definition event payload.
+
+    Read field by field (an edit carries its new done criteria under ``after``),
+    never from the encoded payload, so metadata (``session``, ``similar``,
+    ``category``, ``supersedes``) cannot carry an id into the watermark.
+    """
+    after = payload.get("after")
+    after = after if isinstance(after, dict) else {}
+    return src.decision_ids(*(payload.get(name) for name in PREMISE_FIELDS),
+                            *(after.get(name) for name in PREMISE_FIELDS))
 
 
 def _graph(index):
@@ -124,28 +141,37 @@ class ContextMixin:
         return out
 
     def _decision_clock(self):
-        """``{"seqs", "marks", "last"}``: running max D-id over definition events.
+        """``{"seqs", "marks", "last", "reconfirmed"}``: the decision watermark clock.
 
-        ``marks[i]`` is the highest D-id cited by any item definition up to
-        ``seqs[i]``; ``last`` maps a key to its newest definition seq.  Kept on
-        the store and rebuilt whenever the (count, max, sum of seq) of definition
+        ``marks[i]`` is the highest D-id cited in the premise fields of any item
+        definition up to ``seqs[i]`` (:func:`_premise_ids`: never metadata such
+        as ``session``); ``last`` maps a key to its newest definition seq;
+        ``reconfirmed`` maps a key to the highest decision a ``premise_reconfirmed``
+        event named for it, the per-item floor every claim path reads.  Kept on
+        the store and rebuilt whenever the (count, max, sum of seq) of these
         events changes, so a rollback or an out-of-order commit never leaves
         it behind.
         """
         row = self.conn.execute(
             "SELECT COUNT(*) AS n, MAX(seq) AS m, COALESCE(SUM(seq), 0) AS s"
-            f" FROM events WHERE {DEFINITION_EVENTS}").fetchone()
+            f" FROM events WHERE {DEFINITION_EVENTS} OR type='premise_reconfirmed'").fetchone()
         stamp = (row["n"], row["m"], row["s"])
         clock = getattr(self, "_ctx_clock", None)
         if clock is not None and clock["stamp"] == stamp:
             return clock
-        clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp}
+        clock = {"seqs": [], "marks": [], "last": {}, "reconfirmed": {}, "stamp": stamp}
         mark = -1
         for row in self.conn.execute(
-                f"SELECT seq, key, payload FROM events WHERE {DEFINITION_EVENTS}"
-                " ORDER BY seq"):
-            raw = row["payload"]
-            ids = src.decision_ids(raw if isinstance(raw, str) else json.dumps(raw))
+                "SELECT seq, key, type, payload FROM events"
+                f" WHERE {DEFINITION_EVENTS} OR type='premise_reconfirmed' ORDER BY seq"):
+            payload = _payload(row["payload"])
+            if row["type"] == "premise_reconfirmed":     # a re-read, not a change of the definition
+                did = src.decision_ids(payload.get("decision"))
+                if did:
+                    clock["reconfirmed"][row["key"]] = max(
+                        clock["reconfirmed"].get(row["key"], -1), _num(did[-1]))
+                continue
+            ids = _premise_ids(payload)
             if ids:
                 mark = max(mark, _num(ids[-1]))
             clock["seqs"].append(row["seq"])
@@ -172,8 +198,7 @@ class ContextMixin:
 
     @staticmethod
     def _texts(item):
-        return [item.get(name) for name in
-                ("title", "description", "done_criteria", "note")]
+        return [item.get(name) for name in PREMISE_FIELDS]
 
     def _work(self, item, fetch, fresh_lanes=False):
         gitad = self._adapter("git")
@@ -205,9 +230,11 @@ class ContextMixin:
         cited = src.decision_ids(*self._texts(item))
         naming = src.decisions_naming(inputs["book"], key)
         mark = self._watermark(item, inputs["clock"], cited)
+        confirmed = inputs["clock"]["reconfirmed"].get(key, -1)
         newer = [d for d in naming if d not in cited
-                 and mark is not None and _num(d) > mark]
-        superseded = inputs["book"]["superseded"]
+                 and mark is not None and mark < _num(d) and confirmed < _num(d)]
+        superseded = {old: new for old, new in inputs["book"]["superseded"].items()
+                      if confirmed < _num(new)}
         ctx = {
             "dep_states": [entry(k) for k in deps],
             "dependents": [entry(k) for k in dependents],
@@ -437,6 +464,31 @@ class ContextMixin:
                           in_progress=groups["in_progress"], unknown=groups["unknown"],
                           warnings=groups["warnings"])
 
+    def reconfirm(self, principal, key, decision):
+        """Record that the premise of *key* was read against *decision* (no edit).
+
+        An audited ``premise_reconfirmed`` event raises the item's confirmation
+        floor to that decision: newer decisions and retired premises up to it no
+        longer refuse a claim (ordinary, system lease or ready); a later one does.
+        """
+        def record(now):
+            self._require_role(principal, "l1", "router")
+            did = re.fullmatch(r"D-0*(\d+)", decision.strip()) if isinstance(decision, str) else None
+            if did is None:
+                raise Refused("validation", "decision must be a D-NNN id")
+            did = f"D-{int(did.group(1))}"
+            with self._write():
+                item = self._get_or_refuse(key)
+                self._may_manage(principal, item["project"])
+                if item["state"] in views.TERMINAL:
+                    raise Refused("bad_state", f"{key} is {item['state']}")
+                if not self._adapter("decisions").has(did):
+                    raise Refused("not_found", f"no decision {did} in the decisions log")
+                self._append(principal, key, "premise_reconfirmed",
+                             {"decision": did, "who": principal.name}, now)
+            return {"key": key, "reconfirmed": did}
+        return self._run(principal, "reconfirm", key, record)
+
     # -------------------------------------------------------------- claim
     @staticmethod
     def _force_stale_reason(value):
@@ -474,6 +526,12 @@ class ContextMixin:
             if work["commits"]:
                 head = work["commits"][0]
                 facts.append(f"already merged: {head.get('source', 'Plan-Item commit')} {head['sha'][:8]}")
+            # A system lease skips the freshness reads, never a retired premise; the
+            # confirmation floor is the one an ordinary claim reads.
+            confirmed = self._decision_clock()["reconfirmed"].get(item["key"], -1)
+            facts += [f"premise {d} superseded by {book['superseded'][d]}"
+                      for d in src.decision_ids(*self._texts(item))
+                      if d in book["superseded"] and confirmed < _num(book["superseded"][d])]
             override = self._stale_override(item["key"], reason, facts)
             if unknown:
                 raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
@@ -638,6 +696,8 @@ class ContextMixin:
     def _claim_staleness(ctx):
         """Shared refusal facts for claim and ready; informational age is separate."""
         facts = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
+        facts += [f"premise {old} superseded by {new}"
+                  for old, new in sorted(ctx["superseded_premises"].items())]
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
         if commits and (not lanes or commits[0].get("source")):
