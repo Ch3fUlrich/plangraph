@@ -74,6 +74,19 @@ run and attempt, and lists every refusal: `moved_head`, `stale_base`, `replay_mi
 `delta_missing`, `operator_path_unauthorized` (a gate path without a `Gate-Edit` grant for this head) and
 `main_not_green`.
 
+## Evidence across a rebase
+
+`plangraph land-train evidence-assess --repo DIR --evidence FILE --main SHA --head SHA --trains-now N`
+decides whether a batch's review ACCEPT and part CI survive a rebase or a main move. The evidence key is
+the patch-id of the batch's own diff plus its touched paths. Both carry to the new head, which the output
+names next to the old one, while the patch-id and paths are unchanged, no main commit since the evidence
+base touched those paths and the merge dry run is clean. A conflict re-reviews only the range-diff of the
+resolution; a main change on the batch's paths voids both. After more than 3 trains landed since the
+evidence base the ACCEPT still carries and the part CI runs again. A rebase happens only on a textual
+conflict. A flake verdict (a red that also fails without the patch, or a hung test) decides only what
+voids an ACCEPT; it never lets a red required CI merge. `evidence-report --records FILE` prints per day
+the rebases, carried ACCEPTs and CI runs, re-reviews and fix rounds caused by a rebase.
+
 ## Push a built train
 
 The builder defaults to `land/train-NAME` and saves the ordered part heads in
