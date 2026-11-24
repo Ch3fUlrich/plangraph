@@ -126,6 +126,9 @@ For rollout, apply Postgres Migration 15 (`keeper write receipts`) with `pg admi
 restart the keeper, and deploy the matching native `plangraph` client. The migration imports
 known legacy outcomes. SQLite installs the same receipt store when the keeper opens the database.
 
+The landing, launch and placement adopters name the receipt model's verbs in
+[external-action receipts: adopters](ext-action-receipts-adopters.md).
+
 ### Seat verdict receipts
 
 The spawner registers the item, claim epoch, review round, verified head, and seat run before
