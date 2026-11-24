@@ -645,8 +645,10 @@ fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
         fs::create_dir_all(&state).unwrap();
         fs::create_dir_all(tmp.path().join("tmp-sweep")).unwrap();
         let reader = tmp.path().join("process-cwds");
-        fs::write(&reader, "#!/bin/sh\necho '[[],false]'\n").unwrap();
-        fs::set_permissions(&reader, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        pg_worker_core::executable_test_support::write_executable(
+            &reader,
+            "#!/bin/sh\necho '[[],false]'\n",
+        );
         let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
             .args(["--apply", "--repo"])
             .arg(&repo)
@@ -708,8 +710,10 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     fs::create_dir_all(&state).unwrap();
     fs::create_dir_all(tmp.path().join("tmp-sweep")).unwrap();
     let reader = tmp.path().join("process-cwds");
-    fs::write(&reader, "#!/bin/sh\necho '[[],false]'\n").unwrap();
-    fs::set_permissions(&reader, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &reader,
+        "#!/bin/sh\necho '[[],false]'\n",
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
         .args(["--apply", "--repo"])
         .arg(&repo)
