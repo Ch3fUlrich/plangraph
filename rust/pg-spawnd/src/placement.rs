@@ -230,16 +230,67 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
         .get("prompt")
         .and_then(Value::as_str)
         .ok_or_else(|| parameter("prompt must be a string"))?;
-    let mut argv = route_args(args)?;
-    argv[0] = "spawn".into();
-    argv.extend(["--".into(), prompt.into()]);
     if let Some(wait) = args.get("wait_seconds") {
         if !wait.as_f64().is_some_and(|n| n >= 0.0) {
             return Err(parameter("wait_seconds must be a number >= 0"));
         }
         // The adapter only waits for base admission; callers poll the durable record.
     }
+    // Every launch option is valid before the first key is reserved. The reservation lives in
+    // `_launched` until this call ends: the spawner has registered its run record by then, and a
+    // refused or failed launch leaves no claim behind.
+    let (args, _launched) = admit_lane(state, args)?;
+    let mut argv = route_args(&args)?;
+    argv[0] = "spawn".into();
+    argv.extend(["--".into(), prompt.into()]);
     native_call(state, &argv, Duration::from_secs(200))
+}
+/// Refuse a native writer for an item key another live lane holds, naming the lane. A
+/// deliberate second lane names `card.lane_override_reason`; the reason and the admitted
+/// keys are carried on the card into the run record. `state` is the one state path of the
+/// dispatch: lock, reservation and run lookup all use it. The returned guard keeps the
+/// admitted keys reserved until it drops.
+pub(crate) fn admit_lane(
+    state: &Path,
+    args: &Args,
+) -> Result<(Args, pg_spawnd::lane_guard::Launched), ToolError> {
+    use pg_spawnd::lane_guard::{admit_launch, LaunchRequest};
+    let card = &args["card"];
+    let (Some(prompt), Some(repo)) = (args["prompt"].as_str(), card["repo"].as_str()) else {
+        return Err(parameter("native-codex requires a prompt and card.repo"));
+    };
+    let explicit = match card.get("lane_override_reason") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(reason)) => Some(reason.as_str()),
+        Some(_) => return Err(parameter("lane_override_reason must be a string")),
+    };
+    // Every key the card names is checked: the singular keys and each member of a batch card.
+    let item: Vec<String> = [&card["item_key"], &card["item"]]
+        .into_iter()
+        .chain(card["item_keys"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .filter(|item| crate::records::valid_item(item))
+        .map(str::to_owned)
+        .collect();
+    let launched = admit_launch(&LaunchRequest {
+        prompt,
+        extra: &item,
+        state,
+        repo: Path::new(repo),
+        explicit,
+        reserve: true,
+    })
+    .map_err(parameter)?;
+    let mut admitted = args.clone();
+    // Only this guard may record an override; a caller-supplied one is dropped.
+    let card = admitted["card"].as_object_mut().expect("card is an object");
+    card.remove("lane_override");
+    // Batch members land on the run record through the card's `item_keys`.
+    card.insert("item_keys".into(), serde_json::json!(launched.keys));
+    if let Some(reason) = &launched.lane_override {
+        card.insert("lane_override".into(), Value::String(reason.clone()));
+    }
+    Ok((admitted, launched))
 }
 fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value, ToolError> {
     let (code, bytes, line) = Adapter(state).run(argv, timeout)?;

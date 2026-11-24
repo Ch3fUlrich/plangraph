@@ -679,3 +679,14 @@ def test_batch_card_keys_land_on_the_run_record():
         record = {}
         annotate_item(record, card)
         assert 'item_keys' not in record, card
+
+
+def test_native_run_record_keeps_the_lane_override():
+    from plangraph.spawner.notify import annotate_native
+    card = {'run_kind': 'native-codex', 'lane_override': ' second lane '}
+    record = {}
+    annotate_native(record, card)
+    assert record['lane_override'] == 'second lane'
+    plain = {}
+    annotate_native(plain, {'run_kind': 'native-codex', 'lane_override': '  '})
+    assert 'lane_override' not in plain

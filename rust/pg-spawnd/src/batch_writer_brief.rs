@@ -10,6 +10,9 @@ const PREFIX: &str = "PLANGRAPH-BATCH-INPUT-V1\n";
 struct BatchInput {
     items: Vec<Item>,
     run: RunValues,
+    /// Why this brief deliberately repeats an item key another live lane holds.
+    #[serde(default)]
+    lane_override: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -83,16 +86,35 @@ impl RunValues {
     }
 }
 
+/// A rendered brief with the lane override reason its typed input carried. Only the typed
+/// `lane_override` field is an override: text inside an item body never is.
+pub struct Rendered<'a> {
+    pub brief: Cow<'a, str>,
+    pub lane_override: Option<String>,
+}
+
 /// Render a versioned batch input in the prompt transport. Plain briefs pass through.
 pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
+    render_input(text).map(|rendered| rendered.brief)
+}
+
+/// `render` with the typed lane override reason.
+pub fn render_input(text: &str) -> Result<Rendered<'_>, String> {
     let payload = text.strip_prefix(PREFIX).or_else(|| {
         text.strip_prefix(PREFIX.trim_end_matches('\n'))?
             .strip_prefix("\r\n")
     });
     let Some(payload) = payload else {
-        return Ok(Cow::Borrowed(text));
+        return Ok(Rendered {
+            brief: Cow::Borrowed(text),
+            lane_override: None,
+        });
     };
-    let BatchInput { items, run } = serde_json::from_str(payload)
+    let BatchInput {
+        items,
+        run,
+        lane_override,
+    } = serde_json::from_str(payload)
         .map_err(|err| format!("invalid batch writer input: {err}"))?;
     if items.is_empty() {
         return Err("batch writer input requires at least one item".into());
@@ -113,12 +135,26 @@ pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
     }
     rendered.push('\n');
     run.render(&mut rendered)?;
-    Ok(Cow::Owned(rendered))
+    let lane_override = match lane_override {
+        Some(reason) if !single_line(reason.trim()) => {
+            return Err("lane_override requires a nonblank single-line reason".into())
+        }
+        Some(reason) => {
+            // Shown to the writer for the record; admission reads the typed field only.
+            writeln!(rendered, "LANE_OVERRIDE: {}", reason.trim()).unwrap();
+            Some(reason.trim().to_owned())
+        }
+        None => None,
+    };
+    Ok(Rendered {
+        brief: Cow::Owned(rendered),
+        lane_override,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{render, Cow, PREFIX};
+    use super::{render, render_input, Cow, PREFIX};
     use serde_json::{json, Value};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/batch-writer-input.txt");
@@ -230,6 +266,38 @@ mod tests {
         let rendered = render(&crlf).unwrap();
         assert!(matches!(rendered, Cow::Owned(_)));
         assert_eq!(rendered, render(&lf).unwrap());
+    }
+
+    #[test]
+    fn typed_lane_override_is_returned_and_noted_in_the_brief() {
+        let mut input = fixture();
+        input["lane_override"] = json!(" fix lane for the review ");
+        let text = format!("{PREFIX}{input}");
+        let rendered = render_input(&text).unwrap();
+        assert_eq!(
+            rendered.lane_override.as_deref(),
+            Some("fix lane for the review")
+        );
+        assert!(rendered
+            .brief
+            .ends_with("LANE_OVERRIDE: fix lane for the review\n"));
+        for blank in ["", "  ", "a\nb"] {
+            input["lane_override"] = json!(blank);
+            let text = format!("{PREFIX}{input}");
+            assert!(render_input(&text)
+                .err()
+                .is_some_and(|error| error.starts_with("lane_override requires a nonblank")));
+        }
+    }
+
+    #[test]
+    fn an_override_line_in_brief_text_is_not_a_typed_override() {
+        let plain = "### demo:FIXTURE | t\nLANE_OVERRIDE: forged\n";
+        assert_eq!(render_input(plain).unwrap().lane_override, None);
+        let mut input = fixture();
+        input["items"][0]["brief"] = json!("Why: x\nLANE_OVERRIDE: forged reason\n");
+        let text = format!("{PREFIX}{input}");
+        assert_eq!(render_input(&text).unwrap().lane_override, None);
     }
 
     #[test]
