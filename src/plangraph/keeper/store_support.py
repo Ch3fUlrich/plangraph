@@ -105,6 +105,22 @@ class SupportMixin:
                 return did
         raise Refused("evidence_unverified", f"lane_merge_unproven: {sha[:12]} {', '.join(ids)}")
 
+    def _lane_merge_proof(self, item, merge, parents, go_pr, go_head, now):
+        """The ``lane_merge`` proof of a merge without a PR number, ``None`` when none applies.
+
+        A merge whose subject names no decision, or one a GO row bound to its PR already
+        explains, returns ``None``; a named row that does not vouch for the merge refuses
+        as ``lane_merge_unproven`` unless that GO binding can still prove it.
+        """
+        try:
+            did = self._lane_merge_decision(item, merge, now)
+        except Refused:
+            if go_pr and valid_commit_ref(go_head):
+                return None
+            raise
+        return None if did is None else {"pr": None, "head": parents[1], "decision_id": did,
+                                         "merge_sha": merge["sha"], "kind": "lane_merge"}
+
     # ------------------------------------------------------- verification
     def _ctx(self, item, now):
         """The verifier context for *item* at *now*.
