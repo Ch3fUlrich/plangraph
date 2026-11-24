@@ -16,6 +16,8 @@ fn part_with_upstream_first_patch(dir: &Path) -> (Host, String, String) {
     git_in(&host.cwd, &["add", "b.txt"]);
     git_in(&host.cwd, &["commit", "-qm", "second"]);
     git_in(&host.cwd, &["checkout", "-q", "main"]);
+    // A commit before the cherry-pick keeps its id from being the part commit's own.
+    git_in(&host.cwd, &["commit", "-qm", "train", "--allow-empty"]);
     git_in(&host.cwd, &["cherry-pick", &first]);
     let new_main = git_in(&host.cwd, &["rev-parse", "HEAD"]);
     git_in(&host.cwd, &["checkout", "-q", "part"]);
@@ -185,6 +187,7 @@ fn a_patch_main_holds_only_up_to_whitespace_is_not_dropped() {
     host.cwd = host.repo.clone();
     // A user's log format must not hide the patch ids.
     git_in(&host.cwd, &["config", "format.pretty", "%s"]);
+    git_in(&host.cwd, &["config", "log.abbrevCommit", "true"]);
     git_in(&host.cwd, &["checkout", "-q", "main"]);
     commit_file(&host, "g.txt", "x\n", "file");
     git_in(&host.cwd, &["checkout", "-q", "-b", "part"]);
@@ -257,10 +260,24 @@ fn the_same_edit_in_another_repeated_block_is_not_an_upstream_patch() {
 }
 
 #[test]
-fn an_upstream_patch_is_still_dropped_under_a_user_log_format() {
-    let dir = tempfile::tempdir().unwrap();
-    let (host, _, new_main) = part_with_upstream_first_patch(dir.path());
-    git_in(&host.cwd, &["config", "format.pretty", "%s"]);
-    assert_eq!(host.rebase(&new_main).unwrap(), Integrated::Done);
-    assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD^"]), new_main);
+fn an_upstream_patch_is_still_dropped_under_a_user_log_setting() {
+    for (key, value) in [("format.pretty", "%s"), ("log.abbrevCommit", "true")] {
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _, new_main) = part_with_upstream_first_patch(dir.path());
+        git_in(&host.cwd, &["config", key, value]);
+        let first = git_in(&host.cwd, &["rev-parse", "HEAD~1"]);
+        // The part commit is a real skip candidate that the proof then accepts.
+        assert_eq!(
+            host.skipped_commits(&new_main).unwrap(),
+            vec![first],
+            "{key}"
+        );
+        host.refuse_unproven_drops(&new_main).unwrap();
+        assert_eq!(host.rebase(&new_main).unwrap(), Integrated::Done, "{key}");
+        assert_eq!(
+            git_in(&host.cwd, &["rev-parse", "HEAD^"]),
+            new_main,
+            "{key}"
+        );
+    }
 }
