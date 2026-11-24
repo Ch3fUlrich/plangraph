@@ -150,24 +150,24 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
-def pytest_python(cwd=None):
-    """The first interpreter, in the pre-push hook's order, that really runs `python -m pytest`.
+def pytest_python():
+    """The first trusted interpreter, in the pre-push hook's order, that really runs `python -m pytest`.
 
-    The review checkout's .venv, the configured PREFLIGHT_PYTHON, the service's own venv, then the
-    service checkout's .venv. A pytest console script is not required (a user-site install has
-    none) and one is not enough (it may sit beside an interpreter that cannot import pytest).
+    The configured PREFLIGHT_PYTHON, the service's own venv, then the service checkout's .venv. Nothing
+    inside the review checkout is run or trusted here: it is the code under review. A pytest console
+    script is neither required (a user-site install has none) nor enough (it may sit beside an
+    interpreter that cannot import pytest).
     """
     configured = os.environ.get("PREFLIGHT_PYTHON")
-    candidates = [Path(cwd) / ".venv/bin/python"] if cwd else []
-    if configured:
-        candidates.append(Path(configured).expanduser())
+    candidates = [Path(configured).expanduser()] if configured else []
     candidates += [Path(sys.prefix) / "bin/python", Path(__file__).resolve().parents[3] / ".venv/bin/python"]
     for python in candidates:
         if not os.access(python, os.X_OK):
             continue
-        try:
+        try:  # from the interpreter's own directory with safe-path, so no cwd module can shadow pytest
             ran = subprocess.run([str(python), "-m", "pytest", "--version"], capture_output=True, timeout=30,
-                                 stdin=subprocess.DEVNULL)
+                                 stdin=subprocess.DEVNULL, cwd=str(python.parent),
+                                 env=dict(os.environ, PYTHONSAFEPATH="1"))
         except (OSError, subprocess.SubprocessError):
             continue
         if ran.returncode == 0:
@@ -175,29 +175,29 @@ def pytest_python(cwd=None):
     return None
 
 
-def pytest_bin_dir(cwd=None):
+def pytest_bin_dir():
     """The bin directory of ``pytest_python``, or None."""
-    python = pytest_python(cwd)
+    python = pytest_python()
     return python.parent if python else None
 
 
-def review_tool_path(path, home, cwd=None, shim_dir=None):
+def review_tool_path(path, home, shim_dir=None):
     """``path`` with a pytest interpreter first (so `python -m pytest` works) and ~/.cargo/bin last.
 
-    ``home`` is the seat's launching user's home, read before a seat swaps HOME for its own dir;
-    ``cwd`` is the review checkout. The interpreter's directory is placed first even when a later
-    PATH entry holds it, so a bare system python never shadows it. An interpreter whose directory
-    has no executable named ``python`` (a system python3) gets one in ``shim_dir``.
+    ``home`` is the seat's launching user's home, read before a seat swaps HOME for its own dir.
+    The interpreter's directory is placed first even when a later PATH entry holds it, so a bare
+    system python never shadows it. With ``shim_dir`` the seat's `python` and `python3` are
+    wrappers that exec exactly the interpreter that passed validation, never a sibling.
     """
     path = path or os.defpath
-    if python := pytest_python(cwd):
-        venv = python.parent
-        front = [str(venv)]
-        if not os.access(venv / "python", os.X_OK) and shim_dir:
+    if python := pytest_python():
+        front = [str(python.parent)]
+        if shim_dir:
             Path(shim_dir).mkdir(parents=True, exist_ok=True)
-            link = Path(shim_dir) / "python"
-            link.unlink(missing_ok=True)
-            link.symlink_to(python)
+            for name in ("python", "python3"):
+                link = Path(shim_dir) / name
+                link.write_text(f'#!/bin/sh\nexec {shlex.quote(str(python))} "$@"\n')
+                link.chmod(0o755)
             front.insert(0, str(shim_dir))
         path = os.pathsep.join([*front, *(d for d in path.split(os.pathsep) if d not in front)])
     cargo_bin = Path(home or Path.home()) / ".cargo/bin"

@@ -340,7 +340,7 @@ class SpawnerRunner:
                 # no inherited config layer: HOME and XDG_CONFIG_HOME live in the per-job dir and every
                 # caller-set OPENCODE_* override outside _REVIEW_OPENCODE_ENV_ALLOW is dropped.
                 render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
-                review_seat_home(child_env, oc_dir, work_dir)
+                review_seat_home(child_env, oc_dir)
                 for name in [n for n in child_env
                              if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
