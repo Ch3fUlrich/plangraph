@@ -3,6 +3,7 @@
 mod adapters;
 mod capacity;
 mod lanes;
+mod probe;
 pub(crate) mod quota;
 mod runtime;
 mod selection;

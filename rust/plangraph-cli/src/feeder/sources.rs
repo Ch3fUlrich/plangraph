@@ -131,23 +131,26 @@ fn decode_runs(
                 })
                 .find(|i| i["key"].as_str() == Some(key))
         };
-        // A batch run holds the files of every one of its items.
         let lane = run.run_id.starts_with(super::lanes::LANE_RUN_PREFIX);
-        let item = match find(&run.item_key) {
-            Some(item) => item,
-            // A hand lane whose item left the ready list still holds its host slot.
-            None if lane => {
-                run.item_key.clear();
-                continue;
+        if lane {
+            // A hand lane holds every key its card names; each key's files resolve on their
+            // own, so a key that left the ready list never hides the files of the others.
+            run.files.clear();
+            let keys: Vec<String> = std::iter::once(run.item_key.clone())
+                .chain(run.item_keys.clone())
+                .collect();
+            for key in keys {
+                if let Some(member) = find(&key) {
+                    run.files.extend(decode_task(member)?.files);
+                }
             }
-            None => return Err("writer_item_missing".into()),
-        };
-        run.files = decode_task(item)?.files;
-        for key in run.item_keys.clone() {
-            match find(&key) {
-                Some(member) => run.files.extend(decode_task(member)?.files),
-                None if lane => run.item_keys.retain(|k| *k != key),
-                None => return Err("writer_item_missing".into()),
+        } else {
+            // A batch run holds the files of every one of its items.
+            let item = find(&run.item_key).ok_or("writer_item_missing")?;
+            run.files = decode_task(item)?.files;
+            for key in run.item_keys.clone() {
+                let member = find(&key).ok_or("writer_item_missing")?;
+                run.files.extend(decode_task(member)?.files);
             }
         }
         let mut seen = std::collections::BTreeSet::new();
@@ -166,12 +169,25 @@ pub(super) fn runs(
     let mut cmd = python(env, repo);
     cmd.args(["-m", "plangraph.spawner.cli", "ps"]);
     let mut data = output(cmd)?;
-    // Hand lanes (fleet-launch writer sessions) count beside the spawner's runs.
-    let lanes = super::lanes::live_lane_runs(
-        &home.join(".local/state/routing/launch/sessions"),
-        &home.join(".claude/jobs"),
-        std::time::SystemTime::now(),
+    // Hand lanes (fleet-launch writer sessions) count beside the spawner's runs, except the
+    // sessions the spawner lists already under the same run id.
+    let listed: std::collections::BTreeSet<String> = read_runs(&data)?
+        .into_iter()
+        .map(|r| r.run_id)
+        .filter(|id| !id.is_empty())
+        .collect();
+    let (sessions, jobs) = (
+        super::lanes::sessions_dir(home, env),
+        super::lanes::jobs_dir(home, env),
     );
+    let lanes = super::lanes::live_lane_runs(&super::lanes::Evidence {
+        sessions: &sessions,
+        jobs: &jobs,
+        now: std::time::SystemTime::now(),
+        listed: &listed,
+        roster: &super::lanes::claude_roster,
+        pid_alive: &super::lanes::pid_alive,
+    });
     data["runs"]
         .as_array_mut()
         .ok_or("ps missing runs")?
@@ -337,18 +353,17 @@ mod tests {
         );
     }
     #[test]
-    fn hand_lanes_count_as_host_writers_and_their_items_are_never_picked() {
+    fn hand_lanes_count_as_host_writers_and_every_key_of_their_card_is_held() {
         let d = tempfile::tempdir().unwrap();
         let (sessions, jobs) = (d.path().join("s"), d.path().join("j"));
         std::fs::create_dir_all(&sessions).unwrap();
-        std::fs::create_dir_all(jobs.join("aaa")).unwrap();
-        std::fs::create_dir_all(jobs.join("bbb")).unwrap();
-        std::fs::write(jobs.join("aaa/state.json"), r#"{"state":"working"}"#).unwrap();
-        std::fs::write(jobs.join("bbb/state.json"), r#"{"state":"working"}"#).unwrap();
         for (name, job, card) in [
             ("writer-1", "aaa", "plangraph:HELD-A"),
-            ("writer-2", "bbb", "plangraph:GONE"),
+            // The first key left the ready list; the second still holds its files.
+            ("writer-2", "bbb", "plangraph:GONE plangraph:HELD-C"),
         ] {
+            std::fs::create_dir_all(jobs.join(job)).unwrap();
+            std::fs::write(jobs.join(job).join("state.json"), r#"{"state":"working"}"#).unwrap();
             std::fs::write(
                 sessions.join(format!("{name}.json")),
                 json!({"name":"writer","session_name":name,"job_id":job,
@@ -357,17 +372,28 @@ mod tests {
             )
             .unwrap();
         }
-        let lanes =
-            super::super::lanes::live_lane_runs(&sessions, &jobs, std::time::SystemTime::now());
+        let none = std::collections::BTreeSet::new();
+        let lanes = super::super::lanes::live_lane_runs(&super::super::lanes::Evidence {
+            sessions: &sessions,
+            jobs: &jobs,
+            now: std::time::SystemTime::now(),
+            listed: &none,
+            roster: &|| None,
+            pid_alive: &|_| false,
+        });
         let data = json!({"runs": lanes});
         let ready = json!({"items":[
             {"key":"plangraph:HELD-A","priority":9,"files":["src/a.rs"]},
+            {"key":"plangraph:HELD-C","priority":8,"files":["src/c.rs"]},
+            {"key":"plangraph:SAME-C","priority":7,"files":["src/c.rs"]},
             {"key":"plangraph:FREE-B","priority":1,"files":["src/b.rs"]}]});
         let runs = decode_runs(&data, &ready, &json!({"items":[]}), &[]).unwrap();
         assert_eq!(runs[0].files, ["src/a.rs"]);
-        // The lane whose item left the ready list still holds a slot, with no item.
-        assert_eq!(runs[1].item_key, "");
+        // Every key is held and each key's files resolve on their own.
+        assert!(runs[1].holds("plangraph:GONE") && runs[1].holds("plangraph:HELD-C"));
+        assert_eq!(runs[1].files, ["src/c.rs"]);
         let p = Policy::default();
+        // HELD-A, HELD-C (held) and SAME-C (shares HELD-C's files) are never picked.
         assert_eq!(pick(&ready, &runs, &p).unwrap().key, "plangraph:FREE-B");
         let f: HostFacts = serde_json::from_value(json!({"host":"workstation",
             "free_ram_bytes":40000000000u64,"free_disk_bytes":20000000000u64,
@@ -375,6 +401,47 @@ mod tests {
         .unwrap();
         let f = apply_facts(f, &runs, &p, 1001, false, None, None).unwrap();
         assert_eq!(f.running_writers, 2);
+    }
+    #[test]
+    fn a_session_both_listed_by_the_spawner_and_recorded_is_counted_once() {
+        let d = tempfile::tempdir().unwrap();
+        let (sessions, jobs) = (d.path().join("s"), d.path().join("j"));
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(jobs.join("aaa")).unwrap();
+        std::fs::write(jobs.join("aaa/state.json"), r#"{"state":"working"}"#).unwrap();
+        std::fs::write(
+            sessions.join("writer-1.json"),
+            json!({"name":"writer","session_name":"writer-1","job_id":"aaa","run_id":"run-1",
+                "host":"workstation","card":"plangraph:HELD-A","ts":900})
+            .to_string(),
+        )
+        .unwrap();
+        // The spawner lists the same fleet session as a run (the launcher registers it).
+        let ps = json!({"runs":[{"run_id":"run-1","host":"workstation","role":"implement",
+            "status":"running","item_key":"plangraph:HELD-A","started":900}]});
+        let listed: std::collections::BTreeSet<String> = read_runs(&ps)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.run_id)
+            .collect();
+        let lanes = super::super::lanes::live_lane_runs(&super::super::lanes::Evidence {
+            sessions: &sessions,
+            jobs: &jobs,
+            now: std::time::SystemTime::now(),
+            listed: &listed,
+            roster: &|| None,
+            pid_alive: &|_| false,
+        });
+        assert!(lanes.is_empty());
+        let ready = json!({"items":[{"key":"plangraph:HELD-A","priority":9,"files":["src/a.rs"]}]});
+        let runs = decode_runs(&ps, &ready, &json!({"items":[]}), &[]).unwrap();
+        let p = Policy::default();
+        let f: HostFacts = serde_json::from_value(json!({"host":"workstation",
+            "free_ram_bytes":40000000000u64,"free_disk_bytes":20000000000u64,
+            "quota_remaining_percent":80,"observed_at":1000}))
+        .unwrap();
+        let f = apply_facts(f, &runs, &p, 1001, false, None, None).unwrap();
+        assert_eq!(f.running_writers, 1);
     }
     #[test]
     fn card_identity_and_unknown_scope_only_consume_their_host_slot() {

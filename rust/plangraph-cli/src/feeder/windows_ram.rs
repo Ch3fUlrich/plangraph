@@ -2,10 +2,11 @@
 //! so admission takes the lower of it and Windows' own free physical memory (read through WSL
 //! interop), less a Windows floor. A failed read falls back to the last value for one facts
 //! window, then refuses: a host that cannot see its Windows side admits nothing.
+use super::probe::capture;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 /// Longest wait for the PowerShell read before the host falls back to the cached value.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
@@ -39,39 +40,16 @@ fn parse_free_kb(out: &str) -> Result<u64, String> {
 
 /// Windows' free physical memory in bytes via `powershell.exe`, killed after `READ_TIMEOUT`.
 pub(super) fn read_powershell() -> Result<u64, String> {
-    let mut child = Command::new("powershell.exe")
-        .args([
+    let out = capture(
+        Command::new("powershell.exe").args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
             "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("cannot start powershell.exe: {e}"))?;
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => break,
-            Ok(Some(status)) => return Err(format!("powershell.exe exited with {status}")),
-            Ok(None) if start.elapsed() > READ_TIMEOUT => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "powershell.exe timed out after {}s",
-                    READ_TIMEOUT.as_secs()
-                ));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => return Err(format!("powershell.exe wait failed: {e}")),
-        }
-    }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("powershell.exe output: {e}"))?;
-    parse_free_kb(&String::from_utf8_lossy(&out.stdout))
+        ]),
+        READ_TIMEOUT,
+    )?;
+    parse_free_kb(&String::from_utf8_lossy(&out))
 }
 
 /// The Windows free RAM from `read`; a failed read uses the cached last value while it is at

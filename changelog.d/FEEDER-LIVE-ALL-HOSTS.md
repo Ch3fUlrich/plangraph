@@ -7,3 +7,4 @@ On WSL the feeder takes free RAM as the lower of WSL MemAvailable and Windows' f
 Feeder host admission refuses new writers while /proc/pressure/cpu some avg300 is above cpu_pressure_max_percent (default 50), naming the value; load1 only paces a host that has no PSI file.
 plangraph quota --push SSH_DESTINATION delivers the quota snapshot to a worker; the pg-quota-facts@ timer runs it every 5 minutes per worker.
 A live feeder tick starts every batch its free slots allow (started, slots, stopped), by the same loop the dry run plays.
+Hand-lane detection merges with the spawner's runs by run id, honours ROUTING_STATE_DIR and CLAUDE_CONFIG_DIR, checks pid and the Claude roster instead of a fixed cutoff, and holds every key of a lane's card.

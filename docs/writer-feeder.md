@@ -131,12 +131,16 @@ policy `[host_aliases]` mappings resolve host names; explicit policy aliases win
 A facts host inconsistent with registry `self` or `PLANGRAPH_HOST_NAME` refuses;
 active writers with no host refuse instead of silently counting zero.
 
-Hand lanes count too. Every writer session of the fleet launcher on the host
-(`~/.local/state/routing/launch/sessions/*.json` with name `writer`) whose job under
-`~/.claude/jobs/<job_id>/state.json` is not `done`, `stopped` or `failed` and changed within
-six hours is a running writer: it takes a slot of its host, and the plan items its card
-names (`plangraph:` keys) are held, so the feeder never picks them nor an item sharing
-their files. A lane whose item is no longer ready still holds its slot.
+Hand lanes count too. Every writer session record of the fleet launcher on the host
+(`$ROUTING_STATE_DIR/launch/sessions/*.json`, default `~/.local/state/routing/...`, name
+`writer`) that the spawner does not list under the same `run_id` is a running writer when its
+job under `$CLAUDE_CONFIG_DIR/jobs/<job_id>/state.json` (default `~/.claude`) is not `done`,
+`stopped` or `failed` and either changed within six hours or is still listed by
+`claude agents --json --all` (an unreadable roster keeps the slot); a record with no job is
+alive while its recorded `pid` is. A running lane takes a slot of its host and holds every
+`plangraph:` key its card names: each key's files resolve on their own, so the feeder never
+picks a held item nor one sharing its files. A lane whose items are no longer ready still
+holds its slot.
 
 `--live-facts` is the feeder service's Linux and WSL mode. It samples available
 memory, one-minute load, effective CPU count, and disk space on the run-state
