@@ -8,15 +8,16 @@ fn run(state: &Path, id: &str, ended: i64, leg: &str, verdict: bool, log: &str) 
         "chosen_leg":{"id":leg}, "review_result":if verdict {"verdict"} else {"missing_verdict"}})
 }
 
-const CONTRACT: &str = "=== REVIEW OUTPUT\nAnswer each vector.\n";
+const CONTRACT: &str = "Name each finding as file:line. End with the line HEAD: abc and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n";
 
-/// Store the prompt of a run: `after` closes with the review contract, `before` carries it early.
+/// Store the prompt of a run in one of the two recorded layouts: `after` closes with the
+/// `=== REVIEW OUTPUT` contract, `before` carries the contract ahead of the inline diff.
 fn prompt(state: &Path, id: &str, after: bool) {
     let body = "x".repeat(5000);
     let text = if after {
-        format!("brief\n{body}\n{CONTRACT}")
+        format!("brief\n=== INLINE DIFF (base a, head b) ===\n{body}\n=== END INLINE DIFF ===\n\n=== REVIEW OUTPUT\n{CONTRACT}")
     } else {
-        format!("brief\n{CONTRACT}{body}\n")
+        format!("brief\n{CONTRACT}\n\n=== INLINE DIFF (base a, head b) ===\n{body}\n=== END INLINE DIFF ===\n")
     };
     std::fs::write(state.join("runs").join(id).join("prompt.txt"), text).unwrap();
 }
@@ -75,7 +76,7 @@ fn compares_prompt_order_cohorts_per_matched_leg_with_denominators_and_missing_u
         cohort_run(s, "run-onlyafter", 32, "x", true, true, &step(1, 1)),
         cohort_run(s, "run-late", 999, "w", true, true, &step(1, 1)),
     ];
-    let report = compare(s, &records, WINDOW, &[]);
+    let report = compare(s, &records, WINDOW, &[], &[]);
     let w = &report["strata"]["w"];
     assert_eq!(w["matched"], true);
     assert_eq!(w["before"]["reviews"], 3);
@@ -88,7 +89,7 @@ fn compares_prompt_order_cohorts_per_matched_leg_with_denominators_and_missing_u
     assert_eq!(w["after"]["cached_input_share"], 0.9);
     assert_eq!(report["unmatched"], json!(["x"]));
     assert_eq!(report["matched_total"]["after"]["reviews"], 2);
-    let only_x = compare(s, &records, WINDOW, &["x".into()]);
+    let only_x = compare(s, &records, WINDOW, &["x".into()], &[]);
     assert_eq!(only_x["matched_total"]["before"]["reviews"], 0);
     assert_eq!(
         only_x["matched_total"]["before"]["no_verdict_share"],
@@ -105,7 +106,7 @@ fn a_run_without_a_stored_prompt_belongs_to_no_cohort() {
     late_started["started"] = json!(500); // dispatched outside the window
     let mut nostart = cohort_run(s, "run-nostart", 21, "w", true, true, &step(1, 1));
     nostart.as_object_mut().unwrap().remove("started");
-    let report = compare(s, &[bare, late_started, nostart], WINDOW, &[]);
+    let report = compare(s, &[bare, late_started, nostart], WINDOW, &[], &[]);
     assert_eq!(report["excluded"]["no_prompt"], 1);
     assert_eq!(report["excluded"]["no_start_time"], 1);
     assert!(report["strata"]["w"].is_null());
@@ -126,7 +127,7 @@ fn shared_log_fallthrough_is_excluded_without_counting_as_missing_usage() {
     let mut empty_mixed = cohort_run(s, "run-mix2", 12, "w", true, false, "none\n");
     empty_mixed["attempts"] = attempts(&[("first", "limited"), ("w", "completed")]);
     let after = cohort_run(s, "run-after", 30, "w", true, true, &step(1, 1));
-    let report = compare(s, &[mixed, single, empty_mixed, after], WINDOW, &[]);
+    let report = compare(s, &[mixed, single, empty_mixed, after], WINDOW, &[], &[]);
     let before = &report["strata"]["w"]["before"];
     assert_eq!(before["reviews"], 3);
     assert_eq!(before["mixed_leg_excluded"], 2);
@@ -144,7 +145,7 @@ fn archived_attempt_logs_leave_a_clean_final_leg_log_that_counts() {
     retried["attempts"] = attempts(&[("first", "limited"), ("w", "completed")]);
     std::fs::write(s.join("runs/run-retry/live-attempt-1.log"), step(999, 0)).unwrap();
     let after = cohort_run(s, "run-after", 30, "w", true, true, &step(1, 1));
-    let report = compare(s, &[retried, after], WINDOW, &[]);
+    let report = compare(s, &[retried, after], WINDOW, &[], &[]);
     let before = &report["strata"]["w"]["before"];
     assert_eq!(before["mixed_leg_excluded"], 0);
     assert_eq!(before["usage_runs"], 1);
@@ -171,7 +172,7 @@ fn string_valued_legs_and_trailing_skips_resolve_to_the_last_launched_leg() {
     ]);
     let mut after = cohort_run(s, "run-after", 30, "w", true, true, &step(1, 1));
     after["attempts"] = attempts(&[("w", "completed")]);
-    let report = compare(s, &[trailing, none, after], WINDOW, &[]);
+    let report = compare(s, &[trailing, none, after], WINDOW, &[], &[]);
     assert_eq!(report["strata"]["w"]["before"]["reviews"], 1);
     assert_eq!(report["strata"]["w"]["before"]["input_tokens"], 100);
     assert!(report["strata"]["skipped-leg"].is_null());
@@ -192,4 +193,65 @@ fn execute_refuses_a_missing_or_empty_window() {
     let mut out = Vec::new();
     execute(args(&["--help"]), &mut out).unwrap();
     assert!(String::from_utf8(out).unwrap().contains("--since"));
+}
+
+#[test]
+fn layouts_come_from_prompt_structure_and_unknown_ones_are_reported_apart() {
+    let state = tempfile::tempdir().unwrap();
+    let s = state.path();
+    let store = |id: &str, text: &str| {
+        std::fs::write(s.join("runs").join(id).join("prompt.txt"), text).unwrap();
+    };
+    let ids = [
+        "run-mention",
+        "run-shortdiff",
+        "run-nocontract",
+        "run-contractlast",
+        "run-trailing",
+    ];
+    let records: Vec<_> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| run(s, id, 10 + i as i64, "w", true, &step(1, 1)))
+        .collect();
+    // a mid-line mention of the heading is not the contract section
+    store(
+        "run-mention",
+        &format!("brief\nsee the === REVIEW OUTPUT heading\n{CONTRACT}\n=== ITEM CONTEXT\nx\n"),
+    );
+    // old order with a short diff after the contract must not look like a closing contract
+    store("run-shortdiff", &format!("brief\n{CONTRACT}\n=== INLINE DIFF (base a, head b) ===\n+x\n=== END INLINE DIFF ===\n"));
+    // no output contract at all
+    store("run-nocontract", "brief only\n");
+    // a contract with no heading and nothing after it carries no layout evidence
+    store("run-contractlast", &format!("brief\n{CONTRACT}"));
+    // heading and contract followed by more material is not a closing contract
+    store(
+        "run-trailing",
+        &format!("brief\n=== REVIEW OUTPUT\n{CONTRACT}\n=== ITEM CONTEXT\nx\n"),
+    );
+    let report = compare(s, &records, WINDOW, &[], &[]);
+    assert_eq!(report["strata"]["w"]["before"]["reviews"], 2); // mention + shortdiff
+    assert_eq!(report["strata"]["w"]["after"]["reviews"], 0);
+    assert_eq!(report["excluded"]["unknown_layout"], 3);
+}
+
+#[test]
+fn strata_report_host_and_harness_provenance_and_filter_by_host() {
+    let state = tempfile::tempdir().unwrap();
+    let s = state.path();
+    let mut one = cohort_run(s, "run-h1", 10, "w", true, false, &step(1, 1));
+    one["host"] = json!("host-a");
+    one["chosen_leg"] = json!({"id":"w", "harness":"opencode", "roles":["review","implement"]});
+    let mut two = cohort_run(s, "run-h2", 11, "w", true, true, &step(1, 1));
+    two["host"] = json!("host-b");
+    two["chosen_leg"] = json!({"id":"w", "harness":"opencode", "roles":["review","implement"]});
+    let report = compare(s, &[one.clone(), two.clone()], WINDOW, &[], &[]);
+    let prov = &report["strata"]["w"]["provenance"];
+    assert_eq!(prov["hosts"], json!({"host-a":1, "host-b":1}));
+    assert_eq!(prov["harnesses"], json!({"opencode":2}));
+    assert_eq!(prov["leg_roles"], json!(["implement", "review"]));
+    let only_a = compare(s, &[one, two], WINDOW, &[], &["host-a".into()]);
+    assert_eq!(only_a["strata"]["w"]["before"]["reviews"], 1);
+    assert_eq!(only_a["strata"]["w"]["after"]["reviews"], 0);
 }

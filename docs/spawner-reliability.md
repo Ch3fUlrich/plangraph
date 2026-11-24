@@ -86,29 +86,36 @@ The gate-known override denominator and unknown-gate count are separate metrics;
 missing gates are never inferred as skips.
 Recovery metrics retain full corrected history, and leg metadata is chronological.
 
-`pg-spawnd health review-order --since T --until T [--leg ID,ID] [--state PATH]` measures the
-stable-first prompt order from recorded review runs started in `[since, until)`. The cohort of
-a review is read from its stored `prompt.txt`: `after` when the review contract (the line
-starting `=== REVIEW OUTPUT`) is within the last 2000 characters, `before` when it is not;
-a launched run with no stored prompt is counted under `excluded.no_prompt`. A review is
-grouped by its last launched leg (a leg is an object or a bare string); reviews with attempts
-but no launch are `excluded.unlaunched`. Per leg (matched only with reviews in both cohorts) it prints
-reviews, no-verdict share, cached-input-token share with its token denominators, and
-`missing_usage` (reviews with no usage frame in their log). Runs with more than one launched
-attempt share one `live.log` unless the retry path archived the earlier legs'
-`live-attempt-N.log`; shared-log runs stay in the review counts, their usage is excluded and
-they are counted in `mixed_leg_excluded` only, not in `missing_usage`. Read-only.
+`pg-spawnd health review-order --since T --until T [--leg ID,ID] [--host NAME,NAME]
+[--state PATH]` measures the stable-first prompt order from recorded review runs started in
+`[since, until)`. The cohort of a review is read from the structure of its stored
+`prompt.txt`: `after` when the `=== REVIEW OUTPUT` heading and the line starting `Name each
+finding as file:line.` are the last content; `before` when that contract line has no heading
+and an `=== ITEM CONTEXT` or `=== INLINE DIFF (` section follows it. Any other prompt is
+`excluded.unknown_layout`, a launched run with no stored prompt is `excluded.no_prompt`,
+and a review with attempts but no launch is `excluded.unlaunched`. A review is grouped by its
+last launched leg (a leg is an object or a bare string). Per leg (matched only with reviews
+in both cohorts) it prints reviews, no-verdict share, cached-input-token share with its token
+denominators, `missing_usage` (reviews with no usage frame in their log) and a `provenance`
+block: host counts, harness counts and the roles the leg catalog gives the leg. Runs with more
+than one launched attempt share one `live.log` unless the retry path archived the earlier
+legs' `live-attempt-N.log`; shared-log runs stay in the review counts, their usage is excluded
+and they are counted in `mixed_leg_excluded` only, not in `missing_usage`. Read-only.
 
-Measured 2026-11-24 on one workstation state (63 reviews with no launched attempt are
-`excluded.unlaunched`; every launched review had a stored prompt), exact command `pg-spawnd health review-order --state <state> --since
-2026-11-11T00:00:00Z --until 2026-11-25T00:00:00Z --leg opencode-go-deepseek-v4-flash` (the
-coding worker; the run without `--leg` lists every leg, all others unmatched). Cohorts come
-from the stored prompts, so no deploy time is needed. Before: 91 reviews, 1 no-verdict
-(0.011), 89 with usage, 2 mixed-log excluded, 0 missing usage, 268,879,872 of 277,913,969
-input tokens cached (0.9675). After: 18 reviews, 0 no-verdict, 18 with usage, 0 mixed, 0
-missing, 145,491,712 of 148,878,030 cached (0.9773). Both shares move the expected way
-(fewer no-verdicts, more cached input), but one no-verdict in 91 against none in 18 is not
-a significant difference; the larger sample is `PROMPT-ORDER-CODING-WORKER-EXPERIMENT`.
+Measured 2026-11-24 on one workstation state, exact command `pg-spawnd health review-order
+--state <state> --since 2026-11-11T00:00:00Z --until 2026-11-25T00:00:00Z` (run without
+`--leg` so every leg is listed; one matched leg, all others have reviews in one cohort only).
+Excluded: 63 unlaunched, 132 unknown layout, 0 without a prompt. Matched leg
+`opencode-go-deepseek-v4-flash`, the coding worker: its catalog roles are implement, research
+and review on the opencode harness, and its 56 counted reviews all come from one host (the
+name stays out of the repository). Before: 39 reviews, 1 no-verdict (0.026), 37 with usage,
+2 mixed-log excluded, 0 missing usage, 1,352,704 of 2,626,884 input tokens cached (0.515).
+After: 17 reviews, 0 no-verdict, 17 with usage, 0 mixed, 0 missing, 137,388,928 of
+140,540,881 cached (0.978). The direction is the expected one (fewer no-verdicts, more
+cached input), but the cohorts are small and differ in size (input tokens per review about
+67,000 before and 8,300,000 after, so the runs are not like for like) and
+one no-verdict in 39 against none in 17 is not significant. The larger, size-matched sample
+is `PROMPT-ORDER-CODING-WORKER-EXPERIMENT`.
 
 The immutable operator baseline lives in a dated research directory in the private data repo.
 Before RL14 on, compare the pinned window

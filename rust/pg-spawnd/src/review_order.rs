@@ -4,11 +4,11 @@ use crate::{evidence::regular, review_artifacts::directory, review_health::termi
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, io::Read, io::Write, path::Path};
 
-const HELP: &str = "health review-order [--state PATH] --since T --until T [--leg ID[,ID]]";
-/// The review contract text opens this section; the stable-first order puts it at the very end
-/// of the stored prompt, the earlier order placed it elsewhere.
-const CONTRACT_MARKER: &str = "=== REVIEW OUTPUT";
-const CONTRACT_TAIL_CHARS: usize = 2000;
+const HELP: &str =
+    "health review-order [--state PATH] --since T --until T [--leg ID[,ID]] [--host NAME[,NAME]]";
+/// First words of the review output contract line, present in both recorded layouts.
+const CONTRACT_LINE: &str = "Name each finding as file:line.";
+const CONTRACT_HEADING: &str = "=== REVIEW OUTPUT";
 const MAX_LOG: u64 = 8 * 1024 * 1024;
 
 /// `(total input tokens, cached input tokens)` summed over the usage frames of a live log.
@@ -77,10 +77,35 @@ fn final_leg(record: &Value) -> Option<&str> {
     }
 }
 
-/// Which prompt order a review received, read from its stored `prompt.txt`: 1 when the review
-/// contract closes the prompt (stable-first), 0 when the prompt has no contract in its tail,
-/// `None` when no prompt was stored.
-fn prompt_cohort(state: &Path, record: &Value) -> Option<usize> {
+/// What the stored prompt shows about its order. `Closing`: the `=== REVIEW OUTPUT` heading and
+/// the contract line are the last content (stable-first). `Leading`: the contract line has no
+/// heading and an evidence section (`=== ITEM CONTEXT` or `=== INLINE DIFF (`) follows it.
+/// Anything else carries no unambiguous layout.
+enum Layout {
+    Closing,
+    Leading,
+    Unknown,
+}
+
+fn layout_of(text: &str) -> Layout {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(at) = lines.iter().rposition(|l| l.starts_with(CONTRACT_LINE)) else {
+        return Layout::Unknown;
+    };
+    let headed = at > 0 && lines[at - 1] == CONTRACT_HEADING;
+    let evidence_after = lines[at + 1..]
+        .iter()
+        .any(|l| l.starts_with("=== ITEM CONTEXT") || l.starts_with("=== INLINE DIFF ("));
+    let nothing_after = lines[at + 1..].iter().all(|l| l.trim().is_empty());
+    match (headed, evidence_after, nothing_after) {
+        (true, false, true) => Layout::Closing,
+        (false, true, _) => Layout::Leading,
+        _ => Layout::Unknown,
+    }
+}
+
+/// The stored `prompt.txt` of a run, `None` when none was stored or it is unreadable.
+fn stored_prompt(state: &Path, record: &Value) -> Option<String> {
     let path = directory(state, record).ok()?.join("prompt.txt");
     regular(&path, false).ok()?;
     let mut text = String::new();
@@ -89,9 +114,7 @@ fn prompt_cohort(state: &Path, record: &Value) -> Option<usize> {
         .take(MAX_LOG + 1)
         .read_to_string(&mut text)
         .ok()?;
-    let start = text.len().saturating_sub(CONTRACT_TAIL_CHARS);
-    let start = (start..=text.len()).find(|&i| text.is_char_boundary(i))?;
-    Some(usize::from(text[start..].contains(CONTRACT_MARKER)))
+    (text.len() as u64 <= MAX_LOG).then_some(text)
 }
 
 /// An archived `live-attempt-N.log` means the retry path moved earlier legs' output away, so
@@ -105,6 +128,14 @@ fn log_is_final_leg_only(state: &Path, record: &Value) -> bool {
                     e.is_ok_and(|e| e.file_name().to_string_lossy().starts_with("live-attempt-"))
                 })
             })
+}
+
+#[derive(Default)]
+struct Stratum {
+    cohorts: [Tally; 2],
+    hosts: BTreeMap<String, u64>,
+    harnesses: BTreeMap<String, u64>,
+    roles: std::collections::BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -151,9 +182,10 @@ pub(crate) fn compare(
     records: &[Value],
     (since, until): (i64, i64),
     legs: &[String],
+    hosts: &[String],
 ) -> Value {
-    let mut tallies: BTreeMap<&str, [Tally; 2]> = BTreeMap::new();
-    let (mut unlaunched, mut no_prompt, mut no_start) = (0u64, 0u64, 0u64);
+    let mut tallies: BTreeMap<&str, Stratum> = BTreeMap::new();
+    let (mut unlaunched, mut no_prompt, mut no_start, mut unknown) = (0u64, 0u64, 0u64, 0u64);
     for record in records {
         let Some((_, _, class)) = terminal(state, record) else {
             continue; // not a terminal review run
@@ -169,15 +201,41 @@ pub(crate) fn compare(
         if leg.is_some_and(|l| !legs.is_empty() && !legs.iter().any(|x| x == l)) {
             continue;
         }
+        let host = record["host"].as_str().unwrap_or("unknown");
+        if !hosts.is_empty() && !hosts.iter().any(|h| h == host) {
+            continue;
+        }
         let Some(leg) = leg else {
             unlaunched += 1;
             continue;
         };
-        let Some(cohort) = prompt_cohort(state, record) else {
+        let Some(text) = stored_prompt(state, record) else {
             no_prompt += 1;
             continue;
         };
-        let tally = &mut tallies.entry(leg).or_default()[cohort];
+        let cohort = match layout_of(&text) {
+            Layout::Leading => 0,
+            Layout::Closing => 1,
+            Layout::Unknown => {
+                unknown += 1;
+                continue;
+            }
+        };
+        let stratum = tallies.entry(leg).or_default();
+        *stratum.hosts.entry(host.into()).or_default() += 1;
+        let harness = record["chosen_leg"]["harness"]
+            .as_str()
+            .or_else(|| record["harness"].as_str())
+            .unwrap_or("unknown");
+        *stratum.harnesses.entry(harness.into()).or_default() += 1;
+        let roles = record["chosen_leg"]["roles"]
+            .as_array()
+            .into_iter()
+            .flatten();
+        stratum
+            .roles
+            .extend(roles.filter_map(|r| r.as_str().map(String::from)));
+        let tally = &mut stratum.cohorts[cohort];
         tally.reviews += 1;
         tally.no_verdict += u64::from(class != "verdict");
         if !log_is_final_leg_only(state, record) {
@@ -190,7 +248,8 @@ pub(crate) fn compare(
     }
     let (mut strata, mut unmatched) = (BTreeMap::new(), Vec::new());
     let (mut sum_before, mut sum_after) = (Tally::default(), Tally::default());
-    for (leg, [b, a]) in &tallies {
+    for (leg, stratum) in &tallies {
+        let [b, a] = &stratum.cohorts;
         let matched = b.reviews > 0 && a.reviews > 0;
         if matched {
             sum_before.add(b);
@@ -200,15 +259,18 @@ pub(crate) fn compare(
         }
         strata.insert(
             *leg,
-            json!({"matched":matched, "before":b.view("before"), "after":a.view("after")}),
+            json!({"matched":matched, "before":b.view("before"), "after":a.view("after"),
+                "provenance":{"hosts":stratum.hosts, "harnesses":stratum.harnesses,
+                    "leg_roles":stratum.roles}}),
         );
     }
     json!({"query":"pg-spawnd health review-order: terminal review runs (role review, status \
         completed|succeeded|terminated_after_answer|failed|timeout|timed_out|stalled|limited|killed) \
         with started in [since, until), grouped by the last launched attempt leg (string or object \
-        leg); cohort = prompt order read from the stored prompt.txt: after when the review contract \
-        (a line starting with the marker) is within the last 2000 characters, before when it is \
-        not; no_verdict = review result other than verdict; cached share = cached / total input \
+        leg); cohort = prompt order read from the stored prompt.txt: after when the \
+        === REVIEW OUTPUT heading and the contract line are the last content, before when the \
+        contract line has no heading and an item-context or inline-diff section follows it, \
+        otherwise unknown_layout and excluded; --host keeps the named hosts; no_verdict = review result other than verdict; cached share = cached / total input \
         tokens summed over live.log usage frames. Runs with more than one launched attempt and no \
         archived live-attempt log share one live.log: counted in mixed_leg_excluded, left out of \
         usage and not counted as missing_usage; missing_usage = reviews without any usage frame \
@@ -216,7 +278,7 @@ pub(crate) fn compare(
         "window":{"since":since, "until":until},
         "strata":strata, "unmatched":unmatched,
         "excluded":{"unlaunched":unlaunched,
-            "no_prompt":no_prompt, "no_start_time":no_start},
+            "no_prompt":no_prompt, "unknown_layout":unknown, "no_start_time":no_start},
         "matched_total":{"before":sum_before.view("before"), "after":sum_after.view("after")}})
 }
 
@@ -256,8 +318,17 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
                 .collect()
         })
         .unwrap_or_default();
+    let hosts: Vec<String> = flags
+        .get("--host")
+        .map(|s| {
+            s.split(',')
+                .filter(|h| !h.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
     let records = crate::records::list_runs(&state);
-    let report = compare(&state, &records, window, &legs);
+    let report = compare(&state, &records, window, &legs, &hosts);
     writeln!(out, "{report}").map_err(|e| e.to_string())
 }
 

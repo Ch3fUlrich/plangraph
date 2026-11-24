@@ -1,1 +1,1 @@
-`pg-spawnd health review-order` compares the no-verdict share and cached-input-token share of recorded review runs per leg between the two prompt-order cohorts, read from each run's stored prompt, and reports excluded and shared-log runs separately.
+`pg-spawnd health review-order` compares the no-verdict share and cached-input-token share of recorded review runs per leg between the two prompt-order layouts, identified from each run's stored prompt structure, with host and harness provenance and separate counts for unknown-layout, unlaunched and shared-log runs.
