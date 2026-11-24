@@ -107,36 +107,58 @@ fn arrivals(reference: &str, project: &str, start: i64, end: i64) -> Result<Vec<
 }
 
 /// What each landing in the window brought to main: the commits reachable from its landed SHA and not from the
-/// previous landing that is its ancestor, at the landing's own time. Parts reach main under SHAs of their own in a
-/// tested fast-forward, and a train may start before the window, so the join reads the landed history, not the
-/// first-parent arrivals of the window.
+/// landing before it, at the landing's own time. The landing before it is the latest recorded landing in the
+/// ancestry of its landed SHA (the one no other ancestor landing descends from), never one chosen by clock, and
+/// both must lie on the selected main ref. Parts reach main under SHAs of their own in a tested fast-forward, and a
+/// train may start before the window, so the join reads the landed history, not the first-parent arrivals of the
+/// window. A landing with no earlier landing has no verified base: its parts stay unknown here (a PR-merge
+/// landing is still joined through its own arrival).
 fn train_arrivals(
     db: &database::Db,
     repo: &str,
+    reference: &str,
     start: i64,
     end: i64,
 ) -> Result<Vec<Arrival>, String> {
-    let landings = db.landings(repo)?;
+    let ancestor =
+        |older: &str, newer: &str| git(&["merge-base", "--is-ancestor", older, newer]).is_ok();
+    let main = git(&[
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        &format!("{reference}^{{commit}}"),
+    ])?;
+    let main = main.trim();
+    let landings: Vec<(String, i64)> = db
+        .landings(repo)?
+        .into_iter()
+        .filter(|(sha, _)| ancestor(sha, main))
+        .collect();
     let mut trains = Vec::new();
-    for (index, (sha, at)) in landings.iter().enumerate() {
+    for (sha, at) in &landings {
         if !(start..end).contains(at) {
             continue;
         }
-        let previous = landings[..index]
+        let earlier: Vec<&String> = landings
             .iter()
-            .rev()
-            .find(|(earlier, _)| git(&["merge-base", "--is-ancestor", earlier, sha]).is_ok());
-        // The first landing recorded has no earlier landing to bound its train: it takes what its first parent
-        // did not have, which is the whole train in PR-merge mode.
-        let range = match previous {
-            Some((earlier, _)) => format!("{earlier}..{sha}"),
-            None if git(&["rev-parse", "--verify", "--quiet", &format!("{sha}^")]).is_ok() => {
-                format!("{sha}^..{sha}")
-            }
-            None => sha.clone(),
+            .map(|(other, _)| other)
+            .filter(|other| *other != sha && ancestor(other, sha))
+            .collect();
+        let Some(base) = earlier.iter().find(|candidate| {
+            earlier
+                .iter()
+                .all(|other| other == *candidate || !ancestor(candidate, other))
+        }) else {
+            continue;
         };
-        let Ok(listing) = git(&["rev-list", "--parents", "--reverse", "-n", "20000", &range])
-        else {
+        let Ok(listing) = git(&[
+            "rev-list",
+            "--parents",
+            "--reverse",
+            "-n",
+            "20000",
+            &format!("{base}..{sha}"),
+        ]) else {
             continue;
         };
         let members: Vec<(String, Vec<String>)> = listing
@@ -227,7 +249,7 @@ fn collect(
         .map(|t| (t, Hour::default()))
         .collect();
     let arrivals = arrivals(reference, project, start, end)?;
-    let trains = train_arrivals(db, repo, start, end)?;
+    let trains = train_arrivals(db, repo, reference, start, end)?;
     for arrival in &arrivals {
         hours
             .get_mut(&(arrival.at.div_euclid(HOUR) * HOUR))

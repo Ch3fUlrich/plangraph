@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS throughput_quota_window (
     account TEXT NOT NULL, window TEXT NOT NULL, reset INTEGER, remaining REAL,
     PRIMARY KEY(repo,bucket,provider,account,window)
 );
+CREATE TABLE IF NOT EXISTS throughput_train_join (
+    repo TEXT NOT NULL, landed_sha TEXT NOT NULL, PRIMARY KEY(repo,landed_sha)
+);
 CREATE TABLE IF NOT EXISTS throughput_accept_part (
     repo TEXT NOT NULL, head TEXT NOT NULL, sha TEXT NOT NULL, landed INTEGER NOT NULL,
     seconds INTEGER NOT NULL, model TEXT, tokens INTEGER, commits INTEGER NOT NULL,
@@ -87,6 +90,16 @@ fn accept_source(connection: &Connection) -> rusqlite::Result<&'static str> {
         "(SELECT repo,sha,sha AS head,landed,seconds,model,tokens,commits FROM throughput_accept)"
     } else {
         "(SELECT NULL AS repo,NULL AS sha,NULL AS head,0 AS landed,0 AS seconds,NULL AS model,NULL AS tokens,0 AS commits WHERE 0)"
+    })
+}
+
+/// The landings whose parts were joined from verified history; before any collection, every landing counts as the
+/// first collector's equality join did.
+fn joined_source(connection: &Connection) -> rusqlite::Result<&'static str> {
+    Ok(if table_exists(connection, "throughput_train_join")? {
+        "throughput_train_join"
+    } else {
+        "(SELECT repo,landed_sha FROM landing)"
     })
 }
 
@@ -205,6 +218,17 @@ impl Db {
     /// Carry the samples of the first collector (one acceptance per landing, one percentage per provider) into
     /// the part and window tables; rows already there win, and the old tables are left as they are.
     fn migrate_legacy(connection: &Connection) -> rusqlite::Result<()> {
+        // Once: a later collection of any window must not bring back a sample a verified part row has replaced.
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS throughput_meta (key TEXT PRIMARY KEY NOT NULL);",
+        )?;
+        if connection.execute(
+            "INSERT OR IGNORE INTO throughput_meta VALUES('legacy_migrated')",
+            [],
+        )? == 0
+        {
+            return Ok(());
+        }
         if table_exists(connection, "throughput_accept")? {
             connection.execute_batch(
                 "INSERT OR IGNORE INTO throughput_accept_part(repo,head,sha,landed,seconds,model,tokens,commits,legacy)
@@ -299,6 +323,8 @@ impl Db {
             seconds=excluded.seconds,model=excluded.model,tokens=excluded.tokens,commits=excluded.commits,legacy=0",
         )?;
         // Verified part rows replace the legacy sample of the same landing: it counted that landing once.
+        let mut joined =
+            connection.prepare("INSERT OR IGNORE INTO throughput_train_join VALUES(?1,?2)")?;
         let mut retire = connection
             .prepare("DELETE FROM throughput_accept_part WHERE repo=?1 AND sha=?2 AND legacy=1")?;
         for arrival in arrivals {
@@ -308,6 +334,10 @@ impl Db {
         }
         for (set, row) in [(arrivals, &mut arrival_row), (trains, &mut train_row)] {
             for arrival in set {
+                if std::ptr::eq(set, trains) {
+                    // The landing's parts are known: a count of none is a true zero, not a missing base.
+                    joined.execute(params![repo, arrival.sha])?;
+                }
                 let parts = inputs.accepted_parts(arrival);
                 for (head, accepted) in &parts {
                     row.execute(params![
@@ -338,6 +368,7 @@ impl Db {
         let query = |sql: &str| query(&transaction, sql, repo);
         let accept = accept_source(&transaction).map_err(database_error)?;
         let quota_table = quota_source(&transaction).map_err(database_error)?;
+        let joined = joined_source(&transaction).map_err(database_error)?;
         let days = query(&format!("WITH train AS (
             SELECT date(landed_at) AS day, COUNT(*) AS trains, SUM(json_array_length(parts)) AS train_parts,
             SUM(CASE WHEN unixepoch(landed_at)>=unixepoch(build_started_at)
@@ -405,7 +436,10 @@ impl Db {
             {build} AS build_seconds,
             1+{reruns} AS attempts, {reruns} AS ci_reruns, {left_out} AS drops, {fix_tasks} AS fix_tasks,
             1.0*({build})/60/NULLIF(json_array_length(l.parts),0) AS minutes_per_merged_batch,
-            COUNT(a.head) AS accepted_parts, AVG(a.seconds) AS accept_to_main_seconds
+            CASE WHEN EXISTS(SELECT 1 FROM {joined} j WHERE j.repo=l.repo AND j.landed_sha=l.landed_sha)
+                THEN COUNT(a.head) END AS accepted_parts,
+            CASE WHEN EXISTS(SELECT 1 FROM {joined} j WHERE j.repo=l.repo AND j.landed_sha=l.landed_sha)
+                THEN AVG(a.seconds) END AS accept_to_main_seconds
             FROM landing l LEFT JOIN {accept} a ON a.repo=l.repo AND a.sha=l.landed_sha
             WHERE l.repo=?1 AND {in_window}
             GROUP BY l.train,l.landed_sha ORDER BY l.landed_at,l.landed_sha"))?;

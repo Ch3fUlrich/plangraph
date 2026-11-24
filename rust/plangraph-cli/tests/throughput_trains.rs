@@ -187,6 +187,10 @@ impl Train {
     }
 
     fn collect(&self, until: &str) {
+        self.collect_window("2026-11-21T00:00:00Z", until);
+    }
+
+    fn collect_window(&self, from: &str, until: &str) {
         self.cli(&[
             "throughput",
             "collect",
@@ -194,7 +198,7 @@ impl Train {
             "fixture",
             "HEAD",
             self.snapshot.to_str().unwrap(),
-            "2026-11-21T00:00:00Z",
+            from,
             until,
         ]);
     }
@@ -418,4 +422,105 @@ fn a_part_that_arrives_on_its_own_does_not_displace_its_trains_row() {
         )
         .unwrap();
     assert_eq!(on_landing, 6);
+}
+
+#[test]
+fn collecting_an_unrelated_window_does_not_bring_a_retired_legacy_sample_back() {
+    let train = train(Mode::PrMerge);
+    let connection = Connection::open(&train.db).unwrap();
+    connection.execute_batch(LEGACY).unwrap();
+    connection
+        .execute(
+            "INSERT INTO throughput_accept VALUES('fixture/repo',?1,1763683300,900,'old-model',500,12)",
+            [&train.landed],
+        )
+        .unwrap();
+    train.collect("2026-11-22T00:00:00Z");
+    // A window with no landing at all, collected afterwards.
+    train.collect_window("2026-11-23T00:00:00Z", "2026-11-24T00:00:00Z");
+    let rows: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM throughput_accept_part WHERE sha=?1",
+            [&train.landed],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 6, "the retired legacy row stayed retired");
+    let legacy: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM throughput_accept_part WHERE legacy=1 AND sha=?1",
+            [&train.landed],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy, 0);
+}
+
+#[test]
+fn a_landing_with_no_earlier_landing_has_no_verified_base_and_its_ff_parts_stay_unknown() {
+    let train = train(Mode::TestedFastForward);
+    // Remove the earlier landing: nothing bounds the fast-forwarded train from below.
+    Connection::open(&train.db)
+        .unwrap()
+        .execute("DELETE FROM landing WHERE train='t0'", [])
+        .unwrap();
+    train.collect("2026-11-22T00:00:00Z");
+    let report = train.report();
+    // Not a partial count of the one part that arrived under the landed SHA: unknown.
+    assert!(train_row(&report)["accepted_parts"].is_null(), "{report}");
+    assert!(
+        train_row(&report)["accept_to_main_seconds"].is_null(),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_landing_takes_only_the_parts_after_the_latest_landing_in_its_ancestry() {
+    let train = train(Mode::PrMerge);
+    // An intervening landing whose clock is later than the train's: the base is still the one in the ancestry.
+    let connection = Connection::open(&train.db).unwrap();
+    git(
+        &train.repo,
+        &["checkout", "-q", "-b", "other", &train.heads[0]],
+    );
+    output(dated(&train.repo, "2026-11-21T10:00:00Z").args([
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "unrelated",
+    ]));
+    let unrelated = git(&train.repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(&train.repo, &["checkout", "-q", "main"]);
+    // Not an ancestor of main: it must never be taken for a base or a landing of this history.
+    connection
+        .execute(
+            "INSERT INTO landing VALUES('fixture/repo',?1,'t9','[9]','2026-11-21T08:00:00Z','2026-11-21T11:30:00Z',0,0,0)",
+            [&unrelated],
+        )
+        .unwrap();
+    train.collect("2026-11-22T00:00:00Z");
+    let report = train.report();
+    assert_eq!(train_row(&report)["accepted_parts"], 6, "{report}");
+    assert_eq!(
+        report["trains"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["train"] == "t9")
+            .count(),
+        1,
+        "listed as a landing: {report}"
+    );
+    let on_unrelated: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM throughput_accept_part WHERE sha=?1",
+            [&unrelated],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        on_unrelated, 0,
+        "a landing off the selected main ref joins nothing"
+    );
 }
