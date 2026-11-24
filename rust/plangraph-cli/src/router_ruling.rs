@@ -3,39 +3,34 @@
 //!
 //! The statement is a label (`cause:`, `size:`, `time:`) anywhere in the text. The evidence is a
 //! `Measured:` field (the label starts a line, a table cell or a sentence; `Unmeasured:` is not
-//! one) whose text, up to the end of its line or table cell, holds a number and names one of our
-//! own data sources (keeper, telemetry, ledger, CI, a query, journal or log), an anchor that
-//! identifies the result (a date or date range, a decision id, a pull request or a run id) and a
-//! measured value besides the anchor, and says it found something. Other companies' practice
-//! never satisfies it, and neither does a query that ran with no result yet.
+//! one) of the form `Measured: SOURCE ... ANCHOR ... VALUE`, up to the end of its line or table
+//! cell: the first word (after an optional "our") is one of our own data sources (keeper,
+//! telemetry, ledger, ci-runs, journal, decisions-log, sqlite), a token identifies the result (a
+//! date or date range, a decision id, a pull request or a run id), and a plain number is the
+//! measured value (a time of day or an id is not one). The field must not say that nothing was
+//! found. Other companies' practice never satisfies it: it names no source of ours.
 
 const LABELS: [&str; 3] = ["cause", "size", "time"];
 const MEASURED: &str = "measured:";
-/// Words that name data of this system. Matched as whole words of the Measured text.
-const OWN_SOURCES: [&str; 12] = [
+/// Our own data sources: the first word of a `Measured:` field.
+const OWN_SOURCES: [&str; 7] = [
     "keeper",
     "telemetry",
     "ledger",
-    "ci",
-    "query",
-    "sqlite",
+    "ci-runs",
     "journal",
-    "jsonl",
     "decisions-log",
-    "events",
-    "db",
-    "pg",
+    "sqlite",
 ];
 
-/// Phrases of a measurement that produced nothing.
-const EMPTY: [&str; 7] = [
+/// Phrases of a measurement that found nothing (not "pending", which can name the measured work).
+const EMPTY: [&str; 6] = [
     "no result",
     "no data",
     "n/a",
-    "none",
     "not yet",
-    "pending",
-    "unknown",
+    "nothing found",
+    "none found",
 ];
 
 /// Whether one token identifies a result: a date or date range, a decision id, a pull request
@@ -57,23 +52,32 @@ fn anchor(token: &str) -> bool {
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
 }
 
-/// Whether the text of one `Measured:` field is evidence: one of our sources, an anchor, a value
-/// that is not part of an anchor, and no statement that nothing was found.
+/// A plain number (`14`, `6.5`, `>30`, `12%`); a time of day or an id is not a value.
+fn value(token: &str) -> bool {
+    let number = token
+        .trim_start_matches(['<', '>', '~'])
+        .trim_end_matches('%');
+    !number.is_empty()
+        && number.bytes().all(|c| c.is_ascii_digit() || c == b'.')
+        && number.bytes().any(|c| c.is_ascii_digit())
+}
+
+/// Whether the text of one `Measured:` field is evidence: it starts with one of our sources,
+/// holds an anchor and a value, and does not say that nothing was found.
 fn measured_field(cell: &str) -> bool {
     if EMPTY.iter().any(|phrase| cell.contains(phrase)) {
         return false;
     }
     let tokens: Vec<&str> = cell
         .split(|c: char| c.is_whitespace() || ",;()".contains(c))
-        .map(|t| t.trim_matches(|c: char| !(c.is_alphanumeric() || c == '#')))
+        .map(|t| t.trim_matches(|c: char| !(c.is_alphanumeric() || c == '#' || c == '-')))
         .filter(|t| !t.is_empty())
         .collect();
-    let source = tokens.iter().any(|t| OWN_SOURCES.contains(t));
+    let first = tokens.iter().find(|t| !matches!(**t, "our" | "the"));
+    let source = first.is_some_and(|t| OWN_SOURCES.contains(t));
     let anchored = tokens.iter().any(|t| anchor(t));
-    let value = tokens
-        .iter()
-        .any(|t| !anchor(t) && t.bytes().any(|c| c.is_ascii_digit()));
-    source && anchored && value
+    let valued = tokens.iter().any(|t| !anchor(t) && value(t));
+    source && anchored && valued
 }
 
 /// Positions of `label:` as a whole word (so `runtime:` and `timeout:` do not count).
@@ -159,6 +163,8 @@ mod tests {
     fn a_measured_line_with_numbers_and_a_source_passes() {
         for row in [
             "| D-1 | demo | y | router | cause: CI queue. Measured: keeper query runs 2026-11-20..24, 41 of 63 red trains waited >30 min |",
+            "cause: queue\nMeasured: keeper query 2026-11-24 counted 14 pending trains",
+            "cause: queue\nMeasured: our telemetry 2026-11-24..26 median 6.5 parts, 12% red",
             "size: 6 parts\nMeasured: ledger rows 2026-11-01..24, median 6 parts per train, 14 trains",
         ] {
             assert_eq!(ruling_refusal(row), None, "{row}");
@@ -178,7 +184,10 @@ mod tests {
             "cause: slow CI\nMeasured: GitHub CI ran 42 trains",
             "cause: slow CI\nMeasured: Our keeper query ran on 2026-11-24; no results yet",
             "cause: slow CI\nMeasured: keeper query 2026-11-24",
-            "cause: slow CI\nMeasured: keeper query, 14 trains, none on 2026-11-24",
+            "cause: slow CI\nMeasured: keeper query, 14 trains, no data on 2026-11-24",
+            "cause: slow CI\nMeasured: GitHub CI ran 42 trains on 2026-11-24",
+            "cause: slow CI\nMeasured: keeper query started at 09:30 on 2026-11-24",
+            "cause: slow CI\nMeasured: ci 41 runs 2026-11-24",
         ] {
             assert!(ruling_refusal(row).is_some(), "{row}");
         }
