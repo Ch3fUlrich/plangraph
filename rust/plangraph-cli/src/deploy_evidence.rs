@@ -40,9 +40,15 @@ impl HostProbe for CommandProbe {
     }
 }
 
+/// The prefix of a `missing` entry that stands for an item the keeper could not scan.
+pub const SCAN_UNVERIFIED: &str = "scan_unverified";
+
 /// One entry of a keeper row's `missing` list, split into what the probe needs.
 fn target_row(entry: &str, probe: &dyn HostProbe) -> Value {
     let reason = |status: &str| json!({"target": entry, "status": status, "blocking": true});
+    if entry.starts_with(SCAN_UNVERIFIED) {
+        return reason("scan_unverified");
+    }
     match entry {
         "(hosts unnamed)" => return reason("hosts_unnamed"),
         "live_evidence_missing" => return reason("live_proof_missing"),
@@ -57,12 +63,14 @@ fn target_row(entry: &str, probe: &dyn HostProbe) -> Value {
         ("active", "unit_inactive")
     };
     let (seen, status) = match probe.state(host, unit) {
-        Ok(state) if state == live => (state, "live_unrecorded"),
+        // A host that runs the unit does not say which revision it runs: only keeper deploy evidence
+        // tied to the landed revision clears a row, so a live unit stays pending until it is recorded.
+        Ok(state) if state == live => (state, "unrecorded"),
         Ok(state) => (state, dead),
         Err(why) => (why, "host_unverified"),
     };
     json!({"target": entry, "host": host, "unit": unit, "probe": seen,
-           "status": status, "blocking": status != "live_unrecorded"})
+           "status": status, "blocking": true})
 }
 
 /// The report of the keeper's pending rows with the live host state of every target.
@@ -77,10 +85,13 @@ pub fn build_report(rows: &[Value], probe: &dyn HostProbe, now: i64) -> Value {
                 .filter_map(Value::as_str)
                 .map(|entry| target_row(entry, probe))
                 .collect();
-            let pending = targets.iter().any(|t| t["blocking"] == true);
+            let targets = if targets.is_empty() {
+                vec![target_row(SCAN_UNVERIFIED, probe)]
+            } else {
+                targets
+            };
             json!({"key": row["key"], "state": row["state"], "merged_at": row["merged_at"],
-                   "age_hours": row["age_hours"], "targets": targets,
-                   "status": if pending { "pending" } else { "live_unrecorded" }})
+                   "age_hours": row["age_hours"], "targets": targets, "status": "pending"})
         })
         .collect();
     let pending = rows.iter().filter(|r| r["status"] == "pending").count();
@@ -118,7 +129,16 @@ fn exception_defect(exception: &Value, today: NaiveDate) -> Option<String> {
 
 /// The GO decision for a report: pending rows older than `max_age_hours` (or of unknown age) block,
 /// unless a valid dated exception names the key.
-pub fn gate(report: &Value, exceptions: &Value, now: i64, max_age_hours: u64) -> Value {
+pub fn gate(
+    report: &Value,
+    exceptions: &Value,
+    now: i64,
+    max_age_hours: u64,
+) -> Result<Value, String> {
+    validate_report(report)?;
+    if !exceptions.is_array() {
+        return Err("exceptions file is not a list".into());
+    }
     let today = DateTime::from_timestamp(now, 0).map(|t| t.date_naive());
     let (mut blockers, mut excepted, mut waiting, mut invalid) = (vec![], vec![], vec![], vec![]);
     let listed = exceptions.as_array().map_or(&[][..], Vec::as_slice);
@@ -153,8 +173,46 @@ pub fn gate(report: &Value, exceptions: &Value, now: i64, max_age_hours: u64) ->
             _ => blockers.push(entry),
         }
     }
-    json!({"go": blockers.is_empty(), "max_age_hours": max_age_hours, "blockers": blockers,
-           "excepted": excepted, "waiting": waiting, "invalid_exceptions": invalid})
+    Ok(
+        json!({"go": blockers.is_empty(), "max_age_hours": max_age_hours, "blockers": blockers,
+           "excepted": excepted, "waiting": waiting, "invalid_exceptions": invalid}),
+    )
+}
+
+/// A report the gate may trust: the schema, a `rows` list and a `pending` count that agrees with it, and
+/// for every row a key, the `pending` status, an age that is a number or null, and blocking targets.
+pub fn validate_report(report: &Value) -> Result<(), String> {
+    if report["schema"] != "plangraph.deploy-evidence/1" {
+        return Err("not a deploy-evidence report".into());
+    }
+    let rows = report["rows"].as_array().ok_or("report has no rows list")?;
+    if report["pending"].as_u64() != Some(rows.len() as u64) {
+        return Err(format!(
+            "report pending count disagrees with its {} rows",
+            rows.len()
+        ));
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let bad = |why: &str| Err(format!("row {index}: {why}"));
+        if !row["key"].as_str().is_some_and(|k| !k.is_empty()) {
+            return bad("no key");
+        }
+        if row["status"] != "pending" {
+            return bad("status is not pending");
+        }
+        if !(row["age_hours"].is_null() || row["age_hours"].is_u64()) {
+            return bad("age_hours is not a number or null");
+        }
+        let targets = row["targets"].as_array().map_or(&[][..], Vec::as_slice);
+        if targets.is_empty()
+            || !targets
+                .iter()
+                .all(|t| t["target"].is_string() && t["blocking"] == true)
+        {
+            return bad("targets are missing or not blocking");
+        }
+    }
+    Ok(())
 }
 
 const USAGE: &str = "usage: plangraph deploy-evidence report [--project NAME] [--no-done] [--probe PROGRAM] [--rows FILE] | gate --report FILE [--exceptions FILE] [--now EPOCH] [--max-age-hours N]";
@@ -220,9 +278,6 @@ fn run_inner(env: &Env, args: &[String]) -> Result<i32, String> {
                 &["--report", "--exceptions", "--now", "--max-age-hours"],
             )?;
             let report = read_json(flag(&set, "--report").ok_or("gate needs --report FILE")?)?;
-            if report["schema"] != "plangraph.deploy-evidence/1" {
-                return Err("not a deploy-evidence report".into());
-            }
             let exceptions = match flag(&set, "--exceptions") {
                 Some(path) => read_json(path)?,
                 None => json!([]),
@@ -239,7 +294,7 @@ fn run_inner(env: &Env, args: &[String]) -> Result<i32, String> {
                 &exceptions,
                 number("--now", now())?,
                 hours.max(0) as u64,
-            );
+            )?;
             println!("{decision}");
             Ok(if decision["go"] == true { 0 } else { 1 })
         }

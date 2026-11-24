@@ -599,3 +599,28 @@ fn deployment_rows_cover_completed_items_in_the_same_refresh() {
     assert_eq!(rows[1]["state"], "done");
     keeper.assert_finished();
 }
+
+#[test]
+fn an_item_the_inventory_could_not_scan_becomes_a_row_not_silence() {
+    let open = json!({"closed":[],"merged_not_done":0,"deployment_pending":[]});
+    let done = json!({"closed":[],"merged_not_done":1,
+        "listed":[{"key":"demo:U","state":"done","reason":"evidence_unverified: deploy_scan_unreadable"}]});
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"ready"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (json!({"apply":false,"project":"demo"}), open),
+        (
+            json!({"apply":false,"project":"demo","inventory":true}),
+            done,
+        ),
+    ]);
+    let timing = ScheduleTiming::new(Duration::from_secs(95), Duration::from_secs(400));
+    let rows = deployment_rows_with(&keeper, &keeper, Some("demo"), true, timing).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["key"], "demo:U");
+    assert!(rows[0]["missing"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("scan_unverified: "));
+    assert!(rows[0]["age_hours"].is_null());
+}

@@ -24,16 +24,17 @@ fn executable_fixtures_use_the_shared_writer() {
                     continue;
                 }
                 let source = std::fs::read_to_string(&path).unwrap();
-                for (number, line) in source.lines().enumerate() {
-                    let trimmed = line.trim_start();
-                    if trimmed.starts_with("//") {
+                let lines: Vec<&str> = source.lines().collect();
+                for (number, line) in lines.iter().enumerate() {
+                    if line.trim_start().starts_with("//") {
                         continue;
                     }
                     let literal =
                         writes_executable_mode(line) && !mode_is_not_a_fixture_write(&name, line);
                     let computed =
                         sets_computed_mode(line) && !computed_mode_is_not_a_fixture(&name, line);
-                    let copied = copies_a_file(line) && !copy_is_not_an_executable(&name);
+                    let copied = copies_a_file(line)
+                        && !copy_is_not_an_executable(&name, &statement(&lines[number..]));
                     if literal || computed || copied {
                         offenders.push(format!("{name}:{}", number + 1));
                     }
@@ -111,22 +112,72 @@ fn mode_is_not_a_fixture_write(path: &str, line: &str) -> bool {
     }
 }
 
-/// A mode setter whose argument is not a literal (`from_mode(mode)`, `.mode(CONST)`): the guard cannot
-/// read its bits, so each such call needs a justified exemption below.
+/// What a mode setter is given: a literal that is the whole argument, or anything else.
+enum Argument {
+    Literal(u32),
+    Computed,
+}
+
+/// Every mode setter on the line with its argument. A literal counts only when it is the entire
+/// argument, so `0o600 | 0o100` and an argument that continues on the next line are computed.
+fn mode_arguments(line: &str) -> Vec<Argument> {
+    let mut found = Vec::new();
+    for setter in ["::from_mode", ".set_mode", ".chmod", ".mode"] {
+        for (offset, _) in line.match_indices(setter) {
+            let Some(argument) = line[offset + setter.len()..]
+                .trim_start()
+                .strip_prefix('(')
+                .map(str::trim_start)
+            else {
+                continue;
+            };
+            if argument.starts_with(')') {
+                continue; // an accessor such as `.mode()`
+            }
+            found.push(match literal_argument(argument) {
+                Some((mode, rest))
+                    if matches!(rest.trim_start().chars().next(), Some(')' | ',')) =>
+                {
+                    Argument::Literal(mode)
+                }
+                _ => Argument::Computed,
+            });
+        }
+    }
+    found
+}
+
+/// The numeric literal that starts `text` and what follows it (an integer suffix is skipped).
+fn literal_argument(text: &str) -> Option<(u32, &str)> {
+    let (radix, digits) = if let Some(digits) = text.strip_prefix("0o") {
+        (8, digits)
+    } else if let Some(digits) = text.strip_prefix("0x") {
+        (16, digits)
+    } else if let Some(digits) = text.strip_prefix("0b") {
+        (2, digits)
+    } else if text.starts_with(|c: char| c.is_ascii_digit()) {
+        (10, text)
+    } else {
+        return None;
+    };
+    let end = digits
+        .find(|ch: char| !ch.is_digit(radix) && ch != '_')
+        .unwrap_or(digits.len());
+    let mode = u32::from_str_radix(&digits[..end].replace('_', ""), radix).ok()?;
+    let rest = &digits[end..];
+    let rest = match rest.strip_prefix(['u', 'i']) {
+        Some(width) => width.trim_start_matches(|c: char| c.is_ascii_digit()),
+        None => rest,
+    };
+    Some((mode, rest))
+}
+
+/// A mode setter whose argument is not a plain literal: the guard cannot read its bits, so each such
+/// call needs a justified exemption below.
 fn sets_computed_mode(line: &str) -> bool {
-    ["::from_mode", ".set_mode", ".chmod", ".mode"]
+    mode_arguments(line)
         .iter()
-        .any(|setter| {
-            line.match_indices(setter).any(|(offset, _)| {
-                let rest = line[offset + setter.len()..].trim_start();
-                rest.strip_prefix('(')
-                    .map(str::trim_start)
-                    .is_some_and(|argument| {
-                        !argument.starts_with(')')
-                            && !argument.starts_with(|c: char| c.is_ascii_digit())
-                    })
-            })
-        })
+        .any(|argument| matches!(argument, Argument::Computed))
 }
 
 fn computed_mode_is_not_a_fixture(path: &str, line: &str) -> bool {
@@ -155,50 +206,36 @@ fn copies_a_file(line: &str) -> bool {
     !line.trim_start().starts_with("//") && line.contains("fs::copy(")
 }
 
-/// Files whose copies are production code or data that no test executes: a copied executable belongs on
-/// `write_executable(path, fs::read(source))`.
-fn copy_is_not_an_executable(path: &str) -> bool {
-    matches!(
-        path,
+/// The statement that starts at the first line, up to its `;`.
+fn statement(lines: &[&str]) -> String {
+    let end = lines.iter().position(|l| l.contains(';')).unwrap_or(0);
+    lines[..=end.min(lines.len() - 1)].join(" ")
+}
+
+/// Copies that are production code or data no test executes. A copied executable belongs on
+/// `write_executable(path, fs::read(source))`; a data exemption names the copied file, so the executable
+/// copy next to it is still refused.
+fn copy_is_not_an_executable(path: &str, statement: &str) -> bool {
+    let data = |name: &str| statement.contains(name);
+    match path {
         // Production installers and mirrors.
-        "pg-hook/src/commit_msg.rs"
-            | "pg-ctx/src/mirror_backend.rs"
-            // Data: a .gitignore, a systemd timer unit, a toolchain pin, a run record, a Python module the
-            // hook runs through the interpreter, and a hook file the test only compares byte for byte.
-            | "pg-hook/tests/status_files.rs"
-            | "pg-keeper-backup/tests/units.rs"
-            | "pg-spawnd/tests/toolchain_pin.rs"
-            | "pg-spawnd/src/cli_review_tests.rs"
-            | "pg-hook/tests/commit_message.rs"
-            | "plangraph-cli/tests/landing_hosts.rs"
-    )
+        "pg-hook/src/commit_msg.rs" | "pg-ctx/src/mirror_backend.rs" => true,
+        "pg-hook/tests/status_files.rs" => data(".gitignore"),
+        "pg-keeper-backup/tests/units.rs" => data(".timer"),
+        "pg-spawnd/tests/toolchain_pin.rs" => data("rust-toolchain.toml"),
+        "pg-spawnd/src/cli_review_tests.rs" => data("record.json"),
+        // A Python module the hook runs through the interpreter.
+        "pg-hook/tests/commit_message.rs" => data("ci_commit_gate.py"),
+        // A hook file the test only compares byte for byte.
+        "plangraph-cli/tests/landing_hosts.rs" => data("pre-push"),
+        _ => false,
+    }
 }
 
 fn writes_executable_mode(line: &str) -> bool {
-    ["::from_mode", ".set_mode", ".chmod", ".mode"]
+    mode_arguments(line)
         .iter()
-        .any(|setter| {
-            line.match_indices(setter).any(|(offset, _)| {
-                let rest = line[offset + setter.len()..].trim_start();
-                let Some(literal) = rest.strip_prefix('(').map(str::trim_start) else {
-                    return false;
-                };
-                let (radix, digits) = if let Some(digits) = literal.strip_prefix("0o") {
-                    (8, digits)
-                } else if let Some(digits) = literal.strip_prefix("0x") {
-                    (16, digits)
-                } else if let Some(digits) = literal.strip_prefix("0b") {
-                    (2, digits)
-                } else {
-                    (10, literal)
-                };
-                let end = digits
-                    .find(|ch: char| !ch.is_digit(radix) && ch != '_')
-                    .unwrap_or(digits.len());
-                u32::from_str_radix(&digits[..end].replace('_', ""), radix)
-                    .is_ok_and(|mode| mode & 0o111 != 0)
-            })
-        })
+        .any(|argument| matches!(argument, Argument::Literal(mode) if mode & 0o111 != 0))
 }
 
 #[test]
@@ -257,4 +294,36 @@ fn recognizes_file_copies() {
     ] {
         assert!(!copies_a_file(other), "{other}");
     }
+}
+
+#[test]
+fn a_literal_inside_an_expression_is_a_computed_mode() {
+    for setter in [
+        "OpenOptions::new().mode(0o600 | 0o100)",
+        "Permissions::from_mode(0o644 | 0o111)",
+        "permissions.set_mode(0o600 + 0o100)",
+        "OpenOptions::new().mode(",
+    ] {
+        assert!(sets_computed_mode(setter), "{setter}");
+        assert!(!writes_executable_mode(setter), "{setter}");
+    }
+    assert!(writes_executable_mode("Permissions::from_mode(0o755u32)"));
+    assert!(writes_executable_mode("Permissions::from_mode(0o755_u32)"));
+    assert!(!sets_computed_mode("Permissions::from_mode(0o755)"));
+}
+
+#[test]
+fn a_data_copy_exemption_does_not_cover_an_executable_copy_in_the_same_file() {
+    let path = "pg-hook/tests/commit_message.rs";
+    let executable =
+        "std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), hooks.join(\"commit-msg\")).unwrap();";
+    let data = statement(&[
+        "    std::fs::copy(",
+        "        Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../tools/ci_commit_gate.py\"),",
+        "        tools.join(\"ci_commit_gate.py\"),",
+        "    )",
+        "    .unwrap();",
+    ]);
+    assert!(!copy_is_not_an_executable(path, executable));
+    assert!(copy_is_not_an_executable(path, &data));
 }
