@@ -8,7 +8,7 @@ from plangraph.spawner import remote_ps
 
 
 def registry(root):
-    return {'version': 1, 'self': 'coding.vm', 'hosts': [
+    return {'version': 1, 'self': 'controller', 'hosts': [
         {'id': 'dell', 'transport': 'ssh', 'os': 'linux', 'aliases': ['dell-build'],
          'caps': {'mem_floor_mb': 1}, 'repos': {'plangraph': {'root': root}}},
         {'id': 'ws', 'transport': 'ssh', 'os': 'linux', 'wsl_distro': 'Ubuntu',
