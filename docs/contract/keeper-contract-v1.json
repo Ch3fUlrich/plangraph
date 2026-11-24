@@ -50,7 +50,8 @@
     {"method": "POST", "path": "/v1/replay", "roles": ["run_token"], "request": "ReplayBody", "response": "Replay"},
     {"method": "POST", "path": "/v1/withdraw_review", "roles": ["router"], "request": "WithdrawBody", "response": "Withdraw"},
     {"method": "POST", "path": "/v1/reopen", "roles": ["router"], "request": "ReopenBody", "response": "Reopen"},
-    {"method": "POST", "path": "/v1/set_kind", "roles": ["router"], "request": "SetKindBody", "response": "SetKind"}
+    {"method": "POST", "path": "/v1/set_kind", "roles": ["router"], "request": "SetKindBody", "response": "SetKind"},
+    {"method": "POST", "path": "/v1/lift_operator_gate", "roles": ["router"], "request": "LiftOperatorGateBody", "response": "LiftOperatorGate"}
   ],
   "$defs": {
     "Error": {"type": "object", "properties": {"error": {"enum": ["validation", "forbidden", "not_found", "method_not_allowed", "too_large", "bad_state", "conflict", "locked", "epoch_stale", "lease_held", "same_principal", "same_family", "family_unknown", "evidence_missing", "evidence_unverified", "cycle", "unavailable", "internal"]}, "msg": {"type": "string"}}, "required": ["error", "msg"]},
@@ -116,7 +117,7 @@
     "WaiveBody": {"type": "object", "properties": {"key": {"type": "string"}, "decision_id": {"type": "string"}}, "required": ["key", "decision_id"]},
     "CloseBody": {"type": "object", "properties": {"key": {"type": "string"}, "batch_ref": {"type": "string"}}, "required": ["key", "batch_ref"]},
     "LegacyBody": {"type": "object", "properties": {"key": {"type": "string"}, "state": {"enum": ["claimed", "in_review"]}, "note": {"type": "string"}}, "required": ["key", "state"]},
-    "Op": {"type": "object", "properties": {"op": {"enum": ["create", "edit", "legacy_state", "add_evidence", "close_on_decision", "cancel", "priority", "rehome", "set_kind", "add_dep", "remove_dep"]}}, "required": ["op"]},
+    "Op": {"type": "object", "properties": {"op": {"enum": ["create", "edit", "legacy_state", "add_evidence", "close_on_decision", "cancel", "priority", "rehome", "set_kind", "lift_operator_gate", "add_dep", "remove_dep"]}}, "required": ["op"]},
     "ApplyOpsBody": {"type": "object", "properties": {"ops": {"type": "array", "minItems": 1, "maxItems": 500, "items": {"$ref": "#/$defs/Op"}}, "batch_ref": {"type": "string"}}, "required": ["ops"]},
     "RehomeBody": {"type": "object", "properties": {"key": {"type": "string"}, "new_project": {"type": "string"}, "host": {"type": ["string", "null"]}}, "required": ["key", "new_project"]},
     "RecordRunBody": {"type": "object", "properties": {"key": {"type": "string"}, "run": {"type": "object", "properties": {"run_id": {"type": "string"}, "phase": {"enum": ["started", "finished"]}, "rc": {"type": ["integer", "null"]}, "writer": {"type": "object"}, "seats": {"type": "array", "items": {"type": "object"}}}, "required": ["run_id", "phase"]}}, "required": ["key", "run"]},
@@ -125,6 +126,8 @@
     "ReplayBody": {"type": "object", "properties": {"entries": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "properties": {"id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}, "verb": {"type": "string"}, "body": {"type": "object"}}, "required": ["id", "verb", "body"]}}}, "required": ["entries"]},
     "WithdrawBody": {"type": "object", "properties": {"key": {"type": "string"}, "decision_id": {"type": "string", "pattern": "^D-[0-9]+$"}}, "required": ["key", "decision_id"]},
     "ReopenBody": {"type": "object", "properties": {"key": {"type": "string"}, "reason": {"type": "string"}, "decision_id": {"type": "string", "pattern": "^D-[0-9]+$"}}, "required": ["key", "reason", "decision_id"]},
+    "LiftOperatorGate": {"type": "object", "properties": {"key": {"type": "string"}, "operator": {"const": false}, "waits_on_operator": {"const": false}, "decision_id": {"type": "string"}}, "required": ["key", "operator", "waits_on_operator", "decision_id"]},
+    "LiftOperatorGateBody": {"type": "object", "properties": {"key": {"type": "string"}, "decision_id": {"type": "string"}}, "required": ["key", "decision_id"]},
     "SetKindBody": {"type": "object", "properties": {"key": {"type": "string"}, "kind": {"enum": ["question", "operator_task"]}}, "required": ["key", "kind"]},
     "Empty": {"type": "object"},
     "Event": {"type": "object", "properties": {"seq": {"type": "integer", "minimum": 1}, "ts": {"type": "string"}, "actor": {"type": ["string", "null"]}, "role": {"type": ["string", "null"]}, "model": {"type": ["string", "null"]}, "key": {"type": ["string", "null"]}, "type": {"type": "string"}, "payload": {"type": "object"}, "prev_hash": {"type": "string", "pattern": "^([0-9a-f]{64})?$"}, "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "required": ["seq", "ts", "actor", "role", "model", "key", "type", "payload", "prev_hash", "hash"], "additionalProperties": false},
