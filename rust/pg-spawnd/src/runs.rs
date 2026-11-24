@@ -99,6 +99,8 @@ impl Runs {
             }
             Err(err) => return Err(err),
         };
+        // Until the supervisor has the run, any refusal or error removes the slot the adapter made.
+        let mut slot_guard = crate::slot_guard::SlotGuard::new(launch.review_slot.clone());
         let review = match crate::prompt::prepare_launch(args, &leg, &mut launch, dry) {
             Ok(dispatch) => dispatch,
             Err(ToolError::Refused {
@@ -176,6 +178,7 @@ impl Runs {
         if started["status"] == "refused" {
             return Ok(started);
         }
+        slot_guard.release();
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
 
@@ -196,6 +199,7 @@ impl Runs {
         dry: bool,
         group_meta: Option<(&str, usize, usize, &[String])>,
     ) -> Result<Value, ToolError> {
+        let mut slot_guard = crate::slot_guard::SlotGuard::new(launch.review_slot.clone());
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
@@ -316,7 +320,7 @@ impl Runs {
                 review_slot: launch.review_slot,
             };
             match self.supervisor.start(spec) {
-                Ok(()) => {}
+                Ok(()) => slot_guard.release(),
                 Err(SupervisorError::QueueFull) => {
                     base["events"] = json!(events);
                     base["refusal"] = json!("QueueFull");

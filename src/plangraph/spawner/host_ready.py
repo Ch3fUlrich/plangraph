@@ -20,7 +20,6 @@ from .host_ready_source import (
     select_drive,
     legacy_cache_roots as _legacy_cache_roots,
     pool_slot_roots as _pool_slot_roots,
-    review_pool,
     record_disk_floor_alarm as _record_disk_floor_alarm,
     windows_cargo_lease as _windows_cargo_lease,
     HOST_TIMEOUT, probe_host, python_test_tools,
@@ -78,23 +77,6 @@ def harness_path(env, *, native_writer=False):
 def shared_cargo_target():
     return Path(os.environ.get('PLANGRAPH_CARGO_TARGET_DIR',
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()
-
-
-def review_cargo_slot(job_id, leases=None):
-    """Private build directory of one review seat: a ``slot-review-<id>`` of the capped pool.
-
-    It sits beside the shared target in the same ``<target>-pool`` that admission cleanup and
-    ``pg-disk-hygiene`` already enumerate and trim to ``PLANGRAPH_CARGO_TARGET_CAP_GB``. With
-    ``leases``, the shared lease hygiene checks for this slot is taken first and kept in
-    ``leases[job_id]`` until the seat ends, so a trim never removes a running seat's build.
-    """
-    pool = review_pool(shared_cargo_target())
-    safe = ''.join(c for c in str(job_id) if c.isalnum() or c in '-_') or 'seat'
-    slot = pool / f'slot-review-{safe}'
-    if leases is not None:
-        leases[job_id] = _cargo_lease_for(slot)
-    slot.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return slot
 
 
 def cargo_child_env(env, *, pin_configured=False, target=None):

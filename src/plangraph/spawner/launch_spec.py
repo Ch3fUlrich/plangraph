@@ -21,6 +21,7 @@ from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
 from .host_ready import harness_path
+from .review_slot import drop_review_slot
 from .inline_diff import InlineDiffError
 from .resolver import host_skip_reason_async, admitted_by_render
 from .service import SpawnService
@@ -246,14 +247,6 @@ def allocated_review_slot(allocated, env):
     target = Path(env.get('CARGO_TARGET_DIR') or '/')
     named = slot.name.startswith('slot-review-') and slot.parent.name.endswith('-pool')
     return str(slot) if named and target.parent == slot else None
-
-
-def drop_review_slot(slot):
-    """Remove the review slot this launch allocated; only a path ``allocated_review_slot`` returned is removed."""
-    if slot:
-        shutil.rmtree(slot, ignore_errors=True)
-        # The slot's name is unique to this launch and its lease is closed, so its lock file goes too.
-        Path(slot + '.plangraph-lock').unlink(missing_ok=True)
 
 
 class WindowsEnvIncomplete(Exception):

@@ -45,6 +45,7 @@ mod placement;
 mod pre_review;
 mod prompt;
 mod prompt_git;
+mod slot_guard;
 use pg_spawnd::{pyjson, role_header};
 mod reconcile;
 #[allow(dead_code)]
