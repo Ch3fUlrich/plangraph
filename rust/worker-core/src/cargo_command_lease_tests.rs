@@ -55,6 +55,22 @@ fn an_outer_lease_is_reused_and_the_exit_code_is_returned() {
         3
     );
     assert!(!outer_holds(&target, Some(OsStr::new("/elsewhere"))));
+    // A nested command spelling the target through a symlink alias reuses the outer lease.
+    let alias = tmp.path().join("alias");
+    std::os::unix::fs::symlink(&target, &alias).unwrap();
+    std::fs::create_dir_all(&target).unwrap();
+    assert!(outer_holds(&alias, Some(held.as_os_str())));
+    assert_eq!(
+        run_command(
+            Some(&alias),
+            Some(held.as_os_str()),
+            &ok,
+            &[],
+            Duration::ZERO
+        )
+        .unwrap(),
+        3
+    );
     drop(exclusive);
 }
 
