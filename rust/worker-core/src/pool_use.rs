@@ -43,6 +43,8 @@ pub struct Report {
     pub waiting: BTreeMap<String, u64>,
     pub waiting_total: u64,
     pub startable: u64,
+    /// Host admission the sample offered; shared by every window of one tick.
+    pub admission_slots: u64,
     /// `(leg, runs)` to start now, at most `startable` runs in total.
     pub starts: Vec<(String, u64)>,
 }
@@ -82,20 +84,7 @@ impl Pool {
         } else {
             0
         };
-        // Round robin over the legs by name keeps the split deterministic and fair.
-        let mut left = self.waiting.clone();
-        let mut taken: BTreeMap<String, u64> = BTreeMap::new();
-        let mut budget = startable;
-        while budget > 0 {
-            for (leg, n) in left.iter_mut().filter(|(_, n)| **n > 0) {
-                if budget == 0 {
-                    break;
-                }
-                *n -= 1;
-                budget -= 1;
-                *taken.entry(leg.clone()).or_default() += 1;
-            }
-        }
+        let starts = round_robin(&self.waiting, startable);
         Ok(Report {
             pool: self.pool.clone(),
             window: self.window.clone(),
@@ -109,9 +98,27 @@ impl Pool {
             waiting: self.waiting.clone(),
             waiting_total,
             startable,
-            starts: taken.into_iter().collect(),
+            admission_slots: self.admission_slots,
+            starts,
         })
     }
+}
+
+/// Round robin over the legs by name keeps the split deterministic and fair.
+fn round_robin(waiting: &BTreeMap<String, u64>, mut budget: u64) -> Vec<(String, u64)> {
+    let mut left = waiting.clone();
+    let mut taken: BTreeMap<String, u64> = BTreeMap::new();
+    while budget > 0 && left.values().any(|n| *n > 0) {
+        for (leg, n) in left.iter_mut().filter(|(_, n)| **n > 0) {
+            if budget == 0 {
+                break;
+            }
+            *n -= 1;
+            budget -= 1;
+            *taken.entry(leg.clone()).or_default() += 1;
+        }
+    }
+    taken.into_iter().collect()
 }
 
 fn per_leg(map: &BTreeMap<String, u64>) -> String {
@@ -159,21 +166,35 @@ impl Report {
         format!("pool-underuse {} {}", self.pool, self.window)
     }
 
-    /// The dispatcher's input: the runs to start now, or `None` when there are none.
-    pub fn start_event(&self) -> Option<serde_json::Value> {
-        (!self.starts.is_empty()).then(|| {
-            serde_json::json!({"kind":"pool-fill","pool":self.pool,"window":self.window,
-                "starts":self.starts.iter().map(|(leg,n)| serde_json::json!({"leg":leg,"runs":n}))
-                    .collect::<Vec<_>>()})
-        })
-    }
-
     pub fn telemetry_row(&self) -> serde_json::Value {
         serde_json::json!({"ts":self.now,"pool":self.pool,"window":self.window,
             "reset_at":self.reset_at,"used_pct":self.used_pct,"pace_pct":self.pace_pct,
             "underused":self.underused,"waiting":self.waiting_total,"startable":self.startable,
             "live":self.live.values().sum::<u64>()})
     }
+}
+
+/// The dispatcher's input for one tick: the runs to start now over every under-used
+/// window, or `None` when there are none. The windows of a pool see the same ready work
+/// and draw on the same host admission, so work is counted once (the largest per-leg
+/// count) and the tick's total never exceeds the smallest admission any sample offered.
+pub fn fill_event(reports: &[Report]) -> Option<serde_json::Value> {
+    let live: Vec<&Report> = reports.iter().filter(|r| r.underused).collect();
+    let budget = live.iter().map(|r| r.admission_slots).min()?;
+    let mut waiting: BTreeMap<String, u64> = BTreeMap::new();
+    for report in &live {
+        for (leg, n) in &report.waiting {
+            let seen = waiting.entry(leg.clone()).or_default();
+            *seen = (*seen).max(*n);
+        }
+    }
+    let starts = round_robin(&waiting, budget);
+    (!starts.is_empty()).then(|| {
+        serde_json::json!({"kind":"pool-fill",
+            "windows":live.iter().map(|r| format!("{} {}", r.pool, r.window)).collect::<Vec<_>>(),
+            "starts":starts.iter().map(|(leg,n)| serde_json::json!({"leg":leg,"runs":n}))
+                .collect::<Vec<_>>()})
+    })
 }
 
 /// Append the report as one JSON line unless the file's newest row for the same

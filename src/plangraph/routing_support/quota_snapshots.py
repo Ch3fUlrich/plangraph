@@ -203,11 +203,12 @@ class QuotaGate:
         if provider is None or unavailable(status):
             return status
         now = self.clock() if now is None else now
-        until = pool_down_until(self._snapshot(), provider, now, min_pct=_min_pct())
+        rows = self._snapshot()   # one read per decision: with ttl 0 a second read could differ
+        until = pool_down_until(rows, provider, now, min_pct=_min_pct())
         if until is None:
             return status
         passed = self._probe_pass(model)
-        if passed is not None and passed > pool_seen_at(self._snapshot(), provider):
+        if passed is not None and passed > pool_seen_at(rows, provider):
             return status
         return dict(state='limited', reason='quota_snapshot', evidence=dict(
             status=429, body_excerpt=f'omniroute {provider} pool at 0%, resets at {until:.0f}',

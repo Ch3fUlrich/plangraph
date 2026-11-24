@@ -666,3 +666,42 @@ def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkey
     assert roles[writer.id] is None
     assert all(roles[leg_id] == 'review' for leg_id in roles if leg_id != writer.id) and len(roles) > 1
     assert store.leg_status(leg_probe.key(writer))['state'] != 'down'
+
+
+@pytest.mark.parametrize('retry_age', [599, 601])
+def test_scheduled_codex_probe_clears_a_booked_usage_limit_before_its_reset(tmp_path, monkeypatch, retry_age):
+    """D-6804: an upgraded plan lifts a Codex usage limit; the review sweep must find that out."""
+    from plangraph.planner import legs
+    from plangraph.spawner import leg_probe
+
+    leg = next(row for row in legs.routed_review_legs() if row.id == legs.REVIEW_GPT)
+    monkeypatch.setattr(legs, 'spawnable_legs', lambda: (leg,))
+    monkeypatch.setattr(legs, 'routed_review_legs', lambda: (leg,))
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name, *, path=None: '/bin/codex' if name == 'codex' else None)
+    clock = [10_000]
+    monkeypatch.setattr(leg_probe.time, 'time', lambda: clock[0])
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    model = leg_probe.key(leg)
+    store.record_harness_limit(model, "HTTP 429: You've hit your usage limit, resets in 72h",
+                               'spawner:harness', now=clock[0], harness='codex')
+    failed_at = clock[0] + 1
+    store.record_probe_fail(model, 'still limited', 'review-probe', now=failed_at)
+    assert store.leg_status(model, now=failed_at)['state'] == 'limited'
+    calls = []
+
+    async def spawn(**kwargs):
+        calls.append(kwargs['model_or_combo'])
+        return SimpleNamespace(job_id='probe', status='completed', exit_code=0, stdout='OK')
+
+    async def cancel(job_id):
+        pass
+
+    runner = SimpleNamespace(leg_reader=store, spawn=spawn, cancel=cancel)
+    clock[0] = failed_at + retry_age
+    result = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+    if retry_age < 600:   # bounded: no second probe call inside ten minutes of the last attempt
+        assert calls == [] and result['limited_legs'] == [leg.id]
+        assert store.leg_status(model, now=clock[0])['state'] == 'limited'
+        return
+    assert calls == [leg.model] and result['probes'][0]['ok'] and result['limited_legs'] == []
+    assert store.leg_status(model, now=clock[0])['state'] == 'ok'   # long before the 72 h reset

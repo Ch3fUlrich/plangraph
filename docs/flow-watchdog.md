@@ -257,11 +257,15 @@ the window key; unknown windows are left out); the collector adds the rest. Each
   queues one `POOL-UNDERUSE ... waiting=<n> startable=<min(waiting, admission_slots)>`
   alert (standing identity `pool-underuse <pool> <window>`, kept while the block is missing);
 - hands the dispatcher hook `PLANGRAPH_POOL_START` (JSON argv, same contract as
-  `PLANGRAPH_WATCHDOG_DELIVERY`) one `pool-fill` event with the runs to start per leg, never
-  more than `admission_slots`; admission itself still runs on every start;
+  `PLANGRAPH_WATCHDOG_DELIVERY`) one `pool-fill` event per tick with the runs to start per leg.
+  The under-used windows of a tick share the ready work (counted once, the largest per-leg count)
+  and one host admission budget (the smallest `admission_slots` of the samples); admission itself
+  still runs on every start;
 - appends a row to `<state>/pool-use.jsonl` (time, used, pace, waiting, startable, live),
   at most one per ten minutes per window. A window already past its reset is stale: no alert.
 
 `pool-use-check SAMPLE.json [ROWS.jsonl]` is the same check for digest and scheduler callers.
 A stored usage limit also ends at a successful probe: the quota-snapshot gate stops limiting a
-leg when its last probe passed after the pool's newest snapshot.
+leg when its last probe passed after the pool's newest snapshot (read once per decision), and the
+scheduled review sweep re-probes a leg with a booked Codex 429 every ten minutes (agy: one hour).
+`plangraph quota pool` averages and resets over the accounts still inside their window only.
