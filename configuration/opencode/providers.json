@@ -8,7 +8,7 @@
     },
     "mimo": {
       "package": "@opencode/ai/providers/openai-compatible",
-      "name": "MiMo direct gateway legs (D-2459)",
+      "name": "MiMo legs through OmniRoute provider xiaomi-mimo (base URL and key as the omniroute provider)",
       "env": ["AUTOOS_OMNIROUTE_KEY"],
       "settings": {"baseURL": "http://127.0.0.1:8080/v1"},
       "models": {

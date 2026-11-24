@@ -207,7 +207,7 @@ SEED_PROVIDERS: list[dict[str, Any]] = [
     },
     {
         "provider_id": "mimo",
-        "omniroute_id": "mimo",
+        "omniroute_id": "xiaomi-mimo",
         "tier": "subscription",
         "transport": "gateway",
         "gateway_mode": "omniroute_acp",
@@ -276,6 +276,16 @@ SEED_PROVIDERS: list[dict[str, Any]] = [
         "updated_at": "2026-10-19T00:00:00Z",
     },
 ]
+
+def omniroute_provider_id(provider_id):
+    """The provider id OmniRoute lists for a leg's model prefix (``mimo`` is ``xiaomi-mimo``).
+
+    The one mapping from a leg to its OmniRoute provider: the snapshot lookup, the call-log
+    alias and the catalog row all read ``SEED_PROVIDERS``; an unmapped prefix is its own id.
+    """
+    return next((row["omniroute_id"] for row in SEED_PROVIDERS
+                 if row["provider_id"] == provider_id and row.get("omniroute_id")), provider_id)
+
 
 SEED_CLIENTS: list[dict[str, Any]] = [
     {

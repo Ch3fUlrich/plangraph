@@ -121,9 +121,10 @@ class HarnessBinary:
 
 def _host_harness_table(name):
     """``harness_bins`` of this host in the hosts registry (absolute path per harness)."""
-    try:
-        from plangraph.spawner.overflow import host_config, registry_caps
-        registry = registry_caps()
+    try:   # read quietly: a host without a registry is normal, and every lookup would log it
+        from plangraph.fleet_sync.genconfig import config_dir
+        from plangraph.spawner.overflow import host_config
+        registry = json.loads((config_dir() / "hosts.json").read_text(encoding="utf-8"))
         host = host_config(registry, os.environ.get("PLANGRAPH_HOST_NAME") or registry.get("self"))
         table = host.get("harness_bins")
         value = table.get(name) if isinstance(table, dict) else None
@@ -148,7 +149,7 @@ def resolve_harness_binary(name, env=None, *, search=None):
     from plangraph.spawner.host_ready import harness_path
     env = os.environ if env is None else env
     var = "PLANGRAPH_" + re.sub(r"\W", "_", str(name)).upper() + "_BIN"
-    for source, candidate in (("env", env.get(var)), ("host_table", _host_harness_table(name))):
+    for source, candidate in (("env", env.get(var) or os.environ.get(var)), ("host_table", _host_harness_table(name))):
         if candidate and Path(candidate).is_absolute() and (found := shutil.which(candidate)):
             return HarnessBinary(name, found, (candidate,), source)
     search = harness_path(dict(env)) if search is None else search
