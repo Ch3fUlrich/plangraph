@@ -515,3 +515,77 @@ fn the_report_counts_rounds_by_cause_escalations_and_replans() {
     assert_eq!(report["max_rounds"], 4);
     assert_eq!(report["over_cap"], json!([]));
 }
+
+#[test]
+fn the_initial_implementation_takes_no_round_and_only_the_first_launch_may_be_initial() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = card("initial", 0);
+    args["card"]
+        .as_object_mut()
+        .unwrap()
+        .remove("failing_checks");
+    let admitted = run(dir.path(), &args).ok().unwrap();
+    assert!(admitted.fields.get("writer_round").is_none());
+    assert_eq!(admitted.fields["round_cause"], "initial");
+    let mut fields = admitted.fields.clone();
+    drop(admitted);
+    fields["role"] = json!("implement");
+    fields["item_key"] = json!("p:I");
+    crate::runs::create(
+        dir.path(),
+        "run-init",
+        "fixture",
+        fields,
+        pg_worker_core::run::record::Status::Completed,
+    )
+    .ok()
+    .unwrap();
+    // The first fix turn is round 1, and the report counts no round for the initial run.
+    let first = run(dir.path(), &card("red_ci", 3)).ok().unwrap();
+    assert_eq!(first.fields["writer_round"], 1);
+    drop(first);
+    let records = crate::records::list_runs(dir.path());
+    assert!(report(dir.path(), &records, 0.0, f64::MAX)["items"]
+        .as_object()
+        .unwrap()
+        .is_empty());
+    // After a fix round an initial launch is refused.
+    book(dir.path(), &[red(3)]);
+    assert!(message(run(dir.path(), &args)).starts_with("round_initial_after_fix"));
+}
+
+#[test]
+fn one_batch_key_shares_one_ledger_across_item_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    for (index, item) in ["p:One", "p:Two", "p:One"].into_iter().enumerate() {
+        crate::runs::create(
+            dir.path(),
+            &format!("run-r{}", index + 1),
+            "fixture",
+            json!({"role":"implement", "item_key":item, "batch_key":"p:Batch", "round_pr":PR,
+            "writer_round":index + 1, "round_verdict_file":null, "round_cause":"red_ci",
+            "round_failing_checks":5, "started":1_000.0 + index as f64}),
+            pg_worker_core::run::record::Status::Completed,
+        )
+        .ok()
+        .unwrap();
+    }
+    let mut args = card("red_ci", 5);
+    args["card"]["item_key"] = json!("p:Three");
+    args["card"]["batch_key"] = json!("p:Batch");
+    // Three rounds of three item keys are one ledger: the stall holds the fourth.
+    assert!(message(run(dir.path(), &args)).starts_with("round_replan_pending"));
+    assert_eq!(replans(dir.path())[0]["item"], "p:Batch");
+    // Without the batch key the third item key has a ledger of its own.
+    args["card"].as_object_mut().unwrap().remove("batch_key");
+    assert_eq!(
+        run(dir.path(), &args).ok().unwrap().fields["writer_round"],
+        1
+    );
+    let mut bad = card("red_ci", 5);
+    bad["card"]["batch_key"] = json!("not a key");
+    assert!(message(run(dir.path(), &bad)).starts_with("round_batch_key_invalid"));
+    let records = crate::records::list_runs(dir.path());
+    let report = report(dir.path(), &records, 0.0, f64::MAX);
+    assert_eq!(report["items"]["p:Batch"]["rounds"], 3);
+}

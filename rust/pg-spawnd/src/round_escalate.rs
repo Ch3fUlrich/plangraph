@@ -16,6 +16,17 @@ mod tests;
 /// What can start a writer fix round.
 pub(crate) const CAUSES: [&str; 4] = ["review_finding", "red_ci", "rebase_main", "fast_check"];
 
+/// The first implementation of a batch: not a fix turn, so it takes no round number and uses no
+/// round of the ceiling. Only the first launch of a batch may carry it.
+pub(crate) const INITIAL: &str = "initial";
+
+/// The ledger key of a run record or card: the batch key when it names one, else the item key.
+pub(crate) fn batch_key(value: &Value) -> Option<&str> {
+    value["batch_key"]
+        .as_str()
+        .or_else(|| value["item_key"].as_str())
+}
+
 /// The cause of the round the card starts; a card without one is a review finding.
 pub(crate) fn cause(card: &Value) -> Result<&'static str, ToolError> {
     match card.get("round_cause").filter(|v| !v.is_null()) {
@@ -23,6 +34,7 @@ pub(crate) fn cause(card: &Value) -> Result<&'static str, ToolError> {
         Some(v) => CAUSES
             .iter()
             .copied()
+            .chain([INITIAL])
             .find(|c| v.as_str() == Some(*c))
             .ok_or_else(|| refused("round_cause_invalid")),
     }
@@ -74,7 +86,7 @@ pub(crate) fn report(state: &std::path::Path, records: &[Value], since: f64, unt
     );
     for record in records.iter().filter(|r| r["role"] == "implement") {
         let (Some(item), Some(at)) = (
-            record["item_key"].as_str(),
+            batch_key(record),
             record["started"]
                 .as_f64()
                 .or_else(|| record["ended"].as_f64()),

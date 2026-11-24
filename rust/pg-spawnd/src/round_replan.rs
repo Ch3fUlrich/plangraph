@@ -74,6 +74,9 @@ pub(crate) trait Ports {
     fn plan(&self, leg: &Leg, input: &PlanInput) -> Result<Vec<Vec<String>>, ToolError>;
     fn define_slice(&self, slice: &Slice) -> Result<(), ToolError>;
     fn close_pr_unmerged(&self, pr: &str) -> Result<(), ToolError>;
+    /// Release the keeper claim of `item` so a batch sent back without a PR can be taken again;
+    /// a repeat after success must be harmless to the caller (the job saves the step).
+    fn release_claim(&self, item: &str) -> Result<(), ToolError>;
     /// Deliver `line`; `key` is the same on every retry of this job's report, so a receiver can
     /// drop a repeat. Return Ok only after the receiver or its durable spool took the line.
     fn send_routing(&self, key: &str, line: &str) -> Result<(), ToolError>;
@@ -407,6 +410,12 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         job["closed"] = json!(true);
         save(path, job)?;
     }
+    if returned && job["released"] != true {
+        // The batch goes back to the keeper: its claim is released before the report.
+        ports.release_claim(job["item"].as_str().unwrap_or(""))?;
+        job["released"] = json!(true);
+        save(path, job)?;
+    }
     if job["report"] == "pending" {
         let keys: Vec<_> = slices.iter().filter_map(|s| s["key"].as_str()).collect();
         let state = if keep_open {
@@ -448,7 +457,8 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         save(path, job)?;
     }
     if job["report"] == "sending" {
-        let line = job["report_line"].as_str().unwrap_or("").to_string();
+        // A line saved before the cutoff existed is cut again, never retried oversized.
+        let line = bounded(job["report_line"].as_str().unwrap_or("").to_string(), path);
         ports.send_routing(&report_key(job), &line)?;
         // `sent` only after the delivery was acknowledged.
         job["report"] = json!("sent");
@@ -457,20 +467,45 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
     Ok(())
 }
 
-/// The longest routing line sent: the fleet bus refuses a message of 2000 characters.
+/// The longest routing line sent, in characters: the fleet bus refuses a text over 2000.
 const LINE_MAX: usize = 1800;
+/// The most JSON bytes the line may take of the bus body (4096 bytes with the envelope).
+const LINE_JSON_MAX: usize = 3000;
+
+/// The JSON bytes of `c` in the worst case (`\uXXXX` for a non-ASCII or control character).
+fn json_cost(c: char) -> usize {
+    match c {
+        '"' | '\\' => 2,
+        c if c.is_ascii() && !c.is_ascii_control() => 1,
+        c if c.len_utf16() == 2 => 12,
+        _ => 6,
+    }
+}
 
 /// `line` cut to `LINE_MAX` characters with a pointer to the job file that keeps the full text.
 fn bounded(line: String, path: &Path) -> String {
-    if line.chars().count() <= LINE_MAX {
+    if line.chars().count() <= LINE_MAX
+        && line.chars().map(json_cost).sum::<usize>() <= LINE_JSON_MAX
+    {
         return line;
     }
     let name = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let tail = format!(" ... (full text in replans/{name})");
-    let keep = LINE_MAX - tail.chars().count();
-    format!("{}{tail}", line.chars().take(keep).collect::<String>())
+    let (mut chars, mut bytes) = (
+        tail.chars().count(),
+        tail.chars().map(json_cost).sum::<usize>(),
+    );
+    let mut kept = String::new();
+    for c in line.chars() {
+        if chars + 1 > LINE_MAX || bytes + json_cost(c) > LINE_JSON_MAX {
+            break;
+        }
+        (chars, bytes) = (chars + 1, bytes + json_cost(c));
+        kept.push(c);
+    }
+    format!("{kept}{tail}")
 }
 
 /// Drive one job to its end; on failure the step and the reason stay in the file for the next run.

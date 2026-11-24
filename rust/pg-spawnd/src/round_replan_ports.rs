@@ -215,7 +215,8 @@ impl Ports for CommandPorts<'_> {
         last_round_findings(self.state, item, pr)
     }
 
-    /// The deterministic grouping stands in for the leg's own: it already honours the line
+    /// Slice FIX-ROUNDS-S2-REPLAN-PLANNER-USES-FAILURE-EVIDENCE replaces this size-based grouping
+    /// with the routed planner. The deterministic grouping stands in for the leg's own: it already honours the line
     /// target and covers every counted file once.
     fn plan(&self, _leg: &Leg, input: &PlanInput) -> Result<Vec<Vec<String>>, ToolError> {
         Ok(input.proposal.to_vec())
@@ -259,6 +260,12 @@ impl Ports for CommandPorts<'_> {
         let file = path.to_string_lossy().into_owned();
         self.exec
             .run(Tool::Keeper, &strings(&["define", "--file", &file]))
+            .map(|_| ())
+    }
+
+    fn release_claim(&self, item: &str) -> Result<(), ToolError> {
+        self.exec
+            .run(Tool::Keeper, &strings(&["--json", "release", item]))
             .map(|_| ())
     }
 
