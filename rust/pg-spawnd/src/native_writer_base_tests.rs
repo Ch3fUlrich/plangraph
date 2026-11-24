@@ -271,3 +271,6 @@ for launch in (False, True):
 
 #[path = "native_writer_moving_main_tests.rs"]
 mod moving_main;
+
+#[path = "native_writer_rebase_tests.rs"]
+mod rebase;
