@@ -430,7 +430,15 @@ class SupportMixin:
         """Decode the JSON/bool columns of a raw items row."""
         item["evidence_kinds"] = _json_list(item.get("evidence_kinds"))
         item["operator"] = bool(item.get("operator"))
+        item["supersedes"] = _json_list(item.get("supersedes"))
         return item
+
+    def _superseders(self, key):
+        """Keys of live items whose ``supersedes`` names *key*."""
+        return sorted(row["key"] for row in self.conn.execute(
+            "SELECT key, supersedes FROM items WHERE supersedes LIKE ?"
+            " AND state NOT IN ('done','cancelled')", (f'%"{key}"%',))
+            if key in _json_list(row["supersedes"]))
 
     def _dep_map(self):
         deps = {}
