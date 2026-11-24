@@ -791,24 +791,7 @@ mod idle;
 #[path = "native_writer_placement_tests.rs"]
 mod placement;
 #[path = "native_writer_push_tests.rs"]
-mod push;
+pub(crate) mod push;
 #[cfg(test)]
 #[path = "native_writer_quota_tests.rs"]
 mod quota_tests;
-
-/// Run an accepted writer lifecycle whose host reclaim and push are the real host's.
-/// Returns the record, the writer turns taken and the reviews run.
-pub(crate) fn run_with_host_handoff(
-    accepted: &str,
-    reclaim: Box<dyn FnMut() -> Result<(), String>>,
-    push: Box<dyn FnMut(&str) -> Result<Option<String>, String>>,
-) -> (serde_json::Value, usize, usize) {
-    let mut driver = Fake {
-        head_script: vec!["base", Box::leak(accepted.to_owned().into_boxed_str())],
-        host_reclaim: Some(reclaim),
-        host_push: Some(push),
-        ..fake()
-    };
-    let record = run(&mut driver, json!({}), "brief");
-    (record, driver.calls.len(), driver.reviews.len())
-}
