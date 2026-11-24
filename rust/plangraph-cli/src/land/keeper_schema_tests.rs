@@ -50,3 +50,10 @@ fn only_direct_registry_entries_count_and_strings_comments_and_other_mentions_ar
     assert!(parse_latest("MIGRATIONS = (Migration(1, a),\n").is_err());
     assert_eq!(parse_latest("x = 1\n"), Ok(0));
 }
+
+#[test]
+fn multibyte_characters_in_comments_and_strings_do_not_panic_the_scan() {
+    let text = "MIGRATIONS = (Migration(1, \"héllo — ✓\"), # ünï ✓\n  Migration(2, 'a\\é', X))\n";
+    assert_eq!(parse_latest(text), Ok(2));
+    assert!(parse_latest("MIGRATIONS = (Migration(1, \"é\"),\n").is_err());
+}
