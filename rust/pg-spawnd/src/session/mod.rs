@@ -214,6 +214,7 @@ fn local(
             text: restart.prompt.clone(),
             items: Vec::new(),
             lane_override: None,
+            base: None,
         })
     }) {
         Ok(admitted) => admitted,
@@ -418,6 +419,8 @@ struct Admitted {
     items: Vec<String>,
     /// The reason that admitted a deliberate second lane.
     lane_override: Option<String>,
+    /// The base the batch brief names; the completed head is gated against it.
+    base: Option<String>,
 }
 
 /// The launch prompt of a writer. With `lanes` the item keys of its brief are admitted
@@ -436,6 +439,7 @@ fn read_admitted_prompt(
         None => None,
     };
     let items = crate::lane_guard::item_keys(&brief);
+    let base = crate::batch_writer_brief::admitted_base(&brief).map(str::to_owned);
     let text = match brief {
         Cow::Borrowed(_) => text,
         Cow::Owned(brief) => {
@@ -447,5 +451,6 @@ fn read_admitted_prompt(
         text,
         items,
         lane_override: reason,
+        base,
     })
 }

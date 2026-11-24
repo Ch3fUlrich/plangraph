@@ -359,4 +359,28 @@ pub fn check_batch_prompt(launcher: &Launcher) {
         prompt.split_once("# Run values").map(|(_, run)| run),
         include_str!("../fixtures/batch-writer-run-values.txt").strip_prefix("# Run values"),
     );
+    if matches!(launcher, Launcher::Rust(_)) {
+        check_batch_lane_record(&s);
+    }
+}
+
+/// The Rust launcher keeps the brief's items and admitted base in the launch record and
+/// refuses a second writer for an item a live writer run holds.
+fn check_batch_lane_record(s: &Sandbox) {
+    let spec = s.json("state/launch/sessions/writer-0001.json");
+    let id = spec["run_id"].as_str().expect("fleet run ID");
+    let record = s.json(&format!("xdg/plangraph/runs/{id}/record.json"));
+    assert_eq!(record["brief_items"], json!(["demo:FIXTURE"]));
+    assert_eq!(
+        record["admitted_base"],
+        "1111111111111111111111111111111111111111"
+    );
+    assert_eq!(record["lane_override"], serde_json::Value::Null);
+    let out = s.launch("writer").output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("lane_collision: demo:FIXTURE is held by live lane writer-0001"),
+        "{stderr}"
+    );
 }
