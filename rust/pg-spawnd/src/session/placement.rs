@@ -131,10 +131,12 @@ impl Placement {
         }
         let excepted = self.exceptions.iter().any(|row| {
             row["host"] == name
-                && row["decision"]
+                && row["decision"].as_str().is_some_and(valid_decision)
+                && row["until"]
                     .as_str()
-                    .is_some_and(|d| d.starts_with("D-"))
-                && row["until"].as_str().is_some_and(|until| until >= today)
+                    .and_then(parse_date)
+                    .zip(parse_date(today))
+                    .is_some_and(|(until, today)| until >= today)
         });
         (!excepted).then(|| {
             format!(
@@ -259,7 +261,7 @@ impl Placement {
         } else {
             self.hosts.clone()
         };
-        let compare = self.worker && explicit.is_none() && pool.iter().any(Host::last_resort);
+        let compare = self.worker && explicit.is_none();
         if compare {
             pool.sort_by_key(Host::last_resort);
         } else if let Some(index) = pool.iter().position(|h| self.local(h)) {
@@ -295,11 +297,9 @@ impl Placement {
             if !compare || host.last_resort() {
                 return Ok(host);
             }
-            if best
-                .as_ref()
-                .is_none_or(|(headroom, _)| memory - floor > *headroom)
-            {
-                best = Some((memory - floor, host));
+            // Hosts below their own floor were skipped above; the rest rank by free memory.
+            if best.as_ref().is_none_or(|(free, _)| memory > *free) {
+                best = Some((memory, host));
             }
         }
         best.map(|(_, host)| host)
@@ -410,6 +410,35 @@ pub(super) fn fs_hostname() -> String {
         return String::new();
     }
     String::from_utf8_lossy(name.split(|b| *b == 0).next().unwrap_or_default()).into_owned()
+}
+
+/// `D-` and at least one digit, nothing else.
+fn valid_decision(id: &str) -> bool {
+    id.strip_prefix("D-")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// A real calendar date `YYYY-MM-DD` as `(year, month, day)`.
+fn parse_date(text: &str) -> Option<(i32, u32, u32)> {
+    let b = text.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let digits = |r: std::ops::Range<usize>| {
+        text.get(r)
+            .filter(|t| t.bytes().all(|c| c.is_ascii_digit()))
+            .and_then(|t| t.parse::<u32>().ok())
+    };
+    let (year, month, day) = (digits(0..4)? as i32, digits(5..7)?, digits(8..10)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=days).contains(&day).then_some((year, month, day))
 }
 
 /// Today's UTC date as `YYYY-MM-DD`.

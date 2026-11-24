@@ -127,7 +127,8 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
         .ok()
         .unwrap();
     let log = record.path().with_file_name("live.log");
-    let answer = "No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n";
+    let answer =
+        "No findings in src/lib.rs:1.\nFILES READ: src/lib.rs\nVERDICT: PASS\nTEST_GAMING: no\n";
     std::fs::write(
         &log,
         format!(

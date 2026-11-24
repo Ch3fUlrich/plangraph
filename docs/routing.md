@@ -261,7 +261,7 @@ authentication or secrets diff tries Sonnet first and also seats both OpenCode s
 (`opencode-go-deepseek-v4-flash`, `opencode-go-glm-5.3-flash`, tools mode with checkout reads)
 seat the head when the head's smart seat is limited or has every parallel slot busy (policy
 `review_parallel_slots`, D-6787 clause 6: a head never waits for a smart slot), and the legs after the seat are the
-fallbacks of a run that ends without a verdict. A seat run for several items carries `item_keys` and the head.
+fallbacks of a run that ends without a verdict (a smart seat falls only to other smart legs; if none gives a verdict both weak seats launch and both are required). The pair seats a head only when both weak legs serve; with one down, another served smart leg is the counted seat. A seat run for several items carries `item_keys` and the head.
 `plangraph router go-row` accepts a part with one smart seat, or else two required seats, that each ACCEPT its head with a
 `FILES READ` line naming files, and the keeper reads a seat record (smart or required) without
 `FILES READ` as no seat.

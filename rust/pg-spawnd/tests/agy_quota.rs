@@ -132,10 +132,14 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
         result["sonnet_only"]["first_leg"]["model"],
         "gemini-4-argon-low"
     );
-    // Clause 6: Hydrogen and the pair limited, Argon alone is not a counted seat (one family).
+    // Hydrogen and the pair limited: Argon is the one counted smart seat of the head.
+    assert!(result["sonnet_only"]["error"].is_null());
     assert_eq!(
-        result["sonnet_only"]["error"],
-        "two distinct review families unavailable"
+        result["sonnet_only"]["review_seats"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
     let states = &result["hydrogen"]["agy_quota_states"];
     assert_eq!(states["agy:gemini-4-hydrogen"]["state"], "limited");

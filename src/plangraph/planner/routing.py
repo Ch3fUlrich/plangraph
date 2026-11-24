@@ -711,9 +711,16 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                         for leg in candidates if leg.id == id_ and leg.family not in excluded
                         and not policy.skip_reason(leg, role)), None)
         smart = next((leg for leg in ordered if leg.id == primary), None)
-        if smart is None:
+        served = {leg.id for leg in ordered}
+        weak = [leg for leg in candidates if leg.id in REVIEW_REQUIRED and leg.family not in excluded
+                and not policy.skip_reason(leg, role)]
+        if smart is None and len(weak) == len(REVIEW_REQUIRED) and all(leg.id in served for leg in weak):
+            # Both weak legs serve: the pair seats the head and leads its own fallbacks.
             ordered = [*(leg for leg in ordered if leg.id in REVIEW_REQUIRED),
                        *(leg for leg in ordered if leg.id not in REVIEW_REQUIRED)]
+        elif smart is None:
+            # The pair is incomplete (a leg limited, fenced or off): any other served smart leg is the counted seat.
+            smart = next((leg for leg in ordered if leg.id in REVIEW_SMART), None)
         if smart is not None:
             # Rule 3.66 (f10): one counted seat on the first smart leg; the weak pair seats only when none serves.
             smart_seat = True

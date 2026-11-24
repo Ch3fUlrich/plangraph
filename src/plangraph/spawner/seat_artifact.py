@@ -61,6 +61,21 @@ def seat_reasons(families, reasons):
     return tuple(dict.fromkeys(reasons))
 
 
+def lone_smart_seat(plan):
+    """True for a plan whose one counted seat is a smart leg (rule 3.66 f10)."""
+    from plangraph.planner.legs import REVIEW_REQUIRED, REVIEW_SMART
+    return (len(plan.review_seats) == 1 and plan.review_seats[0].id in REVIEW_SMART
+            and any(leg.id in REVIEW_REQUIRED for leg in plan.legs))
+
+
+def weak_pair(plan, writers):
+    """The weak pair's legs of ``plan`` when every weak leg that no writer family fences is routed, else ()."""
+    from plangraph.planner.legs import REVIEW_REQUIRED
+    from plangraph.planner.seats import seat_family
+    routed = [leg for leg in plan.legs if leg.id in REVIEW_REQUIRED and seat_family(leg.family) not in writers]
+    return tuple(routed) if len(routed) == len(REVIEW_REQUIRED) else ()
+
+
 def reserve_seat_families(plan, writers):
     """Give each canonical spare family, with all its alternates, one owner."""
     from plangraph.planner.seats import seat_family, writer_parts
@@ -73,6 +88,14 @@ def reserve_seat_families(plan, writers):
         raise SpawnRefused('distinct_family_unavailable: review seat is a writer family')
     owners = {seat_family(seat.family): i for i, seat in enumerate(plan.review_seats)}
     spares, next_slot = [[] for _ in plan.review_seats], 0
+    if lone_smart_seat(plan):
+        # Rule 3.66 (f10): the smart seat falls only to other smart legs; a run that still ends without a
+        # verdict then launches both weak seats (``weak_pair_plans``), never one weak leg in its slot.
+        from plangraph.planner.legs import REVIEW_SMART
+        seat = plan.review_seats[0]
+        spares[0] = [leg for leg in plan.legs if leg.id in REVIEW_SMART and leg.id != seat.id
+                     and seat_family(leg.family) not in writers]
+        return spares, owners
     for spare in plan.legs:
         family = seat_family(spare.family)
         if family in writers:

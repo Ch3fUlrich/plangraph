@@ -3,10 +3,32 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-/// A host with at least this much free memory (MB) admits a writer.
-const ADMIT_FREE_MB: i64 = 4096;
+/// Free memory (MB) a host needs to admit a writer when the host policy names no floor for it.
+const DEFAULT_FLOOR_MB: i64 = 4096;
 /// Writers in an hour before concentration on one host is a finding.
 const MIN_WRITERS: u64 = 2;
+
+/// Per-host memory floors (MB) from the host policy file named by `FLEET_HOST_POLICY`, if any.
+pub(crate) fn policy_floors() -> BTreeMap<String, i64> {
+    let policy = std::env::var_os("FLEET_HOST_POLICY")
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    policy
+        .as_ref()
+        .and_then(|p| p["hosts"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|host| {
+            let gib = host["memory_floor_gib"]
+                .as_f64()
+                .filter(|g| g.is_finite())?;
+            Some((
+                host["name"].as_str()?.to_owned(),
+                (gib * 1024.0).ceil() as i64,
+            ))
+        })
+        .collect()
+}
 
 fn host_of(record: &Value) -> Option<&str> {
     record["placement"]["host"]
@@ -22,38 +44,54 @@ fn started(record: &Value) -> Option<i64> {
         .map(|t| t as i64)
 }
 
+/// A launch that never started work: refusals, queue entries and dry runs are no launches.
+fn launched(record: &Value) -> bool {
+    !matches!(
+        record["status"].as_str(),
+        Some("dry_run" | "refused" | "queued" | "skipped")
+    )
+}
+
 /// `(rows, alerts)` for the hours of `[since, until)`. A row is `{hour, host, role, runs, free_mb}`
-/// (`free_mb` is the last recorded free memory of the host in that hour, or null).
+/// (`free_mb` is the last free memory the admission recorded for the host in that hour, or null).
+/// Admission is judged only from samples of the same hour; a host with no sample that hour is unknown
+/// (an idle host leaves no sample) and is never assumed to admit.
 pub(crate) fn placement_hourly(
     records: &[Value],
+    floors: &BTreeMap<String, i64>,
     since: i64,
     until: i64,
 ) -> (Vec<Value>, Vec<String>) {
-    // (hour, host, role) -> (runs, free_mb), and the latest free memory per host by time.
     let mut cells = BTreeMap::<(i64, String, String), (u64, Option<i64>)>::new();
-    let mut free_at = BTreeMap::<String, (i64, i64)>::new();
+    // (hour, host) -> (time of the sample, free_mb): the latest sample of that hour.
+    let mut samples = BTreeMap::<(i64, String), (i64, i64)>::new();
     for record in records {
         let (Some(host), Some(ts)) = (host_of(record), started(record)) else {
             continue;
         };
-        if ts < since || ts >= until || matches!(record["status"].as_str(), Some("dry_run")) {
+        if ts < since || ts >= until {
             continue;
         }
-        let role = record["role"].as_str().unwrap_or("implement");
+        let hour = ts - ts.rem_euclid(3600);
         let free = record["placement"]["free_mb"]
             .as_f64()
             .filter(|m| m.is_finite())
             .map(|m| m as i64);
+        if let Some(free) = free {
+            let sample = samples.entry((hour, host.into())).or_insert((ts, free));
+            if sample.0 <= ts {
+                *sample = (ts, free);
+            }
+        }
+        if record["status"].as_str() == Some("dry_run") || !launched(record) {
+            continue;
+        }
+        let role = record["role"].as_str().unwrap_or("implement");
         let cell = cells
-            .entry((ts - ts.rem_euclid(3600), host.into(), role.into()))
+            .entry((hour, host.into(), role.into()))
             .or_insert((0, None));
         cell.0 += 1;
         cell.1 = free.or(cell.1);
-        if let Some(free) = free {
-            if free_at.get(host).is_none_or(|(at, _)| *at <= ts) {
-                free_at.insert(host.into(), (ts, free));
-            }
-        }
     }
     let rows = cells
         .iter()
@@ -76,10 +114,12 @@ pub(crate) fn placement_hourly(
         if total < MIN_WRITERS {
             continue;
         }
-        if let Some((other, (_, free))) = free_at
-            .iter()
-            .find(|(host, (_, free))| *host != holder && *free >= ADMIT_FREE_MB)
-        {
+        let admits = samples.iter().find(|((h, host), (_, free))| {
+            *h == hour
+                && host != holder
+                && *free >= floors.get(host).copied().unwrap_or(DEFAULT_FLOOR_MB)
+        });
+        if let Some(((_, other), (_, free))) = admits {
             alerts.push(format!(
                 "ALERT writers concentrated: hour={hour} host={holder} writers={total} while host={other} admits free_mb={free}"
             ));
@@ -96,6 +136,10 @@ mod tests {
         json!({"role": role, "started": ts, "placement": {"host": host, "free_mb": free}})
     }
 
+    fn none() -> BTreeMap<String, i64> {
+        BTreeMap::new()
+    }
+
     #[test]
     fn rows_count_runs_per_hour_host_and_role_with_the_last_free_memory() {
         let records = [
@@ -104,7 +148,7 @@ mod tests {
             run("b", "review", 3800, 20000),
             run("a", "implement", 7300, 7000),
         ];
-        let (rows, _) = placement_hourly(&records, 0, 10_000);
+        let (rows, _) = placement_hourly(&records, &none(), 0, 10_000);
         assert_eq!(
             rows,
             [
@@ -122,33 +166,65 @@ mod tests {
             run("a", "implement", 3700, 2000),
             run("b", "review", 3800, 30000),
         ];
-        let (_, alerts) = placement_hourly(&all_one, 0, 10_000);
+        let (_, alerts) = placement_hourly(&all_one, &none(), 0, 10_000);
         assert_eq!(alerts.len(), 1, "{alerts:?}");
         assert!(alerts[0].contains("host=a") && alerts[0].contains("host=b admits"));
-        // Writers on two hosts, one writer only, or no admitting host: no alert.
         let spread = [
             run("a", "implement", 3600, 2000),
             run("b", "implement", 3700, 30000),
         ];
-        assert!(placement_hourly(&spread, 0, 10_000).1.is_empty());
+        assert!(placement_hourly(&spread, &none(), 0, 10_000).1.is_empty());
         let single = [
             run("a", "implement", 3600, 2000),
             run("b", "review", 3800, 30000),
         ];
-        assert!(placement_hourly(&single, 0, 10_000).1.is_empty());
+        assert!(placement_hourly(&single, &none(), 0, 10_000).1.is_empty());
         let none_admit = [
             run("a", "implement", 3600, 2000),
             run("a", "implement", 3700, 2000),
             run("b", "review", 3800, 1000),
         ];
-        assert!(placement_hourly(&none_admit, 0, 10_000).1.is_empty());
+        assert!(placement_hourly(&none_admit, &none(), 0, 10_000)
+            .1
+            .is_empty());
     }
 
     #[test]
-    fn runs_outside_the_window_and_dry_runs_are_not_counted() {
+    fn admission_uses_the_hosts_own_floor_and_only_the_same_hours_sample() {
+        let records = [
+            run("a", "implement", 3600, 2000),
+            run("a", "implement", 3700, 2000),
+            run("b", "review", 3800, 9000),
+        ];
+        // b's floor is 12 GiB: 9000 MB does not admit; with an 8 GiB floor it does.
+        let high = BTreeMap::from([("b".to_owned(), 12 * 1024)]);
+        assert!(placement_hourly(&records, &high, 0, 10_000).1.is_empty());
+        let low = BTreeMap::from([("b".to_owned(), 8 * 1024)]);
+        assert_eq!(placement_hourly(&records, &low, 0, 10_000).1.len(), 1);
+        // A later hour's sample of b never claims b admitted an earlier hour.
+        let later = [
+            run("a", "implement", 3600, 2000),
+            run("a", "implement", 3700, 2000),
+            run("b", "review", 7300, 30000),
+        ];
+        assert!(placement_hourly(&later, &none(), 0, 10_000).1.is_empty());
+    }
+
+    #[test]
+    fn refusals_queue_entries_and_dry_runs_are_not_launches() {
+        let mut refused = run("a", "implement", 3600, 2000);
+        refused["status"] = json!("refused");
         let mut dry = run("a", "implement", 3700, 2000);
         dry["status"] = json!("dry_run");
-        let records = [run("a", "implement", 50_000, 2000), dry];
-        assert!(placement_hourly(&records, 0, 10_000).0.is_empty());
+        let records = [refused, dry, run("b", "review", 3800, 30000)];
+        let (rows, alerts) = placement_hourly(&records, &none(), 0, 10_000);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(alerts.is_empty());
+    }
+
+    #[test]
+    fn runs_outside_the_window_are_not_counted() {
+        let records = [run("a", "implement", 50_000, 2000)];
+        assert!(placement_hourly(&records, &none(), 0, 10_000).0.is_empty());
     }
 }

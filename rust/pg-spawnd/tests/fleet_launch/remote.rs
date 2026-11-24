@@ -61,8 +61,28 @@ pub fn check(launcher: &Launcher) {
     fs::write(s.path("windows-kb"), "12582912\n").unwrap();
     let out = s.launch("writer").arg("--dry-run").output().unwrap();
     s.expect(&out, 0, DRY, "");
-    assert_eq!(s.json("ssh.json")["payload"]["host"], "fixture-other");
+    // Rust ranks the hosts above their own floor by free memory (remote 12 GiB at its 12 GiB floor beats
+    // other's 8 GiB); the pinned Python launcher ranks by headroom over the floor.
+    let expected = if matches!(launcher, Launcher::Rust(_)) {
+        "fixture-remote"
+    } else {
+        "fixture-other"
+    };
+    assert_eq!(s.json("ssh.json")["payload"]["host"], expected);
     s.no_launch();
+    if matches!(launcher, Launcher::Rust(_)) {
+        // Below its own floor the remote host never wins on free memory: the other host is chosen.
+        fs::write(s.path("windows-kb"), "7340032\n").unwrap();
+        let out = s.launch("writer").arg("--dry-run").output().unwrap();
+        s.expect(
+            &out,
+            0,
+            DRY,
+            "skip fixture-remote: MemAvailable 7168 MB < floor 12288 MB\n",
+        );
+        assert_eq!(s.json("ssh.json")["payload"]["host"], "fixture-other");
+        s.no_launch();
+    }
 
     fs::write(s.path("windows-kb"), "11534336\n").unwrap();
     let out = s

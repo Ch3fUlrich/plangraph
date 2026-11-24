@@ -78,9 +78,8 @@ def test_the_lone_smart_seat_slot_holds_the_next_smart_legs_before_the_weak_pair
     plan = review(("gpt",))
     spares, owners = reserve_seat_families(plan, ("gpt",))
     ids = [leg.id for leg in spares[0]]
-    assert ids[:2] == [REVIEW_ARGON_LOW, REVIEW_ARGON]
-    assert ids.index(REVIEW_ARGON) < ids.index(REVIEW_REQUIRED[0])
-    assert REVIEW_HYDROGEN not in ids
+    assert ids == [REVIEW_ARGON_LOW, REVIEW_ARGON]   # smart legs only: the weak pair launches as two seats, not as a spare
+    assert not set(ids) & set(REVIEW_REQUIRED) and REVIEW_HYDROGEN not in ids
 
 
 # Rule 3.66 (f10) clause 6 (D-6787): the weak pair also seats a head whose smart seat is limited or busy.
@@ -127,3 +126,19 @@ def test_the_service_reports_a_smart_leg_busy_only_when_every_slot_is_running(tm
                                (cap, {"status": "completed"}, ()), (cap, {"role": "implement"}, ())):
         monkeypatch.setattr(service, "ps", lambda n=n, other=other: running(n, **other))
         assert service.busy_review_legs() == expected, (n, other)
+
+
+GLM = BY_ID[REVIEW_REQUIRED[1]].model
+ARGONS = {"gemini-4-argon-low", "gemini-4-argon-medium"}
+
+
+def test_an_incomplete_weak_pair_is_not_reported_as_the_pair():
+    # Hydrogen limited and GLM down: DeepSeek plus Argon is no pair; Argon is the one counted seat.
+    plan = routed(("gpt",), down=HYDROGEN | {GLM})
+    assert seats(plan) == [REVIEW_ARGON_LOW] and plan.error is None
+    # Every Gemini leg and GLM down: Sonnet is the counted seat for a GPT head.
+    assert seats(routed(("gpt",), down=GEMINI | {GLM})) == [REVIEW_SONNET]
+    # A Claude head has no Sonnet: DeepSeek cannot be a "pair" alone, so two families seat it or it errors.
+    plan = routed(("claude",), down=GEMINI | {GLM})
+    assert REVIEW_REQUIRED[1] not in seats(plan)
+    assert not (plan.error is None and seats(plan) == [REVIEW_REQUIRED[0], REVIEW_ARGON_LOW])

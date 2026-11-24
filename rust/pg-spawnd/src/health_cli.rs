@@ -53,7 +53,12 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let mut result = crate::health_report::build_report(&records, &evidence, since, until)
         .map_err(|e| e.to_string())?;
     result["review_legs"] = crate::review_health::report(&state, &records, since, until);
-    let (rows, alerts) = crate::health_report_placement::placement_hourly(&records, since, until);
+    let (rows, alerts) = crate::health_report_placement::placement_hourly(
+        &records,
+        &crate::health_report_placement::policy_floors(),
+        since,
+        until,
+    );
     result["placement_hourly"] = serde_json::json!(rows);
     result["placement_alerts"] = serde_json::json!(alerts);
     if flags.contains_key("--baseline") {

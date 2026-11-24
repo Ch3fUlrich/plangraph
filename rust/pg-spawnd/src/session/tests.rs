@@ -250,6 +250,28 @@ fn a_writer_naming_a_host_is_refused_while_placement_is_on_unless_routing_dated_
         .is_some(),
         "other host"
     );
+    // A bare "D-", a non-numeric id, and an unparsable or impossible date never count.
+    let row = |decision: &str, until: &str| serde_json::json!({"host_exceptions": [{"host": "worker-b", "decision": decision, "until": until}]});
+    for (decision, until) in [
+        ("D-", "2026-11-30"),
+        ("D-x1", "2026-11-30"),
+        ("D-6741", "tomorrow"),
+        ("D-6741", "2026-02-30"),
+        ("D-6741", "2026-13-01"),
+        ("D-6741", ""),
+    ] {
+        assert!(
+            refusal(row(decision, until), "writer", "worker-b", "2026-11-24").is_some(),
+            "{decision} {until}"
+        );
+    }
+    assert!(refusal(
+        row("D-6741", "2028-02-29"),
+        "writer",
+        "worker-b",
+        "2026-11-24"
+    )
+    .is_none());
     let unlisted = Placement::with_hostname(
         None,
         Some("writer"),
@@ -269,4 +291,57 @@ fn today_is_an_iso_date() {
     let today = placement::today();
     assert_eq!(today.len(), 10);
     assert!(today.starts_with("20") && today.as_bytes()[4] == b'-' && today.as_bytes()[7] == b'-');
+}
+
+#[test]
+fn a_writer_ranks_the_hosts_above_their_own_floor_by_free_memory_with_or_without_a_last_resort() {
+    use placement::Placement;
+    // Unequal floors: "big" has the most free memory but is below its own floor; "mid" has the
+    // larger headroom but less free memory than "high".
+    let policy = serde_json::json!({"worker_roles": ["writer"], "hosts": [
+        {"name": "mid", "memory_floor_gib": 1},
+        {"name": "big", "memory_floor_gib": 64},
+        {"name": "high", "memory_floor_gib": 10}
+    ]});
+    let placement =
+        Placement::with_hostname(Some(&policy), Some("writer"), "mid".into(), "mid".into());
+    let pick = |gib: [u64; 3]| {
+        placement
+            .select_with(None, |host, _| {
+                Some(
+                    gib[["mid", "big", "high"]
+                        .iter()
+                        .position(|n| *n == host.name())
+                        .unwrap()]
+                        << 10,
+                )
+            })
+            .map(|host| host.name().to_owned())
+    };
+    assert_eq!(
+        pick([8, 60, 12]).unwrap(),
+        "high",
+        "most free memory above its own floor, not most headroom"
+    );
+    assert_eq!(pick([20, 60, 12]).unwrap(), "mid");
+    assert_eq!(
+        pick([8, 70, 12]).unwrap(),
+        "big",
+        "above its floor it wins on free memory"
+    );
+    assert_eq!(pick([8, 60, 9]).unwrap(), "mid");
+    assert!(
+        pick([0, 60, 9]).is_err(),
+        "every host below its floor: no host (no queue)"
+    );
+    // A non-worker role keeps the first admitting host from the local one down.
+    let other =
+        Placement::with_hostname(Some(&policy), Some("reviewer"), "mid".into(), "mid".into());
+    assert_eq!(
+        other
+            .select_with(None, |_, _| Some(100 << 10))
+            .unwrap()
+            .name(),
+        "mid"
+    );
 }
