@@ -169,8 +169,6 @@ fn scan(
 pub const REQUIRED_ENV: [&str; 2] = ["PG_URL", "PG_TOKEN_FILE"];
 /// The variable that moves the role configuration file.
 pub const CONFIG_ENV: &str = "PLANGRAPH_STATE_CONFIG";
-/// The configuration fields that name paths which must already exist (the others are created).
-pub const CONFIG_READS: [&str; 2] = ["transcript", "data_repo"];
 
 /// The role configuration file: the configured path, else the role's file below the user config.
 pub fn config_path(home: &std::path::Path, role: &str, configured: Option<&str>) -> PathBuf {
@@ -178,6 +176,33 @@ pub fn config_path(home: &std::path::Path, role: &str, configured: Option<&str>)
         home.join(".config/plangraph/state-shadow")
             .join(format!("{role}.json"))
     })
+}
+
+/// The role configuration as `state wait` accepts it: it parses, and its role, principal, session,
+/// transcript name, lease margin, repository, start time and decision base are valid.
+fn parse_config(role: &str, bytes: &[u8]) -> Result<Config> {
+    let config: Config =
+        serde_json::from_slice(bytes).map_err(|_| "invalid shadow configuration")?;
+    if config.role != *role
+        || config.principal.is_empty()
+        || !pg_worker_core::turn_budget::safe_name(&config.session_id)
+        || config.transcript.file_stem().and_then(|stem| stem.to_str()) != Some(&config.session_id)
+        || config.lease_margin_seconds <= 0
+        || config.lease_margin_seconds > 86400
+        || !github::valid_repo(&config.github_repo)
+        || chrono::DateTime::parse_from_rfc3339(&config.github_since).is_err()
+        || !local::sha(&config.decision_base)
+    {
+        return Err("shadow role or source configuration invalid".into());
+    }
+    Ok(config)
+}
+
+/// The paths `state wait` reads from a role configuration that it accepts (they must already exist); the
+/// host install dry run checks them with the same validation.
+pub fn read_paths(role: &str, bytes: &[u8]) -> std::result::Result<Vec<PathBuf>, String> {
+    let config = parse_config(role, bytes).map_err(|e| e.to_string())?;
+    Ok(vec![config.transcript, config.data_repo])
 }
 
 pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
@@ -192,22 +217,10 @@ pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
         return Err("usage: plangraph state wait --role ROLE [--once]".into());
     }
     let config_path = config_path(home, role, env.get(CONFIG_ENV).map(String::as_str));
-    let config: Config = serde_json::from_slice(
+    let config = parse_config(
+        role,
         &std::fs::read(&config_path).map_err(|_| "shadow configuration unavailable")?,
-    )
-    .map_err(|_| "invalid shadow configuration")?;
-    if config.role != *role
-        || config.principal.is_empty()
-        || !pg_worker_core::turn_budget::safe_name(&config.session_id)
-        || config.transcript.file_stem().and_then(|stem| stem.to_str()) != Some(&config.session_id)
-        || config.lease_margin_seconds <= 0
-        || config.lease_margin_seconds > 86400
-        || !github::valid_repo(&config.github_repo)
-        || chrono::DateTime::parse_from_rfc3339(&config.github_since).is_err()
-        || !local::sha(&config.decision_base)
-    {
-        return Err("shadow role or source configuration invalid".into());
-    }
+    )?;
     let keeper = Arc::new(crate::keeper_events::Client::new(env)?);
     sources::authorize(&config, &keeper)?;
     let directory = config.directory.join(role);

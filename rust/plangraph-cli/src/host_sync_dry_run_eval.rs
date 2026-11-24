@@ -133,8 +133,12 @@ fn load_env(needs: &Needs, home: &Path, instance: Option<&str>) -> EnvLoad {
                     .push(("file".into(), shown(Path::new(&path), home))),
             },
             None => {
-                load.unverifiable
-                    .get_or_insert_with(|| raw.replace("%h", "~"));
+                let shown_raw = raw.replace("%h", "~");
+                // A mandatory file whose path cannot be expanded is missing whatever the command reads.
+                if !file.optional {
+                    load.missing.push(("file".into(), shown_raw.clone()));
+                }
+                load.unverifiable.get_or_insert(shown_raw);
             }
         }
     }
@@ -262,20 +266,16 @@ pub(super) fn evaluate(
                 .get(crate::state_shadow::CONFIG_ENV)
                 .and_then(|v| expand(v, home));
             let path = crate::state_shadow::config_path(home, role, configured.as_deref());
-            let config = std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
-            let Some(config) = config else {
-                add("file", shown(&path, home));
-                continue;
-            };
-            for field in crate::state_shadow::CONFIG_READS {
-                match config[field].as_str().filter(|p| p.starts_with('/')) {
-                    Some(read) if !Path::new(read).exists() => {
-                        add("path", shown(Path::new(read), home));
+            // The runtime's own validation: a configuration `state wait` refuses is a missing file here.
+            let reads = std::fs::read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| crate::state_shadow::read_paths(role, &bytes));
+            match reads {
+                Err(_) => add("file", shown(&path, home)),
+                Ok(paths) => {
+                    for read in paths.iter().filter(|p| !p.exists()) {
+                        add("path", shown(read, home));
                     }
-                    Some(_) => {}
-                    None => add("file", shown(&path, home)),
                 }
             }
         }
