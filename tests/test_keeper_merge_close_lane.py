@@ -1,6 +1,9 @@
 """Merge-close refusals: one repository under several names, and pre-PR lane merges."""
 import pytest
 
+from keeper_util import to_claimed
+from plangraph.keeper.errors import Refused
+
 from plangraph.keeper.evidence_git import GitAdapter
 from test_keeper_merge_close_auto import auto, env, git, set_states, state  # noqa: F401 - env is a fixture
 
@@ -76,3 +79,35 @@ def test_a_merge_without_pr_or_decision_in_its_subject_still_reads_merged_pr_mis
     env.repo.land("x", "Plan-Item: demo:C", 0, subject="Merge lane/x into main")
     result = auto(env, require_seats=False)
     assert "merged_pr_missing" in result["listed"][0]["reason"]
+
+
+def test_a_named_close_from_open_takes_a_pre_pr_lane_merge(env):
+    """The full-history named close (from_open) reads the same lane_merge proof as the automatic one."""
+    set_states(env)
+    to_claimed(env, "demo:A")
+    env.repo.land("x", "Plan-Item: demo:A", 0, subject="Merge lane/x into main (D-123 fixture lane)")
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    lane_head = git(env.repo.root, "rev-parse", "HEAD^2")
+    path = env.repo.root.parent / "DECISIONS.md"
+    path.write_text(f"| D-123 | demo | GO {lane_head} demo:A merged at {merge} |\n", encoding="utf-8")
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    env.store.ctx["decisions"] = DecisionsAdapter(path)
+    result = env.store.close_merged(env.p("router"), "demo:A", "D-123", from_open=True, apply=True,
+                                    require_seats=False)
+    assert result["state"] == "done"
+    proof = env.store._evidence("demo:A")[-1]["ref"]["prs"][0]
+    assert (proof["kind"], proof["pr"], proof["merge_sha"], proof["head"]) == ("lane_merge", None, merge, lane_head)
+
+
+def test_a_named_close_from_open_refuses_a_lane_merge_the_row_does_not_name(env):
+    set_states(env)
+    to_claimed(env, "demo:A")
+    env.repo.land("x", "Plan-Item: demo:A", 0, subject="Merge lane/x into main (D-123 fixture lane)")
+    lane_head = git(env.repo.root, "rev-parse", "HEAD^2")
+    path = env.repo.root.parent / "DECISIONS.md"
+    path.write_text(f"| D-123 | demo | GO {lane_head} demo:A |\n", encoding="utf-8")
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    env.store.ctx["decisions"] = DecisionsAdapter(path)
+    with pytest.raises(Refused, match="lane_merge_unproven"):
+        env.store.close_merged(env.p("router"), "demo:A", "D-123", from_open=True, apply=True,
+                               require_seats=False)
