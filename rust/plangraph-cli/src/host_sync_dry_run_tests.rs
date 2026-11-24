@@ -210,3 +210,62 @@ fn shell_variables_inside_a_quoted_script_are_not_environment_keys() {
         render.keys
     );
 }
+
+const TEMPLATE: &str = "[Service]\nEnvironmentFile=%h/.config/p/s/%i.env\nExecStart=%h/.local/bin/tool --peer ${PEER}\n";
+
+#[test]
+fn a_template_family_checks_the_keys_of_every_instance_file_on_the_host() {
+    let dir = units(&[("s@.service", TEMPLATE)]);
+    let home = tempfile::tempdir().unwrap();
+    put(home.path(), ".local/bin/tool", "", 0o755);
+    let needs = plan("s@.service", dir.path(), None).unwrap();
+    // No instance file: the host cannot run any instance.
+    fs::create_dir_all(home.path().join(".config/p/s")).unwrap();
+    assert_eq!(
+        missing(&needs, home.path()),
+        ["env PEER", "file ~/.config/p/s/%i.env"]
+    );
+    put(home.path(), ".config/p/s/a.env", "PEER=x\n", 0o600);
+    put(home.path(), ".config/p/s/b.env", "OTHER=1\n", 0o600);
+    put(home.path(), ".config/p/s/notes.txt", "", 0o600);
+    assert_eq!(missing(&needs, home.path()), ["env PEER"]);
+    put(home.path(), ".config/p/s/b.env", "PEER=y\n", 0o600);
+    assert!(missing(&needs, home.path()).is_empty());
+}
+
+#[test]
+fn an_env_file_with_a_specifier_the_dry_run_cannot_expand_is_not_a_pass() {
+    let unit = "[Service]\nEnvironmentFile=%t/p/a.env\nExecStart=/bin/true ${KEY}\n";
+    let dir = units(&[("u.service", unit)]);
+    let home = tempfile::tempdir().unwrap();
+    let needs = plan("u.service", dir.path(), None).unwrap();
+    assert_eq!(missing(&needs, home.path()), ["file %t/p/a.env"]);
+    // A unit that reads no key from it has nothing to verify there.
+    let dir = units(&[(
+        "v.service",
+        "[Service]\nEnvironmentFile=%t/p/a.env\nExecStart=/bin/true\n",
+    )]);
+    let needs = plan("v.service", dir.path(), None).unwrap();
+    assert!(missing(&needs, home.path()).is_empty());
+}
+
+#[test]
+fn a_bare_exec_name_is_found_in_the_manager_search_path_or_the_unit_path() {
+    let dir = units(&[
+        ("a.service", "[Service]\nExecStart=sh -c true\n"),
+        ("b.service", "[Service]\nExecStart=no-such-tool-here --x\n"),
+        (
+            "c.service",
+            "[Service]\nEnvironment=PATH=%h/.local/bin\nExecStart=mytool\n",
+        ),
+        ("d.service", "[Service]\nExecStart=./relative\n"),
+    ]);
+    let home = tempfile::tempdir().unwrap();
+    let check = |name: &str| missing(&plan(name, dir.path(), None).unwrap(), home.path());
+    assert!(check("a.service").is_empty());
+    assert_eq!(check("b.service"), ["binary no-such-tool-here"]);
+    assert_eq!(check("c.service"), ["binary mytool"]);
+    put(home.path(), ".local/bin/mytool", "", 0o755);
+    assert!(check("c.service").is_empty());
+    assert_eq!(check("d.service"), ["binary ./relative"]);
+}

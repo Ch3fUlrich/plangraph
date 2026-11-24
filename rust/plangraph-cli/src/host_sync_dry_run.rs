@@ -272,26 +272,6 @@ fn expand(text: &str, home: &Path) -> Option<String> {
     Some(out)
 }
 
-/// The directory a path with an unknown specifier lives in: everything before its first specifier.
-fn fixed_dir(text: &str, home: &Path) -> Option<PathBuf> {
-    let bytes = text.as_bytes();
-    let (mut cut, mut i) = (text.len(), 0);
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            match bytes.get(i + 1) {
-                Some(b'h' | b'%') => i += 1,
-                _ => {
-                    cut = i;
-                    break;
-                }
-            }
-        }
-        i += 1;
-    }
-    let head = &text[..cut];
-    expand(&head[..head.rfind('/')?], home).map(PathBuf::from)
-}
-
 fn env_file_vars(path: &Path) -> Option<BTreeMap<String, String>> {
     let text = std::fs::read_to_string(path).ok()?;
     let mut vars = BTreeMap::new();
@@ -321,6 +301,84 @@ fn env_file_vars(path: &Path) -> Option<BTreeMap<String, String>> {
     Some(vars)
 }
 
+/// Where the service manager looks for a bare `ExecStart` name.
+const MANAGER_PATH: [&str; 6] = [
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
+];
+
+fn has_instance(path: &str) -> bool {
+    path.contains("%i") || path.contains("%I")
+}
+
+/// The instances a template environment path has on this host (the file names that fit around `%i`), or
+/// the finding that says why they cannot be listed.
+fn instances(path: &str, home: &Path) -> Result<Vec<String>, Missing> {
+    let shown_raw = path.replace("%h", "~");
+    let at = path.find("%i").or_else(|| path.find("%I")).unwrap_or(0);
+    let (head, tail) = (&path[..at], &path[at + 2..]);
+    let (Some(slash), false) = (head.rfind('/'), tail.contains('/')) else {
+        return Err(("file".into(), shown_raw));
+    };
+    let (Some(dir), Some(suffix)) = (expand(&head[..slash], home), expand(tail, home)) else {
+        return Err(("file".into(), shown_raw));
+    };
+    let prefix = &head[slash + 1..];
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Err(("path".into(), shown(Path::new(&dir), home)));
+    };
+    let mut found: Vec<String> = entries
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| {
+            n.len() > prefix.len() + suffix.len() && n.starts_with(prefix) && n.ends_with(&suffix)
+        })
+        .map(|n| n[prefix.len()..n.len() - suffix.len()].to_owned())
+        .collect();
+    found.sort();
+    Ok(found)
+}
+
+/// What the unit's environment holds for one instance (`None`: the unit is not a template instance).
+struct EnvLoad {
+    vars: BTreeMap<String, String>,
+    /// The first environment file whose path cannot be expanded: its keys cannot be known.
+    unverifiable: Option<String>,
+    missing: Vec<Missing>,
+}
+
+fn load_env(needs: &Needs, home: &Path, instance: Option<&str>) -> EnvLoad {
+    let mut load = EnvLoad {
+        vars: needs.environment.clone(),
+        unverifiable: None,
+        missing: Vec::new(),
+    };
+    for file in &needs.env_files {
+        let raw = match instance {
+            Some(i) => file.path.replace("%i", i).replace("%I", i),
+            None if has_instance(&file.path) => continue,
+            None => file.path.clone(),
+        };
+        match expand(&raw, home) {
+            Some(path) => match env_file_vars(Path::new(&path)) {
+                Some(found) => load.vars.extend(found),
+                None if file.optional && !Path::new(&path).exists() => {}
+                None => load
+                    .missing
+                    .push(("file".into(), shown(Path::new(&path), home))),
+            },
+            None => {
+                load.unverifiable
+                    .get_or_insert_with(|| raw.replace("%h", "~"));
+            }
+        }
+    }
+    load
+}
+
 /// Check `needs` against this host. `getenv` reads the host's process environment.
 pub(super) fn evaluate(
     needs: &Needs,
@@ -331,6 +389,10 @@ pub(super) fn evaluate(
     let mut add = |kind: &str, name: String| {
         missing.insert((kind.to_owned(), name));
     };
+    let base = load_env(needs, home, None);
+    for (kind, name) in &base.missing {
+        add(kind, name.clone());
+    }
     for binary in &needs.binaries {
         if binary.starts_with('$') {
             continue;
@@ -338,46 +400,79 @@ pub(super) fn evaluate(
         let Some(path) = expand(binary, home) else {
             continue;
         };
-        if !path.starts_with('/') {
-            add("binary", binary.clone());
-        } else if !is_executable(Path::new(&path)) {
-            add("binary", shown(Path::new(&path), home));
+        if path.contains('/') {
+            if !path.starts_with('/') {
+                add("binary", binary.clone());
+            } else if !is_executable(Path::new(&path)) {
+                add("binary", shown(Path::new(&path), home));
+            }
+        } else {
+            // A simple name is searched in the manager's directories and in the unit's own PATH.
+            let own = base.vars.get("PATH").and_then(|p| expand(p, home));
+            let mut dirs: Vec<String> = MANAGER_PATH.iter().map(|d| (*d).to_owned()).collect();
+            dirs.extend(own.iter().flat_map(|p| p.split(':').map(str::to_owned)));
+            if !dirs
+                .iter()
+                .any(|d| d.starts_with('/') && is_executable(&Path::new(d).join(&path)))
+            {
+                add("binary", binary.clone());
+            }
         }
     }
-    let mut vars = needs.environment.clone();
-    let mut keys_known = true;
-    for file in &needs.env_files {
-        match expand(&file.path, home) {
-            Some(path) => match env_file_vars(Path::new(&path)) {
-                Some(found) => vars.extend(found),
-                None if file.optional && !Path::new(&path).exists() => {}
-                None => add("file", shown(Path::new(&path), home)),
-            },
-            None => {
-                keys_known = false;
-                let dir = fixed_dir(&file.path, home);
-                if !file.optional && !dir.as_ref().is_some_and(|d| d.is_dir()) {
-                    let name = dir.map_or(file.path.clone(), |d| shown(&d, home));
-                    add("path", name);
+    // A template's environment files are read for every instance present on the host.
+    let mut names = BTreeSet::new();
+    for file in needs.env_files.iter().filter(|f| has_instance(&f.path)) {
+        match instances(&file.path, home) {
+            Ok(found) if found.is_empty() && !file.optional => {
+                add("file", file.path.replace("%h", "~"));
+            }
+            Ok(found) => names.extend(found),
+            Err((kind, name)) => {
+                if !file.optional {
+                    add(&kind, name);
                 }
             }
         }
     }
-    for key in needs
-        .keys
-        .iter()
-        .filter(|k| !MANAGER_KEYS.contains(&k.as_str()))
-    {
-        let value = vars.get(key).filter(|v| !v.is_empty());
-        let Some(value) = value else {
-            if keys_known {
-                add("env", key.clone());
+    let runs: Vec<Option<&str>> = if names.is_empty() {
+        vec![None]
+    } else {
+        names.iter().map(|n| Some(n.as_str())).collect()
+    };
+    for run in runs {
+        let load = if run.is_none() {
+            EnvLoad {
+                vars: base.vars.clone(),
+                unverifiable: base.unverifiable.clone(),
+                missing: Vec::new(),
             }
-            continue;
+        } else {
+            load_env(needs, home, run)
         };
-        if let Some(path) = expand(value, home).filter(|p| p.starts_with('/')) {
-            if !Path::new(&path).exists() {
-                add("path", shown(Path::new(&path), home));
+        for (kind, name) in &load.missing {
+            add(kind, name.clone());
+        }
+        let wanted: Vec<_> = needs
+            .keys
+            .iter()
+            .filter(|k| !MANAGER_KEYS.contains(&k.as_str()))
+            .collect();
+        if let (Some(path), false) = (&load.unverifiable, wanted.is_empty()) {
+            // The keys the command reads may live there: the host cannot be shown to have them.
+            add("file", path.clone());
+        }
+        for key in wanted {
+            let value = load.vars.get(key).filter(|v| !v.is_empty());
+            let Some(value) = value else {
+                if load.unverifiable.is_none() {
+                    add("env", key.clone());
+                }
+                continue;
+            };
+            if let Some(path) = expand(value, home).filter(|p| p.starts_with('/')) {
+                if !Path::new(&path).exists() {
+                    add("path", shown(Path::new(&path), home));
+                }
             }
         }
     }
@@ -503,10 +598,12 @@ pub(super) fn run(args: &[OsString]) -> i32 {
         eprintln!("host-sync: HOME is not set");
         return 2;
     };
-    let registry_path = flags
-        .get("--registry")
-        .cloned()
-        .unwrap_or_else(|| home.join(".config/plangraph/hosts.json"));
+    let registry_path = flags.get("--registry").cloned().unwrap_or_else(|| {
+        env.xdg_config_home
+            .clone()
+            .unwrap_or_else(|| home.join(".config"))
+            .join("plangraph/hosts.json")
+    });
     let registry = match HostRegistry::load(&registry_path) {
         Ok(registry) => registry,
         Err(e) => {
