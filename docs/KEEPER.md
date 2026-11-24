@@ -133,7 +133,7 @@ and may set `corrects` to a DONE key (validated by the store: target must be `do
 items: `claim` refuses them (`superseded by KEY`, not overridable by `force_stale`; cancel the superseder or drop its link) and `ready`
 lists them under `needs_reconcile`, so the feeder drops them, as it does items whose cited decision was retired (`superseded_premises`,
 `superseded_contract`). Every create path (`define`, `apply_ops`/md-sync, plan import) runs one similarity check (`item_fields.similar_items`:
-token overlap of title+description, files when both name them, threshold 0.6, same project and kind, open items only) and refuses a near
+token overlap of title (60%) and description (40%), files when both name them, titles of 3+ words only, threshold 0.6, same project and kind, open items only) and refuses a near
 copy with the matching keys until each is answered `similar={KEY: supersedes|depends_on|distinct}`; the answer is stored in the
 `item_created` event. A legacy import only warns.
 

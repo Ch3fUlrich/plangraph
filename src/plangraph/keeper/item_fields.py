@@ -341,7 +341,7 @@ def parse_kg_refs(text):
 SIMILAR_ANSWERS = ("supersedes", "depends_on", "distinct")
 _WORD = re.compile(r"[a-z0-9][a-z0-9_-]{3,}")
 _FILES = re.compile(r"(?m)^files:[ \t]*(.*)$")
-_SIMILAR_MIN_TOKENS = 5
+_SIMILAR_MIN_TOKENS = 3        # words of a title; shorter titles are never matched
 #: EXPERIMENT (rule 3.76): token overlap; replace by embeddings if 7 days of
 #: matches shown / answered supersedes / duplicates found by hand say so.
 SIMILAR_THRESHOLD = 0.6
@@ -355,8 +355,8 @@ def check_similar_answers(value, key=None):
     return value
 
 
-def _tokens(item):
-    return set(_WORD.findall(f"{item.get('title') or ''} {item.get('description') or ''}".lower()))
+def _tokens(item, field):
+    return set(_WORD.findall((item.get(field) or "").lower()))
 
 
 def _files(item):
@@ -372,9 +372,10 @@ def similar_items(definition, items):
     """``[(key, score)]``: open items of the same project and kind that are near
     copies of *definition* by title, description and files (the one function
     every creation path shares)."""
-    mine = _tokens(definition)
+    mine = _tokens(definition, "title")
     if len(mine) < _SIMILAR_MIN_TOKENS:
         return []
+    my_text = _tokens(definition, "description")
     related = {definition.get("under"), definition.get("corrects"), definition.get("fixes"),
                definition.get("slice_parent"), *(definition.get("depends_on") or []),
                *(definition.get("supersedes") or [])}
@@ -385,7 +386,10 @@ def similar_items(definition, items):
                 or other.get("kind") != definition.get("kind")
                 or definition["key"] in (other.get("depends_on") or [])):
             continue
-        score = _jaccard(mine, _tokens(other))
+        # The title carries the weight: boilerplate descriptions alone never match.
+        score = _jaccard(mine, _tokens(other, "title"))
+        if my_text and _tokens(other, "description"):
+            score = 0.6 * score + 0.4 * _jaccard(my_text, _tokens(other, "description"))
         their_files = _files(other)
         if my_files and their_files:
             score = 0.6 * score + 0.4 * _jaccard(my_files, their_files)
