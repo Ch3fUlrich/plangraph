@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
 from .schema import CLAIM_DEFINITION_INDEX_DDL, EVENT_AUDIENCE_DDL, EXIT_CLASSES, INCIDENTS_DDL, JEV_KINDS, JEV_STATUSES, LANDING_CLAIMS_DDL, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL, WINDOW_CLASSES
-from .schema import CRITERIA_AMENDMENTS_TABLE
+from .schema import CATEGORIES_TABLE, CRITERIA_AMENDMENTS_TABLE, START_CATEGORIES
 from .messages_schema import PG as MESSAGES_DDL
 from .schema_pg_spawner import PG as SPAWNER_DDL
 from .schema_pg_baseline import BASELINE as _V1
@@ -388,7 +388,13 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(27, "definition design reference",
                         'ALTER TABLE items ADD COLUMN IF NOT EXISTS design_ref TEXT COLLATE "C";'),
               Migration(28, "item supersedes links",
-                        'ALTER TABLE items ADD COLUMN IF NOT EXISTS supersedes TEXT COLLATE "C";'))
+                        'ALTER TABLE items ADD COLUMN IF NOT EXISTS supersedes TEXT COLLATE "C";'),
+              Migration(29, "item categories",
+                        'ALTER TABLE items ADD COLUMN IF NOT EXISTS category TEXT COLLATE "C";\n'
+                        + CATEGORIES_TABLE.replace("TEXT", 'TEXT COLLATE "C"').replace(
+                            "IF NOT EXISTS ", "")
+                        + "".join(f"INSERT INTO categories(project,name,rank) VALUES('*','{n}',{i})"
+                                  " ON CONFLICT DO NOTHING;\n" for i, n in enumerate(START_CATEGORIES))))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)

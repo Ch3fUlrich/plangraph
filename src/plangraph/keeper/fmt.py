@@ -295,6 +295,12 @@ def needs_you_text(rows) -> str:
         for r in rows or []) or "nothing needs you"
 
 
+def categories_text(data) -> str:
+    rows = (data or {}).get("categories") or []
+    return "\n".join(f"{r['rank']} {r['name']}" for r in rows) + (
+        f"\nuncategorised {data['uncategorised']}" if data else "")
+
+
 def answers_text(rows) -> str:
     return "\n".join(
         f"{r['key']} | {r['decision_id']} | {r['done_at']} | {r['answer']}"

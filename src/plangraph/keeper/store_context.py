@@ -387,7 +387,7 @@ class ContextMixin:
 
     def _ready_items(self, project=None, n=10, owner=None, agent=False):
         """Candidate rows with shared claim facts and presentation status."""
-        items = self._all_items()
+        items = self._rank_items(self._all_items())
         index = {it["key"]: it for it in items}
         states = {key: item["state"] for key, item in index.items()}
         trains = self._open_claim_trains()

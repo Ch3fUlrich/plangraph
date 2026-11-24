@@ -9,6 +9,7 @@ import math
 import re
 from datetime import date
 
+from .. import views
 from .errors import Refused
 
 #: metric and provider names share the budget ``[A-Za-z0-9._:-]{1,64}`` alphabet.
@@ -16,6 +17,16 @@ _NAME_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
 _METRICS_MAX_ITEMS = 50
 _METRICS_MAX_ROWS = 1000
 
+#: Key/track rules of the category backfill, first match wins; no match leaves it to a model pass.
+_CATEGORY_RULES = tuple((c, re.compile(p, re.I)) for c, p in (
+    ("security", r"SECURITY|SECRET|CREDENTIAL|SCRUB|\bAUTH"),
+    ("network", r"NETWORK|PROXY|\bDNS\b|FIREWALL|\bTLS\b|\bNET-"),
+    ("speed", r"SPEED|LATENCY|PERF|SLOW|THROUGHPUT|FASTER|\bFAST\b"),
+    ("efficiency-tokens", r"TOKEN|COST|PROMPT-SIZE"),
+    ("efficiency-quality", r"QUALITY|ACCURACY|PRECISION"),
+    ("reliability", r"RELIAB|FLAKE|FLAKY|WATCHDOG|RETRY|RECOVER|STUCK|HANG|DEAD-SESSION"),
+    ("ui-ux", r"\bUI\b|\bUX\b|WEB-|\bPAGE\b|TABLE-VIEW"),
+    ("cleanup", r"CLEANUP|REMOVE|PRUNE|DEAD-CODE|ARCHIVE")))
 _START_KINDS = frozenset(("planner", "expert", "judge", "answer", "worker_leg"))
 _INITIATORS = frozenset(("operator", "agent"))
 
@@ -133,3 +144,130 @@ class MetricsMixin:
         msg = f"{start_kind}/{initiator}/{provider or '-'}: {reason}"[:500]
         self._audit(principal, "governor_override", None, True, "", msg, now)
         return {"logged": True}
+
+    # ------------------------------------------------ ITEM-CATEGORY-RANKED
+    def _category_list(self, project):
+        """Ranked category names of *project* (its own list, else the default ``*`` list)."""
+        for scope in (project, "*"):
+            names = [r["name"] for r in self.conn.execute(
+                "SELECT name FROM categories WHERE project=? ORDER BY rank, name", (scope,))]
+            if names:
+                return names
+        return []
+
+    def _category_ranks(self):
+        """``{project: {name: rank}}`` for every project that ranks its own list, plus ``*``."""
+        out = {}
+        for r in self.conn.execute("SELECT project, name, rank FROM categories"):
+            out.setdefault(r["project"], {})[r["name"]] = r["rank"]
+        return out
+
+    def _rank_items(self, items):
+        """Give each item ``category_rank``: its place in its project's list, none last."""
+        ranks = self._category_ranks()
+        for item in items:
+            table = ranks.get(item["project"]) or ranks.get("*") or {}
+            item["category_rank"] = table.get(item.get("category"), len(table))
+        return items
+
+    def categories(self, principal, project=None):
+        """The ranked category list of *project* and how many live items have none."""
+        def read(now):
+            names = self._category_list(project or "*")
+            items = [i for i in self._all_items() if i["state"] not in ("done", "cancelled")
+                     and (project is None or i["project"] == project)]
+            return {"categories": [{"name": n, "rank": r} for r, n in enumerate(names)],
+                    "uncategorised": sum(1 for i in items if not i.get("category"))}
+        return self._run(principal, "categories", None, read)
+
+    def add_category(self, principal, name, rank=None):
+        """Append a category to the default list (router only; no code change)."""
+        def add(now):
+            self._require_role(principal, "router")
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,31}", name):
+                raise Refused("validation", "category must match [a-z][a-z0-9-]{1,31}")
+            with self._write():
+                if self.conn.execute("SELECT 1 FROM categories WHERE name=?", (name,)).fetchone():
+                    raise Refused("conflict", f"category {name} exists")
+                last = self.conn.execute(
+                    "SELECT MAX(rank) FROM categories WHERE project='*'").fetchone()[0]
+                self.conn.execute("INSERT INTO categories(project,name,rank) VALUES('*',?,?)",
+                                  (name, (last if last is not None else -1) + 1))
+            return {"added": name}
+        return self._run(principal, "add_category", None, add)
+
+    def rank_categories(self, principal, project, order):
+        """Set *project*'s ranked list (the categories in *order* first, the rest after)."""
+        def rank(now):
+            self._require_role(principal, "router", "oversight")
+            known = self._category_list("*")
+            if not isinstance(project, str) or not project or project == "*":
+                raise Refused("validation", "project must name a project")
+            if (not isinstance(order, list) or len(set(order)) != len(order)
+                    or any(n not in known for n in order)):
+                raise Refused("validation", f"order must list distinct categories of {known}")
+            names = list(order) + [n for n in self._category_list(project) if n not in order]
+            with self._write():
+                self.conn.execute("DELETE FROM categories WHERE project=?", (project,))
+                for r, n in enumerate(names):
+                    self.conn.execute("INSERT INTO categories(project,name,rank) VALUES(?,?,?)",
+                                      (project, n, r))
+            return {"project": project, "order": names}
+        return self._run(principal, "rank_categories", None, rank)
+
+    def backfill_categories(self, principal, project, dry_run=False):
+        """Set the category of live uncategorised items by key and track rules;
+        the unmatched keys are returned for a model pass with a sampled check."""
+        def fill(now):
+            self._require_role(principal, "router")
+            chosen, unmatched = {}, []
+            for item in self._all_items():
+                if (item["project"] != project or item["state"] in ("done", "cancelled")
+                        or item.get("category") or item["kind"] in ("goal", "gate")):
+                    continue
+                text = f"{item['id']} {item.get('track') or ''}"
+                match = next((c for c, rule in _CATEGORY_RULES if rule.search(text)), None)
+                if match:
+                    chosen[item["key"]] = match
+                else:
+                    unmatched.append(item["key"])
+            if not dry_run:
+                for key, name in chosen.items():
+                    self._edit(principal, key, {"category": name}, now)
+            return {"set": chosen, "unmatched": unmatched, "dry_run": bool(dry_run)}
+        return self._run(principal, "backfill_categories", None, fill)
+
+    def _record_categories(self, items, now):
+        """EXPERIMENT (rule 3.76): per-day ready and done counts per category, and a
+        finding for a category whose ready items waited over 48 h with no item done."""
+        stamp, day, cutoff = self._iso(now), self._iso(now)[:10], self._iso(now - 48 * 3600)
+        done = self._snapshot_run_meta()[1]
+        cat = {i["key"]: i.get("category") for i in items}
+        waiting, ready, merged, recent = {}, {}, {}, set()
+        for item in views.ready(items):
+            name = item.get("category")
+            if name:
+                ready[name] = ready.get(name, 0) + 1
+                if (item.get("created_at") or stamp) <= cutoff:
+                    waiting.setdefault(name, item["key"])
+        for key, ts in done.items():
+            if cat.get(key) and ts[:10] == day:
+                merged[cat[key]] = merged.get(cat[key], 0) + 1
+            if cat.get(key) and ts >= cutoff:
+                recent.add(cat[key])
+        for kind, counts in (("ready", ready), ("merged", merged)):
+            for name, value in counts.items():
+                self.conn.execute(
+                    "INSERT INTO metrics(day,metric,value,source,computed_at) VALUES(?,?,?,?,?)"
+                    " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
+                    "computed_at=excluded.computed_at",
+                    (day, f"category_{kind}.{name}", float(value), "reap", stamp))
+        starved = {key: name for name, key in waiting.items() if name not in recent}
+        code = "category_starved"
+        previous = {r["key"] for r in self.conn.execute(
+            "SELECT key FROM alerts WHERE code=? AND state='open'", (code,))}
+        for key, name in starved.items():
+            self._alerts_raise_finding(
+                key, code, f"category {name}: ready items waited over 48h with none done", now)
+        for key in sorted(previous - starved.keys()):
+            self._alerts_resolve(key, now, code=code)

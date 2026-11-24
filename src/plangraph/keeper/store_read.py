@@ -187,6 +187,8 @@ class ReadMixin:
             info["design_ref"] = item["design_ref"]
         if item.get("supersedes"):
             info["supersedes"] = list(item["supersedes"])
+        if item.get("category"):
+            info["category"] = item["category"]
         incidents = self._incidents_by_key(key).get(key)
         if incidents:
             info["incidents"] = incidents
