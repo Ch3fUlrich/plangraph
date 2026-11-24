@@ -141,6 +141,13 @@
     return "?" + kept.join("&");
   }
 
+  /* Ranking helpers shared by the table model and view: the keeper's effective
+   * priority (own value raised by what the item blocks; the stored value when
+   * absent). */
+  PlanUI.effectivePriority = function (r) {
+    return Number(r.effective_priority != null ? r.effective_priority : r.priority) || 0;
+  };
+
   PlanUI.tableUrlEncode = tableUrlEncode;
   PlanUI.tableUrlDecode = tableUrlDecode;
   PlanUI.tableUrlMerge = tableUrlMerge;
