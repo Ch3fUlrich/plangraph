@@ -55,3 +55,18 @@ def test_aging_acts_on_the_own_value_only(w):
     w.store.reap(w.p("system"))
     assert w.store.show(w.p("router"), "demo:LOW")["priority"] == 8
 
+
+def test_reap_records_the_telemetry_of_the_graph_after_aging(tmp_path):
+    world = World(tmp_path)
+    try:
+        world.store.create_items(world.p("router"), [
+            defn("BLOCKER", priority=9), defn("TOP", ["BLOCKER"], priority=10),
+            defn("GOAL", ["TOP"], kind="goal")])
+        world.clock.advance(4 * 86400)       # TOP (10, unclaimed 3 days) ages to 9; BLOCKER (9, 7 days) stays
+        world.store.reap(world.p("system"))
+        assert world.store.show(world.p("router"), "demo:TOP")["priority"] == 9
+        rows = {r["metric"]: r["value"] for r in world.conn.execute(
+            "SELECT metric, value FROM metrics WHERE metric LIKE 'priority_inherit%'")}
+        assert rows == {"priority_inherit_raised": 0.0, "priority_inherit_longest_chain": 0.0}
+    finally:
+        world.close()
