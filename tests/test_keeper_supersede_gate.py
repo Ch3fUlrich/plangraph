@@ -252,6 +252,16 @@ def test_define_edit_of_a_title_into_a_near_copy_is_refused_until_answered(w):
     assert created and created[-1]["payload"]["similar"] == {"demo:ORIG": "supersedes"}
 
 
+def test_an_edit_without_answers_leaves_the_event_payload_unchanged(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("A", title="Plain item about the cache layer"),
+                                  defn("GOAL", ["A"], kind="goal")])
+    w.store.edit_definition(router, "demo:A", {"title": "Plain item about the cache layer v2"})
+    last = [e for e in keeper_events.read_events(w.conn)
+            if e["key"] == "demo:A" and e["type"] == "item_defined"][-1]
+    assert last["payload"]["fields"] == ["title"] and "similar" not in last["payload"]
+
+
 def test_define_edit_unrelated_fields_and_distinct_answers_pass(w):
     router = w.p("router")
     w.store.create_items(router, [defn("ORIG", title=LONG, description=LONG),
