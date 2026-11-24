@@ -536,6 +536,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     host.fast_checks(&head).unwrap();
     assert!(host.stamped(&head));
     assert!(!host.stamped(&base));
+    super::review_tests::assert_shared_receipt_and_push(&mut host, dir.path(), &head);
     host.gates().unwrap();
     let runs = fs::read_to_string(dir.path().join("gate-runs.txt")).unwrap();
     let expected = format!("check --base refs/plangraph/native/run-host/base --head HEAD {head}");

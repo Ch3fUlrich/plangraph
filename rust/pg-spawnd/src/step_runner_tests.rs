@@ -498,7 +498,16 @@ fn shell_steps_create_the_worktree_check_the_exact_head_and_push_a_draft_pr() {
     let pushed = steps.push(HEAD, &checked.stamp).unwrap();
     assert_eq!(pushed.pr, 42);
     let log = steps.runner.log.join("\n");
-    assert!(log.contains(&format!("git push origin {HEAD}:refs/heads/lane/x")));
+    assert!(log.contains(&format!(
+        "git push --atomic origin {HEAD}:refs/heads/lane/x +refs/notes/plangraph-fast-checks:refs/notes/plangraph-fast-checks-lane-x"
+    )));
+    let receipt = std::fs::read_to_string(&checked.stamp).unwrap();
+    assert!(
+        receipt.starts_with(&format!("head {HEAD}\nresult green\n"))
+            && receipt.contains("check 1-check-a rc=0 wall=")
+            && receipt.contains("check 2-check-b rc=0 wall="),
+        "{receipt}"
+    );
     assert!(!log.contains("--force"));
     assert!(
         log.contains("gh pr create --draft --head lane/x"),

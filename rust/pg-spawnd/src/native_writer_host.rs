@@ -333,14 +333,30 @@ impl Driver for Host {
         // The turns up to this head are bound to it before the gates run, so a head whose gate
         // fails keeps its own output and the next head starts after it.
         self.session_excerpt(&stamp)?;
-        let log = self.checks()?;
+        let (log, mut checks) = self.checks_run()?;
         // The exact-head gate output, named in the review brief next to the stamp.
         fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
-        fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
+        // The worktree is verified at `head` above: a receipt always names at least that check.
+        checks.insert(
+            0,
+            pg_worker_core::fast_check_stamp::Check {
+                label: "head-pinned".into(),
+                rc: 0,
+                seconds: 0.0,
+            },
+        );
+        // The shared producer: the state file and the note a lane push carries; the worktree's
+        // own stamp holds the same text for the review gate.
+        let shared = pg_worker_core::fast_check_stamp::publish(&self.cwd, head, &checks)?;
+        fs::copy(shared, &stamp)
+            .map(|_| ())
             .map_err(|e| e.to_string())
     }
     fn stamped(&mut self, head: &str) -> bool {
-        self.stamp(head).is_ok_and(|stamp| stamp.is_file())
+        self.stamp(head).is_ok_and(|stamp| {
+            fs::read_to_string(stamp)
+                .is_ok_and(|text| pg_worker_core::fast_check_stamp::text_is_green(&text, head))
+        })
     }
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
         self.review_run(head, previous)
@@ -355,8 +371,23 @@ impl Driver for Host {
             return Ok(None);
         };
         let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
-        // No force flag: the remote refuses anything but a fast-forward.
-        self.git(&["push", "origin", &format!("{head}:{target}")])?;
+        // No force flag on the branch: the remote refuses anything but a fast-forward. The head
+        // and its receipt go in one atomic push, the form the lane hook requires.
+        let mut argv = pg_worker_core::fast_check_stamp::push_argv(head, &target);
+        // A head that was never fast-checked has no receipt to send; the lane hook refuses it.
+        if self
+            .git(&[
+                "rev-parse",
+                "--verify",
+                "-q",
+                "refs/notes/plangraph-fast-checks",
+            ])
+            .is_err()
+        {
+            argv.truncate(4);
+        }
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        self.git(&argv)?;
         Ok(Some(target))
     }
     fn record_quota(&mut self, limit: &crate::native_writer::quota::Limit) -> Result<(), String> {
