@@ -108,5 +108,9 @@ def test_loops_without_a_gh_or_ssh_poll_and_one_shot_calls_stay_allowed():
         "ssh host true",
         "for f in a b; do echo $f; done; sleep 1",
         "plangraph wait ci --pr 1270 --deadline 3600",
+        # gh and ssh only as arguments, never as the command that is polled
+        "while true; do echo gh ssh; sleep 5; done",
+        "until grep -q ssh /tmp/log; do sleep 2; done",
+        "for h in gh ssh; do printf %s $h; sleep 1; done",
     ):
         assert run_bash(command).returncode == 0, command
