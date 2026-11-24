@@ -94,17 +94,33 @@ pub fn require(
     }
 }
 
+/// The runs that admitted `parts`, in part order.
+fn accepted(parts: &[PartIn], runs: &[PartCi]) -> Vec<PartCi> {
+    parts
+        .iter()
+        .filter_map(|p| runs.iter().find(|r| r.pr == p.pr && r.head == p.head))
+        .cloned()
+        .collect()
+}
+
 /// The gate of `land-train build`: `--part-ci FILE` (JSON array of runs) and `--previous-train SHA` are
-/// required, so a train cannot be built without the part runs.
+/// required, so a train cannot be built without the part runs. The accepted runs are written to
+/// `<out>/<name>.part-ci.json` next to the manifest, so each part's full-CI run id can be read back.
 pub(super) fn gate_cli(
     flags: &BTreeMap<String, String>,
     repo: &Path,
     parts: &[PartIn],
+    name: &str,
 ) -> Result<(), String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
     let file = need("part-ci")?;
     let runs: Vec<PartCi> =
         serde_json::from_slice(&std::fs::read(file).map_err(|e| format!("{file}: {e}"))?)
             .map_err(|e| format!("{file}: {e}"))?;
-    require(repo, parts, &runs, need("previous-train")?)
+    require(repo, parts, &runs, need("previous-train")?)?;
+    let out = Path::new(flags.get("out").map_or(".", String::as_str));
+    std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
+    let record = serde_json::to_vec_pretty(&accepted(parts, &runs)).map_err(|e| e.to_string())?;
+    let file = out.join(format!("{name}.part-ci.json"));
+    std::fs::write(&file, record).map_err(|e| format!("{}: {e}", file.display()))
 }

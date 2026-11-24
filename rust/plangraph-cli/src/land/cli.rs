@@ -214,7 +214,7 @@ pub(super) fn run_inner(
     match cmd.as_str() {
         "build" => {
             let repo_dir = PathBuf::from(need("repo")?);
-            super::part_ci::gate_cli(&flags, &repo_dir, &parts)?;
+            super::part_ci::gate_cli(&flags, &repo_dir, &parts, &need("name")?)?;
             // Main is read for the repository this checkout belongs to.
             let origin = super::git::out(&repo_dir, &["remote", "get-url", "origin"])?;
             let slug = crate::ci_watch::github::repository(&origin)?;
