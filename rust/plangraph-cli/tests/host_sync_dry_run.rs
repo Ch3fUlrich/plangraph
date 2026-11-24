@@ -135,3 +135,29 @@ fn the_default_registry_is_found_through_xdg_config_home_first() {
     // Without it the registry under HOME is read, and there is none: a refusal, not a pass.
     assert_eq!(run(None).status.code(), Some(2));
 }
+
+#[test]
+fn the_unit_sources_can_come_from_another_directory() {
+    let (home, repo) = fixture();
+    fs::write(home.path().join(".config/p/a.env"), "OTHER=1\n").unwrap();
+    let pinned = tempfile::tempdir().unwrap();
+    fs::write(
+        pinned.path().join("a.service"),
+        "[Service]\nExecStart=%h/.local/bin/tool\n",
+    )
+    .unwrap();
+    let run = |units: Option<&Path>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_host-sync"));
+        cmd.env_clear()
+            .env("HOME", home.path())
+            .args(["--install-dry-run", "--registry", REGISTRY, "--repo"])
+            .arg(repo.path());
+        if let Some(units) = units {
+            cmd.arg("--units").arg(units);
+        }
+        cmd.args(["code", "a.service"]).output().unwrap()
+    };
+    // The checkout's own unit reads PG_PINS; the pinned copy does not. The flag decides which one counts.
+    assert_eq!(run(None).status.code(), Some(1));
+    assert_eq!(run(Some(pinned.path())).status.code(), Some(0));
+}
