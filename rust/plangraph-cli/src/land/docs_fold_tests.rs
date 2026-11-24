@@ -191,21 +191,45 @@ fn the_line_cap_of_a_reference_is_never_breached() {
 }
 
 #[test]
-fn caps_come_from_the_size_checker_less_its_headroom() {
+fn caps_come_from_the_size_checker_less_its_headroom_else_the_limit() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
         "tools/check_file_size.py",
-        "DOC_CAPS = {\"docs/SPAWNER.md\": 728}\nDOC_HEADROOM = 60\n",
+        "LIMIT = 800\nDOC_CAPS = {\"docs/SPAWNER.md\": 728}\nDOC_HEADROOM = 60\n",
     );
     assert_eq!(
         caps(dir.path()),
-        BTreeMap::from([("docs/SPAWNER.md".to_owned(), 668)])
+        BTreeMap::from([
+            ("CONTRIBUTING.md".to_owned(), 800),
+            ("docs/KEEPER.md".to_owned(), 800),
+            ("docs/SPAWNER.md".to_owned(), 668),
+        ])
     );
     assert!(caps(tempfile::tempdir().unwrap().path()).is_empty());
-    // The checker of this repository is readable by the same pattern.
+    // The checker of this repository is readable by the same pattern, for every reference.
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    assert!(caps(&repo).contains_key("docs/SPAWNER.md"));
+    let real = caps(&repo);
+    for (_, reference) in AREAS {
+        assert!(real.contains_key(reference), "{reference}");
+    }
+}
+
+#[test]
+fn a_reference_at_the_default_limit_takes_no_fragment() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, "tools/check_file_size.py", "LIMIT = 10\n");
+    write(root, "CONTRIBUTING.md", &"line\n".repeat(10));
+    write(root, "docs/contributing/ITEM.md", "More.\n");
+    write(root, "docs/KEEPER.md", "k\n");
+    write(root, "docs/SPAWNER.md", "s\n");
+    let report = fold(root, &caps(root), true).unwrap();
+    assert!(
+        report.folded.is_empty() && report.kept[0].1.contains("10-line cap"),
+        "{report:?}"
+    );
+    assert_eq!(read(root, "CONTRIBUTING.md").lines().count(), 10);
 }
 
 fn git(root: &Path, args: &[&str]) -> String {

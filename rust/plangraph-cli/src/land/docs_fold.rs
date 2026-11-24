@@ -74,32 +74,45 @@ fn lines(text: &str) -> usize {
     text.lines().count()
 }
 
-/// `DOC_CAPS` minus `DOC_HEADROOM` from the repository's size checker; empty when it has neither.
+/// The line cap of each shared reference from the repository's size checker: `DOC_CAPS` minus
+/// `DOC_HEADROOM` for a doc with its own cap, else `LIMIT`. Empty when the checker is unreadable.
 pub fn caps(root: &Path) -> BTreeMap<String, usize> {
     let Ok(text) = std::fs::read_to_string(root.join("tools/check_file_size.py")) else {
         return BTreeMap::new();
     };
-    let headroom = regex::Regex::new(r"(?m)^DOC_HEADROOM\s*=\s*(\d+)")
-        .unwrap()
-        .captures(&text)
-        .and_then(|c| c[1].parse::<usize>().ok())
-        .unwrap_or(0);
-    let Some(map) = regex::Regex::new(r"(?m)^DOC_CAPS\s*=\s*\{([^}]*)\}")
-        .unwrap()
-        .captures(&text)
-    else {
-        return BTreeMap::new();
+    let number = |name: &str| {
+        regex::Regex::new(&format!(r"(?m)^{name}\s*=\s*(\d+)"))
+            .unwrap()
+            .captures(&text)
+            .and_then(|c| c[1].parse::<usize>().ok())
     };
-    regex::Regex::new(r#""([^"]+)"\s*:\s*(\d+)"#)
+    let headroom = number("DOC_HEADROOM").unwrap_or(0);
+    let mut caps: BTreeMap<String, usize> = BTreeMap::new();
+    if let Some(limit) = number("LIMIT") {
+        caps.extend(
+            AREAS
+                .iter()
+                .map(|(_, reference)| ((*reference).to_owned(), limit)),
+        );
+    }
+    if let Some(map) = regex::Regex::new(r"(?m)^DOC_CAPS\s*=\s*\{([^}]*)\}")
         .unwrap()
-        .captures_iter(&map[1])
-        .filter_map(|c| {
-            Some((
-                c[1].to_owned(),
-                c[2].parse::<usize>().ok()?.checked_sub(headroom)?,
-            ))
-        })
-        .collect()
+        .captures(&text)
+    {
+        for c in regex::Regex::new(r#""([^"]+)"\s*:\s*(\d+)"#)
+            .unwrap()
+            .captures_iter(&map[1])
+        {
+            if let Some(cap) = c[2]
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| n.checked_sub(headroom))
+            {
+                caps.insert(c[1].to_owned(), cap);
+            }
+        }
+    }
+    caps
 }
 
 /// Fold every fragment under `root/docs/<area>/`. With `apply` false nothing is written.

@@ -42,6 +42,8 @@ struct Fake {
     reopened: Vec<u64>,
     stopped: Vec<u64>,
     holds_ended: usize,
+    keeper_keeps: BTreeMap<u64, String>,
+    stop_keeps: BTreeMap<u64, String>,
 }
 
 impl Fake {
@@ -84,11 +86,14 @@ impl Effects for Fake {
         self.tick()?;
         Ok(self.landed.contains(sha))
     }
-    fn close_items(&mut self, part: &PartState, proof: &Proof) -> Result<(), String> {
+    fn close_items(&mut self, part: &PartState, proof: &Proof) -> Result<Applied, String> {
         self.tick()?;
+        if let Some(why) = self.keeper_keeps.get(&part.pr) {
+            return Ok(Applied::Kept(why.clone()));
+        }
         self.proofs.push((part.pr, proof.clone()));
         self.closed_items.push(part.pr);
-        Ok(())
+        Ok(Applied::Done)
     }
     fn verify_hosts(&mut self, _merge: &str) -> Result<Vec<HostReceipt>, String> {
         self.tick()?;
@@ -109,10 +114,13 @@ impl Effects for Fake {
         self.reopened.push(pr);
         Ok(())
     }
-    fn stop_writer(&mut self, part: &PartState, _merge: &str) -> Result<(), String> {
+    fn stop_writer(&mut self, part: &PartState, _merge: &str) -> Result<Applied, String> {
         self.tick()?;
+        if let Some(why) = self.stop_keeps.get(&part.pr) {
+            return Ok(Applied::Kept(why.clone()));
+        }
         self.stopped.push(part.pr);
-        Ok(())
+        Ok(Applied::Done)
     }
     fn end_hold(&mut self) -> Result<(), String> {
         self.tick()?;
@@ -374,5 +382,88 @@ fn events_record_what_happened() {
             "writer_stopped",
             "hold_released"
         ]
+    );
+}
+
+#[test]
+fn an_item_the_keeper_kept_open_and_a_writer_the_guard_kept_stay_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let parts = vec![part(1, true), part(2, true)];
+    let mut fx = Fake::new(&parts);
+    fx.keeper_keeps.insert(1, "seats missing".into());
+    fx.stop_keeps.insert(2, "unpushed commits".into());
+    let mut s = settle(parts);
+    let summary = run(&mut s, &dir.path().join("s.json"), &mut fx).unwrap();
+    assert_eq!(fx.closed_items, vec![2]);
+    // Its work is in the landed tree, so the writer of part 1 stops even though the keeper kept its item.
+    assert_eq!(fx.stopped, vec![1]);
+    assert!(!summary.complete && fx.holds_ended == 0);
+    assert!(
+        summary
+            .held
+            .iter()
+            .any(|h| h.contains("#1 close_items") && h.contains("seats missing")),
+        "{summary:?}"
+    );
+    assert!(
+        summary
+            .held
+            .iter()
+            .any(|h| h.contains("#2 stop_writer") && h.contains("unpushed commits")),
+        "{summary:?}"
+    );
+    // The keeper closes it later; the next run finishes it and stops its writer.
+    fx.keeper_keeps.clear();
+    fx.stop_keeps.clear();
+    let mut s = Settlement::load(&dir.path().join("s.json"))
+        .unwrap()
+        .unwrap();
+    assert!(
+        run(&mut s, &dir.path().join("s.json"), &mut fx)
+            .unwrap()
+            .complete
+    );
+    assert_eq!(fx.closed_items, vec![2, 1]);
+    assert_eq!(fx.stopped, vec![1, 2]);
+}
+
+#[test]
+fn a_push_after_a_crashed_close_is_given_back_on_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let parts = vec![part(1, true)];
+    let mut probe = Fake::new(&parts);
+    probe.push_during_close.insert(1, sha('q'));
+    run(
+        &mut settle(parts.clone()),
+        &dir.path().join("probe.json"),
+        &mut probe,
+    )
+    .unwrap();
+    // Crash at every effect call; the one right after close_pr leaves the pull request closed with the
+    // push on it, and the resumed run must give it back.
+    let mut checked = false;
+    for crash in 1..=probe.calls {
+        let path = dir.path().join(format!("c{crash}.json"));
+        let mut fx = Fake::new(&parts);
+        fx.push_during_close.insert(1, sha('q'));
+        fx.fail_at = Some(crash);
+        let _ = run(&mut settle(parts.clone()), &path, &mut fx);
+        if fx.heads[&1] != (PrState::Closed, sha('q')) {
+            continue;
+        }
+        fx.fail_at = None;
+        let mut resumed = Settlement::load(&path).unwrap().unwrap();
+        run(&mut resumed, &path, &mut fx).unwrap();
+        assert_eq!(
+            fx.heads[&1],
+            (PrState::Open, sha('q')),
+            "the push is not lost"
+        );
+        assert_eq!(fx.reopened, vec![1]);
+        checked = true;
+    }
+    assert!(
+        checked,
+        "some crash point leaves the pull request closed with the push"
     );
 }
