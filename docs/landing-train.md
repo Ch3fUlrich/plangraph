@@ -128,7 +128,9 @@ done to merge, the critical path (parallel jobs count once, the CI jobs replace 
 and the bottleneck stage; a train with no row for a required stage is marked `incomplete`. The last line names the stage with
 the most critical-path time over the N trains. `landing report OWNER/REPO BATCH` and `--day DATE` keep their meaning. The
 GO request and train card print the same timeline. Host and result per stage and the push-gate sub-stages are not columns of
-`landing_stages` yet; they need a keeper schema step.
+`landing_stages` yet, and only push, CI, delta review, GO, merge and host sync have a producer, so a train is complete
+with those stages (`fast_checks`, `review` and `writing` are shown when present); the missing columns and producers need a
+keeper schema step.
 
 ## Settlement after the merge
 
@@ -141,7 +143,11 @@ Refusals are `held` and checked again on the next run: an item stays open when i
 its writer has commits outside the landed tree; a pull request is read, closed and read again, and reopened and left
 open when a push arrived in between; a writer is stopped only when its head is in the landed tree and its pull request is
 closed. Ownership, READY time, CI, eviction and host-sync facts are recorded as events. `hold_released` in the state file
-turns true when every step is done and the hosts are current, which ends the hold on new batches (rule 3.64).
+turns true when every step is done and the hosts are current; the router reads it to end the hold on new batches (rule 3.64),
+which is an external consumer this change does not wire. `tools/merge_batch_land.py settle` still runs its own cursor but
+stays at `close_parts` while `merge-close` lists a part's item. A part's items count as closed unless `merge-close` lists
+them (refused or flagged), reports their deployment unproven, only previews, or fails to scan; an item in a state the
+automatic close skips shows in no row, which the settlement cannot tell from a closed one.
 
 ## Documentation fragments
 

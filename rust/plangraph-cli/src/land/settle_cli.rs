@@ -43,6 +43,14 @@ impl Init {
             return Err("settle: merge must be a full lower-case SHA".into());
         }
         let mut seen = std::collections::BTreeSet::new();
+        for p in &self.parts {
+            if p.writer_head.is_some() != p.writer_record.is_some() {
+                return Err(format!(
+                    "settle: part #{} needs both writer_head and writer_record or neither",
+                    p.pr
+                ));
+            }
+        }
         let mut parts = Vec::new();
         for p in self.parts {
             if !full_sha(&p.head) || p.writer_head.as_deref().is_some_and(|w| !full_sha(w)) {
@@ -97,16 +105,23 @@ pub(super) fn parse_pr_view(raw: &str) -> Result<(PrState, String), String> {
     Ok((state, head.to_owned()))
 }
 
-/// `plangraph merge-close` prints one `listed` line per merged key the keeper refused or flagged. A
-/// part's items are closed unless one of them is listed; an already closed item prints nothing.
+/// What `plangraph merge-close` printed about a part's items. The part stays held when the keeper
+/// listed one as refused or flagged, found its deployment unproven, only previewed its close, or could
+/// not scan a repository (then no close is claimed). An item that is in no row was closed by an earlier
+/// pass or is in a state the automatic close does not touch.
 pub(super) fn parse_close_report(report: &str, items: &[String]) -> Applied {
     for line in report.lines() {
         let mut fields = line.split('\t');
-        if let (Some("listed"), Some(key)) = (fields.next(), fields.next()) {
-            if items.iter().any(|item| item == key) {
-                let why: Vec<&str> = fields.collect();
-                return Applied::Kept(format!("{key} {}", why.join(" ")));
+        let (Some(label), Some(key)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let why: Vec<&str> = fields.collect();
+        match label {
+            "listed" | "deployment-pending" | "would-close" if items.iter().any(|i| i == key) => {
+                return Applied::Kept(format!("{key} {label} {}", why.join(" ")));
             }
+            "scan-error" => return Applied::Kept(format!("scan-error {key} {}", why.join(" "))),
+            _ => {}
         }
     }
     Applied::Done
@@ -224,7 +239,7 @@ impl Effects for Real {
 
     fn stop_writer(&mut self, part: &PartState, merge: &str) -> Result<Applied, String> {
         let Some(record) = &part.writer_record else {
-            return Ok(Applied::Done);
+            return Err(format!("part #{} has no writer record to stop", part.pr));
         };
         let raw = output(
             Command::new("pg-spawnd")

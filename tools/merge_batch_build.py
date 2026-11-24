@@ -641,6 +641,12 @@ def run_timing_import(repo, batch, head, run_info, attempt):
         print(f"CI stage for {batch} pending keeper delivery: {exc}", file=sys.stderr)
 
 
+def listed_items(report, keys):
+    """The keys of ``keys`` that ``plangraph merge-close`` printed as ``listed`` (refused or flagged)."""
+    rows = (line.split("\t") for line in report.splitlines())
+    return sorted({r[1] for r in rows if len(r) > 1 and r[0] == "listed" and r[1] in keys})
+
+
 def landing_report(st):
     try:
         result = run(["plangraph", "landing", "report", st["repo"], landing_batch_key(st)], timeout=35)

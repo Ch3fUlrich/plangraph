@@ -236,7 +236,14 @@ pub(super) fn run(flags: &BTreeMap<String, String>) -> Result<Vec<String>, Strin
             .collect());
     }
     let apply = !flags.contains_key("check");
-    let report = fold(&root, &caps(&root), apply)?;
+    let caps = caps(&root);
+    // Folding without a line cap could push a reference past it: refuse when the checker is unreadable.
+    if let Some((_, reference)) = AREAS.iter().find(|(_, r)| !caps.contains_key(*r)) {
+        return Err(format!(
+            "fold-docs: no line cap for {reference} (tools/check_file_size.py unreadable)"
+        ));
+    }
+    let report = fold(&root, &caps, apply)?;
     let mut out: Vec<String> = report
         .folded
         .iter()

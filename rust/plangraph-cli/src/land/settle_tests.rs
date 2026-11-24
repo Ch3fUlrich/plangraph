@@ -467,3 +467,15 @@ fn a_push_after_a_crashed_close_is_given_back_on_resume() {
         "some crash point leaves the pull request closed with the push"
     );
 }
+
+#[test]
+fn a_writer_record_without_a_writer_head_is_an_error_not_no_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = part(1, false);
+    p.writer_head = None;
+    let mut fx = Fake::new(std::slice::from_ref(&p));
+    let mut s = settle(vec![p]);
+    let err = run(&mut s, &dir.path().join("s.json"), &mut fx).unwrap_err();
+    assert!(err.contains("writer record but no writer head"), "{err}");
+    assert!(fx.stopped.is_empty());
+}

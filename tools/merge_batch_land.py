@@ -13,7 +13,7 @@ from pathlib import Path
 
 from merge_batch_build import (
     check_landed_parts, cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
-    landing_report, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
+    landing_report, listed_items, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
     require_tested_ff_evidence, run_timing_import, seats_acknowledged, wait_marked_merged,
 )
 from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
@@ -263,6 +263,8 @@ def require_full_run(repo, head, branch, batch_key=None):
     if not runs:
         raise MergeBatchError("full_ci: no tests run on exact batch head " + head)
     run = max(runs, key=lambda r: r["id"])
+    if batch_key and run.get("head_sha") == head and run.get("status") == "completed" and run.get("conclusion") != "success":
+        run_timing_import(repo, batch_key, head, run, run.get("run_attempt", 1))  # a red run's jobs, before the refusal
     if (run.get("head_sha") != head or run.get("head_branch") != branch
             or run.get("event") != "pull_request" or not branch.startswith("batch/")
             or run.get("status") != "completed" or run.get("conclusion") != "success"):
@@ -495,6 +497,8 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
                 raise MergeBatchError(f"train #{number} settlement requires PG_MERGE_CLOSE_REQUIRE_SEATS=off (or false, 0)")
             result = run(["plangraph", "merge-close"], timeout=330)
             sys.stderr.write(result.stdout + result.stderr)
+            if kept := listed_items(result.stdout, {key for part in landed for key in part["items"]}):
+                raise MergeBatchError(f"train #{number} close_parts: the keeper kept open {', '.join(kept)}")
         elif step == "host_sync":
             started = landing_now()
             result = run(["plangraph", "landing", "verify-hosts", repo, merge], timeout=600)
