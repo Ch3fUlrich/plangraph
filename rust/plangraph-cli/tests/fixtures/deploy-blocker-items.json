@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "description": "Why: the train deploy preflight refused train.service@beta of part(s) #1, #2: missing env PG_PINS; missing file ~/.config/p/a.env.\nHow: fix the host or the Deploy-Hosts/Deploy declaration, rerun the dry run.\nDone when: the dry run passes for this target.",
+      "done_criteria": "the host install dry run passes for train.service@beta",
+      "id": "LE-DEPLOY-BLOCKED-TRAIN-SERVICE-BETA",
+      "key": "plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-BETA",
+      "kind": "lane",
+      "priority": 10,
+      "project": "plangraph",
+      "title": "Train deploy target train.service@beta refused: missing env PG_PINS; missing file ~/.config/p/a.env",
+      "under": "plangraph:LESSONS-ENFORCE"
+    }
+  ]
+}

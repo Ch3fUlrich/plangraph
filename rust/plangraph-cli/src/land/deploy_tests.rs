@@ -297,3 +297,26 @@ fn spans_attribute_parts_without_a_manifest() {
     assert_eq!(parts[0].families, ["s.service".to_string()].into());
     assert_eq!(parts[0].trailer_hosts, ["alpha".to_string()].into());
 }
+
+#[test]
+fn blocker_items_are_the_definitions_the_keeper_accepts() {
+    // The same file is defined into a real keeper store by tests/test_keeper_create_under.py.
+    let plan = DeployPlan {
+        targets: vec![],
+        blockers: vec![Blocker {
+            key: "plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-BETA".into(),
+            family: "train.service".into(),
+            host: Some("beta".into()),
+            parts: vec![1, 2],
+            reasons: vec![
+                "missing env PG_PINS".into(),
+                "missing file ~/.config/p/a.env".into(),
+            ],
+        }],
+    };
+    let golden: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/deploy-blocker-items.json"
+    ))
+    .unwrap();
+    assert_eq!(plan.blocker_items(), golden);
+}
