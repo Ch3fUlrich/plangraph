@@ -55,6 +55,13 @@ def _tests_reported(text):
         and not (zero and not re.search(r"\b[1-9][0-9]*\s+(?:passed|failed|selected|collected|ran|tests?)\b", body))
 
 
+def _record_names_item(record, key):
+    """A seat run names its item in ``item_key``, or in the ``item_keys`` of a batch card (never both missing)."""
+    keys = record.get("item_keys")
+    return record.get("item_key") == key or (
+        record.get("item_key") is None and isinstance(keys, list) and key in keys)
+
+
 def _recorded_harness_seat(record, completion, text, head):
     """The countable seat of an unwitnessed run (rule 3.26), or ``None``.
 
@@ -172,7 +179,7 @@ class SpawnerRecordAdapter:
                 raise ValueError(f"{run_id}: missing or ambiguous record")
             host, record = records[0]
             if (record.get("run_id") != run_id or record.get("host") != host
-                    or record.get("item_key") != item["key"]):
+                    or not _record_names_item(record, item["key"])):
                 raise ValueError(f"{run_id}: record identity mismatch")
             if require_diff_head and record.get("head_sha") != head:
                 raise ValueError(f"{run_id}: review diff head mismatch")
