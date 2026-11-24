@@ -170,7 +170,11 @@ pub fn execute(args: Vec<String>, out: &mut dyn std::io::Write) -> i32 {
         eprintln!("head-gate: --worktree, --base, --head and --brief are required");
         return 2;
     };
-    let brief = match fs::read_to_string(brief) {
+    // The brief file is the launch input: a typed batch input is rendered as the writer saw it.
+    let brief = match fs::read_to_string(brief)
+        .map_err(|e| e.to_string())
+        .and_then(|text| crate::batch_writer_brief::render(&text).map(|b| b.into_owned()))
+    {
         Ok(brief) => brief,
         Err(error) => {
             eprintln!("head-gate: brief unreadable: {error}");
@@ -308,7 +312,12 @@ mod tests {
         let f = Fixture::new();
         let head = f.commit("work\n\nPlan-Item: demo:ASSIGNED");
         let brief = f.dir.path().join("brief.md");
-        fs::write(&brief, BRIEF).unwrap();
+        // A typed batch input names its items as `### key | title` once rendered.
+        let typed = json!({"items":[{"key":"demo:ASSIGNED","title":"t","brief":"Why: x"}],
+            "run":{"name":"n","worktree":"w","base":f.base,"writer_family":"claude",
+                   "status_file":"s","fast_checks":["true"],"review_cmd":"r",
+                   "review_wait_seconds":1,"round_cap":1,"trailers":["Plan-Item: demo:ASSIGNED"]}});
+        fs::write(&brief, format!("PLANGRAPH-BATCH-INPUT-V1\n{typed}")).unwrap();
         let record = f.dir.path().join("gate.json");
         let args = [
             "--worktree",

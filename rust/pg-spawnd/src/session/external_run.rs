@@ -26,6 +26,8 @@ pub(super) fn register(
             "harness":"claude", "requested_model":args.model, "effort":args.effort,
             "item_key":admission.fields["card"],
             "brief_items":brief.items, "lane_override":brief.lane_override,
+            // `pg-spawnd head-gate --base <admitted_base> --brief <brief_path>` gates the completed head.
+            "admitted_base":brief.base, "brief_path":args.prompt,
         }),
     )
 }
