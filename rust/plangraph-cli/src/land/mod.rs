@@ -4,6 +4,9 @@ pub mod build;
 mod build_tests;
 mod chain;
 pub mod cli;
+pub mod cut;
+#[cfg(test)]
+mod cut_tests;
 pub mod delta;
 pub mod deploy;
 mod deploy_probe;

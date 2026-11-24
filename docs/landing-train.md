@@ -137,3 +137,12 @@ push lock. Result lines: `REBASED` (old head, new head, `patch_ids_equal`, own c
 `CURRENT`, `CONFLICT <lane> <files>` (at least one unmerged path; the lane is untouched) and `REFUSED` (fetched head is not
 `--expect`, no own commit left, a commit without the `--writer` trailer). The probe PR move and the seat re-run follow from
 these lines; the verb exits 3 when any lane is not relaned.
+
+## Cutting a slice or landing branch
+
+`plangraph land-train cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1] [--gate FILE]`
+(rust/plangraph-cli/src/land/cut.rs) picks the source commits (full ids, oldest first) onto `--base` without `-x`, drops any
+`(cherry picked from commit ...)` line, adds `Picked-From: <source>` and, for a commit named in `--gate-edits` (the router's
+D-id), `Gate-Edit: <D-id>` inside the existing trailer block, then runs `tools/ci_commit_gate.py check` on the range. The branch
+exists only when the gate accepts; a merge commit as a source is refused. `land-train cut-check --repo DIR --base SHA --head SHA`
+applies the same check to a branch cut by hand and refuses a `cherry-pick -x` line.
