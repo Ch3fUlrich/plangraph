@@ -111,8 +111,21 @@ fn with_failures(reason: String, failures: &[(String, String)]) -> String {
 }
 /// The card and brief of one writer run for `items`: the plain item card for one item, the
 /// first item's card with every key and the union of the files for a batch.
+/// The run name, and with it the lane, of a feeder batch: `feeder-<first item slug>`.
+fn run_name(first_key: &str) -> String {
+    let slug = first_key
+        .rsplit(':')
+        .next()
+        .unwrap_or("batch")
+        .to_ascii_lowercase();
+    format!("feeder-{slug}")
+}
+
 fn batch_card(items: &[Task], repo: &str, reviews: &str, policy: &Policy) -> Value {
     let mut c = card(&items[0], repo, reviews, policy);
+    // The native host pushes the accepted head with its receipt to this lane (nothing is pushed
+    // without a target); the brief's run name and this ref name the same lane.
+    c["push_ref"] = json!(format!("refs/heads/lane/{}", run_name(&items[0].key)));
     if items.len() > 1 {
         let mut files: Vec<&String> = items.iter().flat_map(|t| &t.files).collect();
         files.sort();
@@ -146,18 +159,12 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
         .collect();
     trailers.push(WRITER_TRAILER.into());
     trailers.push("Changelog: a changelog.d/<ITEM>.md fragment, or a Changelog: skip (<reason>) trailer on every commit without one".into());
-    let slug = items[0]
-        .key
-        .rsplit(':')
-        .next()
-        .unwrap_or("batch")
-        .to_ascii_lowercase();
     let input = json!({"items":named, "run":{
-        "name":format!("feeder-{slug}"), "worktree":"the run worktree (the current directory)",
+        "name":run_name(&items[0].key), "worktree":"the run worktree (the current directory)",
         "base":"origin/main at launch", "writer_family":"gpt",
         "status_file":format!("{}/status.txt", reviews.trim_end_matches('/')),
-        "fast_checks":["python3 tools/affected_tests.py --base origin/main --head HEAD --local --files-only --run -n 2",
-            "python3 tools/preflight.py --base origin/main --head HEAD --lane"],
+        // The native host pushes the accepted head and its receipt itself: no writer push line.
+        "push":false,
         "review_cmd":"the native worker starts the review of another family on the exact head",
         "review_wait_seconds":1800, "round_cap":8, "trailers":trailers}});
     format!("PLANGRAPH-BATCH-INPUT-V1\n{input}")

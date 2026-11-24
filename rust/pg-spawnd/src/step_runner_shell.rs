@@ -117,13 +117,32 @@ impl<R: CommandRunner> ShellSteps<R> {
         if !dirty.trim().is_empty() {
             return Err("worktree has uncommitted or untracked files".into());
         }
-        for check in self.config.checks.clone() {
+        // One receipt check per command that ran; the worktree being clean at `head` is itself one.
+        let mut ran = vec![pg_worker_core::fast_check_stamp::Check {
+            label: "head-pinned".into(),
+            rc: 0,
+            seconds: 0.0,
+        }];
+        for (index, check) in self.config.checks.clone().into_iter().enumerate() {
+            let started = std::time::Instant::now();
             self.runner.run(&dir, &check)?;
+            let program = check.first().map_or("check", String::as_str);
+            let program = program.rsplit('/').next().unwrap_or(program);
+            ran.push(pg_worker_core::fast_check_stamp::Check {
+                label: format!(
+                    "{}-{}",
+                    index + 1,
+                    program.replace(
+                        |c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_',
+                        "-"
+                    )
+                ),
+                rc: 0,
+                seconds: started.elapsed().as_secs_f64(),
+            });
         }
-        let stamp = self.stamp_path(head)?;
-        std::fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
-            .map_err(|err| err.to_string())?;
-        std::fs::write(&stamp, "green\n").map_err(|err| err.to_string())?;
+        // The shared producer: the state file and the note that the lane push carries.
+        let stamp = pg_worker_core::fast_check_stamp::publish(Path::new(&dir), head, &ran)?;
         Ok(FastChecks {
             stamp: stamp.to_string_lossy().into_owned(),
         })
@@ -132,15 +151,21 @@ impl<R: CommandRunner> ShellSteps<R> {
     /// Push the accepted head as a fast-forward and return the draft pull request of the branch.
     pub fn push(&mut self, head: &str, stamp: &str) -> Result<Push, String> {
         let expected = self.stamp_path(head)?;
-        if !expected.is_file() || Path::new(stamp) != expected {
+        let green = std::fs::read_to_string(&expected)
+            .is_ok_and(|text| pg_worker_core::fast_check_stamp::text_is_green(&text, head));
+        if !green || Path::new(stamp) != expected {
             return Err(format!("no fast-checks stamp for {head}"));
         }
         let dir = self.config.worktree_dir.clone();
         let branch = self.config.branch.clone();
         // No force flag: the remote refuses anything but a fast-forward.
-        let refspec = format!("{head}:refs/heads/{branch}");
-        self.runner
-            .run(&dir, &argv(&["git", "push", "origin", &refspec]))?;
+        // The head and its receipt go in one atomic push, the form the lane hook requires.
+        let mut push = vec!["git".to_owned()];
+        push.extend(pg_worker_core::fast_check_stamp::push_argv(
+            head,
+            &format!("refs/heads/{branch}"),
+        ));
+        self.runner.run(&dir, &push)?;
         let view = argv(&[
             "gh", "pr", "view", &branch, "--json", "number", "-q", ".number",
         ]);

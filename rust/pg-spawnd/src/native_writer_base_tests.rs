@@ -48,7 +48,7 @@ fn local_base_fixture(dir: &Path) -> Host {
         reviews: dir.join("reviews"),
         record_path: dir.join("record.json"),
         base_ref: "refs/heads/lane/local".into(),
-        tool_path: std::env::var("PATH").unwrap(),
+        tool_path: super::review_tests::fake_plangraph_path(dir),
         effort: WRITER_EFFORT.into(),
         state: dir.to_path_buf(),
         brief: "brief".into(),
