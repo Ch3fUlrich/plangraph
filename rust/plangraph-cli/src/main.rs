@@ -22,6 +22,9 @@ fn run() -> i32 {
     {
         return keeper_restart::run(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("flow-snapshot") {
+        return plangraph_cli::flow_snapshot::cli(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("fast-checks") {
         return plangraph_cli::fast_checks::run(&args[1..]);
     }
