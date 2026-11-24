@@ -9,7 +9,7 @@
 
 use pg_session_resume::engine::{reap_idle, stop_done, Config, DEFAULT_ALLOW};
 use pg_session_resume::lock::Lock;
-use pg_session_resume::system::System;
+use pg_session_resume::system::{System, EXIT_WAIT_MS};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -110,6 +110,7 @@ fn run() -> Result<(), String> {
         allow: allowlist(&state),
     };
     let mut host = System {
+        exit_wait_ms: EXIT_WAIT_MS,
         log_file: state.join("session-lifecycle.log"),
         log_failed: false,
     };
@@ -124,14 +125,14 @@ fn run() -> Result<(), String> {
         println!("pg-session-resume: another tick holds the lock");
         return Ok(());
     };
-    match cmd.as_str() {
+    let unsaved = match cmd.as_str() {
         "stop-done" => stop_done(&mut host, &cfg, quiet, only),
         "reap" => reap_idle(&mut host, &cfg),
-        "tick" => {
-            stop_done(&mut host, &cfg, quiet, None);
-            reap_idle(&mut host, &cfg);
-        }
+        "tick" => stop_done(&mut host, &cfg, quiet, None) + reap_idle(&mut host, &cfg),
         other => return Err(format!("unknown command {other}")),
+    };
+    if unsaved > 0 {
+        return Err(format!("{unsaved} stop record(s) could not be written"));
     }
     if host.log_failed {
         return Err("a log line could not be written".into());

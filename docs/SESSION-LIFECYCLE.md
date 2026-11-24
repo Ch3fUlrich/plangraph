@@ -24,25 +24,38 @@ A stop needs the runtime's own positive idle signal:
 
 - Claude: `~/.claude/jobs/<job id>/state.json` says `state: done` with no running tasks
   (`working`, `blocked` and a job with tasks are kept; `stopped` only gets its record
-  written; an unreadable state keeps the session and logs once). Activity is the newest of
-  the transcript and state.json mtimes.
+  written; an unreadable state keeps the session and logs once). The count is `inFlight`
+  tasks + queued + drainableMonitors; a count that is missing or not a number is
+  `job-tasks-unknown`, never zero. Activity is the newest of the transcript and state.json mtimes.
 - Codex and OpenCode: `pid` and `pid_start` (field 22 of `/proc/<pid>/stat`; a pid with
-  another start time is never signalled, a gone process counts as already stopped), no child
+  another start time is never signalled, a process confirmed gone counts as already stopped,
+  an unreadable `/proc` entry keeps the session as `no-runtime-state`), no child
   process, and `turn_end_path`, a file the runtime or launcher touches when a turn ends: its
   mtime must be strictly newer than the activity (nanosecond mtimes; the same instant or the
   same second proves nothing). Without it the session is kept (`no-idle-signal`). Activity is
   `activity_path` (a per-session file the launcher names), else the Codex rollout file;
   OpenCode without `activity_path` is never reaped as idle.
 
-A kept session logs its reason once (`stop_refused` in the record). Never stopped: a session
-without a handle, and names matching the built-in globs (`*-L1`, `*-L1-*`, `L1`, `routing`,
-`plan-*`, `overseer`, `planner`, with `-*` forms) or a line of
-`<state>/launch/stop-allowlist.txt`.
+Codex/OpenCode are stopped with SIGTERM through a pidfd opened for the recorded pid and
+re-checked against `pid_start`, so a reused pid is never hit, and `stopped` is published only
+after the process is confirmed gone (10 s; a survivor logs `stop-failed` and the record stays
+unmarked).
+
+A kept session logs its reason once per cause (`stop_refused` in the record): `no-job-state`,
+`job-<state>`, `job-has-tasks`, `job-tasks-unknown`, `no-process-identity`, `no-idle-signal`,
+`turn-open`, `has-children`, `no-runtime-state`, `no-resume-handle`. Never stopped: a session
+without a handle, and names matching (case-insensitively) the built-in globs `*-L1`, `*-L1-*`,
+`L1`, `L1-*`, `routing*`, `plan-*`, `overseer*`, `*planner*`, `*judge*`, `plangraph-oversight*`
+(a superset of the Python reaper's list) or a line of `<state>/launch/stop-allowlist.txt`.
 
 A stop writes `state: "stopped"`, `stopped_ts` and `resume: {agent, handle, head (git HEAD at
 the stop), worktree (inode and git dir), status_head, round, stopped_ts, reason}`; head and
 worktree stay null when their lookup failed. `resume.handle` is the "resumable" mark; the lane
-gets `<lane>.resume.json` with the same handle. A kernel lock (flock on
+gets `<lane>.resume.json` with the same handle. A stop belongs to the launch that produced it (`resume.launch_ts`, `launch_run`, `handle`
+must equal the record's `ts`, `run_id` and handle), so a `fleet-launch --respawn` copy of the
+record is a live session again. A record that cannot be saved is not published and the run
+exits 2; the next tick finds the runtime stopped and writes the record without a second stop,
+and a missing lane copy is rewritten the same way. A kernel lock (flock on
 `<state>/launch/pg-session-resume.lock`) keeps two ticks apart: a second one prints that the
 lock is held and leaves the work to the first.
 

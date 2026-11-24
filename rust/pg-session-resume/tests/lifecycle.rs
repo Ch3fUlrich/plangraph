@@ -14,7 +14,7 @@ const HEAD2: &str = "fedcba9876543210fedcba9876543210fedcba98";
 fn job(state: &str, tasks: u64) -> Option<JobState> {
     Some(JobState {
         state: state.into(),
-        tasks,
+        tasks: Some(tasks),
     })
 }
 
@@ -126,17 +126,30 @@ fn a_handle_that_is_not_a_plain_id_is_no_handle() {
 
 #[test]
 fn claude_job_with_tasks_is_kept() {
-    let r = rig("writer", json!({}));
-    done(&r, HEAD);
-    let mut h = Fake::new(100_000);
-    h.activity = Some(1);
-    for (state, tasks) in [("done", 2), ("working", 0), ("blocked", 0)] {
-        h.job = job(state, tasks);
-        stop_done(&mut h, &r.cfg, 0, None);
-        reap_idle(&mut h, &r.cfg);
+    // every refusal has its reason, logged once however often the tick repeats
+    for (state, tasks, why) in [
+        ("done", Some(2), "job-has-tasks"),
+        ("done", None, "job-tasks-unknown"),
+        ("working", Some(0), "job-working"),
+        ("blocked", Some(0), "job-blocked"),
+    ] {
+        let r = rig("writer", json!({}));
+        done(&r, HEAD);
+        let mut h = Fake::new(100_000);
+        h.activity = Some(1);
+        h.job = Some(JobState {
+            state: state.into(),
+            tasks,
+        });
+        for _ in 0..3 {
+            stop_done(&mut h, &r.cfg, 0, None);
+            reap_idle(&mut h, &r.cfg);
+        }
+        assert!(h.runs.is_empty(), "{state} {tasks:?}");
+        assert_eq!(h.lines.len(), 1, "{state} {tasks:?}: {:?}", h.lines);
+        assert!(h.lines[0].contains(&format!("why={why}")), "{}", h.lines[0]);
+        assert!(record(&r, "writer").get("resume").is_none());
     }
-    assert!(h.runs.is_empty() && h.lines.is_empty(), "{:?}", h.lines);
-    assert!(record(&r, "writer").get("resume").is_none());
 }
 
 #[test]
@@ -244,7 +257,7 @@ fn codex_and_opencode_stop_by_pid_with_their_own_handle() {
         let mut h = Fake::new(5000);
         h.procs.insert(4242, 9);
         stop_done(&mut h, &r.cfg, 60, None);
-        assert_eq!(h.runs[0].1, ["kill", "4242"], "{agent}");
+        assert_eq!(h.terminated, [(4242, 9)], "{agent}");
         assert_eq!(record(&r, "writer")["resume"]["handle"], "T-1");
     }
 }
@@ -256,7 +269,11 @@ fn pid_start_mismatch_never_signalled() {
     let mut h = Fake::new(5000);
     h.procs.insert(4242, 10); // another process holds the pid now
     stop_done(&mut h, &r.cfg, 0, None);
-    assert!(h.runs.is_empty(), "{:?}", h.runs);
+    assert!(
+        h.terminated.is_empty() && h.runs.is_empty(),
+        "{:?}",
+        h.terminated
+    );
     assert_eq!(record(&r, "writer")["state"], "stopped");
 
     // without a recorded identity nothing is signalled either
@@ -267,30 +284,32 @@ fn pid_start_mismatch_never_signalled() {
     done(&r, HEAD);
     h.procs.insert(4242, 9);
     stop_done(&mut h, &r.cfg, 0, None);
-    assert!(h.runs.is_empty());
+    assert!(h.terminated.is_empty());
     assert!(h.lines.last().unwrap().contains("why=no-process-identity"));
 }
 
 #[test]
 fn codex_without_a_turn_end_signal_or_with_children_is_kept() {
-    let r = rig("writer", codex(9));
-    done(&r, HEAD);
-    let mut h = Fake::new(5000);
-    h.procs.insert(4242, 9);
-    h.turn_ended = None;
-    stop_done(&mut h, &r.cfg, 0, None);
-    stop_done(&mut h, &r.cfg, 0, None);
-    assert_eq!(h.lines.len(), 1, "{:?}", h.lines);
-    assert!(h.lines[0].contains("why=no-idle-signal"));
-    h.turn_ended = Some(false); // a turn is open
-    stop_done(&mut h, &r.cfg, 0, None);
-    h.turn_ended = Some(true);
-    h.children = Some(true); // a tool is running
-    stop_done(&mut h, &r.cfg, 0, None);
-    h.children = None; // unreadable
-    stop_done(&mut h, &r.cfg, 0, None);
-    assert!(h.runs.is_empty(), "{:?}", h.runs);
-    assert!(record(&r, "writer").get("resume").is_none());
+    for (turn, children, why) in [
+        (None, Some(false), "no-idle-signal"),
+        (Some(false), Some(false), "turn-open"),
+        (Some(true), Some(true), "has-children"),
+        (Some(true), None, "no-runtime-state"),
+    ] {
+        let r = rig("writer", codex(9));
+        done(&r, HEAD);
+        let mut h = Fake::new(5000);
+        h.procs.insert(4242, 9);
+        (h.turn_ended, h.children) = (turn, children);
+        for _ in 0..3 {
+            stop_done(&mut h, &r.cfg, 0, None);
+            reap_idle(&mut h, &r.cfg);
+        }
+        assert!(h.terminated.is_empty());
+        assert_eq!(h.lines.len(), 1, "{why}: {:?}", h.lines);
+        assert!(h.lines[0].contains(&format!("why={why}")), "{}", h.lines[0]);
+        assert!(record(&r, "writer").get("resume").is_none());
+    }
 }
 
 #[test]
@@ -301,4 +320,144 @@ fn the_reaper_records_the_head_of_the_lane_status_as_status_head() {
     h.activity = Some(1);
     reap_idle(&mut h, &r.cfg);
     assert_eq!(record(&r, "writer")["resume"]["status_head"], HEAD2);
+}
+
+#[test]
+fn an_unreadable_process_is_not_proof_of_exit_and_a_survivor_is_not_stopped() {
+    let r = rig("writer", codex(9));
+    done(&r, HEAD);
+    let mut h = Fake::new(5000);
+    h.proc_unknown = true;
+    stop_done(&mut h, &r.cfg, 0, None);
+    assert!(h.terminated.is_empty());
+    assert!(h.lines[0].contains("why=no-runtime-state"), "{:?}", h.lines);
+    assert!(record(&r, "writer").get("resume").is_none());
+
+    // SIGTERM was sent but the process stays alive: nothing is published as stopped
+    h.proc_unknown = false;
+    h.survives = true;
+    h.procs.insert(4242, 9);
+    stop_done(&mut h, &r.cfg, 0, None);
+    assert_eq!(h.terminated, [(4242, 9)]);
+    assert!(h.lines.last().unwrap().contains("event=stop-failed"));
+    let rec = record(&r, "writer");
+    assert!(rec.get("resume").is_none() && rec["state"] != "stopped");
+    assert!(!r.cfg.pr_dir.join("lane-a.resume.json").exists());
+}
+
+#[test]
+fn protected_names_of_the_python_reaper_are_never_stopped_by_either_path() {
+    for name in [
+        "auto-planner-v2",
+        "Auto-Planner",
+        "plangraph-oversight-seat",
+        "PlanGraph-Oversight-9",
+        "a-judge-b",
+        "routing-0007",
+        "x-L1-y",
+    ] {
+        let mut r = rig(name, json!({}));
+        r.cfg.allow = pg_session_resume::engine::DEFAULT_ALLOW
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        done(&r, HEAD);
+        let mut h = Fake::new(100_000);
+        h.activity = Some(1);
+        reap_idle(&mut h, &r.cfg);
+        stop_done(&mut h, &r.cfg, 0, None);
+        assert!(h.runs.is_empty() && h.lines.is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn a_record_that_cannot_be_saved_is_not_published_and_is_recovered_without_a_second_stop() {
+    let r = rig("writer", json!({}));
+    done(&r, HEAD);
+    let rec_path = r.cfg.launch_dir.join("writer-0644.json");
+    let tmp = rec_path.with_extension("json.tmp");
+    std::fs::create_dir(&tmp).unwrap(); // the atomic rename's temp file cannot be created
+    let mut h = Fake::new(5000);
+    assert_eq!(
+        stop_done(&mut h, &r.cfg, 0, None),
+        1,
+        "reported as a failure"
+    );
+    assert_eq!(h.runs.len(), 1);
+    assert!(h
+        .lines
+        .iter()
+        .any(|l| l.contains("event=record-save-failed")));
+    assert!(
+        !h.lines.iter().any(|l| l.contains("event=stop ")),
+        "{:?}",
+        h.lines
+    );
+    assert!(!r.cfg.pr_dir.join("lane-a.resume.json").exists());
+    assert!(record(&r, "writer").get("resume").is_none());
+
+    std::fs::remove_dir(&tmp).unwrap();
+    h.job = job("stopped", 0); // the runtime did stop it
+    assert_eq!(stop_done(&mut h, &r.cfg, 0, None), 0);
+    assert_eq!(h.runs.len(), 1, "no second stop command");
+    assert_eq!(record(&r, "writer")["resume"]["handle"], SID);
+    assert!(h.lines.last().unwrap().contains("event=stop "));
+}
+
+#[test]
+fn a_lane_copy_that_failed_is_repaired_by_a_later_tick() {
+    let r = rig("writer", json!({}));
+    done(&r, HEAD);
+    let blocker = r.cfg.pr_dir.join("lane-a.resume.json.tmp");
+    std::fs::create_dir(&blocker).unwrap();
+    let mut h = Fake::new(5000);
+    assert_eq!(stop_done(&mut h, &r.cfg, 0, None), 1);
+    assert_eq!(record(&r, "writer")["state"], "stopped");
+    assert!(h
+        .lines
+        .iter()
+        .any(|l| l.contains("event=lane-record-failed")));
+    std::fs::remove_dir(&blocker).unwrap();
+    assert_eq!(reap_idle(&mut h, &r.cfg), 0);
+    assert_eq!(h.runs.len(), 1, "the stop is not repeated");
+    let lane: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(r.cfg.pr_dir.join("lane-a.resume.json")).unwrap())
+            .unwrap();
+    assert_eq!(lane["handle"], SID);
+}
+
+#[test]
+fn a_respawned_launch_is_not_hidden_by_the_stop_of_the_old_one() {
+    let r = rig("writer", json!({"run_id": "run-1"}));
+    done(&r, HEAD);
+    let mut h = Fake::new(5000);
+    stop_done(&mut h, &r.cfg, 0, None);
+    assert_eq!(h.runs.len(), 1);
+    // `fleet-launch --respawn` copies the record: stop marks and resume object stay, the launch
+    // identity (ts, run id, session id) is new
+    let path = r.cfg.launch_dir.join("writer-0644.json");
+    let mut rec: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    rec["ts"] = json!(6000);
+    rec["run_id"] = json!("run-2");
+    rec["session_id"] = json!("2222222a-91d1-442a-bc81-f5dd71769181");
+    rec["job_id"] = json!("2222222a");
+    std::fs::write(&path, rec.to_string()).unwrap();
+    h.now = 7000;
+    stop_done(&mut h, &r.cfg, 0, None);
+    assert_eq!(h.runs.len(), 2, "the new launch is a live session again");
+    assert_eq!(h.runs[1].1, ["claude", "stop", "2222222a"]);
+    assert_eq!(record(&r, "writer")["resume"]["launch_run"], "run-2");
+}
+
+#[test]
+fn a_foreign_stop_mark_older_than_the_launch_does_not_hide_it() {
+    let r = rig(
+        "writer",
+        json!({"state": "stopped", "stopped_ts": 900, "ts": 1000}),
+    );
+    done(&r, HEAD);
+    let mut h = Fake::new(5000);
+    stop_done(&mut h, &r.cfg, 0, None);
+    assert_eq!(h.runs.len(), 1);
 }

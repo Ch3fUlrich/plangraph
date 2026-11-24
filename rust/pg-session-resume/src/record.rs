@@ -63,9 +63,28 @@ impl Record {
         })
     }
 
+    /// Whether this launch was stopped. A stop belongs to the launch that produced it: a respawn
+    /// copies the old record under a newer `ts` (and a new run id and handle), so the stop marks
+    /// it carries say nothing about the new session.
     pub fn stopped(&self) -> bool {
-        self.value.get("stopped_ts").is_some_and(|v| !v.is_null())
-            || self.str("state") == Some("stopped")
+        let stopped_ts = self.u64("stopped_ts");
+        let marked = self.value.get("stopped_ts").is_some_and(|v| !v.is_null())
+            || self.str("state") == Some("stopped");
+        if !marked {
+            return false;
+        }
+        match self.resume() {
+            Some(r) => {
+                r.get("launch_ts").and_then(Value::as_u64) == self.u64("ts")
+                    && r.get("launch_run").and_then(Value::as_str) == self.str("run_id")
+                    && r.get("handle").and_then(Value::as_str) == self.handle()
+            }
+            // A stop mark without our resume object: the launch must not be newer than it.
+            None => match (self.u64("ts"), stopped_ts) {
+                (Some(ts), Some(stop)) => ts <= stop,
+                _ => true,
+            },
+        }
     }
 
     /// The id the agent resumes by: Claude session id, Codex thread id, OpenCode session.

@@ -2,7 +2,7 @@
 //! Shared fixtures of the lifecycle test binaries.
 
 use pg_session_resume::engine::Config;
-use pg_session_resume::host::{Host, JobState};
+use pg_session_resume::host::{Host, JobState, Process};
 use pg_session_resume::record::Record;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -23,6 +23,11 @@ pub struct Fake {
     pub job: Option<JobState>,
     /// pid -> start time of the live processes.
     pub procs: HashMap<u32, u64>,
+    /// Every pid is unreadable (the /proc entry cannot be parsed).
+    pub proc_unknown: bool,
+    /// The signalled process does not exit.
+    pub survives: bool,
+    pub terminated: Vec<(u32, u64)>,
     pub children: Option<bool>,
     pub wt_id: Option<String>,
     pub turn_ended: Option<bool>,
@@ -41,9 +46,12 @@ impl Fake {
             fail_run: false,
             job: Some(JobState {
                 state: "done".into(),
-                tasks: 0,
+                tasks: Some(0),
             }),
             procs: HashMap::new(),
+            proc_unknown: false,
+            survives: false,
+            terminated: vec![],
             children: Some(false),
             wt_id: Some("w1".into()),
             turn_ended: Some(true),
@@ -63,8 +71,20 @@ impl Host for Fake {
             Ok(String::new())
         }
     }
-    fn proc_start(&self, pid: u32) -> Option<u64> {
-        self.procs.get(&pid).copied()
+    fn process(&self, pid: u32) -> Process {
+        match (self.proc_unknown, self.procs.get(&pid)) {
+            (true, _) => Process::Unknown,
+            (_, Some(s)) => Process::Live(*s),
+            (_, None) => Process::Gone,
+        }
+    }
+    fn terminate(&mut self, pid: u32, start: u64) -> Result<(), String> {
+        self.terminated.push((pid, start));
+        if self.fail_run || self.survives {
+            return Err("still running".into());
+        }
+        self.procs.remove(&pid);
+        Ok(())
     }
     fn job_state(&self, _: &Record) -> Option<JobState> {
         self.job.clone()
@@ -132,6 +152,7 @@ pub fn record(r: &Rig, name: &str) -> Value {
     .unwrap()
 }
 
+/// A lane file for the lane every rig uses.
 pub fn write(r: &Rig, file: &str, text: &str) {
     std::fs::write(r.cfg.pr_dir.join(file), text).unwrap();
 }

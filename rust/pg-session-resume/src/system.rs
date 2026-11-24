@@ -1,12 +1,28 @@
 //! The real host: processes, /proc, git, the runtimes' own state files.
 
-use crate::host::{Host, JobState};
+use crate::host::{Host, JobState, Process};
 use crate::record::{Agent, Record};
 use std::io::Write;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// How long a signalled process may take to exit before the stop counts as failed.
+pub const EXIT_WAIT_MS: i32 = 10_000;
+
+fn pidfd_open(pid: u32) -> std::io::Result<OwnedFd> {
+    // SAFETY: pidfd_open takes a pid and zero flags and returns a new descriptor we own.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fd is a fresh, valid descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+}
+
 pub struct System {
+    /// Milliseconds `terminate` waits for the process to exit (`EXIT_WAIT_MS`).
+    pub exit_wait_ms: i32,
     pub log_file: PathBuf,
     /// Set when a log line could not be persisted; the process then exits non-zero.
     pub log_failed: bool,
@@ -60,10 +76,67 @@ impl Host for System {
         ))
     }
 
-    fn proc_start(&self, pid: u32) -> Option<u64> {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        // An exited process nobody waited for still has a /proc entry and its start time: gone.
-        (proc_state(&stat)? != 'Z').then(|| proc_start_ticks(&stat))?
+    fn process(&self, pid: u32) -> Process {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => match (proc_state(&stat), proc_start_ticks(&stat)) {
+                // An exited process nobody waited for still has a /proc entry: gone.
+                (Some('Z' | 'X'), _) => Process::Gone,
+                (Some(_), Some(start)) => Process::Live(start),
+                _ => Process::Unknown,
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Process::Gone,
+            Err(_) => Process::Unknown,
+        }
+    }
+
+    fn terminate(&mut self, pid: u32, start: u64) -> Result<(), String> {
+        let fd = match pidfd_open(pid) {
+            Ok(fd) => fd,
+            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return Ok(()),
+            Err(e) => return Err(format!("pidfd_open {pid}: {e}")),
+        };
+        // The descriptor now pins one process: check it is the recorded one, then signal
+        // through the descriptor, so a pid reused in between is never hit.
+        match self.process(pid) {
+            Process::Live(s) if s == start => {}
+            Process::Gone => return Ok(()),
+            Process::Live(_) => return Err(format!("pid {pid} belongs to another process")),
+            Process::Unknown => return Err(format!("pid {pid} state unreadable")),
+        }
+        let sent = unsafe {
+            // SAFETY: signals only the process the descriptor pins; no siginfo, no flags.
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                fd.as_raw_fd(),
+                libc::SIGTERM,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if sent < 0 {
+            let e = std::io::Error::last_os_error();
+            return if e.raw_os_error() == Some(libc::ESRCH) {
+                Ok(())
+            } else {
+                Err(format!("signal {pid}: {e}"))
+            };
+        }
+        // A pidfd becomes readable when its process exits: wait for that, never assume it.
+        let mut p = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd on a descriptor this function owns.
+        let ready = unsafe { libc::poll(&mut p, 1, self.exit_wait_ms) };
+        if ready > 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "pid {pid} still running {}s after SIGTERM",
+                EXIT_WAIT_MS / 1000
+            ))
+        }
     }
 
     fn has_children(&self, pid: u32) -> Option<bool> {
@@ -187,14 +260,24 @@ fn codex_rollouts(home: &Path, thread: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The job state. `tasks` counts the running tasks and the queued work together and is None
+/// when the file does not carry valid counts: a malformed count is never read as zero.
 pub fn parse_job_state(text: &str) -> Option<JobState> {
     let v: serde_json::Value = serde_json::from_str(text).ok()?;
     let state = v.get("state")?.as_str()?.to_owned();
-    let tasks = v
-        .get("inFlight")
-        .and_then(|i| i.get("tasks"))
-        .and_then(|t| t.as_u64())
-        .unwrap_or(0);
+    let count = |flight: &serde_json::Value, key: &str| match flight.get(key) {
+        None => Some(0), // queued work is not reported by every runtime version
+        Some(n) => n.as_u64(),
+    };
+    let tasks = match v.get("inFlight") {
+        Some(f) if f.is_object() => f
+            .get("tasks")
+            .and_then(serde_json::Value::as_u64)
+            .zip(count(f, "queued"))
+            .zip(count(f, "drainableMonitors"))
+            .map(|((t, q), m)| t + q + m),
+        _ => None,
+    };
     Some(JobState { state, tasks })
 }
 

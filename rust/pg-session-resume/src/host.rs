@@ -9,16 +9,32 @@ use std::path::Path;
 pub struct JobState {
     /// `done`, `working`, `blocked`, `stopped`, ...
     pub state: String,
-    /// Tasks and monitors still running inside the job.
-    pub tasks: u64,
+    /// Tasks, monitors and queued work still in flight inside the job; None when the
+    /// state file does not say (only Some(0) is an idle job).
+    pub tasks: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Process {
+    /// Alive, with this start time (field 22 of /proc/<pid>/stat).
+    Live(u64),
+    /// No such process, or it exited and only awaits its parent.
+    Gone,
+    /// The state could not be read or understood.
+    Unknown,
 }
 
 pub trait Host {
     fn now(&self) -> u64;
     /// Run to completion; Ok(stdout) or Err(reason).
     fn run(&mut self, cwd: Option<&Path>, argv: &[String]) -> Result<String, String>;
-    /// The start time of a live process (its identity together with the pid), None when gone.
-    fn proc_start(&self, pid: u32) -> Option<u64>;
+    /// What /proc says about the pid: the start time of a live process (its identity together
+    /// with the pid), confirmed gone, or unreadable (not proof of anything).
+    fn process(&self, pid: u32) -> Process;
+    /// SIGTERM to exactly the process with this pid and start time, and wait for it to exit.
+    /// Ok only when that process is confirmed gone; a pid that now belongs to another process
+    /// is never signalled.
+    fn terminate(&mut self, pid: u32, start: u64) -> Result<(), String>;
     /// Whether the process has live child processes (a running tool or shell);
     /// None when that cannot be read.
     fn has_children(&self, pid: u32) -> Option<bool>;

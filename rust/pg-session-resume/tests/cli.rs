@@ -29,8 +29,8 @@ fn tick_over_empty_directories_succeeds_and_unknown_commands_fail() {
     assert_eq!(bad.status.code(), Some(2));
 }
 
-#[test]
-fn done_status_with_a_missing_claude_binary_logs_a_failed_stop() {
+/// A state dir with one DONE writer whose Claude job state file reads `job_state`.
+fn done_writer(job_state: &str) -> (tempfile::TempDir, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let (launch, pr) = (dir.path().join("launch/sessions"), dir.path().join("pr"));
     std::fs::create_dir_all(&launch).unwrap();
@@ -48,20 +48,57 @@ fn done_status_with_a_missing_claude_binary_logs_a_failed_stop() {
         "lane-a DONE\nHEAD: 0123456789abcdef0123456789abcdef01234567\n",
     )
     .unwrap();
-    let out = bin()
+    // a clean HOME of its own: the host's real jobs never decide this test
+    let home = tempfile::tempdir().unwrap();
+    let job = home.path().join(".claude/jobs/1591af3e");
+    std::fs::create_dir_all(&job).unwrap();
+    std::fs::write(job.join("state.json"), job_state).unwrap();
+    (dir, home)
+}
+
+fn stop_done(dir: &tempfile::TempDir, home: &tempfile::TempDir) -> std::process::Output {
+    bin()
         .args(["stop-done", "--quiet-s", "0", "--state"])
         .arg(dir.path())
         .arg("--pr-dir")
-        .arg(&pr)
+        .arg(dir.path().join("pr"))
         .env("PATH", "/nonexistent")
+        .env("HOME", home.path())
         .output()
-        .unwrap();
+        .unwrap()
+}
+
+#[test]
+fn done_status_with_a_missing_claude_binary_logs_a_failed_stop() {
+    let (dir, home) = done_writer(r#"{"state":"done","inFlight":{"tasks":0}}"#);
+    let out = stop_done(&dir, &home);
     assert!(out.status.success());
     let log = std::fs::read_to_string(dir.path().join("session-lifecycle.log")).unwrap();
     assert!(
         log.contains("event=stop-failed name=w-1 reason=done"),
         "{log}"
     );
+}
+
+#[test]
+fn a_job_state_with_a_garbled_task_count_is_kept() {
+    let (dir, home) = done_writer(r#"{"state":"done","inFlight":{"tasks":"2"}}"#);
+    for _ in 0..2 {
+        assert!(stop_done(&dir, &home).status.success());
+    }
+    let log = std::fs::read_to_string(dir.path().join("session-lifecycle.log")).unwrap();
+    assert_eq!(log.matches("why=job-tasks-unknown").count(), 1, "{log}");
+    assert!(!log.contains("event=stop-failed"), "{log}");
+}
+
+#[test]
+fn a_stop_that_cannot_be_recorded_fails_the_run() {
+    let (dir, home) = done_writer(r#"{"state":"stopped"}"#);
+    // the temp file of the record's atomic rename cannot be created
+    std::fs::create_dir(dir.path().join("launch/sessions/w-1.json.tmp")).unwrap();
+    let out = stop_done(&dir, &home);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("could not be written"));
 }
 
 #[test]
