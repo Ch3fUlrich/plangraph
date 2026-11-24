@@ -20,6 +20,7 @@ fn inputs() -> Inputs {
 
 fn run(id: u64, status: &str, conclusion: Option<&str>) -> CiRun {
     CiRun {
+        name: "CI".into(),
         id,
         attempt: 1,
         status: status.into(),
@@ -42,7 +43,7 @@ impl Keeper for FakeKeeper {
 struct FakeCi(VecDeque<Vec<CiRun>>, usize);
 
 impl CiRuns for FakeCi {
-    fn runs(&mut self, _: &str) -> Result<Vec<CiRun>, String> {
+    fn runs(&mut self, _: &str, _: u64) -> Result<Vec<CiRun>, String> {
         self.1 += 1;
         if self.0.len() > 1 {
             return Ok(self.0.pop_front().unwrap());
@@ -125,6 +126,7 @@ fn services(ci: Vec<Vec<CiRun>>, polls: u32) -> ServiceSteps<FakeKeeper, FakeCi,
             polls,
             interval: Duration::ZERO,
         },
+        required: vec!["CI".into()],
         sleep: Box::new(|_| {}),
         rest: Rest,
     }
@@ -198,6 +200,7 @@ fn a_keeper_that_claims_other_keys_fails_the_claim() {
         ci: FakeCi(VecDeque::new(), 0),
         train: FakeTrain::default(),
         wait: actions.wait,
+        required: vec![],
         sleep: Box::new(|_| {}),
         rest: Rest,
     };
@@ -235,12 +238,12 @@ fn a_run_that_never_finishes_fails_ci_class_after_the_looks() {
 
 #[test]
 fn a_head_without_runs_is_never_green() {
-    assert!(matches!(classify(&[]), Reading::Pending(_)));
+    assert!(matches!(classify(&[], &[]), Reading::Pending(_)));
 }
 
 #[test]
 fn a_cancelled_run_is_red() {
-    let Reading::Done(class) = classify(&[run(3, "completed", Some("cancelled"))]) else {
+    let Reading::Done(class) = classify(&[run(3, "completed", Some("cancelled"))], &[]) else {
         panic!("pending");
     };
     assert!(matches!(class.classification, Classification::Red));
@@ -249,10 +252,13 @@ fn a_cancelled_run_is_red() {
 
 #[test]
 fn red_wins_over_a_run_still_going() {
-    let Reading::Done(class) = classify(&[
-        run(3, "completed", Some("failure")),
-        run(4, "in_progress", None),
-    ]) else {
+    let Reading::Done(class) = classify(
+        &[
+            run(3, "completed", Some("failure")),
+            run(4, "in_progress", None),
+        ],
+        &[],
+    ) else {
         panic!("pending");
     };
     assert!(matches!(class.classification, Classification::Red));
@@ -306,17 +312,57 @@ fn keeper_cli_reads_the_epochs_of_a_claim_batch() {
 }
 
 #[test]
-fn keeper_cli_releases_every_key_when_the_batch_is_refused() {
-    let mut script = Script::new(vec![Err("pg exit 2: demo:B refused"), Ok("{}"), Ok("{}")]);
+fn keeper_cli_releases_only_the_epochs_this_attempt_got() {
+    // demo:A was granted at epoch 3, demo:B is held by someone else: only A goes back.
+    let mut script = Script::new(vec![
+        Ok(
+            r#"{"results":[{"key":"demo:A","epoch":3},{"key":"demo:B","error":"claimed","msg":"held"}]}"#,
+        ),
+        Ok("{}"),
+    ]);
     let mut keeper = KeeperCli {
         runner: &mut script,
         dir: ".".into(),
         prefix: vec!["pg".into()],
     };
     let error = keeper.claim_batch(&keys()).unwrap_err();
-    assert!(error.contains("demo:B refused"), "{error}");
-    assert_eq!(script.seen[1], ["pg", "release", "demo:A"]);
-    assert_eq!(script.seen[2], ["pg", "release", "demo:B"]);
+    assert!(error.contains("demo:B"), "{error}");
+    assert_eq!(
+        script.seen.len(),
+        2,
+        "no release for the key another batch holds"
+    );
+    assert_eq!(
+        script.seen[1],
+        ["env", "PG_EPOCH=3", "pg", "release", "demo:A"]
+    );
+}
+
+#[test]
+fn keeper_cli_reports_a_release_that_failed() {
+    let mut script = Script::new(vec![
+        Ok(r#"{"results":[{"key":"demo:A","epoch":3},{"key":"demo:B","error":"claimed"}]}"#),
+        Err("pg exit 2: refused"),
+    ]);
+    let mut keeper = KeeperCli {
+        runner: &mut script,
+        dir: ".".into(),
+        prefix: vec!["pg".into()],
+    };
+    let error = keeper.claim_batch(&keys()).unwrap_err();
+    assert!(error.contains("release failed: demo:A@3"), "{error}");
+}
+
+#[test]
+fn keeper_cli_says_when_the_outcome_of_the_claim_is_unknown() {
+    let mut script = Script::new(vec![Err("pg: unreachable")]);
+    let mut keeper = KeeperCli {
+        runner: &mut script,
+        dir: ".".into(),
+        prefix: vec!["pg".into()],
+    };
+    let error = keeper.claim_batch(&keys()).unwrap_err();
+    assert!(error.contains("outcome unknown"), "{error}");
 }
 
 #[test]
@@ -331,17 +377,23 @@ fn keeper_cli_refuses_a_row_without_an_epoch() {
 }
 
 #[test]
-fn gh_ci_reads_the_workflow_runs_of_the_head() {
-    let mut script = Script::new(vec![Ok(
-        r#"{"workflow_runs":[{"id":5,"run_attempt":2,"status":"completed","conclusion":"success"},
-            {"id":6,"run_attempt":1,"status":"queued","conclusion":null}]}"#,
-    )]);
+fn gh_ci_reads_only_the_runs_of_this_pull_request() {
+    let mut script = Script::new(vec![Ok(r#"{"workflow_runs":[
+            {"id":5,"name":"CI","run_attempt":2,"status":"completed","conclusion":"success","pull_requests":[{"number":12}]},
+            {"id":6,"name":"CI","run_attempt":1,"status":"queued","conclusion":null,"pull_requests":[{"number":12}]},
+            {"id":7,"name":"CI","run_attempt":1,"status":"completed","conclusion":"failure","pull_requests":[{"number":99}]},
+            {"id":8,"name":"CI","run_attempt":1,"status":"completed","conclusion":"success","pull_requests":[]}]}"#)]);
     let mut ci = GhCi {
         runner: &mut script,
         dir: ".".into(),
         repo: "demo/repo".into(),
     };
-    let runs = ci.runs(HEAD).unwrap();
+    let runs = ci.runs(HEAD, 12).unwrap();
+    assert_eq!(
+        runs.len(),
+        2,
+        "another pull request's run and an unbound run are left out"
+    );
     assert_eq!(runs[0], run(5, "completed", Some("success")).tap_attempt(2));
     assert_eq!(runs[1].conclusion, None);
     assert_eq!(
@@ -352,6 +404,24 @@ fn gh_ci_reads_the_workflow_runs_of_the_head() {
             &format!("repos/demo/repo/actions/runs?head_sha={HEAD}&per_page=100")
         ]
     );
+}
+
+#[test]
+fn green_needs_every_required_workflow_to_have_run() {
+    let only_lint = CiRun {
+        name: "lint".into(),
+        ..run(4, "completed", Some("success"))
+    };
+    let required = ["CI".to_owned()];
+    assert!(matches!(
+        classify(std::slice::from_ref(&only_lint), &required),
+        Reading::Pending(_)
+    ));
+    let ci = run(5, "completed", Some("success"));
+    let Reading::Done(class) = classify(&[only_lint, ci], &required) else {
+        panic!("pending");
+    };
+    assert_eq!(class.run, 5, "the run named is the required workflow's");
 }
 
 trait TapAttempt {

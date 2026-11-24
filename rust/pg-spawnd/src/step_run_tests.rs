@@ -28,6 +28,10 @@ fn call(dir: &Path) -> Vec<String> {
         BASE,
         "--brief",
         brief.to_str().unwrap(),
+        "--train-cmd",
+        "train-desk join",
+        "--ci-workflow",
+        "CI",
     ])
 }
 
@@ -44,7 +48,8 @@ fn the_call_names_repo_batch_items_base_brief_and_steps_file() {
     assert_eq!(args.inputs.base, BASE);
     assert!(args.inputs.brief.ends_with("brief.md"));
     assert_eq!(args.steps, dir.path().join("steps.json"));
-    assert!(args.journal && args.checks.is_empty());
+    assert!(args.journal);
+    assert_eq!(args.ci_workflows, ["CI"]);
 }
 
 #[test]
@@ -54,40 +59,42 @@ fn a_missing_or_repeated_flag_is_refused() {
     args.extend(strings(&["--repo", "other/repo"]));
     assert_eq!(parse(&args).unwrap_err(), "--repo given twice");
     let args = call(dir.path());
-    let without: Vec<String> = args[..args.iter().position(|a| a == "--base").unwrap()].to_vec();
+    let without: Vec<String> = args[..args.iter().position(|a| a == "--brief").unwrap()].to_vec();
     assert!(parse(&without).unwrap_err().contains("--brief is required"));
     assert!(parse(&strings(&["run-abc", "--nope", "x"])).is_err());
 }
 
 #[test]
-fn checks_and_commands_split_into_argv() {
+fn commands_split_into_argv() {
     let dir = tempfile::tempdir().unwrap();
     let mut args = call(dir.path());
-    args.extend(strings(&[
-        "--check",
-        "cargo fmt --check",
-        "--check",
-        "make lint",
-        "--train-cmd",
-        "train-desk join",
-        "--no-journal",
-    ]));
+    args.extend(strings(&["--keeper-cmd", "pg --json", "--no-journal"]));
     let args = parse(&args).unwrap();
-    assert_eq!(
-        args.checks,
-        [
-            strings(&["cargo", "fmt", "--check"]),
-            strings(&["make", "lint"])
-        ]
-    );
     assert_eq!(args.train_cmd, ["train-desk", "join"]);
+    assert_eq!(args.keeper_cmd.unwrap(), ["pg", "--json"]);
     assert!(!args.journal);
 }
 
 #[test]
-fn the_fix_round_limit_is_the_round_cap() {
+fn a_call_without_a_train_command_or_ci_workflow_is_refused_before_anything_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let full = call(dir.path());
+    let cut = |flag: &str| -> Vec<String> {
+        let at = full.iter().position(|arg| arg == flag).unwrap();
+        full[..at].to_vec()
+    };
+    assert!(parse(&cut("--train-cmd"))
+        .unwrap_err()
+        .contains("--train-cmd is required"));
+    assert!(parse(&cut("--ci-workflow"))
+        .unwrap_err()
+        .contains("--ci-workflow is required"));
+}
+
+#[test]
+fn the_round_cap_allows_eight_reviews_and_so_seven_fixes() {
     assert_eq!(
-        limits().fix_rounds as u64,
+        limits().fix_rounds as u64 + 1,
         crate::round_progress::MAX_ROUNDS
     );
 }
@@ -111,32 +118,42 @@ fn a_steps_file_that_is_not_a_list_is_refused_with_its_path() {
 
 /// Actions that record the steps they were asked to run.
 #[derive(Default)]
-struct Calls(Vec<&'static str>);
+struct Calls(Vec<&'static str>, Option<usize>);
+
+impl Calls {
+    /// Record a call; the call numbered `die_on` kills the process before it returns.
+    fn enter(&mut self, step: &'static str) {
+        self.0.push(step);
+        if self.1 == Some(self.0.len() - 1) {
+            panic!("killed during {step}");
+        }
+    }
+}
 
 impl StepActions for Calls {
     fn claim(&mut self, _: &[String]) -> Result<Claim, String> {
-        self.0.push("claim");
+        self.enter("claim");
         Ok(Claim { claim: "c".into() })
     }
     fn worktree(&mut self, _: &str, _: &str) -> Result<Worktree, String> {
-        self.0.push("worktree");
+        self.enter("worktree");
         Ok(Worktree {
             worktree: "w".into(),
         })
     }
     fn write(&mut self, _: &str, _: &str) -> Result<Write, String> {
-        self.0.push("write");
+        self.enter("write");
         Ok(Write {
             head: HEAD.into(),
             session: "s".into(),
         })
     }
     fn fast_checks(&mut self, _: &str) -> Result<FastChecks, String> {
-        self.0.push("fast_checks");
+        self.enter("fast_checks");
         Ok(FastChecks { stamp: "st".into() })
     }
     fn review(&mut self, _: &str, _: &str) -> Result<Review, String> {
-        self.0.push("review");
+        self.enter("review");
         Ok(Review {
             verdict: Verdict::Accept,
             review: "run-1".into(),
@@ -146,11 +163,11 @@ impl StepActions for Calls {
         unreachable!()
     }
     fn push(&mut self, _: &str, _: &str, _: &str) -> Result<Push, String> {
-        self.0.push("push");
+        self.enter("push");
         Ok(Push { pr: 5 })
     }
     fn ci_class(&mut self, _: &str, _: u64) -> Result<CiClass, String> {
-        self.0.push("ci_class");
+        self.enter("ci_class");
         Ok(CiClass {
             classification: Classification::Green,
             run: 2,
@@ -158,7 +175,7 @@ impl StepActions for Calls {
         })
     }
     fn train_join(&mut self, _: &str, _: u64, _: u64, _: u32) -> Result<TrainJoin, String> {
-        self.0.push("train_join");
+        self.enter("train_join");
         Ok(TrainJoin {
             train: "t".into(),
             manifest: "m".into(),
@@ -166,53 +183,53 @@ impl StepActions for Calls {
     }
 }
 
-fn run_to_end(dir: &Path) -> (Calls, Outcome, usize) {
-    let args = parse(&call(dir)).unwrap();
-    let mut runner = load(&args.steps, args.inputs.clone()).unwrap();
-    let mut sink = log_for(&Args {
+/// Start the subcommand's `drive` on the call; `die_on` kills it during that action call.
+fn start(dir: &Path, die_on: Option<usize>) -> (Calls, Option<i32>) {
+    let args = Args {
         journal: false,
-        ..args
-    });
-    let mut calls = Calls::default();
-    let mut now = 0;
-    let outcome = runner.run(&mut calls, &mut sink, &mut || {
-        now += 1;
-        now
-    });
-    (calls, outcome, runner.steps().rows.len())
+        ..parse(&call(dir)).unwrap()
+    };
+    let mut calls = Calls(Vec::new(), die_on);
+    let code = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive(&args, &mut calls, &mut Vec::new()).unwrap()
+    }));
+    (calls, code.ok())
+}
+
+fn rows_saved(dir: &Path) -> usize {
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("steps.json")).unwrap()).unwrap();
+    saved["rows"].as_array().unwrap().len()
 }
 
 #[test]
 fn a_killed_run_resumes_from_the_steps_file() {
     let dir = tempfile::tempdir().unwrap();
-    let (first, outcome, rows) = run_to_end(dir.path());
-    assert!(matches!(outcome, Outcome::Joined { .. }));
-    assert_eq!(rows, 8);
-    assert_eq!(first.0[0], "claim");
-    // The process died after the fast checks of the written head: keep the first four rows.
-    let path = dir.path().join("steps.json");
-    let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    saved["rows"].as_array_mut().unwrap().truncate(4);
-    std::fs::write(&path, saved.to_string()).unwrap();
-
-    let (second, outcome, rows) = run_to_end(dir.path());
+    // Killed during the review (the fifth action call): four rows are on disk.
+    let (killed, code) = start(dir.path(), Some(4));
+    assert_eq!(code, None, "the run did not finish");
     assert_eq!(
-        second.0,
-        ["review", "push", "ci_class", "train_join"],
-        "nothing before the kill reruns"
+        killed.0,
+        ["claim", "worktree", "write", "fast_checks", "review"]
     );
-    assert!(matches!(outcome, Outcome::Joined { .. }));
-    assert_eq!(rows, 8);
-    // The file holds the whole list again, so a third start has nothing left to run.
-    let (third, outcome, _) = run_to_end(dir.path());
+    assert_eq!(rows_saved(dir.path()), 4);
+
+    // The same call again resumes at the review: nothing before it runs twice.
+    let (second, code) = start(dir.path(), None);
+    assert_eq!(code, Some(0));
+    assert_eq!(second.0, ["review", "push", "ci_class", "train_join"]);
+    assert_eq!(rows_saved(dir.path()), 8);
+
+    // A third start has nothing left to run and reports the same join.
+    let (third, code) = start(dir.path(), None);
+    assert_eq!(code, Some(0));
     assert!(third.0.is_empty());
-    assert!(matches!(outcome, Outcome::Joined { .. }));
 }
 
 #[test]
 fn a_steps_file_of_another_batch_is_not_resumed() {
     let dir = tempfile::tempdir().unwrap();
-    run_to_end(dir.path());
+    start(dir.path(), None);
     let mut other = inputs(dir.path());
     other.batch_key = "batch-2".into();
     let error = load(&dir.path().join("steps.json"), other).err().unwrap();

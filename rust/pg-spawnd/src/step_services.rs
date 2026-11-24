@@ -20,6 +20,8 @@ pub trait Keeper {
 /// One workflow run of a head, as the CI service reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CiRun {
+    /// The workflow's name.
+    pub name: String,
     pub id: u64,
     pub attempt: u32,
     /// `queued`, `in_progress` or `completed`.
@@ -29,8 +31,9 @@ pub struct CiRun {
 }
 
 pub trait CiRuns {
-    /// Every workflow run of exactly `head`, latest attempt of each.
-    fn runs(&mut self, head: &str) -> Result<Vec<CiRun>, String>;
+    /// Every workflow run of exactly `head` that belongs to pull request `pr`, latest attempt
+    /// of each.
+    fn runs(&mut self, head: &str, pr: u64) -> Result<Vec<CiRun>, String>;
 }
 
 /// The landing train desk: registers the green part and returns the train it joined.
@@ -68,7 +71,7 @@ const PASSING: [&str; 3] = ["success", "skipped", "neutral"];
 /// Green when every run completed without a failure; red as soon as one completed with one,
 /// naming that run, so the autofix item reads the run that failed. A head without runs is
 /// pending, never green.
-pub fn classify(runs: &[CiRun]) -> Reading {
+pub fn classify(runs: &[CiRun], required: &[String]) -> Reading {
     if runs.is_empty() {
         return Reading::Pending("no CI run for the head yet");
     }
@@ -91,8 +94,16 @@ pub fn classify(runs: &[CiRun]) -> Reading {
     if runs.iter().any(|run| conclusion(run).is_none()) {
         return Reading::Pending("a CI run has not completed");
     }
+    // Green speaks for the required workflows: each ran for this head and none failed.
+    if required
+        .iter()
+        .any(|name| !runs.iter().any(|run| &run.name == name))
+    {
+        return Reading::Pending("a required workflow has no run for the head yet");
+    }
     let last = runs
         .iter()
+        .filter(|run| required.is_empty() || required.contains(&run.name))
         .max_by_key(|run| run.id)
         .expect("runs not empty");
     Reading::Done(CiClass {
@@ -107,6 +118,8 @@ pub struct ServiceSteps<K: Keeper, C: CiRuns, T: TrainDesk, A: StepActions> {
     pub ci: C,
     pub train: T,
     pub wait: CiWait,
+    /// Workflow names that must have passed for the head to be green.
+    pub required: Vec<String>,
     /// Called between two looks at the CI; a test passes a no-op.
     pub sleep: Box<dyn FnMut(Duration)>,
     pub rest: A,
@@ -127,13 +140,13 @@ impl<K: Keeper, C: CiRuns, T: TrainDesk, A: StepActions> StepActions for Service
             claim: epochs.join(","),
         })
     }
-    fn ci_class(&mut self, head: &str, _pr: u64) -> Result<CiClass, String> {
+    fn ci_class(&mut self, head: &str, pr: u64) -> Result<CiClass, String> {
         let mut last = "no CI look taken";
         for look in 0..self.wait.polls.max(1) {
             if look > 0 {
                 (self.sleep)(self.wait.interval);
             }
-            match classify(&self.ci.runs(head)?) {
+            match classify(&self.ci.runs(head, pr)?, &self.required) {
                 Reading::Done(class) => return Ok(class),
                 Reading::Pending(why) => last = why,
             }

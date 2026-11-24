@@ -303,7 +303,7 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
 /// What `pg-spawnd step-run` needs of a native run: its agent steps over the run's Host, the
 /// checkout and worktree paths of its record, and the lock that keeps a second supervisor off.
 pub(crate) struct StepHost {
-    pub agents: Box<dyn pg_spawnd::step_runner::StepActions>,
+    pub agents: crate::native_writer_steps::AgentSteps<Host>,
     pub repo: PathBuf,
     pub worktree: PathBuf,
     pub _owner: pg_worker_core::lockfile::LockGuard,
@@ -330,11 +330,7 @@ pub(crate) fn step_host(
     host.configure(&request)?;
     let (repo, worktree) = (host.repo.clone(), host.cwd.clone());
     Ok(StepHost {
-        agents: Box::new(crate::native_writer_steps::AgentSteps::new(
-            host,
-            base.to_owned(),
-            findings,
-        )),
+        agents: crate::native_writer_steps::AgentSteps::new(host, base.to_owned(), findings),
         repo,
         worktree,
         _owner: owner,

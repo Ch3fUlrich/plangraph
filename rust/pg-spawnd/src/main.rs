@@ -77,6 +77,7 @@ mod serve_options;
 mod shim;
 mod spawn;
 mod step_run;
+mod step_run_actions;
 #[cfg(test)]
 mod step_run_tests;
 use pg_spawnd::state;

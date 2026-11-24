@@ -20,8 +20,6 @@ pub(crate) struct AgentSteps<D: Driver> {
     /// Where the text of every review is kept, one file per review run, so a fix turn of a
     /// resumed list still reads the findings its `review` reference names.
     pub findings: PathBuf,
-    /// The last REQUEST_CHANGES review, for the delta review of the next round.
-    previous: Option<Value>,
     /// A usage limit or a stop ends the batch at once: another turn only spends the quota.
     halted: Option<String>,
 }
@@ -32,7 +30,6 @@ impl<D: Driver> AgentSteps<D> {
             driver,
             base,
             findings,
-            previous: None,
             halted: None,
         }
     }
@@ -51,6 +48,42 @@ impl<D: Driver> AgentSteps<D> {
             }
             error
         })
+    }
+
+    /// The review state that must outlive the process: the last REQUEST_CHANGES review, for
+    /// the delta review of the next round, and the HIGH+MED count of every round, for the
+    /// stop rule.
+    fn state_path(&self, name: &str) -> PathBuf {
+        self.findings.join(name)
+    }
+
+    fn previous(&self) -> Option<Value> {
+        let text = std::fs::read_to_string(self.state_path("previous.json")).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    fn rounds(&self) -> Vec<(String, u64)> {
+        std::fs::read_to_string(self.state_path("rounds.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<(String, u64)>>(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn keep(&self, name: &str, value: &impl serde::Serialize) -> Result<(), String> {
+        std::fs::create_dir_all(&self.findings).map_err(|err| err.to_string())?;
+        let bytes = serde_json::to_vec(value).map_err(|err| err.to_string())?;
+        std::fs::write(self.state_path(name), bytes)
+            .map_err(|err| format!("review state {name} not kept: {err}"))
+    }
+
+    /// The stamp the push may consume: the one this driver wrote for exactly `head`.
+    pub(crate) fn verify_stamp(&mut self, head: &str, stamp: &str) -> Result<(), String> {
+        match self.driver.stamp_path(head) {
+            Some(expected) if expected.is_file() && expected == std::path::Path::new(stamp) => {
+                Ok(())
+            }
+            _ => Err(format!("no fast-checks stamp for {head}")),
+        }
     }
 
     fn findings_path(&self, run: &str) -> Result<PathBuf, String> {
@@ -86,7 +119,8 @@ impl<D: Driver> StepActions for AgentSteps<D> {
         if !self.driver.stamped(head) {
             return Err(format!("review_refused: no fast-checks stamp for {head}"));
         }
-        let run = self.driver.review(head, self.previous.as_ref())?;
+        let previous = self.previous();
+        let run = self.driver.review(head, previous.as_ref())?;
         if run["head"] != head {
             return Err(format!("the review ran on another head than {head}"));
         }
@@ -104,9 +138,21 @@ impl<D: Driver> StepActions for AgentSteps<D> {
         let id = run["run_id"].as_str().unwrap_or_default();
         let path = self.findings_path(id)?;
         std::fs::create_dir_all(&self.findings).map_err(|err| err.to_string())?;
-        std::fs::write(&path, run["text"].as_str().unwrap_or_default())
-            .map_err(|err| format!("review text not kept: {err}"))?;
-        self.previous = matches!(verdict, Verdict::RequestChanges).then_some(run.clone());
+        let text = run["text"].as_str().unwrap_or_default().to_owned();
+        std::fs::write(&path, &text).map_err(|err| format!("review text not kept: {err}"))?;
+        match verdict {
+            Verdict::RequestChanges => {
+                let mut rounds = self.rounds();
+                if !rounds.iter().any(|(seen, _)| seen == id) {
+                    rounds.push((id.to_owned(), crate::native_writer::high_med(&text)));
+                }
+                self.keep("rounds.json", &rounds)?;
+                self.keep("previous.json", &run)?;
+            }
+            Verdict::Accept => {
+                let _ = std::fs::remove_file(self.state_path("previous.json"));
+            }
+        }
         Ok(Review {
             verdict,
             review: id.to_owned(),
@@ -116,6 +162,12 @@ impl<D: Driver> StepActions for AgentSteps<D> {
     fn fix(&mut self, head: &str, session: &str, review: &str) -> Result<Fix, String> {
         let text = std::fs::read_to_string(self.findings_path(review)?)
             .map_err(|err| format!("findings of review {review} unreadable: {err}"))?;
+        // The shared round stop rule decides before every fix: no progress, slow progress or
+        // the cap ends the batch instead of spending another turn.
+        let counts: Vec<u64> = self.rounds().iter().map(|(_, count)| *count).collect();
+        if let Some(reason) = crate::native_writer::round_stop(&counts) {
+            return Err(format!("round_stop: {reason}"));
+        }
         let prompt =
             format!("Open findings of the review of {head} on this worktree; fix them:\n{text}\n");
         self.turn(Some(session), &prompt)?;
@@ -129,11 +181,39 @@ impl<D: Driver> StepActions for AgentSteps<D> {
     fn claim(&mut self, _: &[String]) -> Result<Claim, String> {
         Err(not_agent("claim"))
     }
-    fn worktree(&mut self, _: &str, _: &str) -> Result<Worktree, String> {
-        Err(not_agent("worktree"))
+    /// The checkout is the driver's: it pins the base the review reads and admits origin/main.
+    fn worktree(&mut self, _claim: &str, base: &str) -> Result<Worktree, String> {
+        let path = self.driver.worktree().ok_or("the driver has no worktree")?;
+        // A kill between the checkout and its row leaves the checkout: reuse it at the base.
+        let at_base =
+            path.join(".git").exists() && self.driver.head().is_ok_and(|head| head == base);
+        if !at_base {
+            let got = self.driver.prepare()?;
+            if got != base {
+                return Err(format!("the base resolved to {got}, not {base}"));
+            }
+        }
+        Ok(Worktree {
+            worktree: path.to_string_lossy().into_owned(),
+        })
     }
-    fn fast_checks(&mut self, _: &str) -> Result<FastChecks, String> {
-        Err(not_agent("fast_checks"))
+    /// The driver's gates write the stamp the review seat reads (the worktree's own git
+    /// directory), so one receipt serves checks, review and push.
+    fn fast_checks(&mut self, head: &str) -> Result<FastChecks, String> {
+        if let Some(basis) = self.driver.prepare_review(head)? {
+            if basis.head != head {
+                return Err(format!(
+                    "the package was rebased onto a newer main as {}; start the checks again",
+                    basis.head
+                ));
+            }
+        }
+        self.driver.fast_checks(head)?;
+        let stamp = self.driver.stamp_path(head).filter(|path| path.is_file());
+        let stamp = stamp.ok_or_else(|| format!("fast checks left no stamp for {head}"))?;
+        Ok(FastChecks {
+            stamp: stamp.to_string_lossy().into_owned(),
+        })
     }
     fn push(&mut self, _: &str, _: &str, _: &str) -> Result<Push, String> {
         Err(not_agent("push"))
