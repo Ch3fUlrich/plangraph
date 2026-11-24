@@ -18,19 +18,23 @@ fn identified(target: &Path) -> bool {
 
 /// A Git repository below the target is someone's source tree, never a build cache, whatever markers
 /// sit beside it: a `.git` directory or file (a repository or linked worktree) or a bare repository
-/// (a `HEAD` file beside `objects` and `refs` directories) at any depth.
+/// (a `HEAD` file beside `objects` and `refs` directories, which may be symlinks) at any depth.
 fn holds_git_repository(target: &Path) -> io::Result<bool> {
     let mut pending = vec![target.to_path_buf()];
     while let Some(directory) = pending.pop() {
         let (mut head, mut objects, mut refs) = (false, false, false);
         for entry in fs::read_dir(&directory)? {
             let entry = entry?;
-            let is_dir = entry.file_type()?.is_dir();
+            let kind = entry.file_type()?;
+            let is_dir = kind.is_dir();
+            // A marker directory may be a symlink (a shared object store, a linked refs directory):
+            // it counts as present and is never followed.
+            let marker_dir = is_dir || kind.is_symlink();
             match entry.file_name().to_str() {
                 Some(".git") => return Ok(true),
                 Some("HEAD") => head = !is_dir,
-                Some("objects") => objects = is_dir,
-                Some("refs") => refs = is_dir,
+                Some("objects") => objects = marker_dir,
+                Some("refs") => refs = marker_dir,
                 _ => {}
             }
             if is_dir {

@@ -71,6 +71,7 @@ fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env("PG_PROCESS_CWD_READER", &reader)
+            .env("PG_PROCESS_INVENTORY", "reader")
             .env(
                 "PLANGRAPH_CARGO_TARGET_DIR",
                 tmp.path().join("cache/cargo-target"),
@@ -136,6 +137,7 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
         .env("HOME", &home)
         .env_remove("XDG_CONFIG_HOME")
         .env("PG_PROCESS_CWD_READER", &reader)
+        .env("PG_PROCESS_INVENTORY", "reader")
         .env("PLANGRAPH_CARGO_TARGET_DIR", container.join("shared"))
         .output()
         .unwrap();
@@ -150,7 +152,8 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
 /// keeps all of it, while the same aged target without the repository is removed.
 #[test]
 fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
-    for with_repository in [true, false] {
+    for variant in ["bare", "symlinked-refs", "none"] {
+        let with_repository = variant != "none";
         let (tmp, repo, root) = fixture();
         fs::write(repo.join(".git/info/exclude"), "rust/target/\n").unwrap();
         let target = repo.join("rust/target");
@@ -180,13 +183,22 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
                 ],
             );
         }
+        if variant == "symlinked-refs" {
+            // Git still reads the commits: refs is a link to a directory outside the target.
+            let refs = bare.join("refs");
+            let elsewhere = tmp.path().join("shared-refs");
+            fs::rename(&refs, &elsewhere).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &refs).unwrap();
+        }
         let old = SystemTime::now() - Duration::from_secs(7200);
         let mut pending = vec![target.clone()];
         while let Some(path) = pending.pop() {
             if fs::symlink_metadata(&path).unwrap().is_dir() {
                 pending.extend(fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
             }
-            fs::File::open(&path).unwrap().set_modified(old).unwrap();
+            if !fs::symlink_metadata(&path).unwrap().is_symlink() {
+                fs::File::open(&path).unwrap().set_modified(old).unwrap();
+            }
         }
         let home = tmp.path().join("home");
         fs::create_dir_all(home.join(".config")).unwrap();
@@ -215,6 +227,7 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env("PG_PROCESS_CWD_READER", &reader)
+            .env("PG_PROCESS_INVENTORY", "reader")
             .env(
                 "PLANGRAPH_CARGO_TARGET_DIR",
                 tmp.path().join("cache/cargo-target"),
@@ -224,7 +237,7 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
         let row: serde_json::Value =
             serde_json::from_slice(&fs::read(state.join("disk-hygiene.json")).unwrap()).unwrap();
         assert!(output.status.success(), "{row}");
-        assert_eq!(target.exists(), with_repository, "{row}");
+        assert_eq!(target.exists(), with_repository, "{variant}: {row}");
         if with_repository {
             assert!(bare.join("HEAD").is_file() && target.join("debug/blob").is_file());
         }
