@@ -1,0 +1,1 @@
+The Class-Search check (`pg-policy --class-search`, run by fast checks and the native writer gate) accepts `-> 1 hit, N changed` as well as `-> N hits, M changed`, and its refusal prints the expected form; trailing prose after `changed` is still refused.

@@ -249,7 +249,7 @@ fn class_search_accepts_repair_of_malformed_commit() {
     git(repo, &["commit", "--allow-empty", "-qm", "Base"]);
     let base = git(repo, &["rev-parse", "HEAD"]);
     git(repo, &["commit", "--allow-empty", "-qm", "Ordinary commit"]);
-    let malformed = "Class-Search: fixture -> 1 hit, 1 changed";
+    let malformed = "Class-Search: fixture -> 1 hit, 1 changed (prose after the count)";
     git(
         repo,
         &["commit", "--allow-empty", "-qm", "Fix", "-m", malformed],
@@ -292,4 +292,44 @@ fn class_search_accepts_repair_of_malformed_commit() {
     assert!(repaired.status.success(), "{repaired:?}");
     let repaired_range = check_range();
     assert!(repaired_range.status.success(), "{repaired_range:?}");
+}
+
+#[test]
+fn class_search_accepts_hit_and_hits_and_refuses_trailing_prose_with_the_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    git(repo, &["commit", "--allow-empty", "-qm", "Base"]);
+    let base = git(repo, &["rev-parse", "HEAD"]);
+    let check_range = || {
+        Command::new(env!("CARGO_BIN_EXE_pg-policy"))
+            .current_dir(repo)
+            .args(["--class-search", "--range", &base])
+            .output()
+            .unwrap()
+    };
+    for record in [
+        "Class-Search: fixture -> 1 hit, 1 changed",
+        "Class-Search: fixture -> 2 hits, 1 changed",
+    ] {
+        git(
+            repo,
+            &["commit", "--allow-empty", "-qm", "Fix", "-m", record],
+        );
+        let output = check_range();
+        assert!(output.status.success(), "{record}: {output:?}");
+    }
+    let prose = "Class-Search: fixture -> 5 hits, 1 changed (unchanged path noted)";
+    git(
+        repo,
+        &["commit", "--allow-empty", "-qm", "Fix", "-m", prose],
+    );
+    let output = check_range();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        text.contains(prose)
+            && text.contains("expected `Class-Search: <pattern> -> <n> hits, <m> changed`"),
+        "{text}"
+    );
 }

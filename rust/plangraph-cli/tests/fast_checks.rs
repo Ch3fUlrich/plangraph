@@ -215,7 +215,7 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     assert!(String::from_utf8_lossy(&output.stdout)
         .contains("FAILED test_example.py::test_example - fixture failure"));
 
-    let malformed = "Class-Search: example -> 1 hit, 1 changed";
+    let malformed = "Class-Search: example -> 1 hit, 1 changed (prose after the count)";
     git(
         root,
         &[
