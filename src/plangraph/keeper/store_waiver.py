@@ -27,7 +27,6 @@ import re
 from . import auth, context_sources, timing
 from .coverage import writer_families
 from .errors import Refused
-from .store_lane_merge import LaneMergeMixin
 from .evidence_types import Result, as_epoch, valid_commit_ref
 from .store_runs import go_key_scope
 from .schema import RISK_TAGS
@@ -94,7 +93,7 @@ def _names_item(statement, key):
                for name in (key, bare))
 
 
-class WaiverMixin(LaneMergeMixin):
+class WaiverMixin:
     """Router decision verbs for reviews: waive a family or close merged work."""
 
     def close_merged(self, principal, key, decision_id, families=None, *, from_open=False, apply=False,
