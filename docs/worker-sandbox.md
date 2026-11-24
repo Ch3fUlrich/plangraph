@@ -80,6 +80,18 @@ built `pg-jail` beside the worker binary when present, otherwise explicitly sets
 `PG_JAIL=off`. This fallback is test-profile-only, never a worker default;
 explicit caller configuration is preserved.
 
+## Credential isolation of a spawned Codex run
+
+`workspace-write` alone lets a run read the whole filesystem. The native writer therefore adds
+the `plangraph_isolated` permission profile: read everywhere, write to the named roots and
+temporary directories, network on, and `none` for every path of
+`src/plangraph/config/secret_paths.json` (one list; the Claude review sandbox reads it too).
+Limits that hold on every host: the deny applies to commands the agent runs, not to Codex's own
+process, so `CODEX_HOME` (harness auth) stays readable; a denied path must not lie inside a
+writable root, because the sandbox creates mount points for missing denied paths there and the
+run fails to start; a resumed session is only as isolated as the exec-level flags Codex applies
+to it, so the probe below is the check after every Codex upgrade.
+
 ## WSL hardening
 
 WSL defaults can expose host drives and host executables to the worker distro.

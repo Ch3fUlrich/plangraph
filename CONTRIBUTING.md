@@ -222,7 +222,7 @@ Rust review tests also execute keeper evidence and planner routing code; changes
 `tools/ci_select.py` selects `rust` and `rust-windows` through the shared `rust`
 output for paths in `RUST_INPUTS`, including documentation under `docs/schemas/`.
 The Claude writer launcher embeds `skills/batch-writer/SKILL.md`, so edits to that
-skill also select Rust CI. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
+skill, and the sandbox embeds `src/plangraph/config/secret_paths.json`, so edits to those also select Rust CI. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
 and environment template they read. The merge-close test reads both the

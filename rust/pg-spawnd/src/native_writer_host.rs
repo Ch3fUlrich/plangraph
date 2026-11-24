@@ -124,6 +124,8 @@ impl Host {
             directory,
             &git_dirs,
         );
+        let deny = pg_worker_core::credential_isolation::host_deny_read_paths()
+            .map_err(|e| format!("{}: {e}", pg_worker_core::credential_isolation::REFUSED))?;
         let mut command = self.command(codex);
         crate::native_writer_sandbox::apply_env(&mut command, std::env::vars_os(), &self.tool_path);
         // Exec-level flags apply to fresh and resumed turns, including saved sessions
@@ -143,7 +145,10 @@ impl Host {
             .args(["--json"])
             .args(model_args(&self.effort))
             .args(["-c", "approval_policy=never"])
-            .args(crate::native_writer_sandbox::sandbox_args(&roots).map_err(|e| e.to_string())?)
+            .args(
+                crate::native_writer_sandbox::sandbox_args(&roots, &deny)
+                    .map_err(|e| e.to_string())?,
+            )
             .arg("-o")
             .arg(directory.join("native.last"))
             .arg("-")

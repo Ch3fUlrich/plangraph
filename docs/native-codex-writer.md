@@ -116,6 +116,13 @@ and HEAD can be updated during a commit. The child's environment is an allowlist
 git identity, ssh agent, proxy and TLS settings, cargo and rustup homes); every other variable of
 the supervisor, including host secrets, is dropped. A canary run on a worker host comes first
 after a change to either list.
+Reads are denied too: the same command line carries the `plangraph_isolated` Codex permission
+profile (`credential_isolation.rs`), which reads everywhere except the paths of
+`src/plangraph/config/secret_paths.json` (the plangraph config directory under `~/.config` and
+`XDG_CONFIG_HOME`, the ssh, aws, gnupg and gcloud directories, git, netrc and docker credentials).
+A card that names `sandbox: danger-full-access` is refused with `sandbox_refused:`.
+`pg-host-readiness --credential-probe` prints `denied <path>` for each of those paths that exists
+on the host and `ISOLATED`; run it on every host after a deploy.
 Package placement requires a fresh `workspace-write` record from `pg-host-readiness`.
 The probe starts Codex's sandbox and commits in a scratch linked worktree using the
 same sandbox overrides as the writer. On Linux, the writer account's AppArmor policy
