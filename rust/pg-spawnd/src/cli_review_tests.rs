@@ -145,7 +145,10 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     assert_eq!(value["witness_kind"], "cli_reported");
     assert_eq!(value["completion"]["head_sha"], head);
     assert_eq!(value["verdict"], "pass");
-    assert_eq!(value["findings"], "No findings in src/lib.rs:1.");
+    assert_eq!(
+        value["findings"],
+        "No findings in src/lib.rs:1.\nFILES READ: src/lib.rs"
+    );
     assert_eq!(value["attempts"][0]["witness_kind"], "cli_reported");
     record.save().unwrap();
     // Keeper imports fcntl and is POSIX-only; record/provenance assertions run everywhere.
