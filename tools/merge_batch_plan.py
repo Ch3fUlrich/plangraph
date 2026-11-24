@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -378,3 +380,87 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
         if not data["jobs"]:
             raise MergeBatchError("full_ci: incomplete job pagination")
         page += 1
+
+
+# --- entry replay: the tests a part changed run five times on a clean checkout of its head (LE-CI-FLAKE-ENTRY-REPLAY)
+
+_OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (\S+)|test (\S+) \.\.\. (ok|FAILED))", re.M)
+
+
+def changed_tests(root, base: str, head: str) -> dict:
+    """Python test files (not browser) and the Rust ``#[test]`` fns whose lines the part touched (body edits
+    included), as [manifest, name]. A test fn spans from its attribute to the closing brace at its indent."""
+    git = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, check=True, text=True).stdout  # noqa: E731
+    diff = f"{base}...{head}"
+    python = [p for p in git("diff", "--name-only", "--diff-filter=AMR", diff, "--", "tests").splitlines()
+              if re.fullmatch(r"tests/(?!browser/)(?:\w+/)*test_\w+\.py", p)]
+    rust = []
+    for path in git("diff", "--name-only", "--diff-filter=AM", diff, "--", "rust").splitlines():
+        hunks = re.findall(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", git("diff", "-U0", diff, "--", path), re.M) if path.endswith(".rs") else []
+        touched = {n for c, d in hunks for n in (range(int(c), int(c) + int(d or 1)) if int(d or 1) else (int(c), int(c) + 1))}
+        text = git("show", f"{head}:{path}") if touched else ""
+        owner = Path(path).parent
+        while not (Path(root) / owner / "Cargo.toml").exists() and owner != owner.parent:
+            owner = owner.parent
+        for m in re.finditer(r"^([ \t]*)#\[(?:\w+::)?test\b.*\n(?:\1#\[.*\n)*\1(?:async )?fn (\w+)(?:.*\{\}|.*\n(?:.*\n)*?\1\})", text, re.M):
+            if touched & set(range(text.count("\n", 0, m.start()) + 1, text.count("\n", 0, m.end()) + 2)):
+                rust.append([f"{owner}/Cargo.toml", m[2]])
+    return {"python": python, "rust": rust}
+
+
+def replay_commands(changed: dict, runs: int = 5, workers: bool = True) -> list[tuple[list[str], list[str]]]:
+    """``(command, wanted)`` per run: each changed test ``runs`` times on one head, the last run with every worker or
+    thread. ``wanted`` names what the run must report an outcome for (a test file prefix or a Rust test name)."""
+    py = [sys.executable, "-m", "pytest", "-q", "-rA", "--no-header", "-p", "no:cacheprovider", *changed["python"]]
+    commands = [(py + (["-n", "auto"] if workers and i == runs - 1 else []), [f"{f}::" for f in changed["python"]])
+                for i in range(runs)] if changed["python"] else []
+    for manifest, name in changed["rust"]:
+        commands += [(["cargo", "test", "--manifest-path", manifest, name, "--", *(["--test-threads=1"] if i < runs - 1 else [])], [name])
+                     for i in range(runs)]
+    return commands
+
+
+def replay(root, changed: dict, out, workers: bool = True, runs: int = 5, head: str = "") -> dict:
+    """Run the replay in a clean detached checkout of ``head`` (verified to be that commit) and keep every log.
+    FLAKY ids passed and failed among the runs; failed: failed every run or no outcome; incomplete: a run that
+    reported no outcome for a changed test, so five invocations that skipped it never make a passing receipt."""
+    out, git = Path(out), lambda *a, cwd=root: subprocess.run(["git", *a], cwd=cwd, capture_output=True, check=True, text=True).stdout.strip()  # noqa: E731
+    out.mkdir(parents=True, exist_ok=True)
+    sha = git("rev-parse", f"{head or 'HEAD'}^{{commit}}")
+    checkout = tempfile.mkdtemp(prefix="entry-replay-")
+    git("worktree", "add", "--detach", checkout, sha)
+    try:
+        if git("rev-parse", "HEAD", cwd=checkout) != sha:
+            raise MergeBatchError(f"the replay checkout is not {sha}")
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(checkout) / "src"), os.environ.get("PYTHONPATH")])))
+        seen, failed, incomplete = {}, [], []   # test -> {passed: first log}
+        for n, (command, wanted) in enumerate(replay_commands(changed, runs, workers)):
+            done = subprocess.run(command, cwd=checkout, env=env, capture_output=True, text=True)
+            log = out / f"{'cargo' if command[0] == 'cargo' else 'python'}-run-{n}.log"
+            log.write_text(text := done.stdout + done.stderr, encoding="utf-8")
+            outcomes = [(m[2] or m[3], m[1] == "PASSED" or m[4] == "ok") for m in _OUTCOME.finditer(text)]
+            for test, ok in outcomes:
+                seen.setdefault(test, {}).setdefault(ok, str(log))
+            incomplete += [f"{w} (run {n})" for w in wanted if not any(t.startswith(w) if w.endswith("::") else t.split("::")[-1] == w for t, _ in outcomes)]
+            if done.returncode and not outcomes:
+                failed.append(" ".join(command[:6]))
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", checkout], cwd=root, capture_output=True)
+    flaky = sorted(t for t, r in seen.items() if len(r) == 2)
+    failed += sorted(t for t, r in seen.items() if True not in r)
+    result = {"flaky": flaky, "failed": failed, "incomplete": incomplete, "logs": {t: [seen[t][False], seen[t][True]] for t in flaky},
+              "ok": not (flaky or failed or incomplete), "runs": runs, "head": sha, "changed": changed}
+    (out / "replay.json").write_text(json.dumps(result), encoding="utf-8")
+    return result
+
+
+def replay_dir(head: str) -> Path:
+    """Where the entry replay of a part head is kept: ``<telemetry>/entry-replay/<head>`` (readiness reads it)."""
+    return Path(os.environ.get("PLANGRAPH_TELEMETRY_DIR") or Path.home() / ".local/share/plangraph/telemetry") / "entry-replay" / head
+
+
+def replay_receipt(head: str):
+    try:
+        return json.loads((replay_dir(head) / "replay.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None

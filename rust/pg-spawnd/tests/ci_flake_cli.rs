@@ -174,3 +174,30 @@ fn combine_durations_writes_one_map_for_the_next_train() {
         "{\"t.py::x\":1.0,\"t.py::y\":2.0}\n"
     );
 }
+
+#[test]
+fn an_expired_or_not_yet_started_cargo_entry_is_not_quarantined_on_any_runner() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = dir.path().join("ledger.json");
+    std::fs::write(&ledger, r#"{"cargo:pg-spawnd:m::c": {"owner": "plangraph:FIX", "starts": "2026-11-24T00:00:00Z", "expires": "2026-11-25T00:00:00Z"}}"#).unwrap();
+    let ask = |as_of: &str, mode: &str| {
+        let out = flake(
+            &[
+                "cargo-quarantine",
+                "--ledger",
+                ledger.to_str().unwrap(),
+                "--as-of",
+                as_of,
+                "--mode",
+                mode,
+            ],
+            &[],
+        );
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert_eq!(ask("2026-11-24T12:00:00Z", "blocking"), "pg-spawnd m::c\n");
+    // At the expiry instant and after it the test blocks again (it is no longer excluded); before the start it was never excluded.
+    assert_eq!(ask("2026-11-25T00:00:00Z", "blocking"), "");
+    assert_eq!(ask("2026-11-23T23:59:59Z", "blocking"), "");
+}

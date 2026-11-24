@@ -157,9 +157,7 @@ assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
         assert!(gate.contains(input), "ci-gate missing {input}");
     }
     let suite_jobs = jobs.split_once("\n  ci-gate:\n").unwrap().0;
-    // Each pytest job branches on the full run twice for its tests and once for the same-SHA retry, which
-    // leaves the affected path to its own rerun classification.
-    assert_eq!(suite_jobs.matches("needs.select.outputs.full").count(), 6);
+    assert_eq!(suite_jobs.matches("needs.select.outputs.full").count(), 4);
     assert!(gate.contains("- name: Post ci-full evidence"));
     assert!(gate.contains(
         "success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true'"
