@@ -16,10 +16,18 @@ pub struct Accept {
     pub run_id: String,
 }
 
-/// The two OpenCode seats every head needs when no single-seat leg accepted it (rule 3.66 (f)).
-const REQUIRED_PAIR: [&str; 2] = ["deepseek", "glm"];
-/// Legs whose one ACCEPT counts for the head alone.
-pub const DEFAULT_SINGLE_SEAT: &str = "hydrogen";
+/// The two OpenCode seats every head needs when no single-seat leg accepted it (rule 3.66 (f)): the
+/// exact route leg ids of `REVIEW_REQUIRED` in `plangraph.planner.legs`.
+const REQUIRED_PAIR: [&str; 2] = ["opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash"];
+/// The exact leg whose one ACCEPT counts for the head alone (`REVIEW_HYDROGEN`).
+pub const DEFAULT_SINGLE_SEAT: &str = "agy-gemini-4-hydrogen-high";
+
+/// Where the reviewers' answers are and which exact legs count alone; part of every train build.
+#[derive(Clone, Debug)]
+pub struct AcceptGate {
+    pub dir: PathBuf,
+    pub single_seat: Vec<String>,
+}
 
 fn run_id_ok(id: &str) -> bool {
     (1..=80).contains(&id.len())
@@ -83,28 +91,40 @@ fn accepts(dir: &Path) -> Result<Vec<(PathBuf, Accept)>, String> {
 
 /// Every part has counted ACCEPT evidence at its exact head; returns one line per part for the PR body.
 ///
-/// Counted means: the part's registrar receipt names a run, an ACCEPT file at the part head carries
-/// that run id, and the head is covered either by a `single_seat` leg (a substring of the leg named
-/// in the file's header) or by both required OpenCode seats (DeepSeek and GLM) on distinct runs.
+/// Counted means: the part's registrar receipt names a run, exactly one ACCEPT file at the part head
+/// carries that run id, and the head is covered either by that answer's leg being one of `single_seat`
+/// or by both required OpenCode legs (exact ids) accepting the head on two different runs. Leg ids are
+/// compared whole, never as substrings, and a run id that appears in two answers at the head is refused.
 /// The error names the part, its head and the directory, and lists the ACCEPT files found.
-pub fn require(
-    dir: &Path,
-    parts: &[PartIn],
-    single_seat: &[String],
-) -> Result<Vec<String>, String> {
+pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, String> {
+    let (dir, single_seat) = (gate.dir.as_path(), &gate.single_seat);
     let found = accepts(dir)?;
     let mut lines = Vec::new();
     for part in parts {
         let head = part.head.to_ascii_lowercase();
         let at_head: Vec<_> = found.iter().filter(|(_, a)| a.head == head).collect();
-        let bound = at_head
+        let bound: Vec<_> = at_head
             .iter()
-            .find(|(_, a)| a.run_id == part.receipt.run_id);
-        let leg_accepted = |word: &str| at_head.iter().any(|(_, a)| a.leg.contains(word));
-        let covered = single_seat.iter().any(|leg| leg_accepted(leg))
-            || REQUIRED_PAIR.iter().all(|leg| leg_accepted(leg));
-        match bound {
-            Some((path, _)) if covered => lines.push(format!(
+            .filter(|(_, a)| a.run_id == part.receipt.run_id)
+            .collect();
+        let run_of = |leg: &str| {
+            at_head
+                .iter()
+                .filter(|(_, a)| a.leg == leg)
+                .map(|(_, a)| a.run_id.as_str())
+                .collect::<Vec<_>>()
+        };
+        let pair: Vec<_> = REQUIRED_PAIR.iter().map(|leg| run_of(leg)).collect();
+        let paired = pair.iter().all(|runs| runs.len() == 1) && pair[0][0] != pair[1][0];
+        let counted = match bound.as_slice() {
+            [one] => {
+                single_seat.iter().any(|leg| *leg == one.1.leg)
+                    || (paired && pair.iter().any(|runs| runs[0] == one.1.run_id))
+            }
+            _ => false,
+        };
+        match bound.first() {
+            Some((path, _)) if counted => lines.push(format!(
                 "accept #{} head {} run {} file {}",
                 part.pr,
                 part.head,
@@ -124,9 +144,10 @@ pub fn require(
                         )
                     })
                     .collect();
-                let why = match (bound.is_some(), covered) {
-                    (false, _) => "no ACCEPT at this head carries the receipt run",
-                    _ => "neither a single-seat leg nor both deepseek and glm accepted it",
+                let why = match bound.len() {
+                    0 => "no ACCEPT at this head carries the receipt run",
+                    1 => "neither the exact single-seat leg nor both required legs on two runs accepted it",
+                    _ => "the receipt run appears in more than one ACCEPT at this head",
                 };
                 return Err(format!(
                     "accept: part #{} head {} is not counted: {why} (receipt run {}, dir {}, ACCEPT files found: {})",

@@ -1,7 +1,7 @@
 //! Landing by code: the state of main, the train builder, the red-train split and the stage timeline.
 mod accept;
 #[cfg(test)]
-mod accept_tests;
+pub(crate) mod accept_tests;
 pub mod build;
 #[cfg(test)]
 mod build_tests;

@@ -52,17 +52,20 @@ fn completed_build_warns_with_the_paths_and_parts_that_overlap() {
         "line 1\nline 2\nline 3\nline 4\nline 5\nsecond\n",
     );
     let out = tempfile::tempdir().unwrap();
+    let parts = vec![part(10, &first, None), part(20, &second, None)];
+    let (_accepted, accept) = crate::land::accept_tests::counted_for(&parts);
     let job = Build {
         repo: fx.path().to_owned(),
         base: base.clone(),
         name: "fixture".into(),
-        parts: vec![part(10, &first, None), part(20, &second, None)],
+        parts,
         attributes: String::new(),
         cap: None,
         out: out.path().to_owned(),
         branch: "land/train-fixture".into(),
         resolutions: vec![],
         protected: vec![],
+        accept,
         open: BuildOpen {
             build: "fixture".into(),
             policy_version: git::POLICY_VERSION.into(),

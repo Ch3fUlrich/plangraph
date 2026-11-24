@@ -12,7 +12,7 @@ const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA 
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
-accept dir DIR: the reviewers' answers; build refuses a part unless an ACCEPT at its head carries the receipt run and either a --single-seat leg (default hydrogen) or both deepseek and glm accepted it\n\
+accept dir DIR: the reviewers' answers; build refuses a part unless exactly one ACCEPT at its head carries the receipt run and either is a --single-seat leg (exact id, default agy-gemini-4-hydrogen-high) or both opencode-go-deepseek-v4-flash and opencode-go-glm-5.3-flash accepted it on two runs\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
@@ -28,6 +28,8 @@ pub struct Build {
     pub branch: String,
     pub resolutions: Vec<Adopted>,
     pub protected: Vec<String>,
+    /// The reviewers' answers every part needs before anything is built or published.
+    pub accept: super::accept::AcceptGate,
     /// `land_build_open`: policy version, base, grant digest and the snapshot position, fixed before building.
     pub open: BuildOpen,
 }
@@ -74,6 +76,7 @@ pub fn build_train(b: &Build, main: &State, tip: &str) -> Result<Vec<String>, St
     if b.open.policy_version != POLICY_VERSION || b.open.base != b.base || b.open.build != b.name {
         return Err("the build record does not match this build".into());
     }
+    let accepted = super::accept::require(&b.accept, &b.parts)?;
     std::fs::create_dir_all(&b.out).map_err(|e| e.to_string())?;
     write(&b.out.join(format!("{}.open.json", b.name)), &b.open)?;
     let outcome = build::build(&BuildInput {
@@ -116,6 +119,7 @@ pub fn build_train(b: &Build, main: &State, tip: &str) -> Result<Vec<String>, St
         lines.push(format!("left out #{} ({}) {:?}", l.pr, l.head, l.reason));
     }
     lines.extend(warnings);
+    lines.extend(accepted);
     Ok(lines)
 }
 
@@ -218,15 +222,16 @@ pub(super) fn run_inner(
             let answer = main_gh::answer_for(repo, "main", ledger, &matrix);
             let name = need("name")?;
             let base = need("base")?;
-            let single_seat: Vec<String> = flags
-                .get("single-seat")
-                .map_or(super::accept::DEFAULT_SINGLE_SEAT, String::as_str)
-                .split(',')
-                .map(|leg| leg.trim().to_ascii_lowercase())
-                .filter(|leg| !leg.is_empty())
-                .collect();
-            let accepted =
-                super::accept::require(Path::new(&need("accept-dir")?), &parts, &single_seat)?;
+            let accept = super::accept::AcceptGate {
+                dir: PathBuf::from(need("accept-dir")?),
+                single_seat: flags
+                    .get("single-seat")
+                    .map_or(super::accept::DEFAULT_SINGLE_SEAT, String::as_str)
+                    .split(',')
+                    .map(|leg| leg.trim().to_ascii_lowercase())
+                    .filter(|leg| !leg.is_empty())
+                    .collect(),
+            };
             let adopted = match flags.get("resolution-log") {
                 Some(p) => adopted_from_log(p, &name)?,
                 None => vec![],
@@ -247,6 +252,7 @@ pub(super) fn run_inner(
                         .transpose()?,
                     resolutions: adopted,
                     protected,
+                    accept,
                     open: BuildOpen {
                         build: name.clone(),
                         policy_version: POLICY_VERSION.into(),
@@ -266,10 +272,6 @@ pub(super) fn run_inner(
                 &answer.state,
                 &answer.tip,
             )
-            .map(|mut lines| {
-                lines.extend(accepted);
-                lines
-            })
         }
         "verify" | "review" | "admit" => {
             let manifest: Manifest = read(&need("manifest")?)?;
