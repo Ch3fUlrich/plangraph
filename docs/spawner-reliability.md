@@ -90,14 +90,16 @@ Recovery metrics retain full corrected history, and leg metadata is chronologica
 [--state PATH]` measures the stable-first prompt order from recorded review runs started in
 `[since, until)`. The cohort of a review is read from the structure of its stored
 `prompt.txt`: `after` when the `=== REVIEW OUTPUT` heading and the line starting `Name each
-finding as file:line.` are the last content; `before` when that contract line has no heading
-and an `=== ITEM CONTEXT` or `=== INLINE DIFF (` section follows it. Any other prompt is
-`excluded.unknown_layout`, a launched run with no stored prompt is `excluded.no_prompt`,
-and a review with attempts but no launch is `excluded.unlaunched`. A review is grouped by its
+finding as file:line.` are the last content; `before` when that contract line has no heading and an `=== ` section follows it and the host
+had not yet dispatched a reordered prompt. An old layout dispatched after the host's first
+reordered prompt was not changed by the rollout and is `excluded.post_rollout_unreordered`;
+any other prompt is `excluded.unknown_layout`, a launched run with no stored prompt is
+`excluded.no_prompt`, and a review with attempts but no launch is `excluded.unlaunched`.
+A review is grouped by its
 last launched leg (a leg is an object or a bare string). Per leg (matched only with reviews
 in both cohorts) it prints reviews, no-verdict share, cached-input-token share with its token
 denominators, `missing_usage` (reviews with no usage frame in their log) and a `provenance`
-block: host counts, harness counts and the roles the leg catalog gives the leg. Runs with more
+block: host counts, and the harness and catalog roles of the leg that produced the review. Runs with more
 than one launched attempt share one `live.log` unless the retry path archived the earlier
 legs' `live-attempt-N.log`; shared-log runs stay in the review counts, their usage is excluded
 and they are counted in `mixed_leg_excluded` only, not in `missing_usage`. Read-only.
@@ -105,10 +107,12 @@ and they are counted in `mixed_leg_excluded` only, not in `missing_usage`. Read-
 Measured 2026-11-24 on one workstation state, exact command `pg-spawnd health review-order
 --state <state> --since 2026-11-11T00:00:00Z --until 2026-11-25T00:00:00Z` (run without
 `--leg` so every leg is listed; one matched leg, all others have reviews in one cohort only).
-Excluded: 63 unlaunched, 132 unknown layout, 0 without a prompt. Matched leg
-`opencode-go-deepseek-v4-flash`, the coding worker: its catalog roles are implement, research
-and review on the opencode harness, and its 56 counted reviews all come from one host (the
-name stays out of the repository). Before: 39 reviews, 1 no-verdict (0.026), 37 with usage,
+Excluded: 63 unlaunched, 132 unknown layout, 0 post-rollout unreordered, 0 without a prompt.
+Matched leg `opencode-go-deepseek-v4-flash` (catalog roles implement, research and review,
+opencode harness); its 56 counted reviews come from one host, whose name stays out of the
+repository. Run records carry no coding-worker designation for a host or a leg, so this
+is the leg selected by id and not an attested coding worker; an attestation from the host
+registry is a precondition of the experiment below. Before: 39 reviews, 1 no-verdict (0.026), 37 with usage,
 2 mixed-log excluded, 0 missing usage, 1,352,704 of 2,626,884 input tokens cached (0.515).
 After: 17 reviews, 0 no-verdict, 17 with usage, 0 mixed, 0 missing, 137,388,928 of
 140,540,881 cached (0.978). The direction is the expected one (fewer no-verdicts, more

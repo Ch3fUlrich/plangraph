@@ -68,19 +68,24 @@ fn leg_id(leg: &Value) -> Option<&str> {
     leg["id"].as_str().or_else(|| leg.as_str())
 }
 
-/// The leg that produced the review: the last launched attempt, else the chosen leg of a
-/// record with no attempt list. `None` when attempts exist but none launched.
-fn final_leg(record: &Value) -> Option<&str> {
+/// The leg record that produced the review: the last launched attempt's leg, else the chosen
+/// leg of a record with no attempt list. `None` when attempts exist but none launched.
+fn final_leg_value(record: &Value) -> Option<&Value> {
     match record["attempts"].as_array().filter(|a| !a.is_empty()) {
-        Some(_) => launched(record).last().and_then(|a| leg_id(&a["leg"])),
-        None => leg_id(&record["chosen_leg"]),
+        Some(_) => launched(record).last().map(|a| &a["leg"]),
+        None => Some(&record["chosen_leg"]),
     }
+}
+
+fn final_leg(record: &Value) -> Option<&str> {
+    final_leg_value(record).and_then(leg_id)
 }
 
 /// What the stored prompt shows about its order. `Closing`: the `=== REVIEW OUTPUT` heading and
 /// the contract line are the last content (stable-first). `Leading`: the contract line has no
-/// heading and an evidence section (`=== ITEM CONTEXT` or `=== INLINE DIFF (`) follows it.
+/// heading and any `=== ` evidence section (item context, inline diff, review material) follows it.
 /// Anything else carries no unambiguous layout.
+#[derive(Clone, Copy, PartialEq)]
 enum Layout {
     Closing,
     Leading,
@@ -93,9 +98,7 @@ fn layout_of(text: &str) -> Layout {
         return Layout::Unknown;
     };
     let headed = at > 0 && lines[at - 1] == CONTRACT_HEADING;
-    let evidence_after = lines[at + 1..]
-        .iter()
-        .any(|l| l.starts_with("=== ITEM CONTEXT") || l.starts_with("=== INLINE DIFF ("));
+    let evidence_after = lines[at + 1..].iter().any(|l| l.starts_with("=== "));
     let nothing_after = lines[at + 1..].iter().all(|l| l.trim().is_empty());
     match (headed, evidence_after, nothing_after) {
         (true, false, true) => Layout::Closing,
@@ -185,8 +188,27 @@ pub(crate) fn compare(
     hosts: &[String],
 ) -> Value {
     let mut tallies: BTreeMap<&str, Stratum> = BTreeMap::new();
-    let (mut unlaunched, mut no_prompt, mut no_start, mut unknown) = (0u64, 0u64, 0u64, 0u64);
-    for record in records {
+    let (mut unlaunched, mut no_prompt, mut no_start, mut unknown, mut unchanged) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
+    let layouts: Vec<Option<Layout>> = records
+        .iter()
+        .map(|r| {
+            terminal(state, r)?;
+            stored_prompt(state, r).map(|t| layout_of(&t))
+        })
+        .collect();
+    // Rollout exposure per host: the first dispatch that produced a reordered prompt. An old
+    // layout dispatched after it was not reordered by the rollout and is no before sample.
+    let mut rollout: BTreeMap<&str, f64> = BTreeMap::new();
+    for (record, layout) in records.iter().zip(&layouts) {
+        if let (Some(Layout::Closing), Some(started)) = (layout, record["started"].as_f64()) {
+            let at = rollout
+                .entry(record["host"].as_str().unwrap_or("unknown"))
+                .or_insert(started);
+            *at = at.min(started);
+        }
+    }
+    for (record, layout) in records.iter().zip(layouts) {
         let Some((_, _, class)) = terminal(state, record) else {
             continue; // not a terminal review run
         };
@@ -209,29 +231,31 @@ pub(crate) fn compare(
             unlaunched += 1;
             continue;
         };
-        let Some(text) = stored_prompt(state, record) else {
-            no_prompt += 1;
-            continue;
-        };
-        let cohort = match layout_of(&text) {
-            Layout::Leading => 0,
-            Layout::Closing => 1,
-            Layout::Unknown => {
+        let cohort = match layout {
+            None => {
+                no_prompt += 1;
+                continue;
+            }
+            Some(Layout::Leading) if rollout.get(host).is_some_and(|&at| started >= at) => {
+                unchanged += 1;
+                continue;
+            }
+            Some(Layout::Leading) => 0,
+            Some(Layout::Closing) => 1,
+            Some(Layout::Unknown) => {
                 unknown += 1;
                 continue;
             }
         };
         let stratum = tallies.entry(leg).or_default();
         *stratum.hosts.entry(host.into()).or_default() += 1;
-        let harness = record["chosen_leg"]["harness"]
+        let attempt_leg = final_leg_value(record).unwrap_or(&Value::Null);
+        let harness = attempt_leg["harness"]
             .as_str()
             .or_else(|| record["harness"].as_str())
             .unwrap_or("unknown");
         *stratum.harnesses.entry(harness.into()).or_default() += 1;
-        let roles = record["chosen_leg"]["roles"]
-            .as_array()
-            .into_iter()
-            .flatten();
+        let roles = attempt_leg["roles"].as_array().into_iter().flatten();
         stratum
             .roles
             .extend(roles.filter_map(|r| r.as_str().map(String::from)));
@@ -269,8 +293,9 @@ pub(crate) fn compare(
         with started in [since, until), grouped by the last launched attempt leg (string or object \
         leg); cohort = prompt order read from the stored prompt.txt: after when the \
         === REVIEW OUTPUT heading and the contract line are the last content, before when the \
-        contract line has no heading and an item-context or inline-diff section follows it, \
-        otherwise unknown_layout and excluded; --host keeps the named hosts; no_verdict = review result other than verdict; cached share = cached / total input \
+        contract line has no heading and an === section follows it and the host had not yet produced a \
+        reordered prompt (a later one is post_rollout_unreordered), otherwise unknown_layout and \
+        excluded; --host keeps the named hosts; no_verdict = review result other than verdict; cached share = cached / total input \
         tokens summed over live.log usage frames. Runs with more than one launched attempt and no \
         archived live-attempt log share one live.log: counted in mixed_leg_excluded, left out of \
         usage and not counted as missing_usage; missing_usage = reviews without any usage frame \
@@ -278,7 +303,8 @@ pub(crate) fn compare(
         "window":{"since":since, "until":until},
         "strata":strata, "unmatched":unmatched,
         "excluded":{"unlaunched":unlaunched,
-            "no_prompt":no_prompt, "unknown_layout":unknown, "no_start_time":no_start},
+            "no_prompt":no_prompt, "unknown_layout":unknown,
+            "post_rollout_unreordered":unchanged, "no_start_time":no_start},
         "matched_total":{"before":sum_before.view("before"), "after":sum_after.view("after")}})
 }
 
@@ -289,7 +315,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let mut flags = BTreeMap::new();
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {
-        let known = ["--state", "--since", "--until", "--leg"];
+        let known = ["--state", "--since", "--until", "--leg", "--host"];
         if !known.contains(&flag.as_str()) || flags.contains_key(&flag) {
             return Err("unknown or duplicate review-order flag".into());
         }
