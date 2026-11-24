@@ -1,10 +1,14 @@
 //! Prompt-order measurement: review verdict completion and cached input tokens, before and
 //! after the stable-first prompt order, per leg (matched stratum), from recorded runs only.
-use crate::{evidence::regular, review_artifacts::directory, review_health::sample};
+use crate::{evidence::regular, review_artifacts::directory, review_health::terminal};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, io::Read, io::Write, path::Path};
 
-const HELP: &str = "health review-order [--state PATH] --before-since T --before-until T --after-since T --after-until T [--leg ID[,ID]]";
+const HELP: &str = "health review-order [--state PATH] --since T --until T [--leg ID[,ID]]";
+/// The review contract text opens this section; the stable-first order puts it at the very end
+/// of the stored prompt, the earlier order placed it elsewhere.
+const CONTRACT_MARKER: &str = "=== REVIEW OUTPUT";
+const CONTRACT_TAIL_CHARS: usize = 2000;
 const MAX_LOG: u64 = 8 * 1024 * 1024;
 
 /// `(total input tokens, cached input tokens)` summed over the usage frames of a live log.
@@ -59,15 +63,35 @@ fn launched(record: &Value) -> Vec<&Value> {
         .unwrap_or_default()
 }
 
+/// A leg id stored as `{"id":..}` or as a bare string.
+fn leg_id(leg: &Value) -> Option<&str> {
+    leg["id"].as_str().or_else(|| leg.as_str())
+}
+
 /// The leg that produced the review: the last launched attempt, else the chosen leg of a
 /// record with no attempt list. `None` when attempts exist but none launched.
 fn final_leg(record: &Value) -> Option<&str> {
     match record["attempts"].as_array().filter(|a| !a.is_empty()) {
-        Some(_) => launched(record)
-            .last()
-            .and_then(|a| a["leg"]["id"].as_str()),
-        None => record["chosen_leg"]["id"].as_str(),
+        Some(_) => launched(record).last().and_then(|a| leg_id(&a["leg"])),
+        None => leg_id(&record["chosen_leg"]),
     }
+}
+
+/// Which prompt order a review received, read from its stored `prompt.txt`: 1 when the review
+/// contract closes the prompt (stable-first), 0 when the prompt has no contract in its tail,
+/// `None` when no prompt was stored.
+fn prompt_cohort(state: &Path, record: &Value) -> Option<usize> {
+    let path = directory(state, record).ok()?.join("prompt.txt");
+    regular(&path, false).ok()?;
+    let mut text = String::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_LOG + 1)
+        .read_to_string(&mut text)
+        .ok()?;
+    let start = text.len().saturating_sub(CONTRACT_TAIL_CHARS);
+    let start = (start..=text.len()).find(|&i| text.is_char_boundary(i))?;
+    Some(usize::from(text[start..].contains(CONTRACT_MARKER)))
 }
 
 /// An archived `live-attempt-N.log` means the retry path moved earlier legs' output away, so
@@ -102,10 +126,10 @@ fn share(part: u64, whole: u64) -> Value {
 }
 
 impl Tally {
-    fn view(&self, label: &str, (since, until): (i64, i64)) -> Value {
-        json!({"label":label, "since":since, "until":until, "reviews":self.reviews,
+    fn view(&self, label: &str) -> Value {
+        json!({"label":label, "reviews":self.reviews,
             "no_verdict":self.no_verdict, "no_verdict_share":share(self.no_verdict, self.reviews),
-            "usage_runs":self.usage_runs, "mixed_leg_excluded":self.mixed, "missing_usage":self.reviews - self.usage_runs,
+            "usage_runs":self.usage_runs, "mixed_leg_excluded":self.mixed, "missing_usage":self.reviews - self.usage_runs - self.mixed,
             "input_tokens":self.input, "cached_input_tokens":self.cached,
             "cached_input_share":share(self.cached, self.input)})
     }
@@ -119,49 +143,40 @@ impl Tally {
     }
 }
 
-/// Compare two windows per leg. Only legs with reviews in both windows are matched and
-/// summed; the others are listed so a mismatch is visible.
+/// Compare the two prompt-order cohorts per leg inside one dispatch window. Only legs with
+/// reviews in both cohorts are matched and summed; the others are listed so a mismatch is
+/// visible.
 pub(crate) fn compare(
     state: &Path,
     records: &[Value],
-    before: (i64, i64),
-    after: (i64, i64),
+    (since, until): (i64, i64),
     legs: &[String],
 ) -> Value {
     let mut tallies: BTreeMap<&str, [Tally; 2]> = BTreeMap::new();
-    let windows = [before, after];
-    let cohort_of = |t: f64| {
-        windows
-            .iter()
-            .position(|&(since, until)| t >= since as f64 && t < until as f64)
-    };
-    let (mut unlaunched, mut crossing, mut no_start) = ([0u64; 2], [0u64; 2], 0u64);
+    let (mut unlaunched, mut no_prompt, mut no_start) = (0u64, 0u64, 0u64);
     for record in records {
-        let Some((_, (ended, _, class))) = sample(state, record) else {
-            continue;
+        let Some((_, _, class)) = terminal(state, record) else {
+            continue; // not a terminal review run
         };
-        // The cohort is the window of the dispatch time: the prompt was built then.
         let Some(started) = record["started"].as_f64() else {
-            if cohort_of(ended).is_some() {
-                no_start += 1;
-            }
+            no_start += 1;
             continue;
         };
-        let Some(cohort) = cohort_of(started) else {
+        if started < since as f64 || started >= until as f64 {
             continue;
-        };
+        }
         let leg = final_leg(record);
         if leg.is_some_and(|l| !legs.is_empty() && !legs.iter().any(|x| x == l)) {
             continue;
         }
         let Some(leg) = leg else {
-            unlaunched[cohort] += 1;
+            unlaunched += 1;
             continue;
         };
-        if cohort_of(ended) != Some(cohort) {
-            crossing[cohort] += 1;
+        let Some(cohort) = prompt_cohort(state, record) else {
+            no_prompt += 1;
             continue;
-        }
+        };
         let tally = &mut tallies.entry(leg).or_default()[cohort];
         tally.reviews += 1;
         tally.no_verdict += u64::from(class != "verdict");
@@ -185,20 +200,24 @@ pub(crate) fn compare(
         }
         strata.insert(
             *leg,
-            json!({"matched":matched, "before":b.view("before", before), "after":a.view("after", after)}),
+            json!({"matched":matched, "before":b.view("before"), "after":a.view("after")}),
         );
     }
     json!({"query":"pg-spawnd health review-order: terminal review runs (role review, status \
         completed|succeeded|terminated_after_answer|failed|timeout|timed_out|stalled|limited|killed) \
-        by dispatch time (started) in [since, until) with the end in the same window, grouped by the last launched attempt leg; no_verdict = review result other \
-        than verdict; cached share = cached / total input tokens summed over live.log usage \
-        frames; runs with more than one launched attempt and no archived live-attempt log share one live.log and are excluded from usage \
-        (mixed_leg_excluded, also in missing_usage); runs without usage frames count as missing_usage and stay out of the token share",
+        with started in [since, until), grouped by the last launched attempt leg (string or object \
+        leg); cohort = prompt order read from the stored prompt.txt: after when the review contract \
+        (a line starting with the marker) is within the last 2000 characters, before when it is \
+        not; no_verdict = review result other than verdict; cached share = cached / total input \
+        tokens summed over live.log usage frames. Runs with more than one launched attempt and no \
+        archived live-attempt log share one live.log: counted in mixed_leg_excluded, left out of \
+        usage and not counted as missing_usage; missing_usage = reviews without any usage frame \
+        among the rest",
+        "window":{"since":since, "until":until},
         "strata":strata, "unmatched":unmatched,
-        "excluded":{"unlaunched":{"before":unlaunched[0], "after":unlaunched[1]},
-            "boundary_crossing":{"before":crossing[0], "after":crossing[1]},
-            "no_start_time":no_start},
-        "matched_total":{"before":sum_before.view("before", before), "after":sum_after.view("after", after)}})
+        "excluded":{"unlaunched":unlaunched,
+            "no_prompt":no_prompt, "no_start_time":no_start},
+        "matched_total":{"before":sum_before.view("before"), "after":sum_after.view("after")}})
 }
 
 pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), String> {
@@ -208,14 +227,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let mut flags = BTreeMap::new();
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {
-        let known = [
-            "--state",
-            "--before-since",
-            "--before-until",
-            "--after-since",
-            "--after-until",
-            "--leg",
-        ];
+        let known = ["--state", "--since", "--until", "--leg"];
         if !known.contains(&flag.as_str()) || flags.contains_key(&flag) {
             return Err("unknown or duplicate review-order flag".into());
         }
@@ -228,12 +240,9 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let time = |name: &str| {
         crate::health_cli::timestamp(flags.get(name).ok_or(format!("missing {name}"))?)
     };
-    let before = (time("--before-since")?, time("--before-until")?);
-    let after = (time("--after-since")?, time("--after-until")?);
-    if before.0 >= before.1 || after.0 >= after.1 || before.1 > after.0 {
-        return Err(
-            "windows must be non-empty and before must end by the time after starts".into(),
-        );
+    let window = (time("--since")?, time("--until")?);
+    if window.0 >= window.1 {
+        return Err("window must be non-empty".into());
     }
     let state = crate::state::resolve_state(flags.get("--state").map(String::as_str), |k| {
         std::env::var_os(k)
@@ -248,7 +257,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         })
         .unwrap_or_default();
     let records = crate::records::list_runs(&state);
-    let report = compare(&state, &records, before, after, &legs);
+    let report = compare(&state, &records, window, &legs);
     writeln!(out, "{report}").map_err(|e| e.to_string())
 }
 

@@ -86,31 +86,29 @@ The gate-known override denominator and unknown-gate count are separate metrics;
 missing gates are never inferred as skips.
 Recovery metrics retain full corrected history, and leg metadata is chronological.
 
-`pg-spawnd health review-order --before-since T --before-until T --after-since T
---after-until T [--leg ID,ID] [--state PATH]` measures the stable-first prompt order from
-recorded review runs. Per leg (a stratum counts as matched only with reviews in both
-windows) it prints reviews, no-verdict share, cached-input-token share, the number of
-runs with no usage frame in their live log (`missing_usage`, left out of the token
-share), the matched totals and the query text. Runs with more than one launched attempt
-share one `live.log` across fallback legs unless the retry path archived the earlier legs'
-`live-attempt-N.log`; shared-log runs stay in the review counts but their usage is excluded
-and counted in `mixed_leg_excluded`. Read-only; windows must not overlap.
+`pg-spawnd health review-order --since T --until T [--leg ID,ID] [--state PATH]` measures the
+stable-first prompt order from recorded review runs started in `[since, until)`. The cohort of
+a review is read from its stored `prompt.txt`: `after` when the review contract (the line
+starting `=== REVIEW OUTPUT`) is within the last 2000 characters, `before` when it is not;
+a launched run with no stored prompt is counted under `excluded.no_prompt`. A review is
+grouped by its last launched leg (a leg is an object or a bare string); reviews with attempts
+but no launch are `excluded.unlaunched`. Per leg (matched only with reviews in both cohorts) it prints
+reviews, no-verdict share, cached-input-token share with its token denominators, and
+`missing_usage` (reviews with no usage frame in their log). Runs with more than one launched
+attempt share one `live.log` unless the retry path archived the earlier legs'
+`live-attempt-N.log`; shared-log runs stay in the review counts, their usage is excluded and
+they are counted in `mixed_leg_excluded` only, not in `missing_usage`. Read-only.
 
-Measured 2026-11-24 on one workstation state (376 review records), exact command
-`pg-spawnd health review-order --state <state> --before-since 2026-11-11T00:00:00Z
---before-until 2026-11-23T19:07:00Z --after-since 2026-11-23T19:07:00Z --after-until
-2026-11-24T12:00:00Z`. The cut is the train-21 merge that placed the review contract last;
-the deploy time of that build on this host is not recorded, so the cohorts are only
-approximate. Cohorts are assigned by dispatch time and a review is grouped by the last
-launched leg; reviews with no launched attempt (34 before, 24 after) and one review that
-crossed the cut are listed under `excluded`, not in a leg. Matched strata: only
-`opencode-go-deepseek-v4-flash`. Before: 90 reviews, 1 no-verdict (0.011), 88 with usage,
-2 mixed-log excluded, 2 missing usage, 272,748,672 of 281,811,395 input tokens cached
-(0.968). After: 18 reviews, 0 no-verdict, 18 with usage, 0 missing, 140,866,816 of
-144,170,930 cached (0.977). Eighteen reviews and an unknown deploy time support no
-decision; the matched coding-worker comparison is the experiment
-`PROMPT-ORDER-CODING-WORKER-EXPERIMENT` (slice of `PROMPT-ORDER-REVIEW-MEASUREMENT`), which
-needs a recorded deploy time and at least 30 reviews per window.
+Measured 2026-11-24 on one workstation state (63 reviews with no launched attempt are
+`excluded.unlaunched`; every launched review had a stored prompt), exact command `pg-spawnd health review-order --state <state> --since
+2026-11-11T00:00:00Z --until 2026-11-25T00:00:00Z --leg opencode-go-deepseek-v4-flash` (the
+coding worker; the run without `--leg` lists every leg, all others unmatched). Cohorts come
+from the stored prompts, so no deploy time is needed. Before: 91 reviews, 1 no-verdict
+(0.011), 89 with usage, 2 mixed-log excluded, 0 missing usage, 268,879,872 of 277,913,969
+input tokens cached (0.9675). After: 18 reviews, 0 no-verdict, 18 with usage, 0 mixed, 0
+missing, 145,491,712 of 148,878,030 cached (0.9773). Both shares move the expected way
+(fewer no-verdicts, more cached input), but one no-verdict in 91 against none in 18 is not
+a significant difference; the larger sample is `PROMPT-ORDER-CODING-WORKER-EXPERIMENT`.
 
 The immutable operator baseline lives in a dated research directory in the private data repo.
 Before RL14 on, compare the pinned window

@@ -77,8 +77,8 @@ pub(crate) fn classify(record: &Value, text: &str) -> &'static str {
 
 pub(crate) type Sample<'a> = (f64, &'a str, &'a str);
 
-/// One terminal review run of a record: its leg and `(ended, run_id, class)`.
-pub(crate) fn sample<'a>(state: &Path, record: &'a Value) -> Option<(&'a str, Sample<'a>)> {
+/// A terminal review run of a record, whatever its leg: `(ended, run_id, class)`.
+pub(crate) fn terminal<'a>(state: &Path, record: &'a Value) -> Option<Sample<'a>> {
     if record["role"] != "review"
         || !matches!(
             record["status"].as_str(),
@@ -97,20 +97,24 @@ pub(crate) fn sample<'a>(state: &Path, record: &'a Value) -> Option<(&'a str, Sa
     {
         return None;
     }
-    let leg = record["attempts"]
-        .as_array()
-        .and_then(|attempts| attempts.last())
-        .and_then(|attempt| attempt["leg"]["id"].as_str())
-        .or_else(|| record["chosen_leg"]["id"].as_str());
-    let (Some(leg), Some(id), Some(ended)) =
-        (leg, record["run_id"].as_str(), record["ended"].as_f64())
-    else {
+    let (Some(id), Some(ended)) = (record["run_id"].as_str(), record["ended"].as_f64()) else {
         return None;
     };
     let class = record["review_result"]
         .as_str()
         .unwrap_or_else(|| classify(record, &answer(state, record)));
-    Some((leg, (ended, id, class)))
+    Some((ended, id, class))
+}
+
+/// One terminal review run with its leg (last attempt, else the chosen leg) for leg health.
+fn sample<'a>(state: &Path, record: &'a Value) -> Option<(&'a str, Sample<'a>)> {
+    let run = terminal(state, record)?;
+    let leg = record["attempts"]
+        .as_array()
+        .and_then(|attempts| attempts.last())
+        .and_then(|attempt| attempt["leg"]["id"].as_str())
+        .or_else(|| record["chosen_leg"]["id"].as_str())?;
+    Some((leg, run))
 }
 
 fn samples<'a>(state: &Path, records: &'a [Value]) -> BTreeMap<&'a str, Vec<Sample<'a>>> {
