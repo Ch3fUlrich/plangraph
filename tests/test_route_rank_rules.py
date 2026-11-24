@@ -243,3 +243,21 @@ def test_a_coding_index_counts_only_when_every_ranked_row_has_one():
     assert [c["model_id"] for c in rank_candidates([with_coding, without])] == ["plain", "coding"]
     both = [with_coding, cand("other", aa_intelligence=70.0, coding_index=60.0)]
     assert [c["model_id"] for c in rank_candidates(both)][0] == "coding"
+
+
+def test_the_coding_index_reaches_the_utility_row_without_touching_the_catalog_cells(tmp_path):
+    from plangraph.planner.benchmarks import benchmark_for_leg, benchmark_rows_from_db
+    from plangraph.routing_support.catalog_db import CatalogDB
+    path = tmp_path / "catalog.sqlite"
+    with CatalogDB(path) as db:
+        db.init_and_seed()
+        expected = {row["id"]: row["coding_index"] for row in db.list_models() if row.get("coding_index") is not None}
+    rows, errors = benchmark_rows_from_db(path)
+    assert not errors and expected
+    for model, coding in expected.items():
+        if model in rows:
+            assert rows[model]["coding_index"] == coding
+            assert all("coding_index" not in cell for cell in rows[model]["benchmark_rows"])
+    leg = replace(BY_ID["opencode-go-muse-spark"], effort=None)
+    utility = benchmark_for_leg(rows, leg)
+    assert utility is not None and utility["coding_index"] == rows[leg.model]["coding_index"] == 75.8
