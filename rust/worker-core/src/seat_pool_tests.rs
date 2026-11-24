@@ -103,6 +103,63 @@ fn head_porcelain_before_after() {
     assert!(finish_seat(&f.repo, &p).is_err());
     assert!(finish_seat(&f.repo, &p).is_ok());
 }
+fn commit_empty(f: &Fixture, message: &str) -> String {
+    // Plumbing under the fixture's git isolation: no hooks, signing or host identity.
+    let root = Path::new(&f.repo.root);
+    let run = |args: &[&str]| {
+        let out = crate::git_test_support::command(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let tree = run(&["write-tree"]);
+    let parent = run(&["rev-parse", "HEAD"]);
+    let sha = run(&["commit-tree", &tree, "-p", &parent, "-m", message]);
+    run(&["update-ref", "HEAD", &sha]);
+    sha
+}
+
+#[test]
+fn seat_is_pinned_to_the_requested_head_not_the_repository_head() {
+    let mut f = Fixture::new();
+    let first = workspace(&f).revision_sha.unwrap();
+    commit_empty(&f, "second");
+    grant(&f, "run");
+    let mut ws = workspace(&f);
+    ws.revision_sha = Some(first.clone());
+    let proof = prepare_seat(&f.repo, &ws, &f.state, "run", 1).unwrap();
+    assert_eq!(proof.head_at_start, first);
+    let head = git(&proof.checkout, &["rev-parse", "HEAD"]).unwrap();
+    assert_eq!(head, format!("{first}\n").as_bytes());
+    f.record.checkout = proof.checkout.clone();
+    save_lifecycle(&f.state, &f.record).unwrap();
+    let record = finish_seat(&f.repo, &proof).unwrap();
+    assert_eq!(
+        (record.head_at_start, record.head_at_end),
+        (first.clone(), first)
+    );
+}
+
+#[test]
+fn same_slot_is_clean_and_repinned_on_reuse() {
+    let mut f = Fixture::new();
+    let first = seat(&mut f);
+    fs::write(first.checkout.join("leftover"), "scratch").unwrap();
+    let second_head = commit_empty(&f, "second");
+    let mut ws = workspace(&f);
+    ws.revision_sha = Some(second_head.clone());
+    let reused = prepare_seat(&f.repo, &ws, &f.state, "run", 1).unwrap();
+    assert_eq!(reused.checkout, first.checkout);
+    assert!(!reused.checkout.join("leftover").exists());
+    assert_eq!(reused.head_at_start, second_head);
+    assert!(git(&reused.checkout, &["status", "--porcelain=v1", "-z"])
+        .unwrap()
+        .is_empty());
+    assert!(git(&reused.checkout, &["symbolic-ref", "-q", "HEAD"]).is_err());
+}
+
 #[test]
 fn dirty_slot_fails_and_resets() {
     let mut f = Fixture::new();

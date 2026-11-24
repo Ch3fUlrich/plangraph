@@ -168,13 +168,19 @@ pub fn finish_seat(repo: &RepoEntry, proof: &SeatProof) -> Result<WorkspaceRecor
         reset(repo, &proof.checkout, &proof.head_at_start)?;
         return Err(WriterError::Verify);
     }
+    // The record carries the head read from the checkout after the run, not a copy of the start head.
+    let end = git(&proof.checkout, &["rev-parse", "HEAD"])?;
+    let head_at_end = String::from_utf8(end)
+        .map_err(|_| WriterError::Verify)?
+        .trim()
+        .to_owned();
     Ok(WorkspaceRecord {
         repo_id: proof.repo_id.clone(),
         toplevel: proof.checkout.to_string_lossy().into(),
         branch: None,
         base_sha: proof.base.clone(),
         head_at_start: proof.head_at_start.clone(),
-        head_at_end: proof.head_at_start.clone(),
+        head_at_end,
     })
 }
 #[cfg(test)]
