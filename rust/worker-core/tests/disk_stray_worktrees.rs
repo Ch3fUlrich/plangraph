@@ -104,3 +104,81 @@ fn only_merged_clean_idle_stray_worktrees_are_removed() {
         .iter()
         .any(|a| a.contains("removed stray worktree") && a.contains("merged")));
 }
+
+fn merged_tree() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("main");
+    let jobs = tmp.path().join("jobs");
+    for dir in [&repo, &jobs] {
+        fs::create_dir(dir).unwrap();
+    }
+    git(&repo, &["init", "-qb", "main"]);
+    fs::write(repo.join("one"), "one").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "one"]);
+    git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    let tree = jobs.join("job");
+    git(
+        &repo,
+        &["worktree", "add", "-qb", "job", tree.to_str().unwrap()],
+    );
+    (tmp, repo, tree)
+}
+
+#[test]
+fn a_checkout_that_changes_while_the_lock_is_awaited_is_not_removed() {
+    let now = SystemTime::now() + Duration::from_secs(90000);
+    // The protection check runs under the lock, last before removal: its side effect is the race.
+    for race in ["dirty", "unmerged"] {
+        let (_tmp, repo, tree) = merged_tree();
+        let mut report = report();
+        let racing = tree.clone();
+        sweep_stray_worktrees(
+            &repo,
+            &[],
+            &Guards::default(),
+            now,
+            true,
+            &mut report,
+            |_| {
+                if race == "dirty" {
+                    fs::write(racing.join("new-work"), "valuable").unwrap();
+                } else {
+                    fs::write(racing.join("late"), "late").unwrap();
+                    git(&racing, &["add", "late"]);
+                    git(&racing, &["commit", "-qm", "late"]);
+                }
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert!(
+            tree.join(if race == "dirty" { "new-work" } else { "late" })
+                .exists(),
+            "{race}: {report:?}"
+        );
+        assert_eq!(report.freed_bytes, 0, "{race}");
+    }
+}
+
+#[test]
+fn a_run_that_appears_before_the_final_check_keeps_the_checkout() {
+    let (_tmp, repo, tree) = merged_tree();
+    let mut report = report();
+    let now = SystemTime::now() + Duration::from_secs(90000);
+    sweep_stray_worktrees(
+        &repo,
+        &[],
+        &Guards::default(),
+        now,
+        true,
+        &mut report,
+        |_| Ok(false),
+    )
+    .unwrap();
+    assert!(tree.exists());
+    assert!(report
+        .skipped
+        .iter()
+        .any(|s| s.contains("active work or build")));
+}
