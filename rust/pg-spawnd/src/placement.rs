@@ -254,17 +254,12 @@ fn guard_lanes(state: &Path, sessions: &Path, args: &Args, prompt: &str) -> Resu
         Some(value) => Some(value.as_str().unwrap_or("").to_owned()),
     };
     let keys = pg_spawnd::lane_admission::submission_keys(prompt, &args["card"]);
-    pg_spawnd::lane_admission::check(
-        (state, sessions),
-        "native-submit",
-        &keys,
-        reason.as_deref(),
-    )
-    .map_err(|message| ToolError::Refused {
-        kind: RefusalKind::Spawn,
-        message,
-        legs: vec![],
-    })
+    pg_spawnd::lane_admission::check((state, sessions), "native-submit", &keys, reason.as_deref())
+        .map_err(|message| ToolError::Refused {
+            kind: RefusalKind::Spawn,
+            message,
+            legs: vec![],
+        })
 }
 fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value, ToolError> {
     let (code, bytes, line) = Adapter(state).run(argv, timeout)?;
