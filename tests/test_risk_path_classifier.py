@@ -82,6 +82,10 @@ def test_operational_escalation_preserved(kwargs):
     ("gate-files", "tools/ci_commit_gate.py"),
     ("gate-files", "rust/plangraph-cli/src/land/go_verify.rs"),
     ("gate-files", "src/plangraph/spawner/git_guard.py"),
+    ("gate-files", "tools/seat_verdict.py"),
+    ("gate-files", "tools/seat_record.py"),
+    ("gate-files", "tools/seat_backfill.py"),
+    ("gate-files", "src/plangraph/routing_support/risk.py"),
     ("gateway", "src/plangraph/gateway/proxy.py"),
     ("deploy-config", "deployment/stack.yml"),
     ("installer", "setup/install-agent.sh"),
@@ -102,7 +106,8 @@ def test_rule_33_table_has_a_test_per_class():
 
 @pytest.mark.parametrize("path", [
     "docs/KEEPER.md", "docs/deployment/notes.md", "tests/test_keeper_api.py",
-    "src/plangraph/planner/cards.py",
+    "src/plangraph/planner/cards.py", "tests/test_seat_verdict.py",
+    "docs/seat_verdict.md",
 ])
 def test_rule_33_table_leaves_docs_tests_and_unplaced_paths_low(path):
     assert evaluate_risk([path], bucket="S0", has_tests=True).risk == "low"

@@ -107,6 +107,10 @@ RULE_33_CLASSES: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = tupl
          r"|rust/plangraph-cli/src/land/(?:go_verify|registrar|resolve)[^/]*"
          r"|\.gitattributes|(?:.*/)?\.gitattributes)$", ()),
         ("gate-files", r"^(?:.*/)?[^/]*(?:guard|validator|hook)s?[^/]*\.(?:py|rs|sh|toml)$", ()),
+        # The verdict and record tools decide what a review counts for; the classifier decides how
+        # much review a change needs. A change to either is as sensitive as a gate file.
+        ("gate-files", r"^(?:.*/)?tools/seat_[^/]+\.py$", ()),
+        ("gate-files", r"^(?:.*/)?src/plangraph/routing_support/risk\.py$", ()),
         ("gateway", r"(?:^|/)[^/]*gateway[^/]*(?:/|\.[a-z]+$)", ()),
         ("deploy-config", r"^(?:.*/)?(?:deployment|deploy|deployments)/[^/]+$", ("live-step",)),
         ("installer", r"^(?:.*/)?setup/[^/]+\.(?:sh|ps1|py|toml|ya?ml)$", ("live-step",)),
