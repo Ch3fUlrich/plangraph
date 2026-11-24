@@ -95,8 +95,8 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
     )
     .is_err());
 }
-#[test]
-fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
+/// A completed agy review of a one-commit repository that answered `answer`, finished through the real run path.
+fn finished_agy_review(answer: &str) -> (tempfile::TempDir, RunRecord, String, String) {
     let dir = tempfile::tempdir().unwrap();
     git_ok(dir.path(), &["init", "-q"]);
     git_ok(
@@ -127,7 +127,7 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
         .ok()
         .unwrap();
     let log = record.path().with_file_name("live.log");
-    let answer = "No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n";
+    let answer = answer.replace("{head}", &head);
     std::fs::write(
         &log,
         format!(
@@ -138,6 +138,13 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     .unwrap();
     record.set("live_log", json!(log));
     crate::runs::finish(&mut record, Status::Completed, &leg, 1);
+    (dir, record, head, id)
+}
+
+#[test]
+fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
+    let (dir, record, head, id) =
+        finished_agy_review("No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n");
     let value = record.to_value();
     assert_eq!(value["served_model"], "gemini-4-hydrogen-high");
     assert_eq!(value["served_family"], "google");
@@ -150,6 +157,61 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     // Keeper imports fcntl and is POSIX-only; record/provenance assertions run everywhere.
     #[cfg(unix)]
     assert_keeper_accepts_cli_review(dir.path(), record.path(), &head, &id);
+}
+
+/// The native record of an ACCEPT review (no CLI-reported verdict) is an unwitnessed seat the keeper counts.
+#[cfg(unix)]
+#[test]
+fn an_accept_review_record_is_an_unwitnessed_seat_the_keeper_counts() {
+    let (dir, record, head, id) = finished_agy_review(
+        "HEAD: {head}\nTESTS: none: no shell\nFILES READ: src/lib.rs:1\nTEST_GAMING: no\nVERDICT: ACCEPT\n",
+    );
+    let value = record.to_value();
+    assert_eq!(value["served_model"], "unwitnessed");
+    assert_eq!(value["completion"]["head_sha"], head);
+    assert_eq!(value["finish_reason"], "stop");
+    assert!(value.get("witness_kind").is_none_or(Value::is_null));
+    record.save().unwrap();
+    let mirror = dir.path().join("mirror/fixture").join(&id);
+    std::fs::create_dir_all(&mirror).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in [mirror.clone(), mirror.parent().unwrap().into()] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    std::fs::copy(record.path(), mirror.join("record.json")).unwrap();
+    std::fs::set_permissions(
+        mirror.join("record.json"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = test_python::command()
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .args([
+            "-c",
+            r#"
+import sys
+from pathlib import Path
+from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
+mirror, head, run_id = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+item = {'key': 'demo:A', 'run_ids': '["%s"]' % run_id}
+(seat,) = SpawnerRecordAdapter(mirror).review_seats(item, head, '', allow_unwitnessed=True)
+assert (seat['harness'], seat['witness'], seat['head']) == ('agy', 'recorded-harness', head), seat
+"#,
+        ])
+        .arg(dir.path().join("mirror"))
+        .arg(&head)
+        .arg(&id)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(unix)]

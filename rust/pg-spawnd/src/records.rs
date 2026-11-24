@@ -24,6 +24,29 @@ pub(crate) fn valid_item(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
 }
 
+const MAX_BATCH_KEYS: usize = 50;
+
+/// The valid item keys of a batch card (`item_keys`), in order and without repeats.
+/// One invalid key, a non-list or more than `MAX_BATCH_KEYS` keys stores none.
+fn batch_members(card: &Value) -> Vec<Value> {
+    let Some(keys) = card["item_keys"]
+        .as_array()
+        .filter(|keys| keys.len() <= MAX_BATCH_KEYS)
+    else {
+        return Vec::new();
+    };
+    if !keys.iter().all(|k| k.as_str().is_some_and(valid_item)) {
+        return Vec::new();
+    }
+    let mut members: Vec<Value> = Vec::new();
+    for key in keys {
+        if !members.contains(key) {
+            members.push(key.clone());
+        }
+    }
+    members
+}
+
 pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Value>) {
     let item = [&card["item_key"], &card["item"]]
         .into_iter()
@@ -49,6 +72,10 @@ pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Val
         }
         None => Value::Null,
     };
+    let members = batch_members(card);
+    if !members.is_empty() {
+        base["item_keys"] = Value::Array(members);
+    }
     let missing = json!({"event":"seat_item_missing","level":"warning"});
     if base["item_key"].is_null()
         && matches!(base["role"].as_str(), Some("review" | "judge"))
