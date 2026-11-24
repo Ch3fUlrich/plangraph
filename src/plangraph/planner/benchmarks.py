@@ -263,9 +263,8 @@ def rank_ineligible(leg, row, *, risk, effort, current, now=None):
         reason = ("effort_channel", dict(kind="effort_channel", channel=row.get("effort_channel"), effort=effort))
     elif risk in HIGH_RISKS and (why := stale_reason(row, current, now)):
         reason = ("stale_row", dict(kind="stale_row", why=why, measured_at=row.get("measured_at")))
-    elif (risk in HIGH_RISKS and row.get("origin") == "own" and row.get("n_runs") is not None
-          and row["n_runs"] < CANARY_CARDS):
-        reason = ("canary_pending", dict(kind="canary_pending", n_runs=row["n_runs"], needed=CANARY_CARDS))
+    elif risk in HIGH_RISKS and row.get("origin") == "own" and (row.get("n_runs") or 0) < CANARY_CARDS:
+        reason = ("canary_pending", dict(kind="canary_pending", n_runs=row.get("n_runs"), needed=CANARY_CARDS))
     else:
         return None
     logging.getLogger(__name__).info("route_rank_ineligible %s %s", leg.id, json.dumps(reason[1], default=str))

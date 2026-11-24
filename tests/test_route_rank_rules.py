@@ -219,7 +219,7 @@ def test_the_stale_reason_is_logged(caplog):
 # --- canary -----------------------------------------------------------------------------------
 
 def test_a_new_own_row_needs_a_five_card_canary_for_high_and_critical():
-    for runs, ok in ((4, False), (5, True)):
+    for runs, ok in ((None, False), (0, False), (4, False), (5, True)):   # unknown runs prove no canary
         bench = {BY_ID[LEG].model: fresh(origin="own", n_runs=runs)}
         result = plan(pool(LEG), HIGH, bench)
         assert eligible(result) is ok, runs
