@@ -25,6 +25,8 @@ pub fn parse_latest(text: &str) -> Result<u32, String> {
     let (mut versions, mut depth, mut i) = (Vec::new(), 0u32, start);
     while i < text.len() {
         let rest = &text[i..];
+        // Step by whole characters: a multi-byte one in a comment or string never splits.
+        let width = rest.chars().next().map_or(1, char::len_utf8);
         i += match rest.as_bytes()[0] {
             b'#' | b'"' | b'\'' => literal_len(rest),
             b'(' if depth == 1 && entry_name(&text[..i]) => {
@@ -52,7 +54,7 @@ pub fn parse_latest(text: &str) -> Result<u32, String> {
                 }
                 1
             }
-            _ => 1,
+            _ => width,
         };
     }
     Err("the MIGRATIONS registry is not closed".into())
@@ -82,7 +84,12 @@ fn literal_len(text: &str) -> usize {
     };
     let mut i = mark.len();
     while i < text.len() && !text[i..].starts_with(&mark) {
-        i += if bytes[i] == b'\\' { 2 } else { 1 };
+        let width = if bytes[i] == b'\\' {
+            1 + text[i + 1..].chars().next().map_or(0, char::len_utf8)
+        } else {
+            text[i..].chars().next().map_or(1, char::len_utf8)
+        };
+        i += width;
     }
     (i + mark.len()).min(text.len())
 }
