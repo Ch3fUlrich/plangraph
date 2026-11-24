@@ -346,19 +346,34 @@ def test_pytest_deadline_reports_hang_and_keeps_running(tmp_path, parallel, phas
             command.wait(timeout=5)
 
 
-@pytest.mark.parametrize('phase', ['call', 'teardown'])
-def test_pytest_deadline_interrupts_main_thread_without_pthread_kill(tmp_path, phase):
-    """Windows has no pthread_kill: the deadline still fails the hung test and the run goes on."""
+def _run_without_pthread_kill(tmp_path, body, deadline_signal):
     import subprocess
 
     root = Path(__file__).resolve().parents[1]
     (tmp_path / 'conftest.py').write_text(
+        'import signal\n'
         'pytest_plugins = ("_split_ci_environment",)\n\n'
         'def pytest_configure(config):\n'
         '    import _split_ci_environment as plugin\n'
-        '    plugin._PTHREAD_KILL = None\n',
+        '    plugin._PTHREAD_KILL = None\n'
+        f'    plugin._DEADLINE_SIGNAL = signal.{deadline_signal}\n',
     )
-    (tmp_path / 'test_hang.py').write_text(
+    (tmp_path / 'test_hang.py').write_text(body)
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-o', 'test_deadline=2', str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
+                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
+    )
+    return result, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('deadline_signal', ['SIGUSR2', 'SIGINT'])
+@pytest.mark.parametrize('phase', ['call', 'teardown'])
+def test_pytest_deadline_interrupts_main_thread_without_pthread_kill(tmp_path, phase, deadline_signal):
+    """Windows has no pthread_kill (and carries the deadline on SIGINT): the hung test still fails."""
+    result, output = _run_without_pthread_kill(
+        tmp_path,
         'import time, pytest\n\n'
         'def spin():\n'
         '    while True:\n        time.sleep(0.01)\n\n'
@@ -366,18 +381,27 @@ def test_pytest_deadline_interrupts_main_thread_without_pthread_kill(tmp_path, p
         + {'call': '    return spin\n', 'teardown': '    yield\n    spin()\n'}[phase]
         + f'def test_blocked(fixture):\n    {"fixture()" if phase == "call" else "pass"}\n\n'
         'def test_after_hang():\n    pass\n',
+        deadline_signal,
     )
-    result = subprocess.run(
-        [sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-o', 'test_deadline=2', str(tmp_path)],
-        cwd=tmp_path, capture_output=True, text=True, timeout=30,
-        env=dict(_nested_pytest_env(), PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
-                 PYTHONPATH=os.pathsep.join((str(root / 'tests'), str(root / 'src')))),
-    )
-    output = result.stdout + result.stderr
     assert result.returncode == pytest.ExitCode.TESTS_FAILED, output
     assert {'call': '1 failed, 1 passed', 'teardown': '2 passed, 1 error'}[phase] in output, output
     assert 'HUNG test_hang.py::test_blocked' in output and 'in spin' in output, output
     assert 'INTERNALERROR' not in output, output
+
+
+def test_pytest_deadline_sigint_fallback_keeps_a_real_ctrl_c(tmp_path):
+    """Where SIGINT carries the deadline, a user's Ctrl-C still interrupts the session."""
+    result, output = _run_without_pthread_kill(
+        tmp_path,
+        'import os, signal, time\n\n'
+        'def test_ctrl_c():\n'
+        '    os.kill(os.getpid(), signal.SIGINT)\n'
+        '    time.sleep(10)\n\n'
+        'def test_not_reached():\n    pass\n',
+        'SIGINT',
+    )
+    assert result.returncode == pytest.ExitCode.INTERRUPTED, output
+    assert 'KeyboardInterrupt' in output and 'HUNG' not in output, output
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='checks the thread-directed deadline signal')

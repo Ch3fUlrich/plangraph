@@ -438,14 +438,14 @@ fn failed_recovery_after_a_close_is_an_error() {
 #[cfg(unix)]
 #[test]
 fn merge_close_exit_status_distinguishes_expiry_from_connection_failure() {
-    use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+    use std::{fs, process::Command};
 
     let root = tempfile::tempdir().unwrap();
     let curl = root.path().join("curl");
     let token = root.path().join("token");
     let count = root.path().join("calls");
     fs::write(&token, "fixture").unwrap();
-    fs::write(
+    pg_worker_core::executable_test_support::write_executable(
         &curl,
         r#"#!/bin/sh
 /bin/cat >/dev/null
@@ -459,9 +459,7 @@ case "$n" in
   *) exit 99 ;;
 esac
 "#,
-    )
-    .unwrap();
-    fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     for (fail_refresh, exit, calls) in [("yes", 1, "5\n"), ("no", 0, "7\n")] {
         fs::write(&count, "0\n").unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))

@@ -245,11 +245,13 @@ class _Alarm:
         self._target = target
         self._sig = sig
         self.started = False
+        self.fired = False
 
     def _run(self):
         try:
             # The lock is only released by cancel(); a timeout means the deadline passed.
             if not self._cancelled.acquire(timeout=self._delay):
+                self.fired = True
                 if _PTHREAD_KILL is not None:
                     _PTHREAD_KILL(self._target, self._sig)
                 else:
@@ -331,6 +333,9 @@ def _watch_test_phase(item, teardown=False):
     armed = False
 
     def interrupt(signum, frame):
+        if signum == signal.SIGINT and not alarm.fired:
+            # Where SIGINT carries the deadline, only the alarm's own interrupt is a hang.
+            raise KeyboardInterrupt
         if armed:
             # Teardown must be able to clean up after a timeout and is bounded too.
             item.stash[_DEADLINE] = (monotonic() + seconds, seconds, started)
@@ -351,6 +356,7 @@ def _watch_test_phase(item, teardown=False):
             arm_failure = exc
             faulthandler.dump_traceback_later(max(0.001, remaining))
         if armed and monotonic() >= expires:
+            alarm.fired = True
             interrupt(sig, None)
         result = yield
     finally:

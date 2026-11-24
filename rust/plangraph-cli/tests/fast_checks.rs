@@ -364,7 +364,16 @@ fn hangs_with_child() {
     .unwrap();
     let config = std::fs::read_to_string(root.join("rust/.config/nextest.toml")).unwrap();
     let deadline = path.join("nextest.toml");
-    std::fs::write(&deadline, config.replace("\"120s\"", "\"2s\"")).unwrap();
+    assert_eq!(
+        config.matches("period = \"120s\"").count(),
+        1,
+        "rust/.config/nextest.toml must keep exactly one slow-timeout period of 120s for this fixture to shorten"
+    );
+    std::fs::write(
+        &deadline,
+        config.replace("period = \"120s\"", "period = \"2s\""),
+    )
+    .unwrap();
     let pidfile = path.join("child.pid");
     let output = preflight_command()
         .current_dir(&root)
