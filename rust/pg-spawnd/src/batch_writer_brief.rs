@@ -133,6 +133,23 @@ mod tests {
     }
 
     #[test]
+    fn a_feeder_batch_renders_as_a_batch_for_the_batch_writer_skill() {
+        // The golden brief the plangraph-cli feeder emits for a two-item batch.
+        let text = include_str!("../tests/fixtures/feeder-batch-input.txt");
+        let rendered = render(text).unwrap();
+        assert!(crate::role_header::is_batch(&rendered), "{rendered}");
+        assert_eq!(crate::role_header::skill_name(&rendered), "batch-writer");
+        for part in [
+            "### plangraph:ALPHA-1 | ALPHA-1",
+            "### plangraph:ALPHA-2 | ALPHA-2",
+            "# Run values",
+            "Plan-Item: plangraph:ALPHA-2",
+        ] {
+            assert!(rendered.contains(part), "{part}");
+        }
+    }
+
+    #[test]
     fn parses_fixture_with_either_line_ending() {
         let lf = FIXTURE.replace("\r\n", "\n");
         let crlf = lf.replace('\n', "\r\n");
