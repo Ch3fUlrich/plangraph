@@ -20,12 +20,12 @@
 - **Review gate** (`accept.rs`, enforced inside `build_train` through the `AcceptGate` of every `Build`): `land-train build` takes
   `--accept-dir DIR`, the reviewers' answers, and `--single-seat LEGS` (exact leg ids, comma separated; default
   `agy-gemini-4-hydrogen-high,cx-gpt-6.2-sol-high`, rule 3.66 (f10) clause 8). An answer counts only with a
-  `[served by LEG via spawner run RUN, status completed]` line, a `FILES READ:` line, a full `HEAD:` sha and `VERDICT: ACCEPT` as its
+  `[served by LEG via spawner run RUN, status completed]` line as its first line (the only line of that form), a `FILES READ:` line, a full `HEAD:` sha and `VERDICT: ACCEPT` as its
   last line. A part passes when exactly one answer at its exact head carries the part's receipt `run_id` and its leg is a single-seat
   leg, or both `opencode-go-deepseek-v4-flash` and `opencode-go-glm-5.3-flash` accepted the head on two different runs (rule 3.66 (f)).
   The gpt leg counts alone only through `--seat-meta FILE`, a JSON object of run id to `{effort, effort_decision, writer_families}`
   written by the launcher of the review runs (never read from the answer text): `high`, `D-6804` and a non-empty writer family list in which every entry resolves through the shared
-  writer-family resolver (`plangraph.review.family.writer_key`, so model ids such as `gpt-6.2-sol` resolve to their family and a blank or
+  writer-family resolver (`plangraph.review.family.writer_key` of the installed plangraph, run by an isolated interpreter so the `--repo` checkout cannot supply it, so model ids such as `gpt-6.2-sol` resolve to their family and a blank or
   unknown entry refuses) to a family other than the reviewer leg's own (D-6804). Each run of the deepseek and glm pair belongs to exactly one completed answer at the head, whatever its verdict. Legs compare whole, never as substrings. A writer status
   file, a REQUEST_CHANGES answer, an answer for another run, a run id seen in two answers or an ACCEPT on an older head never counts;
   the refusal names the part, head, receipt run and the files found, and the output carries one `accept #PR head SHA run RUN file NAME`

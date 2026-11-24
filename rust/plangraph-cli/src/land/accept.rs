@@ -50,7 +50,9 @@ pub struct AcceptGate {
     pub dir: PathBuf,
     pub single_seat: Vec<String>,
     pub meta: std::collections::BTreeMap<String, SeatMeta>,
-    /// A checkout holding `src/plangraph`, for the Python writer-family resolver.
+    /// `None`: the writer-family resolver is the installed plangraph, loaded by an isolated interpreter
+    /// (`-I`: no PYTHONPATH, no current directory) so the unverified `--repo` checkout never supplies it.
+    /// `Some` names a checkout the caller itself trusts (tests).
     pub src_root: Option<PathBuf>,
 }
 
@@ -60,6 +62,16 @@ impl AcceptGate {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("seat meta {}: {e}", path.display()))?;
         serde_json::from_str(&text).map_err(|e| format!("seat meta {}: {e}", path.display()))
+    }
+
+    /// The interpreter that resolves writer families. Without a trusted `src_root` it is the interpreter
+    /// named by `PG_SPAWND_PYTHON` run isolated, so only an installed plangraph can answer.
+    pub fn python(&self) -> std::process::Command {
+        let mut command = python_command(self.src_root.as_deref());
+        if self.src_root.is_none() {
+            command.arg("-I");
+        }
+        command
     }
 
     /// Whether a single-seat answer meets the extra conditions of its leg.
@@ -81,7 +93,7 @@ impl AcceptGate {
         // ambiguous entry resolves to nothing and refuses, as does the reviewer's own family.
         let mut names = vec![accept.leg.clone()];
         names.extend(meta.writer_families.iter().cloned());
-        let python = || python_command(self.src_root.as_deref());
+        let python = || self.python();
         let Ok(keys) = writer_keys(&names, &python) else {
             return false;
         };
@@ -103,31 +115,39 @@ fn run_id_ok(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
 }
 
-/// `[served by LEG via spawner run RUN, status completed]`
+/// `[served by LEG via spawner run RUN, status completed]`, matched as a whole line. The launcher writes it
+/// as the first line of the answer file; it must be that line and the only line of that form, so text the
+/// reviewer wrote in the body can neither add nor replace it.
 fn served_by(text: &str) -> Option<(String, String)> {
-    text.lines().find_map(|line| {
-        let rest = line.trim().strip_prefix("[served by ")?;
+    let header = |line: &str| -> Option<(String, String)> {
+        let rest = line.trim().strip_prefix("[served by ")?.strip_suffix(']')?;
         let (leg, rest) = rest.split_once(" via spawner run ")?;
         let (run, status) = rest.split_once(", status ")?;
-        (status.trim_end_matches(']') == "completed" && run_id_ok(run) && !leg.contains(' '))
+        (status == "completed" && run_id_ok(run) && !leg.contains(' ') && !leg.is_empty())
             .then(|| (leg.to_ascii_lowercase(), run.to_owned()))
-    })
+    };
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let found = header(lines.next()?)?;
+    lines
+        .all(|l| !l.trim_start().starts_with("[served by "))
+        .then_some(found)
 }
 
-/// `Some` for a completed review answer: a `served by` header with its run id and a full `HEAD:` sha.
+/// `Some` for a completed review answer: a `served by` header with its run id and one full `HEAD:` sha
+/// (every `HEAD:` line names it; a stale first line and the real last one conflict and refuse).
 /// `accepted` is set only with a `FILES READ:` line and `VERDICT: ACCEPT` as the last non-empty line.
 pub fn parse(text: &str) -> Option<Accept> {
     let last = text.lines().rev().find(|l| !l.trim().is_empty())?;
     let accepted =
         last.trim() == "VERDICT: ACCEPT" && text.lines().any(|l| l.starts_with("FILES READ:"));
     let (leg, run_id) = served_by(text)?;
-    let head = text
+    let mut heads = text
         .lines()
-        .rev()
-        .find_map(|l| l.trim().strip_prefix("HEAD:"))?
-        .trim();
+        .filter_map(|l| l.trim().strip_prefix("HEAD:"))
+        .map(str::trim);
+    let head = heads.next()?;
     let full = head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit());
-    full.then(|| Accept {
+    (full && heads.all(|other| other.eq_ignore_ascii_case(head))).then(|| Accept {
         head: head.to_ascii_lowercase(),
         leg,
         run_id,
