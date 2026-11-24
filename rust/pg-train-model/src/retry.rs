@@ -46,20 +46,24 @@ pub(crate) fn halve(m: &Model, parts: &[PartId]) -> Vec<Vec<PartId>> {
 impl Model {
     /// A train's CI went red. A named culprit drops with its descendants and the rest retry as one group
     /// (the failing part drops, the rest land); with no culprit the train is halved. A single part that
-    /// is red drops. The second red round of a lineage escalates it, once.
+    /// is red drops. Two red rounds, of the train or of its lineage, escalate it, once.
     pub(crate) fn red(&mut self, train: TrainId, culprit: Option<PartId>) -> Outcome {
         let t = &mut self.trains[train as usize];
+        if t.ci == Ci::Running {
+            t.red_rounds += 1;
+        }
         t.ci = Ci::Red;
         t.closed = true;
-        let (parts, kind) = (t.parts.clone(), t.kind);
+        let (parts, kind, rounds) = (t.parts.clone(), t.kind, t.red_rounds);
         let (lineage, round) = match kind {
-            Kind::Ordinary => {
+            Kind::Retry { lineage, round } => (lineage, round),
+            _ => {
                 self.lineages += 1;
                 self.runs.push((self.lineages, 0, parts.len() as u8));
                 (self.lineages, 0)
             }
-            Kind::Retry { lineage, round } => (lineage, round),
         };
+        self.discard_specs(Some(train));
         let groups = match culprit {
             Some(c) => {
                 let out = self.with_descendants(c, &parts);
@@ -89,7 +93,7 @@ impl Model {
         });
         self.groups.splice(0..0, next.collect::<Vec<_>>());
         self.cascade_drops();
-        let escalated = round + 1 == 2 && self.escalated.insert(lineage);
+        let escalated = rounds + round >= 2 && self.escalated.insert(lineage);
         Outcome::Red {
             groups: count,
             escalated,
@@ -97,33 +101,21 @@ impl Model {
     }
 
     pub(crate) fn start_retry(&mut self) -> Result<Outcome, Denied> {
-        if self.live_retry() || self.live_ordinary() || self.groups.is_empty() {
+        if self.live_retry() || self.live_ordinary() || self.live_spec() || self.groups.is_empty() {
             return Err(Denied::Phase);
         }
         let g = self.groups.remove(0);
         let id = self.trains.len() as TrainId;
-        g.parts
-            .iter()
-            .for_each(|&p| self.parts[p as usize].status = Status::InTrain(id));
+        self.release(&g.parts, Status::InTrain(id));
         if let Some(r) = self.runs.iter_mut().find(|r| r.0 == g.lineage) {
             r.1 += 1;
         }
-        self.trains.push(Train {
-            kind: Kind::Retry {
-                lineage: g.lineage,
-                round: g.round,
-            },
-            included: Some(g.parts.clone()),
-            frozen: g.parts.clone(),
-            parts: g.parts,
-            left_out: vec![],
-            base: self.main,
-            bound: true,
-            sealed: true,
-            ci: Ci::Running,
-            closed: false,
-            landed: false,
-        });
+        let kind = Kind::Retry {
+            lineage: g.lineage,
+            round: g.round,
+        };
+        self.trains
+            .push(Train::new(kind, g.parts, self.main).started());
         Ok(Outcome::Train(id))
     }
 }

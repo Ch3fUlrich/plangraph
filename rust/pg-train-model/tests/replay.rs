@@ -33,13 +33,10 @@ fn tiny(batches: Vec<Batch>) -> History {
 
 fn rule(target: usize, bound: u32, order: Order) -> Config {
     Config {
-        rule: Rule {
-            target,
-            bound,
-            order,
-        },
+        rule: Rule::new(target, bound, order),
         cut_after_secs: 3600,
         costs: COSTS,
+        speculative: false,
     }
 }
 
@@ -136,6 +133,32 @@ fn every_recorded_batch_lands_exactly_once_under_each_rule() {
     }
 }
 
+fn speculative(mut c: Config) -> Config {
+    c.speculative = true;
+    c
+}
+
+#[test]
+fn a_speculative_pipeline_lands_every_batch_once_in_order_and_never_slower() {
+    let h = history();
+    let rules = [
+        Config::every_ready_rides(COSTS),
+        rule(2, 3600, Order::Count),
+        rule(4, 7200, Order::Oldest),
+    ];
+    for c in rules {
+        let (seq, spec) = (replay(&h, &c), replay(&h, &speculative(c)));
+        let mut ids: Vec<&String> = spec.trains.iter().flat_map(|t| &t.parts).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 52, "{c:?}");
+        // Main moves one train at a time, so it only ever advances to a train whose CI finished.
+        assert!(spec.trains.windows(2).all(|w| w[0].land <= w[1].land));
+        assert!(spec.trains.iter().all(|t| t.land >= t.start));
+        assert!(spec.makespan_secs <= seq.makespan_secs, "{c:?}");
+    }
+}
+
 /// `cargo test -p pg-train-model --test replay -- --ignored --nocapture` prints the comparison table.
 #[test]
 #[ignore]
@@ -165,14 +188,17 @@ fn print_the_comparison_over_trains_nine_to_sixteen() {
     for per_conflict in [0, 900, 3600] {
         println!("cost of one resolved conflict: {} min", per_conflict / 60);
         for (name, c) in rows {
-            let r = replay(&h, &with_conflict_cost(c, per_conflict));
+            let c = with_conflict_cost(c, per_conflict);
+            let r = replay(&h, &c);
+            let s = replay(&h, &speculative(c));
             println!(
-                "{name:34} trains {:2} conflicts {:2} longest wait {:5.1} h mean {:5.1} h parts/h {:.2}",
+                "{name:34} trains {:2} conflicts {:2} longest wait {:5.1} h mean {:5.1} h parts/h {:.2} speculative {:.2}",
                 r.trains.len(),
                 r.conflicts,
                 r.longest_wait_secs as f64 / 3600.0,
                 r.mean_wait_secs as f64 / 3600.0,
-                r.parts_per_hour
+                r.parts_per_hour,
+                s.parts_per_hour
             );
         }
     }
