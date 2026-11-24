@@ -16,6 +16,24 @@ fn identified(target: &Path) -> bool {
         || crate::private_targets::cargo_target(target)
 }
 
+/// A Git repository or worktree below the target (a `.git` directory or file at any depth) is
+/// someone's source tree, never a build cache, whatever markers sit beside it.
+fn holds_git_repository(target: &Path) -> io::Result<bool> {
+    let mut pending = vec![target.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            if entry.file_name() == ".git" {
+                return Ok(true);
+            }
+            if entry.file_type()?.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// A pin or live path that is the target or lies inside it refuses the sweep. One that names an
 /// ancestor does not: a unit `WorkingDirectory=` at the checkout root pins the whole checkout on
 /// the hosts this sweep exists for, and a process working inside the target is checked separately.
@@ -115,6 +133,13 @@ fn sweep_owned(
     {
         report.skipped.push(format!(
             "{}: main checkout target holds tracked or unignored files; not touched",
+            target.display()
+        ));
+        return Ok(());
+    }
+    if holds_git_repository(&canonical)? {
+        report.skipped.push(format!(
+            "{}: main checkout target holds a git repository; not touched",
             target.display()
         ));
         return Ok(());
@@ -346,6 +371,31 @@ mod tests {
         let (_tmp, repo) = fixture(7200);
         fs::write(repo.join(".gitignore"), "rust/target/debug/\n").unwrap();
         assert_eq!(run(&repo, true, false).freed_bytes, 0);
+    }
+
+    #[test]
+    fn a_git_repository_below_the_target_keeps_the_directory() {
+        // A scratch checkout nested in the ignored directory, its tracked file edited locally.
+        let (_tmp, repo) = fixture(7200);
+        let nested = repo.join("rust/target/scratch");
+        fs::create_dir_all(&nested).unwrap();
+        git(&nested, &["init", "-q"]);
+        fs::write(nested.join("src.rs"), b"edited").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(7200);
+        for p in [nested.clone(), repo.join("rust/target")] {
+            fs::File::open(p).unwrap().set_modified(old).unwrap();
+        }
+        let report = run(&repo, true, false);
+        assert_eq!(report.freed_bytes, 0);
+        assert!(nested.join("src.rs").exists() && nested.join(".git").exists());
+        assert!(report.skipped[0].contains("git repository"));
+        // A linked worktree's `.git` file counts the same.
+        let (_tmp, repo) = fixture(7200);
+        let linked = repo.join("rust/target/linked");
+        fs::create_dir_all(&linked).unwrap();
+        fs::write(linked.join(".git"), "gitdir: elsewhere\n").unwrap();
+        assert_eq!(run(&repo, true, false).freed_bytes, 0);
+        assert!(linked.join(".git").exists());
     }
 
     #[test]
