@@ -30,6 +30,7 @@ import bisect
 import json
 import re
 import time
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 
@@ -546,13 +547,15 @@ class ContextMixin:
         (the document may be read from origin); a frozen close reads this copy and never the file.
         """
         decisions = self._adapter("decisions")
+        if decisions is None:
+            return None
+        snapshot = getattr(decisions, "snapshot", None)   # one read of the document serves every lookup below
         try:
-            # Strict read: the plain book turns an unreadable source into an empty one.
-            book = decision_book(decisions, fresh=True) if decisions is not None else None
-            if book is None:
-                return None
-            texts = {did: decisions.text(did) for key in keys for did in decisions_naming(book, key)}
-            standing = bool(decisions.has(self.merge_close_decision)) if self.merge_close_decision else None
+            with snapshot() if callable(snapshot) else nullcontext():
+                # Strict read: the plain book turns an unreadable source into an empty one.
+                book = decision_book(decisions, fresh=True)
+                texts = {did: decisions.text(did) for key in keys for did in decisions_naming(book, key)}
+                standing = bool(decisions.has(self.merge_close_decision)) if self.merge_close_decision else None
         except Exception:  # noqa: BLE001 - an unreadable document proves and names nothing
             return None
         return {"book": book, "texts": texts, "standing": standing}

@@ -315,3 +315,16 @@ def test_an_absent_decisions_adapter_is_unverified_not_missing(env, tmp_path):
     env.store.close_merged_auto(env.p("system"))
     flags = evidence(env, "demo:A")["landing"]["flags"]
     assert flags["go_rows_unverified"] is True and "go_row_missing" not in flags
+
+
+def test_the_decision_snapshot_reads_the_document_once(env, tmp_path, monkeypatch):
+    ci, path = forge(env, tmp_path, rows="".join(
+        f"| D-90{n:02d} | router | GO #{n} demo:{key} |\n" for n, key in enumerate("ABCABC", 1)))
+    env.store.merge_close_decision = "D-9001"
+    reads = []
+    real = DecisionsAdapter._read_document
+    monkeypatch.setattr(DecisionsAdapter, "_read_document",
+                        lambda self, **kw: reads.append(1) or real(self, **kw))
+    snapshot = env.store._decision_snapshot(["demo:A", "demo:B", "demo:C"])
+    assert snapshot["standing"] is True and len(snapshot["texts"]) == 6
+    assert len(reads) == 1
