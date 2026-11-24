@@ -17,6 +17,8 @@ from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
 from .host_ready import harness_path
+from .env_redact import harness_limit_line
+from .exit_outcome import quota_models
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
 REVIEW_PROMPT = 'Reply with the single word OK. Do not create a plan or any other file.'
@@ -190,6 +192,13 @@ async def _await_completion(runner, job, deadline):
         await asyncio.sleep(0.02)
 
 
+def probe_quota_line(leg, review_mode, exit_code, stdout, stderr):
+    """The limit line of a failed probe: an agy review probe's, and any Codex probe's (its account limit)."""
+    if leg.harness == 'codex' or (review_mode and leg.harness == 'agy'):
+        return harness_limit_line(exit_code, stdout, stderr)
+    return None
+
+
 def _is_review_probe(leg, role=None):
     if role is not None:
         return role == 'review'
@@ -209,7 +218,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
     repo"; the caller's repo is never auto-reset.
     """
-    from .env_redact import harness_limit_line, redact_env_values, redact_output
+    from .env_redact import redact_env_values, redact_output
     from .exit_outcome import _booking_seconds
 
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True, parameter='timeout_s')
@@ -317,9 +326,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             env = dict(os.environ)
             env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
             excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
-            if review_mode and leg.harness == 'agy' and not leaked and diagnostic is not None:
-                quota = harness_limit_line(getattr(diagnostic, 'exit_code', None),
-                                           getattr(diagnostic, 'stdout', '') or '', stderr)
+            if not leaked and diagnostic is not None:
+                quota = probe_quota_line(leg, review_mode, getattr(diagnostic, 'exit_code', None),
+                                         getattr(diagnostic, 'stdout', '') or '', stderr)
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
             if not quota:
@@ -329,8 +338,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             if ok:
                 state.record_probe_pass(key(leg), caller=caller)
             elif quota:
-                state.record_harness_limit(key(leg), quota, caller, harness=leg.harness,
-                                           down_s=_booking_seconds())
+                for model in quota_models(key(leg), leg.harness):
+                    state.record_harness_limit(model, quota, caller, harness=leg.harness,
+                                               down_s=_booking_seconds())
                 status = state.leg_status(key(leg))
                 if status['state'] == 'limited':
                     return dict(ok=False, reason='limited', skipped='limited', infra=False,

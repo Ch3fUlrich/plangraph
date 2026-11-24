@@ -204,20 +204,6 @@ def _read_result(service, run_id):
     return asyncio.run(service.refresh_result(run_id))
 
 
-def _quota_models(model, harness):
-    """The models one usage limit books: a Codex limit is account-wide, so every routed Codex leg
-    (its model and its id, the keys the route reads, review seats included) is limited with the run's own model."""
-    if harness != 'codex':
-        return [model]
-    from plangraph.planner.legs import review_route_pool
-    keys = [model]
-    # The review route's Codex seats (REVIEW_GPT) share the account: the whole route pool.
-    for leg in review_route_pool():
-        if leg.harness == 'codex':
-            keys += [leg.model, leg.id]
-    return list(dict.fromkeys(keys))
-
-
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
         return _supervise()
@@ -285,6 +271,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.verb == 'quota-result':
         from .env_redact import harness_limit_line
+        from .exit_outcome import quota_models
         from .leg_state import record_harness_limit
         from .leg_probe import key
         from types import SimpleNamespace
@@ -292,7 +279,7 @@ def main(argv=None):
         if line:
             if args.reset_at is not None and args.reset_at > time.time():
                 line += f' Resets in {args.reset_at - time.time()}s.'
-            for model in _quota_models(args.model, args.harness):
+            for model in quota_models(args.model, args.harness):
                 record_harness_limit(key(SimpleNamespace(model=model, harness=args.harness)),
                                      line, 'pg-spawnd:cli-result', harness=args.harness,
                                      account=args.account, combo=args.combo)

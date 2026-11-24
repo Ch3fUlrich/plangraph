@@ -2,10 +2,21 @@
 import time
 
 
-def agy_limit_reason(model, state):
+def _limited_until(state):
     reset = (state.get('evidence') or {}).get('reset_at')
-    if model.startswith(('agy:', 'agy/')) and state['state'] == 'limited' and reset:
+    if state['state'] == 'limited' and reset:
         return 'limited_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset))
+
+
+def agy_limit_reason(model, state):
+    if model.startswith(('agy:', 'agy/')):
+        return _limited_until(state)
+
+
+def codex_limit_reason(leg, state):
+    """A recorded Codex usage-limit reply keeps its reset time in the route's skip reason."""
+    if getattr(leg, 'harness', None) == 'codex':
+        return _limited_until(state)
 
 
 def unavailable(state):
