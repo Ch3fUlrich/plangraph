@@ -52,6 +52,37 @@ fn options(home: &Path, args: &[String]) -> Result<Options, String> {
     Ok(o)
 }
 
+/// The live capacity numbers of one decision line: the RAM views, load and pressure admission
+/// reconciled and the slots they leave. Applies the live budget to `facts` and `policy`.
+fn capacity_line(
+    facts: &mut HostFacts,
+    policy: &mut Policy,
+    load: Option<(usize, f64)>,
+    ram_views: Option<(u64, Option<windows_ram::WindowsRam>)>,
+) -> Result<Option<Value>, String> {
+    let Some((cpus, load)) = load else {
+        return Ok(None);
+    };
+    let free_ram_bytes = facts.free_ram_bytes;
+    let budget = capacity::apply(facts, policy, cpus, load)?;
+    Ok(Some(json!({
+        "host":facts.host, "cpus":cpus, "load1":load, "running_writers":facts.running_writers,
+        "free_ram_bytes":free_ram_bytes, "ram_floor_bytes":policy.ram_floor_bytes,
+        "wsl_free_ram_bytes":ram_views.map(|v| v.0),
+        "windows_free_ram_bytes":ram_views.and_then(|v| v.1).map(|w| w.free_bytes),
+        "windows_ram_source":ram_views.and_then(|v| v.1).map(|w| w.source),
+        "windows_ram_floor_bytes":ram_views.and_then(|v| v.1).map(|_| policy.windows_ram_floor_bytes),
+        "ram_per_writer_bytes":policy.ram_per_run_bytes,
+        "slots_by_ram":budget.slots_by_ram, "new_writers_allowed":budget.new_writers_allowed,
+        "load_paced":budget.load_paced, "writer_limit":budget.limit,
+        "cpu_pressure_avg300":facts.cpu_pressure_avg300,
+        "cpu_pressure_max_percent":policy.cpu_pressure_max_percent,
+        "cpu_pressure_source":budget.pressure_source,
+        "free_disk_bytes":facts.free_disk_bytes,
+        "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
+    })))
+}
+
 fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, String> {
     let mut policy: Policy =
         toml::from_str(&fs::read_to_string(&o.policy).map_err(|_| "policy unreadable")?)
@@ -95,6 +126,8 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
             .map_err(|_| "invalid host facts")?;
         (sample, None, None)
     };
+    // What the capacity line shows if quota refuses before the facts are complete.
+    let sampled = sample.clone();
     let mut facts = match sources::facts(
         env,
         &o.repo,
@@ -105,34 +138,20 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
         local.as_deref(),
     ) {
         Ok(facts) => facts,
-        // A stale center snapshot is a routine refusal that names its age, not a fault.
+        // A stale center snapshot is a routine refusal that names its age, not a fault; the
+        // sampled RAM, load and writer count still go out with it.
         Err(reason) if reason.starts_with("quota_stale") => {
-            return Ok(json!({"decision":"refused","reason":reason}))
+            let mut shown = sampled;
+            shown.running_writers = running
+                .iter()
+                .filter(|r| r.writer() && same_host(&r.host, &shown.host, &policy))
+                .count();
+            let capacity = capacity_line(&mut shown, &mut policy, load, ram_views)?;
+            return Ok(json!({"decision":"refused","reason":reason,"capacity":capacity}));
         }
         Err(e) => return Err(e),
     };
-    let measurement = if let Some((cpus, load)) = load {
-        let free_ram_bytes = facts.free_ram_bytes;
-        let budget = capacity::apply(&mut facts, &mut policy, cpus, load)?;
-        Some(json!({
-            "host":facts.host, "cpus":cpus, "load1":load, "running_writers":facts.running_writers,
-            "free_ram_bytes":free_ram_bytes, "ram_floor_bytes":policy.ram_floor_bytes,
-            "wsl_free_ram_bytes":ram_views.map(|v| v.0),
-            "windows_free_ram_bytes":ram_views.and_then(|v| v.1).map(|w| w.free_bytes),
-            "windows_ram_source":ram_views.and_then(|v| v.1).map(|w| w.source),
-            "windows_ram_floor_bytes":ram_views.and_then(|v| v.1).map(|_| policy.windows_ram_floor_bytes),
-            "ram_per_writer_bytes":policy.ram_per_run_bytes,
-            "slots_by_ram":budget.slots_by_ram, "new_writers_allowed":budget.new_writers_allowed,
-            "load_paced":budget.load_paced, "writer_limit":budget.limit,
-            "cpu_pressure_avg300":facts.cpu_pressure_avg300,
-            "cpu_pressure_max_percent":policy.cpu_pressure_max_percent,
-            "cpu_pressure_source":budget.pressure_source,
-            "free_disk_bytes":facts.free_disk_bytes,
-            "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
-        }))
-    } else {
-        None
-    };
+    let measurement = capacity_line(&mut facts, &mut policy, load, ram_views)?;
     if !eligible {
         return Ok(json!({"decision":"idle","reason":"no_eligible_item","capacity":measurement}));
     }
@@ -309,6 +328,23 @@ mod tests {
         );
         policy.cpu_pressure_max_percent = 80.0;
         assert_eq!(case(70.15, &mut policy).0, Admission::Admit);
+    }
+    #[test]
+    fn the_capacity_line_carries_sampled_ram_load_and_writers() {
+        let mut policy = Policy::default();
+        let mut facts = live_facts(2, 20_000_000_000);
+        let views = Some((85_000_000_000, None));
+        let line = capacity_line(&mut facts, &mut policy, Some((32, 5.0)), views)
+            .unwrap()
+            .unwrap();
+        assert_eq!(line["running_writers"], 2);
+        assert_eq!(line["free_ram_bytes"], 20_000_000_000u64);
+        assert_eq!(line["wsl_free_ram_bytes"], 85_000_000_000u64);
+        assert_eq!(line["load1"], 5.0);
+        assert_eq!(line["slots_by_ram"], 4);
+        assert!(capacity_line(&mut facts, &mut policy, None, None)
+            .unwrap()
+            .is_none());
     }
     #[test]
     fn psi_text_gives_some_avg300_and_other_text_gives_none() {

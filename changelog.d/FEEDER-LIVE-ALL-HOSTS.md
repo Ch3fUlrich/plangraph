@@ -8,3 +8,4 @@ Feeder host admission refuses new writers while /proc/pressure/cpu some avg300 i
 plangraph quota --push SSH_DESTINATION delivers the quota snapshot to a worker; the pg-quota-facts@ timer runs it every 5 minutes per worker.
 A live feeder tick starts every batch its free slots allow (started, slots, stopped), by the same loop the dry run plays.
 Hand-lane detection merges with the spawner's runs by run id, honours ROUTING_STATE_DIR and CLAUDE_CONFIG_DIR, checks pid and the Claude roster instead of a fixed cutoff, and holds every key of a lane's card.
+A feeder refusal for a stale quota snapshot keeps the sampled RAM, load and writer count in its capacity line.
