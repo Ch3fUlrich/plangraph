@@ -24,6 +24,8 @@ const SWITCH: &str = "PG_MERGE_CLOSE_REQUIRE_SEATS";
 pub struct Outcome {
     pub text: String,
     pub merged_not_done: u64,
+    /// The keeper's `deployment_pending` rows, open and (when asked) completed items.
+    pub deployments: Vec<Value>,
 }
 
 /// The refresh limit and shared deadline for one scheduled pass.
@@ -79,6 +81,11 @@ struct ClosePass {
     scan_errors: BTreeMap<String, String>,
     deployment_text: String,
     deployment_count: Option<usize>,
+    deployments: Vec<Value>,
+    /// Ask for the completed-item inventory instead of the close candidates.
+    inventory: bool,
+    /// Also page through the completed-item inventory of each project.
+    include_done: bool,
 }
 
 impl ClosePass {
@@ -95,6 +102,9 @@ impl ClosePass {
         }
         if let Some(project) = project {
             body["project"] = json!(project);
+        }
+        if self.inventory {
+            body["inventory"] = json!(true);
         }
         loop {
             let result = page(body.clone())?;
@@ -116,6 +126,7 @@ impl ClosePass {
                 *self.deployment_count.get_or_insert(0) += deployments.len();
                 for row in deployments {
                     deployment_text(&mut self.deployment_text, row);
+                    self.deployments.push(row.clone());
                 }
             }
             let Some(after) = result["next_after"].as_str() else {
@@ -150,6 +161,7 @@ impl ClosePass {
         Outcome {
             text: self.text,
             merged_not_done,
+            deployments: self.deployments,
         }
     }
 }
@@ -323,15 +335,67 @@ pub fn run_scheduled_with(
     deployment_only: bool,
     timing: ScheduleTiming,
 ) -> Result<Outcome, String> {
+    let pass = ClosePass {
+        deployment_count: Some(0),
+        ..ClosePass::default()
+    };
+    scheduled(
+        keeper,
+        control,
+        (seats, apply, project, deployment_only),
+        pass,
+        timing,
+    )
+}
+
+/// The unproven deployments of open items and, with `include_done`, of completed items.
+pub fn deployment_rows_with(
+    keeper: &dyn Transport,
+    control: &dyn Transport,
+    project: Option<&str>,
+    include_done: bool,
+    timing: ScheduleTiming,
+) -> Result<Vec<Value>, String> {
+    let pass = ClosePass {
+        deployment_count: Some(0),
+        include_done,
+        ..ClosePass::default()
+    };
+    Ok(scheduled(keeper, control, (None, false, project, true), pass, timing)?.deployments)
+}
+
+/// [`deployment_rows_with`] against the configured keeper.
+pub fn deployment_rows(
+    env: &Env,
+    project: Option<&str>,
+    include_done: bool,
+) -> Result<Vec<Value>, String> {
+    let timing = ScheduleTiming::new(REFRESH_TIMEOUT, PASS_BUDGET);
+    let transport = |max_time_secs| DeadlineKeeper {
+        keeper: SlowKeeper { env, max_time_secs },
+        deadline: timing.deadline,
+    };
+    deployment_rows_with(
+        &transport(MAX_TIME_SECS),
+        &transport(10),
+        project,
+        include_done,
+        timing,
+    )
+}
+
+fn scheduled(
+    keeper: &dyn Transport,
+    control: &dyn Transport,
+    (seats, apply, project, deployment_only): (Option<bool>, bool, Option<&str>, bool),
+    mut pass: ClosePass,
+    timing: ScheduleTiming,
+) -> Result<Outcome, String> {
     let ScheduleTiming {
         refresh_timeout,
         deadline,
     } = timing;
     refresh_index(control, refresh_timeout)?;
-    let mut pass = ClosePass {
-        deployment_count: Some(0),
-        ..ClosePass::default()
-    };
     let projects_reply;
     let projects = if let Some(project) = project {
         vec![project]
@@ -345,30 +409,41 @@ pub fn run_scheduled_with(
             .collect::<Result<_, _>>()?
     };
     for (index, project) in projects.iter().enumerate() {
-        let result = pass.collect(seats, apply, Some(project), |body| {
-            let call = || {
-                if Instant::now() >= deadline {
-                    return Err(MERGE_INDEX_EXPIRED.into());
-                }
-                keeper.call("close_merged_auto", Some(body.clone()))
-            };
-            match call() {
-                Err(error)
-                    if apply && error == MERGE_INDEX_EXPIRED && Instant::now() < deadline =>
-                {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if let Err(reason) = refresh_index(control, refresh_timeout.min(remaining)) {
-                        return if reason == REFRESH_STILL_RUNNING {
-                            Err(error)
-                        } else {
-                            Err(reason)
-                        };
+        let mut result = Ok(());
+        for inventory in [false, true]
+            .into_iter()
+            .take(1 + usize::from(pass.include_done))
+        {
+            pass.inventory = inventory;
+            result = pass.collect(seats, apply, Some(project), |body| {
+                let call = || {
+                    if Instant::now() >= deadline {
+                        return Err(MERGE_INDEX_EXPIRED.into());
                     }
-                    call()
+                    keeper.call("close_merged_auto", Some(body.clone()))
+                };
+                match call() {
+                    Err(error)
+                        if apply && error == MERGE_INDEX_EXPIRED && Instant::now() < deadline =>
+                    {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if let Err(reason) = refresh_index(control, refresh_timeout.min(remaining))
+                        {
+                            return if reason == REFRESH_STILL_RUNNING {
+                                Err(error)
+                            } else {
+                                Err(reason)
+                            };
+                        }
+                        call()
+                    }
+                    result => result,
                 }
-                result => result,
+            });
+            if result.is_err() {
+                break;
             }
-        });
+        }
         if let Err(error) = result {
             if !apply || !pass.closed_any || error != MERGE_INDEX_EXPIRED {
                 return Err(error);

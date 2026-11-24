@@ -145,6 +145,10 @@ class Config:
         self.require_seats = data.get("require_seats", False)
         if not isinstance(self.require_seats, bool):
             raise ConfigError("require_seats must be true or false")
+        # The merge-index warm-up also scans completed items, so the deployment inventory can list them.
+        self.deploy_inventory_done = data.get("deploy_inventory_done", False)
+        if not isinstance(self.deploy_inventory_done, bool):
+            raise ConfigError("deploy_inventory_done must be true or false")
 
     # ------------------------------------------------------------- helpers
     @staticmethod

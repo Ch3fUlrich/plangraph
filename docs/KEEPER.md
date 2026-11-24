@@ -353,6 +353,8 @@ These lanes no longer block a merged close.
 
 ## API (threaded `http.server`, bind 127.0.0.1 by default)
 
+The merged-not-deployed inventory, completed items and the GO gate: `docs/deploy-evidence.md`.
+
 A router can send the keyless body `{"dry_run": true}` to `POST /v1/close_merged` as a deploy probe.
 A permitted probe returns `{"dry_run": true, "route": "close_merged"}` with
 zero item, audit, evidence, or event writes.
