@@ -35,6 +35,9 @@ SLOW_TIMEOUT = 120.0  # close_merged reads git and the decisions log before it c
 #: reads that build the whole plan view on the daemon (ready: 24 s measured on a
 #: 4285-item plan, behind the keeper lock); the 15 s default gave up on a read
 #: the daemon then finished.
+#: seconds on top of the keeper's claim preflight budget for the write that follows it.
+CLAIM_COMMIT_MARGIN_S = 15.0
+CLAIM_VERBS = frozenset({"claim", "claim_batch"})
 SLOW_READS = frozenset({"ready", "blocked", "waves"})
 NOTICE = "READ-ONLY fallback (keeper unreachable)"
 
@@ -117,6 +120,25 @@ class Session:
         return self._token
 
     # ---------------------------------------------------------------- HTTP
+    def claim_timeout(self) -> float:
+        """The bound for a claim: the keeper's own claim budget plus its commit margin.
+
+        The budget comes from the keeper's open health answer, so a keeper configured
+        with a longer preflight is not given up on while it is still answering; a
+        keeper that does not answer gets the default budget.
+        """
+        from .timing import DEFAULT_CLAIM_PREFLIGHT_S
+
+        budget = DEFAULT_CLAIM_PREFLIGHT_S
+        try:
+            with urllib.request.urlopen(f"{self.url}/v1/health", timeout=TIMEOUT) as resp:
+                value = json.loads(resp.read()).get("claim_preflight_s")
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+                budget = value
+        except (OSError, ValueError, AttributeError, http.client.HTTPException):
+            pass
+        return budget + CLAIM_COMMIT_MARGIN_S
+
     def call(self, method, verb, params=None, body=None, timeout=None, *, idempotency_key=None):
         if method == "POST":
             from .api_routes import RETRYABLE_WRITES, check_write_key
@@ -234,7 +256,8 @@ def write(session, verb, body, renderer=None) -> int:
             if code:
                 return code
         else:
-            result = session.call("POST", verb, body=body)
+            result = session.call("POST", verb, body=body,
+                                  timeout=session.claim_timeout() if verb in CLAIM_VERBS else None)
         status = _emit(session, result, renderer or (lambda r: fmt.result_text(verb, r)))
         if isinstance(result, dict) and (result.get("refused") or (
                 verb in ("claim_batch", "heartbeat_batch")

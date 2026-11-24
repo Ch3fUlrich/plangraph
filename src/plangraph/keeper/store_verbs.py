@@ -26,6 +26,7 @@ class VerbsMixin:
     """Every Store verb that moves an item through its lifecycle."""
 
     claim_preflight_s = timing.DEFAULT_CLAIM_PREFLIGHT_S
+    claim_index_window_s = timing.DEFAULT_CLAIM_INDEX_WINDOW_S
 
     # --------------------------------------------------------- evidence
     def add_evidence_router(self, principal, key, kind, ref):

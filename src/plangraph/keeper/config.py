@@ -18,6 +18,7 @@ The config maps the store and its verifiers onto real paths:
 * ``bind``          — ``"host:port"`` (or ``host``/``port`` keys)
 * ``default_lease`` — seconds a claim is held without a heartbeat
 * ``claim_preflight_s`` — seconds for claim authority checks before writing
+* ``claim_index_window_s`` — seconds a claim reuses its repository's just-refreshed work index (0: refresh every claim)
 
 A config file is refused unless its mode is exactly ``0600``: it may name paths
 and, in deployments, tokens.  No value is ever printed — :meth:`Config.__repr__`
@@ -31,7 +32,7 @@ import stat
 from pathlib import Path
 
 from .evidence_git import valid_ref
-from .timing import DEFAULT_CLAIM_PREFLIGHT_S
+from .timing import DEFAULT_CLAIM_INDEX_WINDOW_S, DEFAULT_CLAIM_PREFLIGHT_S
 
 __all__ = ["Config", "ConfigError", "load_config", "verifier_context",
            "REQUIRED_MODE"]
@@ -125,6 +126,8 @@ class Config:
         self.default_lease = self._positive_seconds(data, "default_lease", 7200)
         self.claim_preflight_s = self._positive_seconds(
             data, "claim_preflight_s", DEFAULT_CLAIM_PREFLIGHT_S)
+        self.claim_index_window_s = self._seconds(
+            data, "claim_index_window_s", DEFAULT_CLAIM_INDEX_WINDOW_S)
         self.review_overdue_s = self._positive_seconds(data, "review_overdue_s", 4 * 3600)
         self.lease_warn_s = self._positive_seconds(data, "lease_warn_s", 15 * 60)
         self.alert_window_s = self._positive_seconds(data, "alert_window_s", 7 * 86400)
