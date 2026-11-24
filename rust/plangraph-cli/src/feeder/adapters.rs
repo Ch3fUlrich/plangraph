@@ -189,8 +189,13 @@ pub(super) struct Adapters<'a, T> {
     pub repo: PathBuf,
     pub state: PathBuf,
     pub host: String,
+    /// The deadline of the next launch; the spawner is killed when it passes.
+    pub launch_limit: Option<std::time::Duration>,
 }
 impl<T: Transport> Launch for Adapters<'_, T> {
+    fn set_launch_limit(&mut self, limit: std::time::Duration) {
+        self.launch_limit = Some(limit);
+    }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError> {
         let result = self
             .keeper
@@ -277,7 +282,16 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         .arg("--prompt-file")
         .arg(prompt_path)
         .args(["--wait", "0"]);
-        let out = cmd.output().map_err(|_| "cannot execute spawner")?;
+        let out = match self.launch_limit {
+            Some(limit) => pg_worker_core::host_command::capture(&mut cmd, limit).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::TimedOut {
+                    format!("launch_timeout: spawner exceeded {}s", limit.as_secs())
+                } else {
+                    "cannot execute spawner".to_string()
+                }
+            })?,
+            None => cmd.output().map_err(|_| "cannot execute spawner")?,
+        };
         let mut run = receipt(&out.stdout, out.status.code())?;
         if run["host"].as_str().is_none_or(str::is_empty) {
             run["host"] = json!(self.host);
@@ -403,6 +417,7 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
             repo: temp.path().into(),
             state: temp.path().into(),
             host: "dell".into(),
+            launch_limit: None,
         };
         let epoch = a.claim("plangraph:A").unwrap();
         a.release("plangraph:A", epoch).unwrap();
@@ -443,6 +458,7 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
             repo: temp.path().into(),
             state: temp.path().into(),
             host: "dell".into(),
+            launch_limit: None,
         };
         let files = vec!["src/a.rs".to_owned()];
         let batch = vec!["plangraph:ME".to_owned(), "plangraph:MATE".to_owned()];
@@ -470,6 +486,7 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
             repo: temp.path().into(),
             state: temp.path().into(),
             host: "dell".into(),
+            launch_limit: None,
         };
         let files = vec!["src/a.rs".to_owned()];
         assert_eq!(

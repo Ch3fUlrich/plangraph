@@ -164,6 +164,7 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
             repo: o.repo.clone(),
             state: state.into(),
             host: facts.host.clone(),
+            launch_limit: None,
         },
     );
     if let Some(measurement) = measurement {

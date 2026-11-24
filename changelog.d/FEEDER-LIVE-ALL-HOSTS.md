@@ -16,3 +16,4 @@ The live feeder tick counts its deadline from service entry and begins no claim 
 A fleet-session spawner row is split into its card's keys before the launcher record exists, and a malformed state.json no longer counts as proof of life for a hand lane.
 Publishing the quota snapshot uses the policy's quota_max_age_seconds, the limit the reading feeder applies (plangraph quota --policy PATH).
 The shipped feeder policy test now pins the tick budget below the service timeout.
+A live feeder tick checks the remaining deadline before each claim, reservation check and launch, reserves time to release the held claims, bounds the spawner launch, and keeps the claims of a launch cut off at its deadline.

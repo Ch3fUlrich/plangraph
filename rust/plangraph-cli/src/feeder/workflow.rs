@@ -36,9 +36,15 @@ fn claim_batch(
     batch: &[Task],
     launch: &mut impl Launch,
     dropped: &mut Vec<Value>,
+    budget: u64,
 ) -> Result<Vec<(Task, u64)>, SpawnError> {
     let mut claimed: Vec<(Task, u64)> = Vec::new();
     for item in batch {
+        // This claim may succeed, so its release must fit too; out of time, give back what is
+        // held and let the tick stop (the next tick takes the work).
+        if !call_fits(launch, budget, claimed.len() + 1) {
+            return Ok(out_of_time(&claimed, item, launch, dropped));
+        }
         match launch.claim(&item.key) {
             Ok(epoch) => claimed.push((item.clone(), epoch)),
             Err(ClaimError::Refused(reason)) => {
@@ -59,6 +65,12 @@ fn claim_batch(
     let mut own: Vec<String> = claimed.iter().map(|(t, _)| t.key.clone()).collect();
     let mut held: Vec<(Task, u64)> = Vec::new();
     for (at, (item, epoch)) in claimed.iter().enumerate() {
+        let pending = held.len() + claimed.len() - at;
+        if !call_fits(launch, budget, pending) {
+            let mut all = held.clone();
+            all.extend(claimed[at..].iter().cloned());
+            return Ok(out_of_time(&all, item, launch, dropped));
+        }
         match launch.rival(&item.key, &item.files, &own) {
             Ok(None) => held.push((item.clone(), *epoch)),
             Ok(Some(rival)) => {
@@ -92,6 +104,20 @@ fn claim_batch(
         return Ok(Vec::new());
     }
     Ok(held)
+}
+/// The tick ran out of time between calls: release every claim still held, record why, and
+/// return no batch.
+fn out_of_time(
+    held: &[(Task, u64)],
+    at: &Task,
+    launch: &mut impl Launch,
+    dropped: &mut Vec<Value>,
+) -> Vec<(Task, u64)> {
+    dropped.push(json!({"item_key":at.key,"reason":"tick_budget"}));
+    for (key, error) in release_held(held, launch) {
+        dropped.push(json!({"item_key":key,"reason":format!("release failed: {error}")}));
+    }
+    Vec::new()
 }
 /// Release each claim by its own epoch; the failures, as (key, error), stay held until expiry.
 fn release_held(held: &[(Task, u64)], launch: &mut impl Launch) -> Vec<(String, String)> {
@@ -166,6 +192,18 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
 /// take up to about 20 seconds. A live tick begins an attempt only if this much (or the last
 /// attempt's duration, if longer) still fits before its deadline.
 const ATTEMPT_RESERVE_SECONDS: u64 = 60;
+
+/// Longest one keeper call takes (curl `--max-time`), and the time reserved to release one
+/// held claim after the deadline.
+const CALL_SECONDS: u64 = 20;
+
+/// Whether one more keeper call can begin and, with `held` claims then held, still be followed
+/// by releasing them all before the budget (counted from service entry) is spent.
+fn call_fits(launch: &mut impl Launch, budget: u64, held: usize) -> bool {
+    let reserved = CALL_SECONDS.saturating_mul(1 + held as u64);
+    launch.elapsed() + std::time::Duration::from_secs(reserved)
+        <= std::time::Duration::from_secs(budget)
+}
 
 static SERVICE_ENTRY: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
@@ -266,7 +304,7 @@ pub fn tick(
             batch
         } else {
             let mut dropped = Vec::new();
-            let claimed = claim_batch(&batch, launch, &mut dropped);
+            let claimed = claim_batch(&batch, launch, &mut dropped, policy.tick_budget_seconds);
             for row in &dropped {
                 ready["items"]
                     .as_array_mut()
@@ -287,6 +325,21 @@ pub fn tick(
                 continue;
             }
             let items: Vec<Task> = held.iter().map(|(t, _)| t.clone()).collect();
+            // The launch gets the time left less the release of every held claim; with less
+            // than one call's worth the batch is given back instead.
+            let left = std::time::Duration::from_secs(policy.tick_budget_seconds)
+                .saturating_sub(launch.elapsed())
+                .saturating_sub(std::time::Duration::from_secs(
+                    CALL_SECONDS * held.len() as u64,
+                ));
+            if left < std::time::Duration::from_secs(CALL_SECONDS) {
+                let mut gone = Vec::new();
+                out_of_time(&held, &held[0].0, launch, &mut gone);
+                skipped.extend(gone);
+                stopped = "tick_budget: no time left to launch".into();
+                break;
+            }
+            launch.set_launch_limit(left);
             let c = batch_card(&items, repo, reviews, policy);
             match launch.start(&c, &batch_brief(&items, rules, reviews)) {
                 Ok(run) => {
@@ -296,6 +349,14 @@ pub fn tick(
                         row["item_keys"] = json!(items.iter().map(|t| &t.key).collect::<Vec<_>>());
                     }
                     rows.push(row);
+                }
+                // A launch cut off at its deadline may have been admitted: keep the claims
+                // until their lease ends instead of releasing items a run may hold.
+                Err(e) if e.starts_with("launch_timeout") => {
+                    return failed(
+                        json!({"decision":"refused","item_key":items[0].key,"reason":format!("{e}; claims retained"),"skipped":skipped,"error":true}),
+                        &rows,
+                    );
                 }
                 Err(e) => {
                     let failures: Vec<String> = held

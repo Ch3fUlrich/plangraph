@@ -175,3 +175,77 @@ fn refused_attempts_count_against_the_budget_before_any_writer_starts() {
     let row = drive(&ready(items), &mut host, "dell", 1, true);
     assert_eq!(row["decision"], "would_spawn");
 }
+
+fn alpha_pair() -> Vec<Value> {
+    vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 8, &["src/b.rs"]),
+    ]
+}
+
+#[test]
+fn a_batch_whose_claims_would_outlast_the_deadline_is_given_back_before_it_runs_past_it() {
+    let items = alpha_pair();
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    // 38 s of preflight, two claims at 19 s each: the second claim, with both releases to
+    // follow, would end after the 100 s budget.
+    host.clock = 38;
+    host.claim_secs = 19;
+    let row = drive(&ready(items), &mut host, "dell", 2, false);
+    assert!(registry.lock().unwrap().started.is_empty());
+    // The one claim taken is released again and nothing is left held.
+    assert_eq!(registry.lock().unwrap().released, ["plangraph:ALPHA-1"]);
+    assert!(registry.lock().unwrap().claimed.is_empty());
+    assert_eq!(row["decision"], "refused");
+    assert!(row["reason"].as_str().unwrap().starts_with("tick_budget"));
+    assert!(row["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["reason"] == "tick_budget"));
+    // The tick never reached the 110 s service timeout, release included.
+    assert!(host.clock + 20 <= 110, "ended at {}", host.clock);
+}
+
+#[test]
+fn the_launch_gets_the_time_left_and_a_batch_is_given_back_when_none_is() {
+    let items = vec![item("ALPHA-1", 9, &["src/a.rs"])];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    host.clock = 38;
+    host.claim_secs = 10;
+    drive(&ready(items.clone()), &mut host, "dell", 1, false);
+    // 100 s budget - 48 s used - 20 s to release the one held claim.
+    assert_eq!(host.launch_limit, Some(std::time::Duration::from_secs(32)));
+    assert_eq!(registry.lock().unwrap().started.len(), 1);
+    // A slow reservation check leaves 12 s: below one call, so no launch and no claim kept.
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    host.clock = 38;
+    host.claim_secs = 20;
+    host.rival_secs = 10;
+    let row = drive(&ready(items), &mut host, "dell", 1, false);
+    assert!(registry.lock().unwrap().started.is_empty());
+    assert!(registry.lock().unwrap().claimed.is_empty());
+    assert_eq!(registry.lock().unwrap().released, ["plangraph:ALPHA-1"]);
+    assert!(row["reason"].as_str().unwrap().starts_with("tick_budget"));
+}
+
+#[test]
+fn a_launch_cut_off_at_its_deadline_keeps_its_claims() {
+    let items = vec![item("ALPHA-1", 9, &["src/a.rs"])];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    host.start_error = Some("launch_timeout: spawner exceeded 32s".into());
+    let row = drive(&ready(items), &mut host, "dell", 1, false);
+    assert_eq!(row["error"], true);
+    assert!(row["reason"].as_str().unwrap().contains("claims retained"));
+    // A run may have been admitted: nothing is released.
+    assert!(registry.lock().unwrap().released.is_empty());
+    assert!(registry
+        .lock()
+        .unwrap()
+        .claimed
+        .contains_key("plangraph:ALPHA-1"));
+}

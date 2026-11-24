@@ -56,6 +56,11 @@ pub struct Host {
     pub clock: u64,
     pub claim_secs: u64,
     pub start_secs: u64,
+    pub rival_secs: u64,
+    /// The limit the tick set for its last launch.
+    pub launch_limit: Option<std::time::Duration>,
+    /// Every start fails with this error.
+    pub start_error: Option<String>,
 }
 impl Host {
     pub fn new(registry: &Arc<Mutex<Registry>>, items: &[Value]) -> Self {
@@ -81,12 +86,18 @@ impl Host {
             clock: 0,
             claim_secs: 0,
             start_secs: 0,
+            rival_secs: 0,
+            launch_limit: None,
+            start_error: None,
         }
     }
 }
 impl Launch for Host {
     fn elapsed(&mut self) -> std::time::Duration {
         std::time::Duration::from_secs(self.clock)
+    }
+    fn set_launch_limit(&mut self, limit: std::time::Duration) {
+        self.launch_limit = Some(limit);
     }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError> {
         self.clock += self.claim_secs;
@@ -116,6 +127,7 @@ impl Launch for Host {
         files: &[String],
         batch: &[String],
     ) -> Result<Option<String>, String> {
+        self.clock += self.rival_secs;
         self.registry
             .lock()
             .unwrap()
@@ -137,6 +149,9 @@ impl Launch for Host {
     }
     fn start(&mut self, card: &Value, _: &str) -> Result<Value, String> {
         self.clock += self.start_secs;
+        if let Some(e) = &self.start_error {
+            return Err(e.clone());
+        }
         let started = self.registry.lock().unwrap().started.len();
         if self.fail_start || self.fail_start_after.is_some_and(|n| started >= n) {
             return Err("spawner denied".into());

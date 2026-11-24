@@ -271,6 +271,8 @@ pub trait Launch {
     fn elapsed(&mut self) -> std::time::Duration {
         workflow::service_elapsed()
     }
+    /// The longest the next `start` may run; an adapter without a limit ignores it.
+    fn set_launch_limit(&mut self, _limit: std::time::Duration) {}
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError>;
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String>;
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String>;
