@@ -22,7 +22,8 @@ JOBS = WORKFLOW["jobs"]
 NONBLOCKING = {
     "Retry the failed tests once at the same SHA", "Upload the same-SHA retry logs and record",
     "Quarantined tests (reporting, never blocking)", "Retry the failed Rust tests once at the same SHA",
-    "Quarantined Rust tests (reporting, never blocking)", "Carry ci-full evidence to a reworded head",
+    "Quarantined Rust tests (reporting, never blocking)", "Quarantined Rust tests on Windows (reporting, never blocking)",
+    "Carry ci-full evidence to a reworded head",
     "Quarantine ledger in the gate summary", "Publish the quarantine ledger", "Download shard timings",
     "Combine shard timings per suite", "Upload the combined shard timings", "Post ci-full evidence",
 }
@@ -295,10 +296,11 @@ def test_a_failing_package_run_fails_the_step_and_no_ledger_entry_runs_the_plain
 
 
 @pytest.mark.parametrize("job", ["pytest", "pytest-postgres"])
-def test_one_classification_retry_across_both_paths_and_every_pytest_step_is_bounded(job):
+def test_every_red_pytest_path_gets_one_classification_retry_and_every_pytest_step_is_bounded(job):
     retry = named(job, "Retry the failed tests once at the same SHA")
-    # The affected path (a pull request without the full run) already reruns its failures with -n0 and the first worker count.
-    assert "!(github.event_name == 'pull_request' && needs.select.outputs.full != 'true')" in retry["if"]
+    # The affected pull request path is classified too: the retry keeps the first and the retry log with the tested SHA.
+    assert retry["if"] == "${{ failure() && steps.pytest.outcome == 'failure' }}"
+    assert "first.log" in yaml.safe_load((ROOT / ".github/actions/pytest-retry/action.yml").read_text())["runs"]["steps"][0]["run"]
     report = named(job, "Quarantined tests (reporting, never blocking)")
     assert report["uses"] == "./.github/actions/bounded-step" and 0 < int(report["with"]["seconds"]) < report["timeout-minutes"] * 60
     assert report["timeout-minutes"] < JOBS[job]["timeout-minutes"]
@@ -310,3 +312,38 @@ def test_the_timing_merge_is_not_a_pytest_step_and_the_reuse_keeps_the_go_verifi
     assert go["if"] == "${{ success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true' }}"
     assert "tested != 'true'" in named("ci-gate", "Post ci-full evidence")["if"]
     assert "--old-jobs" in named("select", "Select test suites")["run"] and "attempts/" in named("select", "Select test suites")["run"]
+
+
+def test_reword_reuse_is_off_until_enabled_and_compares_the_tree_this_run_checked_out():
+    run = named("select", "Select test suites")["run"]
+    assert 'if [ "${{ vars.CI_REWORD_REUSE }}" = 1 ] &&' in run
+    # The merge checkout tree, not the pull request head's: a base that moved since the old run never reuses it.
+    assert """--tree "$(git rev-parse 'HEAD^{tree}')\"""" in run and 'HEAD_SHA^{tree}' not in run
+
+
+WINDOWS = {"pg-spawnd": "cargo test -p pg-spawnd", "pg-worker-core": "cargo test -p pg-worker-core"}
+
+
+@pytest.mark.parametrize("package", sorted(WINDOWS))
+def test_the_native_windows_blocking_run_skips_only_its_own_package_entries(tmp_path, package):
+    target = tmp_path / "target"
+    (target / "debug").mkdir(parents=True)
+    stub(target / "debug/ci-flake.exe", "printf '%s\\n' 'pg-spawnd a::b' 'pg-worker-core c::d' 'other e::f'\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub(bin_dir / "cargo", 'echo "cargo $*" >> "$RUNNER_TEMP/calls"\n')
+    other = "pg-worker-core" if package == "pg-spawnd" else "pg-spawnd"
+    skip = {"pg-spawnd": "a::b", "pg-worker-core": "c::d"}[package]
+    done, _, _ = run_script(named("rust-windows", WINDOWS[package])["run"], tmp_path, {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(target), "GITHUB_WORKSPACE": str(tmp_path),
+        "PYTEST_QUARANTINE_FILE": "l", "PYTEST_QUARANTINE_AS_OF": "t"}, tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "calls").read_text().strip() == f"cargo test -p {package} -- --exact --skip {skip}"
+    assert other not in (tmp_path / "calls").read_text()
+
+
+def test_the_windows_job_pins_the_same_ledger_and_runs_the_reporting_step_without_blocking():
+    assert named("rust-windows", "Quarantine ledger and run timestamp")["with"]["as-of"] == "${{ needs.select.outputs.as-of }}"
+    report = named("rust-windows", "Quarantined Rust tests on Windows (reporting, never blocking)")
+    assert report["continue-on-error"] is True and "--mode quarantine" in report["run"]
+    assert index("rust-windows", "Quarantine ledger and run timestamp") < index("rust-windows", "cargo test -p pg-spawnd")

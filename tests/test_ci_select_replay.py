@@ -16,6 +16,8 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools"
 spec = importlib.util.spec_from_file_location("ci_select_replay", TOOLS / "ci_select.py")
 ci_select = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci_select)
+sys.path.insert(0, str(TOOLS))
+import merge_batch_plan as plan  # noqa: E402  (the replay lives with the batch planning)
 
 STABLE = "def test_stable():\n    assert True\n"
 # Fails on the third run of five: the counter file lives next to the test.
@@ -30,7 +32,7 @@ def test_the_changed_python_test_files_and_new_rust_tests_are_selected(tmp_path)
         "tests/test_new.py": STABLE, "tests/browser/test_ui.py": STABLE, "docs/x.md": "x\n",
         "rust/pg-spawnd/src/lib.rs": "#[cfg(test)]\nmod t {\n    #[test]\n    fn added_case() {}\n    fn helper() {}\n}\n",
     }, BASE)
-    changed = ci_select.changed_tests(root, base, head)
+    changed = plan.changed_tests(root, base, head)
     assert changed["python"] == ["tests/test_new.py"]
     assert changed["rust"] == [["rust/pg-spawnd/Cargo.toml", "added_case"]]
 
@@ -41,20 +43,20 @@ RUST_TEST = "#[cfg(test)]\nmod t {\n    #[test]\n    fn kept() {\n        let n 
 def test_a_body_only_edit_of_an_existing_rust_test_selects_that_test_and_no_other(tmp_path):
     base = {**BASE, "rust/pg-spawnd/src/lib.rs": RUST_TEST}
     root, b, head = tree(tmp_path, {"rust/pg-spawnd/src/lib.rs": RUST_TEST.replace("let n = 1;", "let n = 2;").replace("assert_eq!(n, 1)", "assert_eq!(n, 2)")}, base)
-    assert ci_select.changed_tests(root, b, head)["rust"] == [["rust/pg-spawnd/Cargo.toml", "kept"]]
+    assert plan.changed_tests(root, b, head)["rust"] == [["rust/pg-spawnd/Cargo.toml", "kept"]]
 
 
 def test_a_deleted_line_and_an_edit_outside_any_test_select_the_enclosing_test_only(tmp_path):
     base = {**BASE, "rust/pg-spawnd/src/lib.rs": RUST_TEST}
     root, b, head = tree(tmp_path, {"rust/pg-spawnd/src/lib.rs": RUST_TEST.replace("        let n = 1;\n", "").replace("mod t {", "mod t {\n    const X: u8 = 1;")}, base)
-    assert ci_select.changed_tests(root, b, head)["rust"] == [["rust/pg-spawnd/Cargo.toml", "kept"]]
+    assert plan.changed_tests(root, b, head)["rust"] == [["rust/pg-spawnd/Cargo.toml", "kept"]]
 
 
 def test_a_predictable_one_in_five_failure_is_flaky_and_keeps_both_logs(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
     root, base, head = tree(tmp_path, {"tests/test_flip.py": ONE_IN_FIVE}, BASE)
     out = tmp_path / "logs"
-    result = ci_select.replay(root, ci_select.changed_tests(root, base, head), out, workers=False)
+    result = plan.replay(root, plan.changed_tests(root, base, head), out, workers=False)
     assert result["flaky"] == ["tests/test_flip.py::test_one_in_five"] and result["ok"] is False
     failing, passing = result["logs"]["tests/test_flip.py::test_one_in_five"]
     assert "FAILED" in Path(failing).read_text() and "PASSED" in Path(passing).read_text()
@@ -64,14 +66,15 @@ def test_a_predictable_one_in_five_failure_is_flaky_and_keeps_both_logs(tmp_path
 def test_a_stable_passing_test_clears_the_entry(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
     root, base, head = tree(tmp_path, {"tests/test_stable.py": STABLE}, BASE)
-    result = ci_select.replay(root, ci_select.changed_tests(root, base, head), tmp_path / "logs", workers=False, head=head)
-    assert result == {"flaky": [], "failed": [], "logs": {}, "ok": True, "runs": 5, "head": head, "changed": {"python": ["tests/test_stable.py"], "rust": []}}
+    result = plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs", workers=False, head=head)
+    assert result == {"flaky": [], "failed": [], "incomplete": [], "logs": {}, "ok": True, "runs": 5, "head": head,
+                      "changed": {"python": ["tests/test_stable.py"], "rust": []}}
 
 
 def test_a_test_that_always_fails_is_a_failure_not_a_flake(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
     root, base, head = tree(tmp_path, {"tests/test_bad.py": "def test_bad():\n    assert 0\n"}, BASE)
-    result = ci_select.replay(root, ci_select.changed_tests(root, base, head), tmp_path / "logs", workers=False)
+    result = plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs", workers=False)
     assert result["flaky"] == [] and result["failed"] == ["tests/test_bad.py::test_bad"] and result["ok"] is False
 
 
@@ -82,19 +85,49 @@ def test_a_test_that_always_fails_is_a_failure_not_a_flake(tmp_path, monkeypatch
     (["FAILED a::t"] * 5, [], ["a::t"]),
 ])
 def test_flaky_means_both_a_pass_and_a_failure_in_the_runs(tmp_path, monkeypatch, lines, flaky, failed):
-    commands = [[sys.executable, "-c", f"print({line!r})"] for line in lines]
-    monkeypatch.setattr(ci_select, "replay_commands", lambda *_a, **_kw: commands)
-    result = ci_select.replay(tmp_path, {}, tmp_path / "logs")
+    root, _, head = tree(tmp_path, {"docs/x.md": "x\n"}, BASE)
+    commands = [([sys.executable, "-c", f"print({line!r})"], []) for line in lines]
+    monkeypatch.setattr(plan, "replay_commands", lambda *_a, **_kw: commands)
+    result = plan.replay(root, {}, tmp_path / "logs", head=head)
     assert (result["flaky"], result["failed"]) == (flaky, failed)
     assert len(list((tmp_path / "logs").glob("*-run-*.log"))) == 5
 
 
+def test_five_invocations_that_never_ran_the_changed_test_are_not_a_passing_receipt(tmp_path, monkeypatch):
+    root, _, head = tree(tmp_path, {"docs/x.md": "x\n"}, BASE)
+    skipped = [([sys.executable, "-c", "print('PASSED tests/test_other.py::t')"], ["tests/test_a.py::"]) for _ in range(5)]
+    monkeypatch.setattr(plan, "replay_commands", lambda *_a, **_kw: skipped)
+    result = plan.replay(root, {}, tmp_path / "logs", head=head)
+    assert result["ok"] is False and result["failed"] == [] and result["flaky"] == []
+    assert result["incomplete"] == [f"tests/test_a.py:: (run {n})" for n in range(5)]
+    rust = [([sys.executable, "-c", "print('test mod::kept ... ok')"], ["kept"]) for _ in range(5)]
+    monkeypatch.setattr(plan, "replay_commands", lambda *_a, **_kw: rust)
+    assert plan.replay(root, {}, tmp_path / "logs2", head=head)["ok"] is True   # the name is the last path segment
+
+
+def test_the_replay_runs_the_requested_head_in_a_clean_checkout_not_the_working_tree(tmp_path, monkeypatch):
+    """A passing working tree and a failing requested commit: the receipt follows the commit, never the checkout."""
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
+    root, base, bad = tree(tmp_path, {"tests/test_flip.py": "def test_flip():\n    assert 0\n"}, BASE)
+    (root / "tests/test_flip.py").write_text(STABLE.replace("test_stable", "test_flip"))   # uncommitted fix
+    changed = plan.changed_tests(root, base, bad)
+    result = plan.replay(root, changed, tmp_path / "logs", workers=False, head=bad)
+    assert result["ok"] is False and result["failed"] == ["tests/test_flip.py::test_flip"] and result["head"] == bad
+    assert subprocess_out(root, "worktree", "list").count("\n") == 0   # the temporary checkout is gone
+
+
+def subprocess_out(root, *args):
+    import subprocess
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
 def test_the_replay_command_runs_serial_four_times_then_once_with_every_worker(tmp_path):
-    commands = ci_select.replay_commands({"python": ["tests/test_a.py"], "rust": [["rust/x/Cargo.toml", "case"]]},
+    commands = plan.replay_commands({"python": ["tests/test_a.py"], "rust": [["rust/x/Cargo.toml", "case"]]},
                                          workers=True)
-    python = [c for c in commands if c[0] != "cargo"]
+    python = [c for c, _ in commands if c[0] != "cargo"]
     assert len(python) == 5 and sum("-n" in c and "auto" in c for c in python) == 1
-    cargo = [c for c in commands if c[0] == "cargo"]
+    assert [wanted for _, wanted in commands][0] == ["tests/test_a.py::"] and [w for _, w in commands][-1] == ["case"]
+    cargo = [c for c, _ in commands if c[0] == "cargo"]
     assert len(cargo) == 5 and sum("--test-threads=1" in c for c in cargo) == 4
 
 
@@ -143,6 +176,6 @@ def test_entry_set_run_writes_the_receipt_where_readiness_reads_it(tmp_path, mon
     monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(tmp_path / "telemetry"))
     root, base, head = tree(tmp_path, {"tests/test_stable.py": STABLE}, BASE)
     assert ci_select.main(["entry-set", "--root", str(root), "--base", base, "--head", head, "--run"]) == 0
-    found = ci_select.replay_receipt(head)
+    found = plan.replay_receipt(head)
     assert found["head"] == head and found["ok"] is True and found["changed"]["python"] == ["tests/test_stable.py"]
-    assert ci_select.replay_receipt("0" * 40) is None
+    assert plan.replay_receipt("0" * 40) is None
