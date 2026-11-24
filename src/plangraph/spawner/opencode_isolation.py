@@ -141,7 +141,7 @@ def review_seat_home(env, job_dir):
     The seat's HOME hides the user's profile, so cargo and the repository's pytest are put
     on its PATH first, from the launching user's home.
     """
-    from plangraph.routing_support.review_toolchain import review_tool_path
+    from plangraph.routing_support.claude_seat import review_tool_path
     env['PATH'] = review_tool_path(env.get('PATH'), env.get('HOME'))
     env['HOME'] = job_dir
     config = os.path.join(job_dir, 'config')
