@@ -84,28 +84,36 @@ impl Manifest {
         problems
     }
 
-    /// Every problem with the installers: a template unit file (`*.in`) whose entry names none and an
-    /// installer script that is not a file of `repo`.
+    /// Every problem with the installers: a template unit file (`*.in`, or with an `@NAME@` placeholder)
+    /// whose entry names no installer, and an installer script that Git does not track.
     pub fn installer_problems(&self, repo: &Path, unit_files: &BTreeSet<String>) -> Vec<String> {
         let mut problems = Vec::new();
-        for key in unit_files.iter().filter(|k| k.ends_with(".in")) {
-            if self
-                .unit_by_key(key)
-                .is_some_and(|u| u.installer.is_none() && u.not_deployed.is_none())
-            {
-                problems.push(format!(
-                    "deploy/{key} is a template: its entry needs an installer (via, step, renders)"
-                ));
+        for key in unit_files {
+            let Some(unit) = self.unit_by_key(key) else {
+                continue; // an unlisted unit file is reported by `coverage`
+            };
+            if unit.installer.is_some() || unit.not_deployed.is_some() {
+                continue;
+            }
+            match super::scan::needs_rendering(repo, key) {
+                Ok(true) => problems.push(format!(
+                    "deploy/{key} is a template: its entry needs an installer (via, step, renders, enable)"
+                )),
+                Ok(false) => {}
+                Err(e) => problems.push(e),
             }
         }
         for unit in &self.unit {
-            if let Some(installer) = &unit.installer {
-                if !repo.join(&installer.via).is_file() {
-                    problems.push(format!(
-                        "unit {}: installer via {} is not a file of the repository",
-                        unit.name, installer.via
-                    ));
-                }
+            let Some(installer) = &unit.installer else {
+                continue;
+            };
+            match super::scan::tracked(repo, &installer.via) {
+                Ok(files) if files.contains(&installer.via) => {}
+                Ok(_) => problems.push(format!(
+                    "unit {}: installer via {} is not a tracked file of the repository",
+                    unit.name, installer.via
+                )),
+                Err(e) => problems.push(e),
             }
         }
         problems

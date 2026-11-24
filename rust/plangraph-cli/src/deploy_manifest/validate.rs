@@ -75,13 +75,15 @@ impl Manifest {
             }
             unit.enable_unit()?;
             for env in unit.env_files.iter().flat_map(|e| e.split('|')) {
-                if env.starts_with('/')
-                    || env.contains(['=', ' ', '\\'])
-                    || env.contains("..")
+                // A file name under the config directory, or a path a unit names as written: absolute
+                // or under `%h`.
+                if env.contains(['=', ' ', '\\'])
+                    || env.split('/').any(|part| part == "..")
                     || !env.ends_with(".env")
+                    || env.starts_with("//")
                 {
                     return Err(format!(
-                        "{what}: env file {env:?} must be a relative file name ending in .env"
+                        "{what}: env file {env:?} must be a file name or an absolute or %h path ending in .env"
                     ));
                 }
             }

@@ -52,7 +52,7 @@ pub fn unit_files(repo: &Path) -> Result<BTreeSet<String>, String> {
 }
 
 /// The paths Git tracks under `sub` of `repo`, relative to `repo`.
-fn tracked(repo: &Path, sub: &str) -> Result<Vec<String>, String> {
+pub fn tracked(repo: &Path, sub: &str) -> Result<Vec<String>, String> {
     // A hook or test runner may export GIT_DIR or GIT_INDEX_FILE; they would point at another repository.
     let output = Command::new("git")
         .arg("-C")
@@ -89,6 +89,25 @@ const EXEC_KEYS: [&str; 7] = [
     "ExecStopPost",
 ];
 
+/// The program of an `Exec*` value: the first command word after systemd's prefix characters
+/// (`@ - : + !`), quoted words read to their closing quote so a path may hold spaces.
+fn first_word(value: &str) -> String {
+    let value = value.trim_start_matches(['@', '-', ':', '+', '!', ' ', '\t']);
+    let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) else {
+        return value.split_whitespace().next().unwrap_or("").to_owned();
+    };
+    let mut word = String::new();
+    let mut chars = value[1..].chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => word.extend(chars.next()),
+            c if c == quote => break,
+            c => word.push(c),
+        }
+    }
+    word
+}
+
 /// One program a unit runs: the unit's coverage key, the program's file name and its path as written
 /// (`%h` written `~`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -113,13 +132,7 @@ pub fn consumers(repo: &Path, unit_files: &BTreeSet<String>) -> Result<BTreeSet<
             if !EXEC_KEYS.contains(&key.trim()) {
                 continue;
             }
-            let program = value
-                .trim_start_matches(['-', '+', '!', '@', ' '])
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_matches('"')
-                .replacen("%h", "~", 1);
+            let program = first_word(value).replacen("%h", "~", 1);
             if !(program.starts_with('/') || program.starts_with("~/")) {
                 continue;
             }
@@ -152,7 +165,7 @@ pub fn unit_env_files(
             else {
                 continue;
             };
-            let value = value.trim_start_matches('-');
+            let value = value.trim_start_matches('-').trim_matches(['"', '\'']);
             if value.is_empty() {
                 continue; // an empty setting only clears the list
             }
@@ -210,4 +223,16 @@ pub fn bin_targets(repo: &Path) -> Result<BTreeSet<(String, String)>, String> {
         }
     }
     Ok(out)
+}
+
+/// `true` when the tracked unit file `deploy/<key>` is a template an installer must render: a `*.in`
+/// file, or a unit with an `@NAME@` placeholder (`@ROOT@`, `@PYTHON@`, `@ROUTER_DIR@`).
+pub fn needs_rendering(repo: &Path, key: &str) -> Result<bool, String> {
+    if key.ends_with(".in") {
+        return Ok(true);
+    }
+    let path = repo.join("deploy").join(key);
+    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let placeholder = regex::Regex::new(r"@[A-Z][A-Z0-9_]*@").map_err(|e| e.to_string())?;
+    Ok(placeholder.is_match(&text))
 }

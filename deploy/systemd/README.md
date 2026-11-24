@@ -13,9 +13,10 @@ file name in two directories needs two entries (`dir = "<subdir>"` outside `depl
 `deploy/` itself).
 
 - A unit family lists its files, scope, host roles (`keeper`, `worker`, `wsl`, `all`), the env file names it reads
-  (never values; `%i` for the instance of a template) and its first-run check. A family whose files are templates
-  (`*.in`, or `@ROOT@` placeholders) names its `[unit.installer]`: the script in the tree (`via`), the command it
-  runs (`step`) and the unit names it writes (`renders`).
+  (never values; `%i` for the instance of a template; a file outside the config directories as its absolute or `%h` path) and its first-run check. A family whose files are templates
+  (`*.in`, or `@ROOT@` placeholders) names its `[unit.installer]`: the tracked script (`via`), the command it runs (`step`), the unit names it writes
+  (`renders`) and the installed timer or service it enables (`enable`); the family's `files` are sources, `enable`
+  and `renders` are the installed names.
 - A binary lists its package, bin, host roles and, in `install_paths`, every path a consumer runs it from, each with
   its roles; no list means only `~/.local/bin/<bin>`, and a binary run from two places lists both.
 - A host lists its roles in `PG_HOST_ROLES` or in `~/.config/plangraph/host-roles`; the manifest holds no host names.
@@ -30,7 +31,8 @@ cargo test --offline --locked --manifest-path rust/Cargo.toml -p plangraph-cli -
 
 They fail for a unit file or binary target the manifest does not name, for an entry whose file is not tracked, for a
 program a unit runs (`Exec*`, any directory) from a path its binary entry does not declare for the unit's roles, for an
-`EnvironmentFile` its entry omits, and for a template without an installer. Nothing in them reads systemd. The
+`EnvironmentFile` its entry omits, and for a template or `@NAME@` placeholder unit without an installer or with an
+installer script Git does not track. Nothing in them reads systemd. The
 tables below describe the units; the manifest decides where they are installed.
 
 ## 1. Files
