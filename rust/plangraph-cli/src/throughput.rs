@@ -24,6 +24,9 @@ struct Hour {
 struct Arrival {
     sha: String,
     at: i64,
+    /// The landing this arrival belongs to: itself when it is a landed SHA, else the next landed SHA on main
+    /// (a tested fast-forward brings its parts' merges before the landed head).
+    train: String,
     commits: u64,
     /// Every commit the arrival made reachable, oldest first, with its parents.
     members: Vec<(String, Vec<String>)>,
@@ -98,6 +101,7 @@ fn arrivals(reference: &str, project: &str, start: i64, end: i64) -> Result<Vec<
             Ok(Arrival {
                 sha: sha.into(),
                 at,
+                train: String::new(),
                 commits: members.len() as u64,
                 members,
                 items,
@@ -175,7 +179,15 @@ fn collect(
         .step_by(HOUR as usize)
         .map(|t| (t, Hour::default()))
         .collect();
-    let arrivals = arrivals(reference, project, start, end)?;
+    let mut arrivals = arrivals(reference, project, start, end)?;
+    let landings = db.landing_shas(repo)?;
+    let mut next: Option<String> = None;
+    for arrival in arrivals.iter_mut().rev() {
+        if landings.contains(&arrival.sha) {
+            next = Some(arrival.sha.clone());
+        }
+        arrival.train = next.clone().unwrap_or_else(|| arrival.sha.clone());
+    }
     for arrival in &arrivals {
         hours
             .get_mut(&(arrival.at.div_euclid(HOUR) * HOUR))

@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS throughput_quota_window (
 CREATE TABLE IF NOT EXISTS throughput_accept_part (
     repo TEXT NOT NULL, sha TEXT NOT NULL, head TEXT NOT NULL, landed INTEGER NOT NULL,
     seconds INTEGER NOT NULL, model TEXT, tokens INTEGER, commits INTEGER NOT NULL,
-    PRIMARY KEY(repo,sha,head)
+    train TEXT NOT NULL, PRIMARY KEY(repo,sha,head)
 );";
 
 fn database_error(error: rusqlite::Error) -> String {
@@ -68,6 +68,37 @@ fn query(connection: &Connection, sql: &str, repo: &str) -> Result<Vec<Value>, S
         .map_err(database_error)?;
     rows.collect::<rusqlite::Result<_>>()
         .map_err(database_error)
+}
+
+fn table_exists(connection: &Connection, name: &str) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)",
+        [name],
+        |row| row.get(0),
+    )
+}
+
+/// The table a report reads acceptances from: the part table, else the first collector's table read as parts
+/// (so a database not yet collected since the upgrade still reports its history), else nothing.
+fn accept_source(connection: &Connection) -> rusqlite::Result<&'static str> {
+    Ok(if table_exists(connection, "throughput_accept_part")? {
+        "throughput_accept_part"
+    } else if table_exists(connection, "throughput_accept")? {
+        "(SELECT repo,sha,sha AS head,landed,seconds,model,tokens,commits,sha AS train FROM throughput_accept)"
+    } else {
+        "(SELECT NULL AS repo,NULL AS sha,NULL AS head,0 AS landed,0 AS seconds,NULL AS model,NULL AS tokens,0 AS commits,NULL AS train WHERE 0)"
+    })
+}
+
+/// As `accept_source`, for the quota samples.
+fn quota_source(connection: &Connection) -> rusqlite::Result<&'static str> {
+    Ok(if table_exists(connection, "throughput_quota_window")? {
+        "throughput_quota_window"
+    } else if table_exists(connection, "throughput_quota_hourly")? {
+        "(SELECT repo,bucket,through,provider,'' AS account,'' AS window,NULL AS reset,remaining FROM throughput_quota_hourly)"
+    } else {
+        "(SELECT NULL AS repo,0 AS bucket,0 AS through,NULL AS provider,NULL AS account,NULL AS window,NULL AS reset,NULL AS remaining WHERE 0)"
+    })
 }
 
 fn check_landing_schema(connection: &Connection) -> Result<(), String> {
@@ -120,6 +151,19 @@ impl Db {
             .map_err(database_error)
     }
 
+    /// The landed SHAs the lander recorded for `repo`: where a train's parts arrive on main.
+    pub fn landing_shas(&self, repo: &str) -> Result<std::collections::HashSet<String>, String> {
+        let connection = self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let mut statement = connection
+            .prepare("SELECT landed_sha FROM landing WHERE repo=?1")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([repo], |row| row.get(0))
+            .map_err(database_error)?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(database_error)
+    }
+
     pub fn store(
         &self,
         repo: &str,
@@ -135,6 +179,7 @@ impl Db {
             .map_err(database_error)?;
         check_landing_schema(&transaction)?;
         transaction.execute_batch(SCHEMA).map_err(database_error)?;
+        Self::migrate_legacy(&transaction).map_err(database_error)?;
         Self::write_hours(&transaction, repo, end, hours, inputs).map_err(database_error)?;
         Self::write_arrivals(&transaction, repo, arrivals, inputs).map_err(database_error)?;
         transaction
@@ -150,6 +195,24 @@ impl Db {
             )
             .map_err(database_error)?;
         transaction.commit().map_err(database_error)
+    }
+
+    /// Carry the samples of the first collector (one acceptance per landing, one percentage per provider) into
+    /// the part and window tables; rows already there win, and the old tables are left as they are.
+    fn migrate_legacy(connection: &Connection) -> rusqlite::Result<()> {
+        if table_exists(connection, "throughput_accept")? {
+            connection.execute_batch(
+                "INSERT OR IGNORE INTO throughput_accept_part(repo,sha,head,landed,seconds,model,tokens,commits,train)
+                 SELECT repo,sha,sha,landed,seconds,model,tokens,commits,sha FROM throughput_accept;",
+            )?;
+        }
+        if table_exists(connection, "throughput_quota_hourly")? {
+            connection.execute_batch(
+                "INSERT OR IGNORE INTO throughput_quota_window(repo,bucket,through,provider,account,window,reset,remaining)
+                 SELECT repo,bucket,through,provider,'','',NULL,remaining FROM throughput_quota_hourly;",
+            )?;
+        }
+        Ok(())
     }
 
     fn write_hours(
@@ -216,8 +279,9 @@ impl Db {
         let mut landing = connection.prepare("INSERT INTO throughput_item_landing VALUES(?1,?2,?3)
             ON CONFLICT(repo,item) DO UPDATE SET landed=MIN(throughput_item_landing.landed,excluded.landed)")?;
         let mut acceptance = connection.prepare(
-            "INSERT INTO throughput_accept_part VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
-            ON CONFLICT(repo,sha,head) DO UPDATE SET landed=excluded.landed,seconds=excluded.seconds,
+            "INSERT INTO throughput_accept_part(repo,sha,head,landed,seconds,model,tokens,commits,train)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+            ON CONFLICT(repo,sha,head) DO UPDATE SET landed=excluded.landed,seconds=excluded.seconds,train=excluded.train,
             model=excluded.model,tokens=excluded.tokens,commits=excluded.commits",
         )?;
         for arrival in arrivals {
@@ -233,7 +297,8 @@ impl Db {
                     accepted.seconds,
                     accepted.model,
                     accepted.tokens,
-                    accepted.commits
+                    accepted.commits,
+                    arrival.train
                 ])?;
             }
         }
@@ -245,7 +310,9 @@ impl Db {
         let transaction = connection.transaction().map_err(database_error)?;
         check_landing_schema(&transaction)?;
         let query = |sql: &str| query(&transaction, sql, repo);
-        let days = query("WITH train AS (
+        let accept = accept_source(&transaction).map_err(database_error)?;
+        let quota_table = quota_source(&transaction).map_err(database_error)?;
+        let days = query(&format!("WITH train AS (
             SELECT date(landed_at) AS day, COUNT(*) AS trains, SUM(json_array_length(parts)) AS train_parts,
             SUM(CASE WHEN unixepoch(landed_at)>=unixepoch(build_started_at)
                 THEN unixepoch(landed_at)-unixepoch(build_started_at) END) AS train_seconds
@@ -254,14 +321,14 @@ impl Db {
             GROUP BY date(landed_at)
         ), accepted AS (
             SELECT date(landed,'unixepoch') AS day, COUNT(*) AS accept_samples, AVG(seconds) AS accept_to_main_seconds
-            FROM throughput_accept_part WHERE repo=?1 GROUP BY date(landed,'unixepoch')
+            FROM {accept} WHERE repo=?1 GROUP BY date(landed,'unixepoch')
         ), items AS (
             SELECT date(landed,'unixepoch') AS day, COUNT(*) AS items_landed
             FROM throughput_item_landing WHERE repo=?1 GROUP BY date(landed,'unixepoch')
         ) SELECT d.day,observed_seconds,commits,items_closed,COALESCE(items_landed,0) AS items_landed,COALESCE(trains,0) AS trains,
             COALESCE(train_parts,0) AS train_parts,train_seconds,COALESCE(accept_samples,0) AS accept_samples,accept_to_main_seconds
             FROM throughput_daily d LEFT JOIN train USING(day) LEFT JOIN accepted USING(day) LEFT JOIN items USING(day)
-            WHERE repo=?1 ORDER BY d.day")?;
+            WHERE repo=?1 ORDER BY d.day"))?;
         let writers = query(
             "SELECT date(bucket,'unixepoch') AS day,host,
             SUM(running) AS writer_running_seconds, SUM(measured) AS writer_measured_seconds,
@@ -269,14 +336,14 @@ impl Db {
             1.0*SUM(active)/NULLIF(SUM(measured),0) AS writer_active_share
             FROM throughput_writer_hourly WHERE repo=?1 GROUP BY day,host ORDER BY day,host",
         )?;
-        let models = query("SELECT date(landed,'unixepoch') AS day,model,SUM(tokens) AS tokens,
+        let models = query(&format!("SELECT date(landed,'unixepoch') AS day,model,SUM(tokens) AS tokens,
             SUM(commits) AS landed_commits, 1.0*SUM(tokens)/NULLIF(SUM(commits),0) AS tokens_per_landed_commit
-            FROM throughput_accept_part WHERE repo=?1 AND tokens IS NOT NULL AND model IS NOT NULL
-            GROUP BY day,model ORDER BY day,model")?;
-        let quota = query("SELECT date(bucket,'unixepoch') AS day,provider,account,window,
+            FROM {accept} WHERE repo=?1 AND tokens IS NOT NULL AND model IS NOT NULL
+            GROUP BY day,model ORDER BY day,model"))?;
+        let quota = query(&format!("SELECT date(bucket,'unixepoch') AS day,provider,account,window,
             MIN(remaining) AS quota_headroom_percent, strftime('%Y-%m-%dT%H:%M:%SZ',MAX(reset),'unixepoch') AS reset_at
-            FROM throughput_quota_window WHERE repo=?1 GROUP BY day,provider,account,window
-            ORDER BY day,provider,account,window")?;
+            FROM {quota_table} WHERE repo=?1 GROUP BY day,provider,account,window
+            ORDER BY day,provider,account,window"))?;
         let weeks = query("WITH latest AS (SELECT MAX(day) AS last FROM throughput_daily WHERE repo=?1),
             periods AS (SELECT d.*,CASE WHEN d.day>date(last,'-7 days') THEN 'current' ELSE 'previous' END AS week
             FROM throughput_daily d CROSS JOIN latest WHERE repo=?1 AND day>date(last,'-14 days'))
@@ -313,14 +380,14 @@ impl Db {
             1+{reruns} AS attempts, {reruns} AS ci_reruns, {left_out} AS drops, {fix_tasks} AS fix_tasks,
             1.0*({build})/60/NULLIF(json_array_length(l.parts),0) AS minutes_per_merged_batch,
             COUNT(a.head) AS accepted_parts, AVG(a.seconds) AS accept_to_main_seconds
-            FROM landing l LEFT JOIN throughput_accept_part a ON a.repo=l.repo AND a.sha=l.landed_sha
+            FROM landing l LEFT JOIN {accept} a ON a.repo=l.repo AND a.train=l.landed_sha
             WHERE l.repo=?1 AND {in_window}
             GROUP BY l.train,l.landed_sha ORDER BY l.landed_at,l.landed_sha"))?;
         let hours = query("SELECT strftime('%Y-%m-%dT%H:00:00Z',h.bucket,'unixepoch') AS hour,h.commits,h.items_closed,
             (SELECT COUNT(*) FROM throughput_item_landing i WHERE i.repo=h.repo AND i.landed>=h.bucket
-                AND i.landed<h.bucket+3600) AS items_landed,
+                AND i.landed<h.through) AS items_landed,
             (SELECT COALESCE(SUM(json_array_length(l.parts)),0) FROM landing l WHERE l.repo=h.repo
-                AND unixepoch(l.landed_at)>=h.bucket AND unixepoch(l.landed_at)<h.bucket+3600) AS batches_merged
+                AND unixepoch(l.landed_at)>=h.bucket AND unixepoch(l.landed_at)<h.through) AS batches_merged
             FROM throughput_hourly h WHERE h.repo=?1 ORDER BY h.bucket")?;
         transaction.commit().map_err(database_error)?;
         Ok(
