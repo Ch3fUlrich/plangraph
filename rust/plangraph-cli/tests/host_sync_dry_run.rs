@@ -2,7 +2,6 @@
 
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     path::Path,
     process::{Command, Output},
 };
@@ -32,8 +31,7 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir) {
     let home = tempfile::tempdir().unwrap();
     let bin = home.path().join(".local/bin/tool");
     fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    fs::write(&bin, "").unwrap();
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    pg_worker_core::executable_test_support::write_executable(&bin, "");
     fs::create_dir_all(home.path().join(".config/p")).unwrap();
     (home, repo)
 }
