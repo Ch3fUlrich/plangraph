@@ -348,6 +348,9 @@ class SpawnerRunner:
             if render_reason is None:
                 from .opencode_answer import configure_launch_output
                 render_reason = configure_launch_output(child_env, model_or_combo, role, reasoning_cap)
+            if role == 'review' and render_reason is None:
+                render_reason = _opencode_isolation.review_layers_refusal(
+                    child_env, managed_dir=_opencode_managed_dir, env_allow=_REVIEW_OPENCODE_ENV_ALLOW)
             if role == 'review':
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}

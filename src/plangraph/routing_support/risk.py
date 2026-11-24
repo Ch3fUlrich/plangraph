@@ -104,13 +104,14 @@ RULE_33_CLASSES: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = tupl
         ("gate-files",
          r"^(?:tools/(?:ci_commit_[^/]*|gate_wiring_check|check_[^/]*|preflight[^/]*"
          r"|merge_gate[^/]*|bench_gate|hooks/[^/]*)|\.githooks/.*"
-         r"|rust/plangraph-cli/src/land/(?:accept|go_verify|registrar|resolve)[^/]*"
+         r"|rust/plangraph-cli/src/land/(?:accept|cli|go_verify|registrar|resolve)[^/]*"
          r"|\.gitattributes|(?:.*/)?\.gitattributes)$", ()),
         ("gate-files", r"^(?:.*/)?[^/]*(?:guard|validator|hook)s?[^/]*\.(?:py|rs|sh|toml)$", ()),
         # The verdict and record tools decide what a review counts for; the classifier decides how
         # much review a change needs. A change to either is as sensitive as a gate file.
         ("gate-files", r"^(?:.*/)?tools/seat_[^/]+\.py$", ()),
         ("gate-files", r"^(?:.*/)?src/plangraph/routing_support/risk\.py$", ()),
+        ("gate-files", r"^(?:.*/)?src/plangraph/spawner/opencode_isolation\.py$", ()),
         ("gateway", r"(?:^|/)[^/]*gateway[^/]*(?:/|\.[a-z]+$)", ()),
         ("deploy-config", r"^(?:.*/)?(?:deployment|deploy|deployments)/[^/]+$", ("live-step",)),
         ("installer", r"^(?:.*/)?setup/[^/]+\.(?:sh|ps1|py|toml|ya?ml)$", ("live-step",)),

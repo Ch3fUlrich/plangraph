@@ -323,7 +323,7 @@ def review_policy_refusal(config_json, denied_tools, *, repository_tools):
             return f'review_policy: {tool} is allowed'
     if cfg.get('mcp') != {} or cfg.get('plugin') != []:
         return 'review_policy: mcp or plugin adds a tool source'
-    if cfg.get('share') not in (None, 'disabled'):
+    if cfg.get('share') != 'disabled':
         return 'review_policy: sharing is not disabled'
     return None
 
@@ -372,6 +372,43 @@ _REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
                               'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY')
 
 
+def review_layers_refusal(env, *, managed_dir=None, env_allow=None):
+    """Why an active configuration layer of the review child can add tools or override the policy, else None.
+
+    Checks the child env: the managed config dir holds no opencode.json(c), no OPENCODE_* name outside the
+    allow list is set, project and Claude Code config layers are disabled, HOME, XDG_CONFIG_HOME and
+    OPENCODE_CONFIG_DIR live inside the per-job dir, and OPENCODE_CONFIG is an empty config inside it.
+    """
+    managed_dir = managed_dir if managed_dir is not None else _opencode_managed_dir
+    env_allow = env_allow if env_allow is not None else _REVIEW_OPENCODE_ENV_ALLOW
+    if not isinstance(env, Mapping):
+        return 'review_layers: env is not a mapping'
+    managed = managed_dir(env)
+    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
+        return 'review_layers: a managed opencode config is active'
+    for name in env:
+        if str(name).startswith('OPENCODE_') and name not in env_allow:
+            return f'review_layers: {name} is not allowed'
+    for name in ('OPENCODE_DISABLE_PROJECT_CONFIG', 'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS'):
+        if env.get(name) != '1':
+            return f'review_layers: {name} is not set'
+    try:
+        job_dir = Path(env.get('XDG_DATA_HOME') or '')
+        if not job_dir.name:
+            return 'review_layers: no per-job dir'
+        for key in ('HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'):
+            path = Path(env.get(key) or '')
+            if not path.name or not path.resolve().is_relative_to(job_dir.resolve()):
+                return f'review_layers: {key} is outside the per-job dir'
+        cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
+        if not (cfg_path.name and cfg_path.is_file() and cfg_path.resolve().is_relative_to(job_dir.resolve())
+                and json.loads(cfg_path.read_text()) == {}):
+            return 'review_layers: OPENCODE_CONFIG is not an empty config in the per-job dir'
+    except (OSError, ValueError):
+        return 'review_layers: config layers unreadable'
+    return None
+
+
 def _opencode_tools_denied(config_json, env, *, managed_dir=None,
                            denied_tools=None, env_allow=None) -> bool:
     """True only when the child's final config AND env prove every tool denied.
@@ -408,29 +445,4 @@ def _opencode_tools_denied(config_json, env, *, managed_dir=None,
         return False
     if cfg.get('mcp') != {} or cfg.get('plugin') != []:
         return False
-    if not isinstance(env, Mapping):
-        return False
-    managed = managed_dir(env)
-    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
-        return False
-    for name in env:
-        if str(name).startswith('OPENCODE_') and name not in env_allow:
-            return False
-    if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
-            or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
-            or env.get('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS') != '1'):
-        return False
-    try:
-        job_dir = Path(env.get('XDG_DATA_HOME') or '')
-        if not job_dir.name:
-            return False
-        for key in ('HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'):
-            path = Path(env.get(key) or '')
-            if not path.name or not path.resolve().is_relative_to(job_dir.resolve()):
-                return False
-        cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
-        return (bool(cfg_path.name) and cfg_path.is_file()
-                and cfg_path.resolve().is_relative_to(job_dir.resolve())
-                and json.loads(cfg_path.read_text()) == {})
-    except (OSError, ValueError):
-        return False
+    return review_layers_refusal(env, managed_dir=managed_dir, env_allow=env_allow) is None

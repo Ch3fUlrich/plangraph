@@ -82,6 +82,8 @@ def test_operational_escalation_preserved(kwargs):
     ("gate-files", "tools/ci_commit_gate.py"),
     ("gate-files", "rust/plangraph-cli/src/land/go_verify.rs"),
     ("gate-files", "rust/plangraph-cli/src/land/accept.rs"),
+    ("gate-files", "rust/plangraph-cli/src/land/cli.rs"),
+    ("gate-files", "src/plangraph/spawner/opencode_isolation.py"),
     ("gate-files", "src/plangraph/spawner/git_guard.py"),
     ("gate-files", "tools/seat_verdict.py"),
     ("gate-files", "tools/seat_record.py"),

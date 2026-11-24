@@ -43,6 +43,7 @@ def test_applied_policy_passes_its_own_refusal_check(repository_tools):
     lambda c: c['permission'].update(bash='allow'),
     lambda c: c['permission']['bash'].update({'*': 'allow'}),
     lambda c: c.update(share='auto'),
+    lambda c: c.pop('share'),
 ])
 def test_any_extra_allow_refuses_the_launch(edit):
     cfg = config(True)

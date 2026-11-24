@@ -320,13 +320,13 @@ def test_deny_block_condition_removed_yields_not_denied_and_no_witness(tmp_path,
     (tmp_path / 'pg-bad.json').write_text('{"x": 1}')  # inside job dir, content not {}
     (tmp_path / 'outside.json').write_text('{}')       # content ok, outside job dir
     extra = {k: str(tmp_path / v) for k, v in (extra or {}).items()}
-    job, _ = _freeze_leg(tmp_path, monkeypatch,
-                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
-                         freeze=freeze, bad_cfg=bad_cfg, extra=extra)
-    if bad_cfg is not None:   # a config that adds tools or lacks the default deny is refused, not launched unwitnessed
-        assert any(e.get('event') == 'render_refused' and e['reason'].startswith('review_policy:') for e in job.events)
-    else:
-        assert {'event': 'opencode_tools_not_denied'} in job.events
+    job, ctx = _freeze_leg(tmp_path, monkeypatch,
+                           lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
+                           freeze=freeze, bad_cfg=bad_cfg, extra=extra)
+    # Not denied now means refused: a config or an active layer that can add tools stops the launch before the process exists.
+    prefix = 'review_policy:' if bad_cfg is not None else 'review_layers:'
+    assert any(e.get('event') == 'render_refused' and e['reason'].startswith(prefix) for e in job.events), job.events
+    assert 'env' not in ctx
     assert job.request_side_model is None
     assert job.witness_kind is None
 
@@ -342,9 +342,10 @@ def test_deny_block_all_conditions_present_denies_and_witnesses(tmp_path, monkey
 @pytest.mark.parametrize('name', ['opencode.json', 'opencode.jsonc'])
 def test_managed_config_file_yields_not_denied(tmp_path, monkeypatch, _empty_managed_dir, name):
     (_empty_managed_dir / name).write_text('{}')
-    job, _ = _freeze_leg(tmp_path, monkeypatch,
-                         lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]))
-    assert {'event': 'opencode_tools_not_denied'} in job.events
+    job, ctx = _freeze_leg(tmp_path, monkeypatch,
+                           lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]))
+    assert any(e.get('event') == 'render_refused' and 'managed opencode config' in e['reason'] for e in job.events)
+    assert 'env' not in ctx
     assert job.witness_kind is None
 
 
