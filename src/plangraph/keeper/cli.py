@@ -192,7 +192,7 @@ def _add_writes(sub):
 
     lift = _p(sub, "lift-operator-gate", help="router: clear the operator flags of an item the operator released")
     lift.add_argument("key")
-    lift.add_argument("decision", help="the OPERATOR decision (D-n) that lifted the step and names the key")
+    lift.add_argument("decision", help="the OPERATOR decision (D-n) whose row says `Lifts-Gate: KEY`")
 
     merged = _p(sub, "close-merged", help="router: close one merged review on a GO decision")
     merged.add_argument("key")

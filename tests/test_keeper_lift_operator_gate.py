@@ -17,10 +17,12 @@ from apply_batch import BatchError, build_request, validate_op  # noqa: E402
 KEY = "demo:GATE"
 HEADER = "| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n"
 ROWS = (
-    "| D-10 | demo | Gate lifted: apply demo:GATE now | OPERATOR | 2026-11-24 |\n"
-    "| D-11 | demo | Gate lifted: apply demo:GATE now | ROUTER | 2026-11-24 |\n"
-    "| D-12 | demo | Gate lifted: apply demo:OTHER now | OPERATOR | 2026-11-24 |\n"
-    "| D-13 | demo | Gate lifted: apply demo:GATEWAY now | OPERATOR | 2026-11-24 |\n")
+    "| D-10 | demo | Gate lifted; Lifts-Gate: demo:GATE; apply now | OPERATOR | 2026-11-24 |\n"
+    "| D-11 | demo | Gate lifted; Lifts-Gate: demo:GATE; apply now | ROUTER | 2026-11-24 |\n"
+    "| D-12 | demo | Gate lifted; Lifts-Gate: demo:OTHER; apply now | OPERATOR | 2026-11-24 |\n"
+    "| D-13 | demo | Gate lifted; Lifts-Gate: demo:GATEWAY; apply now | OPERATOR | 2026-11-24 |\n"
+    "| D-14 | demo | Keep demo:GATE blocked until the review is done | OPERATOR | 2026-11-24 |\n"
+    "| D-15 | demo | Lifts-Gate: demo:OTHER demo:GATE; Note: both | OPERATOR | 2026-11-24 |\n")
 
 
 @pytest.fixture
@@ -60,6 +62,7 @@ def test_the_router_clears_the_flags_with_an_operator_decision_and_logs_it(w):
     ("D-11", "evidence_unverified"),      # a router row is no operator answer
     ("D-12", "evidence_unverified"),      # an operator row that names another item
     ("D-13", "evidence_unverified"),      # a longer key is not this key
+    ("D-14", "evidence_unverified"),      # an OPERATOR row that names the key but keeps it blocked
     ("D-99", "evidence_unverified"),      # absent from the decisions file
     ("10", "validation"), (None, "validation"), ("", "validation")])
 def test_it_is_refused_without_an_operator_decision_naming_the_key(w, did, code):
@@ -75,6 +78,11 @@ def test_only_the_router_may_lift(w, who):
         w.store.lift_operator_gate(w.p(who), KEY, "D-10")
     assert exc.value.code == "forbidden"
     assert _flags(w) == (True, True)
+
+
+def test_a_release_list_may_name_several_keys(w):
+    assert w.store.lift_operator_gate(w.p("router"), KEY, "D-15")["decision_id"] == "D-15"
+    assert _flags(w) == (False, False)
 
 
 def test_an_item_without_the_gate_has_nothing_to_lift(w):

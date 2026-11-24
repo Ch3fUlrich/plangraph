@@ -25,6 +25,15 @@ __all__ = ["KindMixin", "SETTABLE_KINDS"]
 SETTABLE_KINDS = ("question", "operator_task")
 
 
+def _lifted_keys(decision):
+    """The keys of every ``Lifts-Gate: k1 k2`` list of a decision cell (to the next field)."""
+    keys = set()
+    for scope in re.findall(r"(?:^|;|\s)Lifts-Gate: +([^;\n]+)", decision):
+        scope = re.split(r" +[A-Za-z][A-Za-z-]*: +", scope, maxsplit=1)[0]
+        keys.update(token for token in re.split(r"[ ,]+", scope.strip()) if token)
+    return keys
+
+
 class KindMixin:
     """Router-only ``set_kind``."""
 
@@ -64,8 +73,12 @@ class KindMixin:
         """Clear ``operator`` (and so ``waits_on_operator``) once the operator lifted the step.
 
         No edit, ``set_kind`` or owner change can clear the flag.  The router names the
-        decision that lifted the gate: its row must be an OPERATOR row that names the key.
+        decision that lifted the gate: its row must be an OPERATOR row with an
+        affirmative ``Lifts-Gate: <key> ...`` release; a row that only names the key may
+        keep the gate closed and does not count.
         One ``operator_gate_lifted`` event records the D-id and the actor.
+        A row that merely names the key does not count: it may keep the gate closed,
+        so the row must carry ``Lifts-Gate: <key> ...``.
         """
         from .store_runs import _operator_authority
 
@@ -77,10 +90,9 @@ class KindMixin:
         row = self._operator_gate_row(item, decision_id, now)
         if not _operator_authority(row):
             raise Refused("evidence_unverified", f"{decision_id} is not an OPERATOR decision")
-        names = (item["key"], item["id"])
-        if not any(re.search(rf"(?<![\w:-]){re.escape(n)}(?![\w-])", row.get("decision", ""))
-                   for n in names):
-            raise Refused("evidence_unverified", f"{decision_id} does not name {key}")
+        if item["key"] not in _lifted_keys(row.get("decision", "")):
+            raise Refused("evidence_unverified",
+                          f"{decision_id} has no 'Lifts-Gate: {key}' release")
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
