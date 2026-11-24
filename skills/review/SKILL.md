@@ -63,10 +63,10 @@ does not affect the verdict. Do not pad: **no findings is a valid result.**
   race under a trusted caller, a wish), or a defect main already has and the change does
   not touch or worsen. Own line; never blocks; becomes a follow-up item.
 - **PROCESS**: a defect of the brief or the review setup (a missing context field, a test
-  you cannot run). Own line; the orchestrator's; never counts against the head. If you
-  cannot judge a done criterion without the missing piece, add `PROCESS-BLOCKING <what you
-  need>` and end with `VERDICT: REQUEST_CHANGES`: the orchestrator repairs the setup and
-  asks again without a writer round.
+  you cannot run). Own line; the orchestrator's; never counts against the head and never
+  decides the verdict (a REQUEST_CHANGES would send the writer into a round it cannot
+  win). Name what you could not judge under "Unverified"; the orchestrator repairs the
+  setup and has the same head reviewed again.
 
 ## Output
 
@@ -76,8 +76,7 @@ First line, exactly one of:
 VERDICT: ACCEPT|REQUEST_CHANGES
 ```
 
-(choose one value). `REQUEST_CHANGES` when any HIGH or MED finding or a `PROCESS-BLOCKING`
-line stands, else `ACCEPT`.
+(choose one value). `REQUEST_CHANGES` when any HIGH or MED finding stands, else `ACCEPT`.
 Then one line per finding:
 
 ```

@@ -125,10 +125,13 @@ resume message of a native run).
    FETCH_HEAD`. This is the one reset this text allows; your earlier commits are in that
    head. A native run keeps its head and resets nothing.
 2. Fix every HIGH and MED finding in new commits with a test that fails without the fix, or
-   refute it with a named test that shows it does not hold; commit that test, so the head
-   changes (a native run ends a turn without a commit as `no_commit`; only a script driver
-   reviews an unchanged head again). A line tagged NEW-REQ or PROCESS is not yours to fix
-   unless the findings say so.
+   refute it with a named test that shows it does not hold: an existing test when one already
+   shows it, a new committed test only where coverage is missing. When every finding is
+   refuted by existing tests and nothing is to commit, write `REFUTED <finding> <test>` per
+   finding and `BLOCKED refutation-only` to STATUS_FILE and end: the orchestrator has the
+   same head reviewed again with that evidence (a native run would end the turn as
+   `no_commit`). A line tagged NEW-REQ or PROCESS is not yours to fix unless the findings
+   say so.
 3. For every finding search its class once through your whole diff (the same defect in a
    sibling function, a second path, another test) and fix what you find; write one line
    `CLASS <finding> | <class> | searched: <files and symbols> | <n more fixed or none>`.
