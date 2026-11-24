@@ -72,6 +72,13 @@ pub fn sweep(
                 ));
                 continue;
             }
+            // The cache lease a build holds shared is held exclusively through the scan and the removal.
+            let Some(_lease) = crate::cargo_cache::try_exclusive_lease(&target)? else {
+                report
+                    .skipped
+                    .push(format!("{}: cache lease held", target.display()));
+                continue;
+            };
             let (bytes, newest) = scan(&target)?;
             if now.duration_since(newest).unwrap_or_default() <= IDLE_AFTER {
                 continue;

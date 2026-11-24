@@ -134,3 +134,25 @@ fn a_home_reached_through_a_symlinked_ancestor_is_still_swept_but_a_linked_targe
     assert!(report.freed_bytes > 0 && !old.exists());
     assert!(outside.exists() && container.join("linked").exists());
 }
+
+#[test]
+fn a_held_cache_lease_keeps_an_idle_legacy_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let container = tmp.path().join("cargo-target");
+    let old = target(&container, "batch23", Duration::from_secs(3 * 86400));
+    let lease = crate::cargo_cache::try_exclusive_lease(&old)
+        .unwrap()
+        .unwrap();
+    let held = run(
+        std::slice::from_ref(&container),
+        &Guards::default(),
+        true,
+        false,
+    );
+    assert_eq!(held.freed_bytes, 0);
+    assert!(old.exists());
+    assert!(held.skipped.iter().any(|s| s.contains("cache lease held")));
+    drop(lease);
+    assert!(run(&[container], &Guards::default(), true, false).freed_bytes > 0);
+    assert!(!old.exists());
+}
