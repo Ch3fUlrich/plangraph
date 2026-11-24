@@ -14,6 +14,8 @@ fn the_deny_list_names_the_plangraph_config_directory_and_the_ssh_directory() {
         "/fixture/user/.ssh",
         "/fixture/user/.aws",
         "/fixture/user/.git-credentials",
+        // The keeper daemon config of deploy/systemd/plangraph-keeper.service holds the DSN.
+        "/fixture/user/.local/share/plangraph/keeper.json",
     ] {
         assert!(
             deny.contains(&PathBuf::from(expected)),
@@ -120,6 +122,9 @@ fn a_sandboxed_fixture_run_cannot_read_a_fixture_secret_under_the_config_directo
     let config = home.join(".config/plangraph");
     fs::create_dir_all(&config).unwrap();
     fs::write(config.join("keeper.dsn"), "fixture-secret").unwrap();
+    let keeper = home.join(".local/share/plangraph/keeper.json");
+    fs::create_dir_all(keeper.parent().unwrap()).unwrap();
+    fs::write(&keeper, "fixture-secret").unwrap();
     let workspace = home.join("workspace");
     fs::create_dir(&workspace).unwrap();
     fs::write(workspace.join("plain"), "fixture-plain").unwrap();
@@ -131,16 +136,19 @@ fn a_sandboxed_fixture_run_cannot_read_a_fixture_secret_under_the_config_directo
             "--",
             "sh",
             "-c",
-            "cat plain; cat \"$1\" || echo secret-denied",
+            "cat plain; cat \"$1\" || echo secret-denied; cat \"$2\" || echo keeper-denied",
             "fixture",
         ])
         .arg(config.join("keeper.dsn"))
+        .arg(&keeper)
         .current_dir(&workspace)
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
-        text.contains("fixture-plain") && text.contains("secret-denied"),
+        text.contains("fixture-plain")
+            && text.contains("secret-denied")
+            && text.contains("keeper-denied"),
         "{text}"
     );
     assert!(!text.contains("fixture-secret"), "{text}");

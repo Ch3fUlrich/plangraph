@@ -55,8 +55,23 @@ pub fn check(launcher: &Launcher) {
             .output()
             .unwrap();
         s.expect(&out, 0, &expected, &stderr);
-        // A fleet launch never widens a sandbox: no danger-full-access, no skipped permissions.
+        // The effective permission mode of the production launch path is pinned: fleet seats are
+        // attended operator sessions that run in bypassPermissions by decision (they use keeper
+        // tokens), and nothing wider is ever added. Their print path is guarded by
+        // `pg-hook secret-read`, not by a sandbox.
         let text = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            text.matches("--permission-mode bypassPermissions").count(),
+            1,
+            "{} must launch with the one pinned permission mode",
+            case.name
+        );
+        assert_eq!(
+            text.matches("--permission-mode").count(),
+            1,
+            "{}",
+            case.name
+        );
         for wider in ["danger-full-access", "--dangerously-skip-permissions"] {
             assert!(!text.contains(wider), "{} launches with {wider}", case.name);
         }

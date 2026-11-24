@@ -109,6 +109,23 @@ def codex_review_client(harness, role, tag, *, env=None):
     return executable, None if executable else f"REVIEW {tag} FAIL client_missing {searched}"
 
 
+def codex_isolation_args(env=None):
+    """``codex exec`` arguments that run a routed Codex review under the shared policy: read
+    everywhere except the secret paths of ``secret_paths.json``, and a tool environment cut to the
+    core variables without the harness API keys. The Rust native writer builds the same profile
+    from the same data file."""
+    from plangraph.routing_support.claude_seat import secret_data, secret_paths
+    name = "plangraph_review"
+    entries = ['":root"="read"'] + [f"{json.dumps(path)}=\"none\"" for path in secret_paths(env)]
+    exclude = ",".join(json.dumps(pattern) for pattern in secret_data()["tool_env_exclude"])
+    values = [f'default_permissions="{name}"',
+              f"permissions.{name}.filesystem={{{','.join(entries)}}}",
+              'shell_environment_policy.inherit="core"',
+              "shell_environment_policy.ignore_default_excludes=false",
+              f"shell_environment_policy.exclude=[{exclude}]"]
+    return [arg for value in values for arg in ("-c", value)]
+
+
 def codex_model(model):
     """(name, effort) the Codex client takes for a registered gpt leg model: OmniRoute's
     ``omniroute/cx-`` alias is the plain id and a trailing effort suffix is the reasoning effort."""
