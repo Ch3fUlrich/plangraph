@@ -1,9 +1,16 @@
+import _thread
+import faulthandler
+import math
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from contextlib import contextmanager
+from threading import get_ident
+from time import monotonic
 import pytest
 
 def python_test_env(env=None):
@@ -135,3 +142,181 @@ def shard_items(items, shard):
 @pytest.fixture
 def shard_selector():
     return shard_items
+
+
+def _ci_nodeid(nodeid):
+    # xdist's loadgroup adds an @group suffix after the normal test ID.
+    suffix = nodeid.rfind('@')
+    return nodeid[:suffix] if suffix > max(nodeid.rfind(']'), nodeid.rfind('::')) else nodeid
+
+
+def pytest_addoption(parser):
+    parser.addini('test_deadline', 'Default per-test deadline in seconds', default='120')
+
+
+# The deadline alarm uses bare _thread primitives captured at import: tests may patch
+# threading.Thread, Thread.__init__ or Thread.daemon, and a Thread/Timer object built
+# per phase would then fail to arm and leave that patch unrestored for later tests.
+_START_ALARM_THREAD = _thread.start_new_thread
+_NEW_LOCK = _thread.allocate_lock
+_PTHREAD_KILL = getattr(signal, 'pthread_kill', None)
+_INTERRUPT_MAIN = _thread.interrupt_main
+# Platforms without a thread-directed signal (Windows) run the same handler through
+# interrupt_main, which fires at the next bytecode boundary of the main thread.
+_DEADLINE_SIGNAL = getattr(signal, 'SIGUSR2', signal.SIGINT)
+_SET_SIGNAL_HANDLER = signal.signal
+_DEADLINE = pytest.StashKey()
+
+
+class _Alarm:
+    """Send `sig` to thread `target` after `delay` seconds unless cancelled."""
+
+    def __init__(self, delay, target, sig):
+        self._cancelled = _NEW_LOCK()
+        self._cancelled.acquire()
+        self._finished = _NEW_LOCK()
+        self._finished.acquire()
+        self._delay = min(max(0, delay), _thread.TIMEOUT_MAX)
+        self._target = target
+        self._sig = sig
+        self.started = False
+        self.fired = False
+
+    def _run(self):
+        try:
+            # The lock is only released by cancel(); a timeout means the deadline passed.
+            if not self._cancelled.acquire(timeout=self._delay):
+                self.fired = True
+                if _PTHREAD_KILL is not None:
+                    _PTHREAD_KILL(self._target, self._sig)
+                else:
+                    _INTERRUPT_MAIN(self._sig)
+        finally:
+            self._finished.release()
+
+    def start(self):
+        _START_ALARM_THREAD(self._run, ())
+        self.started = True
+
+    def cancel(self):
+        if self._cancelled.locked():
+            self._cancelled.release()
+
+    def join(self):
+        if self.started:
+            self._finished.acquire()
+            self._finished.release()
+
+
+class _TestHung(BaseException):
+    """Unwind the test without caching a timeout as a fixture setup failure."""
+
+
+class _TeardownHung(_TestHung, pytest.fail.Exception):
+    """Let pytest collect this teardown failure and run remaining finalizers."""
+
+
+def _stop_hung_test(item, started, teardown):
+    pid = os.getpid()
+    message = f'HUNG {_ci_nodeid(item.nodeid)}'
+    with tempfile.TemporaryFile() as stacks:
+        faulthandler.dump_traceback(file=stacks, all_threads=True)
+        stacks.seek(0)
+        message += '\n' + stacks.read().decode(errors='replace')
+    if started is not None:
+        from plangraph.spawner import proc_kill
+
+        table = proc_kill._scan()
+        isolated_group = os.getpgrp() == pid
+        # Shared fixtures can own children that predate this test.
+        roots = {child for child, entry in table.items() if child != pid and
+                 (entry[1] == pid or (isolated_group and entry[2] == pid)) and
+                 entry[4] >= started}
+        children = proc_kill.descendants(table, roots)
+        try:
+            proc_kill.kill_identities({child: table[child][4] for child in children if table[child][0] != 'Z'})
+        except OSError as exc:
+            message += f'Could not stop test subprocesses: {exc}\n'
+    raise (_TeardownHung if teardown else _TestHung)(message)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_protocol(item):
+    try:
+        default = float(item.config.getini('test_deadline'))
+        marker = item.get_closest_marker('long_test_deadline')
+        seconds = float(marker.args[0]) if marker else default
+        reason = marker.kwargs.get('reason') if marker else None
+        if not math.isfinite(default) or default <= 0:
+            raise ValueError
+        if marker and (not math.isfinite(seconds) or seconds <= default or
+                       not isinstance(reason, str) or not reason.strip()):
+            raise ValueError
+    except (IndexError, TypeError, ValueError) as exc:
+        raise pytest.UsageError(
+            f'{item.nodeid}: test_deadline must be positive; longer overrides need a reason',
+        ) from exc
+    started = (int(time.clock_gettime(time.CLOCK_BOOTTIME) * os.sysconf('SC_CLK_TCK'))
+               if sys.platform == 'linux' else None)
+    item.stash[_DEADLINE] = (monotonic() + seconds, seconds, started)
+    return (yield)
+
+
+def _watch_test_phase(item, teardown=False):
+    expires, seconds, started = item.stash[_DEADLINE]
+    remaining = expires - monotonic()
+    armed = False
+
+    def interrupt(signum, frame):
+        if signum == signal.SIGINT and not alarm.fired:
+            # Where SIGINT carries the deadline, only the alarm's own interrupt is a hang.
+            raise KeyboardInterrupt
+        if armed:
+            # Teardown must be able to clean up after a timeout and is bounded too.
+            item.stash[_DEADLINE] = (monotonic() + seconds, seconds, started)
+            _stop_hung_test(item, started, teardown)
+
+    # SIGALRM belongs to tests that install their own subprocess alarms.
+    sig = _DEADLINE_SIGNAL
+    alarm = _Alarm(remaining, get_ident(), sig)
+    arm_failure = None
+    previous = _SET_SIGNAL_HANDLER(sig, interrupt)
+    try:
+        try:
+            alarm.start()
+            armed = True
+        except Exception as exc:
+            # The phase still runs, so the other hooks and fixtures can finish and
+            # only this test reports the failure.
+            arm_failure = exc
+            faulthandler.dump_traceback_later(max(0.001, remaining))
+        if armed and monotonic() >= expires:
+            alarm.fired = True
+            interrupt(sig, None)
+        result = yield
+    finally:
+        armed = False
+        alarm.cancel()
+        alarm.join()
+        if arm_failure is not None:
+            faulthandler.cancel_dump_traceback_later()
+        _SET_SIGNAL_HANDLER(sig, previous)
+    if arm_failure is not None:
+        raise RuntimeError(f'could not arm the test deadline: {arm_failure!r}') from arm_failure
+    return result
+
+
+pytest_runtest_setup = pytest_runtest_call = pytest.hookimpl(wrapper=True, tryfirst=True)(_watch_test_phase)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item):
+    return (yield from _watch_test_phase(item, teardown=True))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    if call.excinfo is not None and call.excinfo.errisinstance(_TestHung):
+        report.longrepr = str(call.excinfo.value)
+    return report
