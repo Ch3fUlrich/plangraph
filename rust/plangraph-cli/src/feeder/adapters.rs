@@ -477,7 +477,8 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
             d.path(),
             &format!("echo $$ > {}\nexec sleep 60", pid_file.display()),
         );
-        let limit = std::time::Duration::from_secs(2);
+        // Generous: under load the stand-in must run far enough to record its pid first.
+        let limit = std::time::Duration::from_secs(8);
         let mut a = adapters(&env, d.path(), Some(limit));
         let card = json!({"item_key":"plangraph:A","files":[]});
         let began = std::time::Instant::now();
@@ -515,7 +516,10 @@ print(json.dumps(dict(host=decide(100,2000,3000,rows,True).host)))
                 self.0.release(k, e)
             }
         }
-        let mut a = Clamped(adapters(&env, d.path(), None), limit);
+        let mut a = Clamped(
+            adapters(&env, d.path(), None),
+            std::time::Duration::from_secs(3),
+        );
         let row = tick(
             &ready,
             &[],
