@@ -58,8 +58,8 @@ stays red), keeps both logs with the runner, run, attempt and SHA, and writes `f
 (a priority-10 Keeper item definition per test that failed and then passed); `quarantine` prints the owner and expiry of every
 active ledger entry for the gate and operator summaries; `cargo-quarantine` lists the active Rust entries (`cargo:<package>:<test
 path>` keys in the same ledger); `combine-durations` merges per-shard duration maps. The workflow reads the ledger of the pull
-request's base, so a change cannot quarantine its own failing test. The Keeper side (defining the item from the artifact) is a
-follow-up slice.
+request's base, so a change cannot quarantine its own failing test. The Keeper side (defining the item from the artifact) and committing
+the combined duration maps are follow-up slices (`docs/ci-gate.md`).
 
 Selection follows transitive AST imports in src/ and tests/, plus test references
 to filenames for subprocess consumers. Changed tests select themselves.

@@ -1,0 +1,41 @@
+name: Quarantine ledger of this run
+description: >-
+  Pin the quarantine ledger and the run's UTC timestamp for pytest (PYTEST_QUARANTINE_FILE, PYTEST_QUARANTINE_AS_OF) and publish
+  the owner and expiry of every active entry. A pull request reads the ledger of its base, so a change cannot quarantine its own failing test.
+inputs:
+  as-of:
+    description: Shared UTC timestamp of the run attempt (ISO, with offset)
+    required: true
+  base-sha:
+    description: Base commit of a pull request; empty reads the checked-out ledger
+    required: false
+    default: ''
+  flake-bin:
+    description: Path of the ci-flake binary
+    required: false
+    default: rust/target/release/ci-flake
+outputs:
+  active:
+    description: Number of active quarantine entries
+    value: ${{ steps.ledger.outputs.active }}
+runs:
+  using: composite
+  steps:
+    - id: ledger
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        AS_OF: ${{ inputs.as-of }}
+        FLAKE_BIN: ${{ inputs.flake-bin }}
+      run: |
+        set -euo pipefail
+        ledger="$RUNNER_TEMP/pytest-quarantine.json"
+        if [ -n "$BASE_SHA" ]; then
+          git show "$BASE_SHA:.github/pytest-quarantine.json" > "$ledger" 2>/dev/null || echo '{}' > "$ledger"
+        else
+          cp .github/pytest-quarantine.json "$ledger"
+        fi
+        { echo "PYTEST_QUARANTINE_FILE=$ledger"; echo "PYTEST_QUARANTINE_AS_OF=$AS_OF"; } >> "$GITHUB_ENV"
+        # An invalid ledger fails here, before any test runs: it never becomes a silent quarantine.
+        "$FLAKE_BIN" quarantine --ledger "$ledger" --as-of "$AS_OF" | tee -a "$GITHUB_STEP_SUMMARY"
