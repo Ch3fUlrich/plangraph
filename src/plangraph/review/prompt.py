@@ -101,6 +101,24 @@ def _writer_artifacts(record: dict) -> str:
     return "\n".join(sections) + "\n\n"
 
 
+def _refuse_held_items(context: dict, rules: str) -> None:
+    """Refuse to brief a writer for an item another live lane holds (the shared Rust guard).
+
+    ``context["lane_override"]`` is the recorded reason that admits a second lane;
+    ``context["lane"]`` names the lane being briefed, which is never its own conflict.
+    """
+    from plangraph.spawner.item_key import LaneRefused, lane_check
+
+    keys = [context[name] for name in ("item_key", "item_keys") if name in context]
+    flat = [k for key in keys for k in (key if isinstance(key, (list, tuple)) else [key])]
+    try:
+        lane_check({"prompt": rules, "keys": [k for k in flat if isinstance(k, str)],
+               "reason": context.get("lane_override"), "own": context.get("lane"),
+               "context": "brief-generator", "card": {}})
+    except LaneRefused as exc:
+        raise ValueError(f"Writer brief refused: {exc}") from exc
+
+
 def render_brief(role: str, context: dict | None = None, *, rules: str = "",
                  launch_record: dict | None = None) -> str:
     """Render a versioned brief, optionally bound to a Claude fleet writer record."""
@@ -112,6 +130,8 @@ def render_brief(role: str, context: dict | None = None, *, rules: str = "",
     context = context or {}
     values.update({key: str(value) for key, value in context.items()
                    if key in fields})
+    if role == "writer":
+        _refuse_held_items(context, rules)
     text = Path(__file__).with_name(role + "_brief.md").read_text(encoding="utf-8")
     prefix, marker, item = text.partition("=== ITEM CONTEXT")
     writer = _claude_writer_trailer(rules, launch_record) if role == "writer" else ""

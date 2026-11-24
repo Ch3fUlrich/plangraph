@@ -159,9 +159,12 @@ pub fn cli(input: &str) -> Result<(), String> {
             .flatten()
             .filter_map(|k| k.as_str().filter(|k| valid_key(k)).map(str::to_owned)),
     );
-    let reserve = request["reserve"]["run_id"]
-        .as_str()
-        .zip(request["reserve"]["name"].as_str());
+    // A reservation takes the brief's lane name, else the run id.
+    let lane_name = pg_worker_core::lane_roster::brief_name(text("prompt").unwrap_or(""));
+    let reserve = request["reserve"]["run_id"].as_str().map(|run_id| {
+        let name = request["reserve"]["name"].as_str().or(lane_name.as_deref());
+        (run_id, name.unwrap_or(run_id))
+    });
     check(&Request {
         state: &state,
         sessions: &sessions,

@@ -276,20 +276,20 @@ pub fn live_claude_sessions() -> Option<BTreeSet<String>> {
 pub fn pull_request_lanes(json: &str) -> Vec<Lane> {
     let rows: Vec<Value> = serde_json::from_str(json).unwrap_or_default();
     rows.iter()
-        .filter_map(|row| {
+        .map(|row| {
             let text = format!(
                 "{}\n{}",
                 row["title"].as_str().unwrap_or(""),
                 row["body"].as_str().unwrap_or("")
             );
             let branch = row["headRefName"].as_str().unwrap_or("").to_owned();
-            Some(Lane {
+            Lane {
                 name: branch.clone(),
                 kind: LaneKind::PullRequest,
                 detail: format!("#{}", row["number"]),
                 keys: item_keys(&text),
                 branch: Some(branch).filter(|b| !b.is_empty()),
-            })
+            }
         })
         .collect()
 }

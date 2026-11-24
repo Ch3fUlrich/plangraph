@@ -1,6 +1,15 @@
-"""Spawn-time item identity; invalid optional metadata never refuses a run."""
+"""Spawn-time item identity; invalid optional metadata never refuses a run.
+
+It also holds the Python entry to the duplicate-assignment guard (``pg-spawnd lane-check``):
+the roster, the override rule and the admission lock live in Rust, and ``lane_check`` only
+hands a submission to that one implementation.
+"""
+import json
+import logging
 import os
 import re
+import subprocess
+from pathlib import Path
 
 
 def valid_item(value):
@@ -60,3 +69,45 @@ def annotate_item(record, card, *, inherit=False):
         event = dict(event='seat_item_missing', level='warning')
         if event not in record.setdefault('events', []):
             record['events'].append(event)
+
+
+#: What the Rust guard prints when it refuses; any other failure is not a refusal.
+_REFUSALS = ("lane_conflict:", "lane_override requires")
+
+
+class LaneRefused(ValueError):
+    """An item is held by another live lane, or an override came without a reason."""
+
+
+def lane_state() -> Path:
+    return Path(os.environ.get("PLANGRAPH_SPAWN_STATE") or
+                Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "plangraph")
+
+
+def lane_check(payload: dict, binary: str | None = None) -> None:
+    """Refuse (``LaneRefused``) a submission another live lane holds.
+
+    ``payload`` is the ``lane-check`` input (``state``, ``prompt``, ``card``, ``keys``,
+    ``reason``, ``reserve`` ...). A host without the installed binary, or one too old to know
+    the verb, cannot answer: the Rust launch and submit paths still guard, so this only logs.
+    """
+    if binary is None:
+        from plangraph.fleet_snapshot import _projection_binary
+        try:
+            binary = _projection_binary()
+        except RuntimeError:
+            logging.warning("lane guard skipped: pg-spawnd is not installed")
+            return
+    payload = {"state": str(lane_state()), **payload}
+    try:
+        result = subprocess.run([binary, "lane-check"], input=json.dumps(payload), text=True,
+                                capture_output=True, timeout=90, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logging.warning("lane guard skipped: %s", exc)
+        return
+    if result.returncode == 0:
+        return
+    message = (result.stderr or result.stdout).strip()
+    if message.startswith(_REFUSALS):
+        raise LaneRefused(message)
+    logging.warning("lane guard skipped: %s", message[:200])

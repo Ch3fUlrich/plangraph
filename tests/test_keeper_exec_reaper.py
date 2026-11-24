@@ -86,3 +86,18 @@ def test_delayed_worker_park_cannot_overwrite_projector(doors, w, run_id, attemp
     assert snapshot(w, key) == before
     assert before[0] == "waiting"
     assert before[2:] == ("wf-1", "run-1", 2)
+
+
+def test_reaper_keeps_the_claim_of_a_merged_item_waiting_for_its_close_pass(w):
+    merged, unmerged, unverified = seed(w, [("merged", []), ("unmerged", []), ("unverified", [])])
+    for key in (merged, unmerged, unverified):
+        to_claimed(w, key)
+    for key, verified in ((merged, 1), (unverified, 0)):
+        w.conn.execute("INSERT INTO evidence (key, kind, verified) VALUES (?, 'commit+ci', ?)",
+                       (key, verified))
+    w.conn.commit()
+
+    reaped = w.store.reap(w.p("system"), w.clock.advance(365 * 24 * 3600))
+
+    assert sorted(reaped["expired"]) == sorted([unmerged, unverified])
+    assert snapshot(w, merged)[0] == "claimed"

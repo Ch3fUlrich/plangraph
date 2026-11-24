@@ -35,6 +35,10 @@ class ReapMixin:
                 if item["state"] == "claimed" and item["lease_until"]:
                     due = self._parse_iso(item["lease_until"])
                     if due is not None and due.timestamp() < now:
+                        if self._merge_proven(item["key"]):
+                            # Merged and waiting for its close pass: the claim needs no
+                            # lease, and lapsing it would show the item as unclaimed work.
+                            continue
                         self._append(principal, item["key"], "lease_expired", {}, now)
                         self.conn.execute(
                             "UPDATE items SET state='open', claimed_by=NULL,"
@@ -58,6 +62,12 @@ class ReapMixin:
         if expired or aged or findings or alerts or gate_alerts:
             self._reap_revision = getattr(self, "_reap_revision", 0) + 1
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}
+
+    def _merge_proven(self, key):
+        """Whether a verified merge proof (the ``merged`` flag's evidence) names ``key``."""
+        return self.conn.execute(
+            "SELECT 1 FROM evidence WHERE key=? AND verified!=0"
+            " AND kind IN ('commit+ci','commit') LIMIT 1", (key,)).fetchone() is not None
 
     def _check_gate_capacity(self, items, now):
         code = "gate_dependency_capacity"
