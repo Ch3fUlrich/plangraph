@@ -464,3 +464,24 @@ def test_one_decision_reads_the_snapshot_once_even_when_it_is_never_cached():
                      probe_ts=lambda model: 800.0)
     assert gate.apply(SOL, OK, now)['state'] == 'limited'   # 800 < 900: the probe predates the snapshot
     assert reads == [[]]                                    # exactly one read
+
+
+def test_production_reader_clears_the_snapshot_limit_of_a_sibling_after_a_quota_recovery(tmp_path, monkeypatch):
+    """A sibling leg of the probed account has no probe pass of its own; the recovery row is its signal."""
+    now = time.time()
+    sibling = 'omniroute/cx-gpt-6.2-astra'
+    monkeypatch.setattr(flag, 'default_reader', _production_reader)
+    flag.default_reader.cache_clear()
+    store = LegStateStore(tmp_path / 'state')
+    monkeypatch.setattr(leg_state, '_default_store', lambda: store)
+    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
+    monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: []))
+    monkeypatch.setattr(quota_snapshots, 'fetch_snapshot_rows', lambda: [_row(0, '2099-01-01T00:00:00Z')])
+    try:
+        reader = flag.default_reader()
+        assert reader.leg_status(sibling, now=now)['state'] == 'limited'
+        store.record_quota_recovery(sibling, 'review-probe', now=now)
+        assert reader.leg_status(sibling, now=now)['state'] == 'ok'
+        assert store.last_probe_ts(sibling) is None
+    finally:
+        flag.default_reader.cache_clear()

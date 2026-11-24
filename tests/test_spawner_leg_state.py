@@ -531,16 +531,30 @@ def test_probe_pass_supersedes_a_far_provider_usage_limit_in_every_scope(tmp_pat
         now += 1000
 
 
-def test_quota_recovery_ends_only_a_limit_and_leaves_no_liveness_evidence(tmp_path):
+def test_quota_recovery_ends_only_quota_evidence_in_every_scope(tmp_path):
+    from plangraph.routing_support.leg_state import routing_status
     store = ls.LegStateStore(tmp_path / "legs.sqlite")
     now = 1_000_000.0
-    store.record_harness_limit("sib", "HTTP 429: usage limit, resets in 72h", "spawner:harness", now=now, harness="codex")
-    store.record_probe_fail("down-leg", "no commit", "leg-probe", now=now, down_s=1800)
-    assert store.record_quota_recovery("sib", "review-probe", now=now + 60) is True
-    assert store.leg_status("sib", now=now + 61)["state"] == "ok"
-    assert store.last_probe_ts("sib") is None and store.last_probe_attempt_ts("sib", now=now + 61) is None
-    # A leg that is not limited gets no row, so its own failure evidence stands.
-    before = store.leg_status("down-leg", now=now + 1)
-    assert store.record_quota_recovery("down-leg", "review-probe", now=now + 2) is False
-    assert store.leg_status("down-leg", now=now + 1) == before
-    assert store.record_quota_recovery("never-seen", "review-probe", now=now) is False
+    limit = "HTTP 429: usage limit, resets in 72h"
+    for leg in ("plain", "scoped", "failing", "gone"):
+        store.record_harness_limit(leg, limit, "spawner:harness", now=now, harness="codex",
+                                   **(dict(account="a1", combo="c1") if leg == "scoped" else {}))
+    # Independent evidence on top of / beside a limit: two probe failures, a model that is gone.
+    store.record_probe_fail("failing", "no commit", "leg-probe", now=now + 1, down_s=1800)
+    store.record_probe_fail("failing", "no commit", "leg-probe", now=now + 2, down_s=1800)
+    store.record_harness_limit("gone", "model_unavailable: not served, resets in 72h", "spawner:harness",
+                               now=now + 1, harness="codex")
+    before = {leg: store.leg_status(leg, now=now + 30) for leg in ("failing", "gone")}
+    for leg in ("plain", "scoped", "failing", "gone", "never-seen"):
+        store.record_quota_recovery(leg, "review-probe", now=now + 60)
+    later = now + 61
+    assert store.leg_status("plain", now=later)["state"] == "ok"
+    assert store.leg_status("scoped", now=later, account="a1", combo="c1")["state"] == "ok"   # the _book_failure scope
+    assert store.leg_status("failing", now=later)["state"] == "down"   # two probe failures stand
+    assert routing_status(store.leg_status("gone", now=later))["state"] == "down"
+    assert before["failing"]["state"] == "limited"   # the limit was what showed before; liveness evidence stands after
+    # No liveness evidence from a recovery row, and a limit booked after it stands.
+    assert store.last_probe_ts("plain") is None and store.last_probe_attempt_ts("plain", now=later) is None
+    assert store.last_quota_clear_ts("plain") == now + 60 and store.last_quota_clear_ts("nothing") is None
+    store.record_harness_limit("plain", limit, "spawner:harness", now=now + 120, harness="codex")
+    assert store.leg_status("plain", now=now + 121)["state"] == "limited"
