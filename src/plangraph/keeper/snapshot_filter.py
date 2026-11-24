@@ -118,8 +118,11 @@ def _category_block(store, items):
     if not any(item.get("category") for item in items):
         return {}
     live = [i for i in items if i["state"] not in ("done", "cancelled")]
+    own = {p: store._category_list(p) for p in sorted({r["project"] for r in store.conn.execute(
+        "SELECT DISTINCT project FROM categories WHERE project<>'*'")})}
     return {"categories": [{"name": n, "rank": r} for r, n in enumerate(store._category_list("*"))],
-            "uncategorised": sum(1 for i in live if not i.get("category"))}
+            "uncategorised": sum(1 for i in live if not i.get("category")),
+            **({"category_overrides": own} if own else {})}
 
 
 def _full(store, now, values=None):

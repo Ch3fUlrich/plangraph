@@ -51,3 +51,10 @@ def test_inheritance_stats_count_raised_items_and_the_longest_chain():
     items = [_it("A", 1), _it("B", 2, ["A"]), _it("TOP", 10, ["B"]), _it("FREE", 5)]
     eff, _ = views.effective_priorities(items)
     assert views.inheritance_stats(eff) == {"raised": 2, "longest_chain": 2}
+
+
+def test_an_item_without_a_category_rank_sorts_after_every_ranked_one():
+    top = {**_it("TOP", 1), "category_rank": 0}
+    last = {**_it("RANKED", 1), "category_rank": 7}
+    none = _it("NONE", 10)          # no rank key at all: the offline snapshot door
+    assert [i["key"] for i in views.ready([none, last, top])] == ["d:TOP", "d:RANKED", "d:NONE"]

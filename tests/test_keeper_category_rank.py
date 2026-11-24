@@ -118,3 +118,12 @@ def test_reap_records_the_per_category_experiment_counts_and_alerts_a_starved_ca
     found = {f["key"]: f["msg"] for f in w.store.alerts(w.p("router"))["findings"]
              if f["code"] == "category_starved"}
     assert "category speed" in found["demo:A"] and "category security" in found["demo:B"]
+
+
+def test_the_snapshot_names_a_project_that_ranks_its_own_list(w):
+    _seed(w, A=(1, "speed"))
+    assert "category_overrides" not in w.store._snapshot(w.clock())
+    w.store.rank_categories(w.p("router"), "demo", ["cleanup"])
+    snap = w.store._snapshot(w.clock())
+    assert snap["category_overrides"]["demo"][:2] == ["cleanup", "speed"]
+    assert [c["name"] for c in snap["categories"]][:2] == ["speed", "efficiency-tokens"]   # the default list
