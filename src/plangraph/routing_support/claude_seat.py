@@ -214,6 +214,38 @@ def deny_secret_reads(argv, env):
     merge_settings(argv, {"permissions": {"deny": read_deny_rules(_credential_paths(env))}})
 
 
+def sandbox_denies_reads(env):
+    """Smoke check that this host's sandbox really hides a file it is told to hide: ``/bin/true``
+    starting proves nothing about denial. A fixture file is readable in a control run and gone
+    in a run that masks its directory, the way Claude's sandbox masks a ``denyRead`` path."""
+    if sys.platform == "linux":
+        search = os.pathsep.join(part for part in env.get("PATH", os.defpath).split(os.pathsep)
+                                 if os.path.isabs(part))
+        bwrap = shutil.which("bwrap", path=search) if search else None
+        if not bwrap:
+            return False
+    elif sys.platform != "darwin":
+        return False
+    directory = mkdtemp(prefix="plangraph-deny-smoke-")
+    try:
+        fixture = str(Path(directory) / "fixture-secret")
+        Path(fixture).write_text("fixture")
+        if sys.platform == "linux":
+            base = [bwrap, "--unshare-pid", "--ro-bind", "/", "/", "--proc", "/proc"]
+            visible = base + ["--", "/bin/sh", "-c", 'test -e "$1"', "sh", fixture]
+            masked = base + ["--tmpfs", directory, "--", "/bin/sh", "-c", 'test ! -e "$1"', "sh", fixture]
+        else:
+            sandbox = "/usr/bin/sandbox-exec"
+            read = ["/bin/sh", "-c", 'cat "$1" >/dev/null', "sh", fixture]
+            refuse = ["/bin/sh", "-c", 'cat "$1" >/dev/null 2>&1 && exit 1; exit 0', "sh", fixture]
+            visible = [sandbox, "-p", "(version 1) (allow default)", *read]
+            masked = [sandbox, "-p", f'(version 1) (allow default) (deny file-read* (subpath "{directory}"))', *refuse]
+        # The inversion lives in the shell, so a sandbox that fails to start is not a denial.
+        return _smoke_sandbox(visible) and _smoke_sandbox(masked)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
 def confine_writer_shell(argv, env, role, job_id):
     """A routed Claude writer runs shell commands, which the Read deny rules do not reach: run
     them in Claude's filesystem sandbox with the secret paths unreadable, or refuse the route
@@ -221,7 +253,7 @@ def confine_writer_shell(argv, env, role, job_id):
     tools = argv[argv.index("--tools") + 1] if "--tools" in argv else "Bash"
     if role not in ("implement", "fix") or "Bash" not in tools.split(","):
         return None
-    if not sandbox_available(env):
+    if not sandbox_available(env) or not sandbox_denies_reads(env):
         host = socket.gethostname()
         return {"event": "sandbox_unavailable", "host": host, "python_job_id": job_id,
                 "refusal": f"sandbox_unavailable: claude shell commands cannot be confined on {host}; "
