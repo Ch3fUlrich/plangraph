@@ -155,6 +155,16 @@ impl Launch for Host {
     }
 }
 fn drive(ready: &Value, host: &mut Host, name: &str, batch: usize, dry: bool) -> Value {
+    drive_in("/reviews", ready, host, name, batch, dry)
+}
+fn drive_in(
+    reviews: &str,
+    ready: &Value,
+    host: &mut Host,
+    name: &str,
+    batch: usize,
+    dry: bool,
+) -> Value {
     tick(
         ready,
         &[],
@@ -162,7 +172,7 @@ fn drive(ready: &Value, host: &mut Host, name: &str, batch: usize, dry: bool) ->
         &policy(batch),
         "rules",
         "/repo",
-        "/reviews",
+        reviews,
         dry,
         host,
     )
@@ -684,77 +694,5 @@ fn a_failed_batch_still_reports_the_members_dropped_before_the_failure() {
     assert_released_with_own_epochs(&registry.lock().unwrap(), &["plangraph:ALPHA-1"]);
 }
 
-/// The status file a batch brief names, parsed from its `PLANGRAPH-BATCH-INPUT-V1` payload.
-fn brief_status_file(brief: &str) -> String {
-    let (_, payload) = brief.split_once('\n').unwrap();
-    let payload: Value = serde_json::from_str(payload).unwrap();
-    payload["run"]["status_file"].as_str().unwrap().to_owned()
-}
-
-#[test]
-fn concurrent_batch_runs_write_their_own_status_file_and_each_brief_quotes_only_its_own() {
-    let items = vec![
-        item("ALPHA-1", 9, &["src/a.rs"]),
-        item("ALPHA-2", 8, &["src/a.rs"]),
-        item("BETA-1", 7, &["src/b.rs"]),
-        item("BETA-2", 6, &["src/b.rs"]),
-    ];
-    let registry: Arc<Mutex<Registry>> = Arc::default();
-    let board = ready(items.clone());
-    // Two hosts feed against the one keeper registry; each launches its own batch.
-    let mut first = Host::new(&registry, &items);
-    let mut second = Host::new(&registry, &items);
-    assert_eq!(
-        drive(&board, &mut first, "dell", 2, false)["decision"],
-        "spawned"
-    );
-    assert_eq!(
-        drive(&board, &mut second, "dell", 2, false)["decision"],
-        "spawned"
-    );
-    let registry = registry.lock().unwrap();
-    assert_eq!(registry.launches.len(), 2);
-    let paths: Vec<String> = registry
-        .launches
-        .iter()
-        .map(|(card, brief)| {
-            // The card names the file the native writer host records as writer_status_path ...
-            let path = card["writer_status_path"].as_str().unwrap().to_owned();
-            // ... and the brief quotes that same file, directly inside the review dir.
-            assert_eq!(brief_status_file(brief), path);
-            assert_eq!(
-                std::path::Path::new(&path).parent().unwrap(),
-                std::path::Path::new("/reviews")
-            );
-            assert_ne!(path, "/reviews/status.txt");
-            path
-        })
-        .collect();
-    assert_ne!(paths[0], paths[1], "two runs must not share a status file");
-    for (card, brief) in &registry.launches {
-        let own = card["item_keys"][0]
-            .as_str()
-            .unwrap()
-            .rsplit(':')
-            .next()
-            .unwrap()
-            .to_ascii_lowercase();
-        let other = if own.starts_with("alpha") {
-            "beta"
-        } else {
-            "alpha"
-        };
-        assert!(brief_status_file(brief).contains(&own));
-        assert!(!brief_status_file(brief).contains(other));
-    }
-}
-
-#[test]
-fn a_single_item_run_also_gets_its_own_status_file() {
-    let items = vec![item("ALPHA-1", 9, &["src/a.rs"])];
-    let registry: Arc<Mutex<Registry>> = Arc::default();
-    let mut host = Host::new(&registry, &items);
-    drive(&ready(items), &mut host, "dell", 1, false);
-    let card = registry.lock().unwrap().launches[0].0.clone();
-    assert_eq!(card["writer_status_path"], "/reviews/status-alpha-1.txt");
-}
+#[path = "feeder_batches/status.rs"]
+mod status;

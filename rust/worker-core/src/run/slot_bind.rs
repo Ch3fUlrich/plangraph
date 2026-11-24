@@ -13,10 +13,13 @@
 //! - **launched**: [`SlotBind::launched`] re-keys the row to the process identity of the run,
 //!   the key the restart reconciliation matches a run record against.
 //!
-//! A daemon that dies between the bind and the launcher's result leaves a row owned by a dead
-//! daemon with no process behind it. [`release_pre_exec`] frees such a row only on proof (dead
-//! owner, a run record that never recorded a process, and a [`StartProof`] that no process or
-//! scope exists); a live owner, a started run or an answer of "unknown" keeps it.
+//! The monitor persists `launch_started` in the run record before it calls the launcher; the
+//! launcher may spawn before a scope exists (and a plain launch never has one), so from that
+//! point the outcome of a crash is unknown and the row stays held. A daemon that dies after the
+//! bind but before that marker left a row with no process behind it. [`release_pre_exec`] frees
+//! such a row only on proof (dead owner, a run record with neither a process nor the marker,
+//! and a [`StartProof`] that no scope exists); a live owner, a launch that began or an answer of
+//! "unknown" keeps it.
 use super::{group::unit_name, record::RunRecord};
 use crate::{
     hosts::Role,
@@ -30,6 +33,8 @@ use std::{
 };
 
 const LOCK_WAIT: Duration = Duration::from_secs(2);
+/// Record field the monitor sets, durably, right before the launcher call.
+pub const LAUNCH_STARTED: &str = "launch_started";
 
 /// The daemon's own identity and the slot every run it starts asks for.
 #[derive(Debug, Clone)]
@@ -75,14 +80,15 @@ impl SlotBind {
     fn owner(&self) -> (u32, u64) {
         (self.cfg.daemon_pid, self.cfg.daemon_start_time)
     }
-    /// Persist the pending entry of a run that waits in the local queue.
-    pub(super) fn pending(&self, run_id: &str) -> Result<(), BindError> {
+    /// Persist the pending entry of a run that waits in the local queue, under the role of the
+    /// run (the role of the run record, which restart reconciliation compares).
+    pub(super) fn pending(&self, run_id: &str, role: Option<Role>) -> Result<(), BindError> {
         let ticket = Ticket {
             run_id: run_id.into(),
             pid: self.cfg.daemon_pid,
             start_time: self.cfg.daemon_start_time,
             enqueued_ms: now_ms(),
-            role: self.cfg.role,
+            role: role.unwrap_or(self.cfg.role),
             class: self.cfg.class,
             repo_id: self.cfg.repo_id.clone(),
             reservation_mb: self.cfg.reservation_mb,
@@ -122,7 +128,7 @@ impl SlotBind {
                 run_id: run_id.into(),
                 pid,
                 start_time: start,
-                role: self.cfg.role,
+                role: ticket.as_ref().map_or(self.cfg.role, |t| t.role),
                 class: self.cfg.class,
                 repo_id: self.cfg.repo_id.clone(),
                 seat_slot: None,
@@ -201,7 +207,7 @@ pub enum Started {
 
 /// Evidence about processes started for one run, beyond its record.
 pub trait StartProof {
-    /// Does any confinement scope or process of `run_id` exist?
+    /// Does any confinement scope of `run_id` exist?
     fn scope_started(&self, run_id: &str) -> Started;
 }
 
@@ -219,7 +225,7 @@ pub fn release_pre_exec(
         }
         match RunRecord::read(slots_dir, run_id) {
             Ok(record) => {
-                if ["pid", "proc", "pid_start"]
+                if ["pid", "proc", "pid_start", LAUNCH_STARTED]
                     .iter()
                     .any(|key| record.get(key).is_some_and(|v| !v.is_null()))
                 {

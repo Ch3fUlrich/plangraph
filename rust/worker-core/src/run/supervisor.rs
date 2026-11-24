@@ -46,6 +46,8 @@ pub enum SupervisorError {
     DuplicateRun,
     #[error(transparent)]
     Start(#[from] StartError),
+    #[error("slot bind: {0}")]
+    SlotBind(#[from] super::slot_bind::BindError),
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum CancelOutcome {
@@ -85,7 +87,7 @@ impl Admission for Gate {
         if let Some(bind) = &self.bind {
             // The pending entry is durable before the run waits; a table that cannot hold it
             // refuses the run here, ahead of any launcher call.
-            if let Err(e) = bind.pending(id) {
+            if let Err(e) = bind.pending(id, None) {
                 lock.lock().unwrap().queue.retain(|key| key != id);
                 changed.notify_all();
                 return Admit::Refused(e.to_string());
@@ -130,6 +132,9 @@ impl Admission for Gate {
                 .unwrap()
                 .0;
         }
+    }
+    fn marks_launch(&self) -> bool {
+        self.bind.is_some()
     }
     fn launched(&self, run_id: &str, identity: &Identity) {
         if let (Some(bind), Some(start)) = (&self.bind, identity.start_time) {
@@ -189,6 +194,15 @@ impl Supervisor {
         if queue_full(s.held, s.queue.len(), self.gate.max_runs, self.max_queued) {
             return Err(SupervisorError::QueueFull);
         }
+        // The pending entry is durable before the start is acknowledged, so a crash after the
+        // acknowledgement leaves a ticket that restart recovery sees.
+        if let Some(bind) = &self.gate.bind {
+            let role = spec
+                .base
+                .get("role")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            bind.pending(&id, role)?;
+        }
         s.queue.push_back(id.clone());
         match supervise::start(&self.runtime, spec) {
             Ok(handle) => {
@@ -200,6 +214,9 @@ impl Supervisor {
                 // Return this reservation when record creation or thread spawn fails.
                 if let Some(pos) = s.queue.iter().rposition(|key| key == &id) {
                     s.queue.remove(pos);
+                }
+                if let Some(bind) = &self.gate.bind {
+                    bind.withdraw(&id);
                 }
                 changed.notify_all();
                 Err(SupervisorError::Start(e))

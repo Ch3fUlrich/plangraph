@@ -44,6 +44,8 @@ fn bind_cfg(dir: &Path) -> SlotBindCfg {
 struct Counting {
     calls: AtomicUsize,
     bound_at_call: Mutex<Vec<bool>>,
+    /// Whether the run record already carried the launch marker at each call.
+    marked_at_call: Mutex<Vec<bool>>,
     slots_dir: std::path::PathBuf,
 }
 impl Launcher for Counting {
@@ -59,6 +61,12 @@ impl Launcher for Counting {
             s.bound && s.group.as_deref() == Some(unit) && (s.pid, s.start_time) == DAEMON
         });
         self.bound_at_call.lock().unwrap().push(bound);
+        let run_id = unit.strip_prefix("pg-").unwrap();
+        let marked = RunRecord::read(&self.slots_dir, run_id)
+            .unwrap()
+            .get(LAUNCH_STARTED)
+            .is_some_and(|v| !v.is_null());
+        self.marked_at_call.lock().unwrap().push(marked);
         SystemLauncher.launch(unit, spec, c, l)
     }
 }
@@ -77,6 +85,7 @@ fn supervisor(dir: &Path, max_runs: usize) -> (Supervisor, Arc<Counting>) {
     let launcher = Arc::new(Counting {
         calls: AtomicUsize::new(0),
         bound_at_call: Mutex::new(Vec::new()),
+        marked_at_call: Mutex::new(Vec::new()),
         slots_dir: dir.into(),
     });
     (
@@ -156,11 +165,12 @@ fn a_refused_bind_makes_no_launcher_call() {
     })
     .unwrap();
     let (s, launcher) = supervisor(d.path(), 2);
-    s.start(spec(d.path(), 3, "true")).unwrap();
-    until(|| status(d.path(), 3) == "failed");
+    // The refusal comes back from `start` itself: no run, no record, no launcher call.
+    assert!(matches!(
+        s.start(spec(d.path(), 3, "true")),
+        Err(SupervisorError::SlotBind(_))
+    ));
     assert_eq!(launcher.calls.load(Ordering::SeqCst), 0);
-    let v = RunRecord::read(d.path(), "run-3").unwrap().to_value();
-    assert_eq!(v["reason"], "admission refused");
     // The other owner's row is untouched and no ticket of ours is left behind.
     let t = table(d.path());
     assert_eq!(t.active.len(), 1);
@@ -199,6 +209,43 @@ fn a_bound_run_launches_once_with_its_reservation_and_frees_it_at_the_end() {
     until(|| table(d.path()).active.is_empty());
     assert_eq!(launcher.calls.load(Ordering::SeqCst), 1);
     assert_eq!(*launcher.bound_at_call.lock().unwrap(), [true]);
+    // The launch marker was durable before the launcher ran.
+    assert_eq!(*launcher.marked_at_call.lock().unwrap(), [true]);
+}
+
+#[test]
+fn an_acknowledged_start_already_has_its_durable_ticket() {
+    let d = tempfile::tempdir().unwrap();
+    let (s, _launcher) = supervisor(d.path(), 1);
+    s.start(spec(d.path(), 0, HOLD)).unwrap();
+    until(|| status(d.path(), 0) == "running");
+    s.start(spec(d.path(), 1, "true")).unwrap();
+    // No waiting: the ticket was written before `start` returned.
+    assert!(table(d.path()).queued.iter().any(|t| t.run_id == "run-1"));
+    std::fs::write(d.path().join("go"), "").unwrap();
+    until(|| status(d.path(), 1) == "completed");
+}
+
+#[test]
+fn the_ticket_and_the_reservation_carry_the_role_of_the_run() {
+    let d = tempfile::tempdir().unwrap();
+    let (s, _launcher) = supervisor(d.path(), 1);
+    s.start(spec(d.path(), 0, HOLD)).unwrap();
+    until(|| status(d.path(), 0) == "running");
+    let mut review = spec(d.path(), 1, "true");
+    review.base.insert("role".into(), json!("review"));
+    s.start(review).unwrap();
+    let t = table(d.path());
+    assert_eq!(
+        t.queued.iter().find(|t| t.run_id == "run-1").unwrap().role,
+        Role::Review
+    );
+    assert_eq!(
+        t.active.iter().find(|a| a.run_id == "run-0").unwrap().role,
+        Role::Implement
+    );
+    std::fs::write(d.path().join("go"), "").unwrap();
+    until(|| status(d.path(), 1) == "completed");
 }
 
 #[test]
@@ -324,6 +371,12 @@ fn restart_keeps_a_live_started_or_unverifiable_binding() {
     keeps(false, Started::Unknown);
     // The run record names a process: the run started.
     record(d.path(), "run-a", Some(1234));
+    keeps(false, Started::No);
+    // A record that carries the launch marker: the launcher may have spawned a process.
+    let mut marked = RunRecord::read(d.path(), "run-a").unwrap();
+    marked.set("pid", serde_json::Value::Null);
+    marked.set(LAUNCH_STARTED, json!(1));
+    marked.save().unwrap();
     keeps(false, Started::No);
     // No record at all is no proof (the ticket of run-a2 has none either).
     std::fs::remove_dir_all(d.path().join("runs")).unwrap();

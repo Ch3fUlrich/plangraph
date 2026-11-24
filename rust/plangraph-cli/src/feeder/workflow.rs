@@ -109,10 +109,14 @@ fn with_failures(reason: String, failures: &[(String, String)]) -> String {
         format!("{reason}; release of {key} failed: {error}")
     })
 }
-/// The run's name part: the first item's key after the namespace, as a file-safe lower-case slug.
-/// Items of concurrent runs are claimed exclusively, so each run's first key, and this slug, is
-/// its own.
-fn run_slug(items: &[Task]) -> String {
+/// The status file of one launch, directly inside the review directory: the file-safe slug of
+/// the first key, a digest of every raw key (so `FOO.BAR-1` and `FOO_BAR-1` differ) and the
+/// first claim's epoch (so a retry of the same items differs). The card carries it as
+/// `writer_status_path` (the native writer host records it) and the brief quotes the same path
+/// as STATUS_FILE, so a run never reads or writes another run's DONE lines. A dry run has no
+/// claim and uses epoch 0.
+fn status_path(items: &[Task], epoch: u64, reviews: &str) -> String {
+    use sha2::{Digest, Sha256};
     let slug: String = items[0]
         .key
         .rsplit(':')
@@ -128,27 +132,26 @@ fn run_slug(items: &[Task]) -> String {
             }
         })
         .collect();
-    if slug.is_empty() {
-        "batch".into()
-    } else {
-        slug
+    let mut digest = Sha256::new();
+    for item in items {
+        digest.update(item.key.as_bytes());
+        digest.update([0]);
     }
-}
-/// The status file of one run, directly inside the review directory. The card carries it as
-/// `writer_status_path` (the native writer host records it) and the brief quotes it as
-/// STATUS_FILE, so a run never reads or writes another run's DONE lines.
-fn status_path(items: &[Task], reviews: &str) -> String {
+    let digest: String = digest.finalize()[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let slug = if slug.is_empty() { "batch" } else { &slug };
     format!(
-        "{}/status-{}.txt",
-        reviews.trim_end_matches('/'),
-        run_slug(items)
+        "{}/status-{slug}-{digest}-e{epoch}.txt",
+        reviews.trim_end_matches('/')
     )
 }
 /// The card and brief of one writer run for `items`: the plain item card for one item, the
 /// first item's card with every key and the union of the files for a batch.
-fn batch_card(items: &[Task], repo: &str, reviews: &str, policy: &Policy) -> Value {
+fn batch_card(items: &[Task], repo: &str, reviews: &str, status: &str, policy: &Policy) -> Value {
     let mut c = card(&items[0], repo, reviews, policy);
-    c["writer_status_path"] = json!(status_path(items, reviews));
+    c["writer_status_path"] = json!(status);
     if items.len() > 1 {
         let mut files: Vec<&String> = items.iter().flat_map(|t| &t.files).collect();
         files.sort();
@@ -164,7 +167,7 @@ const WRITER_TRAILER: &str = "Writer: codex/gpt-6.2-sol-medium (native-codex spa
 /// The shared batch writer input (`PLANGRAPH-BATCH-INPUT-V1`) that pg-spawnd renders into the
 /// `# Items` and `# Run values` sections, so a batch gets the batch-writer skill. The native
 /// worker enforces its own fast-check and review policy; the values here are the brief's text.
-fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
+fn batch_brief(items: &[Task], rules: &str, status: &str) -> String {
     if items.len() == 1 {
         return brief(&items[0], rules);
     }
@@ -182,11 +185,16 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
         .collect();
     trailers.push(WRITER_TRAILER.into());
     trailers.push("Changelog: a changelog.d/<ITEM>.md fragment, or a Changelog: skip (<reason>) trailer on every commit without one".into());
-    let slug = run_slug(items);
+    let slug = items[0]
+        .key
+        .rsplit(':')
+        .next()
+        .unwrap_or("batch")
+        .to_ascii_lowercase();
     let input = json!({"items":named, "run":{
         "name":format!("feeder-{slug}"), "worktree":"the run worktree (the current directory)",
         "base":"origin/main at launch", "writer_family":"gpt",
-        "status_file":status_path(items, reviews),
+        "status_file":status,
         "fast_checks":["python3 tools/affected_tests.py --base origin/main --head HEAD --local --files-only --run -n 2",
             "python3 tools/preflight.py --base origin/main --head HEAD --lane"],
         "review_cmd":"the native worker starts the review of another family on the exact head",
@@ -218,8 +226,9 @@ pub fn tick(
             return json!({"decision":"refused","item_key":seed.key,"reason":reason,"skipped":skipped});
         }
         if dry {
+            let status = status_path(&batch, 0, reviews);
             let mut row = json!({"decision":"would_spawn",
-                "card":batch_card(&batch, repo, reviews, policy), "brief":batch_brief(&batch, rules, reviews)});
+                "card":batch_card(&batch, repo, reviews, &status, policy), "brief":batch_brief(&batch, rules, &status)});
             row["item_key"] = json!(seed.key);
             row["skipped"] = json!(skipped);
             return row;
@@ -243,8 +252,9 @@ pub fn tick(
             continue;
         }
         let items: Vec<Task> = held.iter().map(|(t, _)| t.clone()).collect();
-        let c = batch_card(&items, repo, reviews, policy);
-        let started = launch.start(&c, &batch_brief(&items, rules, reviews));
+        let status = status_path(&items, held[0].1, reviews);
+        let c = batch_card(&items, repo, reviews, &status, policy);
+        let started = launch.start(&c, &batch_brief(&items, rules, &status));
         match started {
             Ok(run) => {
                 let mut row = decided(run);

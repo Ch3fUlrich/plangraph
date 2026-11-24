@@ -61,6 +61,11 @@ pub trait Admission: Send + Sync {
     fn acquire(&self, run_id: &str, cancelled: &AtomicBool) -> Admit;
     /// The launcher started `identity` for a run this admission granted.
     fn launched(&self, _run_id: &str, _identity: &Identity) {}
+    /// Whether the monitor must persist the launch marker before each launcher call (a
+    /// durable record of "the launch began" for restart recovery of bound slots).
+    fn marks_launch(&self) -> bool {
+        false
+    }
 }
 pub enum Admit {
     Granted(Permit),
@@ -156,6 +161,7 @@ const RESERVED: &[&str] = &[
     "reason",
     "error",
     "survivors",
+    "launch_started",
 ];
 pub fn validate(spec: &RunSpec) -> Result<(), StartError> {
     if !valid_run_id(&spec.run_id)

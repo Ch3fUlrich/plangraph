@@ -84,6 +84,19 @@ fn attempt(
             env: &spec.env,
             stdin_piped: spec.stdin.is_some(),
         };
+        // From here a crash leaves the launch outcome unknown: the slot restart release keeps
+        // a run whose record carries this marker.
+        if rt.admission.marks_launch() {
+            record.set(super::slot_bind::LAUNCH_STARTED, json!(finalize::now()));
+            if !finalize::save(record) {
+                // Without the marker a crash would look like a launch that never began.
+                launch_error(
+                    record,
+                    LaunchError::Io(std::io::Error::other("launch marker not persisted")),
+                );
+                return (1, false, StopOutcome::Empty);
+            }
+        }
         grouped = match rt.launcher.launch(
             &unit_name(&spec.run_id),
             &launch,

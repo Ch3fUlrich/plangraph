@@ -223,3 +223,20 @@ def test_review_brief_limits_included_writer_artifact(tmp_path, artifact_size):
         assert evidence.endswith("é\n> EXCLUDED TAIL")
     else:
         assert evidence == "> " + "x" * (limit - 1) + "\n> [artifact truncated at 32 KiB]"
+
+
+def test_review_briefs_of_two_runs_quote_only_their_own_status_file(tmp_path):
+    from plangraph.review.prompt import render_brief
+
+    # Two runs of one feeder share a review dir; each has its own status file (the card's
+    # writer_status_path) holding only its own DONE records.
+    runs = {"alpha": tmp_path / "status-alpha-1-aaaaaaaa-e100.txt",
+            "beta": tmp_path / "status-beta-1-bbbbbbbb-e101.txt"}
+    for name, path in runs.items():
+        path.write_text(f"DONE plangraph:{name.upper()}-1 {name}0000\n", encoding="utf-8")
+    briefs = {name: render_brief("review", {"writer_run": {
+        "review_dir": str(tmp_path), "writer_status_path": str(path)}})
+        for name, path in runs.items()}
+    for name, other in (("alpha", "beta"), ("beta", "alpha")):
+        assert f"DONE plangraph:{name.upper()}-1 {name}0000" in briefs[name]
+        assert f"{other.upper()}-1" not in briefs[name]

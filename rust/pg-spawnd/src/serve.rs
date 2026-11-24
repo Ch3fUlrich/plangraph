@@ -61,17 +61,16 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 /// the restart that reconciles the slot table sees what this daemon holds. The daemon cannot
 /// size a run, so a row counts against `max_runs` only and reserves no memory.
 #[cfg(target_os = "linux")]
-fn bind_slots(cfg: &mut SupervisorCfg, state: &std::path::Path) {
+fn bind_slots(cfg: &mut SupervisorCfg, state: &std::path::Path) -> Result<(), String> {
     use pg_worker_core::{hosts::Role, run::slot_bind::SlotBindCfg, slots::SlotClass};
     if std::env::var("PLANGRAPH_RELIABILITY_RECONCILE").as_deref() != Ok("on") {
-        return;
+        return Ok(());
     }
     let pid = std::process::id();
-    let Some(start) =
+    // Serving without the bind would leave runs the restart reconciliation cannot see.
+    let start =
         pg_worker_core::run::group_unix::proc_start_time(std::path::Path::new("/proc"), pid)
-    else {
-        return;
-    };
+            .ok_or("slot bind: daemon start time unreadable")?;
     cfg.slot_bind = Some(SlotBindCfg {
         slots_dir: state.into(),
         daemon_pid: pid,
@@ -81,9 +80,12 @@ fn bind_slots(cfg: &mut SupervisorCfg, state: &std::path::Path) {
         repo_id: "pg-spawnd".into(),
         reservation_mb: 0,
     });
+    Ok(())
 }
 #[cfg(all(unix, not(target_os = "linux")))]
-fn bind_slots(_: &mut SupervisorCfg, _: &std::path::Path) {}
+fn bind_slots(_: &mut SupervisorCfg, _: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
 
 /// Serve MCP connections until the process is killed.
 #[cfg(unix)]
@@ -95,7 +97,7 @@ pub(crate) fn run(
     pg_worker_core::run::lifecycle::recover(&state).map_err(|error| error.to_string())?;
     cfg.run.state_dir = state.clone();
     let _recovery = crate::reconcile_serve::configured(&state)?;
-    bind_slots(&mut cfg, &state);
+    bind_slots(&mut cfg, &state)?;
     crate::round_replan_ports::start(state.clone());
     let host = cfg.run.host.clone();
     let supervisor = Arc::new(Supervisor::new(cfg).map_err(|e| e.to_string())?);
