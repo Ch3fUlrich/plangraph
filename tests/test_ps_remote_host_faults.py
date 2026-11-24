@@ -1,5 +1,6 @@
 """plangraph_agent_ps keeps listing the healthy hosts when one host's query faults."""
 import json
+import threading
 import time
 
 import pytest
@@ -77,11 +78,39 @@ def test_hung_transport_cannot_hold_ps(config, monkeypatch):
     monkeypatch.setattr(remote_ps, 'TIMEOUT', 0.1)
     write(config, [dict(name='bad', target='bad', src='/s/src'),
                    dict(name='good', target='good', src='/s/src')])
-    started = time.monotonic()
-    rows = remote_ps.list_runs([], transport=fake(None, lambda h, t: time.sleep(5)))
-    assert time.monotonic() - started < 2
+    release = threading.Event()
+    try:
+        rows = remote_ps.list_runs([], transport=fake(None, lambda h, t: release.wait(30)))
+    finally:
+        release.set()
     assert [(r['host'], r['status']) for r in rows] == [('bad', 'unknown'), ('good', 'running')]
     assert rows[0]['reason'] == 'host query failed'
+
+
+def test_more_hosts_than_workers_each_get_their_own_budget(config, monkeypatch):
+    monkeypatch.setattr(remote_ps, 'MAX_WORKERS', 2)
+    monkeypatch.setattr(remote_ps, 'TIMEOUT', 0.7)
+    write(config, [dict(name=f'h{i}', target=f'h{i}', src='/s/src') for i in range(8)])
+
+    def slow(host, timeout):
+        time.sleep(0.6)
+        return json.dumps({'runs': [dict(run_id='r' + host['name'], host='x', status='running')]})
+    rows = remote_ps.list_runs([], transport=slow)
+    assert [r['status'] for r in rows] == ['running'] * 8
+
+
+def test_coverage_and_lifecycle_queries_use_the_host_budget(config, monkeypatch, tmp_path):
+    write(config, [dict(name='w', target='w', src='/s/src', wsl_distro='Ubuntu')])
+    seen = []
+    monkeypatch.setattr(remote_ps, 'lifecycle_command', lambda *a, **k: type('R', (), dict(
+        stdout=b'{"day":"d","runs":[],"fleet":[],"rows":[],"next_cursor":0,"more":false}'))())
+
+    def transport(host, timeout):
+        seen.append(timeout)
+        return '{"day":"d","runs":[],"fleet":[],"rows":[],"next_cursor":0,"more":false}'
+    remote_ps.attempt_coverage_inputs(tmp_path, 'd', transport=transport)
+    remote_ps.changed_runs(tmp_path, {'local': 0}, transport=transport)
+    assert seen == [remote_ps.host_timeout(dict(wsl_distro='x'))] * 2
 
 
 def test_wsl_and_windows_hosts_get_a_longer_query_budget(config):
