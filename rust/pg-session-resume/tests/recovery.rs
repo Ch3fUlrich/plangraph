@@ -129,3 +129,46 @@ fn a_job_that_turns_busy_while_the_activity_is_read_again_is_not_stopped() {
     );
     assert!(!pending(&r).exists());
 }
+
+#[test]
+fn an_attempt_whose_record_is_published_but_whose_stop_line_failed_is_logged_by_the_next_tick() {
+    let r = rig("writer", json!({}));
+    done(&r, HEAD);
+    let mut h = Fake::new(5000);
+    // the phase write after the stop fails, the record write works, the log append fails
+    h.block_on_run = Some(r.cfg.launch_dir.join("writer-0644.pending.tmp"));
+    h.log_fails = true;
+    stop_done(&mut h, &r.cfg, 0, None);
+    assert_eq!(record(&r, "writer")["state"], "stopped");
+    assert_eq!(read(&pending(&r))["phase"], "attempt");
+    std::fs::remove_dir(r.cfg.launch_dir.join("writer-0644.pending.tmp")).unwrap();
+    h.block_on_run = None;
+    h.log_fails = false;
+    assert_eq!(reap_idle(&mut h, &r.cfg), 0);
+    let stops: Vec<_> = h
+        .lines
+        .iter()
+        .filter(|l| l.contains("event=stop "))
+        .collect();
+    assert_eq!(stops.len(), 1, "{:?}", h.lines);
+    assert!(!pending(&r).exists());
+    assert_eq!(h.runs.len(), 1, "no second stop");
+}
+
+#[test]
+fn a_launch_with_an_unresolved_attempt_gets_no_fresh_stop_in_the_same_tick() {
+    let r = rig("writer", json!({}));
+    attempt_snapshot(&r);
+    let before = std::fs::read_to_string(pending(&r)).unwrap();
+    let mut h = Fake::new(9000);
+    h.activity = Some(1); // idle for hours: eligible for a fresh stop
+    h.job_unreadable_reads.set(1); // unreadable for recovery, readable for the stop loop
+    reap_idle(&mut h, &r.cfg);
+    assert!(h.runs.is_empty(), "{:?}", h.runs);
+    assert_eq!(
+        std::fs::read_to_string(pending(&r)).unwrap(),
+        before,
+        "snapshot untouched"
+    );
+    assert!(record(&r, "writer").get("resume").is_none());
+}

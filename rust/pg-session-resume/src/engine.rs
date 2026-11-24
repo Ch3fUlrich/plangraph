@@ -135,111 +135,99 @@ fn stop_target(host: &dyn Host, rec: &Record) -> Target {
     }
 }
 
-/// The record holds the stop: lane copy, then the log line, then the sidecar goes. The line is
-/// written once: the sidecar says `logged` before it is removed, and a log line that cannot be
-/// appended keeps it at `stopped`, so the next tick writes the line.
-fn complete_stop(
+/// The whole life of a stop after its snapshot is on disk, in the order the steps happen. The
+/// sidecar says how far it got; every step is idempotent and the next tick repeats this from
+/// where the disk left off, so a failure or a second reader between two steps loses nothing:
+///   1. ATTEMPT   snapshot written, session not yet touched
+///   2. STOPPED   the stop command succeeded
+///   3. the record holds the stop (`state`, `stopped_ts`, `resume`: one atomic rename)
+///   4. the lane copy   5. the stop line in the log (once, by the stop's identity)
+///   6. LOGGED    the line is out   7. the sidecar is removed
+///
+/// An ATTEMPT is ambiguous (the stop may have succeeded before step 2 could be written): the
+/// record already holding it, or the runtime showing the session stopped, make it a stop
+/// (`unconfirmed`); a session that still runs makes it an abandoned attempt; an unreadable
+/// runtime keeps it, reported, and no fresh stop is made for the launch meanwhile.
+fn drive(
     host: &mut dyn Host,
     cfg: &Config,
-    rec: &Record,
+    rec: &mut Record,
     snap: &mut Value,
-    freed: &str,
     failures: &mut u32,
 ) {
+    let held = rec.stopped() && rec.resume_u64("stopped_ts") == snap["stopped_ts"].as_u64();
+    if rec.stopped() && !held {
+        return drop_pending(host, rec, failures); // another stop owns the record
+    }
+    if !held && phase(snap) == ATTEMPT {
+        match stop_target(host, rec) {
+            Target::AlreadyStopped => snap["unconfirmed"] = json!(true),
+            Target::Keep(why) if why == "no-runtime-state" || why == "no-job-state" => {
+                let line = format!("event=stop-unconfirmed name={} why={why}", rec.label());
+                return refuse_once(host, rec, &line, "stop-unconfirmed");
+            }
+            _ => return drop_pending(host, rec, failures),
+        }
+    }
+    if !held {
+        let mut resume = snap.clone();
+        if let Some(o) = resume.as_object_mut() {
+            o.remove("phase");
+            o.remove("ram_freed_mb");
+        }
+        rec.set("state", json!("stopped"));
+        rec.set("stopped_ts", resume["stopped_ts"].clone());
+        rec.set("stop_refused", Value::Null);
+        rec.set("resume", resume);
+        if !save(host, rec) {
+            *failures += 1;
+            return; // the sidecar stays: the next tick publishes it
+        }
+    }
     if let Some(l) = rec.lane() {
         if !write_lane_resume(host, cfg, rec, &l) {
             *failures += 1;
         }
     }
     if phase(snap) != LOGGED {
-        let reason = snap["reason"].as_str().unwrap_or_default();
-        let handle = snap["handle"].as_str().unwrap_or_default();
-        let at = snap["stopped_ts"].as_u64().unwrap_or_default();
-        // The stop's identity in the log: the handle and the moment of the stop.
-        let id = format!("handle={handle} stopped_ts={at}");
-        let line = format!(
-            "event=stop name={} age_s={} reason={reason} ram_freed_mb={freed} {id}",
-            rec.label(),
-            age(host, rec)
-        );
-        // A line that is out already (the `logged` phase could not be written) is not repeated.
-        let known = host.log_has(&["event=stop ", &id]);
-        if !known && !host.log(&line) {
-            return; // the sidecar stays: the next tick appends it
+        let handle = snap["handle"].as_str().unwrap_or_default().to_owned();
+        let at = snap["stopped_ts"].as_u64().unwrap_or(0).to_string();
+        let launch = snap["launch_ts"].as_u64().unwrap_or(0).to_string();
+        let id = [
+            ("handle", handle.as_str()),
+            ("stopped_ts", at.as_str()),
+            ("launch_ts", launch.as_str()),
+        ];
+        if !host.log_has("stop", &id) {
+            let line = format!(
+                "event=stop name={} age_s={} reason={} ram_freed_mb={} handle={handle} stopped_ts={at} launch_ts={launch}",
+                rec.label(),
+                age(host, rec),
+                snap["reason"].as_str().unwrap_or_default(),
+                snap["ram_freed_mb"].as_str().unwrap_or("unknown"),
+            );
+            if !host.log(&line) {
+                return; // the sidecar stays: the next tick appends it
+            }
         }
         if write_pending(rec, snap, LOGGED).is_err() {
-            *failures += 1; // the line is out; a repeat is possible, never a loss
+            *failures += 1; // the line is out and is known by its identity: never repeated
             return;
         }
     }
     drop_pending(host, rec, failures);
 }
 
-/// Publish a carried-out stop from its snapshot: state, stopped_ts and the resume object reach
-/// the record in one atomic rename (the launch identity scopes the stop, see Record::stopped).
-/// A record that cannot be saved is not published; its sidecar stays.
-fn publish_stop(
-    host: &mut dyn Host,
-    cfg: &Config,
-    rec: &mut Record,
-    snap: &mut Value,
-    freed: &str,
-    failures: &mut u32,
-) {
-    let mut resume = snap.clone();
-    resume.as_object_mut().map(|o| o.remove("phase"));
-    // An attempt whose outcome was never written down: the runtime shows the session stopped,
-    // the snapshot is the best account of that moment.
-    if phase(snap) == ATTEMPT {
-        resume["unconfirmed"] = json!(true);
-    }
-    rec.set("state", json!("stopped"));
-    rec.set("stopped_ts", resume["stopped_ts"].clone());
-    rec.set("stop_refused", Value::Null);
-    rec.set("resume", resume);
-    if save(host, rec) {
-        complete_stop(host, cfg, rec, snap, freed, failures);
-    } else {
-        *failures += 1;
-    }
-}
-
-/// Finish the stops the sidecars name. A sidecar at `stopped` is evidence that the stop command
-/// succeeded and is finished whatever the runtime reports now. An `attempt` is ambiguous: its
-/// stop may have succeeded before the write that would say so failed, or never happened. The
-/// runtime decides: stopped, it is published as `unconfirmed` (the session is resumable, the
-/// snapshot is the best account of the stop); still running, the attempt failed and is removed;
-/// unreadable, it is kept and reported until the runtime can be read.
+/// Drive every stop a sidecar names (the ones an earlier tick could not finish).
 fn finish_pending(host: &mut dyn Host, cfg: &Config) -> u32 {
     let mut failures = 0;
     for mut rec in load_all(&cfg.launch_dir) {
         if !pending_path(&rec).exists() {
             continue;
         }
-        let Some(mut snap) = read_pending(&rec) else {
-            drop_pending(host, &rec, &mut failures); // another launch's, or unreadable
-            continue;
-        };
-        let held = rec.stopped() && rec.resume_u64("stopped_ts") == snap["stopped_ts"].as_u64();
-        match (phase(&snap), rec.stopped()) {
-            (STOPPED, false) => {
-                publish_stop(host, cfg, &mut rec, &mut snap, "unknown", &mut failures)
-            }
-            (STOPPED | LOGGED, true) if held => {
-                complete_stop(host, cfg, &rec, &mut snap, "unknown", &mut failures)
-            }
-            (ATTEMPT, false) => match stop_target(host, &rec) {
-                Target::AlreadyStopped => {
-                    publish_stop(host, cfg, &mut rec, &mut snap, "unknown", &mut failures)
-                }
-                Target::Keep(why) if why == "no-runtime-state" || why == "no-job-state" => {
-                    let name = rec.label();
-                    let line = format!("event=stop-unconfirmed name={name} why={why}");
-                    refuse_once(host, &mut rec, &line, "stop-unconfirmed");
-                }
-                _ => drop_pending(host, &rec, &mut failures),
-            },
-            _ => drop_pending(host, &rec, &mut failures),
+        match read_pending(&rec) {
+            Some(mut snap) => drive(host, cfg, &mut rec, &mut snap, &mut failures),
+            None => drop_pending(host, &rec, &mut failures), // another launch's, or unreadable
         }
     }
     failures
@@ -268,6 +256,9 @@ fn stop_session(
     (reason, status_head, quiet): (&str, Option<&str>, Quiet),
     failures: &mut u32,
 ) {
+    if pending_path(rec).exists() {
+        return; // an unresolved attempt of this launch: `finish_pending` owns it
+    }
     let name = rec.label();
     let Some(handle) = rec.handle().map(str::to_owned) else {
         let line = format!("event=stop-skipped name={name} reason={reason} why=no-resume-handle");
@@ -320,6 +311,10 @@ fn stop_session(
         return;
     }
     // The evidence that this stop happened, before anything else can fail.
+    snap["ram_freed_mb"] = json!(match (before, host.mem_available_mb()) {
+        (Some(b), Some(a)) => a.saturating_sub(b).to_string(),
+        _ => "unknown".into(),
+    });
     if let Err(e) = write_pending(rec, &mut snap, STOPPED) {
         host.log(&format!(
             "event=record-save-failed name={name} error={}",
@@ -327,11 +322,7 @@ fn stop_session(
         ));
         *failures += 1;
     }
-    let freed = match (before, host.mem_available_mb()) {
-        (Some(b), Some(a)) => a.saturating_sub(b).to_string(),
-        _ => "unknown".into(),
-    };
-    publish_stop(host, cfg, rec, &mut snap, &freed, failures);
+    drive(host, cfg, rec, &mut snap, failures);
 }
 
 /// A writer whose lane status says DONE with a head. `quiet_s`: the session must have shown

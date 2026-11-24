@@ -1,6 +1,6 @@
 //! The real host: processes, /proc, git, the runtimes' own state files.
 
-use crate::host::{Host, JobState, Process};
+use crate::host::{line_has, Host, JobState, Process};
 use crate::record::{Agent, Record};
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -138,7 +138,7 @@ impl Host for System {
 
     fn has_children(&self, pid: u32) -> Option<bool> {
         let mut readable = false;
-        for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        for entry in std::fs::read_dir(&self.proc_root).ok()?.flatten() {
             let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
                 continue;
             };
@@ -165,7 +165,7 @@ impl Host for System {
     }
 
     fn mem_available_mb(&self) -> Option<u64> {
-        let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let text = std::fs::read_to_string(self.proc_root.join("meminfo")).ok()?;
         let line = text.lines().find(|l| l.starts_with("MemAvailable:"))?;
         Some(line.split_whitespace().nth(1)?.parse::<u64>().ok()? / 1024)
     }
@@ -184,9 +184,9 @@ impl Host for System {
         parse_job_state(&text)
     }
 
-    fn log_has(&self, parts: &[&str]) -> bool {
+    fn log_has(&self, event: &str, fields: &[(&str, &str)]) -> bool {
         std::fs::read_to_string(&self.log_file)
-            .is_ok_and(|t| t.lines().any(|l| parts.iter().all(|p| l.contains(p))))
+            .is_ok_and(|t| t.lines().any(|l| line_has(l, event, fields)))
     }
 
     fn log(&mut self, line: &str) -> bool {

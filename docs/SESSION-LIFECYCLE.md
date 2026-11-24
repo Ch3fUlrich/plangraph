@@ -58,18 +58,20 @@ gets `<lane>.resume.json` with the same handle. A stop belongs to the launch tha
 must equal the record's `ts`, `run_id` and handle), so a `fleet-launch --respawn` copy of the
 record is a live session again. Before a session is touched, the snapshot of the stop (head, worktree, status head, round,
 reason, time) is written to `<record>.pending` next to the record (owner-only, 0600, as the
-record and the lane copy are), and the runtime and the clock are checked again right before the
-signal (a turn or child that started, or activity that moved, keeps the session). The sidecar
-carries the phase of the stop: `attempt` (nothing proven), `stopped` (the stop command
-succeeded), `logged` (the stop line is in the log). A stop whose record write or log append
-fails exits 2, and the next tick finishes a `stopped` sidecar from its snapshot whatever the
-runtime reports then, without a second stop and without a second log line (the line carries the
-stop's identity, `handle=<id> stopped_ts=<ts>`, and one already in the log is not written again).
-An `attempt` is ambiguous (its stop may have succeeded before the write that would say so
-failed): when the runtime shows the session stopped it is published with `resume.unconfirmed:
-true`, when the session still runs it is removed, and when the runtime cannot be read it is kept
-and reported (`event=stop-unconfirmed`). A sidecar that cannot be removed is reported. Before the
-signal the quiet time is read first and the runtime after it. Each lane keeps the copy of its latest stopped launch, ordered by stop time, then launch, then
+record and the lane copy are). The clock and then the runtime are checked again right before the
+signal (a turn or child that started, or activity that moved, keeps the session). One function
+(`drive`) owns the stop from there, in this order, each step idempotent and repeated by the next
+tick for as long as the sidecar exists: the sidecar says `attempt`; the stop command succeeds
+(`stopped`); the record holds the stop (`state`, `stopped_ts`, `resume`, one atomic rename); the
+lane copy; the stop line in the log, once (the line carries the stop's identity,
+`handle=<id> stopped_ts=<ts> launch_ts=<ts>`, matched as whole fields, and one already in the log
+is not written again); `logged`; the sidecar is removed. A launch whose sidecar is unresolved
+gets no fresh stop. An `attempt` is ambiguous (the stop may have succeeded before the write that
+would say so failed): when the record already holds it, or the runtime shows the session
+stopped, it is a stop (`resume.unconfirmed: true` in the second case); when the session still
+runs it is removed; when the runtime cannot be read it is kept and reported
+(`event=stop-unconfirmed`). A sidecar that cannot be removed is reported (exit 2). All /proc reads
+go through one root. Each lane keeps the copy of its latest stopped launch, ordered by stop time, then launch, then
 session name: a missing or earlier copy is rewritten (publication and repair alike), a later one
 is left. A kernel lock (flock on
 `<state>/launch/pg-session-resume.lock`) keeps two ticks apart: a second one prints that the

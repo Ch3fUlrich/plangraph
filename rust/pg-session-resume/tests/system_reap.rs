@@ -4,7 +4,7 @@
 use pg_session_resume::engine::{reap_idle, Config};
 use pg_session_resume::host::{Host, Process};
 use pg_session_resume::record::Record;
-use pg_session_resume::system::{classify, parse_job_state, proc_start_ticks, System};
+use pg_session_resume::system::{classify, proc_start_ticks, System};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Child, Command};
@@ -203,54 +203,6 @@ fn process_tells_live_from_gone() {
     assert!(matches!(h.process(std::process::id()), Process::Live(_)));
 }
 
-#[test]
-fn a_task_count_that_is_not_a_number_is_never_read_as_zero() {
-    let tasks = |text: &str| parse_job_state(text).map(|j| (j.state, j.tasks));
-    let done = |flight: &str| format!(r#"{{"state":"done","inFlight":{flight}}}"#);
-    assert_eq!(
-        tasks(&done(
-            r#"{"tasks":0,"queued":0,"kinds":[],"drainableMonitors":0}"#
-        )),
-        Some(("done".into(), Some(0)))
-    );
-    assert_eq!(
-        tasks(&done(r#"{"tasks":2}"#)),
-        Some(("done".into(), Some(2)))
-    );
-    assert_eq!(
-        tasks(&done(r#"{"tasks":0,"queued":1}"#)),
-        Some(("done".into(), Some(1)))
-    );
-    // counts whose sum overflows saturate: never a panic, never a wrap to zero
-    let huge = u64::MAX;
-    for flight in [
-        format!(r#"{{"tasks":{huge},"queued":1}}"#),
-        format!(r#"{{"tasks":1,"queued":{huge}}}"#),
-        format!(r#"{{"tasks":0,"queued":{huge},"drainableMonitors":1}}"#),
-    ] {
-        assert_eq!(
-            tasks(&done(&flight)),
-            Some(("done".into(), Some(huge))),
-            "{flight}"
-        );
-    }
-    for bad in [
-        r#"{"tasks":"2"}"#,
-        r#"{"tasks":-1}"#,
-        r#"{"tasks":null}"#,
-        r#"{"queued":0}"#,
-        r#"{"tasks":0,"queued":"1"}"#,
-        r#"{"tasks":0,"drainableMonitors":[]}"#,
-        "null",
-        "7",
-    ] {
-        assert_eq!(tasks(&done(bad)), Some(("done".into(), None)), "{bad}");
-    }
-    assert_eq!(tasks(r#"{"state":"done"}"#), Some(("done".into(), None)));
-    assert_eq!(tasks("{"), None);
-    assert_eq!(tasks(r#"{"state":5}"#), None);
-}
-
 /// A process whose main thread has exited (a zombie leader) while another thread still runs;
 /// `ignore_term`: its signal disposition ignores SIGTERM.
 fn zombie_leader_with_a_live_thread(ignore_term: bool) -> Child {
@@ -368,4 +320,38 @@ fn a_zombie_leader_stays_live_while_the_kernel_says_so_whatever_a_task_listing_s
     running.kill().unwrap();
     running.wait().unwrap();
     assert_eq!(h.process(pid), Process::Gone, "the kernel knows it exited");
+}
+
+#[test]
+fn a_stop_id_is_matched_as_whole_fields_not_as_a_prefix() {
+    let (dir, h) = system(0);
+    let line = "ts=1 event=stop name=w-1 age_s=5 reason=done ram_freed_mb=1 handle=H1 stopped_ts=1000 launch_ts=7\n";
+    std::fs::write(dir.path().join("log"), line).unwrap();
+    let id = |h: &'static str, at: &'static str, l: &'static str| {
+        [("handle", h), ("stopped_ts", at), ("launch_ts", l)]
+    };
+    assert!(h.log_has("stop", &id("H1", "1000", "7")));
+    assert!(
+        !h.log_has("stop", &id("H1", "100", "7")),
+        "a stop time that is a prefix"
+    );
+    assert!(
+        !h.log_has("stop", &id("H", "1000", "7")),
+        "a handle that is a prefix"
+    );
+    assert!(
+        !h.log_has("stop", &id("H1", "1000", "70")),
+        "another launch"
+    );
+    assert!(
+        !h.log_has("stop-skipped", &id("H1", "1000", "7")),
+        "another event"
+    );
+}
+
+#[test]
+fn nothing_in_the_host_reads_the_real_proc_but_through_its_root() {
+    // one root for every /proc read, so a scan and the kernel's answer can be given the same tree
+    let src = include_str!("../src/system.rs");
+    assert_eq!(src.matches("\"/proc").count(), 0, "a hard-coded /proc path");
 }

@@ -50,8 +50,16 @@ pub trait Host {
     fn activity_ts(&self, rec: &Record) -> Option<u64>;
     /// The runtime's own state of a Claude job, None when unreadable.
     fn job_state(&self, rec: &Record) -> Option<JobState>;
-    /// Whether one line of the log holds every one of `parts` (a stop line already written).
-    fn log_has(&self, parts: &[&str]) -> bool;
+    /// Whether the log holds a line of `event` with exactly these `key=value` fields (a stop
+    /// line already written): whole fields, never a prefix of one.
+    fn log_has(&self, event: &str, fields: &[(&str, &str)]) -> bool;
     /// Append one line to the log; false when it could not be persisted.
     fn log(&mut self, line: &str) -> bool;
+}
+
+/// Whether `line` is an `event=<event>` line carrying every `(key, value)` as the whole field
+/// `key=value`: a stop time of 1000 is not a stop time of 100.
+pub fn line_has(line: &str, event: &str, fields: &[(&str, &str)]) -> bool {
+    let has = |want: String| line.split_whitespace().any(|token| token == want);
+    has(format!("event={event}")) && fields.iter().all(|(k, v)| has(format!("{k}={v}")))
 }

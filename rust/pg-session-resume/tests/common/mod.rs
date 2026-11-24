@@ -46,6 +46,8 @@ pub struct Fake {
     pub busy_on_activity_read: Option<usize>,
     pub activity_reads: std::cell::Cell<usize>,
     pub job_busy: std::cell::Cell<bool>,
+    /// The next n reads of the job state fail (an unreadable runtime that becomes readable).
+    pub job_unreadable_reads: std::cell::Cell<usize>,
     /// The session shows this activity once its worktree has been looked up.
     pub active_after_head: Option<u64>,
     pub fresh_activity: std::cell::Cell<Option<u64>>,
@@ -83,6 +85,7 @@ impl Fake {
             busy_on_activity_read: None,
             activity_reads: Default::default(),
             job_busy: Default::default(),
+            job_unreadable_reads: Default::default(),
             active_after_head: None,
             fresh_activity: Default::default(),
             children: Some(false),
@@ -131,6 +134,11 @@ impl Host for Fake {
         Ok(())
     }
     fn job_state(&self, _: &Record) -> Option<JobState> {
+        let n = self.job_unreadable_reads.get();
+        if n > 0 {
+            self.job_unreadable_reads.set(n - 1);
+            return None;
+        }
         if self.job_busy.get() {
             return Some(JobState {
                 state: "working".into(),
@@ -169,10 +177,10 @@ impl Host for Fake {
         }
         self.fresh_activity.get().or(self.activity)
     }
-    fn log_has(&self, parts: &[&str]) -> bool {
+    fn log_has(&self, event: &str, fields: &[(&str, &str)]) -> bool {
         self.lines
             .iter()
-            .any(|l| parts.iter().all(|p| l.contains(p)))
+            .any(|l| pg_session_resume::host::line_has(l, event, fields))
     }
     fn log(&mut self, line: &str) -> bool {
         if self.log_fails {
