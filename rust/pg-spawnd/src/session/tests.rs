@@ -149,9 +149,9 @@ fn subprocess_capture_times_out_without_waiting_for_exit() {
 
 fn writer_policy(extra: serde_json::Value) -> serde_json::Value {
     let mut policy = serde_json::json!({"worker_roles": ["writer"], "hosts": [
-        {"name": "ws", "memory_floor_gib": 2},
-        {"name": "dell", "memory_floor_gib": 2},
-        {"name": "vm", "memory_floor_gib": 2, "last_resort": true}
+        {"name": "worker-a", "memory_floor_gib": 2},
+        {"name": "worker-b", "memory_floor_gib": 2},
+        {"name": "last-resort", "memory_floor_gib": 2, "last_resort": true}
     ]});
     policy
         .as_object_mut()
@@ -165,13 +165,17 @@ fn a_writer_without_a_host_goes_to_the_worker_with_the_most_free_memory_and_the_
 ) {
     use placement::Placement;
     let policy = writer_policy(serde_json::json!({}));
-    let placement =
-        Placement::with_hostname(Some(&policy), Some("writer"), "vm".into(), "vm".into());
+    let placement = Placement::with_hostname(
+        Some(&policy),
+        Some("writer"),
+        "last-resort".into(),
+        "last-resort".into(),
+    );
     let pick = |memory: [u64; 3]| {
         placement
             .select_with(None, |host, _| {
                 Some(
-                    memory[["ws", "dell", "vm"]
+                    memory[["worker-a", "worker-b", "last-resort"]
                         .iter()
                         .position(|n| *n == host.name())
                         .unwrap()]
@@ -180,12 +184,12 @@ fn a_writer_without_a_host_goes_to_the_worker_with_the_most_free_memory_and_the_
             })
             .map(|host| host.name().to_owned())
     };
-    assert_eq!(pick([105, 16, 90]).unwrap(), "ws");
-    assert_eq!(pick([8, 30, 90]).unwrap(), "dell");
+    assert_eq!(pick([105, 16, 90]).unwrap(), "worker-a");
+    assert_eq!(pick([8, 30, 90]).unwrap(), "worker-b");
     assert_eq!(
         pick([1, 1, 90]).unwrap(),
-        "vm",
-        "coding.vm only when no worker admits"
+        "last-resort",
+        "the last-resort host only when no worker admits"
     );
     assert!(pick([1, 1, 1]).is_err());
 }
@@ -195,37 +199,42 @@ fn a_writer_naming_a_host_is_refused_while_placement_is_on_unless_routing_dated_
     use placement::Placement;
     let refusal = |extra: serde_json::Value, role: &str, name: &str, today: &str| {
         let policy = writer_policy(extra);
-        Placement::with_hostname(Some(&policy), Some(role), "vm".into(), "vm".into())
-            .named_host_refusal(name, today)
+        Placement::with_hostname(
+            Some(&policy),
+            Some(role),
+            "last-resort".into(),
+            "last-resort".into(),
+        )
+        .named_host_refusal(name, today)
     };
     let none = serde_json::json!({});
-    assert!(refusal(none.clone(), "writer", "dell", "2026-11-24")
+    assert!(refusal(none.clone(), "writer", "worker-b", "2026-11-24")
         .unwrap()
         .contains("may not name a host"));
     assert!(
-        refusal(none, "reviewer", "dell", "2026-11-24").is_none(),
+        refusal(none, "reviewer", "worker-b", "2026-11-24").is_none(),
         "not a worker role"
     );
     let exception = |until: &str, host: &str| serde_json::json!({"host_exceptions": [{"host": host, "decision": "D-6741", "until": until}]});
     assert!(refusal(
-        exception("2026-11-30", "dell"),
+        exception("2026-11-30", "worker-b"),
         "writer",
-        "dell",
+        "worker-b",
         "2026-11-24"
     )
     .is_none());
     assert!(refusal(
-        exception("2026-11-30", "dell"),
+        exception("2026-11-30", "worker-b"),
         "writer",
-        "dell",
+        "worker-b",
         "2026-11-30"
     )
     .is_none());
     assert!(
         refusal(
-            exception("2026-11-23", "dell"),
+            exception("2026-11-23", "worker-b"),
             "writer",
-            "dell",
+            "worker-b",
             "2026-11-24"
         )
         .is_some(),
@@ -233,17 +242,24 @@ fn a_writer_naming_a_host_is_refused_while_placement_is_on_unless_routing_dated_
     );
     assert!(
         refusal(
-            exception("2026-11-30", "ws"),
+            exception("2026-11-30", "worker-a"),
             "writer",
-            "dell",
+            "worker-b",
             "2026-11-24"
         )
         .is_some(),
         "other host"
     );
-    let unlisted = Placement::with_hostname(None, Some("writer"), "vm".into(), "vm".into());
+    let unlisted = Placement::with_hostname(
+        None,
+        Some("writer"),
+        "last-resort".into(),
+        "last-resort".into(),
+    );
     assert!(
-        unlisted.named_host_refusal("vm", "2026-11-24").is_none(),
+        unlisted
+            .named_host_refusal("last-resort", "2026-11-24")
+            .is_none(),
         "no policy: placement is off"
     );
 }
