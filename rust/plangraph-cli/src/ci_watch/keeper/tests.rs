@@ -35,7 +35,25 @@ fn task() -> Task {
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        class: "code".into(),
+        run_class: "code".into(),
+        job_id: 4242,
     }
+}
+#[test]
+fn keeper_definition_names_the_class_job_and_where_to_start() {
+    let mut task = task();
+    task.class = "infrastructure".into();
+    task.run_class = "mixed".into();
+    let item = definition(&task, &task.key);
+    let text = item["description"].as_str().unwrap();
+    assert!(
+        text.contains("Class: infrastructure (run: mixed)"),
+        "{text}"
+    );
+    assert!(text.contains("Failed job id: 4242"), "{text}");
+    assert!(text.contains("not the batch's code"), "{text}");
+    assert!(text.contains("timestamp context"), "{text}");
 }
 #[test]
 fn keeper_definition_obeys_caps_guard_and_default_tier() {
