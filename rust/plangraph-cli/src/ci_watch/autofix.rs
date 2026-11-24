@@ -87,53 +87,6 @@ fn run(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| "non-UTF8 command output".into())
 }
 
-/// Run the fix command where the pull request's own code may run (cargo builds `build.rs` and procedural
-/// macros): an emptied environment with no credential of the watcher, a scratch HOME and a scratch CARGO_HOME
-/// that links only the dependency caches. The checkout it runs in has no remote that leads to GitHub.
-fn run_sandboxed(dir: &Path, program: &str, args: &[&str], scratch: &Path) -> Result<()> {
-    let home = scratch.join("home");
-    let cargo_home = scratch.join("cargo-home");
-    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&cargo_home).map_err(|e| e.to_string())?;
-    let real = std::env::var_os("CARGO_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")));
-    #[cfg(unix)]
-    for shared in ["registry", "git", "bin"] {
-        if let Some(source) = real.as_ref().map(|r| r.join(shared)).filter(|p| p.exists()) {
-            let _ = std::os::unix::fs::symlink(source, cargo_home.join(shared));
-        }
-    }
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(dir)
-        .env_clear()
-        .env("HOME", &home)
-        .env("CARGO_HOME", &cargo_home)
-        .env("GIT_TERMINAL_PROMPT", "0");
-    // Only these names cross: the toolchain's location and the build's own target and cache settings.
-    for name in [
-        "PATH",
-        "RUSTUP_HOME",
-        "CARGO_TARGET_DIR",
-        "RUSTUP_TOOLCHAIN",
-        "TMPDIR",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    if std::env::var_os("RUSTUP_HOME").is_none() {
-        if let Some(home) = std::env::var_os("HOME") {
-            command.env("RUSTUP_HOME", Path::new(&home).join(".rustup"));
-        }
-    }
-    pg_worker_core::host_command::output(&mut command, Duration::from_secs(1800))
-        .map(drop)
-        .map_err(|_| format!("{program} failed in the sandbox"))
-}
-
 /// Clone the head into `scratch`, run the fix in a sandbox copy, and have the trusted checkout stage that copy's
 /// files, check them, commit and push once. The sandbox copy is read as plain files: its `.git` (config, hooks)
 /// is never run, so a build script cannot turn the commit or the push into code of its own.
@@ -169,7 +122,7 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
         ],
     )?;
     let (program, args) = request.command.split_first().ok_or("empty fix command")?;
-    run_sandboxed(&sandbox.join(request.dir), program, args, scratch)?;
+    super::autofix_jail::run(&sandbox, request.dir, program, args, scratch)?;
     // The trusted repository, the sandbox's files: `add` records what the command left, whatever its `.git` says.
     let (git_dir, work_tree) = (trusted.join(".git"), sandbox.to_string_lossy().into_owned());
     let git_dir = git_dir.to_string_lossy().into_owned();
@@ -204,8 +157,6 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
         &trusted,
         "git",
         &[
-            "-c",
-            "core.hooksPath=/dev/null",
             "-c",
             "user.name=plangraph ci-watch",
             "-c",
@@ -258,6 +209,7 @@ pub fn pass(
     repo: &str,
     tasks: &BTreeMap<String, Task>,
     mut lookup: impl FnMut(u64) -> Result<PrHead>,
+    mut still_red: impl FnMut(u64) -> Result<bool>,
     mut fix: impl FnMut(&Request, &Path) -> Result<Outcome>,
 ) -> Result<Vec<String>> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -311,6 +263,21 @@ pub fn pass(
         };
         if head.sha != task.head_sha {
             continue; // a newer head has its own run; nothing is reserved
+        }
+        // The tasks were read before this pass took the lock: a rerun or a concurrent scan may have turned the
+        // run green since, so its outcome is read again at the source before anything is reserved or pushed.
+        match still_red(task.run_id) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                rows.push(format!(
+                    "autofix {} {}: run state unreadable: {}",
+                    task.head,
+                    class.name(),
+                    super::logs::scrub(&error)
+                ));
+                continue;
+            }
         }
         let key = format!("{label}:{}", class.name());
         ledger
@@ -373,6 +340,15 @@ pub fn pass(
         ));
     }
     Ok(rows)
+}
+
+/// True while the latest attempt of run `run_id` has concluded red (a rerun in flight or a green one is not).
+pub fn run_is_red(gh: &mut impl Github, run_id: u64) -> Result<bool> {
+    let run = gh.value(&format!("actions/runs/{run_id}"))?;
+    Ok(matches!(
+        run["conclusion"].as_str(),
+        Some("failure" | "timed_out" | "startup_failure")
+    ))
 }
 
 /// The head of pull request `pr` as GitHub reports it; a closed or merged pull request answers `NOT_OPEN` and a

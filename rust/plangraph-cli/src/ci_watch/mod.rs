@@ -1,5 +1,6 @@
 //! One bounded CI scan; all external effects are behind the Github adapter.
 pub mod autofix;
+mod autofix_jail;
 #[cfg(test)]
 mod autofix_tests;
 #[cfg(test)]
@@ -187,6 +188,7 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
             &repo,
             &tasks,
             |pr| autofix::pr_head(&mut gh, &repo, pr),
+            |run| autofix::run_is_red(&mut Gh { repo: repo.clone() }, run),
             |request, scratch| autofix::apply(scratch, request),
         )?);
     }
@@ -389,9 +391,10 @@ fn scan(
             if !attempted && !rerun_failed && flakes.contains_key(&test) {
                 continue;
             }
-            // A job that failed without a test id is told apart by its name: two such jobs are two failures.
+            // A job that failed without a test id is told apart by its job id (names repeat across a matrix):
+            // two such jobs are two failures.
             let identity = if test == "<job-failure>" {
-                format!("{test}\0{job}")
+                format!("{test}\0{job_id}")
             } else {
                 test.clone()
             };
@@ -445,6 +448,7 @@ fn scan(
                     run_id,
                     attempt: run["run_attempt"].as_u64().unwrap_or(1),
                     head: head.clone(),
+                    head_sha: sha.to_owned(),
                     run_class: run_class.name().into(),
                     jobs: jobs_seen,
                     tasks: made,

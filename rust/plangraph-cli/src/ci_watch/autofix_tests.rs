@@ -169,11 +169,11 @@ fn one_automatic_fix_per_pull_request_and_class_then_the_writer() {
         calls.borrow_mut().push(request.trailer.to_owned());
         Ok(Outcome::Pushed("new".into()))
     };
-    let rows = pass(dir.path(), "o/r", &tasks, lookup, fix).unwrap();
+    let rows = pass(dir.path(), "o/r", &tasks, lookup, |_| Ok(true), fix).unwrap();
     assert_eq!(rows.len(), 2, "fmt once and clippy once: {rows:?}");
     assert!(calls.borrow()[0].starts_with("Hand-Edit: ") && calls.borrow()[0].contains("job 1"));
     assert!(calls.borrow()[1].contains("clippy") && calls.borrow()[1].contains("job 4"));
-    let again = pass(dir.path(), "o/r", &tasks, lookup, fix).unwrap();
+    let again = pass(dir.path(), "o/r", &tasks, lookup, |_| Ok(true), fix).unwrap();
     assert!(again.is_empty(), "no loop: {again:?}");
     assert_eq!(calls.borrow().len(), 2);
 }
@@ -195,10 +195,80 @@ fn a_moved_head_makes_no_fix_and_keeps_the_class_open_for_the_next_red() {
     let fix = |_: &Request, _: &Path| -> Result<Outcome, String> {
         panic!("a stale head is never fixed")
     };
-    let rows = pass(dir.path(), "o/r", &tasks, lookup, fix).unwrap();
+    let rows = pass(dir.path(), "o/r", &tasks, lookup, |_| Ok(true), fix).unwrap();
     assert!(rows.is_empty(), "{rows:?}");
     let ledger = std::fs::read_to_string(dir.path().join("autofix.json")).unwrap_or_default();
-    assert!(!ledger.contains("pr-9:fmt"), "nothing reserved: {ledger}");
+    for sha in ["old", "new"] {
+        assert!(
+            !ledger.contains(&format!("o/r@{sha}")),
+            "stale head {sha} reserved: {ledger}"
+        );
+    }
+}
+
+#[test]
+fn a_run_that_is_no_longer_red_is_never_fixed_nor_reserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let tasks: BTreeMap<_, _> = [task("pr-9", 9, "fmt", 1, "abc")]
+        .into_iter()
+        .map(|t| (t.key.clone(), t))
+        .collect();
+    let lookup = |_| {
+        Ok(PrHead {
+            remote: "r".into(),
+            branch: "b".into(),
+            sha: "abc".into(),
+        })
+    };
+    // Another scan recorded the rerun green after these tasks were read.
+    let rows = pass(
+        dir.path(),
+        "o/r",
+        &tasks,
+        lookup,
+        |run| {
+            assert_eq!(run, 0, "the run id of the task");
+            Ok(false)
+        },
+        |_: &Request, _: &Path| -> Result<Outcome, String> { panic!("a green run is never fixed") },
+    )
+    .unwrap();
+    assert!(rows.is_empty());
+    let ledger = std::fs::read_to_string(dir.path().join("autofix.json")).unwrap_or_default();
+    assert!(!ledger.contains("o/r@abc"), "{ledger}");
+}
+
+struct Run(&'static str);
+impl super::github::Github for Run {
+    fn pages(&mut self, _: &str, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+        unreachable!()
+    }
+    fn page(&mut self, _: &str, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+        unreachable!()
+    }
+    fn log(&mut self, _: u64) -> Result<String, String> {
+        unreachable!()
+    }
+    fn rerun(&mut self, _: u64) -> Result<(), String> {
+        unreachable!()
+    }
+    fn value(&mut self, endpoint: &str) -> Result<serde_json::Value, String> {
+        assert_eq!(endpoint, "actions/runs/7");
+        Ok(
+            serde_json::json!({"conclusion": serde_json::Value::String(self.0.into()), "status": "completed"}),
+        )
+    }
+}
+
+#[test]
+fn only_a_run_whose_latest_attempt_concluded_red_is_red() {
+    assert!(run_is_red(&mut Run("failure"), 7).unwrap());
+    assert!(run_is_red(&mut Run("timed_out"), 7).unwrap());
+    assert!(!run_is_red(&mut Run("success"), 7).unwrap());
+    assert!(
+        !run_is_red(&mut Run(""), 7).unwrap(),
+        "a rerun in flight has no conclusion"
+    );
 }
 
 struct Recorded(serde_json::Value, usize);
@@ -244,14 +314,19 @@ fn a_closed_pull_request_is_never_cloned_and_is_read_once() {
         lookups.set(lookups.get() + 1);
         pr_head(&mut closed, "o/r", pr)
     };
-    assert!(pass(dir.path(), "o/r", &tasks, lookup, fix)
+    assert!(pass(dir.path(), "o/r", &tasks, lookup, |_| Ok(true), fix)
         .unwrap()
         .is_empty());
-    assert!(
-        pass(dir.path(), "o/r", &tasks, |_| panic!("read again"), fix)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(pass(
+        dir.path(),
+        "o/r",
+        &tasks,
+        |_| panic!("read again"),
+        |_| Ok(true),
+        fix
+    )
+    .unwrap()
+    .is_empty());
     assert_eq!(lookups.get(), 1, "one read for both tasks");
 }
 
@@ -363,16 +438,18 @@ fn a_head_gets_one_fix_per_class_a_later_head_gets_its_own_and_the_fixed_head_no
             .map(|t| (t.key.clone(), t))
             .collect()
     };
-    pass(dir.path(), "o/r", &at("s1", 1), lookup, fix).unwrap();
+    pass(dir.path(), "o/r", &at("s1", 1), lookup, |_| Ok(true), fix).unwrap();
     assert_eq!(pushed.borrow().len(), 1);
     // The head the fix produced is still red with the same class: never fixed again.
     *sha.borrow_mut() = "fix0".into();
-    assert!(pass(dir.path(), "o/r", &at("fix0", 2), lookup, fix)
-        .unwrap()
-        .is_empty());
+    assert!(
+        pass(dir.path(), "o/r", &at("fix0", 2), lookup, |_| Ok(true), fix)
+            .unwrap()
+            .is_empty()
+    );
     // A person's newer head that is red the same way gets its own fix.
     *sha.borrow_mut() = "s2".into();
-    pass(dir.path(), "o/r", &at("s2", 3), lookup, fix).unwrap();
+    pass(dir.path(), "o/r", &at("s2", 3), lookup, |_| Ok(true), fix).unwrap();
     assert_eq!(pushed.borrow().len(), 2);
 }
 
@@ -387,6 +464,7 @@ fn a_task_that_is_not_current_is_never_fixed() {
         "o/r",
         &tasks,
         |_| panic!("a green head is not read"),
+        |_| panic!("a green head is not asked"),
         |_: &Request, _: &Path| -> Result<Outcome, String> { panic!("a green head is not fixed") },
     )
     .unwrap();
@@ -403,4 +481,38 @@ fn the_scheduled_service_runs_the_automatic_fix() {
     for flag in ["ci-watch", "--keeper", "--main-freeze", "--autofix"] {
         assert!(exec.contains(flag), "{flag} missing from {exec}");
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_fix_command_cannot_read_the_trusted_clone_or_a_file_of_the_watcher_nor_write_outside_its_checkout(
+) {
+    let root = tempfile::tempdir().unwrap();
+    let head = remote(root.path());
+    let secret = root.path().join("watcher-secret.txt");
+    std::fs::write(&secret, "token-value\n").unwrap();
+    let scratch = root.path().join("scratch");
+    let escape = root.path().join("escaped.txt");
+    // The trusted clone is `scratch/trusted`; the command knows where it is and still cannot read or write it.
+    let script = format!(
+        "{{ cat '{s}' 2>&1; cat '{t}/rust/a.txt' 2>&1; echo x > '{e}' 2>&1; echo x > '{t}/rust/b.txt' 2>&1; echo end; }} > a.txt",
+        s = secret.display(),
+        t = scratch.join("trusted").display(),
+        e = escape.display()
+    );
+    let outcome = apply(&scratch, &request(&head, &["sh", "-c", &script])).unwrap();
+    assert!(matches!(outcome, Outcome::Pushed(_)), "{outcome:?}");
+    let bare = root.path().join("remote.git");
+    let seen = git(&bare, &["show", "feature:rust/a.txt"]);
+    assert!(seen.contains("end"), "{seen}");
+    assert!(
+        !seen.contains("token-value"),
+        "the watcher's file was readable: {seen}"
+    );
+    assert!(
+        !seen.contains("ugly"),
+        "the trusted clone was readable: {seen}"
+    );
+    assert!(!escape.exists(), "the command wrote outside its checkout");
+    assert!(!scratch.join("trusted/rust/b.txt").exists());
 }

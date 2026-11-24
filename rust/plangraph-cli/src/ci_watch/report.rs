@@ -12,6 +12,9 @@ pub struct RunRow {
     pub run_id: u64,
     pub attempt: u64,
     pub head: String,
+    /// The head commit the run ran on: two pushes to one pull request are two heads.
+    #[serde(default)]
+    pub head_sha: String,
     pub run_class: String,
     /// Failed jobs: name, job id, class.
     pub jobs: Vec<(String, u64, String)>,
@@ -43,12 +46,12 @@ pub fn load(dir: &Path) -> Result<Vec<RunRow>> {
 pub fn report(dir: &Path) -> Result<Value> {
     let rows = load(dir)?;
     let mut by_class: BTreeMap<&str, u64> = BTreeMap::new();
-    let mut heads: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
+    let mut heads: BTreeMap<String, BTreeMap<&str, u64>> = BTreeMap::new();
     let (mut unclassified, mut untasked) = (0, 0);
     for row in &rows {
         *by_class.entry(&row.run_class).or_default() += 1;
         *heads
-            .entry(&row.head)
+            .entry(format!("{}@{}", row.head, row.head_sha))
             .or_default()
             .entry(&row.run_class)
             .or_default() += 1;
@@ -60,17 +63,26 @@ pub fn report(dir: &Path) -> Result<Value> {
         }
     }
     let autofix: super::autofix::Ledger = super::read(&dir.join("autofix.json"))?;
-    let pushed = autofix
-        .done
-        .values()
-        .filter(|v| v.contains(": pushed "))
-        .count();
+    // What the automatic fixes did, by class: the ledger key is `repo@sha:class`, the value ends in the outcome.
+    let mut fixes: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
+    for (key, outcome) in &autofix.done {
+        if outcome.contains("produced by the fix") {
+            continue; // the head a fix made, entered only as a loop guard
+        }
+        let class = key.rsplit_once(':').map_or("", |(_, class)| class);
+        let result = if outcome.contains(": pushed ") {
+            "pushed"
+        } else {
+            "left_to_writer"
+        };
+        *fixes.entry(class).or_default().entry(result).or_default() += 1;
+    }
     Ok(json!({
         "red_runs": rows.len(),
         "red_runs_by_class": by_class,
-        "fix_rounds_per_head_by_class": heads,
+        "red_runs_per_head_sha_by_class": heads,
         "red_runs_without_class": unclassified,
         "red_runs_without_task": untasked,
-        "automatic_fixes_pushed": pushed,
+        "automatic_fixes_by_class": fixes,
     }))
 }

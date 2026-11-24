@@ -52,7 +52,8 @@ impl Github for Fixture {
             if self.two_jobs {
                 let mut second = jobs[0].clone();
                 second["id"] = json!(101);
-                second["name"] = json!("Public scrub");
+                // A matrix repeats the display name; the job id tells the jobs apart.
+                second["name"] = jobs[0]["name"].clone();
                 jobs.push(second);
             }
             Ok(jobs)
