@@ -184,7 +184,8 @@ assert output.getvalue().splitlines() == [
     f'#5 sha={state["merged"][0]["head"]} review=run-fixture verdict=ACCEPT; '
     'CI run 12 state=completed conclusion=success; GO-KEYS [example:PART,example:TRAIN]; '
     'timeline: ci=2.5m push=0.5m; '
-    'MIGRATION 23; PLAN example:TRAIN conforms=yes deviations=none']
+    'MIGRATION 23; keeper deploy: plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE, never a plain restart; '
+    'PLAN example:TRAIN conforms=yes deviations=none']
 "#,
     );
 }
