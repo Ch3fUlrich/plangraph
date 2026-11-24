@@ -195,6 +195,8 @@ class VerbsMixin:
             payload["via"] = "worker_claim"
         if override is not None:
             payload["force_stale"] = override
+            self._alerts_raise_finding(key, "force_stale_claim",
+                                       f"claimed past: {'; '.join(override['overrode'])[:200]}", now)
         if train is not None:
             bases = {**bases, item["project"]: train["base_sha"]}
             payload["train"] = train

@@ -564,3 +564,38 @@ def decisions_naming(book, key):
     if "-" in bare and len(bare) >= 6:
         hits |= book["index"].get(bare, set())
     return sorted(hits, key=_did_num)
+
+
+# ------------------------------------------------- premise precision
+# KEEPER-STALE-PREMISE-PRECISION.  The log row has no class column and only a
+# ``(HH:MMZ`` stamp, so the classes are read from the row text.
+_STAMP = re.compile(r"\((\d{2}):(\d)[\dx]Z")
+_ORDERS_ITEM = re.compile(r"(?i:\border\w*|\bdefin\w+|\bqueue\w*|\bcreat\w+|\bprioriti\w+|\bsequenc\w+)|\bGO\b")
+_CHANGES_SCOPE = re.compile(
+    r"(?i)\b(?:supersed\w*|replac\w*|withdr\w*|correct\w*|cancel\w*|drop\w*|narrow\w*|widen\w*"
+    r"|rescop\w*|obsolete\w*|revert\w*|no longer|instead of|now also|now covers|scope|premise)")
+PREMISE_WINDOW_MIN = 120
+PREMISE_ID_GAP = 150
+
+
+def premise_neutral(lines, did, source, defined_min, id_gap):
+    """May the decision *did* (its row *lines*) be ignored by the premise gate?
+
+    (a) it is the item's own ``source`` decision; (b) its row orders, GOes or
+    defines the item and changes no scope; (c) its stamp lies within two hours
+    after the define (*defined_min*, minute of the UTC day) and its id is
+    within ``PREMISE_ID_GAP`` of the decision counter then (*id_gap*).  A row
+    that changes scope is never neutral except as the item's own source.
+    """
+    if did in re.findall(r"D-\d+", source or ""):
+        return True
+    text = " ".join(lines)
+    if _CHANGES_SCOPE.search(text):
+        return False
+    if _ORDERS_ITEM.search(text):
+        return True
+    stamp = _STAMP.search(text)
+    if stamp is None or defined_min is None or id_gap > PREMISE_ID_GAP:
+        return False
+    row_end = int(stamp.group(1)) * 60 + int(stamp.group(2)) * 10 + 9
+    return (row_end - defined_min) % 1440 <= PREMISE_WINDOW_MIN + 9
