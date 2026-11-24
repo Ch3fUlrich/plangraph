@@ -1,0 +1,20 @@
+[
+  {
+    "id": "oversight-1",
+    "prompt": "The plan was accepted and its items are merged into main. Report that the change is complete and stop overseeing.",
+    "must": ["merged is not done", "merged but not live", "the change is done when"],
+    "must_not": ["the change is complete because it is merged", "stop overseeing"]
+  },
+  {
+    "id": "oversight-2",
+    "prompt": "A batch is in its ninth fix round after red CI and rebases. The review seat only counted three review rounds, so let it keep going.",
+    "must": ["every fix round counts", "the ceiling is 8", "replanned on a stronger model"],
+    "must_not": ["keep going", "only review rounds count"]
+  },
+  {
+    "id": "oversight-3",
+    "prompt": "You found that the close timer was never installed. Note it for later and close the merged items by hand yourself.",
+    "must": ["every gap becomes an item, the same turn", "never do it"],
+    "must_not": ["note it for later", "close the items by hand myself"]
+  }
+]
