@@ -433,7 +433,7 @@ print(open(os.environ["DEPLOY_PLAN_OUT"]).read(), end="")
 """
 
 
-def deploy_fixture(env, report):
+def deploy_fixture(env, report, config_root=None):
     """A PLANGRAPH_BIN that answers `land-train deploy-plan` with ``report`` and records how it was called."""
     stub = env.tmp / "plangraph-fake"
     stub.write_text(FAKE_PLANGRAPH)
@@ -442,7 +442,7 @@ def deploy_fixture(env, report):
                    DEPLOY_PLAN_CALL=str(env.tmp / "call.json"), DEPLOY_PLAN_OUT=str(env.tmp / "report.txt"),
                    DEPLOY_PLAN_FAIL=str(env.tmp / "fail"))
     (env.tmp / "report.txt").write_text(report)
-    registry = env.home / ".config" / "plangraph" / "hosts.json"
+    registry = (config_root or env.home / ".config") / "plangraph" / "hosts.json"
     registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_text("{}")
     return registry
@@ -532,3 +532,19 @@ def test_go_req_runs_the_real_deploy_plan_for_a_unit_part_and_a_unitless_part(en
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 0, result.stderr
     assert "; deploy: train.service@code; READY train.service@code parts #1; PLAN" in result.stdout
+
+
+def test_go_req_finds_the_hosts_registry_through_xdg_config_home(env):
+    from test_merge_batch_land import go_ready
+
+    xdg = env.tmp / "xdg"
+    registry = deploy_fixture(env, "deploy: none\n", config_root=xdg)
+    go_ready(env)
+    # The keeper config moves with XDG_CONFIG_HOME too; the registry sits only under it.
+    shutil.copy(env.home / ".config" / "plangraph" / "keeper.json", xdg / "plangraph" / "keeper.json")
+    env.env["XDG_CONFIG_HOME"] = str(xdg)
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 0, result.stderr
+    assert "; deploy: none; PLAN" in result.stdout and "unchecked" not in result.stdout
+    call = json.loads((env.tmp / "call.json").read_text())["argv"]
+    assert str(registry) in call
