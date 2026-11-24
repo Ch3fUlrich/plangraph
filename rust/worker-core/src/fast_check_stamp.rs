@@ -223,6 +223,10 @@ pub(crate) fn receipt_commit(
         repo,
         &["commit-tree", tree, "-m", message],
         &[
+            // UTF-8 whatever the host configures: another encoding adds a header the validator refuses.
+            ("GIT_CONFIG_COUNT", "1"),
+            ("GIT_CONFIG_KEY_0", "i18n.commitEncoding"),
+            ("GIT_CONFIG_VALUE_0", "utf-8"),
             ("GIT_AUTHOR_NAME", name),
             ("GIT_AUTHOR_EMAIL", email),
             ("GIT_COMMITTER_NAME", name),
@@ -257,8 +261,8 @@ fn canonical_commit(object: &str) -> bool {
         && lines.all(str::is_empty)
 }
 
-/// What a push may publish as a receipt ref: a notes tree of nothing but well-formed receipts
-/// (each file named by the head it is for); with `head`, one of them a green receipt of it.
+/// What a push may publish as a receipt ref: one parentless canonical commit whose root tree is
+/// exactly one well-formed receipt named by its head; with `head`, a green receipt of that head.
 pub fn notes_commit_green(repo: &Path, commit: &str, head: Option<&str>) -> Result<(), String> {
     crate::git::check_rev(commit).map_err(|e| e.to_string())?;
     // Parentless: pushing the ref sends this one commit, so what is validated is all that is published.
@@ -275,39 +279,38 @@ pub fn notes_commit_green(repo: &Path, commit: &str, head: Option<&str>) -> Resu
     if !canonical_commit(&object) {
         return Err(format!("{commit} is not a canonical receipt commit"));
     }
+    // The root tree itself (not `-r`, which hides empty subtrees): exactly one entry, a regular
+    // blob named by the head it is a receipt for, the layout the reader of a fetched ref uses.
     let listing =
-        git(repo, &["ls-tree", "-r", "-z", "--full-tree", commit]).map_err(|e| e.to_string())?;
-    let mut found = false;
-    for entry in listing.split('\0').filter(|e| !e.is_empty()) {
-        let (meta, path) = entry.split_once('\t').ok_or("malformed tree entry")?;
-        let mut fields = meta.split_whitespace();
-        let (_mode, kind, sha) = (fields.next(), fields.next(), fields.next());
-        // Flat layout only: the reader of a fetched ref looks at `<head>`, so a fanout path
-        // that would pass here and fail there is refused here.
-        let name = path.to_owned();
-        if kind != Some("blob")
-            || !matches!(name.len(), 40 | 64)
-            || !name.bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            return Err(format!("not a receipt note: {path}"));
-        }
-        let text = git(
-            repo,
-            &["cat-file", "blob", sha.ok_or("malformed tree entry")?],
-        )
-        .map_err(|e| e.to_string())?;
-        if !well_formed(&text, &name) {
-            return Err(format!("malformed receipt for {name}"));
-        }
-        if let Some(head) = head.filter(|head| *head == name) {
-            if !text_is_green(&text, head) {
-                return Err(format!("receipt of {head} is not green"));
-            }
-            found = true;
-        }
+        git(repo, &["ls-tree", "-z", "--full-tree", commit]).map_err(|e| e.to_string())?;
+    let entries: Vec<&str> = listing.split('\0').filter(|e| !e.is_empty()).collect();
+    let [entry] = entries.as_slice() else {
+        return Err(format!(
+            "{commit} holds {} root entries: a receipt ref holds exactly one receipt",
+            entries.len()
+        ));
+    };
+    let (meta, name) = entry.split_once('\t').ok_or("malformed tree entry")?;
+    let mut fields = meta.split_whitespace();
+    let (mode, kind, sha) = (fields.next(), fields.next(), fields.next());
+    if mode != Some("100644")
+        || kind != Some("blob")
+        || !matches!(name.len(), 40 | 64)
+        || !name.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(format!("not a receipt note: {name}"));
+    }
+    let text = git(
+        repo,
+        &["cat-file", "blob", sha.ok_or("malformed tree entry")?],
+    )
+    .map_err(|e| e.to_string())?;
+    if !well_formed(&text, name) {
+        return Err(format!("malformed receipt for {name}"));
     }
     match head {
-        Some(head) if !found => Err(format!("no receipt of {head} in {commit}")),
+        Some(head) if head != name => Err(format!("no receipt of {head} in {commit}")),
+        Some(head) if !text_is_green(&text, head) => Err(format!("receipt of {head} is not green")),
         _ => Ok(()),
     }
 }
@@ -541,6 +544,50 @@ mod tests {
             receipt_ref_for("refs/heads/lane/x"),
             receipt_ref_for("lane/x")
         );
+    }
+
+    #[test]
+    fn an_extra_empty_subtree_or_second_entry_in_the_root_tree_is_refused() {
+        let (dir, head) = repo();
+        publish(dir.path(), &head, &[check("fmt", 0)]).unwrap();
+        let ok = tip(dir.path(), &head);
+        let blob = git(dir.path(), &["rev-parse", &format!("{ok}:{head}")]).unwrap();
+        let empty = git_stdin(dir.path(), &["mktree"], "").unwrap();
+        // `ls-tree -r` lists only blobs: the name of an empty subtree would be published unseen.
+        for extra in [
+            format!("040000 tree {empty}\tprivate-name\n"),
+            format!("100644 blob {blob}\t{}\n", "b".repeat(40)),
+        ] {
+            let tree = git_stdin(
+                dir.path(),
+                &["mktree"],
+                &format!("100644 blob {blob}\t{head}\n{extra}"),
+            )
+            .unwrap();
+            let commit = canonical_commit_of(dir.path(), &tree, RECEIPT_MESSAGE);
+            let err = notes_commit_green(dir.path(), &commit, Some(&head)).unwrap_err();
+            assert!(err.contains("root entries"), "{err}");
+        }
+        // An executable or symlink mode is not a regular receipt either.
+        let tree = git_stdin(
+            dir.path(),
+            &["mktree"],
+            &format!("100755 blob {blob}\t{head}\n"),
+        )
+        .unwrap();
+        let commit = canonical_commit_of(dir.path(), &tree, RECEIPT_MESSAGE);
+        assert!(notes_commit_green(dir.path(), &commit, Some(&head)).is_err());
+    }
+
+    #[test]
+    fn a_host_commit_encoding_does_not_make_the_receipt_unpublishable() {
+        let (dir, head) = repo();
+        git(dir.path(), &["config", "i18n.commitEncoding", "ISO-8859-1"]).unwrap();
+        publish(dir.path(), &head, &[check("fmt", 0)]).unwrap();
+        let tip = tip(dir.path(), &head);
+        let object = git(dir.path(), &["cat-file", "commit", &tip]).unwrap();
+        assert!(!object.contains("\nencoding "), "{object}");
+        assert_eq!(notes_commit_green(dir.path(), &tip, Some(&head)), Ok(()));
     }
 
     #[test]
