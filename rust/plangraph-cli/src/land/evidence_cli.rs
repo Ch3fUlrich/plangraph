@@ -1,7 +1,11 @@
 //! `plangraph land-train evidence-assess` and `evidence-report`: the carry-over decision for one batch
 //! and the per-day counts of rebases, carries, re-reviews and rebase-caused fix rounds.
-use super::evidence::{daily, Accept, Ci, CiRerun, Decision, Evidence, ReReview, Record, Void};
+use super::evidence::{
+    classify_red, daily, may_merge, records_of, voids_accept, Accept, Ci, CiRerun, Decision,
+    Evidence, Kind, ReReview, Record, Red, RedKind, Void,
+};
 use super::evidence_git;
+use super::main_state::State;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -64,7 +68,64 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         need(flags, "head")?,
         trains,
     )?;
+    if let Some(out) = flags.get("records-out") {
+        append(out, &records_of(&d, need(flags, "day")?))?;
+    }
     Ok(lines(&d))
+}
+
+fn append(path: &str, records: &[Record]) -> Result<(), String> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("{path}: {e}"))?;
+    for r in records {
+        let line = serde_json::to_string(r).map_err(|e| e.to_string())?;
+        writeln!(f, "{line}").map_err(|e| format!("{path}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// `--records-out FILE --day D --kind fix-round-after-rebase`: a fix round that a rebase caused.
+pub(super) fn record_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
+    let kind = match need(flags, "kind")?.as_str() {
+        "fix-round-after-rebase" => Kind::FixRoundAfterRebase,
+        other => {
+            return Err(format!(
+                "unknown --kind {other}: use fix-round-after-rebase"
+            ))
+        }
+    };
+    append(
+        need(flags, "records-out")?,
+        &[Record::new(need(flags, "day")?, kind)],
+    )?;
+    Ok(Vec::new())
+}
+
+/// `--red FILE --ci-green BOOL --main-state FILE`: whether a red voids a carried ACCEPT, and whether
+/// the merge gate would let the batch in. The two answers never depend on each other.
+pub(super) fn red_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
+    let read = |k: &str| -> Result<Vec<u8>, String> {
+        let p = need(flags, k)?;
+        std::fs::read(p).map_err(|e| format!("{p}: {e}"))
+    };
+    let red: Red = serde_json::from_slice(&read("red")?).map_err(|e| format!("--red: {e}"))?;
+    let main: State =
+        serde_json::from_slice(&read("main-state")?).map_err(|e| format!("--main-state: {e}"))?;
+    let ci_green = need(flags, "ci-green")? == "true";
+    let kind = classify_red(&red);
+    let verdict = match (kind, voids_accept(kind)) {
+        (RedKind::Flake, false) => "RED flake: a carried ACCEPT stays".to_owned(),
+        _ => "RED genuine: a carried ACCEPT is void".to_owned(),
+    };
+    let merge = match may_merge(ci_green, &main) {
+        Ok(()) => "MERGE ok".to_owned(),
+        Err(word) => format!("MERGE refused {word}"),
+    };
+    Ok(vec![verdict, merge])
 }
 
 /// `--records FILE` holds one JSON record per line.

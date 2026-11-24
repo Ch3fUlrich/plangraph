@@ -478,3 +478,58 @@ fn a_culprit_that_is_the_only_part_leaves_no_retry_group() {
     assert_eq!(m.status(0), Status::Dropped);
     assert!(m.pending_groups().is_empty());
 }
+
+#[test]
+fn dropping_the_root_of_a_three_part_stack_frees_every_part_above_it_from_the_retry_groups() {
+    // The red single stack 0 <- 1 <- 2 is cut at a closed prefix: [0, 1] and [2].
+    let specs = vec![spec(1, None), spec(2, Some(0)), spec(4, Some(1))];
+    let mut m = Model::new(Policy::every_ready_rides(Order::Oldest), specs);
+    register_all(&mut m, 0..3);
+    ok(&mut m, Event::Select);
+    start(&mut m, 0);
+    ok(
+        &mut m,
+        Event::CiResult {
+            train: 0,
+            green: false,
+        },
+    );
+    assert_eq!(m.pending_groups(), [vec![0, 1], vec![2]]);
+    ok(&mut m, Event::Drop { part: 0 });
+    assert_eq!((m.status(1), m.status(2)), (Status::Ready, Status::Ready));
+    assert!(m.pending_groups().is_empty());
+}
+
+#[test]
+fn a_revert_frees_held_descendants_at_every_depth() {
+    let specs = vec![
+        spec(1, None),
+        spec(2, Some(0)),
+        spec(4, Some(1)),
+        spec(8, Some(2)),
+    ];
+    let mut m = Model::new(Policy::every_ready_rides(Order::Oldest), specs);
+    register_all(&mut m, 0..4);
+    ok(&mut m, Event::Select);
+    start(&mut m, 0);
+    ok(
+        &mut m,
+        Event::CiRed {
+            train: 0,
+            culprit: 3,
+        },
+    );
+    ok(&mut m, Event::StartRetry);
+    ok(
+        &mut m,
+        Event::CiResult {
+            train: 1,
+            green: true,
+        },
+    );
+    ok(&mut m, Event::Settle { train: 1 });
+    assert_eq!(m.landed(), 3);
+    ok(&mut m, Event::Revert { part: 0 });
+    assert_eq!(m.landed(), 0);
+    assert!(m.pending_groups().is_empty());
+}
