@@ -96,6 +96,29 @@ fn sweep_owned(
         ));
         return Ok(());
     }
+    // Only an ignored, untracked directory is a build cache: a tracked file or an unignored one
+    // beside the cargo marker is source and never goes with a recursive removal.
+    let ignored = crate::disk_hygiene::git(
+        repo,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "--",
+            "rust/target/",
+        ],
+    )?;
+    if !crate::disk_hygiene::git(repo, &["ls-files", "--", "rust/target"])?.is_empty()
+        || ignored.trim() != "rust/target/"
+    {
+        report.skipped.push(format!(
+            "{}: main checkout target holds tracked or unignored files; not touched",
+            target.display()
+        ));
+        return Ok(());
+    }
     if names_target(guards, &canonical) {
         report.skipped.push(format!(
             "{}: main checkout target pinned or live; not touched",
@@ -146,10 +169,22 @@ fn sweep_owned(
 mod tests {
     use super::*;
 
+    fn git(repo: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
     fn fixture(age_secs: u64) -> (tempfile::TempDir, std::path::PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("proj");
-        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join(".gitignore"), "rust/target/\n").unwrap();
         let debug = repo.join("rust/target/debug");
         fs::create_dir_all(&debug).unwrap();
         fs::write(debug.join("blob"), [0u8; 64]).unwrap();
@@ -293,6 +328,27 @@ mod tests {
     }
 
     #[test]
+    fn tracked_or_unignored_files_beside_the_cargo_marker_keep_the_directory() {
+        // A tracked source file whose directory also holds a valid cargo marker.
+        let (_tmp, repo) = fixture(7200);
+        fs::write(repo.join("rust/target/lib.rs"), b"fn main() {}").unwrap();
+        git(&repo, &["add", "-f", "rust/target/lib.rs"]);
+        let report = run(&repo, true, false);
+        assert_eq!(report.freed_bytes, 0);
+        assert!(repo.join("rust/target/lib.rs").exists());
+        assert!(report.skipped[0].contains("tracked or unignored"));
+        // Without an ignore rule the directory is no cache either, and local edits stay.
+        let (_tmp, repo) = fixture(7200);
+        fs::remove_file(repo.join(".gitignore")).unwrap();
+        assert_eq!(run(&repo, true, false).freed_bytes, 0);
+        assert!(repo.join("rust/target/debug/blob").exists());
+        // An unignored file inside an otherwise ignored target is also kept.
+        let (_tmp, repo) = fixture(7200);
+        fs::write(repo.join(".gitignore"), "rust/target/debug/\n").unwrap();
+        assert_eq!(run(&repo, true, false).freed_bytes, 0);
+    }
+
+    #[test]
     fn a_foreign_owned_target_is_kept() {
         let (_tmp, repo) = fixture(7200);
         let target = repo.join("rust/target");
@@ -356,7 +412,7 @@ mod tests {
     #[test]
     fn worktree_symlink_and_missing_targets_are_left_alone() {
         let (_tmp, repo) = fixture(7200);
-        fs::remove_dir(repo.join(".git")).unwrap();
+        fs::remove_dir_all(repo.join(".git")).unwrap();
         fs::write(repo.join(".git"), "gitdir: elsewhere\n").unwrap();
         assert!(run(&repo, true, false).actions.is_empty());
         assert!(repo.join("rust/target").exists());

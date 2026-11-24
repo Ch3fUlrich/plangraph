@@ -610,6 +610,7 @@ fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
     for pin_target_itself in [false, true] {
         let (tmp, repo, root) = fixture();
         let target = repo.join("rust/target");
+        fs::write(repo.join(".git/info/exclude"), "rust/target/\n").unwrap();
         fs::create_dir_all(target.join("debug")).unwrap();
         fs::write(target.join("debug/blob"), [0u8; 64]).unwrap();
         fs::write(
