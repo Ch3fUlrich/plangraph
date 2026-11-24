@@ -11,12 +11,7 @@ fn fake_gh(dir: &Path, runs: &str) -> std::path::PathBuf {
         log = dir.join("gh.log").display(),
         runs = dir.join("runs.json").display()
     );
-    fs::write(bin.join("gh"), script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(bin.join("gh"), fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    pg_worker_core::executable_test_support::write_executable(bin.join("gh"), script);
     bin
 }
 
