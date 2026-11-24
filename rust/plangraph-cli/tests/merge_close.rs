@@ -1,7 +1,7 @@
 //! The merge-close job against a fake keeper: no network, no keeper mutation.
 use plangraph_cli::feeder::{Env, Transport};
 use plangraph_cli::merge_close::{
-    repos_with, require_seats, run_scheduled_with, run_with, ScheduleTiming,
+    repos_with, require_seats, run_scheduled_items, run_scheduled_with, run_with, ScheduleTiming,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -575,4 +575,36 @@ fn hourly_reconcile_unit_invokes_only_the_dry_run() {
     assert!(service.contains(" reconcile-merged --dry-run --state "));
     assert!(timer.contains("OnCalendar=hourly"));
     assert!(timer.contains("Unit=pg-reconcile-merged.service"));
+}
+
+#[test]
+fn a_scoped_close_names_its_items_and_prints_the_settled_ones() {
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"running"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (json!({"refresh":"projects"}), json!({"projects":["demo"]})),
+        (
+            json!({"apply":true,"project":"demo","require_seats":false,"items":["demo:A","demo:B"]}),
+            json!({"closed":[{"key":"demo:A"}],"settled":[{"key":"demo:B","state":"done"}],"merged_not_done":0}),
+        ),
+    ]);
+    let outcome = run_scheduled_items(
+        &keeper,
+        &keeper,
+        Some(false),
+        true,
+        None,
+        false,
+        ScheduleTiming::new(Duration::from_secs(95), Duration::from_secs(400)),
+        &["demo:A".to_string(), "demo:B".to_string()],
+    )
+    .unwrap();
+    assert!(
+        outcome
+            .text
+            .starts_with("closed\tdemo:A\t\nsettled\tdemo:B\tdone\n"),
+        "{}",
+        outcome.text
+    );
+    keeper.assert_finished();
 }

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from merge_batch_build import (
     check_landed_parts, cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
-    landing_report, listed_items, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
+    landing_report, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
     require_tested_ff_evidence, run_timing_import, seats_acknowledged, wait_marked_merged,
 )
 from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
@@ -21,7 +21,7 @@ from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_con
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, keeper_migration, part_review, run, write_landing, write_landing_records,
                               cleanup_landed, close_merged_items, active_train, go_key_block, part_items, train_keys)
-from merge_batch_plan import windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
+from merge_batch_plan import _merge_subject, run_settlement, windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -135,7 +135,12 @@ def cmd_push(args):
     if workflow.is_file():   # a red Windows run refuses the push before anything leaves the machine
         windows_gate(st, workflow.read_text(encoding="utf-8"))
     body_text = render_body(active)
-    git("push", REMOTE, f"refs/heads/{st['branch']}:refs/heads/{st['branch']}", cwd=wt)
+    try:
+        git("push", REMOTE, f"refs/heads/{st['branch']}:refs/heads/{st['branch']}", cwd=wt)
+    except MergeBatchError:
+        if keeper_landing_configured():   # a refused push (the push gate's own stage bounds, say) is a stage too
+            record_stage(st["repo"], landing_batch_key(st), "push", head, started, result="failed")
+        raise
     if keeper_landing_configured():
         record_stage(st["repo"], landing_batch_key(st), "push", head, started)
     title = f"batch {st['name']}: " + " ".join(f"#{rec['pr']}" for rec in active["merged"])
@@ -440,20 +445,6 @@ def require_migration_go(st, go_row):
     raise MergeBatchError(refusal)
 
 
-def _merge_subject(number, title, custom):
-    """Return a single-line merge commit subject ending ``(#N)``, or raise."""
-    suffix = f"(#{number})"
-    if custom is not None:
-        if "\n" in custom or "\r" in custom:
-            raise MergeBatchError(f"merge subject must be a single line ending with '{suffix}'")
-        text = custom.strip()
-        if not re.search(rf"\S.*{re.escape(suffix)}\Z", text):
-            raise MergeBatchError(f"merge subject must end with '{suffix}'")
-        return text
-    base = re.sub(r"[\r\n]+", " ", (title or "")).strip() or f"batch #{number}"
-    return base if base.endswith(suffix) else f"{base} {suffix}"
-
-
 def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
     """Verify a pending landing, write its records, and resume the fenced settlement cursor."""
     repo, number = train["repo"], train["pr"]
@@ -495,13 +486,14 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
         elif step == "close_parts":
             if mode == TESTED_FF and not seats_acknowledged():
                 raise MergeBatchError(f"train #{number} settlement requires PG_MERGE_CLOSE_REQUIRE_SEATS=off (or false, 0)")
-            result = run(["plangraph", "merge-close"], timeout=330)
-            sys.stderr.write(result.stdout + result.stderr)
-            if kept := listed_items(result.stdout, {key for part in landed for key in part["items"]}):
-                raise MergeBatchError(f"train #{number} close_parts: the keeper kept open {', '.join(kept)}")
+            run_settlement(repo, train, landed, merge)
         elif step == "host_sync":
             started = landing_now()
-            result = run(["plangraph", "landing", "verify-hosts", repo, merge], timeout=600)
+            try:
+                result = run(["plangraph", "landing", "verify-hosts", repo, merge], timeout=600)
+            except MergeBatchError:
+                record_stage(repo, train["batch_key"], "host_sync", merge, started, result="failed")
+                raise
             receipt["verification"] = json.loads(result.stdout)["verified"]
             sys.stderr.write(result.stdout)
             record_stage(repo, train["batch_key"], "host_sync", merge, started)
@@ -634,7 +626,7 @@ def land_with_lease(args, lease, st, mode):
         settle_train(train, lease, st, wait=args.wait)
         return 0
     git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
-    landed = check_landed_parts(repo, number, st["merged"], merge, args.wait)
+    landed = check_landed_parts(repo, number, st["merged"], merge, args.wait, close=True)
     write_landing(st, mode, merge, reruns, args.go_row)
     drop_state(st)
     try:

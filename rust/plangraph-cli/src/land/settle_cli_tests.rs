@@ -91,6 +91,7 @@ fn a_settlement_with_no_parts_needs_no_effect_but_the_hosts() {
     let state = dir.path().join("s.json");
     let mut done = Settlement::new("example/repo", 9, &"d".repeat(40), vec![]);
     done.hosts = super::settle::Step::Done("3 hosts".into());
+    done.docs = super::settle::Step::Done("nothing to fold".into());
     done.hold_released = true;
     done.save(&state).unwrap();
     let lines = run(&flags(&[
@@ -102,15 +103,27 @@ fn a_settlement_with_no_parts_needs_no_effect_but_the_hosts() {
 }
 
 #[test]
-fn a_listed_item_of_the_part_is_kept_open_and_other_lines_are_not_its_business() {
-    let report = "closed\tk:A\tabc\nlisted\tk:B\topen\tseats missing\nlisted\tk:C\topen\tother\n";
+fn every_item_of_the_part_needs_a_closed_or_settled_done_row() {
+    let report = "closed\tk:A\tabc\nlisted\tk:B\topen\tseats missing\nlisted\tk:C\topen\tother\nsettled\tk:D\tdone\n";
     let items = |keys: &[&str]| keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
-    assert_eq!(parse_close_report(report, &items(&["k:A"])), Applied::Done);
+    assert_eq!(
+        parse_close_report(report, &items(&["k:A", "k:D"])),
+        Applied::Done
+    );
     assert_eq!(
         parse_close_report(report, &items(&["k:A", "k:B"])),
         Applied::Kept("k:B listed open seats missing".into())
     );
-    assert_eq!(parse_close_report("", &items(&["k:A"])), Applied::Done);
+    assert_eq!(parse_close_report("", &items(&[])), Applied::Done);
+    for missing in ["", "merged-part\tk:A\t5\tabc\n", "settled\tk:A\topen\n"] {
+        assert!(
+            matches!(
+                parse_close_report(missing, &items(&["k:A"])),
+                Applied::Kept(_)
+            ),
+            "{missing:?}"
+        );
+    }
 }
 
 #[test]
@@ -144,7 +157,7 @@ fn deployment_previews_and_scan_errors_keep_the_items_open() {
         );
     }
     assert_eq!(
-        parse_close_report("deployment-pending\tk:Z\t3h\tx\n", &items),
+        parse_close_report("deployment-pending\tk:Z\t3h\tx\nclosed\tk:A\ta\n", &items),
         Applied::Done
     );
 }
@@ -171,4 +184,79 @@ fn init_needs_a_writer_head_and_record_together() {
     assert!(Settlement::load(std::path::Path::new(&state))
         .unwrap()
         .is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn the_real_adapter_scopes_the_keeper_close_to_the_part_and_reads_its_rows() {
+    use super::settle::{Effects, PartState, Proof, Step};
+    use super::settle_cli::Real;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("argv.log");
+    let exe = dir.path().join("plangraph");
+    // A stand-in for the keeper CLI: it records the argument list and answers one row per --item.
+    std::fs::write(
+        &exe,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> {log}\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --item ]; then\n    case \"$2\" in\n      k:late) printf 'deployment-pending\\t%s\\t3h\\tdell\\n' \"$2\" ;;\n      *) printf 'closed\\t%s\\tabc\\n' \"$2\" ;;\n    esac\n  fi\n  shift\ndone\n",
+            log = log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut fx = Real {
+        repo: "x/y".into(),
+        dir: dir.path().to_path_buf(),
+        exe,
+        train_pr: 100,
+    };
+    let sha = "a".repeat(40);
+    let part = |items: &[&str]| PartState {
+        pr: 7,
+        head: sha.clone(),
+        items: items.iter().map(|i| (*i).to_owned()).collect(),
+        folded: true,
+        writer_head: None,
+        writer_record: None,
+        owner: None,
+        ready_at: None,
+        close_items: Step::Pending,
+        close_pr: Step::Pending,
+        stop_writer: Step::Pending,
+    };
+    let proof = Proof::OwnMerge;
+    assert_eq!(
+        fx.close_items(&part(&["k:A", "k:B"]), &proof),
+        Ok(Applied::Done)
+    );
+    assert!(matches!(
+        fx.close_items(&part(&["k:A", "k:late"]), &proof),
+        Ok(Applied::Kept(why)) if why.starts_with("k:late deployment-pending")
+    ));
+    assert_eq!(fx.close_items(&part(&[]), &proof), Ok(Applied::Done));
+    let argv = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        argv.lines().collect::<Vec<_>>(),
+        [
+            "merge-close --item k:A --item k:B",
+            "merge-close --item k:A --item k:late"
+        ]
+    );
+}
+
+#[test]
+fn an_older_state_file_without_a_docs_step_loads_and_folds_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.json");
+    let mut done = Settlement::new("example/repo", 9, &"d".repeat(40), vec![]);
+    done.save(&path).unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    raw.as_object_mut().unwrap().remove("docs");
+    std::fs::write(&path, raw.to_string()).unwrap();
+    let loaded = Settlement::load(&path).unwrap().unwrap();
+    assert_eq!(loaded.docs, super::settle::Step::Pending);
+    done = loaded;
+    assert!(!done.hold_released);
 }

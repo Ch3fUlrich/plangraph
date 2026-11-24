@@ -59,7 +59,7 @@ def journal(env):
     add_principal(db, "lander", "router", [])
     db.close()
     env.env.update(PLANGRAPH_ENV_FILE=str(env.tmp / "keeper.env"), JOURNAL_DB=str(path),
-                   JOURNAL_SWEEP_LOG=str(env.tmp / "sweep"))
+                   JOURNAL_SWEEP_LOG=str(env.tmp / "sweep"), SETTLE_LOG=str(env.tmp / "settle.log"))
     binary = env.stubs / "plangraph"
     binary.write_text("""#!/usr/bin/env python3
 import json, os, subprocess, sys
@@ -91,10 +91,20 @@ elif args[:2] == ['landing', 'verify-hosts']:
     head = args[-1]
     print(json.dumps(dict(verified=[dict(host=str(n), head=head, checkout=head,
         hooks=head, build=head, synced=False) for n in range(3)])))
-elif args == ['merge-close'] and os.environ.get('MERGE_CLOSE_LISTED'):
-    print('listed\\t' + os.environ['MERGE_CLOSE_LISTED'] + '\\topen\\tseats missing')
+elif args[:2] == ['land-train', 'settle']:
+    # The persisted settlement: it writes its state from the manifest, then closes, syncs and stops in order.
+    init = json.load(open(args[args.index('--init') + 1]))
+    Path(args[args.index('--state') + 1]).write_text(json.dumps(init))
+    with open(os.environ['SETTLE_LOG'], 'a') as log:
+        log.write(json.dumps(init) + '\\n')
+    listed = os.environ.get('MERGE_CLOSE_LISTED')
+    if listed and any(listed in part['items'] for part in init['parts']):
+        print('settle #%d: 0 steps done, 1 held, open' % init['train_pr'])
+        print('held #%d close_items: %s listed open seats missing' % (init['parts'][0]['pr'], listed))
+    else:
+        print('settle #%d: 3 steps done, 0 held, complete' % init['train_pr'])
 else:
-    assert args[:2] == ['landing', 'ci-import'] or args == ['merge-close'], args
+    assert args[:2] == ['landing', 'ci-import'], args
 """)
     binary.chmod(0o755)
     sweep = env.stubs / "pg-worktree-sweep"
@@ -162,6 +172,13 @@ def test_tested_ff_moves_main_to_the_train_head_without_a_merge_commit(env, keep
         assert train["mode"] == "tested-ff" and train["merge"] == head
         assert train["included"] == [1, 2, 3] and train["open_steps"] == []
         assert len(train["host_verification"]) == 3
+        # The keeper path closes nothing itself: the persisted settlement owns every close.
+        assert env.calls("pr", "close") == []
+        assert "HOLD-RELEASED owner/proj train #100" in res.stderr
+        (manifest,) = (json.loads(line) for line in (env.tmp / "settle.log").read_text().splitlines())
+        assert (manifest["train_pr"], manifest["merge"]) == (100, head)
+        assert [(part["pr"], part["folded"]) for part in manifest["parts"]] == [(1, True), (2, True), (3, True)]
+        assert (env.tmp / "settle.log").parent.exists() and manifest["parts"][0]["items"] == ["plangraph:ITEM-A"]
         frozen = [{"pr": part["pr"], "head": part["head"]} for part in train["parts"]]
         assert journal("consumed", parts=frozen)["consumed"] == frozen
 
@@ -195,6 +212,8 @@ def test_tested_ff_recovers_after_push_before_part_outcomes_are_saved(env, reque
     train = journal()["train"]
     assert train["merge"] == head and train["included"] == [1, 3]
     assert train["open_steps"] == [] and len(train["host_verification"]) == 3
+    (manifest,) = (json.loads(line) for line in (env.tmp / "settle.log").read_text().splitlines())
+    assert [part["pr"] for part in manifest["parts"]] == [1, 3]  # the moved part is not settled as landed
     (row,) = rows(env)
     assert (row["mode"], row["train"], row["landed_sha"]) == ("tested-ff", "l1", head)
     receipt = json.loads((env.state_file("l1").parent / "receipts" / f"l1-{head}.json").read_text())
@@ -569,7 +588,7 @@ def test_a_listed_item_holds_settlement_at_close_parts(env, journal):
     key = journal()["train"]["parts"][0]["items"][0]
     env.env["MERGE_CLOSE_LISTED"] = key
     held = env.run("settle")
-    assert held.returncode == 1 and "kept open" in held.stderr and key in held.stderr, held.stderr
+    assert held.returncode == 1 and "settlement is held" in held.stderr and key in held.stderr, held.stderr
     assert journal()["train"]["open_steps"] == ["close_parts", "host_sync", "cleanup"]
     del env.env["MERGE_CLOSE_LISTED"]
     assert env.run("settle").returncode == 0

@@ -73,6 +73,8 @@ pub fn run_with(
 
 #[derive(Default)]
 struct ClosePass {
+    /// Close only these item keys (the keeper's `items` filter); empty closes every merged item.
+    items: Vec<String>,
     text: String,
     merged_not_done: u64,
     closed_any: bool,
@@ -95,6 +97,9 @@ impl ClosePass {
         }
         if let Some(project) = project {
             body["project"] = json!(project);
+        }
+        if !self.items.is_empty() {
+            body["items"] = json!(self.items);
         }
         loop {
             let result = page(body.clone())?;
@@ -190,6 +195,14 @@ fn page_text(text: &mut String, result: &Value) {
                 flagged(&row["flags"])
             );
         }
+    }
+    for row in rows("settled") {
+        let _ = writeln!(
+            text,
+            "settled\t{}\t{}",
+            row["key"].as_str().unwrap_or("?"),
+            row["state"].as_str().unwrap_or("?")
+        );
     }
     for row in rows("parts") {
         let _ = writeln!(
@@ -295,6 +308,7 @@ fn run_scheduled(
     apply: bool,
     project: Option<&str>,
     deployment_only: bool,
+    items: &[String],
 ) -> Result<Outcome, String> {
     let seats = require_seats(env)?;
     let timing = ScheduleTiming::new(REFRESH_TIMEOUT, PASS_BUDGET);
@@ -302,7 +316,7 @@ fn run_scheduled(
         keeper: SlowKeeper { env, max_time_secs },
         deadline: timing.deadline,
     };
-    run_scheduled_with(
+    run_scheduled_items(
         &transport(MAX_TIME_SECS),
         &transport(10),
         seats,
@@ -310,6 +324,7 @@ fn run_scheduled(
         project,
         deployment_only,
         timing,
+        items,
     )
 }
 
@@ -323,6 +338,30 @@ pub fn run_scheduled_with(
     deployment_only: bool,
     timing: ScheduleTiming,
 ) -> Result<Outcome, String> {
+    run_scheduled_items(
+        keeper,
+        control,
+        seats,
+        apply,
+        project,
+        deployment_only,
+        timing,
+        &[],
+    )
+}
+
+/// The same, closing only the named item keys when `items` is not empty.
+#[allow(clippy::too_many_arguments)]
+pub fn run_scheduled_items(
+    keeper: &dyn Transport,
+    control: &dyn Transport,
+    seats: Option<bool>,
+    apply: bool,
+    project: Option<&str>,
+    deployment_only: bool,
+    timing: ScheduleTiming,
+    items: &[String],
+) -> Result<Outcome, String> {
     let ScheduleTiming {
         refresh_timeout,
         deadline,
@@ -330,6 +369,7 @@ pub fn run_scheduled_with(
     refresh_index(control, refresh_timeout)?;
     let mut pass = ClosePass {
         deployment_count: Some(0),
+        items: items.to_vec(),
         ..ClosePass::default()
     };
     let projects_reply;
@@ -408,16 +448,18 @@ fn refresh_index(control: &dyn Transport, timeout: Duration) -> Result<(), Strin
 
 /// The call the land step makes after a merge: the job with the configured switch.
 pub fn run_once(env: &Env, project: Option<&str>) -> Result<Outcome, String> {
-    run_scheduled(env, true, project, false)
+    run_scheduled(env, true, project, false, &[])
 }
 
-/// `merge-close [--count | --repos | --deploy-status] [--project NAME]`.
-/// The flags only report counts, repositories, or unproven deployments.
+/// `merge-close [--count | --repos | --deploy-status] [--project NAME] [--item KEY]...`.
+/// The flags only report counts, repositories, or unproven deployments; `--item` closes only the named
+/// items and adds a `settled` row for each named item the close does not touch (already done, say).
 pub fn run(env: &Env, args: &[String]) -> i32 {
     let mut count = false;
     let mut repos = false;
     let mut deploy_status = false;
     let mut project = None;
+    let mut items: Vec<String> = Vec::new();
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -428,8 +470,15 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
                 Some(name) => project = Some(name.as_str()),
                 None => return usage(),
             },
+            "--item" => match rest.next() {
+                Some(key) => items.push(key.clone()),
+                None => return usage(),
+            },
             _ => return usage(),
         }
+    }
+    if !items.is_empty() && (count || repos || deploy_status) {
+        return usage();
     }
     if u8::from(count) + u8::from(repos) + u8::from(deploy_status) > 1 {
         return usage();
@@ -450,7 +499,13 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
             }
         };
     }
-    let outcome = run_scheduled(env, !(count || deploy_status), project, deploy_status);
+    let outcome = run_scheduled(
+        env,
+        !(count || deploy_status),
+        project,
+        deploy_status,
+        &items,
+    );
     match outcome {
         Ok(done) => {
             if count {
@@ -469,7 +524,7 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
 
 fn usage() -> i32 {
     eprintln!(
-        "usage: plangraph merge-close [--count | --repos | --deploy-status] [--project NAME]"
+        "usage: plangraph merge-close [--count | --repos | --deploy-status | --item KEY...] [--project NAME]"
     );
     2
 }

@@ -120,17 +120,20 @@ candidate (rule 3.52 (8), D-6535).
 
 ## Stage timeline and bottleneck report
 
-The keeper database holds the timeline: `landing_stages` (fast checks, push, CI, review, delta review, GO, merge, host sync
-per batch or train, every attempt) and `landing_ci_jobs` (one row per CI job of a run from the GitHub API).
-`plangraph landing report OWNER/REPO --last N` (rust/plangraph-cli/src/land/timeline.rs, landing_report.rs) reads the newest N
-landed trains through the keeper's `land` actions `recent` and `timeline` and prints, per train, the wall time from writer
-done to merge, the critical path (parallel jobs count once, the CI jobs replace the whole-run row), idle time between stages
-and the bottleneck stage; a train with no row for a required stage is marked `incomplete`. The last line names the stage with
-the most critical-path time over the N trains. `landing report OWNER/REPO BATCH` and `--day DATE` keep their meaning. The
-GO request and train card print the same timeline. Host and result per stage and the push-gate sub-stages are not columns of
-`landing_stages` yet, and only push, CI, delta review, GO, merge and host sync have a producer, so a train is complete
-with those stages (`fast_checks`, `review` and `writing` are shown when present); the missing columns and producers need a
-keeper schema step.
+The keeper database holds the timeline: `landing_stages` (every attempt of fast checks, push, CI, review, delta review, GO,
+merge and host sync per batch or train, with the host it ran on, its result and, for the push gate, the preflight family as
+`detail`) and `landing_ci_jobs` (one row per CI job of a run from the GitHub API). Producers: the pre-push hook and
+preflight (`tools/pgtest.py` `deliver_landing_stage`: one `fast_checks` row for the gate and one per family, with result),
+the lander (`push`, `go`, `merge`, `host_sync`, written with `ok` or `failed`), the CI importer (host `github`, the run's
+conclusion) and `plangraph review` (`review`, `delta_review`). `plangraph landing report OWNER/REPO --last N`
+(rust/plangraph-cli/src/land/timeline.rs, landing_report.rs) reads the newest N landed trains through the keeper's `land`
+actions `recent` (ordered by the time the merge stage ended, not by pull request number) and `timeline` and prints, per
+train, the wall time from writer done to merge (it ends where the merge stage ends; the host sync is reported apart as the
+time after it), the critical path (parallel jobs count once, the CI jobs replace the whole-run row), idle time between stages
+and the bottleneck stage. A train is `incomplete` when it has no row for `fast_checks`, `push`, `ci`, `review`, `go`, `merge`
+or `host_sync`, or none for a push-gate family (`push_gate_stages`); a landed train with no telemetry stays in the report as
+incomplete. The last line names the stage with the most critical-path time over the N trains. `landing report OWNER/REPO
+BATCH` and `--day DATE` keep their meaning. The GO request and train card print the same timeline.
 
 ## Settlement after the merge
 
@@ -138,16 +141,21 @@ keeper schema step.
 steps after a train merges from a state file that holds the landed manifest (train, merge commit, parts with items, writer
 and folded flag). The state is written before the first effect and after every result, so a crash resumes at the step it
 stopped in; a finished step never runs again. Order: close each part's items (a folded part through the train merge),
-verify the host sync (three distinct hosts at the merge commit), close the folded pull requests, stop the writers.
-Refusals are `held` and checked again on the next run: an item stays open when its pull request moved after the freeze or
-its writer has commits outside the landed tree; a pull request is read, closed and read again, and reopened and left
-open when a push arrived in between; a writer is stopped only when its head is in the landed tree and its pull request is
-closed. Ownership, READY time, CI, eviction and host-sync facts are recorded as events. `hold_released` in the state file
-turns true when every step is done and the hosts are current; the router reads it to end the hold on new batches (rule 3.64),
-which is an external consumer this change does not wire. `tools/merge_batch_land.py settle` still runs its own cursor but
-stays at `close_parts` while `merge-close` lists a part's item. A part's items count as closed unless `merge-close` lists
-them (refused or flagged), reports their deployment unproven, only previews, or fails to scan; an item in a state the
-automatic close skips shows in no row, which the settlement cannot tell from a closed one.
+verify the host sync (three distinct hosts at the merge commit), close the folded pull requests, stop the writers, then fold
+the documentation fragments once. Refusals are `held` and checked again on the next run: an item stays open when its pull
+request moved after the freeze or its writer has commits outside the landed tree; a pull request is read, closed and read
+again, and reopened and left open when a push arrived in between; a writer is stopped only when its head is in the landed
+tree and its pull request is closed. Ownership, READY time, CI, eviction and host-sync facts are recorded as events.
+
+Production runs this path: `tools/merge_batch_land.py` (keeper journal) journals the landed parts first, `included_pr` closes
+nothing there, and the journal step `close_parts` calls `land-train settle` with the landed parts as the manifest
+(`merge_batch_build.run_settlement`, state in `merge-batch-settle/` beside the batch states). The step passes only when the
+settlement is complete; otherwise it fails with the held steps and the journal stays pending, which is the hold on new
+batches (rule 3.64): `plangraph landing journal` lists the train as pending until the settlement finished, and the lander
+prints `HOLD-RELEASED` when it ends. Without the keeper journal the lander still closes the folded pull requests itself.
+Each part's items are closed by `plangraph merge-close --item KEY...`, which the keeper scopes to the named items; a part is
+done only when every item has a `closed` row or a `settled ... done` row. A `listed`, `deployment-pending`, `would-close`,
+`merged-part` row, an item in another state, an item with no row, or a scan error holds the part.
 
 ## Documentation fragments
 
@@ -160,3 +168,9 @@ reference text is never rewritten and a repeated run changes nothing. A fragment
 cap of tools/check_file_size.py (cap minus headroom) stays unfolded and is listed. `--check 1` prints what it would fold.
 `--measure BASE..HEAD` counts the commits of a range that edit a shared reference directly; after the fold it should be
 the one fold commit per train.
+
+The settlement runs the fold as its last step (`fold_landed`): in a throwaway worktree of the landed merge commit it folds the
+fragments and commits the result on the local branch `land/docs-fold-<train>`, whose parent is the merge; the checkout is
+never touched and a repeat finds the branch. The branch is an ordinary commit for the next train to carry; its fragments that
+did not fit a reference stay and are named in the settlement's `docs_fold` event. Publishing that branch is not automated:
+it needs a lane writer identity the settlement does not have.

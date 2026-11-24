@@ -1,8 +1,11 @@
-"""Planning for tools/merge_batch.py: stack order, HIGH tier, batch caps, the plan table and Windows checks."""
+"""Planning for tools/merge_batch.py: stack order, HIGH tier, batch caps, the plan table and Windows checks; also the
+land-side helpers that need no other merge_batch module (the merge subject, the post-merge settlement run)."""
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -11,7 +14,7 @@ import time
 from pathlib import Path
 
 from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, gh_json, git,
-                              pr_labels, save_state)
+                              pr_labels, run, save_state, state_dir)
 
 try:
     from ci_commit_gate import AUTH_DOOR_PATHS, GATE_PATHS
@@ -378,3 +381,47 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
         if not data["jobs"]:
             raise MergeBatchError("full_ci: incomplete job pagination")
         page += 1
+
+
+def _merge_subject(number, title, custom):
+    """Return a single-line merge commit subject ending ``(#N)``, or raise."""
+    suffix = f"(#{number})"
+    if custom is not None:
+        if "\n" in custom or "\r" in custom:
+            raise MergeBatchError(f"merge subject must be a single line ending with '{suffix}'")
+        text = custom.strip()
+        if not re.search(rf"\S.*{re.escape(suffix)}\Z", text):
+            raise MergeBatchError(f"merge subject must end with '{suffix}'")
+        return text
+    base = re.sub(r"[\r\n]+", " ", (title or "")).strip() or f"batch #{number}"
+    return base if base.endswith(suffix) else f"{base} {suffix}"
+
+
+def settlement_path(repo, pr):
+    """The persisted post-merge settlement of train ``pr``; outside ``merge-batch/`` so no batch listing reads it."""
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "-", repo.lower())
+    return state_dir().parent / "merge-batch-settle" / f"{slug}-{pr}.json"
+
+
+def run_settlement(repo, train, landed, merge):
+    """Run the resumable settlement of a landed train: close the parts' items one by one, verify the host sync,
+    close the folded pull requests and stop the writers (``plangraph land-train settle``). The state file is
+    written before the first effect, so a crash resumes where it stopped. Returns once every step is done and
+    raises with the held steps otherwise; the journal cursor stays at ``close_parts`` until then, which is the
+    hold on new batches (rule 3.64): it ends when the journal has no pending train."""
+    path = settlement_path(repo, train["pr"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    extra = ("writer_head", "writer_record", "owner", "ready_at")
+    parts = [dict({key: part[key] for key in extra if part.get(key) is not None},
+                  pr=part["pr"], head=part["head"], items=part["items"], folded=True) for part in landed]
+    init = path.with_name(path.stem + ".init.json")
+    init.write_text(json.dumps(dict(repo=repo, train_pr=train["pr"], merge=merge, parts=parts)), encoding="utf-8")
+    root = git("rev-parse", "--show-toplevel").stdout.strip()
+    result = run(["plangraph", "land-train", "settle", "--state", str(path), "--repo-dir", root,
+                  "--init", str(init)], timeout=1800)
+    sys.stderr.write(result.stdout + result.stderr)
+    lines = result.stdout.splitlines()
+    if not lines or not lines[0].endswith(", complete"):
+        held = "; ".join(line.removeprefix("held ") for line in lines[1:]) or "no step result"
+        raise MergeBatchError(f"train #{train['pr']} close_parts: the settlement is held: {held}")
+    print(f"HOLD-RELEASED {repo} train #{train['pr']}", file=sys.stderr)

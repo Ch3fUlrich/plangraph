@@ -768,3 +768,22 @@ def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
     assert result["closed"] == []
     assert any(row["key"] == "demo:A" and "merged_pr_missing" in row["reason"]
                for row in result["listed"])
+
+
+def test_a_scoped_close_touches_only_the_named_items_and_reports_the_settled_ones(env):
+    for key, pr in (("A", 31), ("B", 32), ("C", 33)):
+        env.repo.land(key.lower(), f"Plan-Item: demo:{key}", pr)
+    first = auto(env, require_seats=False, items=["demo:A"])
+    assert [c["key"] for c in first["closed"]] == ["demo:A"]
+    assert state(env, "demo:B")["state"] == "open" and state(env, "demo:C")["state"] == "open"
+    assert first["settled"] == []
+    again = auto(env, require_seats=False, items=["demo:A", "demo:B"])
+    assert [c["key"] for c in again["closed"]] == ["demo:B"]
+    assert again["settled"] == [{"key": "demo:A", "state": "done"}]
+    assert state(env, "demo:C")["state"] == "open"
+
+
+def test_a_scoped_close_refuses_a_malformed_item_list(env):
+    for bad in ([], [""], "demo:A", [1], [f"demo:{i}" for i in range(101)]):
+        with pytest.raises(Refused):
+            auto(env, require_seats=False, items=bad)

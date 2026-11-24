@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import sys
 import time
 import uuid
@@ -624,11 +625,13 @@ def landing_journal(repo, action, **fields):
     return json.loads(response.stdout)
 
 
-def record_stage(repo, batch, stage, head, started, ended=None):
+def record_stage(repo, batch, stage, head, started, ended=None, result="ok"):
+    """Write one stage with the host it ran on and how it ended (``ok`` or ``failed``)."""
     try:
         landing_journal(repo, "stage", batch_key=batch, stage=stage, head=head,
                         attempt=max(1, started), started_at_ms=started,
-                        ended_at_ms=max(started, landing_now() if ended is None else ended))
+                        ended_at_ms=max(started, landing_now() if ended is None else ended),
+                        host=socket.gethostname()[:64], result=result)
     except MergeBatchError as exc:
         print(f"landing stage {stage} for {batch} pending keeper delivery: {exc}", file=sys.stderr)
 
@@ -639,12 +642,6 @@ def run_timing_import(repo, batch, head, run_info, attempt):
              str(run_info["id"]), str(attempt)], timeout=60)
     except MergeBatchError as exc:
         print(f"CI stage for {batch} pending keeper delivery: {exc}", file=sys.stderr)
-
-
-def listed_items(report, keys):
-    """The keys of ``keys`` that ``plangraph merge-close`` printed as ``listed`` (refused or flagged)."""
-    rows = (line.split("\t") for line in report.splitlines())
-    return sorted({r[1] for r in rows if len(r) > 1 and r[0] == "listed" and r[1] in keys})
 
 
 def landing_report(st):
@@ -758,16 +755,18 @@ def settle(repo, recs, wait):
         time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
 
 
-def included_pr(repo, number, rec, view, merge, *, report):
+def included_pr(repo, number, rec, view, merge, *, report, close=False):
     """Check frozen-head ancestry and report the PR's live-head outcome.
 
-    Read an open PR again before closing it. If its head moved after the
-    build, leave it open and label it needs-update.
+    With the keeper journal the PR is not closed here: closing a folded PR belongs to the persisted settlement
+    (``plangraph land-train settle``), which reads the head again around the close and reopens a PR that took
+    a push in between. Only the keeper-less path passes ``close=True``: it reads an open PR again before
+    closing it. If the head moved after the build, leave the PR open and label it needs-update.
     """
     num = rec["pr"]
     if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
         return "problem", f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}"  # no MERGED line
-    if view["state"] != "MERGED" and view["headRefOid"] == rec["head"]:
+    if close and view["state"] != "MERGED" and view["headRefOid"] == rec["head"]:
         view = gh_json("pr", "view", str(num), "--repo", repo, "--json", "state,headRefOid")
         if view["state"] == "OPEN" and view["headRefOid"] == rec["head"]:
             gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")
@@ -781,11 +780,11 @@ def included_pr(repo, number, rec, view, merge, *, report):
     return "ok", ""
 
 
-def check_landed_parts(repo, number, parts, merge, wait, *, report=True):
+def check_landed_parts(repo, number, parts, merge, wait, *, report=True, close=False):
     views = settle(repo, parts, wait)
     problems, moved, landed = [], [], []
     for rec in parts:
-        outcome, why = included_pr(repo, number, rec, views[rec["pr"]], merge, report=report)
+        outcome, why = included_pr(repo, number, rec, views[rec["pr"]], merge, report=report, close=close)
         if outcome == "moved":
             moved.append(rec["pr"])
         elif outcome == "problem":

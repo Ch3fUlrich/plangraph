@@ -408,7 +408,8 @@ def _close_merged_auto(store, principal, body, need):
     project, repos_only = body.get("project"), body.get("repos_only", False)
     limit, after = body.get("limit"), body.get("after")
     if type(watch) is not bool or watch and (
-            apply is not False or repos_only or project is not None or limit is not None or after is not None):
+            apply is not False or repos_only or project is not None or limit is not None or after is not None
+            or body.get("items") is not None):
         raise Refused("validation", "watch requires a complete dry run across all repositories")
     if not watch and limit is None:
         limit = 25
@@ -416,7 +417,7 @@ def _close_merged_auto(store, principal, body, need):
         report = store.close_merged_auto(
             principal, project, require_seats=body.get("require_seats"),
             apply=apply, repos_only=repos_only, frozen=True,
-            limit=limit, after=after)
+            limit=limit, after=after, items=body.get("items"))
         if watch:
             if report["scan_errors"] or report["next_after"] is not None:
                 raise Refused("evidence_unverified", "merged-open watcher scan incomplete")

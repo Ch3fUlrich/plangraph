@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 /// The hosts a landing is verified on (rule 3.39: workstation, WSL and the Linux build host).
 pub const HOSTS: usize = 3;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", content = "note", rename_all = "snake_case")]
 pub enum Step {
+    #[default]
     Pending,
     /// Finished; never run again.
     Done(String),
@@ -72,6 +73,9 @@ pub struct Settlement {
     pub parts: Vec<PartState>,
     pub hosts: Step,
     pub hosts_receipts: Vec<HostReceipt>,
+    /// The once-per-train fold of the per-item documentation fragments into the shared references.
+    #[serde(default)]
+    pub docs: Step,
     /// The hold on new batches (rule 3.64) ended: every step finished and the hosts are current.
     pub hold_released: bool,
     pub events: Vec<Event>,
@@ -111,6 +115,9 @@ pub trait Effects {
     /// The guarded stop; `Kept` when it left the writer running.
     fn stop_writer(&mut self, part: &PartState, merge: &str) -> Result<Applied, String>;
     fn end_hold(&mut self) -> Result<(), String>;
+    /// Fold the landed documentation fragments of the merge into the shared references, once per train;
+    /// returns what it folded and kept. A fragment that does not fit its reference stays for the next train.
+    fn fold_docs(&mut self, train_pr: u64, merge: &str) -> Result<String, String>;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -129,6 +136,7 @@ impl Settlement {
             parts,
             hosts: Step::Pending,
             hosts_receipts: vec![],
+            docs: Step::Pending,
             hold_released: false,
             events: vec![],
         }
@@ -220,7 +228,14 @@ impl Settlement {
             self.stop_writer_step(i, fx, now)?;
             self.save(path)?;
         }
+        if !self.docs.is_done() {
+            let summary = fx.fold_docs(self.train_pr, &self.merge)?;
+            self.docs = Step::Done(summary.clone());
+            self.note("docs_fold", summary, now());
+            self.save(path)?;
+        }
         let complete = self.hosts.is_done()
+            && self.docs.is_done()
             && self.parts.iter().all(|p| {
                 p.close_items.is_done() && p.close_pr.is_done() && p.stop_writer.is_done()
             });

@@ -42,6 +42,7 @@ struct Fake {
     reopened: Vec<u64>,
     stopped: Vec<u64>,
     holds_ended: usize,
+    folds: Vec<(u64, String)>,
     keeper_keeps: BTreeMap<u64, String>,
     stop_keeps: BTreeMap<u64, String>,
 }
@@ -78,6 +79,12 @@ impl Fake {
 }
 
 impl Effects for Fake {
+    fn fold_docs(&mut self, train_pr: u64, merge: &str) -> Result<String, String> {
+        self.tick()?;
+        self.folds.push((train_pr, merge.to_owned()));
+        Ok("folded 0 fragments".into())
+    }
+
     fn pr_head(&mut self, pr: u64) -> Result<(PrState, String), String> {
         self.tick()?;
         Ok(self.heads[&pr].clone())
@@ -176,6 +183,11 @@ fn crash_at_every_effect_resumes_and_finishes_each_step_once() {
         assert_eq!(fx.closed_prs, vec![1, 2], "crash {crash}");
         assert_eq!(fx.stopped, vec![1, 2, 3], "crash {crash}");
         assert_eq!(fx.holds_ended, 1, "crash {crash}");
+        assert_eq!(
+            fx.folds,
+            vec![(9, MERGE.to_owned())],
+            "once per train, crash {crash}"
+        );
         // A third run changes nothing.
         let before = fx.calls;
         run(&mut resumed, &path, &mut fx).unwrap();
@@ -380,6 +392,7 @@ fn events_record_what_happened() {
             "host_sync",
             "pr_closed",
             "writer_stopped",
+            "docs_fold",
             "hold_released"
         ]
     );

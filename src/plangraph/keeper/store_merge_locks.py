@@ -465,3 +465,44 @@ class MergeLocksMixin:
                 "UPDATE merge_locks SET owner='', expires_at=0 WHERE repo=?"
                 " AND token=?", (repo, token))
         return {}
+
+    def _auto_merge_candidates(self, project, after, limit, items=None):
+        if limit is None:
+            return [item for item in self._all_items()
+                    if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")
+                    and (items is None or item["key"] in items)
+                    and (project is None or item["project"] == project)
+                    and (after is None or item["key"] > after)]
+        states = ",".join("?" for _ in self.AUTO_STATES)
+        sql = (f"SELECT * FROM items WHERE state IN ({states})"
+               " AND kind NOT IN ('goal','operator_task')")
+        args = list(self.AUTO_STATES)
+        if project is not None:
+            sql += " AND project=?"
+            args.append(project)
+        if items is not None:
+            sql += f" AND key IN ({','.join('?' for _ in items)})"
+            args.extend(items)
+        if after is not None:
+            sql += " AND key>?"
+            args.append(after)
+        sql += " ORDER BY key LIMIT ?"
+        args.append(limit + 1)
+        rows = self.conn.execute(sql, args).fetchall()
+        if not rows:
+            return []
+        keys = [row["key"] for row in rows]
+        predicates = ",".join("?" for _ in keys)
+        deps = {key: [] for key in keys}
+        for edge in self.conn.execute(
+                f"SELECT src,dst FROM edges WHERE src IN ({predicates}) ORDER BY dst", keys):
+            deps[edge["src"]].append(edge["dst"])
+        return [dict(self._hydrate(dict(row)), depends_on=deps[row["key"]]) for row in rows]
+
+    def _settled_items(self, items, project, closed_now):
+        """The named items the close does not touch, each with its state: a ``done`` item was closed by an
+        earlier pass, so a scoped caller can tell it from one the scan never reached."""
+        marks = ",".join("?" for _ in items)
+        rows = self.conn.execute(f"SELECT key,state,project FROM items WHERE key IN ({marks})", items).fetchall()
+        return [{"key": row["key"], "state": row["state"]} for row in rows
+                if row["key"] not in closed_now and row["state"] not in self.AUTO_STATES and (project is None or row["project"] == project)]

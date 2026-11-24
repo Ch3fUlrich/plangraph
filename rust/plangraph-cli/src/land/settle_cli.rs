@@ -105,26 +105,33 @@ pub(super) fn parse_pr_view(raw: &str) -> Result<(PrState, String), String> {
     Ok((state, head.to_owned()))
 }
 
-/// What `plangraph merge-close` printed about a part's items. The part stays held when the keeper
-/// listed one as refused or flagged, found its deployment unproven, only previewed its close, or could
-/// not scan a repository (then no close is claimed). An item that is in no row was closed by an earlier
-/// pass or is in a state the automatic close does not touch.
+/// What a scoped `plangraph merge-close --item KEY...` printed about a part's items. Every item needs a
+/// definitive row: `closed` by this pass, or `settled ... done` for one an earlier pass closed. The part
+/// stays held when an item is listed (refused or flagged), has its deployment unproven, was only
+/// previewed, is in another state, has no row at all, or the scan failed (then no close is claimed).
 pub(super) fn parse_close_report(report: &str, items: &[String]) -> Applied {
+    let mut settled: Vec<&str> = Vec::new();
     for line in report.lines() {
         let mut fields = line.split('\t');
         let (Some(label), Some(key)) = (fields.next(), fields.next()) else {
             continue;
         };
         let why: Vec<&str> = fields.collect();
+        let mine = items.iter().any(|i| i == key);
         match label {
-            "listed" | "deployment-pending" | "would-close" if items.iter().any(|i| i == key) => {
+            "closed" if mine => settled.push(key),
+            "settled" if mine && why.first() == Some(&"done") => settled.push(key),
+            "settled" | "listed" | "deployment-pending" | "would-close" | "merged-part" if mine => {
                 return Applied::Kept(format!("{key} {label} {}", why.join(" ")));
             }
             "scan-error" => return Applied::Kept(format!("scan-error {key} {}", why.join(" "))),
             _ => {}
         }
     }
-    Applied::Done
+    match items.iter().find(|i| !settled.contains(&i.as_str())) {
+        Some(missing) => Applied::Kept(format!("{missing} has no close result from the keeper")),
+        None => Applied::Done,
+    }
 }
 
 /// `pg-spawnd writer-stop` exits 0 when it keeps a writer; the report row says which.
@@ -160,11 +167,13 @@ pub(super) fn parse_hosts(raw: &str) -> Result<Vec<HostReceipt>, String> {
         .collect()
 }
 
-struct Real {
-    repo: String,
-    dir: PathBuf,
-    /// The keeper closes by merge evidence for every merged item in one pass; its report is read per part.
-    keeper_report: Option<String>,
+/// The effects against the real tools. `exe` is the `plangraph` binary the keeper steps call back into.
+pub(super) struct Real {
+    pub(super) repo: String,
+    pub(super) dir: PathBuf,
+    pub(super) exe: PathBuf,
+    /// The train's pull request, named in the comment of every folded pull request it closes.
+    pub(super) train_pr: u64,
 }
 
 impl Effects for Real {
@@ -201,21 +210,24 @@ impl Effects for Real {
     }
 
     fn close_items(&mut self, part: &PartState, _proof: &Proof) -> Result<Applied, String> {
-        // The keeper proves a folded part through the train merge itself; one pass covers every part.
-        if self.keeper_report.is_none() {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            self.keeper_report = Some(output(Command::new(exe).arg("merge-close"), "merge-close")?);
+        // The keeper proves each named item through the merge on its default branch (a folded part
+        // through the train merge itself); the pass is scoped to this part's items, so the checks
+        // `Settlement` ran for this part come before any write and no other part's item is closed here.
+        if part.items.is_empty() {
+            return Ok(Applied::Done);
         }
-        Ok(parse_close_report(
-            self.keeper_report.as_deref().unwrap_or_default(),
-            &part.items,
-        ))
+        let mut command = Command::new(&self.exe);
+        command.arg("merge-close");
+        for item in &part.items {
+            command.args(["--item", item]);
+        }
+        let report = output(&mut command, "merge-close")?;
+        Ok(parse_close_report(&report, &part.items))
     }
 
     fn verify_hosts(&mut self, merge: &str) -> Result<Vec<HostReceipt>, String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let raw = output(
-            Command::new(exe).args(["landing", "verify-hosts", &self.repo, merge]),
+            Command::new(&self.exe).args(["landing", "verify-hosts", &self.repo, merge]),
             "verify-hosts",
         )?;
         parse_hosts(&raw)
@@ -223,7 +235,15 @@ impl Effects for Real {
 
     fn close_pr(&mut self, pr: u64) -> Result<(), String> {
         output(
-            Command::new("gh").args(["pr", "close", &pr.to_string(), "--repo", &self.repo]),
+            Command::new("gh").args([
+                "pr",
+                "close",
+                &pr.to_string(),
+                "--repo",
+                &self.repo,
+                "--comment",
+                &format!("merged via batch PR #{}", self.train_pr),
+            ]),
             "gh pr close",
         )
         .map(drop)
@@ -248,6 +268,10 @@ impl Effects for Real {
             "pg-spawnd writer-stop",
         )?;
         parse_stop_report(&raw)
+    }
+
+    fn fold_docs(&mut self, train_pr: u64, merge: &str) -> Result<String, String> {
+        super::docs_fold::fold_landed(&self.dir, train_pr, merge)
     }
 
     /// The hold of rule 3.64 is the `hold_released` field of the state file; nothing else to switch.
@@ -277,7 +301,8 @@ pub(super) fn run(flags: &BTreeMap<String, String>) -> Result<Vec<String>, Strin
     let mut fx = Real {
         repo: settlement.repo.clone(),
         dir: PathBuf::from(need("repo-dir")?),
-        keeper_report: None,
+        exe: std::env::current_exe().map_err(|e| e.to_string())?,
+        train_pr: settlement.train_pr,
     };
     let now = || {
         std::time::SystemTime::now()
