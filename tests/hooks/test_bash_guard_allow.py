@@ -97,3 +97,16 @@ def test_pgrep_one_shot_and_non_self_matching_patterns_are_allowed(guard):
         'echo "while pgrep -f pytest; do sleep 5; done"',
     ):
         assert guard.check(command) is None, command
+
+
+def test_loops_without_a_gh_or_ssh_poll_and_one_shot_calls_stay_allowed():
+    from bash_guard_support import run_bash
+
+    for command in (
+        "until grep -q DONE /tmp/status; do sleep 2; done",
+        "gh pr view 1270 --json headRefName",
+        "ssh host true",
+        "for f in a b; do echo $f; done; sleep 1",
+        "plangraph wait ci --pr 1270 --deadline 3600",
+    ):
+        assert run_bash(command).returncode == 0, command
