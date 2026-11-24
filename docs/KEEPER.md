@@ -392,6 +392,16 @@ preflight step that ran out of time. Independent checkouts refresh in parallel,
 with up to four workers per scan. A later claim refreshes repository authority
 again, even when a previous work index is recent.
 
+The automatic merge close (`close_merged_auto`, `pg merge-close`) records a `landing` object in its
+`commit` evidence: the standing `authority` (the operator decision named by the config setting
+`merge_close_decision`, a `D-NNN` id, with whether the decisions file holds it), one entry per landed PR
+with the forge's merged PR, its pre-merge head and the CI verdict and check names of that head, and the
+GO rows that name the item and bind a landed PR. A squash merge closes the same way: the forge names its
+PR by the squash commit and the head that was reviewed. The forge is asked once per landing by the warm
+scan, outside the lock, and the record is kept. A missing standing decision, an unverified check set or a
+missing GO row never refuses a proved landing: it is listed under `flags` in `landing` and as
+`landing_flags` in the close result.
+
 `pg define` and `pg define --edit` refuse review clauses in `done_criteria`
 or `description` that pin a model or leg from the routing catalog. Ask for
 “a review seat outside every writer family” so the spawner can choose the seat.

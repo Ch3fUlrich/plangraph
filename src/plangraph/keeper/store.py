@@ -116,6 +116,9 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         self.alert_window_s = ALERT_WINDOW_S
         # Seat gate of the merged closes; the keeper setting ``require_seats`` (off by default).
         self.require_seats = False
+        # Forge records of landings, kept for good: a merge-index scan works on a shallow copy of the
+        # store, so the dict has to exist before the copy for the scan's answers to reach the server.
+        self._landings = {}
 
     # ------------------------------------------------------------ time
     def now(self):
