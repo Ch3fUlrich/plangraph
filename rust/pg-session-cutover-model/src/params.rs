@@ -10,8 +10,12 @@ pub const SUPERVISOR_SECS: u16 = 20;
 pub const SCAN_SECS: u16 = 60;
 /// Consecutive Stop-hook blocks Claude Code 2.1.329 honours before it ends the turn.
 pub const STOP_BLOCK_CAP: u8 = 9;
-/// Events one digest carries; the rest stay pending for the next receipt.
-pub const DIGEST_EVENTS: u8 = 8;
+/// Longest digest: the fleet's Bash output limit. The range header counts against it.
+pub const DIGEST_BYTES: u16 = 8192;
+/// The range header every digest starts with (digest id, first and last event).
+pub const HEADER_BYTES: u16 = 64;
+/// Longest wait for a launched replacement to be confirmed and adopted, or aborted.
+pub const RECYCLE_SECS: u16 = 30;
 pub const MAX_SESSIONS: u8 = 3;
 pub const MAX_SOURCES: usize = 2;
 /// Longest timer, in ticks, that the counters hold without overflow.
@@ -30,6 +34,8 @@ pub enum Class {
 pub struct EventSpec {
     pub class: Class,
     pub source: u8,
+    /// Size of the event's line in a digest.
+    pub bytes: u16,
 }
 
 /// The bounds of one exploration: sessions, sources, events and direct messages.
@@ -38,12 +44,13 @@ pub struct Params {
     /// Sessions the role may use; `sessions - 1` recycles fit.
     pub sessions: u8,
     pub stop_cap: u8,
-    /// Events one receipt covers, urgent first.
-    pub digest_cap: u8,
+    /// Bytes of one digest, header included; a receipt covers what fits, urgent first.
+    pub digest_bytes: u16,
     pub bound_secs: u16,
     pub takeover_secs: u16,
     pub supervisor_secs: u16,
     pub scan_secs: u16,
+    pub recycle_secs: u16,
     pub events: Vec<EventSpec>,
     pub messages: u8,
 }
@@ -62,11 +69,12 @@ impl Params {
         Self {
             sessions: 2,
             stop_cap: STOP_BLOCK_CAP,
-            digest_cap: DIGEST_EVENTS,
+            digest_bytes: DIGEST_BYTES,
             bound_secs: URGENT_BOUND_SECS,
             takeover_secs: TAKEOVER_SECS,
             supervisor_secs: SUPERVISOR_SECS,
             scan_secs: SCAN_SECS,
+            recycle_secs: RECYCLE_SECS,
             events,
             messages,
         }
@@ -80,6 +88,7 @@ impl Params {
             self.takeover_secs,
             self.supervisor_secs,
             self.scan_secs,
+            self.recycle_secs,
         ];
         if secs.iter().any(|s| *s == 0 || s % TICK_SECS != 0) {
             return Err(ParamError::Tick);
@@ -87,7 +96,10 @@ impl Params {
         if secs.iter().any(|s| s / TICK_SECS > MAX_TICKS)
             || self.sessions == 0
             || self.sessions > MAX_SESSIONS
-            || self.digest_cap == 0
+            || self
+                .events
+                .iter()
+                .any(|e| e.bytes == 0 || e.bytes > self.digest_bytes.saturating_sub(HEADER_BYTES))
             || self
                 .events
                 .iter()
@@ -121,10 +133,12 @@ pub enum Defect {
     FallbackNotAwaited,
     /// A scan counts as the session's receipt.
     ScanIsReceipt,
+    /// A digest carries every pending event, whatever its size.
+    DigestUnbounded,
 }
 
 impl Defect {
-    pub const ALL: [Defect; 9] = [
+    pub const ALL: [Defect; 10] = [
         Defect::NoTakeover,
         Defect::RecycleWhileActive,
         Defect::NoFence,
@@ -134,6 +148,7 @@ impl Defect {
         Defect::NoSupervisor,
         Defect::FallbackNotAwaited,
         Defect::ScanIsReceipt,
+        Defect::DigestUnbounded,
     ];
 
     pub(crate) fn bit(self) -> u16 {

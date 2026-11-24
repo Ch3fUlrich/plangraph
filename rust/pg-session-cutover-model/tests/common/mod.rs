@@ -3,14 +3,31 @@
 use pg_session_cutover_model::*;
 use std::collections::{HashMap, VecDeque};
 
+/// Size of one event line in a test digest.
+pub const EVENT_BYTES: u16 = 100;
+
 pub const URGENT: fn(u8) -> EventSpec = |source| EventSpec {
     class: Class::Urgent,
     source,
+    bytes: EVENT_BYTES,
 };
 pub const ORDINARY: fn(u8) -> EventSpec = |source| EventSpec {
     class: Class::Ordinary,
     source,
+    bytes: EVENT_BYTES,
 };
+pub fn of_class(class: Class, source: u8) -> EventSpec {
+    EventSpec {
+        class,
+        source,
+        bytes: EVENT_BYTES,
+    }
+}
+
+/// A digest that holds the header and `n` event lines of a test.
+pub fn digest_of(p: &mut Params, n: u16) {
+    p.digest_bytes = HEADER_BYTES + n * EVENT_BYTES;
+}
 
 pub fn params(events: Vec<EventSpec>, messages: u8) -> Params {
     Params::production(events, messages)
