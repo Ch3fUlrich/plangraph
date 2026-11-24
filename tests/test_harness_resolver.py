@@ -142,3 +142,11 @@ def test_spawn_without_the_harness_is_refused_by_name_before_any_exec(bare_unit,
     exe, job = _spawn_claude(tmp_path, monkeypatch, bare_unit)
     assert exe is None, "nothing may be executed"
     assert job.status == "failed" and job.stderr.startswith("harness_not_found claude ")
+
+
+def test_mimo_admission_shortcut_never_hides_a_missing_opencode(bare_unit):
+    # mimo ids are admitted by render without a model listing; the binary check still comes first
+    row = dict(model="mimo/mimo-v2.6-pro", harness="opencode")
+    assert resolver.host_skip_reason(row).startswith("harness_not_found opencode ")
+    _binary(bare_unit / ".local/bin")
+    assert not (resolver.host_skip_reason(row) or "").startswith("harness_not_found")
