@@ -11,7 +11,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-fn directory(state: &Path, record: &Value) -> Result<PathBuf, EvidenceError> {
+pub(crate) fn directory(state: &Path, record: &Value) -> Result<PathBuf, EvidenceError> {
     let dir = run_dir(
         state,
         record["run_id"].as_str().ok_or(EvidenceError::Invalid)?,

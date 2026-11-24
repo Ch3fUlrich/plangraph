@@ -75,43 +75,48 @@ pub(crate) fn classify(record: &Value, text: &str) -> &'static str {
     }
 }
 
-type Sample<'a> = (f64, &'a str, &'a str);
+pub(crate) type Sample<'a> = (f64, &'a str, &'a str);
+
+/// One terminal review run of a record: its leg and `(ended, run_id, class)`.
+pub(crate) fn sample<'a>(state: &Path, record: &'a Value) -> Option<(&'a str, Sample<'a>)> {
+    if record["role"] != "review"
+        || !matches!(
+            record["status"].as_str(),
+            Some(
+                "completed"
+                    | "succeeded"
+                    | "terminated_after_answer"
+                    | "failed"
+                    | "timeout"
+                    | "timed_out"
+                    | "stalled"
+                    | "limited"
+                    | "killed"
+            )
+        )
+    {
+        return None;
+    }
+    let leg = record["attempts"]
+        .as_array()
+        .and_then(|attempts| attempts.last())
+        .and_then(|attempt| attempt["leg"]["id"].as_str())
+        .or_else(|| record["chosen_leg"]["id"].as_str());
+    let (Some(leg), Some(id), Some(ended)) =
+        (leg, record["run_id"].as_str(), record["ended"].as_f64())
+    else {
+        return None;
+    };
+    let class = record["review_result"]
+        .as_str()
+        .unwrap_or_else(|| classify(record, &answer(state, record)));
+    Some((leg, (ended, id, class)))
+}
 
 fn samples<'a>(state: &Path, records: &'a [Value]) -> BTreeMap<&'a str, Vec<Sample<'a>>> {
     let mut legs: BTreeMap<_, Vec<_>> = BTreeMap::new();
-    for record in records {
-        if record["role"] != "review"
-            || !matches!(
-                record["status"].as_str(),
-                Some(
-                    "completed"
-                        | "succeeded"
-                        | "terminated_after_answer"
-                        | "failed"
-                        | "timeout"
-                        | "timed_out"
-                        | "stalled"
-                        | "limited"
-                        | "killed"
-                )
-            )
-        {
-            continue;
-        }
-        let leg = record["attempts"]
-            .as_array()
-            .and_then(|attempts| attempts.last())
-            .and_then(|attempt| attempt["leg"]["id"].as_str())
-            .or_else(|| record["chosen_leg"]["id"].as_str());
-        let (Some(leg), Some(id), Some(ended)) =
-            (leg, record["run_id"].as_str(), record["ended"].as_f64())
-        else {
-            continue;
-        };
-        let class = record["review_result"]
-            .as_str()
-            .unwrap_or_else(|| classify(record, &answer(state, record)));
-        legs.entry(leg).or_default().push((ended, id, class));
+    for (leg, run) in records.iter().filter_map(|r| sample(state, r)) {
+        legs.entry(leg).or_default().push(run);
     }
     legs
 }

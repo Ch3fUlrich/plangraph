@@ -86,6 +86,13 @@ The gate-known override denominator and unknown-gate count are separate metrics;
 missing gates are never inferred as skips.
 Recovery metrics retain full corrected history, and leg metadata is chronological.
 
+`pg-spawnd health review-order --before-since T --before-until T --after-since T
+--after-until T [--leg ID,ID] [--state PATH]` measures the stable-first prompt order from
+recorded review runs. Per leg (a stratum counts as matched only with reviews in both
+windows) it prints reviews, no-verdict share, cached-input-token share, the number of
+runs with no usage frame in their live log (`missing_usage`, left out of the token
+share), the matched totals and the query text. Read-only; windows must not overlap.
+
 The immutable operator baseline lives in a dated research directory in the private data repo.
 Before RL14 on, compare the pinned window
 2026-10-30 10:30Z through 2026-11-02 10:30Z: 641 runs, 155 run-hours,
