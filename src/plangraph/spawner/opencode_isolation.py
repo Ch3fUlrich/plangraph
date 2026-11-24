@@ -139,10 +139,19 @@ def review_seat_home(env, job_dir, cwd=None):
     """Give a review seat its own HOME and config dir under ``job_dir``.
 
     The seat's HOME hides the user's profile, so cargo and the repository's pytest are put
-    on its PATH first, from the launching user's home.
+    on its PATH first, from the launching user's home, and the data dirs they read through
+    HOME stay reachable.
     """
     from plangraph.routing_support.claude_seat import review_tool_path
-    env['PATH'] = review_tool_path(env.get('PATH'), env.get('HOME'), cwd)
+    home = Path(env.get('HOME') or Path.home())
+    env['PATH'] = review_tool_path(env.get('PATH'), str(home), cwd)
+    # User installs and rustup proxies find their data through HOME; keep them pointing at the
+    # launching user's. A cargo home that holds registry credentials is never handed over.
+    for name, folder in (('PYTHONUSERBASE', '.local'), ('RUSTUP_HOME', '.rustup'), ('CARGO_HOME', '.cargo')):
+        source = home / folder
+        if name not in env and source.is_dir() and not (
+                name == 'CARGO_HOME' and any((source / f).exists() for f in ('credentials', 'credentials.toml'))):
+            env[name] = str(source)
     env['HOME'] = job_dir
     config = os.path.join(job_dir, 'config')
     os.mkdir(config, 0o700)

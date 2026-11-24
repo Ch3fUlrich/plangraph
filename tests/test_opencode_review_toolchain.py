@@ -72,3 +72,26 @@ def test_review_checkout_venv_wins_and_is_not_shadowed_by_a_later_path_entry(tmp
     _tool(other / 'bin/python')
     monkeypatch.setenv('PREFLIGHT_PYTHON', str(other / 'bin/python'))
     assert review_tool_path('/usr/bin', str(tmp_path), str(tmp_path / 'empty')).split(os.pathsep)[0] == str(other / 'bin')
+
+
+def test_review_seat_keeps_user_installs_and_rustup_reachable_after_the_home_swap(tmp_path, monkeypatch):
+    from plangraph.spawner.opencode_isolation import review_seat_home
+    home = tmp_path / 'home'
+    for name in ('.local', '.rustup', '.cargo'):
+        (home / name).mkdir(parents=True)
+    job = tmp_path / 'job'
+    job.mkdir()
+    for name in ('PYTHONUSERBASE', 'RUSTUP_HOME', 'CARGO_HOME'):
+        monkeypatch.delenv(name, raising=False)
+    env = {'HOME': str(home), 'PATH': '/usr/bin'}
+    review_seat_home(env, str(job))
+    assert env['HOME'] == str(job)
+    assert (env['PYTHONUSERBASE'], env['RUSTUP_HOME'], env['CARGO_HOME']) == (
+        str(home / '.local'), str(home / '.rustup'), str(home / '.cargo'))
+    # An explicit setting is kept, and a cargo home holding credentials is never handed to the seat.
+    (home / '.cargo/credentials.toml').write_text('x')
+    job2 = tmp_path / 'job2'
+    job2.mkdir()
+    env = {'HOME': str(home), 'PATH': '/usr/bin', 'RUSTUP_HOME': '/custom/rustup'}
+    review_seat_home(env, str(job2))
+    assert env['RUSTUP_HOME'] == '/custom/rustup' and 'CARGO_HOME' not in env
