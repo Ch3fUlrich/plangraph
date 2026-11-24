@@ -212,6 +212,31 @@ pub(crate) fn save_seat_group(state: &Path, envelope: &Value) -> Result<(), Tool
     .map_err(|_| ToolError::Internal("could not save seat group".into()))
 }
 
+/// Admits one group of a split review under its own slot of the plan's leg. The first group keeps the
+/// reservation the whole review was admitted under (named by `args`); each later group takes a new
+/// one, so a split larger than the bound still never runs more seats than the leg allows. The slots
+/// stay in `held` until the review ends.
+pub(crate) fn admit_group(
+    state: &Path,
+    plan: &Value,
+    index: usize,
+    dry: bool,
+    args: &crate::placement::Args,
+    held: &mut Vec<crate::seat_admission::Reservation>,
+) -> Result<crate::placement::Args, ToolError> {
+    use crate::seat_admission::{admit, Fixed, TOKEN_FIELD};
+    let mut group_args = args.clone();
+    if index > 1 && !dry {
+        group_args.remove(TOKEN_FIELD);
+        let (_, slot) = admit(state, plan.clone(), &mut Fixed(plan.clone()))?;
+        if let Some(slot) = slot {
+            group_args.insert(TOKEN_FIELD.into(), json!(slot.token()));
+            held.push(slot);
+        }
+    }
+    Ok(group_args)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_rust_split_groups(
     runs: &crate::runs::Runs,
@@ -237,8 +262,10 @@ pub(crate) fn spawn_rust_split_groups(
     let seat_group_id = format!("seats-{}", &new_run_id()["run-".len()..]);
     let total = groups.len();
     let mut run_ids = Vec::with_capacity(total);
+    let mut held = Vec::new();
     for (idx, group_paths) in groups.iter().enumerate() {
         let index = idx + 1;
+        let args = &admit_group(state, plan, index, dry, args, &mut held)?;
         let (run_id, job_id) = (new_run_id(), new_job_id());
         let mut spec = launch(
             state,
@@ -353,10 +380,11 @@ pub(crate) fn spawn_adapter_split_groups(
     let seat_group_id = format!("seats-{}", &new_run_id()["run-".len()..]);
     let total = groups.len();
     let mut run_ids = Vec::with_capacity(total);
+    let mut held = Vec::new();
     for (idx, group_paths) in groups.iter().enumerate() {
         let index = idx + 1;
         let (run_id, job_id) = (new_run_id(), new_job_id());
-        let mut child_args = args.clone();
+        let mut child_args = admit_group(state, plan, index, dry, args, &mut held)?;
         child_args["card"]["diff_ref"]["paths"] = json!(group_paths);
         let group_prompt = format!("{}{}", group_banner(index, total, group_paths), prompt);
         child_args["prompt"] = json!(group_prompt);
@@ -396,7 +424,7 @@ pub(crate) fn spawn_adapter_split_groups(
     )
 }
 
-fn finish_group_seats(
+pub(crate) fn finish_group_seats(
     state: &Path,
     seat_group_id: &str,
     run_ids: &[String],

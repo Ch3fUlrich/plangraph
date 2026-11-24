@@ -7,3 +7,12 @@ routes again each poll (a leg that booked a 429 leaves the route at once). It ne
 leg of the queued leg's harness: past the wait bound it refuses `seat_queue_timeout`, and a route that replaces the
 leg with a sibling of the same harness (the `agy-cli` selector keeps only agy legs) refuses `seat_leg_limited`, so the
 caller starts its fallback seats. A route that moves to another harness is that fallback and is taken.
+
+A seat is matched to its slot by name: the slot's token rides on the request, the run record stores it as
+`seat_reservation`, and a record naming the token takes the slot over (a start time never matches). A
+request cannot claim a token. A review split into groups admits each group under its own slot (the first group
+keeps the review's), so a split larger than the bound waits like any other burst. When admission refuses with
+`seat_queue_timeout` or `seat_leg_limited` (also when the `agy-cli` selector leaves no agy leg), the spawner
+starts both fallback seats itself (`opencode-go-deepseek-v4-flash` and `opencode-go-glm-5.3-flash`, from the
+route without the selector) and answers with their seat group; if either leg is not routable none starts
+(`seat_fallback_unavailable`).

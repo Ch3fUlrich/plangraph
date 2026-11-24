@@ -70,6 +70,7 @@ mod round_replan;
 mod round_replan_ports;
 mod runs;
 mod seat_admission;
+mod seat_fallback;
 mod serve;
 mod serve_options;
 mod shim;

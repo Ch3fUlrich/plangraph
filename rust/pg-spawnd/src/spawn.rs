@@ -125,6 +125,29 @@ fn record_validation_error(
     save(state, host, record, status)?;
     Ok(())
 }
+/// Starts the two fallback review seats (DeepSeek and GLM) of a seat the smart leg could not take,
+/// and answers with their seat group.
+fn fallback_seats(
+    state: &Path,
+    args: &Args,
+    host: &str,
+    runs: &crate::runs::Runs,
+    role: &Value,
+) -> Result<Value, ToolError> {
+    let open = crate::seat_fallback::seat_args(args);
+    let route: Value = serde_json::from_str(&placement::route(state, &open)?)
+        .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
+    let mut seat = open;
+    seat.insert("wait_seconds".into(), json!(0));
+    let ids = crate::seat_fallback::start_seats(&route, |plan| {
+        runs.spawn(state, &seat, host, role.clone(), plan)
+    })?;
+    let group = format!(
+        "seats-{}",
+        &pg_worker_core::run::record::new_run_id()["run-".len()..]
+    );
+    crate::review_split::finish_group_seats(state, &group, &ids, args.get("wait_seconds"), false)
+}
 pub(crate) fn spawn(
     state: &Path,
     args: &Args,
@@ -148,6 +171,9 @@ pub(crate) fn spawn(
             return Err(error);
         }
     };
+    // Only admission may name a seat reservation; a request cannot claim one.
+    let mut admitted = admitted;
+    admitted.remove(crate::seat_admission::TOKEN_FIELD);
     let args = &admitted;
     let plan: Value = serde_json::from_str(&placement::route(state, args)?)
         .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
@@ -160,16 +186,36 @@ pub(crate) fn spawn(
     {
         return Err(ToolError::Internal("route adapter returned no leg".into()));
     }
-    // A review seat takes a slot of its leg first (route policy review_seat_admission); the slot is
-    // held until this call returns, by which time the run record counts for the leg.
-    let (plan, _slot) = if role == "review" && args.get("dry_run") != Some(&json!(true)) {
-        crate::seat_admission::admit(
+    // A review seat takes a slot of its leg first (route policy review_seat_admission). The run record
+    // carries the slot's token, so the slot stops counting once the record counts the seat. A queue
+    // that times out or loses its leg sends the seat to the two fallback seats.
+    let (plan, slot) = if role == "review" && args.get("dry_run") != Some(&json!(true)) {
+        match crate::seat_admission::admit(
             state,
             plan,
             &mut crate::seat_admission::Live { state, args },
-        )?
+        ) {
+            Ok(taken) => taken,
+            Err(error) if crate::seat_admission::is_queue_refusal(&error) => {
+                return fallback_seats(state, args, host, runs, &role);
+            }
+            Err(error) => return Err(error),
+        }
     } else {
         (plan, None)
+    };
+    let seat_args;
+    let args = match &slot {
+        Some(slot) => {
+            let mut with_token = args.clone();
+            with_token.insert(
+                crate::seat_admission::TOKEN_FIELD.into(),
+                json!(slot.token()),
+            );
+            seat_args = with_token;
+            &seat_args
+        }
+        None => args,
     };
     match runs.spawn(state, args, host, role.clone(), plan.clone()) {
         Err(error) => {

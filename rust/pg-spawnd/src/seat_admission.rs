@@ -6,9 +6,10 @@ use serde_json::Value;
 use std::{collections::BTreeMap, path::Path, path::PathBuf, time::Duration};
 
 /// A reservation covers the gap between admission and the run record; past this it is stale.
+const LOCK_NAME: &str = "admission.lock";
 const RESERVATION_TTL: f64 = 120.0;
-/// A record this much older than the reservation still belongs to it (clock rounding).
-const MATCH_SLACK: f64 = 1.0;
+/// The run-record field that names the reservation a seat was admitted under.
+pub(crate) const TOKEN_FIELD: &str = "seat_reservation";
 
 pub(crate) struct Policy {
     limits: BTreeMap<String, usize>,
@@ -43,6 +44,33 @@ pub(crate) trait Ports {
     fn sleep(&mut self, duration: Duration);
 }
 
+/// True for the two refusals that send a review seat to the fallback seats.
+pub(crate) fn is_queue_refusal(error: &ToolError) -> bool {
+    matches!(error, ToolError::Refused { message, .. }
+        if message.starts_with("seat_queue_timeout:") || message.starts_with("seat_leg_limited:"))
+}
+
+fn clock() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// Ports for a seat that must stay on the leg it was planned for (one group of a split review): the
+/// route never changes, so admission only waits for a slot on that leg.
+pub(crate) struct Fixed(pub Value);
+impl Ports for Fixed {
+    fn route(&mut self) -> Result<Value, ToolError> {
+        Ok(self.0.clone())
+    }
+    fn now(&self) -> f64 {
+        clock()
+    }
+    fn sleep(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+}
+
 /// The production ports: the real clock and the route adapter.
 pub(crate) struct Live<'a> {
     pub state: &'a Path,
@@ -54,9 +82,7 @@ impl Ports for Live<'_> {
             .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))
     }
     fn now(&self) -> f64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |d| d.as_secs_f64())
+        clock()
     }
     fn sleep(&mut self, duration: Duration) {
         std::thread::sleep(duration);
@@ -65,6 +91,15 @@ impl Ports for Live<'_> {
 
 /// Holds one seat slot until the seat's run record takes over; dropping it frees the slot.
 pub(crate) struct Reservation(PathBuf);
+impl Reservation {
+    /// The name the seat's run record carries (`TOKEN_FIELD`), so the record and the slot are one seat.
+    pub(crate) fn token(&self) -> String {
+        self.0
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+}
 impl Drop for Reservation {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
@@ -85,9 +120,10 @@ fn leg_of(record: &Value) -> Option<&str> {
         .or_else(|| record["plan"]["first_leg"]["id"].as_str())
 }
 
-/// Seats on `leg`: live review runs, plus reservations no run record has taken over yet.
+/// Seats on `leg`: live review runs, plus reservations no run record names yet. A reservation whose
+/// token a run record carries is that seat's: the run counts itself and the reservation is finished.
 fn occupied(state: &Path, records: &[Value], leg: &str, now: f64) -> (usize, Vec<PathBuf>) {
-    let mut live: Vec<f64> = records
+    let live = records
         .iter()
         .filter(|r| {
             r["role"] == "review"
@@ -95,39 +131,32 @@ fn occupied(state: &Path, records: &[Value], leg: &str, now: f64) -> (usize, Vec
                 && r["dry_run"] != true
                 && leg_of(r) == Some(leg)
         })
-        .filter_map(|r| r["started"].as_f64())
+        .count();
+    let named: std::collections::BTreeSet<&str> = records
+        .iter()
+        .filter_map(|r| r[TOKEN_FIELD].as_str())
         .collect();
-    live.sort_by(f64::total_cmp);
     let dir = slot_dir(state, leg);
-    let mut held: Vec<(f64, PathBuf)> = std::fs::read_dir(&dir)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter_map(|e| {
-            let at = std::fs::read_to_string(e.path())
-                .ok()?
-                .trim()
-                .parse()
-                .ok()?;
-            Some((at, e.path()))
-        })
-        .collect();
-    held.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut count = live.len();
-    let mut taken = vec![false; live.len()];
+    let mut count = live;
     let mut finished = Vec::new();
-    for (at, path) in held {
-        let matched = live
-            .iter()
-            .enumerate()
-            .find(|(i, started)| !taken[*i] && **started >= at - MATCH_SLACK);
-        if let Some((i, _)) = matched {
-            taken[i] = true;
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let Some(token) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if token == LOCK_NAME {
+            continue;
+        }
+        let Some(at) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| t.trim().parse::<f64>().ok())
+        else {
+            continue;
+        };
+        if named.contains(token) || now - at >= RESERVATION_TTL {
             finished.push(path);
-        } else if now - at < RESERVATION_TTL {
-            count += 1;
         } else {
-            finished.push(path);
+            count += 1;
         }
     }
     (count, finished)
@@ -150,7 +179,7 @@ fn slot_dir(state: &Path, leg: &str) -> PathBuf {
 fn lock_leg(state: &Path, leg: &str) -> Result<pg_worker_core::lockfile::LockGuard, ToolError> {
     let dir = slot_dir(state, leg);
     std::fs::create_dir_all(&dir).map_err(|e| ToolError::Internal(e.to_string()))?;
-    let path = dir.join("admission.lock");
+    let path = dir.join(LOCK_NAME);
     for _ in 0..500 {
         match pg_worker_core::lockfile::try_lock(&path) {
             Ok(Some(guard)) => return Ok(guard),
@@ -209,9 +238,23 @@ pub(crate) fn admit(
                 "seat_queue_timeout: {id} runs {count} of {limit} seats after {waited:.0}s; use the fallback seats"
             )));
         }
-        queued = Some((id, leg["harness"].clone()));
+        queued = Some((id.clone(), leg["harness"].clone()));
         ports.sleep(policy.poll);
-        plan = ports.route()?;
+        plan = match ports.route() {
+            Ok(plan) => plan,
+            // The `agy-cli` selector found no agy leg left: the queued leg was limited and nothing of
+            // its harness is routable, which is the same-harness case below, not a bad request.
+            Err(ToolError::Refused {
+                kind: crate::errors::RefusalKind::Parameter,
+                message,
+                ..
+            }) if message == crate::cli_review::NO_LEG => {
+                return Err(refused(format!(
+                    "seat_leg_limited: {id} left the route while the seat queued and no leg of its harness is routable; use the fallback seats"
+                )));
+            }
+            Err(error) => return Err(error),
+        };
     }
 }
 

@@ -210,22 +210,23 @@ fn the_agy_cli_selector_keeps_secondary_agy_legs_out_of_the_queue_fallback() {
 #[test]
 fn live_review_runs_count_and_a_reservation_is_not_counted_twice() {
     let state = tempfile::tempdir().unwrap();
-    let write = |id: &str, status: &str, started: f64| {
+    let write = |id: &str, status: &str, started: f64, token: Option<&str>| {
         let dir = state.path().join("runs").join(id);
         std::fs::create_dir_all(&dir).unwrap();
         let record = json!({"run_id": id, "role": "review", "status": status, "started": started,
-            "plan": {"first_leg": {"id": HYDROGEN}}});
+            "plan": {"first_leg": {"id": HYDROGEN}}, TOKEN_FIELD: token});
         std::fs::write(dir.join("record.json"), record.to_string()).unwrap();
     };
-    write("run-a", "running", 10.0);
-    write("run-b", "completed", 11.0);
-    write("run-c", "queued", 12.0);
+    write("run-a", "running", 10.0, None);
+    write("run-b", "completed", 11.0, None);
+    write("run-c", "queued", 12.0, None);
     // Two live runs of three: one slot left, a second request is full.
     let (p, slot) = ok(admit(state.path(), plan(&[HYDROGEN], 3, 0.0), &mut quiet()));
     assert_eq!(first(&p), HYDROGEN);
     assert!(admit(state.path(), plan(&[HYDROGEN], 3, 0.0), &mut quiet()).is_err());
     // The reservation's run record appears: still three slots taken, not four.
-    write("run-d", "running", 1000.5);
+    let slot = slot.unwrap();
+    write("run-d", "running", 1000.5, Some(&slot.token()));
     let (count, _) = occupied(
         state.path(),
         &crate::records::list_runs(state.path()),
@@ -270,4 +271,117 @@ fn fifteen_seats_asking_at_once_never_start_more_than_the_bound() {
         }
     });
     assert_eq!(slots.lock().unwrap().len(), 3);
+}
+
+/// A review run record naming the reservation it was admitted under.
+fn record_for(state: &Path, id: &str, started: f64, token: Option<&str>) {
+    let dir = state.join("runs").join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let record = json!({"run_id": id, "role": "review", "status": "running", "started": started,
+        "plan": {"first_leg": {"id": HYDROGEN}}, TOKEN_FIELD: token});
+    std::fs::write(dir.join("record.json"), record.to_string()).unwrap();
+}
+
+#[test]
+fn an_unrelated_run_started_just_before_a_reservation_does_not_release_it() {
+    let state = tempfile::tempdir().unwrap();
+    let mut clock = quiet();
+    // Another seat's record appears 0.5 s before this reservation is written: it names no reservation.
+    record_for(state.path(), "run-other", 999.5, None);
+    let (_, slot) = ok(admit(state.path(), plan(&[HYDROGEN], 2, 0.0), &mut clock));
+    let slot = slot.unwrap();
+    // One live run and one held reservation: the leg is full at two, the reservation is still counted.
+    assert!(admit(state.path(), plan(&[HYDROGEN], 2, 0.0), &mut clock).is_err());
+    // Only the record that names the reservation takes it over.
+    record_for(state.path(), "run-mine", 1000.2, Some(&slot.token()));
+    let (count, finished) = occupied(
+        state.path(),
+        &crate::records::list_runs(state.path()),
+        HYDROGEN,
+        1001.0,
+    );
+    assert_eq!((count, finished.len()), (2, 1));
+}
+
+#[test]
+fn a_stale_reservation_no_record_names_stops_counting_after_the_ttl() {
+    let state = tempfile::tempdir().unwrap();
+    let (_, slot) = ok(admit(state.path(), plan(&[HYDROGEN], 1, 0.0), &mut quiet()));
+    let slot = slot.unwrap();
+    let _ = &slot;
+    let records = crate::records::list_runs(state.path());
+    assert_eq!(occupied(state.path(), &records, HYDROGEN, 1100.0).0, 1);
+    let (count, finished) = occupied(state.path(), &records, HYDROGEN, 1000.0 + 121.0);
+    assert_eq!((count, finished.len()), (0, 1));
+}
+
+#[test]
+fn a_route_with_no_leg_of_the_harness_left_while_queued_is_leg_limited() {
+    struct NoLeg(f64);
+    impl Ports for NoLeg {
+        fn route(&mut self) -> Result<Value, ToolError> {
+            Err(crate::placement::parameter(crate::cli_review::NO_LEG))
+        }
+        fn now(&self) -> f64 {
+            self.0
+        }
+        fn sleep(&mut self, d: Duration) {
+            self.0 += d.as_secs_f64();
+        }
+    }
+    let state = tempfile::tempdir().unwrap();
+    let _full = admit(state.path(), plan(&[HYDROGEN], 1, 600.0), &mut quiet())
+        .okay()
+        .1;
+    match admit(
+        state.path(),
+        plan(&[HYDROGEN], 1, 600.0),
+        &mut NoLeg(1000.0),
+    ) {
+        Err(ToolError::Refused { message, .. }) => {
+            assert!(message.starts_with("seat_leg_limited:"), "{message}")
+        }
+        _ => panic!("an emptied harness route must refuse as leg limited"),
+    }
+}
+
+/// Each group of a split review needs its own slot, so a split larger than the bound is capped too.
+#[test]
+fn a_split_larger_than_the_bound_never_holds_more_slots_than_the_leg_allows() {
+    let state = tempfile::tempdir().unwrap();
+    let bound = plan(&[HYDROGEN], 2, 0.0);
+    // The whole review was admitted once: its token rides on the args and covers group 1.
+    let (_, first) = ok(admit(
+        state.path(),
+        bound.clone(),
+        &mut Fixed(bound.clone()),
+    ));
+    let first = first.unwrap();
+    let mut args = crate::placement::Args::new();
+    args.insert(TOKEN_FIELD.into(), json!(first.token()));
+    let mut held = Vec::new();
+    let mut tokens = Vec::new();
+    let mut refused = 0;
+    for index in 1..=5 {
+        match crate::review_split::admit_group(state.path(), &bound, index, false, &args, &mut held)
+        {
+            Ok(group) => tokens.push(group[TOKEN_FIELD].as_str().unwrap().to_owned()),
+            Err(ToolError::Refused { message, .. }) => {
+                assert!(message.starts_with("seat_queue_timeout:"), "{message}");
+                refused += 1;
+            }
+            Err(_) => panic!("unexpected error"),
+        }
+    }
+    // Group 1 rides the review's slot, group 2 takes the second; groups 3-5 wait for a free slot.
+    assert_eq!((tokens.len(), refused, held.len()), (2, 3, 1));
+    assert_eq!(tokens[0], first.token());
+    assert_ne!(tokens[1], first.token());
+    // A dry split never admits.
+    let none = crate::review_split::admit_group(state.path(), &bound, 4, true, &args, &mut held)
+        .ok()
+        .unwrap();
+    assert!(none
+        .get(TOKEN_FIELD)
+        .is_some_and(|t| *t == json!(first.token())));
 }
