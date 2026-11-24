@@ -191,6 +191,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("worker-maintenance") {
         return crate::worker_liveness::maintenance(&rest, out);
     }
+    if verb.as_deref() == Some("rejoin") {
+        return crate::worker_rejoin::execute(&rest, out);
+    }
     if verb.as_deref() == Some("worker-active-runs") {
         return crate::worker_liveness::inventory(&rest, out);
     }
