@@ -529,3 +529,18 @@ def test_probe_pass_supersedes_a_far_provider_usage_limit_in_every_scope(tmp_pat
         store.record_probe_pass('cx-gpt-6.2-sol-medium', 'review-probe', now=now + 120, **scope)
         assert store.leg_status('cx-gpt-6.2-sol-medium', now=now + 180, **scope)['state'] == 'ok'
         now += 1000
+
+
+def test_quota_recovery_ends_only_a_limit_and_leaves_no_liveness_evidence(tmp_path):
+    store = ls.LegStateStore(tmp_path / "legs.sqlite")
+    now = 1_000_000.0
+    store.record_harness_limit("sib", "HTTP 429: usage limit, resets in 72h", "spawner:harness", now=now, harness="codex")
+    store.record_probe_fail("down-leg", "no commit", "leg-probe", now=now, down_s=1800)
+    assert store.record_quota_recovery("sib", "review-probe", now=now + 60) is True
+    assert store.leg_status("sib", now=now + 61)["state"] == "ok"
+    assert store.last_probe_ts("sib") is None and store.last_probe_attempt_ts("sib", now=now + 61) is None
+    # A leg that is not limited gets no row, so its own failure evidence stands.
+    before = store.leg_status("down-leg", now=now + 1)
+    assert store.record_quota_recovery("down-leg", "review-probe", now=now + 2) is False
+    assert store.leg_status("down-leg", now=now + 1) == before
+    assert store.record_quota_recovery("never-seen", "review-probe", now=now) is False
