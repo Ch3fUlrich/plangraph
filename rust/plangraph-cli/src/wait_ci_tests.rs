@@ -206,3 +206,40 @@ fn a_poll_longer_than_the_remainder_sleeps_only_the_remainder() {
     assert_eq!(elapsed.get(), 30);
     assert_eq!(out.code(), 3);
 }
+
+#[test]
+fn the_process_poll_never_sleeps_past_the_time_left() {
+    let ms = Duration::from_millis;
+    assert_eq!(
+        nap(ms(330), ms(300)),
+        ms(30),
+        "the last nap is the remainder"
+    );
+    assert_eq!(nap(ms(330), ms(0)), ms(50));
+    assert_eq!(nap(ms(330), ms(400)), ms(0), "nothing is left");
+}
+
+#[test]
+fn a_command_is_killed_at_its_limit_counted_from_before_the_spawn() {
+    let mut slow = Command::new("sh");
+    slow.args(["-c", "sleep 30"]);
+    let started = Instant::now();
+    let error = run_limited(&mut slow, Duration::from_millis(300)).unwrap_err();
+    assert_eq!(error, GH_TIMED_OUT);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    // A child that keeps the pipe open after the command exits is also bounded by the limit.
+    let mut leaks = Command::new("sh");
+    leaks.args(["-c", "(sleep 30 &) ; echo rows"]);
+    let started = Instant::now();
+    let error = run_limited(&mut leaks, Duration::from_millis(300)).unwrap_err();
+    assert_eq!(error, GH_TIMED_OUT);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}

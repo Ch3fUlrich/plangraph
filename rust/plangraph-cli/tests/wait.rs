@@ -80,7 +80,7 @@ fn a_run_that_never_completes_ends_at_the_deadline_with_a_named_timeout() {
         ],
     );
     assert_eq!(out.status.code(), Some(3), "{out:?}");
-    assert!(started.elapsed().as_secs() < 30);
+    assert!(started.elapsed().as_secs() < 8, "{:?}", started.elapsed());
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(
         text.contains("WAIT ci timeout deadline 2s: still pending: run=7 status=in_progress"),
@@ -139,7 +139,7 @@ fn a_slow_gh_ends_at_the_deadline_not_at_its_own_timeout() {
         &["ci", "--pr", "9", "--deadline", "3", "--poll", "60"],
     );
     assert_eq!(out.status.code(), Some(3), "{out:?}");
-    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    assert!(started.elapsed().as_secs() < 6, "{:?}", started.elapsed());
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.contains("deadline 3s"), "{text}");
 }
@@ -201,7 +201,7 @@ fn a_descendant_holding_gh_stdout_open_cannot_hold_the_wait_past_its_deadline() 
         &["ci", "--pr", "9", "--deadline", "3", "--poll", "60"],
     );
     assert_eq!(out.status.code(), Some(3), "{out:?}");
-    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    assert!(started.elapsed().as_secs() < 6, "{:?}", started.elapsed());
 }
 
 #[test]

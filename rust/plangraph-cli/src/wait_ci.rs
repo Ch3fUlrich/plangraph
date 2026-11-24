@@ -75,23 +75,42 @@ fn timeout(deadline: Duration, last: &str) -> Outcome {
 
 /// `gh`, killed after `budget` (at most `GH_TIMEOUT`): a hung `gh` must not outlive the deadline.
 pub(crate) fn gh(args: &[String], budget: Duration) -> Result<String, String> {
-    let limit = budget.min(GH_TIMEOUT);
-    let mut child = Command::new("gh")
-        .args(args)
+    let mut command = Command::new("gh");
+    command.args(args);
+    let (status, text) = run_limited(&mut command, budget.min(GH_TIMEOUT))?;
+    if status.success() {
+        Ok(text)
+    } else {
+        Err("gh request failed".into())
+    }
+}
+
+/// How long the process poll may sleep: 50 ms, never more than the time left.
+fn nap(limit: Duration, elapsed: Duration) -> Duration {
+    Duration::from_millis(50).min(limit.saturating_sub(elapsed))
+}
+
+/// Run `command` within `limit`, counted from before it is spawned (its startup is part of the
+/// budget). The child is killed at the limit; its output is read on a thread and awaited with the
+/// same limit, so a descendant that keeps the pipe open cannot hold the caller, and output that
+/// arrives after the limit does not count.
+fn run_limited(
+    command: &mut Command,
+    limit: Duration,
+) -> Result<(std::process::ExitStatus, String), String> {
+    let started = Instant::now();
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "cannot execute gh".to_string())?;
     let mut stdout = child.stdout.take().ok_or("no gh stdout")?;
-    // The output is read on a thread and awaited with the same limit: a descendant of `gh` that
-    // keeps the pipe open after `gh` exited must not hold the wait past its deadline.
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut text = String::new();
         let _ = sender.send(stdout.read_to_string(&mut text).map(|_| text));
     });
-    let started = Instant::now();
     let status = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => break status,
@@ -100,25 +119,17 @@ pub(crate) fn gh(args: &[String], budget: Duration) -> Result<String, String> {
                 let _ = child.wait();
                 return Err(GH_TIMED_OUT.into());
             }
-            // Never sleep past the time left: the last nap is the remainder, not 50 ms.
-            None => std::thread::sleep(
-                Duration::from_millis(50).min(limit.saturating_sub(started.elapsed())),
-            ),
+            None => std::thread::sleep(nap(limit, started.elapsed())),
         }
     };
     let text = receiver
         .recv_timeout(limit.saturating_sub(started.elapsed()))
         .map_err(|_| GH_TIMED_OUT.to_string())?
         .map_err(|e| e.to_string())?;
-    // Output that arrived after the limit does not count.
     if started.elapsed() > limit {
         return Err(GH_TIMED_OUT.into());
     }
-    if status.success() {
-        Ok(text)
-    } else {
-        Err("gh request failed".into())
-    }
+    Ok((status, text))
 }
 
 pub(crate) fn runs_from_json(text: &str) -> Result<Vec<Run>, String> {

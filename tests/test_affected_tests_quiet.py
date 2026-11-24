@@ -416,13 +416,7 @@ def test_an_early_failing_batch_then_a_passing_batch_through_the_cli(tmp_path, m
     fixture = Fixture(tmp_path, monkeypatch)
     fixture.write("def test_x():\n    assert False\n")
     fixture.commit()
-    spec = importlib.util.spec_from_file_location("affected_tests_cli", TOOL)
-    tool = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(TOOL.parent))
-    try:
-        spec.loader.exec_module(tool)
-    finally:
-        sys.path.pop(0)
+    tool = load_tool()
     # A second batch that passes: the CLI wiring still reports the first failure last.
     monkeypatch.setattr(tool, "keeper_postgres_files", lambda root, changed: ["tests/x"])
     monkeypatch.setattr(tool, "run_keeper_postgres", lambda *args, **kwargs: 0)
@@ -434,3 +428,43 @@ def test_an_early_failing_batch_then_a_passing_batch_through_the_cli(tmp_path, m
     assert tool.main() == 1
     lines = capsys.readouterr().out.rstrip("\n").splitlines()
     assert lines[-1] == "AFFECTED rc=1 batches=2 failed=1", lines[-3:]
+
+
+def load_tool():
+    spec = importlib.util.spec_from_file_location("affected_tests_cli", TOOL)
+    tool = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(TOOL.parent))
+    try:
+        spec.loader.exec_module(tool)
+    finally:
+        sys.path.pop(0)
+    return tool
+
+
+def test_the_abbreviated_run_flag_and_operational_errors_end_with_a_result_line(tmp_path, monkeypatch, capsys):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    pass\n")
+    fixture.commit()
+    # `--ru` is argparse's own abbreviation of `--run`: one run-mode decision, the parser's.
+    short = subprocess.run([sys.executable, str(TOOL), "--ru", "--within", "no/such/path", "--base", "HEAD"],
+                           cwd=fixture.tree, env=fixture.env, capture_output=True, text=True, timeout=300)
+    assert short.returncode == 2
+    assert last_line(short) == "AFFECTED rc=2 batches=0 failed=1", short.stdout + short.stderr
+    ambiguous = subprocess.run([sys.executable, str(TOOL), "--ru"], cwd=fixture.tree, env=fixture.env,
+                               capture_output=True, text=True, timeout=300)
+    assert last_line(ambiguous) == "AFFECTED rc=2 batches=0 failed=1", ambiguous.stdout
+    # An operational error (no scratch directory) is nonzero and says so, then still raises.
+    tool = load_tool()
+
+    def no_scratch(*args, **kwargs):
+        raise OSError("No usable temporary directory found")
+
+    monkeypatch.setattr(tool, "affected_pytest", no_scratch)
+    for key, value in fixture.env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.chdir(fixture.tree)
+    monkeypatch.setattr(sys, "argv", [str(TOOL), "--base", "HEAD", "--root", str(fixture.tree),
+                                      "--changed", "tests/test_x.py", "--run", "-n", "0"])
+    with pytest.raises(OSError):
+        tool.main()
+    assert capsys.readouterr().out.rstrip("\n").splitlines()[-1] == "AFFECTED rc=1 batches=0 failed=1"
