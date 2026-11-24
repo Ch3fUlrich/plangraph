@@ -153,6 +153,36 @@ def commits_missing_gate_edit(base: str, head: str, workflow: str, cwd: str | Pa
         base, head, workflow, cwd=cwd, include_merges=include_merges) if not has_edit]
 
 
+GO_VERIFY_COMMAND = 'land-train go-verify --evidence'
+
+
+def go_verify_step(job: object) -> dict | None:
+    '''Return the step of a ci-gate job that runs the go-verify verifier, or None.'''
+    steps = job.get('steps') if isinstance(job, dict) else None
+    for step in steps if isinstance(steps, list) else []:
+        if isinstance(step, dict) and GO_VERIFY_COMMAND in str(step.get('run', '')):
+            return step
+    return None
+
+
+def go_verify_problems(base_job: object, head_job: object) -> list[str]:
+    '''Return why the head weakens a go-verify step the base already has (none when base has none).'''
+    base_step = go_verify_step(base_job)
+    if base_step is None:
+        return []
+    head_step = go_verify_step(head_job)
+    if head_step is None:
+        return ['go-verify step removed']
+    problems = []
+    if head_step.get('continue-on-error'):
+        problems.append('go-verify step made non-blocking (continue-on-error)')
+    if re.search(r'\|\|\s*(true|:)\b|\bset \+e\b', str(head_step.get('run', ''))):
+        problems.append('go-verify step failure is swallowed (|| true or set +e)')
+    if head_step.get('if') != base_step.get('if'):
+        problems.append('go-verify step condition changed')
+    return problems
+
+
 def _wiring_diff(base_wiring: dict[str, object], head_wiring: dict[str, object]) -> str:
     base_text = json.dumps(base_wiring, indent=2, sort_keys=True)
     head_text = json.dumps(head_wiring, indent=2, sort_keys=True)
@@ -193,6 +223,11 @@ def main(argv: list[str] | None = None) -> int:
         print('gate wiring unchanged')
         return 0
     print(_wiring_diff(base_wiring, head_wiring))
+    problems = go_verify_problems(base_wiring['job'], head_wiring['job'])
+    if problems:
+        # A Gate-Edit trailer does not excuse weakening the verifier of a computed GO.
+        print('; '.join(problems), file=sys.stderr)
+        return 1
     try:
         missing = commits_missing_gate_edit(args.base, args.head, args.workflow)
         touching = commits_touching(args.base, args.head, args.workflow)

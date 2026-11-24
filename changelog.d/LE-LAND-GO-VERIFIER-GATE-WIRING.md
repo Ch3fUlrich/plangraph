@@ -1,0 +1,1 @@
+Make the go-verify verifier source an operator-class gate path and run `land-train go-verify --evidence` as a blocking ci-gate step once an evidence file exists; `gate_wiring_check.py` refuses removing or loosening that step.
