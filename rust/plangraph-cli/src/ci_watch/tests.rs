@@ -15,6 +15,7 @@ struct Fixture {
     fail_logs: bool,
     fail_rerun: bool,
     run_pages: usize,
+    two_jobs: bool,
 }
 impl Fixture {
     fn new() -> Self {
@@ -27,6 +28,7 @@ impl Fixture {
             fail_logs: false,
             fail_rerun: false,
             run_pages: 0,
+            two_jobs: false,
         }
     }
 }
@@ -46,7 +48,14 @@ impl Github for Fixture {
                     self.runs[0]["id"].as_u64().unwrap()
                 )
             );
-            Ok(serde_json::from_str(JOBS).unwrap())
+            let mut jobs: Vec<Value> = serde_json::from_str(JOBS).unwrap();
+            if self.two_jobs {
+                let mut second = jobs[0].clone();
+                second["id"] = json!(101);
+                second["name"] = json!("Public scrub");
+                jobs.push(second);
+            }
+            Ok(jobs)
         }
     }
     fn page(&mut self, endpoint: &str, _: Option<&str>) -> Result<Vec<Value>> {
@@ -56,7 +65,7 @@ impl Github for Fixture {
         Ok(self.runs.clone())
     }
     fn log(&mut self, job: u64) -> Result<String> {
-        assert_eq!(job, 100);
+        assert!(job == 100 || (self.two_jobs && job == 101));
         self.reads += 1;
         if self.fail_logs {
             return Err("logs expired".into());
@@ -101,7 +110,7 @@ fn failed_pr_rescan_updates_one_task_and_defines_once() {
             Ok(true)
         })
         .unwrap();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.iter().filter(|r| r.contains("task:")).count(), 1);
     }
     let records = tasks(temp.path());
     assert_eq!(records.len(), 1);

@@ -4,4 +4,4 @@ Description=Scan tests CI failures and define keeper fix tasks
 [Service]
 Type=oneshot
 WorkingDirectory=%h/code/plangraph
-ExecStart=%h/.local/bin/plangraph ci-watch --keeper --main-freeze
+ExecStart=%h/.local/bin/plangraph ci-watch --keeper --main-freeze --autofix

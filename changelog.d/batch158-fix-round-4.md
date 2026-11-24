@@ -1,0 +1,1 @@
+ci-watch --autofix runs the fix in a sandbox without watcher credentials and reserves per head SHA; every red run is recorded and reported (--report); throughput reports join part heads under the train landing in both landing modes, keep earlier samples after an upgrade and stop hourly counts at the observed hour end.

@@ -90,7 +90,13 @@ pub trait Deliver {
 /// A delivery must end this long before its claim goes stale (seconds).
 pub const CLAIM_MARGIN_SECS: i64 = 30;
 
-pub fn record_id(batch: &str, pr: u64, test: &str, run_id: u64) -> String {
+pub fn record_id(batch: &str, pr: u64, test: &str, job: &str, run_id: u64) -> String {
+    // A job that failed without a test id is told apart by its name (ids of real tests are unchanged).
+    let test = if test == "<job-failure>" {
+        format!("{test}\0{job}")
+    } else {
+        test.to_owned()
+    };
     let digest = Sha256::digest(format!("{batch}\0{pr}\0{test}\0{run_id}").as_bytes());
     format!("batch-failure-{:x}", digest)[..30].to_owned()
 }
@@ -105,7 +111,7 @@ pub fn record_failure(
 ) -> Option<String> {
     let batch = task.pr.and_then(|pr| owners.batch_of(pr))?;
     let pr = task.pr.unwrap_or(0);
-    let id = record_id(batch, pr, &task.test, task.run_id);
+    let id = record_id(batch, pr, &task.test, &task.job, task.run_id);
     if !records.iter().any(|r| r.id == id) {
         records.push(FailureRecord {
             id: id.clone(),

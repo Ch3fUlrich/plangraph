@@ -17,6 +17,7 @@ pub mod main_freeze_gh;
 mod main_freeze_gh_tests;
 #[cfg(test)]
 mod main_freeze_tests;
+pub mod report;
 #[cfg(test)]
 mod tests;
 
@@ -54,6 +55,9 @@ pub struct Task {
     /// Head commit of the run that failed; an automatic fix applies to it only.
     #[serde(default)]
     pub head_sha: String,
+    /// Set by the newest scan on every failure it saw; a row a rerun made green stays false.
+    #[serde(default)]
+    pub current: bool,
 }
 #[derive(Deserialize)]
 struct Flakes {
@@ -123,11 +127,11 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
     if args.iter().any(|a| {
         !matches!(
             a.as_str(),
-            "--dry-run" | "--keeper" | "--main-freeze" | "--autofix"
+            "--dry-run" | "--keeper" | "--main-freeze" | "--autofix" | "--report"
         ) && !a.starts_with("--ack=")
     }) {
         return Err(
-            "usage: plangraph ci-watch [--dry-run] [--keeper] [--main-freeze] [--autofix] [--ack=ID]".into(),
+            "usage: plangraph ci-watch [--dry-run] [--keeper] [--main-freeze] [--autofix] [--report] [--ack=ID]".into(),
         );
     }
     let dry = args.iter().any(|a| a == "--dry-run");
@@ -146,6 +150,10 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
             Ok(false)
         }
     };
+    if args.iter().any(|a| a == "--report") {
+        println!("{}", report::report(&dir)?);
+        return Ok(());
+    }
     if let Some(id) = args.iter().find_map(|a| a.strip_prefix("--ack=")) {
         return main_freeze_gh::update_failures(&dir, |records| {
             if batch_failure::acknowledge(records, id) {
@@ -176,6 +184,7 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
         let mut gh = Gh { repo: repo.clone() };
         rows.extend(autofix::pass(
             &dir,
+            &repo,
             &tasks,
             |pr| autofix::pr_head(&mut gh, &repo, pr),
             |request, scratch| autofix::apply(scratch, request),
@@ -226,6 +235,8 @@ fn scan(
     };
     let task_path = dir.join("tasks.jsonl");
     let mut tasks = load_tasks(&task_path)?;
+    // The newest scan marks what is red now; the rows of a head a rerun made green stop being current.
+    tasks.values_mut().for_each(|task| task.current = false);
     let mut reruns: Reruns = read(&dir.join("reruns.json"))?;
     let prs = gh.pages("pulls?state=open&per_page=100", None)?;
     let mut heads = BTreeMap::new();
@@ -369,11 +380,22 @@ fn scan(
             }
         }
         let run_class = classify::classify_run(&failures.iter().map(|f| f.3).collect::<Vec<_>>());
+        let jobs_seen: Vec<_> = failures
+            .iter()
+            .map(|f| (f.0.clone(), f.4, f.3.name().to_owned()))
+            .collect();
+        let mut made = 0usize;
         for (job, test, excerpt, class, job_id) in failures {
             if !attempted && !rerun_failed && flakes.contains_key(&test) {
                 continue;
             }
-            let digest = Sha256::digest(format!("{repo}\0{head}\0{test}").as_bytes());
+            // A job that failed without a test id is told apart by its name: two such jobs are two failures.
+            let identity = if test == "<job-failure>" {
+                format!("{test}\0{job}")
+            } else {
+                test.clone()
+            };
+            let digest = Sha256::digest(format!("{repo}\0{head}\0{identity}").as_bytes());
             let key = format!("plangraph:CI-FIX-{digest:x}");
             let old_defined = tasks
                 .get(&key)
@@ -394,16 +416,46 @@ fn scan(
                 run_class: run_class.name().into(),
                 job_id,
                 head_sha: sha.to_owned(),
+                current: true,
             };
             output.push(format!(
                 "{}task: {}",
                 if dry { "would upsert " } else { "" },
                 serde_json::to_string(&task).map_err(|e| e.to_string())?
             ));
+            made += 1;
             if !dry {
                 store_task(&task_path, &mut tasks, task, &mut define, &mut output)?;
             }
         }
+        let action = if made == 0 { "flake-rerun" } else { "fix-task" };
+        let seen = format!("red:{run_id}:{}", run["run_attempt"].as_u64().unwrap_or(1));
+        // One summary line per pull request run, the first time it is seen.
+        if dry || !reruns.sightings.contains(&seen) {
+            output.push(format!(
+                "red: {head} run {run_id} class {} ({} job(s), {made} task(s), {action})",
+                run_class.name(),
+                jobs_seen.len()
+            ));
+        }
+        if !dry && reruns.sightings.insert(seen) {
+            report::append(
+                dir,
+                &report::RunRow {
+                    run_id,
+                    attempt: run["run_attempt"].as_u64().unwrap_or(1),
+                    head: head.clone(),
+                    run_class: run_class.name().into(),
+                    jobs: jobs_seen,
+                    tasks: made,
+                    action: action.into(),
+                },
+            )?;
+            save(&dir.join("reruns.json"), &reruns)?;
+        }
+    }
+    if !dry && !tasks.is_empty() {
+        save_tasks(&task_path, &tasks)?;
     }
     Ok(output)
 }

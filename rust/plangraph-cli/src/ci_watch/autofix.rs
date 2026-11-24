@@ -87,13 +87,62 @@ fn run(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| "non-UTF8 command output".into())
 }
 
-/// Clone the head into `scratch` (an empty or missing directory), run the fix, commit and push once.
+/// Run the fix command where the pull request's own code may run (cargo builds `build.rs` and procedural
+/// macros): an emptied environment with no credential of the watcher, a scratch HOME and a scratch CARGO_HOME
+/// that links only the dependency caches. The checkout it runs in has no remote that leads to GitHub.
+fn run_sandboxed(dir: &Path, program: &str, args: &[&str], scratch: &Path) -> Result<()> {
+    let home = scratch.join("home");
+    let cargo_home = scratch.join("cargo-home");
+    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&cargo_home).map_err(|e| e.to_string())?;
+    let real = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")));
+    #[cfg(unix)]
+    for shared in ["registry", "git", "bin"] {
+        if let Some(source) = real.as_ref().map(|r| r.join(shared)).filter(|p| p.exists()) {
+            let _ = std::os::unix::fs::symlink(source, cargo_home.join(shared));
+        }
+    }
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(dir)
+        .env_clear()
+        .env("HOME", &home)
+        .env("CARGO_HOME", &cargo_home)
+        .env("GIT_TERMINAL_PROMPT", "0");
+    // Only these names cross: the toolchain's location and the build's own target and cache settings.
+    for name in [
+        "PATH",
+        "RUSTUP_HOME",
+        "CARGO_TARGET_DIR",
+        "RUSTUP_TOOLCHAIN",
+        "TMPDIR",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    if std::env::var_os("RUSTUP_HOME").is_none() {
+        if let Some(home) = std::env::var_os("HOME") {
+            command.env("RUSTUP_HOME", Path::new(&home).join(".rustup"));
+        }
+    }
+    pg_worker_core::host_command::output(&mut command, Duration::from_secs(1800))
+        .map(drop)
+        .map_err(|_| format!("{program} failed in the sandbox"))
+}
+
+/// Clone the head into `scratch`, run the fix in a sandbox copy, and have the trusted checkout stage that copy's
+/// files, check them, commit and push once. The sandbox copy is read as plain files: its `.git` (config, hooks)
+/// is never run, so a build script cannot turn the commit or the push into code of its own.
 pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
     let head = request.head;
-    let parent = scratch.parent().unwrap_or(scratch);
-    let target = scratch.to_string_lossy();
+    std::fs::create_dir_all(scratch).map_err(|e| e.to_string())?;
+    let (trusted, sandbox) = (scratch.join("trusted"), scratch.join("sandbox"));
     run(
-        parent,
+        scratch,
         "git",
         &[
             "clone",
@@ -101,27 +150,43 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
             "--branch",
             &head.branch,
             &head.remote,
-            &target,
+            &trusted.to_string_lossy(),
         ],
     )?;
-    if run(scratch, "git", &["rev-parse", "HEAD"])?.trim() != head.sha {
+    if run(&trusted, "git", &["rev-parse", "HEAD"])?.trim() != head.sha {
         return Ok(Outcome::Stale);
     }
+    run(
+        scratch,
+        "git",
+        &[
+            "clone",
+            "--quiet",
+            "--local",
+            "--no-hardlinks",
+            &trusted.to_string_lossy(),
+            &sandbox.to_string_lossy(),
+        ],
+    )?;
     let (program, args) = request.command.split_first().ok_or("empty fix command")?;
-    run(&scratch.join(request.dir), program, args)?;
-    if run(scratch, "git", &["status", "--porcelain"])?
-        .trim()
-        .is_empty()
-    {
+    run_sandboxed(&sandbox.join(request.dir), program, args, scratch)?;
+    // The trusted repository, the sandbox's files: `add` records what the command left, whatever its `.git` says.
+    let (git_dir, work_tree) = (trusted.join(".git"), sandbox.to_string_lossy().into_owned());
+    let git_dir = git_dir.to_string_lossy().into_owned();
+    let staged = |args: &[&str]| -> Result<String> {
+        let mut all = vec!["--git-dir", &git_dir, "--work-tree", &work_tree];
+        all.extend_from_slice(args);
+        run(&trusted, "git", &all)
+    };
+    staged(&["add", "-A"])?;
+    let paths = run(&trusted, "git", &["diff", "--cached", "--name-only"])?;
+    if paths.trim().is_empty() {
         return Ok(Outcome::Unchanged);
     }
-    // Stage first: a file the command created is untracked and invisible to a plain diff.
-    run(scratch, "git", &["add", "-A"])?;
-    let paths = run(scratch, "git", &["diff", "--cached", "--name-only"])?;
     if let Some(path) = paths.lines().find(|p| protected(p)) {
         return Ok(Outcome::GatePath(path.to_owned()));
     }
-    let lines: u64 = run(scratch, "git", &["diff", "--cached", "--numstat"])?
+    let lines: u64 = run(&trusted, "git", &["diff", "--cached", "--numstat"])?
         .lines()
         .filter_map(|l| {
             let mut f = l.split_whitespace();
@@ -136,9 +201,11 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
         request.subject, request.trailer
     );
     run(
-        scratch,
+        &trusted,
         "git",
         &[
+            "-c",
+            "core.hooksPath=/dev/null",
             "-c",
             "user.name=plangraph ci-watch",
             "-c",
@@ -152,15 +219,27 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
         ],
     )?;
     let refspec = format!("HEAD:refs/heads/{}", head.branch);
-    run(scratch, "git", &["push", "--quiet", "origin", &refspec])?;
+    run(
+        &trusted,
+        "git",
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "--quiet",
+            "origin",
+            &refspec,
+        ],
+    )?;
     Ok(Outcome::Pushed(
-        run(scratch, "git", &["rev-parse", "HEAD"])?
+        run(&trusted, "git", &["rev-parse", "HEAD"])?
             .trim()
             .to_owned(),
     ))
 }
 
-/// What the watcher did for each (pull request, class): kept so a head gets one automatic fix per class.
+/// What the watcher did for each (repository, head SHA, class): a head gets one automatic fix per class, and
+/// the head a fix produced is entered too, so a fix that stays red is never fixed again (no loop).
 #[derive(Default, Deserialize, Serialize)]
 pub struct Ledger {
     pub done: BTreeMap<String, String>,
@@ -176,26 +255,32 @@ pub const NOT_OPEN: &str = "pull request is not open";
 /// A (pull request, class) is reserved before the fix runs, so a crash or a refusal never repeats it.
 pub fn pass(
     dir: &Path,
+    repo: &str,
     tasks: &BTreeMap<String, Task>,
     mut lookup: impl FnMut(u64) -> Result<PrHead>,
     mut fix: impl FnMut(&Request, &Path) -> Result<Outcome>,
 ) -> Result<Vec<String>> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    // One pass at a time: two overlapping passes never claim the same work.
+    let _lock = crate::atomic::lock(&dir.join("autofix.lock")).map_err(|e| e.to_string())?;
     let path = dir.join("autofix.json");
     let mut ledger: Ledger = super::read(&path)?;
     let mut rows = Vec::new();
     let mut heads: BTreeMap<u64, Result<PrHead>> = BTreeMap::new();
-    for task in tasks.values() {
+    // Only the failures of the newest scan: a head a rerun turned green has no current task.
+    for task in tasks.values().filter(|task| task.current) {
         let (Some(class), Some(pr)) = (RedClass::from_name(&task.class), task.pr) else {
             continue;
         };
         if ledger.closed.contains(&pr) {
             continue;
         }
+        let label = format!("{repo}@{}", task.head_sha);
         let fixed: BTreeSet<(String, RedClass)> = ledger
             .done
             .keys()
             .filter_map(|k| {
-                let (head, class) = k.split_once(':')?;
+                let (head, class) = k.rsplit_once(':')?;
                 Some((head.to_owned(), RedClass::from_name(class)?))
             })
             .collect();
@@ -203,7 +288,7 @@ pub fn pass(
             command,
             dir: work,
             trailer,
-        } = classify::decide(class, &task.head, task.job_id, false, &fixed)
+        } = classify::decide(class, &label, task.job_id, false, &fixed)
         else {
             continue;
         };
@@ -227,20 +312,24 @@ pub fn pass(
         if head.sha != task.head_sha {
             continue; // a newer head has its own run; nothing is reserved
         }
-        let key = format!("{}:{}", task.head, class.name());
+        let key = format!("{label}:{}", class.name());
         ledger
             .done
             .insert(key.clone(), format!("job {}: started", task.job_id));
         super::save(&path, &ledger)?;
         let outcome = {
-            let scratch = dir.join("autofix-scratch");
-            let _ = std::fs::remove_dir_all(&scratch);
+            // A directory of its own for each attempt, removed when the attempt ends.
+            let attempt = tempfile::Builder::new()
+                .prefix("autofix-")
+                .tempdir_in(dir)
+                .map_err(|e| e.to_string())?;
+            let scratch = attempt.path().to_path_buf();
             let subject = format!(
                 "Apply the {} fix of failed job {}",
                 class.name(),
                 task.job_id
             );
-            let result = fix(
+            fix(
                 &Request {
                     head: &head,
                     command,
@@ -249,10 +338,14 @@ pub fn pass(
                     subject: &subject,
                 },
                 &scratch,
-            );
-            let _ = std::fs::remove_dir_all(&scratch);
-            result
+            )
         };
+        if let Ok(Outcome::Pushed(new)) = &outcome {
+            ledger.done.insert(
+                format!("{repo}@{new}:{}", class.name()),
+                format!("produced by the fix of job {}", task.job_id),
+            );
+        }
         let text = match &outcome {
             Ok(Outcome::Pushed(sha)) => format!("pushed {sha}"),
             Ok(Outcome::Unchanged) => "unchanged; left to the fix writer".into(),
