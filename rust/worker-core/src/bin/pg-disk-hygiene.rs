@@ -305,6 +305,22 @@ fn execute_with(
             }
         }
     }
+    // Lock files of review slots that no longer exist (a killed run leaves one) go after an hour.
+    if let (true, Some(primary)) = (apply, shared.first()) {
+        let mut primaries = vec![primary.clone()];
+        if let Some(home) = env::var_os("HOME") {
+            primaries.extend(pg_worker_core::cargo_cache::review_fallback_primary(
+                primary,
+                Path::new(&home),
+            ));
+        }
+        for pool in primaries
+            .iter()
+            .filter_map(|p| pg_worker_core::cargo_pool::pool_root(p).ok())
+        {
+            pg_worker_core::cargo_pool::reap_orphan_review_locks(&pool);
+        }
+    }
     // Review seats whose shared target sits under the system temp directory build in the default
     // pool; its review slots are trimmed to the same cap (the pool's other slots are not ours).
     if let (Some(primary), Some(home)) = (shared.first(), env::var_os("HOME")) {
@@ -379,17 +395,41 @@ fn reclaim_below_floor(
     }
     let mut seen = std::collections::BTreeSet::new();
     candidates.retain(|c| seen.insert(c.target.clone()));
-    let mut devices = std::collections::BTreeMap::<u64, Vec<disk_pressure::Candidate>>::new();
+    // One group per device: every configured root starts one (even with no candidate, so a full
+    // disk with nothing to remove still reports), and each target joins the group of the device it
+    // is really on. A group is measured through a directory that survives the removals.
+    struct Group {
+        probe: PathBuf,
+        candidates: Vec<disk_pressure::Candidate>,
+    }
+    let mut devices = std::collections::BTreeMap::<u64, Group>::new();
+    for root in roots {
+        if let Some(dev) = device(root) {
+            devices.entry(dev).or_insert_with(|| Group {
+                probe: root.clone(),
+                candidates: vec![],
+            });
+        }
+    }
     for candidate in candidates {
+        let Some(parent) = candidate.target.parent().map(Path::to_path_buf) else {
+            continue;
+        };
         if let Some(dev) = device(&candidate.target) {
-            devices.entry(dev).or_default().push(candidate);
+            devices
+                .entry(dev)
+                .or_insert_with(|| Group {
+                    probe: parent,
+                    candidates: vec![],
+                })
+                .candidates
+                .push(candidate);
         }
     }
     let mut kept = Vec::new();
     let mut below_floor = false;
     for group in devices.into_values() {
-        let probe = group[0].target.clone();
-        let Ok((free, total)) = space(&probe) else {
+        let Ok((free, total)) = space(&group.probe) else {
             continue;
         };
         let floor = thresholds.for_filesystem(total).cleanup_free_bytes;
@@ -398,11 +438,11 @@ fn reclaim_below_floor(
         }
         below_floor = true;
         kept.extend(disk_pressure::reclaim(
-            &group,
+            &group.candidates,
             guards,
             refs,
             (free, floor),
-            &|| space(&probe).ok().map(|(free, _)| free),
+            &|| space(&group.probe).ok().map(|(free, _)| free),
             SystemTime::now(),
             apply,
             report,
@@ -681,38 +721,107 @@ mod tests {
         assert!(report.alarm);
     }
 
+    fn floor_3000() -> Thresholds {
+        Thresholds {
+            alarm_free_bytes: 1,
+            cleanup_free_bytes: 3000,
+        }
+    }
+
     #[test]
-    fn free_space_is_measured_again_after_each_removal() {
+    fn a_measurement_that_disagrees_with_the_estimate_wins_both_ways() {
         let (fixture, repo, root, _args) = pressure_fixture();
         let canonical = root.canonicalize().unwrap();
         let targets = ["tree-a", "tree-b"].map(|n| canonical.join(n).join("rust/target"));
-        // A fake filesystem: 0 bytes free at the start and 4098 more per target removed. With a
-        // floor of 3000, one removal restores it, so the second target must stay (a sample taken
-        // before cleanup would remove both).
-        let space = |_: &Path| -> io::Result<(u64, u64)> {
-            let gone = targets.iter().filter(|t| !t.exists()).count() as u64;
-            Ok((gone * 4098, 1000))
-        };
-        let thresholds = Thresholds {
-            alarm_free_bytes: 1,
-            cleanup_free_bytes: 3000,
+        let roots = [canonical.clone(), fixture.path().canonicalize().unwrap()];
+        let removed = |targets: &[PathBuf; 2]| targets.iter().filter(|t| !t.exists()).count();
+
+        // The estimate (4098 bytes gained per removal) would stop after one removal against a
+        // floor of 3000, but the filesystem still reports 100 bytes free: both targets go. The
+        // probe is a directory that survives the removals, never the removed target itself.
+        let low = |path: &Path| -> io::Result<(u64, u64)> {
+            assert!(path.exists(), "probe {} must survive", path.display());
+            Ok((100, 1000))
         };
         let mut report = Report::default();
         reclaim_below_floor(
             &repo,
-            &[canonical.clone(), fixture.path().canonicalize().unwrap()],
+            &roots,
+            floor_3000(),
+            &[],
+            None,
+            (&Guards::default(), &[]),
+            &low,
+            true,
+            &mut report,
+        )
+        .unwrap();
+        assert_eq!(removed(&targets), 2, "{report:?}");
+        assert!(report.error.is_none());
+    }
+
+    #[test]
+    fn a_recovered_filesystem_stops_the_pass_even_when_the_estimate_is_short() {
+        let (fixture, repo, root, _args) = pressure_fixture();
+        let canonical = root.canonicalize().unwrap();
+        let targets = ["tree-a", "tree-b"].map(|n| canonical.join(n).join("rust/target"));
+        let roots = [canonical.clone(), fixture.path().canonicalize().unwrap()];
+        // Floor 20000 is above what two 4098-byte targets could give by estimate, but the
+        // filesystem reports 50000 free once anything has been removed.
+        let thresholds = Thresholds {
+            alarm_free_bytes: 1,
+            cleanup_free_bytes: 20_000,
+        };
+        let calls = std::cell::Cell::new(0);
+        let recovering = |path: &Path| -> io::Result<(u64, u64)> {
+            assert!(path.exists());
+            calls.set(calls.get() + 1);
+            Ok((if calls.get() == 1 { 0 } else { 50_000 }, 1000))
+        };
+        let mut report = Report::default();
+        reclaim_below_floor(
+            &repo,
+            &roots,
             thresholds,
             &[],
             None,
             (&Guards::default(), &[]),
-            &space,
+            &recovering,
             true,
             &mut report,
         )
         .unwrap();
         let left = targets.iter().filter(|t| t.exists()).count();
-        assert_eq!(left, 1, "{report:?}");
-        assert!(report.error.is_none());
+        assert_eq!(
+            left, 1,
+            "one removal, then the measurement says recovered: {report:?}"
+        );
+    }
+
+    #[test]
+    fn a_full_disk_with_no_candidate_still_fails_naming_that() {
+        let (fixture, repo, root, _args) = pressure_fixture();
+        let canonical = root.canonicalize().unwrap();
+        for name in ["tree-a", "tree-b"] {
+            std::fs::remove_dir_all(canonical.join(name).join("rust/target")).unwrap();
+        }
+        let full = |_: &Path| -> io::Result<(u64, u64)> { Ok((0, 1000)) };
+        let mut report = Report::default();
+        reclaim_below_floor(
+            &repo,
+            &[canonical, fixture.path().canonicalize().unwrap()],
+            floor_3000(),
+            &[],
+            None,
+            (&Guards::default(), &[]),
+            &full,
+            true,
+            &mut report,
+        )
+        .unwrap();
+        let error = report.error.expect("freed 0 below the floor is an error");
+        assert!(error.contains("no Cargo target candidate"), "{error}");
+        assert!(report.alarm);
     }
 
     #[test]
