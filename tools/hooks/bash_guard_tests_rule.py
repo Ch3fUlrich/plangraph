@@ -280,6 +280,30 @@ def _env_options(words):
     return unset, cleared
 
 
+def _record_export(state, builtin, args):
+    """What `export` / `declare` / `typeset` do to the variables later commands see.
+
+    `export NAME=VAL` and `declare -x NAME=VAL` export (`NAME+=VAL` appends); `export -n` and `declare +x`
+    stop exporting (the name maps to None). `declare` without -x only sets a shell variable.
+    """
+    flags = "".join(w[1:] for w in args if re.match(r"^-[A-Za-z]+$", w))
+    unflags = "".join(w[1:] for w in args if re.match(r"^\+[A-Za-z]+$", w))
+    unexport = "n" in flags if builtin == "export" else "x" in unflags
+    exporting = not unexport and (builtin == "export" or "x" in flags)
+    for word in args:
+        name, has_value, value = word.partition("=")
+        if name.endswith("+") and has_value:
+            name = name[:-1]
+            previous = state[name] if name in state else os.environ.get(name)
+            value = (previous or "") + value
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            continue
+        if unexport:
+            state[name] = None
+        elif exporting and has_value:
+            state[name] = value
+
+
 def main_checkout_cargo(command, cwd, depth=0, inherited=None):
     """Deny message for a cargo build whose target dir is a main checkout's or agent worktree's own, wherever cwd, `cd`, `-C` or `--manifest-path` put it."""
     if depth > 3:
@@ -303,10 +327,7 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
             state.update({name: None for name in words[i + 1:] if not name.startswith("-")})
             continue
         if _basename(words[i]) in ("export", "declare", "typeset"):
-            # `export NAME=VAL` and `declare -x NAME=VAL` reach every later command; without -x declare only sets a shell variable.
-            flags = "".join(w[1:] for w in words[i + 1:] if re.match(r"^-[A-Za-z]+$", w))
-            if _basename(words[i]) == "export" or "x" in flags:
-                state.update(w.split("=", 1) for w in words[i + 1:] if _ENV_ASSIGN_RE.match(w))
+            _record_export(state, _basename(words[i]), words[i + 1:])
             continue
         # Wrapper options are not modelled: every later word may be the command, as check_command reads it.
         wrapped = _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS or any(_basename(w) in _PGTEST for w in words[i:i + 3])
