@@ -12,7 +12,11 @@ DIFF = {"repo": "/srv/repo", "base": "a1b2", "head": "c3d4"}
 
 
 #: Legs whose request bound is a deliberate cost cap below the registry window.
-COST_CAPPED = {"deepseek": "paid pay-as-you-go leg, only if really needed (legs.py note)"}
+#: ... or a deliberate headroom cap (research routes stay under 900k of a 1M window).
+COST_CAPPED = {
+    "deepseek": "paid pay-as-you-go leg, only if really needed (legs.py note)",
+    "opencode-go-glm-5.3-flash": "research headroom cap 900k (test_placement_planning)",
+}
 
 
 def _registry_by_model_id():
