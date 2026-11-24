@@ -96,7 +96,8 @@ fn consumers(host: &Host) -> String {
 }
 
 /// Pairs of (dedupe key, message): the key is stable while the consumer sizes move.
-pub fn messages(hosts: &[Host]) -> Vec<(String, String)> {
+/// `previous_active` is the watchdog's `active` file from the last pass.
+pub fn messages(hosts: &[Host], previous_active: &str) -> Vec<(String, String)> {
     let mut messages = Vec::new();
     for host in hosts {
         if [host.tmp_used_percent, host.root_used_percent]
@@ -105,20 +106,21 @@ pub fn messages(hosts: &[Host]) -> Vec<(String, String)> {
             .any(|percent| percent > DISK_USED_PERCENT)
         {
             let top = consumers(host);
-            // The key changes once when the first measurement arrives, so an alert queued bare
-            // (the snapshot came before hygiene sampled) is followed by one that names the
-            // consumers; moving sizes never change it.
-            let key = format!(
-                "host-disk: host={}{}",
-                serde_json::to_string(&host.host).unwrap(),
-                if top.is_empty() { "" } else { " measured" }
+            // One crossing queues at most two alerts for a host: the bare one, and once the
+            // consumers are known a measured one. The measured key then stays active for the whole
+            // crossing, whether or not the measurement is still there, so it is never queued twice.
+            let base = format!(
+                "host-disk: host={}",
+                serde_json::to_string(&host.host).unwrap()
             );
-            let message = if top.is_empty() {
-                key.clone()
+            let measured = format!("{base} measured");
+            if !top.is_empty() {
+                messages.push((measured.clone(), format!("{measured} top={top}")));
+            } else if previous_active.lines().any(|line| line == measured) {
+                messages.push((measured.clone(), measured));
             } else {
-                format!("{key} top={top}")
-            };
-            messages.push((key, message));
+                messages.push((base.clone(), base));
+            }
         }
         if host.checkout_head != host.origin_main_head
             && host.behind_commits > 0

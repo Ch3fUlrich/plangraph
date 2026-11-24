@@ -181,7 +181,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for message in &s.idle_messages {
                 println!("{message}");
             }
-            let host_alerts = hosts::messages(&s.hosts);
+            let previous_active = fs::read_to_string(dir.join("active")).unwrap_or_default();
+            let host_alerts = hosts::messages(&s.hosts, &previous_active);
             let legacy = findings(s).join(",");
             if !legacy.is_empty() {
                 messages.insert(0, legacy);

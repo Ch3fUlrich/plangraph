@@ -202,3 +202,49 @@ fn an_alert_queued_before_hygiene_sampled_is_followed_by_one_naming_the_consumer
     let (again, queued) = pass_in(watch.path(), host, &env);
     assert_eq!((active, queued.len()), (again, 2));
 }
+
+#[test]
+fn a_crossing_queues_at_most_one_bare_and_one_measured_alert_however_the_measurement_flaps() {
+    let state = tempfile::tempdir().unwrap();
+    let watch = tempfile::tempdir().unwrap();
+    let marks = state.path().join("disk-watermarks.json");
+    let host = serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":87,
+        "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
+    let env = [("PLANGRAPH_DISK_WATERMARKS", marks.as_path())];
+    let write = |present: bool| {
+        if present {
+            let rows = serde_json::json!([{"path": "/data/big", "bytes": 900}]);
+            fs::write(
+                &marks,
+                serde_json::json!({"1": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+            )
+            .unwrap();
+        } else {
+            let _ = fs::remove_file(&marks);
+        }
+    };
+    // Consumers present, absent, present, absent, present: the first sighting queues the
+    // measured alert, nothing after it queues anything.
+    for (pass, present) in [true, false, true, false, true].into_iter().enumerate() {
+        write(present);
+        let (active, queued) = pass_in(watch.path(), host.clone(), &env);
+        assert_eq!(queued.len(), 1, "pass {pass}: {queued:?}");
+        assert_eq!(active.lines().count(), 1, "pass {pass}: {active}");
+    }
+    // The same flapping after a bare first alert: one bare, one measured, no more.
+    let again = tempfile::tempdir().unwrap();
+    for (pass, present) in [false, true, false, true].into_iter().enumerate() {
+        write(present);
+        let (_, queued) = pass_in(again.path(), host.clone(), &env);
+        assert_eq!(
+            queued.len(),
+            if pass == 0 { 1 } else { 2 },
+            "pass {pass}: {queued:?}"
+        );
+    }
+    // The crossing ends: both keys leave `active`, and the next crossing alerts afresh.
+    let calm = serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":10,
+        "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
+    let (active, _) = pass_in(again.path(), calm, &env);
+    assert!(active.trim().is_empty(), "{active}");
+}
