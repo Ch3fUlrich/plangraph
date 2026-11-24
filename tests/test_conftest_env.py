@@ -245,3 +245,204 @@ def test_unix_socket_guard_rejects_long_paths(encoded):
     with socket.socket(socket.AF_UNIX) as server:
         with pytest.raises(AssertionError, match="use short_socket_dir"):
             server.bind(os.fsencode(address) if encoded else address)
+
+
+def test_pytest_shards_balance_recorded_durations(tmp_path, monkeypatch, shard_selector):
+    import json
+    from types import SimpleNamespace
+
+    timings = {'a': 9, 'b': 6, 'c': 4, 'd': 3, 'e': 2}
+    path = tmp_path / 'durations.json'
+    path.write_text(json.dumps(timings))
+    monkeypatch.setenv('PYTEST_SHARD_DURATIONS_FILE', str(path))
+    items = [
+        SimpleNamespace(
+            nodeid=name,
+            get_closest_marker=lambda _, name=name: (
+                SimpleNamespace(args=('group',), kwargs={}) if name in ('c', 'e') else None
+            ),
+        )
+        for name in 'abcde'
+    ]
+    shards = [shard_selector(items, f'{index}/2') for index in range(2)]
+    assert [[item.nodeid for item in shard] for shard in shards] == [['a', 'd'], ['b', 'c', 'e']]
+    assert [sum(timings[item.nodeid] for item in shard) for shard in shards] == [12, 12]
+
+
+@pytest.mark.parametrize(('now', 'mode', 'expected'), [
+    ('2026-11-24T09:00:00+00:00', 'blocking', ['test_regular']),
+    ('2026-11-24T09:00:00+00:00', 'quarantine', ['test_flaky[user@example.invalid]']),
+    ('2026-11-25T09:00:00+00:00', 'blocking', ['test_regular', 'test_flaky[user@example.invalid]']),
+    ('2026-11-25T09:00:00+00:00', 'quarantine', []),
+])
+def test_pytest_quarantine_expires(tmp_path, now, mode, expected):
+    import json
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from _split_ci_environment import quarantine_items
+
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({
+        'test_flaky[user@example.invalid]': {
+            'owner': 'plangraph:FIX-THE-FLAKE',
+            'starts': '2026-11-23T09:00:00+00:00',
+            'expires': '2026-11-25T09:00:00+00:00',
+        }
+    }))
+    items = [SimpleNamespace(nodeid=nodeid) for nodeid in ['test_regular', 'test_flaky[user@example.invalid]@contract']]
+    selected, active = quarantine_items(items, ledger, mode, datetime.fromisoformat(now))
+    assert [item.nodeid.removesuffix('@contract') for item in selected] == expected
+    assert active == ({'test_flaky[user@example.invalid]': 'plangraph:FIX-THE-FLAKE'} if now.startswith('2026-11-24') else {})
+
+
+def _quarantine_entry(**overrides):
+    entry = {
+        'owner': 'plangraph:FIX-THE-FLAKE',
+        'starts': '2026-11-23T09:00:00+00:00',
+        'expires': '2026-11-25T09:00:00+00:00',
+    }
+    entry.update(overrides)
+    return entry
+
+
+@pytest.mark.parametrize('entry', [
+    _quarantine_entry(expires='2026-11-25T10:00:00+00:00'),  # 49 h window
+    _quarantine_entry(expires='2026-11-23T09:00:00+00:00'),  # zero-length window
+    _quarantine_entry(expires='2026-11-22T09:00:00+00:00'),  # negative window
+    _quarantine_entry(owner='FIX-THE-FLAKE'),
+    _quarantine_entry(owner='plangraph:'),
+    _quarantine_entry(owner=None),
+    {key: value for key, value in _quarantine_entry().items() if key != 'owner'},
+    _quarantine_entry(starts='2026-11-23T09:00:00'),  # naive timestamp
+    _quarantine_entry(expires='2026-11-25T09:00:00'),
+    _quarantine_entry(starts='2026-11-23T10:00:00+01:00', expires='2026-11-25T10:00:00+01:00'),  # not UTC
+], ids=['49h', 'zero', 'negative', 'bare-owner', 'empty-owner', 'null-owner', 'missing-owner',
+        'naive-starts', 'naive-expires', 'non-utc'])
+def test_pytest_quarantine_rejects_unsafe_ledger_entries(tmp_path, entry):
+    import json
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from _split_ci_environment import quarantine_items
+
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({'test_flaky': entry}))
+    with pytest.raises(pytest.UsageError, match='PYTEST_QUARANTINE_FILE'):
+        quarantine_items([SimpleNamespace(nodeid='test_flaky')], ledger, 'blocking',
+                         datetime(2026, 11, 24, 9, tzinfo=timezone.utc))
+
+
+def test_pytest_quarantine_accepts_a_window_of_exactly_48_hours(tmp_path):
+    import json
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from _split_ci_environment import quarantine_items
+
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({'test_flaky': _quarantine_entry()}))
+    selected, active = quarantine_items([SimpleNamespace(nodeid='test_flaky')], ledger, 'quarantine',
+                                        datetime(2026, 11, 24, 9, tzinfo=timezone.utc))
+    assert [item.nodeid for item in selected] == ['test_flaky'] and active == {'test_flaky': 'plangraph:FIX-THE-FLAKE'}
+
+
+@pytest.mark.parametrize(('mode', 'expected'), [('blocking', ['test_flaky']), ('quarantine', [])])
+def test_pytest_quarantine_window_that_has_not_begun_stays_blocking(tmp_path, mode, expected):
+    import json
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from _split_ci_environment import quarantine_items
+
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({'test_flaky': _quarantine_entry(
+        starts='2026-11-25T09:00:00+00:00', expires='2026-11-26T09:00:00+00:00')}))
+    selected, active = quarantine_items([SimpleNamespace(nodeid='test_flaky')], ledger, mode,
+                                        datetime(2026, 11, 24, 9, tzinfo=timezone.utc))
+    assert [item.nodeid for item in selected] == expected and active == {}
+
+
+def test_pytest_quarantine_rejects_a_naive_run_timestamp(tmp_path):
+    import json
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from _split_ci_environment import quarantine_items
+
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({'test_flaky': _quarantine_entry()}))
+    with pytest.raises(pytest.UsageError, match='PYTEST_QUARANTINE_FILE'):
+        quarantine_items([SimpleNamespace(nodeid='test_flaky')], ledger, 'blocking', datetime(2026, 11, 24, 9))
+
+
+@pytest.mark.parametrize('parallel', [False, True])
+def test_pytest_writes_shard_durations_through_conftest(tmp_path, parallel):
+    import json
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    nodeid = 'tests/test_conftest_env.py::test_pytest_shards_preserve_groups_and_cover_every_case'
+    data = tmp_path / 'durations.json'
+    worker_args = []
+    if parallel:
+        pytest.importorskip('xdist')
+        worker_args = ['-n', '2', '--dist', 'loadgroup']
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', *worker_args, nodeid],
+        cwd=root, env=dict(_nested_pytest_env(), PYTEST_SHARD_DURATIONS_OUT=str(data)),
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    durations = json.loads(data.read_text(encoding='utf-8'))
+    assert list(durations) == [nodeid]
+    assert durations[nodeid] > 0
+
+
+def test_pytest_shard_durations_sum_setup_call_and_teardown(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from _pytest.reports import TestReport
+    from _split_ci_environment import pytest_terminal_summary
+
+    def report(nodeid, when, duration):
+        return TestReport(nodeid, ('f.py', 0, 't'), {}, 'passed', None, when, duration=duration)
+
+    stats = {'passed': [report('t.py::a@grp', 'setup', 0.5), report('t.py::a@grp', 'call', 2.0),
+                        report('t.py::a@grp', 'teardown', 0.25)]}
+    out = tmp_path / 'durations.json'
+    monkeypatch.setenv('PYTEST_SHARD_DURATIONS_OUT', str(out))
+    pytest_terminal_summary(SimpleNamespace(stats=stats), pytest.ExitCode.OK)
+    assert json.loads(out.read_text(encoding='utf-8')) == {'t.py::a': 2.75}
+
+
+def test_pytest_quarantine_is_applied_during_collection(tmp_path):
+    import json
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    nodeid = 'tests/test_conftest_env.py::test_pytest_shards_preserve_groups_and_cover_every_case'
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({
+        nodeid: {
+            'owner': 'plangraph:FIX-THE-FLAKE',
+            'starts': '2026-11-23T09:00:00+00:00',
+            'expires': '2026-11-25T09:00:00+00:00',
+        },
+    }), encoding='utf-8')
+    env = dict(_nested_pytest_env(), PYTEST_QUARANTINE_FILE=str(ledger),
+               PYTEST_QUARANTINE_AS_OF='2026-11-24T09:00:00+00:00')
+    for mode, code, outcome in [('blocking', 5, '1 deselected'), ('quarantine', 0, '1 passed')]:
+        result = subprocess.run(
+            [sys.executable, '-m', 'pytest', '-q', nodeid], cwd=root,
+            env=dict(env, PYTEST_QUARANTINE_MODE=mode),
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == code, result.stdout + result.stderr
+        assert outcome in result.stdout
+        assert f'QUARANTINED {nodeid} owner=plangraph:FIX-THE-FLAKE mode={mode}' in result.stdout
+
+
+def _nested_pytest_env():
+    return {key: value for key, value in os.environ.items() if not key.startswith('PYTEST_')}

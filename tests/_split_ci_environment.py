@@ -1,3 +1,5 @@
+import json
+import math
 import os
 import subprocess
 import sys
@@ -126,12 +128,107 @@ def shard_items(items, shard):
             raise ValueError
     except (ValueError, AttributeError):
         raise pytest.UsageError('PYTEST_SHARD must be INDEX/COUNT with 0 <= INDEX < COUNT') from None
-    def bucket(item):
+    def key(item):
         group = item.get_closest_marker('xdist_group')
-        key = str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
-        return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') % count
-    return [item for item in items if bucket(item) == index]
+        return str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
+
+    if duration_file := os.environ.get('PYTEST_SHARD_DURATIONS_FILE'):
+        # Imported here so a conftest that copies only this function still resolves it.
+        from _split_ci_environment import _weighted_shard
+        return _weighted_shard(items, key, index, count, duration_file)
+    return [item for item in items
+            if int.from_bytes(hashlib.sha256(key(item).encode()).digest()[:8], 'big') % count == index]
+
+
+def _ci_nodeid(nodeid):
+    # xdist's loadgroup adds an @group suffix after the normal test ID.
+    suffix = nodeid.rfind('@')
+    return nodeid[:suffix] if suffix > max(nodeid.rfind(']'), nodeid.rfind('::')) else nodeid
+
+
+def _weighted_shard(items, key, index, count, duration_file):
+    try:
+        durations = json.loads(Path(duration_file).read_text(encoding='utf-8'))
+        if not isinstance(durations, dict) or any(
+            type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
+            for seconds in durations.values()
+        ):
+            raise ValueError('expected a JSON object mapping test IDs to nonnegative seconds')
+    except (OSError, ValueError, OverflowError) as exc:
+        raise pytest.UsageError(f'PYTEST_SHARD_DURATIONS_FILE: {exc}') from exc
+
+    weights = {}
+    for item in items:
+        group = key(item)
+        weights[group] = weights.get(group, 0) + max(durations.get(_ci_nodeid(item.nodeid), 1), 0.001)
+    loads = [0] * count
+    buckets = {}
+    for group in sorted(weights, key=lambda group: (-weights[group], group)):
+        bucket = min(range(count), key=loads.__getitem__)
+        buckets[group] = bucket
+        loads[bucket] += weights[group]
+    return [item for item in items if buckets[key(item)] == index]
+
 
 @pytest.fixture
 def shard_selector():
     return shard_items
+
+
+def quarantine_items(items, ledger, mode, now):
+    """Select blocking or quarantined tests as of a shared UTC run timestamp."""
+    from datetime import datetime, timedelta
+
+    if mode not in ('blocking', 'quarantine'):
+        raise pytest.UsageError('PYTEST_QUARANTINE_MODE must be blocking or quarantine')
+    try:
+        entries = json.loads(ledger.read_text(encoding='utf-8'))
+        if not isinstance(entries, dict) or now.utcoffset() != timedelta():
+            raise ValueError('expected a test ID mapping and a UTC run timestamp')
+        active = {}
+        for nodeid, entry in entries.items():
+            owner = entry['owner']
+            starts = datetime.fromisoformat(entry['starts'])
+            expires = datetime.fromisoformat(entry['expires'])
+            if (not isinstance(owner, str) or not owner.startswith('plangraph:') or
+                not owner.removeprefix('plangraph:').strip() or
+                starts.utcoffset() != timedelta() or expires.utcoffset() != timedelta() or
+                not timedelta() < expires - starts <= timedelta(hours=48)):
+                raise ValueError(f'invalid owner or quarantine window for {nodeid}')
+            if starts <= now < expires:
+                active[nodeid] = owner
+    except (OSError, TypeError, KeyError, ValueError, OverflowError) as exc:
+        raise pytest.UsageError(f'PYTEST_QUARANTINE_FILE: {exc}') from exc
+    matched = {}
+    selected = []
+    for item in items:
+        nodeid = _ci_nodeid(item.nodeid)
+        owner = active.get(nodeid)
+        if owner:
+            matched[nodeid] = owner
+        if bool(owner) == (mode == 'quarantine'):
+            selected.append(item)
+    return selected, matched
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus):
+    """Publish complete, canonical setup/call/teardown timings for this shard."""
+    destination = os.environ.get('PYTEST_SHARD_DURATIONS_OUT')
+    if not destination or exitstatus != pytest.ExitCode.OK:
+        return
+    durations = {}
+    for reports in terminalreporter.stats.values():
+        for report in reports:
+            if isinstance(report, pytest.TestReport):
+                nodeid = _ci_nodeid(report.nodeid)
+                durations[nodeid] = durations.get(nodeid, 0) + report.duration
+    target = Path(destination)
+    fd, name = tempfile.mkstemp(dir=target.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(durations, stream, sort_keys=True)
+            stream.write('\n')
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
