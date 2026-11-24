@@ -123,20 +123,25 @@ pub(super) fn run_holding(state: &Path, key: &str) {
     .unwrap();
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
-}
+use crate::lane_reservation::now_secs;
 
-/// Drops `launched` on another thread; the channel says when the drop has returned.
-fn drop_in_thread(launched: Launched) -> std::sync::mpsc::Receiver<()> {
+/// Drops `launched` on another thread. The first channel says each time its release finds the
+/// admission lock held, the second when the drop has returned.
+fn drop_in_thread(
+    launched: Launched,
+) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Receiver<()>) {
+    let (busy, blocked) = std::sync::mpsc::channel();
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        crate::lane_reservation::BUSY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                let _ = busy.send(());
+            }));
+        });
         drop(launched);
         done.send(()).unwrap();
     });
-    finished
+    (blocked, finished)
 }
 
 #[test]
@@ -147,10 +152,15 @@ fn a_release_waits_for_an_admission_in_progress() {
     let keys = ["demo:RACE".to_owned()];
     let first = admit_launch(&request(dir.path(), &keys)).unwrap();
     let admission = crate::lane_reservation::lock(dir.path()).unwrap();
-    let finished = drop_in_thread(first);
-    // The drop is blocked on the lock: it cannot return while B holds it.
-    let early = finished.recv_timeout(std::time::Duration::from_millis(300));
-    assert!(early.is_err(), "the release did not wait for the admission");
+    let (blocked, finished) = drop_in_thread(first);
+    // Wait until the release itself has met the held lock: it cannot return while B holds it.
+    blocked
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the release never tried the admission lock");
+    assert!(
+        finished.try_recv().is_err(),
+        "the release did not wait for the admission"
+    );
     let held = crate::lane_reservation::lanes(dir.path(), &keys, "dispatch-b", now_secs());
     assert_eq!(held.len(), 1, "the claim is visible to the admission");
     drop(admission);
@@ -169,7 +179,7 @@ fn a_finished_launch_frees_its_claim_although_another_admission_holds_the_lock()
     let first = admit_launch(&request(dir.path(), &keys)).unwrap();
     first.mark_started().unwrap();
     let admission = crate::lane_reservation::lock(dir.path()).unwrap();
-    let finished = drop_in_thread(first);
+    let (_blocked, finished) = drop_in_thread(first);
     finished
         .recv_timeout(std::time::Duration::from_secs(10))
         .expect("the release gave up with the lock still held");
@@ -240,9 +250,7 @@ fn a_claim_is_marked_started_for_the_supervisor_and_a_check_has_nothing_to_mark(
     let dir = tempfile::tempdir().unwrap();
     let keys = ["demo:START".to_owned()];
     let launched = admit_launch(&request(dir.path(), &keys)).unwrap();
-    let at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    let at = now_secs();
     let after = at + crate::lane_reservation::PENDING_SECS + 1;
     let held = |at| crate::lane_reservation::lanes(dir.path(), &keys, "dispatch-b", at).len();
     assert_eq!(held(at), 1);
@@ -259,4 +267,42 @@ fn a_claim_is_marked_started_for_the_supervisor_and_a_check_has_nothing_to_mark(
     check.reserve = false;
     admit_launch(&check).unwrap().mark_started().unwrap();
     assert_eq!(reservation_files(dir.path()), 0);
+}
+
+#[test]
+fn a_clock_that_steps_back_cannot_revive_a_claim_another_admission_replaced() {
+    // A's pending claim lapses; B is admitted over it at the later time. When the clock then steps
+    // back to a time at which A's claim would hold again, A must not start next to B.
+    let dir = tempfile::tempdir().unwrap();
+    let keys = ["demo:CLOCK".to_owned()];
+    let first = admit_launch(&request(dir.path(), &keys)).unwrap();
+    let claim = || {
+        fs::read_dir(dir.path().join("lane-reservations"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_dir())
+            .flat_map(|entry| fs::read_dir(entry.path()).unwrap())
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+    };
+    let path = claim().unwrap();
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let written = record["ts"].clone();
+    record["ts"] = json!(now_secs() - crate::lane_reservation::PENDING_SECS - 1);
+    fs::write(&path, record.to_string()).unwrap();
+    let second = admit_launch(&request(dir.path(), &keys)).unwrap();
+    // The clock steps back: whatever is left of A's claim looks fresh again.
+    if path.exists() {
+        record["ts"] = written;
+        fs::write(&path, record.to_string()).unwrap();
+    }
+    let error = first.mark_started().unwrap_err();
+    assert!(
+        error.contains("expired before the launch started"),
+        "{error}"
+    );
+    drop(first);
+    assert_eq!(reservation_files(dir.path()), 1);
+    second.mark_started().unwrap();
 }

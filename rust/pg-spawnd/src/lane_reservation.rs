@@ -20,6 +20,14 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+thread_local! {
+    /// Called by `lock_for` on the current thread each time it finds the lock held, so a test
+    /// can wait for a release to be blocked instead of guessing with a timeout.
+    pub(crate) static BUSY_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// How long an admitted claim holds before its launch starts a supervisor.
 pub const PENDING_SECS: u64 = 120;
 
@@ -34,7 +42,8 @@ fn dir(state: &Path) -> PathBuf {
     state.join("lane-reservations")
 }
 
-fn now() -> u64 {
+/// The current time in seconds, the clock of every claim.
+pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
@@ -107,7 +116,7 @@ pub fn reserve(state: &Path, keys: &[String], owner: &str) -> std::io::Result<()
         let tmp = target.with_extension(format!("{}.tmp", std::process::id()));
         let published = fs::write(
             &tmp,
-            json!({"key":key,"owner":owner,"ts":now()}).to_string(),
+            json!({"key":key,"owner":owner,"ts":now_secs()}).to_string(),
         )
         .and_then(|()| fs::rename(&tmp, &target));
         if published.is_err() {
@@ -126,7 +135,7 @@ pub fn reserve(state: &Path, keys: &[String], owner: &str) -> std::io::Result<()
 /// is refused instead.
 pub fn start(state: &Path, keys: &[String], owner: &str) -> Result<(), String> {
     let _lock = lock(state)?;
-    let at = now();
+    let at = now_secs();
     for key in keys {
         let held = read_claim(&path(state, key, owner)).is_some_and(|record| {
             record["owner"] == owner && record["key"] == *key && active(&record, at)
@@ -149,6 +158,24 @@ pub fn start(state: &Path, keys: &[String], owner: &str) -> Result<(), String> {
         published.map_err(|e| format!("lane reservation: {e}"))?;
     }
     Ok(())
+}
+
+/// Remove the claims on `keys` that no longer hold at `at`, whoever owns them. An admission calls
+/// it under the lock when it grants a key over such a claim, so the replaced claim is gone for
+/// good: a wall clock that steps back cannot make it hold again and let its launch start next to
+/// the replacement.
+pub fn sweep_expired(state: &Path, keys: &[String], at: u64) {
+    for key in keys {
+        let entries = fs::read_dir(key_dir(state, key)).into_iter().flatten();
+        for entry in entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        {
+            if read_claim(&entry.path()).is_some_and(|record| !active(&record, at)) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 /// Remove the claims of `owner` on `keys`; the claims of other owners stay. With the state's lock
@@ -185,7 +212,11 @@ pub fn lock_for(
     loop {
         match pg_worker_core::lockfile::try_lock(&anchor) {
             Ok(Some(guard)) => return Ok(guard),
-            Ok(None) if Instant::now() < end => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) if Instant::now() < end => {
+                #[cfg(test)]
+                BUSY_HOOK.with(|hook| hook.borrow().as_ref().map(|hook| hook()));
+                std::thread::sleep(Duration::from_millis(20));
+            }
             Ok(None) => return Err("lane reservation lock busy".into()),
             Err(e) => return Err(format!("lane reservation: {e}")),
         }
@@ -229,7 +260,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let keys = ["demo:K".to_owned()];
         reserve(dir.path(), &keys, "launch-a").unwrap();
-        let at = now();
+        let at = now_secs();
         assert!(lanes(dir.path(), &keys, "launch-a", at).is_empty());
         let held = lanes(dir.path(), &keys, "launch-b", at);
         assert_eq!(held[0].name, "reservation launch-a");
@@ -245,7 +276,7 @@ mod tests {
         // the supervisor starts nothing can register, so the claim is a short crash backstop.
         let dir = tempfile::tempdir().unwrap();
         let keys = ["demo:K".to_owned()];
-        let at = now();
+        let at = now_secs();
         write_claim(dir.path(), "demo:K", "launch-started", at - 300, "started");
         write_claim(
             dir.path(),
@@ -263,13 +294,31 @@ mod tests {
         let fresh = ["demo:F".to_owned()];
         reserve(dir.path(), &fresh, "launch-a").unwrap();
         assert_eq!(
-            lanes(dir.path(), &fresh, "launch-b", now() + PENDING_SECS - 1).len(),
+            lanes(
+                dir.path(),
+                &fresh,
+                "launch-b",
+                now_secs() + PENDING_SECS - 1
+            )
+            .len(),
             1
         );
-        assert!(lanes(dir.path(), &fresh, "launch-b", now() + PENDING_SECS + 1).is_empty());
+        assert!(lanes(
+            dir.path(),
+            &fresh,
+            "launch-b",
+            now_secs() + PENDING_SECS + 1
+        )
+        .is_empty());
         start(dir.path(), &fresh, "launch-a").unwrap();
         assert_eq!(
-            lanes(dir.path(), &fresh, "launch-b", now() + PENDING_SECS + 1).len(),
+            lanes(
+                dir.path(),
+                &fresh,
+                "launch-b",
+                now_secs() + PENDING_SECS + 1
+            )
+            .len(),
             1
         );
     }
@@ -280,9 +329,9 @@ mod tests {
         let keys = ["demo:K".to_owned()];
         let stray = key_dir(dir.path(), "demo:K");
         fs::create_dir_all(&stray).unwrap();
-        let record = json!({"key":"demo:K","owner":"launch-a","ts":now()}).to_string();
+        let record = json!({"key":"demo:K","owner":"launch-a","ts":now_secs()}).to_string();
         fs::write(stray.join("0123.4567.tmp"), &record).unwrap();
-        assert!(lanes(dir.path(), &keys, "launch-b", now()).is_empty());
+        assert!(lanes(dir.path(), &keys, "launch-b", now_secs()).is_empty());
         // The rename cannot replace a directory: the temporary file must not outlive the failure.
         fs::create_dir_all(path(dir.path(), "demo:K", "launch-b")).unwrap();
         assert!(reserve(dir.path(), &keys, "launch-b").is_err());
@@ -304,21 +353,21 @@ mod tests {
         reserve(dir.path(), &keys, "launch-b").unwrap();
         assert_eq!(claim_files(dir.path()), 2);
         release(dir.path(), &keys, "launch-b");
-        let held = lanes(dir.path(), &keys, "launch-c", now());
+        let held = lanes(dir.path(), &keys, "launch-c", now_secs());
         assert_eq!(held.len(), 1);
         assert_eq!(held[0].name, "reservation launch-a");
         release(dir.path(), &keys, "launch-a");
         prune(dir.path(), &keys);
         assert_eq!(claim_files(dir.path()), 0);
         assert!(!key_dir(dir.path(), "demo:K").exists());
-        assert!(lanes(dir.path(), &keys, "launch-c", now()).is_empty());
+        assert!(lanes(dir.path(), &keys, "launch-c", now_secs()).is_empty());
     }
 
     #[test]
     fn start_refuses_an_expired_or_missing_claim_and_never_revives_it() {
         let dir = tempfile::tempdir().unwrap();
         let keys = ["demo:K".to_owned()];
-        let at = now();
+        let at = now_secs();
         write_claim(dir.path(), "demo:K", "launch-a", at, "admitted");
         start(dir.path(), &keys, "launch-a").unwrap();
         // Started once: a second start keeps it started.
@@ -341,7 +390,7 @@ mod tests {
             "{error}"
         );
         assert!(
-            lanes(dir.path(), &keys, "launch-b", now() + PENDING_SECS + 1)
+            lanes(dir.path(), &keys, "launch-b", now_secs() + PENDING_SECS + 1)
                 .iter()
                 .all(|lane| lane.name != "reservation launch-old")
         );

@@ -94,6 +94,12 @@ pub fn admit_launch(request: &LaunchRequest) -> Result<Launched, String> {
         return Err(format!("a launch holds at most {MAX_KEYS} item keys"));
     }
     let reservation = if request.reserve {
+        // The admission passed over any claim that lapsed: take those away for good.
+        crate::lane_reservation::sweep_expired(
+            request.state,
+            &keys,
+            crate::lane_reservation::now_secs(),
+        );
         if let Err(error) = crate::lane_reservation::reserve(request.state, &keys, &owner) {
             // Still under the lock: drop what was written before the failure.
             crate::lane_reservation::release(request.state, &keys, &owner);

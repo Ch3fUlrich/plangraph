@@ -14,7 +14,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// A lane that holds item keys: a live spawner run, a reservation or an unmerged remote branch.
@@ -54,9 +53,7 @@ impl Observed {
             &self.state,
             keys,
             &self.owner,
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs()),
+            crate::lane_reservation::now_secs(),
         );
         between();
         lanes.extend(run_lanes(&live_runs(&self.state)));
