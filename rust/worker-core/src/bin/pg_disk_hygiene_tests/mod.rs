@@ -252,7 +252,7 @@ fn a_measurement_that_disagrees_with_the_estimate_wins_both_ways() {
         &[],
         None,
         (&Guards::default(), &[]),
-        &low,
+        (&low, &super::device),
         true,
         &mut report,
     )
@@ -287,7 +287,7 @@ fn a_recovered_filesystem_stops_the_pass_even_when_the_estimate_is_short() {
         &[],
         None,
         (&Guards::default(), &[]),
-        &recovering,
+        (&recovering, &super::device),
         true,
         &mut report,
     )
@@ -315,7 +315,7 @@ fn a_full_disk_with_no_candidate_still_fails_naming_that() {
         &[],
         None,
         (&Guards::default(), &[]),
-        &full,
+        (&full, &super::device),
         true,
         &mut report,
     )
@@ -323,6 +323,53 @@ fn a_full_disk_with_no_candidate_still_fails_naming_that() {
     let error = report.error.expect("freed 0 below the floor is an error");
     assert!(error.contains("no Cargo target candidate"), "{error}");
     assert!(report.alarm);
+}
+
+#[test]
+fn a_target_that_is_a_mount_point_is_measured_on_its_own_device() {
+    let (fixture, repo, root, _args) = pressure_fixture();
+    let canonical = root.canonicalize().unwrap();
+    let targets = ["tree-a", "tree-b"].map(|n| canonical.join(n).join("rust/target"));
+    // The targets are mount points of a small, full filesystem (device 2); everything above
+    // them, their parents and the root, is on a roomy one (device 1).
+    let device = |path: &Path| {
+        Some(
+            if path.starts_with(&canonical) && path.ends_with("target") {
+                2
+            } else {
+                1
+            },
+        )
+    };
+    let probes = std::cell::RefCell::new(Vec::new());
+    let space = |path: &Path| -> io::Result<(u64, u64)> {
+        probes.borrow_mut().push(path.to_path_buf());
+        Ok(if device(path) == Some(2) {
+            (0, 1000)
+        } else {
+            (u64::MAX / 2, u64::MAX / 2)
+        })
+    };
+    let mut report = Report::default();
+    reclaim_below_floor(
+        &repo,
+        &[canonical.clone(), fixture.path().canonicalize().unwrap()],
+        floor_3000(),
+        &[],
+        None,
+        (&Guards::default(), &[]),
+        (&space, &device),
+        true,
+        &mut report,
+    )
+    .unwrap();
+    // The parent's free space (device 1) must not hide the target filesystem being full.
+    assert!(
+        probes.borrow().iter().any(|p| targets.contains(p)),
+        "{:?}",
+        probes.borrow()
+    );
+    assert!(targets.iter().all(|t| !t.exists()), "{report:?}");
 }
 
 #[test]
@@ -344,7 +391,7 @@ fn candidates_are_grouped_by_the_device_they_are_on() {
         &[],
         None,
         (&Guards::default(), &[]),
-        &space,
+        (&space, &super::device),
         true,
         &mut report,
     )
