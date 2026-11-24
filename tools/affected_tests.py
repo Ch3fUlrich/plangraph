@@ -17,7 +17,7 @@ import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pgtest import (affected_parser, affected_pytest, build_fleet_spawnd, keeper_postgres_files, postgres_bin, report_batches,
-                    run_keeper_postgres, test_environment, with_result_line)
+                    run_flag_in, run_keeper_postgres, test_environment, with_result_line)
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
@@ -781,12 +781,8 @@ _RUN_MODE = []
 
 
 def _wants_run():
-    """Whether this invocation is a `--run`: the answer of the one parse `_main` made; only when
-    that parse itself failed (nothing was recorded) are the argv tokens read, never parsed again
-    (a second parse would print the usage or help text a second time)."""
-    if _RUN_MODE:
-        return _RUN_MODE[0]
-    return any(len(arg) >= 4 and "--run".startswith(arg) for arg in sys.argv[1:])
+    """The one parse's answer; only a failed parse falls back to reading argv (never a second parse)."""
+    return _RUN_MODE[0] if _RUN_MODE else run_flag_in(sys.argv[1:])
 
 
 def main(root=None):

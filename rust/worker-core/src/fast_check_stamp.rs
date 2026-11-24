@@ -210,28 +210,46 @@ fn well_formed(text: &str, name: &str) -> bool {
 const RECEIPT_MESSAGE: &str = "fast-checks receipt";
 const RECEIPT_IDENTITY: &str = "plangraph";
 
-/// A parentless commit of `tree`. The identity goes in the environment, which beats ambient
-/// `GIT_AUTHOR_*` variables and config alike: the object is the same wherever it is written.
+/// A parentless commit of `tree`. The encoding is pinned with a command-line `-c`, which beats
+/// any config source including an inherited `GIT_CONFIG_PARAMETERS` (another encoding adds a
+/// header the validator refuses); the identity is in the environment, which beats `user.*`
+/// config. The object is the same wherever it is written.
 pub(crate) fn receipt_commit(
     repo: &Path,
     tree: &str,
     message: &str,
     name: &str,
 ) -> Result<String, String> {
+    receipt_commit_with(repo, tree, message, name, &[])
+}
+
+/// `receipt_commit` under an ambient environment (a test of what a host's own variables do).
+pub(crate) fn receipt_commit_with(
+    repo: &Path,
+    tree: &str,
+    message: &str,
+    name: &str,
+    ambient: &[(&str, &str)],
+) -> Result<String, String> {
     let email = "plangraph@localhost";
+    let mut env = ambient.to_vec();
+    env.extend([
+        ("GIT_AUTHOR_NAME", name),
+        ("GIT_AUTHOR_EMAIL", email),
+        ("GIT_COMMITTER_NAME", name),
+        ("GIT_COMMITTER_EMAIL", email),
+    ]);
     git_env(
         repo,
-        &["commit-tree", tree, "-m", message],
         &[
-            // UTF-8 whatever the host configures: another encoding adds a header the validator refuses.
-            ("GIT_CONFIG_COUNT", "1"),
-            ("GIT_CONFIG_KEY_0", "i18n.commitEncoding"),
-            ("GIT_CONFIG_VALUE_0", "utf-8"),
-            ("GIT_AUTHOR_NAME", name),
-            ("GIT_AUTHOR_EMAIL", email),
-            ("GIT_COMMITTER_NAME", name),
-            ("GIT_COMMITTER_EMAIL", email),
+            "-c",
+            "i18n.commitEncoding=utf-8",
+            "commit-tree",
+            tree,
+            "-m",
+            message,
         ],
+        &env,
     )
     .map_err(|e| e.to_string())
 }
@@ -577,6 +595,29 @@ mod tests {
         .unwrap();
         let commit = canonical_commit_of(dir.path(), &tree, RECEIPT_MESSAGE);
         assert!(notes_commit_green(dir.path(), &commit, Some(&head)).is_err());
+    }
+
+    #[test]
+    fn an_inherited_config_parameters_encoding_does_not_make_the_receipt_unpublishable() {
+        let (dir, head) = repo();
+        publish(dir.path(), &head, &[check("fmt", 0)]).unwrap();
+        let tree = git(
+            dir.path(),
+            &["rev-parse", &format!("{}^{{tree}}", tip(dir.path(), &head))],
+        )
+        .unwrap();
+        // A host that exports its own encoding (what `git -c` writes into GIT_CONFIG_PARAMETERS).
+        let commit = receipt_commit_with(
+            dir.path(),
+            &tree,
+            RECEIPT_MESSAGE,
+            RECEIPT_IDENTITY,
+            &[("GIT_CONFIG_PARAMETERS", "'i18n.commitencoding=ISO-8859-1'")],
+        )
+        .unwrap();
+        let object = git(dir.path(), &["cat-file", "commit", &commit]).unwrap();
+        assert!(!object.contains("\nencoding "), "{object}");
+        assert_eq!(notes_commit_green(dir.path(), &commit, Some(&head)), Ok(()));
     }
 
     #[test]

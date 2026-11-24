@@ -455,6 +455,10 @@ def test_the_abbreviated_run_flag_and_operational_errors_end_with_a_result_line(
     assert last_line(ambiguous) == "AFFECTED rc=2 batches=0 failed=1", ambiguous.stdout
     # One diagnostic, not one per parse: a usage error and --help each print their text once.
     assert short.stderr.count("usage:") == 0 and ambiguous.stderr.count("usage:") == 1, ambiguous.stderr
+    # After `--` a `--run` is a value, not a flag: the usage error stays free of a result line.
+    after = subprocess.run([sys.executable, str(TOOL), "--base", "HEAD", "--", "--run"], cwd=fixture.tree,
+                           env=fixture.env, capture_output=True, text=True, timeout=300)
+    assert after.returncode == 2 and "AFFECTED" not in after.stdout + after.stderr, after.stdout + after.stderr
     helped = subprocess.run([sys.executable, str(TOOL), "--help"], cwd=fixture.tree, env=fixture.env,
                             capture_output=True, text=True, timeout=300)
     assert helped.returncode == 0 and helped.stdout.count("usage:") == 1 and "AFFECTED" not in helped.stdout
