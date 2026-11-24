@@ -141,7 +141,7 @@ fn editor_comments_do_not_hide_valid_trailers() {
             .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
             .output()
             .unwrap();
-        assert!(output.status.success(), "{output:?}");
+        assert!(output.status.success(), "{key}={comment_char}: {output:?}");
     }
 }
 
@@ -338,4 +338,34 @@ fn class_search_is_checked_on_a_merge_and_on_a_verbatim_message() {
     );
     assert!(!output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("malformed Class-Search"));
+}
+
+#[test]
+fn a_literal_scissors_look_alike_does_not_hide_a_class_search_line() {
+    let dir = repo();
+    let marker = "x ------------------------ >8 ------------------------";
+    // Only a comment-prefixed scissors line is cut; a look-alike is kept by --cleanup=verbatim.
+    let message = format!(
+        "x\n\n{marker}\nClass-Search: fixture -> 1 hit, 1 changed (prose)\n\nWriter: codex"
+    );
+    let output = git(
+        dir.path(),
+        &[
+            "commit",
+            "--allow-empty",
+            "--cleanup=verbatim",
+            "-m",
+            &message,
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("line 4: malformed Class-Search"));
+    // The real scissors line cuts the tail Git discards, under scissors cleanup.
+    let message = "x\n\nWriter: codex\n# ------------------------ >8 ------------------------\nClass-Search: fixture -> 1 hit, 1 changed (prose)\n";
+    // The hook reads commit.cleanup; the --cleanup flag is not visible to it.
+    assert!(git(dir.path(), &["config", "commit.cleanup", "scissors"])
+        .status
+        .success());
+    let output = git(dir.path(), &["commit", "--allow-empty", "-m", message]);
+    assert!(output.status.success(), "{output:?}");
 }
