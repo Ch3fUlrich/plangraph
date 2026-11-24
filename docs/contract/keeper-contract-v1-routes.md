@@ -14,7 +14,7 @@ Query parameters common to reads: `fmt=json|text`, `project=<name>`.
 ## Reads (GET)
 
 ### `GET /v1/health`
-Open. `200 {"status":"ok"}` [Health].
+Open. `200 {"status":"ok","claim_preflight_s":N}` [Health]; `claim_preflight_s` is the claim budget in seconds.
 
 ### `GET /v1/whoami`
 Any role. `200 {name, role, projects[], family|null}` [WhoAmI].

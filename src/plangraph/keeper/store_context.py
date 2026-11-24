@@ -260,18 +260,30 @@ class ContextMixin:
 
     # -------------------------------------------------------------- ready
     def _work_indexes(self, projects, *, fresh=False, shared=None):
+        """Work indexes of every scanned repository.
+
+        A fresh read (the claim guard) refreshes *projects* from origin, plus any other
+        repository whose last built index is expired (older than the ready read's TTL, or
+        never built): a recent one is served as built. The refreshes run in parallel under
+        the claim deadline; the keys of a batch and claims running at the same time share
+        them.
+        """
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
         names = {*projects, *(scan() if scan is not None else ())}
         if not fresh:
             return {name: src.work_index_cached(git, name) for name in sorted(names)}
         indexes = {} if shared is None else shared
-        missing = tuple(sorted(names - indexes.keys()))
+        stale = {name for name in names - set(projects) if src.work_index_expired(git, name)}
+        missing = tuple(sorted((set(projects) | stale) - indexes.keys()))
         if missing:
             indexes.update(timing.share_inflight(
                 ("work indexes", id(git), missing), lambda: self._claim_work_indexes(git, missing),
                 step=f"work index for {missing[0]}" if len(missing) == 1 else "work indexes"))
-        return {name: indexes[name] for name in sorted(names)}
+        return {name: indexes[name] if name in indexes else timing.share_inflight(
+                    ("cached work", id(git), name), lambda name=name: src.work_index_cached(git, name),
+                    step=f"work index for {name}")
+                for name in sorted(names)}
 
     @staticmethod
     def _claim_work_indexes(git, names):
