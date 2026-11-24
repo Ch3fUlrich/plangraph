@@ -230,7 +230,9 @@ def read_record_identity(seat_dir, key=None):
         raise RecordPending("cannot read record identity") from exc
     if not isinstance(record, dict):
         raise ValueError("cannot read record identity")
-    if key is not None and "item_key" in record and record["item_key"] != key:
+    part = record.get("item_keys")
+    if key is not None and "item_key" in record and key != record["item_key"] and not (
+            isinstance(part, list) and key in part):
         raise ValueError("record item_key does not match --key")
     identity = {field: record[field] for field in ("item_key", "head_sha") if field in record}
     request = record.get("request")
