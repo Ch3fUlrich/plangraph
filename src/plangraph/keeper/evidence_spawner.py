@@ -40,24 +40,33 @@ def _required_seat(record):
     return isinstance(leg, dict) and leg.get("id") in REVIEW_REQUIRED
 
 
-def _tests_reported(text):
-    """True when the last standalone ``TESTS:`` line of a review reports tests that ran."""
-    fence, body = None, None
+def _unfenced_lines(text):
+    """The lines of *text* outside code fences, left-stripped of spaces."""
+    fence = None
     for raw in (text or "").splitlines():
         line = raw.lstrip(" ")
         if marker := re.match(r"(`{3,}|~{3,})", line):
             fence = None if fence and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) else fence or marker[1]
-        elif fence is None and line.startswith("TESTS:"):
+        elif fence is None:
+            yield line
+
+
+def _tests_reported(text):
+    """True when the last standalone ``TESTS:`` line of a review reports tests that ran."""
+    body = None
+    for line in _unfenced_lines(text):
+        if line.startswith("TESTS:"):
             body = line[6:].strip().lower()
-    executed = re.search(r"\b[1-9][0-9]*\s+(?:passed|failed|ran|ok)\b|\btests?\s+(?:passed|ok)\b", body or "")
+    executed = re.search(r"\b[1-9][0-9]*\s+(?:tests?\s+)?(?:passed|failed|ran|ok)\b", body or "")
     return bool(body) and bool(executed) and not re.search(r"requires approval|not permitted|denied|disallowed|collect[- ]only|--co\b|--no-run", body) \
         and not re.match(r"(?:none|no|not|n/a|skipped|could not|cannot|can not|did not)\b", body)
 
 
 def _declared_head(text, head):
-    """True when every standalone ``HEAD:`` line of the review names *head*, and at least one does."""
-    named = re.findall(r"(?im)^[ \t]*[*_`]*HEAD[*_`]*[ \t]*:[ \t]*[*_`]*([0-9a-f]{7,40})(?![0-9a-f])", text)
-    return bool(named) and all(sha.lower() == head.lower() for sha in named)
+    """True when every unfenced ``HEAD:`` line of the review is exactly *head*, and at least one is."""
+    values = [m[1].strip().strip("*_`").strip() for line in _unfenced_lines(text)
+              if (m := re.match(r"[*_`]*HEAD[*_`]*[ \t]*:(.*)$", line, re.I))]
+    return bool(values) and all(value.lower() == head.lower() for value in values)
 
 
 def _record_names_item(record, key):
