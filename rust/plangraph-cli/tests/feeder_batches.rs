@@ -41,6 +41,8 @@ struct Host {
     registry: Arc<Mutex<Registry>>,
     files: BTreeMap<String, Vec<String>>,
     fail_start: bool,
+    /// Starts fail once this many batches have started.
+    fail_start_after: Option<usize>,
     fail_release: bool,
     /// The claim of this key fails as unavailable; the rival check of this key errors.
     unavailable_at: Option<String>,
@@ -64,6 +66,7 @@ impl Host {
             registry: registry.clone(),
             files,
             fail_start: false,
+            fail_start_after: None,
             fail_release: false,
             unavailable_at: None,
             rival_error_at: None,
@@ -120,7 +123,8 @@ impl Launch for Host {
             .map(|(other, _)| other.clone()))
     }
     fn start(&mut self, card: &Value, _: &str) -> Result<Value, String> {
-        if self.fail_start {
+        let started = self.registry.lock().unwrap().started.len();
+        if self.fail_start || self.fail_start_after.is_some_and(|n| started >= n) {
             return Err("spawner denied".into());
         }
         let keys: Vec<String> = card["item_keys"].as_array().map_or_else(
@@ -150,10 +154,13 @@ impl Launch for Host {
     }
 }
 fn drive(ready: &Value, host: &mut Host, name: &str, batch: usize, dry: bool) -> Value {
+    drive_with(ready, host, facts(name), batch, dry)
+}
+fn drive_with(ready: &Value, host: &mut Host, facts: HostFacts, batch: usize, dry: bool) -> Value {
     tick(
         ready,
         &[],
-        &facts(name),
+        &facts,
         &policy(batch),
         "rules",
         "/repo",
@@ -197,12 +204,15 @@ fn related_items_share_one_batch_in_priority_order() {
         row["item_keys"],
         json!(["plangraph:ALPHA-1", "plangraph:BETA-1", "plangraph:ALPHA-2"])
     );
-    // GAMMA-1 has higher priority than BETA-1 but is unrelated to the batch.
-    assert!(!registry
-        .lock()
-        .unwrap()
-        .claimed
-        .contains_key("plangraph:GAMMA-1"));
+    // GAMMA-1 has higher priority than BETA-1 but is unrelated to the batch: it is no member,
+    // and the host's second slot starts it as a batch of its own.
+    assert_eq!(
+        registry.lock().unwrap().started,
+        [
+            vec!["plangraph:ALPHA-1", "plangraph:BETA-1", "plangraph:ALPHA-2"],
+            vec!["plangraph:GAMMA-1"]
+        ]
+    );
 }
 
 #[test]
@@ -265,7 +275,10 @@ fn a_later_host_yields_to_a_queued_run_and_launches_disjoint_work() {
     let registry: Arc<Mutex<Registry>> = Arc::default();
     let mut first = Host::new(&registry, &items);
     first.queued = true;
-    let one = drive(&ready(items.clone()), &mut first, "dell", 1, false);
+    // One slot of RAM: the first host starts ALPHA-1 only, so GAMMA-1 stays for the second.
+    let mut one_slot = facts("dell");
+    one_slot.free_ram_bytes = 4_000_000_000;
+    let one = drive_with(&ready(items.clone()), &mut first, one_slot, 1, false);
     assert_eq!(one["decision"], "pending");
     let mut second = Host::new(&registry, &items);
     let two = drive(&ready(items), &mut second, "coding", 1, false);
@@ -415,6 +428,57 @@ fn dry_run_list_stops_where_admission_refuses_and_names_why() {
 }
 
 #[test]
+fn a_live_tick_starts_the_same_batches_a_dry_run_lists() {
+    let items = vec![
+        item("AAA-1", 9, &["src/a.rs"]),
+        item("BBB-1", 8, &["src/a.rs"]),
+        item("CCC-1", 7, &["src/c.rs"]),
+    ];
+    let dry_registry: Arc<Mutex<Registry>> = Arc::default();
+    let dry = drive(
+        &ready(items.clone()),
+        &mut Host::new(&dry_registry, &items),
+        "dell",
+        1,
+        true,
+    );
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    let live = drive(&ready(items), &mut host, "dell", 1, false);
+    let started: Vec<_> = live["started"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["item_key"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(started, would_keys(&dry));
+    assert_eq!(live["slots"], dry["slots"]);
+    assert_eq!(live["stopped"], dry["stopped"]);
+    assert_eq!(live["decision"], "spawned");
+    assert_eq!(
+        registry.lock().unwrap().started,
+        [vec!["plangraph:AAA-1"], vec!["plangraph:CCC-1"]]
+    );
+    assert_disjoint(&registry.lock().unwrap());
+}
+
+#[test]
+fn a_launch_failure_after_a_started_batch_still_lists_the_started_one() {
+    let items = vec![
+        item("AAA-1", 9, &["src/a.rs"]),
+        item("BBB-1", 8, &["src/b.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    host.fail_start_after = Some(1);
+    let row = drive(&ready(items), &mut host, "dell", 1, false);
+    assert_eq!(row["decision"], "refused");
+    assert_eq!(row["error"], true);
+    assert_eq!(row["started"].as_array().unwrap().len(), 1);
+    assert_eq!(registry.lock().unwrap().released, ["plangraph:BBB-1"]);
+}
+
+#[test]
 fn a_member_claimed_by_another_host_is_a_rival_not_a_batch_mate() {
     // Another host already holds BETA-1; this host plans [ALPHA-1, BETA-1] on one file.
     let items = vec![
@@ -501,8 +565,12 @@ fn a_refused_seed_sends_the_tick_back_to_the_next_priority_not_the_batch_tail() 
     let row = drive(&ready(items), &mut host, "dell", 2, false);
     assert_eq!(row["item_key"], "plangraph:GAMMA-1", "{row}");
     let registry = registry.lock().unwrap();
-    assert_eq!(registry.started, [vec!["plangraph:GAMMA-1"]]);
-    assert!(!registry.claimed.contains_key("plangraph:ALPHA-2"));
+    // The refused seed ALPHA-1 does not drag its batch tail into GAMMA-1's batch; ALPHA-2
+    // starts as its own batch in the host's second slot.
+    assert_eq!(
+        registry.started,
+        [vec!["plangraph:GAMMA-1"], vec!["plangraph:ALPHA-2"]]
+    );
 }
 
 #[test]
@@ -523,12 +591,16 @@ fn a_yielding_seed_releases_its_batch_and_the_tick_picks_again() {
     let row = drive(&ready(items), &mut host, "dell", 2, false);
     assert_eq!(row["item_key"], "plangraph:GAMMA-1", "{row}");
     let registry = registry.lock().unwrap();
-    assert_eq!(registry.started, [vec!["plangraph:GAMMA-1"]]);
+    // The yielded batch was released whole; ALPHA-2 is then claimed again as its own batch.
+    assert_eq!(
+        registry.started,
+        [vec!["plangraph:GAMMA-1"], vec!["plangraph:ALPHA-2"]]
+    );
     assert_eq!(
         registry.released[..2],
         ["plangraph:ALPHA-1", "plangraph:ALPHA-2"]
     );
-    assert!(!registry.claimed.contains_key("plangraph:ALPHA-2"));
+    assert!(!registry.claimed.contains_key("plangraph:ALPHA-1"));
 }
 
 #[test]

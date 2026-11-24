@@ -180,95 +180,112 @@ pub fn tick(
         Ok(v) => v,
         Err(e) => return json!({"decision":"refused","reason":e,"error":true}),
     };
-    // A dry run plays the whole tick: each would-be batch takes a slot and one run's RAM, and
-    // the next pick avoids its files, until admission or the ready list ends the list.
+    // The tick plays every slot the host has, for a dry run and a live one alike: each batch
+    // takes a slot and one run's RAM, and the next pick avoids the files of the batches before
+    // it, until admission or the ready list ends the tick. Only the effect of a batch differs:
+    // a dry run records it, a live run claims and starts it.
     let mut sim_runs = runs.to_vec();
     let mut sim_facts = facts.clone();
-    let mut would: Vec<Value> = Vec::new();
+    let mut rows: Vec<Value> = Vec::new();
     let mut stopped = "no_eligible_item".to_string();
+    // The refusal row of a tick that already started batches still lists them.
+    let failed = |mut row: Value, rows: &[Value]| {
+        if !rows.is_empty() {
+            row["started"] = json!(rows);
+        }
+        row
+    };
     loop {
-        let batch = pick_batch(&ready, if dry { &sim_runs } else { runs }, policy);
+        let batch = pick_batch(&ready, &sim_runs, policy);
         let Some(seed) = batch.first() else { break };
-        if let Admission::Refuse(reason) = admit(if dry { &sim_facts } else { facts }, policy) {
-            if would.is_empty() {
+        if let Admission::Refuse(reason) = admit(&sim_facts, policy) {
+            if rows.is_empty() {
                 return json!({"decision":"refused","item_key":seed.key,"reason":reason,"skipped":skipped});
             }
             stopped = reason;
             break;
         }
-        if dry {
+        let items: Vec<Task> = if dry {
             let mut row = json!({"item_key":seed.key,
                 "card":batch_card(&batch, repo, reviews, policy), "brief":batch_brief(&batch, rules, reviews)});
             if batch.len() > 1 {
                 row["item_keys"] = json!(batch.iter().map(|t| &t.key).collect::<Vec<_>>());
             }
-            would.push(row);
-            sim_runs.push(Run {
-                run_id: format!("dry:{}", would.len()),
-                started: None,
-                item_key: seed.key.clone(),
-                host: facts.host.clone(),
-                status: "running".into(),
-                role: "implement".into(),
-                files: batch.iter().flat_map(|t| t.files.clone()).collect(),
-                item_keys: batch.iter().map(|t| t.key.clone()).collect(),
-            });
-            sim_facts.running_writers += 1;
-            sim_facts.free_ram_bytes = sim_facts
-                .free_ram_bytes
-                .saturating_sub(policy.ram_per_run_bytes);
-            continue;
-        }
-        let mut dropped = Vec::new();
-        let claimed = claim_batch(&batch, launch, &mut dropped);
-        for row in &dropped {
-            ready["items"]
-                .as_array_mut()
-                .expect("validated items")
-                .retain(|v| v["key"] != row["item_key"]);
-        }
-        skipped.extend(dropped);
-        let held = match claimed {
-            Ok(held) => held,
-            Err(e) => {
-                return json!({"decision":"refused","item_key":seed.key,"reason":e.to_string(),"skipped":skipped,"error":true})
+            rows.push(row);
+            batch
+        } else {
+            let mut dropped = Vec::new();
+            let claimed = claim_batch(&batch, launch, &mut dropped);
+            for row in &dropped {
+                ready["items"]
+                    .as_array_mut()
+                    .expect("validated items")
+                    .retain(|v| v["key"] != row["item_key"]);
             }
-        };
-        if held.is_empty() {
-            continue;
-        }
-        let items: Vec<Task> = held.iter().map(|(t, _)| t.clone()).collect();
-        let c = batch_card(&items, repo, reviews, policy);
-        let started = launch.start(&c, &batch_brief(&items, rules, reviews));
-        match started {
-            Ok(run) => {
-                let mut row = decided(run);
-                row["item_key"] = json!(items[0].key);
-                if items.len() > 1 {
-                    row["item_keys"] = json!(items.iter().map(|t| &t.key).collect::<Vec<_>>());
+            skipped.extend(dropped);
+            let held = match claimed {
+                Ok(held) => held,
+                Err(e) => {
+                    return failed(
+                        json!({"decision":"refused","item_key":seed.key,"reason":e.to_string(),"skipped":skipped,"error":true}),
+                        &rows,
+                    )
                 }
-                row["skipped"] = json!(skipped);
-                return row;
+            };
+            if held.is_empty() {
+                continue;
             }
-            Err(e) => {
-                let failures: Vec<String> = held
-                    .iter()
-                    .filter_map(|(t, epoch)| launch.release(&t.key, *epoch).err())
-                    .collect();
-                let reason = match failures.first() {
-                    None => format!("spawn failed; claim released: {e}"),
-                    Some(release) => format!("spawn failed: {e}; release failed: {release}"),
-                };
-                return json!({"decision":"refused","item_key":items[0].key,"reason":reason,"skipped":skipped,"error":true});
+            let items: Vec<Task> = held.iter().map(|(t, _)| t.clone()).collect();
+            let c = batch_card(&items, repo, reviews, policy);
+            match launch.start(&c, &batch_brief(&items, rules, reviews)) {
+                Ok(run) => {
+                    let mut row = decided(run);
+                    row["item_key"] = json!(items[0].key);
+                    if items.len() > 1 {
+                        row["item_keys"] = json!(items.iter().map(|t| &t.key).collect::<Vec<_>>());
+                    }
+                    rows.push(row);
+                }
+                Err(e) => {
+                    let failures: Vec<String> = held
+                        .iter()
+                        .filter_map(|(t, epoch)| launch.release(&t.key, *epoch).err())
+                        .collect();
+                    let reason = match failures.first() {
+                        None => format!("spawn failed; claim released: {e}"),
+                        Some(release) => format!("spawn failed: {e}; release failed: {release}"),
+                    };
+                    return failed(
+                        json!({"decision":"refused","item_key":items[0].key,"reason":reason,"skipped":skipped,"error":true}),
+                        &rows,
+                    );
+                }
             }
-        }
+            items
+        };
+        sim_runs.push(Run {
+            run_id: format!("tick:{}", rows.len()),
+            started: None,
+            item_key: items[0].key.clone(),
+            host: facts.host.clone(),
+            status: "running".into(),
+            role: "implement".into(),
+            files: items.iter().flat_map(|t| t.files.clone()).collect(),
+            item_keys: items.iter().map(|t| t.key.clone()).collect(),
+        });
+        sim_facts.running_writers += 1;
+        sim_facts.free_ram_bytes = sim_facts
+            .free_ram_bytes
+            .saturating_sub(policy.ram_per_run_bytes);
     }
-    if let Some(first) = would.first() {
+    if let Some(first) = rows.first() {
         let mut row = first.clone();
-        row["decision"] = json!("would_spawn");
+        if dry {
+            row["decision"] = json!("would_spawn");
+        }
         row["skipped"] = json!(skipped);
-        row["slots"] = json!(would.len());
-        row["would_start"] = json!(would);
+        row["slots"] = json!(rows.len());
+        row[if dry { "would_start" } else { "started" }] = json!(rows);
         row["stopped"] = json!(stopped);
         return row;
     }

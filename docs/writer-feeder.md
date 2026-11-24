@@ -17,7 +17,9 @@ additional caller module paths are preserved.
 `--dry-run` prints one JSON decision and never claims, spawns, writes a prompt,
 creates feeder state, or appends an event. Normal ticks append one JSON line to
 `~/.local/state/plangraph/feeder/events.jsonl`, including refusals and adapter
-errors. A dry run plays the whole tick: `would_start` lists every batch (item key,
+errors. A live tick starts every batch its slots allow, one after the other, by the same loop (`started`
+lists them, with `slots` and `stopped`); a failed start reports the batches already started. A
+dry run plays the same loop without claiming: `would_start` lists every batch (item key,
 card, brief) the tick would start, each taking one slot and one run's RAM and avoiding
 the files of the batches before it; `slots` counts them and `stopped` says why the list
 ends (`no_eligible_item` or the admission refusal, e.g. `ram`, `max_writers`). The first
