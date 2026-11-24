@@ -226,9 +226,21 @@ def confine_writer_shell(argv, env, role, job_id):
         return {"event": "sandbox_unavailable", "host": host, "python_job_id": job_id,
                 "refusal": f"sandbox_unavailable: claude shell commands cannot be confined on {host}; "
                            "the secret paths would stay readable"}
+    # Only the settings built here apply: user, project and local settings could name sandbox
+    # exclusions that run a command outside the sandbox.
+    if "--setting-sources" in argv:
+        argv[argv.index("--setting-sources") + 1] = ""
+    else:
+        argv.extend(["--setting-sources", ""])
     merge_settings(argv, {"sandbox": {
         "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+        "autoAllowBashIfSandboxed": False,
         "filesystem": {"denyRead": _credential_paths(env)}}})
+    # An exclusion list already in an earlier --settings value is replaced, not merged.
+    index = argv.index("--settings") + 1
+    settings = json.loads(argv[index])
+    settings["sandbox"]["excludedCommands"] = []
+    argv[index] = json.dumps(settings)
     return None
 
 

@@ -57,6 +57,7 @@ fn only_allowlisted_variables_survive() {
         var("CODEX_HOME"),
         var("LC_ALL"),
         var("HTTPS_PROXY"),
+        var("LC_FIXTURE_PASSWORD"),
         var("AWS_SECRET_ACCESS_KEY"),
         var("GITHUB_TOKEN"),
         var("OMNIROUTE_API_KEY"),
