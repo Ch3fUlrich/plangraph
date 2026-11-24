@@ -12,21 +12,10 @@ fn own(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| (*s).to_owned()).collect()
 }
 
-/// The stop command, None when the record names nothing that can be stopped.
-pub fn stop_cmd(rec: &Record) -> Option<Vec<String>> {
-    match rec.agent() {
-        Agent::Claude => {
-            // `claude stop` takes the 8-char job id, never a longer id.
-            let job = rec
-                .str("job_id")
-                .or_else(|| rec.handle().map(|h| &h[..h.len().min(8)]))?;
-            Some(vec!["claude".into(), "stop".into(), job.to_owned()])
-        }
-        Agent::Codex | Agent::OpenCode => {
-            let pid = rec.u64("pid").filter(|p| *p > 1)?;
-            Some(vec!["kill".into(), pid.to_string()])
-        }
-    }
+/// The stop command for a Claude job: `claude stop` takes the 8-char job id.
+pub fn claude_stop(rec: &Record) -> Option<Vec<String>> {
+    let job = rec.job_id()?;
+    Some(vec!["claude".into(), "stop".into(), job])
 }
 
 /// The resume command carrying exactly `prompt`.

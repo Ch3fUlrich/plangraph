@@ -1,13 +1,16 @@
 //! The real host: processes, /proc, git, the Claude transcript directory.
 
-use crate::host::Host;
-use crate::record::Record;
+use crate::contract::mtime_secs;
+use crate::host::{Host, JobState};
+use crate::record::{Agent, Record};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub struct System {
     pub log_file: PathBuf,
+    /// Set when a log line could not be persisted; the process then exits non-zero.
+    pub log_failed: bool,
 }
 
 fn git(cwd: &Path, args: &[&str]) -> Option<String> {
@@ -58,7 +61,7 @@ impl Host for System {
         ))
     }
 
-    fn spawn(&mut self, cwd: &Path, argv: &[String]) -> Result<(), String> {
+    fn spawn(&mut self, cwd: &Path, argv: &[String]) -> Result<u32, String> {
         Command::new(&argv[0])
             .args(&argv[1..])
             .current_dir(cwd)
@@ -66,8 +69,12 @@ impl Host for System {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map(drop)
+            .map(|child| child.id())
             .map_err(|e| format!("{}: {e}", argv[0]))
+    }
+
+    fn proc_start(&self, pid: u32) -> Option<u64> {
+        proc_start_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
     }
 
     fn mem_available_mb(&self) -> Option<u64> {
@@ -86,20 +93,90 @@ impl Host for System {
 
     fn activity_ts(&self, rec: &Record) -> Option<u64> {
         let home = PathBuf::from(std::env::var_os("HOME")?);
-        let path = transcript_path(&home, rec.str("cwd")?, rec.str("session_id")?);
-        let m = std::fs::metadata(path).ok()?.modified().ok()?;
-        Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
+        let newest = |paths: Vec<PathBuf>| paths.iter().filter_map(|p| mtime_secs(p)).max();
+        if let Some(own) = rec.str("activity_path") {
+            return newest(vec![PathBuf::from(own)]); // the launcher names the file the runtime writes
+        }
+        match rec.agent() {
+            Agent::Claude => {
+                let transcript = transcript_path(&home, rec.str("cwd")?, rec.str("session_id")?);
+                newest(vec![transcript, job_dir(&home, rec)?.join("state.json")])
+            }
+            Agent::Codex => newest(codex_rollouts(&home, rec.handle()?)),
+            Agent::OpenCode => None, // no known activity file: such a session is never reaped as idle
+        }
+    }
+
+    fn job_state(&self, rec: &Record) -> Option<JobState> {
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        let text = std::fs::read_to_string(job_dir(&home, rec)?.join("state.json")).ok()?;
+        parse_job_state(&text)
     }
 
     fn log(&mut self, line: &str) {
         let line = format!("ts={} {line}", self.now());
         println!("{line}");
-        if let Ok(mut f) = std::fs::OpenOptions::new()
+        let appended = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log_file)
-        {
-            let _ = writeln!(f, "{line}");
+            .and_then(|mut f| writeln!(f, "{line}"));
+        if let Err(e) = appended {
+            eprintln!(
+                "pg-session-resume: cannot append to {}: {e}",
+                self.log_file.display()
+            );
+            self.log_failed = true;
         }
     }
+}
+
+fn job_dir(home: &Path, rec: &Record) -> Option<PathBuf> {
+    Some(home.join(".claude/jobs").join(rec.job_id()?))
+}
+
+/// `rollout-*-<thread>.jsonl` under ~/.codex/sessions/<year>/<month>/<day>/.
+fn codex_rollouts(home: &Path, thread: &str) -> Vec<PathBuf> {
+    let list = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect()
+    };
+    let days = list(&home.join(".codex/sessions"))
+        .iter()
+        .flat_map(|y| list(y))
+        .flat_map(|m| list(&m))
+        .collect::<Vec<_>>();
+    days.iter()
+        .flat_map(|d| list(d))
+        .filter(|f| {
+            f.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with("rollout-") && n.ends_with(&format!("{thread}.jsonl"))
+            })
+        })
+        .collect()
+}
+
+pub fn parse_job_state(text: &str) -> Option<JobState> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let state = v.get("state")?.as_str()?.to_owned();
+    let tasks = v
+        .get("inFlight")
+        .and_then(|i| i.get("tasks"))
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0);
+    Some(JobState { state, tasks })
+}
+
+/// Field 22 of /proc/<pid>/stat (start time in clock ticks); the command name in
+/// field 2 may hold spaces and parentheses, so count from the last `)`.
+pub fn proc_start_ticks(stat: &str) -> Option<u64> {
+    stat[stat.rfind(')')? + 1..]
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
 }

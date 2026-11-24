@@ -9,6 +9,7 @@
 //!   --delay-s N      stop-done: wait first, so the turn that wrote DONE can end
 
 use pg_session_resume::engine::{reap_idle, resume_findings, stop_done, Config, DEFAULT_ALLOW};
+use pg_session_resume::lock::Lock;
 use pg_session_resume::system::System;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -112,12 +113,19 @@ fn run() -> Result<(), String> {
     };
     let mut host = System {
         log_file: state.join("session-lifecycle.log"),
+        log_failed: false,
     };
     let quiet = number(&flags, "quiet-s", 60)?;
     let only = flags.get("session").map(String::as_str);
     std::thread::sleep(std::time::Duration::from_secs(number(
         &flags, "delay-s", 0,
     )?));
+    // One tick at a time: a second one finds the lock held and leaves the work to the first.
+    std::fs::create_dir_all(state.join("launch")).map_err(|e| e.to_string())?;
+    let Some(_lock) = Lock::acquire(&state.join("launch/pg-session-resume.lock")) else {
+        println!("pg-session-resume: another tick holds the lock");
+        return Ok(());
+    };
     match cmd.as_str() {
         "stop-done" => stop_done(&mut host, &cfg, quiet, only),
         "resume" => resume_findings(&mut host, &cfg),
@@ -128,6 +136,9 @@ fn run() -> Result<(), String> {
             reap_idle(&mut host, &cfg);
         }
         other => return Err(format!("unknown command {other}")),
+    }
+    if host.log_failed {
+        return Err("a log line could not be written".into());
     }
     Ok(())
 }

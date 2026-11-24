@@ -48,23 +48,48 @@ pub fn findings_round(lane: &str, file_name: &str) -> Option<u64> {
     digits.parse().ok().filter(|n| *n > 0)
 }
 
+/// One findings file: its round, path and modification time (unix seconds).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Finding {
+    pub round: u64,
+    pub path: PathBuf,
+    pub mtime: u64,
+}
+
+pub fn mtime_secs(path: &Path) -> Option<u64> {
+    let m = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
+}
+
 /// Every findings file of the lane, ascending by round.
-pub fn list_findings(dir: &Path, lane: &str) -> Vec<(u64, PathBuf)> {
-    let mut found: Vec<(u64, PathBuf)> = std::fs::read_dir(dir)
+pub fn list_findings(dir: &Path, lane: &str) -> Vec<Finding> {
+    let mut found: Vec<Finding> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
             let round = findings_round(lane, e.file_name().to_str()?)?;
-            Some((round, e.path()))
+            let path = e.path();
+            Some(Finding {
+                round,
+                mtime: mtime_secs(&path)?,
+                path,
+            })
         })
         .collect();
     found.sort();
     found
 }
 
-pub fn highest_round(dir: &Path, lane: &str) -> u64 {
-    list_findings(dir, lane).last().map_or(0, |(n, _)| *n)
+/// The highest round whose file is not newer than `cutoff`: what the session
+/// already had when it stopped. A file written after the cutoff is still to be sent.
+pub fn delivered_round(dir: &Path, lane: &str, cutoff: u64) -> u64 {
+    list_findings(dir, lane)
+        .iter()
+        .filter(|f| f.mtime <= cutoff)
+        .map(|f| f.round)
+        .max()
+        .unwrap_or(0)
 }
 
 /// `*` matches any run of characters; everything else is literal.

@@ -63,3 +63,45 @@ fn done_status_with_a_missing_claude_binary_logs_a_failed_stop() {
         "{log}"
     );
 }
+
+#[test]
+fn a_log_line_that_cannot_be_persisted_fails_the_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let (launch, pr) = (dir.path().join("launch/sessions"), dir.path().join("pr"));
+    std::fs::create_dir_all(&launch).unwrap();
+    std::fs::create_dir_all(&pr).unwrap();
+    std::fs::create_dir(dir.path().join("session-lifecycle.log")).unwrap(); // appending to a directory fails
+    let sid = "1591af3e-91d1-442a-bc81-f5dd71769181";
+    std::fs::write(
+        launch.join("w-1.json"),
+        format!(
+            r#"{{"name":"w","session_name":"w-1","cwd":"/x/lane-a","session_id":"{sid}","ts":1}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        pr.join("lane-a.status"),
+        "lane-a DONE\nHEAD: 0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let jobs = home.path().join(".claude/jobs/1591af3e");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::write(jobs.join("state.json"), r#"{"state":"done"}"#).unwrap();
+    let out = bin()
+        .args(["stop-done", "--quiet-s", "0", "--state"])
+        .arg(dir.path())
+        .arg("--pr-dir")
+        .arg(&pr)
+        .env("PATH", "/nonexistent")
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot append"));
+}

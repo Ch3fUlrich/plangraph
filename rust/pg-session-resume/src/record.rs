@@ -81,12 +81,26 @@ impl Record {
         })
     }
 
+    /// The 8-char Claude job id: `job_id`, else the head of the session id.
+    pub fn job_id(&self) -> Option<String> {
+        let job = self
+            .str("job_id")
+            .or_else(|| self.handle().map(|h| &h[..h.len().min(8)]))?;
+        job.bytes()
+            .all(|b| b.is_ascii_alphanumeric())
+            .then(|| job.to_owned())
+    }
+
     pub fn resume(&self) -> Option<&Value> {
         self.value.get("resume").filter(|v| v.is_object())
     }
 
     pub fn resume_str(&self, key: &str) -> Option<&str> {
         self.resume()?.get(key)?.as_str()
+    }
+
+    pub fn resume_u64(&self, key: &str) -> Option<u64> {
+        self.resume()?.get(key)?.as_u64()
     }
 
     pub fn resume_round(&self) -> u64 {

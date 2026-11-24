@@ -1,0 +1,9 @@
+[Unit]
+Description=Stop finished agent sessions, resume them on findings files, reap idle ones
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/pg-session-resume tick
+TimeoutStartSec=55s
+UMask=0077
+NoNewPrivileges=true
