@@ -257,3 +257,122 @@ def test_control_char_on_offending_commit_does_not_hide_it(repo: Path, monkeypat
     captured = capsys.readouterr()
     assert 'WITHOUT Gate-Edit' in captured.err
     assert second_sha in captured.err
+
+GO_STEP = '''      - name: Verify computed GO
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          plangraph land-train go-verify --evidence "$GO_EVIDENCE"
+'''
+WORKFLOW_GO = WORKFLOW.replace('      - name: Commit trailers', GO_STEP + '      - name: Commit trailers')
+
+
+def _go_job(text: str) -> dict:
+    import yaml
+    return yaml.safe_load(text)['jobs']['ci-gate']
+
+
+def test_go_verify_step_found_and_intact() -> None:
+    job = _go_job(WORKFLOW_GO)
+    assert gate_wiring_check.go_verify_step(job) is not None
+    assert gate_wiring_check.go_verify_problems(job, job) == []
+
+
+@pytest.mark.parametrize('edit', [
+    lambda t: t.replace('plangraph land-train go-verify --evidence "$GO_EVIDENCE"', 'echo skipped'),
+    lambda t: t.replace('--evidence "$GO_EVIDENCE"', '--evidence "$GO_EVIDENCE" || true'),
+    lambda t: t.replace('        if: ${{ github.event_name == \'pull_request\' }}\n', '        continue-on-error: true\n'),
+    lambda t: t.replace("github.event_name == 'pull_request'", 'true'),
+    lambda t: t.replace(GO_STEP, ''),
+])
+def test_go_verify_step_removed_or_loosened_is_a_problem(edit) -> None:
+    base = _go_job(WORKFLOW_GO)
+    head = _go_job(edit(WORKFLOW_GO))
+    assert gate_wiring_check.go_verify_problems(base, head)
+
+
+def test_go_verify_added_where_base_has_none_is_no_problem() -> None:
+    assert gate_wiring_check.go_verify_problems(_go_job(WORKFLOW), _go_job(WORKFLOW_GO)) == []
+
+
+def test_main_refuses_removal_of_go_verify_even_with_gate_edit(
+        repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW_GO})
+    head = _commit(repo, 'drop it\n\nGate-Edit: D-2209\n', {WORKFLOW_PATH: WORKFLOW})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', head]) == 1
+    assert 'go-verify' in capsys.readouterr().err
+
+
+def test_main_accepts_adding_go_verify_with_gate_edit(
+        repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    head = _commit(repo, 'add it\n\nGate-Edit: D-2209\n', {WORKFLOW_PATH: WORKFLOW_GO})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', head]) == 0
+
+
+def _repo_go_step() -> dict:
+    import yaml
+    doc = yaml.safe_load((REPO_ROOT / WORKFLOW_PATH).read_text())
+    return gate_wiring_check.go_verify_step(doc['jobs']['ci-gate'])
+
+
+def test_the_landing_workflow_runs_go_verify_after_the_gate_and_blocks() -> None:
+    import yaml
+    doc = yaml.safe_load((REPO_ROOT / WORKFLOW_PATH).read_text())
+    steps = doc['jobs']['ci-gate']['steps']
+    step = _repo_go_step()
+    assert step is not None
+    assert steps.index(step) > next(i for i, s in enumerate(steps) if s.get('name') == 'Gate')
+    assert 'continue-on-error' not in step
+    assert 'land-train go-verify --evidence' in step['run']
+    assert gate_wiring_check.go_verify_problems(doc['jobs']['ci-gate'], doc['jobs']['ci-gate']) == []
+
+
+def _run_step(tmp_path: Path, evidence: Path | None, cargo_status: int) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    '''Run the workflow step's script with a stub cargo that records its arguments.'''
+    import os
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    log = tmp_path / 'cargo.log'
+    stub = bindir / 'cargo'
+    stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log}"\nexit {cargo_status}\n')
+    stub.chmod(0o755)
+    env = dict(os.environ, PATH=f'{bindir}:{os.environ["PATH"]}', RUNNER_TEMP=str(tmp_path / 'tmp'))
+    env['GO_EVIDENCE'] = str(evidence) if evidence else str(tmp_path / 'absent.json')
+    result = subprocess.run(['bash', '-c', _repo_go_step()['run']], cwd=REPO_ROOT, env=env,
+                            capture_output=True, text=True)
+    return result, log.read_text().splitlines() if log.exists() else []
+
+
+def test_the_step_does_nothing_without_an_evidence_file(tmp_path: Path) -> None:
+    result, calls = _run_step(tmp_path, None, 1)
+    assert result.returncode == 0
+    assert calls == []
+
+
+def test_the_step_fails_when_the_verifier_refuses_the_evidence(tmp_path: Path) -> None:
+    evidence = tmp_path / 'e.json'
+    evidence.write_text('{}')
+    result, calls = _run_step(tmp_path, evidence, 1)
+    assert result.returncode != 0
+    assert len(calls) == 1 and f'land-train go-verify --evidence {evidence}' in calls[0]
+
+
+def test_the_step_passes_when_the_verifier_accepts(tmp_path: Path) -> None:
+    evidence = tmp_path / 'e.json'
+    evidence.write_text('{}')
+    result, calls = _run_step(tmp_path, evidence, 0)
+    assert result.returncode == 0 and len(calls) == 1
+
+
+def test_go_verify_source_is_a_gate_path(repo: Path) -> None:
+    gate = gate_wiring_check._shared_gate()
+    writer = 'Writer: mimo-v2.6-flash run-1\n'
+    seed = _commit(repo, 'chore: seed\n\n' + writer, {'README.md': 'x\n'})
+    path = 'rust/plangraph-cli/src/land/go_verify.rs'
+    sha = _commit(repo, 'feat: x\n\n' + writer, {path: '// x\n'})
+    assert gate.check(seed, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']
+    # Its sibling test file is not a gate path: only the verifier source and its pin are.
+    sha2 = _commit(repo, 'feat: y\n\n' + writer, {'rust/plangraph-cli/src/land/go_verify_tests.rs': '// y\n'})
+    assert gate.check(sha, sha2, cwd=repo) == []

@@ -185,6 +185,7 @@ fn an_operator_class_path_needs_a_grant_for_this_head() {
         "tools/gate_wiring_check.py",
         "sub/dir/.gitattributes",
         "deploy/ci-watch/matrix.toml",
+        "rust/plangraph-cli/src/land/go_verify.rs",
     ] {
         let mut e = green();
         e.changed_paths.push(path.into());
@@ -266,4 +267,23 @@ fn the_cli_prints_one_line_for_green_evidence_and_every_refusal_otherwise() {
         err.contains("stale_base") && err.contains("delta_missing"),
         "{err}"
     );
+}
+
+#[test]
+fn the_cli_refuses_a_fixture_with_a_skipped_windows_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("e.json");
+    let windows = "Rust spawner and worker core tests on Windows";
+    let mut e = green();
+    e.ci.jobs
+        .iter_mut()
+        .find(|j| j.name == windows)
+        .unwrap()
+        .conclusion = Some("skipped".into());
+    std::fs::write(&file, serde_json::to_vec(&e).unwrap()).unwrap();
+    let flags =
+        std::collections::BTreeMap::from([("evidence".to_string(), file.display().to_string())]);
+    let err = super::go_verify::run_cli(&flags).unwrap_err();
+    assert!(err.starts_with("go refused:"), "{err}");
+    assert!(err.contains(&format!("job_not_green: {windows}")), "{err}");
 }
