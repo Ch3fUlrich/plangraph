@@ -4,6 +4,7 @@ use crate::contract::mtime_secs;
 use crate::host::{Host, JobState};
 use crate::record::{Agent, Record};
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -62,12 +63,15 @@ impl Host for System {
     }
 
     fn spawn(&mut self, cwd: &Path, argv: &[String]) -> Result<u32, String> {
+        // Its own process group: the resumed writer outlives this tick (and a tick killed
+        // with its group). The service unit uses KillMode=process for the same reason.
         Command::new(&argv[0])
             .args(&argv[1..])
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .process_group(0)
             .spawn()
             .map(|child| child.id())
             .map_err(|e| format!("{}: {e}", argv[0]))
@@ -75,6 +79,27 @@ impl Host for System {
 
     fn proc_start(&self, pid: u32) -> Option<u64> {
         proc_start_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+    }
+
+    fn has_children(&self, pid: u32) -> Option<bool> {
+        let mut readable = false;
+        for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+            let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+                continue;
+            };
+            readable = true;
+            if parent_pid(&stat) == Some(u64::from(pid)) {
+                return Some(true);
+            }
+        }
+        readable.then_some(false)
+    }
+
+    fn worktree_id(&self, cwd: &Path) -> Option<String> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(cwd).ok()?;
+        let git_dir = git(cwd, &["rev-parse", "--absolute-git-dir"])?;
+        Some(format!("{}:{}:{git_dir}", meta.dev(), meta.ino()))
     }
 
     fn mem_available_mb(&self) -> Option<u64> {
@@ -92,18 +117,23 @@ impl Host for System {
     }
 
     fn activity_ts(&self, rec: &Record) -> Option<u64> {
-        let home = PathBuf::from(std::env::var_os("HOME")?);
         let newest = |paths: Vec<PathBuf>| paths.iter().filter_map(|p| mtime_secs(p)).max();
         if let Some(own) = rec.str("activity_path") {
             return newest(vec![PathBuf::from(own)]); // the launcher names the file the runtime writes
         }
+        let home = PathBuf::from(std::env::var_os("HOME")?);
         match rec.agent() {
             Agent::Claude => {
                 let transcript = transcript_path(&home, rec.str("cwd")?, rec.str("session_id")?);
                 newest(vec![transcript, job_dir(&home, rec)?.join("state.json")])
             }
             Agent::Codex => newest(codex_rollouts(&home, rec.handle()?)),
-            Agent::OpenCode => None, // no known activity file: such a session is never reaped as idle
+            // One database for every OpenCode session: its newest write is a conservative
+            // signal (a busy neighbour keeps this session alive, never the other way round).
+            Agent::OpenCode => newest(vec![
+                home.join(".local/share/opencode/opencode.db-wal"),
+                home.join(".local/share/opencode/opencode.db"),
+            ]),
         }
     }
 
@@ -169,6 +199,15 @@ pub fn parse_job_state(text: &str) -> Option<JobState> {
         .and_then(|t| t.as_u64())
         .unwrap_or(0);
     Some(JobState { state, tasks })
+}
+
+/// Field 4 of /proc/<pid>/stat (the parent pid), counted from the last `)`.
+pub fn parent_pid(stat: &str) -> Option<u64> {
+    stat[stat.rfind(')')? + 1..]
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 /// Field 22 of /proc/<pid>/stat (start time in clock ticks); the command name in

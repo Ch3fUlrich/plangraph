@@ -22,6 +22,12 @@ pub trait Host {
     fn spawn(&mut self, cwd: &Path, argv: &[String]) -> Result<u32, String>;
     /// The start time of a live process (its identity together with the pid), None when gone.
     fn proc_start(&self, pid: u32) -> Option<u64>;
+    /// Whether the process has live child processes (a running tool or shell);
+    /// None when that cannot be read.
+    fn has_children(&self, pid: u32) -> Option<bool>;
+    /// Identity of the worktree directory itself (inode and git dir), so a replacement
+    /// checkout at the same commit is told apart. None when it cannot be read.
+    fn worktree_id(&self, cwd: &Path) -> Option<String>;
     fn mem_available_mb(&self) -> Option<u64>;
     fn git_head(&self, cwd: &Path) -> Option<String>;
     /// None when the path is no git worktree.

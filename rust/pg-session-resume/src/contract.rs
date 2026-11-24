@@ -53,12 +53,17 @@ pub fn findings_round(lane: &str, file_name: &str) -> Option<u64> {
 pub struct Finding {
     pub round: u64,
     pub path: PathBuf,
-    pub mtime: u64,
+    /// Modification time in nanoseconds since the epoch.
+    pub mtime_ns: u64,
 }
 
 pub fn mtime_secs(path: &Path) -> Option<u64> {
+    mtime_ns(path).map(|n| n / 1_000_000_000)
+}
+
+pub fn mtime_ns(path: &Path) -> Option<u64> {
     let m = std::fs::metadata(path).ok()?.modified().ok()?;
-    Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
+    u64::try_from(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos()).ok()
 }
 
 /// Every findings file of the lane, ascending by round.
@@ -72,7 +77,7 @@ pub fn list_findings(dir: &Path, lane: &str) -> Vec<Finding> {
             let path = e.path();
             Some(Finding {
                 round,
-                mtime: mtime_secs(&path)?,
+                mtime_ns: mtime_ns(&path)?,
                 path,
             })
         })
@@ -81,15 +86,30 @@ pub fn list_findings(dir: &Path, lane: &str) -> Vec<Finding> {
     found
 }
 
-/// The highest round whose file is not newer than `cutoff`: what the session
-/// already had when it stopped. A file written after the cutoff is still to be sent.
-pub fn delivered_round(dir: &Path, lane: &str, cutoff: u64) -> u64 {
+/// The highest round whose file is strictly older than `cutoff_ns`: what the session
+/// already had when it stopped. A file that is not provably older (same instant, or
+/// the same truncated second) is still to be sent: a repeated prompt costs one turn,
+/// a lost one costs a review round.
+pub fn delivered_round(dir: &Path, lane: &str, cutoff_ns: u64) -> u64 {
     list_findings(dir, lane)
         .iter()
-        .filter(|f| f.mtime <= cutoff)
+        .filter(|f| f.mtime_ns < cutoff_ns)
         .map(|f| f.round)
         .max()
         .unwrap_or(0)
+}
+
+/// The sidecar naming the head a findings round reviewed: `<lane>.fix-round-<N>.head`.
+pub fn reviewed_head_path(dir: &Path, lane: &str, round: u64) -> PathBuf {
+    dir.join(format!("{lane}.fix-round-{round}.head"))
+}
+
+/// The reviewed head: one 40-hex line, None when the sidecar is missing or malformed.
+pub fn reviewed_head(dir: &Path, lane: &str, round: u64) -> Option<String> {
+    let text = std::fs::read_to_string(reviewed_head_path(dir, lane, round)).ok()?;
+    let sha = text.trim();
+    (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| sha.to_ascii_lowercase())
 }
 
 /// `*` matches any run of characters; everything else is literal.

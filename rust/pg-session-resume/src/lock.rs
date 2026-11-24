@@ -1,43 +1,33 @@
-//! One tick at a time: a lock file holding the owner's pid. A lock whose owner is
-//! gone is taken over. Without this two overlapping ticks could resume one round twice.
+//! One tick at a time: a kernel-held lock (flock) on a stable file. The kernel drops
+//! it when the owner dies, so there is no stale-lock cleanup and no window in which a
+//! second tick could see a half-written lock file.
 
-use std::path::{Path, PathBuf};
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::Write;
+use std::path::Path;
 
-pub struct Lock(PathBuf);
+pub struct Lock {
+    _file: File, // held for its lifetime: closing it releases the kernel lock
+}
 
 impl Lock {
     /// None when another live process holds the lock.
     pub fn acquire(path: &Path) -> Option<Lock> {
-        for _ in 0..2 {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-            {
-                Ok(mut f) => {
-                    std::io::Write::write_all(&mut f, std::process::id().to_string().as_bytes())
-                        .ok()?;
-                    return Some(Lock(path.to_owned()));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let owner: Option<u32> = std::fs::read_to_string(path)
-                        .ok()
-                        .and_then(|t| t.trim().parse().ok());
-                    let alive = owner.is_some_and(|p| Path::new(&format!("/proc/{p}")).exists());
-                    if alive {
-                        return None;
-                    }
-                    std::fs::remove_file(path).ok()?;
-                }
-                Err(_) => return None,
-            }
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .ok()?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) | Err(TryLockError::Error(_)) => return None,
         }
-        None
-    }
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        // For humans only; the lock is the kernel's, not this text.
+        let _ = file
+            .set_len(0)
+            .and_then(|_| write!(file, "{}", std::process::id()));
+        Some(Lock { _file: file })
     }
 }
