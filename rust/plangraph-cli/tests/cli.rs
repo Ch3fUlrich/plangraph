@@ -323,7 +323,10 @@ fn baseline_runs_the_sibling_pg_telemetry_before_the_one_on_path() {
     fs::create_dir_all(&on_path).unwrap();
     // A copy of plangraph, so that "next to the running binary" is a directory the test owns.
     let plangraph = install.join("plangraph");
-    fs::copy(env!("CARGO_BIN_EXE_plangraph"), &plangraph).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &plangraph,
+        fs::read(env!("CARGO_BIN_EXE_plangraph")).unwrap(),
+    );
     let baseline = |args: &[&str]| {
         Command::new(&plangraph)
             .env_clear()

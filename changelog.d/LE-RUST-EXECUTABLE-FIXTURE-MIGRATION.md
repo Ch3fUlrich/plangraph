@@ -1,0 +1,1 @@
+- The workspace executable-fixture guard also refuses mode setters with a computed argument and `fs::copy` of a file into a fixture directory (unless a narrow exemption names the file and why); the copied binaries and hooks of three test files now go through the shared atomic writer.
