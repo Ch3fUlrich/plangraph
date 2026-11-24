@@ -287,3 +287,55 @@ fn a_malformed_class_search_line_is_refused_with_the_expected_form() {
         assert!(output.status.success(), "{line}: {output:?}");
     }
 }
+
+#[test]
+fn class_search_is_checked_on_a_merge_and_on_a_verbatim_message() {
+    let dir = repo();
+    let root = dir.path();
+    assert!(git(
+        root,
+        &["commit", "--allow-empty", "-m", "base\n\nWriter: codex"]
+    )
+    .status
+    .success());
+    assert!(git(root, &["checkout", "-qb", "side"]).status.success());
+    assert!(git(
+        root,
+        &["commit", "--allow-empty", "-m", "side\n\nWriter: codex"]
+    )
+    .status
+    .success());
+    assert!(git(root, &["checkout", "-q", "main"]).status.success());
+    assert!(git(
+        root,
+        &["commit", "--allow-empty", "-m", "main\n\nWriter: codex"]
+    )
+    .status
+    .success());
+    // A merge needs no trailers, but a malformed Class-Search line in it is refused.
+    let prose = "Merge side\n\nClass-Search: fixture -> 1 hit, 1 changed (prose)";
+    let merge = git(root, &["merge", "--no-ff", "-m", prose, "side"]);
+    assert!(!merge.status.success(), "{merge:?}");
+    let stderr = String::from_utf8_lossy(&merge.stderr);
+    assert!(
+        stderr.contains("line 3: malformed Class-Search"),
+        "{stderr}"
+    );
+    assert!(git(root, &["merge", "--abort"]).status.success());
+    let merge = git(root, &["merge", "--no-ff", "-m", "Merge side", "side"]);
+    assert!(merge.status.success(), "{merge:?}");
+    // Verbatim cleanup keeps trailing whitespace, which the range check refuses.
+    let message = "x\n\nClass-Search: fixture -> 1 hit, 1 changed \n\nWriter: codex";
+    let output = git(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "--cleanup=verbatim",
+            "-m",
+            message,
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed Class-Search"));
+}
