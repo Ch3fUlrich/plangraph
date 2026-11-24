@@ -94,8 +94,19 @@ fn literal_len(text: &str) -> usize {
     (i + mark.len()).min(text.len())
 }
 
-/// The keeper schema version at `rev`; 0 when the revision has no schema file.
+/// The keeper schema version at `rev`; 0 when the revision exists and has no schema file. A revision that
+/// is not a commit of this repository is an error: a bad `--base` or `--head` must not read as version 0.
 pub fn at(repo: &Path, rev: &str) -> Result<u32, String> {
+    git::out(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{rev}^{{commit}}"),
+        ],
+    )
+    .map_err(|_| format!("{rev} is not a commit of this repository"))?;
     let spec = format!("{rev}:{SCHEMA_PATH}");
     if !git::run(repo, None, &["cat-file", "-e", &spec])?
         .status
