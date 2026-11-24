@@ -776,7 +776,8 @@ denies:
   `rust/target`. The target is `--target-dir`, then `CARGO_TARGET_DIR` / `CARGO_BUILD_TARGET_DIR`,
   else `target` of the directory cargo runs in (cwd, leading `cd`, `-C`, `--manifest-path`); it is
   refused from any cwd. The message names the shared target (`~/.cache/plangraph/cargo-target`).
-  Other linked worktrees and `cargo fmt` stay allowed.
+  A repository at the home directory itself is not a main checkout (the shared target lives below
+  it). Other linked worktrees and `cargo fmt` stay allowed.
 - A while or until condition where a literal `pgrep -f` pattern can match the
   shell running the loop. Wait on the PID or unit, or put the original command
   in the Bash tool's background mode.

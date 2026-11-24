@@ -177,3 +177,20 @@ def test_pgtest_and_unrelated_targets_stay_allowed(repos, tmp_path, template):
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     assert hook(template.format(main=main, out=outside), main / "rust").returncode == 0, template
+
+
+def test_a_repository_at_the_home_directory_does_not_make_the_shared_target_a_main_checkout(tmp_path, monkeypatch):
+    """The workstation's home directory is itself a Git repository; the shared target lives below it."""
+    home = tmp_path / "home"
+    (home / ".cache/plangraph/cargo-target").mkdir(parents=True)
+    git(home, "init", "-q")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
+    shared = home / ".cache/plangraph/cargo-target"
+    assert hook(f"CARGO_TARGET_DIR={shared} cargo build", tmp_path).returncode == 0
+    assert hook(f"cargo build --target-dir {shared}", home).returncode == 0
+    project = home / "code" / "proj"
+    (project / "rust").mkdir(parents=True)
+    git(project, "init", "-q")
+    assert hook(f"CARGO_TARGET_DIR={shared} cargo build", project / "rust").returncode == 0
+    assert hook("cargo build", project / "rust").returncode == 2

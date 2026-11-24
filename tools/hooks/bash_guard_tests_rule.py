@@ -184,6 +184,10 @@ def main_checkout_root(cwd):
              "--show-toplevel", "--git-dir", "--git-common-dir"],
             capture_output=True, text=True, check=True, timeout=2).stdout.split("\n")
         top, git_dir, common = (Path(line).resolve() for line in out[:3])
+        # A repository at the home directory is a dotfiles store, not a project: the shared target
+        # and every cache live below it.
+        if top == Path.home().resolve():
+            return None
         return top if git_dir == common or _agent_worktree(top) else None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
