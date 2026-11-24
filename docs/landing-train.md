@@ -72,7 +72,8 @@ binary's `tests.yml` digest and job matrix, binds repository, pull request, base
 run and attempt, and lists every refusal: `moved_head`, `stale_base`, `replay_mismatch`, `job_missing`,
 `job_not_green`, `mixed_attempt`, `stale_attempt`, `workflow_unpinned`, `ci_unbound`, `approval_missing`,
 `delta_missing`, `operator_path_unauthorized` (a gate path without a `Gate-Edit` grant for this head) and
-`main_not_green`.
+`main_not_green`. It also refuses with `deploy_not_live`, `deploy_ledger_stale` or `deploy_ledger_missing` from the
+`deploy-status` ledgers (see `deploy/systemd/README.md`, GO check); `--deploy-ledgers DIR` names the ledger directory.
 
 ## Push a built train
 

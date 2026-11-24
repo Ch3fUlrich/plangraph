@@ -22,7 +22,7 @@ fn jobs(pins: &Pins, tier: &str, attempt: u32) -> Vec<GoJob> {
 
 /// The evidence of a green train: every part of it agrees on repository, pull request, base, head, tree,
 /// manifest, run and attempt.
-fn green() -> Evidence {
+pub(super) fn green() -> Evidence {
     let p = pins();
     Evidence {
         repo: "owner/name".into(),

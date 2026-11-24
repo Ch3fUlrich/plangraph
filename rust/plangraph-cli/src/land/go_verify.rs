@@ -292,13 +292,49 @@ fn ci(e: &Evidence, pins: &Pins, out: &mut Vec<Refusal>) {
     }
 }
 
-/// `land-train go-verify --evidence FILE`: prints one `GO-VERIFIED` line, or refuses with every reason.
+/// The dated routing exceptions, compiled in like the workflow pin.
+const DEPLOY_EXCEPTIONS: &str = include_str!("../../../../deploy/exceptions.toml");
+
+/// The deploy part of the GO: no manifest entry may be not live for more than 24 h on a reporting host.
+pub(super) fn deploy_refusals(
+    ledger_dir: &std::path::Path,
+    exceptions: &str,
+    now: i64,
+) -> Result<Vec<Refusal>, String> {
+    use crate::deploy_manifest::guard;
+    let exceptions = guard::parse_exceptions(exceptions)?;
+    let (ledgers, mut findings) = guard::read_ledgers(ledger_dir);
+    findings.extend(guard::check(&ledgers, &exceptions, now));
+    Ok(findings.into_iter().map(|f| no(f.code, f.detail)).collect())
+}
+
+fn deploy_ledger_dir(flags: &BTreeMap<String, String>) -> std::path::PathBuf {
+    if let Some(dir) = flags.get("deploy-ledgers") {
+        return dir.into();
+    }
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".local/state")))
+        .unwrap_or_default();
+    crate::deploy_manifest::report::ledger_dir(&state.join("plangraph"))
+}
+
+/// `land-train go-verify --evidence FILE [--deploy-ledgers DIR]`: prints one `GO-VERIFIED` line, or refuses with every reason.
 pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let path = flags.get("evidence").ok_or("missing --evidence")?;
     let e: Evidence =
         serde_json::from_slice(&std::fs::read(path).map_err(|x| format!("{path}: {x}"))?)
             .map_err(|x| format!("{path}: {x}"))?;
-    let refusals = verify(&e, &Pins::protected()?);
+    let mut refusals = verify(&e, &Pins::protected()?);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    refusals.extend(deploy_refusals(
+        &deploy_ledger_dir(flags),
+        DEPLOY_EXCEPTIONS,
+        now,
+    )?);
     if !refusals.is_empty() {
         let lines: Vec<_> = refusals
             .iter()
