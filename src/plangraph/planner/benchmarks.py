@@ -165,7 +165,8 @@ def row_quality(model):
         quality = _validated_metric(model, "aa_intelligence")
     if model.get("imputed"):
         se = model.get("score_se")
-        quality = max(0.0, quality - (float(se) if isinstance(se, (int, float)) and se > 0 else IMPUTED_DEFAULT_SD))
+        known = isinstance(se, (int, float)) and not isinstance(se, bool) and se >= 0   # a zero sd is an sd
+        quality = max(0.0, quality - (float(se) if known else IMPUTED_DEFAULT_SD))
     return quality
 
 
@@ -210,10 +211,14 @@ def current_index_version(rows):
 
 
 def current_facts(leg, catalog_rows, index_version=None):
-    """Price, served model and index version now in force for a leg (catalog row, else unknown)."""
+    """Price, served model and index version now in force for a leg (catalog row, else unknown).
+
+    The catalog publishes the price as ``cost_per_task_usd`` and the served model as ``upstream_id``; a
+    measurement recorder that wants the price and served-model rules writes the values it measured under
+    as ``{"price": ..., "served_model": ...}`` into the row's ``source_record``."""
     catalog_id = leg.model if "/" in leg.model else f"{leg.harness}/{leg.model}"
     row = next((r for r in catalog_rows if (r.get("id") or r.get("model_id")) in (catalog_id, leg.model)), None) or {}
-    return dict(index_version=index_version, price=row.get("price"),
+    return dict(index_version=index_version, price=row.get("price", row.get("cost_per_task_usd")),
                 served_model=row.get("served_model", row.get("upstream_id")))
 
 
