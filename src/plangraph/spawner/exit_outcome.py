@@ -163,6 +163,19 @@ def _limit_target(service):
     return target if hasattr(target, 'record_harness_limit') else leg_state
 
 
+def quota_models(model, harness):
+    """The models one usage limit books: a Codex limit is account-wide, so every routed Codex leg
+    (its model and its id, the keys the route reads, review seats and writers alike) is limited with the run's own model."""
+    if harness != 'codex':
+        return [model]
+    from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS, review_route_pool
+    keys = [model]
+    for leg in (*review_route_pool(), *DEFAULT_LEGS, *EXPLICIT_LEGS):
+        if leg.harness == 'codex':
+            keys += [leg.model, leg.id]
+    return list(dict.fromkeys(keys))
+
+
 def _book_failure(service, chosen, line, card=None):
     """Book legacy evidence and quarantine the enabled reader's cached identity.
 
@@ -174,8 +187,10 @@ def _book_failure(service, chosen, line, card=None):
     from .leg_probe import key
     target = _limit_target(service)
     scope = {name: card[name] for name in ('account', 'combo') if name in (card or {})}
-    target.record_harness_limit(key(chosen), line, 'spawner:harness', down_s=_booking_seconds(),
-                                harness=getattr(chosen, 'harness', None), **scope)
+    harness = getattr(chosen, 'harness', None)
+    for model in quota_models(key(chosen), harness):
+        target.record_harness_limit(model, line, 'spawner:harness', down_s=_booking_seconds(),
+                                    harness=harness, **scope)
     if isinstance(target, LegAdapter) and target.enabled:
         target.quarantine(key(chosen))
 
