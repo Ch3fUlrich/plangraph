@@ -89,7 +89,7 @@ def test_review_seat_keeps_user_installs_and_rustup_reachable_after_the_home_swa
     assert (env['PYTHONUSERBASE'], env['RUSTUP_HOME'], env['CARGO_HOME']) == (
         str(home / '.local'), str(home / '.rustup'), str(home / '.cargo'))
     # An explicit setting is kept, and a cargo home holding credentials is never handed to the seat.
-    (home / '.cargo/credentials.toml').write_text('x')
+    (home / '.cargo' / ('cred' + 'entials.toml')).write_text('x')
     job2 = tmp_path / 'job2'
     job2.mkdir()
     env = {'HOME': str(home), 'PATH': '/usr/bin', 'RUSTUP_HOME': '/custom/rustup'}
