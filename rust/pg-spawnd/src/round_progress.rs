@@ -138,7 +138,7 @@ pub(crate) fn round_history(state: &Path, item: &str) -> Result<Vec<Value>, Tool
                 let record = crate::records::read_record(state, &json!(id))
                     .map_err(|_| refused("round_history_unavailable"))?;
                 if record["role"] == "implement"
-                    && record["item_key"] == item
+                    && crate::round_escalate::batch_key(&record) == Some(item)
                     && record["writer_round"].is_u64()
                     && !(record["round_void"] == true
                         && crate::runs::terminal(&record)
@@ -195,9 +195,22 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     if card.get("narrow_fix").is_some_and(|v| !v.is_boolean()) {
         return Err(refused("round_exception_invalid"));
     }
+    // The ledger key: one stable batch key when the card names it, else the item key.
+    let key = match card.get("batch_key").filter(|v| !v.is_null()) {
+        None => item.to_string(),
+        Some(v) => v
+            .as_str()
+            .filter(|s| crate::records::valid_item(s))
+            .ok_or_else(|| refused("round_batch_key_invalid"))?
+            .to_string(),
+    };
+    let item = key.as_str();
     let cause = crate::round_escalate::cause(card)?;
     let checks = crate::round_escalate::failing_checks(card)?;
-    if cause != crate::round_escalate::CAUSES[0] && checks.is_none() {
+    if cause != crate::round_escalate::CAUSES[0]
+        && cause != crate::round_escalate::INITIAL
+        && checks.is_none()
+    {
         // A check-triggered round must show its failure evidence, else a red round reads as green.
         return Err(refused("round_failing_checks_missing"));
     }
@@ -207,6 +220,17 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         .map_err(|_| refused("round_history_unavailable"))?
         .ok_or_else(|| refused("round_admission_busy"))?;
     let history = round_history(state, item)?;
+    if cause == crate::round_escalate::INITIAL {
+        // The first implementation is no fix turn: it takes no round number.
+        if !history.is_empty() {
+            return Err(refused("round_initial_after_fix"));
+        }
+        return Ok(Admission {
+            _lock: Some(lock),
+            fields: json!({"round_cause":cause, "batch_key":item}),
+            prompt_addendum: None,
+        });
+    }
     let next = history.len() as u64 + 1;
     let used_exception = history.iter().any(|r| r["narrow_fix"] == true);
     let mut summaries = vec![];
@@ -319,7 +343,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     }
     Ok(Admission {
         _lock: Some(lock),
-        fields: json!({"writer_round":next,
+        fields: json!({"writer_round":next, "batch_key":item,
         "round_pr":pr, "round_verdict_file":path, "narrow_fix":narrow,
         "previous_confirmed_blockers":counts, "round_cause":cause, "round_failing_checks":checks,
         "round_escalation":new_level, "round_escalation_reason":why, "round_replan":replan}),
@@ -344,8 +368,12 @@ pub(crate) fn record_refusal(
     crate::records::annotate_item(&mut base, &args["card"], &mut vec![]);
     // A stop of the round rule starts the durable replan of the PR (round_replan).
     let dry = args.get("dry_run") == Some(&json!(true));
-    if let (Some(item), None, false) = (base["item_key"].as_str(), args["card"]["pr"].as_str(), dry)
-    {
+    let key = args["card"]["batch_key"]
+        .as_str()
+        .filter(|s| crate::records::valid_item(s))
+        .or_else(|| base["item_key"].as_str())
+        .map(String::from);
+    if let (Some(item), None, false) = (key.as_deref(), args["card"]["pr"].as_str(), dry) {
         // No PR to replan: the batch still goes back, by one delivered routing line.
         if ["no_progress", "slow_progress", "round_cap"].contains(&reason) {
             let findings =
@@ -358,9 +386,7 @@ pub(crate) fn record_refusal(
             }
         }
     }
-    if let (Some(item), Some(pr), false) =
-        (base["item_key"].as_str(), args["card"]["pr"].as_str(), dry)
-    {
+    if let (Some(item), Some(pr), false) = (key.as_deref(), args["card"]["pr"].as_str(), dry) {
         match crate::round_replan::enqueue(state, item, pr, reason) {
             Ok(true) => base["replan"] = json!("queued"),
             Ok(false) => {}

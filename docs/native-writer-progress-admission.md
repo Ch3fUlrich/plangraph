@@ -63,7 +63,12 @@ credit), and the last observed count is carried over any number of omissions. A 
 a PR refuses `no_progress` or `slow_progress` and queues a return job (one routing line with the
 open findings, nothing planned): the batch goes back. The replan keeps the findings at plan
 level, so a diff with no counted file still hands them to the writer. A routing line is cut to 1800
-characters with a pointer to the job file that keeps the full text (the bus refuses 2000). A check-triggered round must carry `card.failing_checks`
+characters and 3000 JSON bytes (the bus refuses 2000 characters and a 4096-byte body) with a
+pointer to the job file that keeps the full text, also when a saved job is resent. A return job
+releases the keeper claim of the batch before it reports. `card.batch_key` names one ledger for
+several item keys (records, locks, replan jobs and the report use it; verdicts name it too);
+`card.round_cause: initial` marks the first implementation, which takes no round number and is
+refused after a fix round. A check-triggered round must carry `card.failing_checks`
 (`round_failing_checks_missing`), an accepted review still allows a counted red-check or
 moved-main fix, and a dry run queues no job. Writer 9 always
 refuses with `round_cap`. `health report` carries `fix_rounds`: rounds by cause per item, escalations and replans

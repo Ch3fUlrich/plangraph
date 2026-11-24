@@ -22,6 +22,7 @@ struct Fixture {
     fail_define_at: RefCell<Option<String>>,
     fail_send: RefCell<bool>,
     lock_only: RefCell<bool>,
+    fail_release: RefCell<bool>,
     keys: RefCell<Vec<String>>,
     sent_keys: RefCell<Vec<String>>,
 }
@@ -87,6 +88,13 @@ impl Ports for Fixture {
     }
     fn close_pr_unmerged(&self, pr: &str) -> Result<(), ToolError> {
         self.calls.borrow_mut().push(format!("close {pr}"));
+        Ok(())
+    }
+    fn release_claim(&self, item: &str) -> Result<(), ToolError> {
+        self.calls.borrow_mut().push(format!("release {item}"));
+        if *self.fail_release.borrow() {
+            return Err(parameter("keeper_down: release refused"));
+        }
         Ok(())
     }
     fn send_routing(&self, key: &str, line: &str) -> Result<(), ToolError> {
@@ -304,6 +312,9 @@ fn a_plan_that_drops_a_file_is_refused_and_nothing_is_closed() {
         }
         fn define_slice(&self, s: &Slice) -> Result<(), ToolError> {
             self.0.define_slice(s)
+        }
+        fn release_claim(&self, i: &str) -> Result<(), ToolError> {
+            self.0.release_claim(i)
         }
         fn close_pr_unmerged(&self, p: &str) -> Result<(), ToolError> {
             self.0.close_pr_unmerged(p)
@@ -541,4 +552,58 @@ fn a_legacy_job_keeps_one_date_across_retries() {
     let job = load(&path).ok().unwrap();
     assert_eq!(job["queued_at"].as_f64(), Some(1_000_000.0));
     assert_eq!(jobs(dir.path())[0]["queued_at"].as_f64(), Some(1_000_000.0));
+}
+
+#[test]
+fn a_return_releases_the_keeper_claim_once_before_it_reports() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(enqueue_return(dir.path(), "p:I", "round_cap", &[])
+        .ok()
+        .unwrap());
+    let ports = Fixture::default();
+    *ports.fail_release.borrow_mut() = true;
+    assert!(run_pending(dir.path(), &ports)[0].1.contains("keeper_down"));
+    assert_eq!(ports.count("route"), 0);
+    *ports.fail_release.borrow_mut() = false;
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    let calls = ports.calls.borrow();
+    let release = calls.iter().rposition(|c| c == "release p:I").unwrap();
+    let route = calls.iter().position(|c| c.starts_with("route")).unwrap();
+    assert!(release < route);
+    assert_eq!(calls.iter().filter(|c| c.starts_with("route")).count(), 1);
+    // One refused release and one that went through; the report waited for the second.
+    assert_eq!(ports.count("release"), 2);
+}
+
+#[test]
+fn the_cutoff_counts_json_bytes_and_a_saved_sending_job_is_cut_before_the_send() {
+    // 1200 non-ASCII characters are under the character cap and far over the bus body cap.
+    let long = "é".repeat(1200);
+    let line = bounded(
+        format!("REPLAN p:I x | {long}"),
+        Path::new("replan-ab.json"),
+    );
+    assert!(line.chars().count() <= LINE_MAX);
+    assert!(line.chars().map(json_cost).sum::<usize>() <= LINE_JSON_MAX);
+    assert!(line.ends_with("(full text in replans/replan-ab.json)"));
+    // A short line is left alone.
+    assert_eq!(bounded("short".into(), Path::new("x.json")), "short");
+    // A job saved as "sending" with an oversized line is cut at the send.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(job_dir(dir.path())).unwrap();
+    let path = job_dir(dir.path()).join("replan-old.json");
+    std::fs::write(
+        &path,
+        json!({"item":"p:Old", "pr":"https://forge/p/1", "reason":"escalated", "level":1,
+        "queued_at":5.0, "plan":{"leg":"strong", "slices":[]}, "defined":[], "closed":false,
+        "report":"sending", "report_line":format!("REPLAN p:Old {long}"), "error":null})
+        .to_string(),
+    )
+    .unwrap();
+    let ports = Fixture::default();
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    let sent = ports.calls.borrow().last().unwrap().clone();
+    assert!(sent.chars().count() < 2000);
+    assert!(sent.contains("(full text in replans/replan-old.json)"));
 }
