@@ -486,10 +486,15 @@ fn a_receipt_pushed_with_the_lane_head_is_read_green_from_a_second_clone() {
     );
 }
 
-/// The receiving side is git's own atomic transaction (GitHub cannot run a hook of ours): when the
-/// remote rejects either ref of the one `push_argv` push, neither ref changes.
+/// The pairing of a lane head and its receipt at publication is held by the managed publisher:
+/// `push_argv` is `--atomic`, and git applies an atomic push all or nothing. A per-ref `update`
+/// hook (which, unlike `pre-receive`, can reject one ref and let another through) shows both
+/// halves: with `--atomic` a rejected receipt leaves the lane unchanged; without it the lane
+/// moves alone, and the consumer (`--stamp-green`) then refuses that head. The guarantee is
+/// scoped to the managed atomic publisher; nothing on the receiving side of a plain push can
+/// enforce more.
 #[test]
-fn a_rejected_receipt_or_lane_update_leaves_both_remote_refs_unchanged() {
+fn an_atomic_push_moves_both_refs_or_neither_and_a_split_lane_has_no_green_receipt() {
     let dir = tempfile::tempdir().unwrap();
     let remote = dir.path().join("remote.git");
     let writer = dir.path().join("writer");
@@ -525,30 +530,60 @@ fn a_rejected_receipt_or_lane_update_leaves_both_remote_refs_unchanged() {
         ],
     );
     let argv = pg_worker_core::fast_check_stamp::push_argv(&head, "lane/x");
-    let hook = remote.join("hooks/pre-receive");
+    assert_eq!(argv[1], "--atomic");
+    let split: Vec<&String> = argv.iter().filter(|a| *a != "--atomic").collect();
+    // Reject only the receipt ref, per ref.
+    let hook = remote.join("hooks/update");
     fs::create_dir_all(hook.parent().unwrap()).unwrap();
-    for (reject, expect_absent) in [
-        ("refs/notes/*", "refs/heads/lane/x"),
-        ("refs/heads/lane/*", "refs/notes/*"),
-    ] {
-        pg_worker_core::executable_test_support::write_executable(
-            &hook,
-            format!("#!/bin/sh\nwhile read old new ref; do case \"$ref\" in {reject}) exit 1;; esac; done\n"),
-        );
-        let pushed = Command::new("git")
-            .current_dir(&writer)
-            .args(&argv)
-            .output()
-            .unwrap();
-        assert!(!pushed.status.success(), "{reject}: {pushed:?}");
-        let refs = git(&remote, &["for-each-ref"]);
-        assert!(
-            !refs.contains("lane"),
-            "{reject} rejected but {expect_absent} moved: {refs}"
-        );
-    }
+    pg_worker_core::executable_test_support::write_executable(
+        &hook,
+        "#!/bin/sh\ncase \"$1\" in refs/notes/*) exit 1;; esac\nexit 0\n",
+    );
+    let atomic = Command::new("git")
+        .current_dir(&writer)
+        .args(&argv)
+        .output()
+        .unwrap();
+    assert!(!atomic.status.success(), "{atomic:?}");
+    assert!(
+        !git(&remote, &["for-each-ref"]).contains("lane"),
+        "an atomic push with a rejected receipt moved the lane"
+    );
+    // Without --atomic the same rejection splits the publication: the lane lands alone.
+    let plain = Command::new("git")
+        .current_dir(&writer)
+        .args(split)
+        .output()
+        .unwrap();
+    assert!(!plain.status.success(), "{plain:?}");
+    let refs = git(&remote, &["for-each-ref"]);
+    assert!(
+        refs.contains("refs/heads/lane/x") && !refs.contains("plangraph-fast-checks"),
+        "{refs}"
+    );
+    // The consumer refuses the split lane: a fetched head with no receipt is not green.
+    let clone = dir.path().join("clone");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            remote.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+    );
+    let green = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(&clone)
+        .args(["fast-checks", "--stamp-green", &head])
+        .status()
+        .unwrap();
+    assert!(
+        !green.success(),
+        "a lane head without its receipt must not be green"
+    );
     // Nothing rejected: both refs land together.
     fs::remove_file(&hook).unwrap();
+    git(&remote, &["update-ref", "-d", "refs/heads/lane/x"]);
     let pushed = Command::new("git")
         .current_dir(&writer)
         .args(&argv)
