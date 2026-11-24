@@ -147,3 +147,47 @@ fn a_merge_commit_source_is_refused() {
     g(fx.p(), &["checkout", "-q", "main"]);
     assert!(fx.cut(&[merge], &[]).unwrap_err().contains("single-parent"));
 }
+
+/// `cargo test` runs in the crate directory, so this path is relative to the caller, not to the worktree.
+#[test]
+fn a_gate_path_relative_to_the_caller_still_works_in_the_cut_worktree() {
+    let fx = Fx::new();
+    let src = fx.source("a.txt", TRAILERS);
+    let relative = Path::new("../../tools/ci_commit_gate.py");
+    assert!(relative.is_file(), "the test runs in the crate directory");
+    let none = BTreeMap::new();
+    cut(
+        &Cut {
+            repo: fx.p(),
+            base: &fx.base,
+            branch: "slice/rel",
+            commits: &[src],
+            gate_edits: &none,
+            gate: relative,
+        },
+        &python,
+    )
+    .unwrap();
+    let head = g(fx.p(), &["rev-parse", "slice/rel"]);
+    check(fx.p(), &fx.base, &head, relative, &python).unwrap();
+}
+
+#[test]
+fn a_missing_gate_names_the_reason() {
+    let fx = Fx::new();
+    let src = fx.source("a.txt", TRAILERS);
+    let none = BTreeMap::new();
+    let err = cut(
+        &Cut {
+            repo: fx.p(),
+            base: &fx.base,
+            branch: "slice/missing",
+            commits: &[src],
+            gate_edits: &none,
+            gate: Path::new("no/such/gate.py"),
+        },
+        &python,
+    )
+    .unwrap_err();
+    assert!(err.contains("no/such/gate.py"), "{err}");
+}

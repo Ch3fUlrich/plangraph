@@ -1,0 +1,1 @@
+`land-train cut` accepts a gate path relative to the caller and reports the gate's stderr; `land-train relane` ignores a merge of main inside a lane when it counts own commits and checks the `Writer` trailer.

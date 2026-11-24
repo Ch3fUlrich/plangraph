@@ -190,8 +190,12 @@ pub fn check(
             ));
         }
     }
+    // The gate runs in `repo` (a temporary worktree for `cut`): a path relative to the caller's directory
+    // must be made absolute before the directory changes.
+    let gate =
+        std::path::absolute(gate).map_err(|e| format!("gate path {}: {e}", gate.display()))?;
     let out = python()
-        .arg(gate)
+        .arg(&gate)
         .args(["check", "--base", base, "--head", head])
         .current_dir(repo)
         .output()
@@ -200,8 +204,9 @@ pub fn check(
         Ok(())
     } else {
         Err(format!(
-            "commit gate refused {base}..{head}:\n{}",
-            String::from_utf8_lossy(&out.stdout)
+            "commit gate refused {base}..{head}:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
         ))
     }
 }

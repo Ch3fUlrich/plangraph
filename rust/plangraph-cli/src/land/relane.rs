@@ -130,6 +130,17 @@ fn refuse(lane: &str, reason: impl Into<String>) -> Result<Outcome, String> {
     })
 }
 
+/// The lane's own commits of `range`, oldest first. A merge of main into the lane is not an own commit: it has
+/// no `Writer` trailer, the rebase flattens it and `patch_ids` skips it.
+fn own_commits(dir: &Path, range: &str) -> Result<Vec<String>, String> {
+    Ok(
+        git::out(dir, &["rev-list", "--reverse", "--no-merges", range])?
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
 /// One `patch-id` per non-merge commit of `range`, oldest first.
 fn patch_ids(dir: &Path, range: &str) -> Result<Vec<String>, String> {
     let log = git::bytes(dir, &["log", "-p", "--reverse", "--no-merges", range])?;
@@ -233,7 +244,7 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
         }
     }
     let own_range = format!("{onto}..{old}");
-    let before = git::commits(repo, &own_range)?;
+    let before = own_commits(repo, &own_range)?;
     if let Some(w) = l.writer {
         if let Some(bad) = foreign(repo, &before, w)? {
             return refuse(
@@ -259,7 +270,7 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
             })
         }
     };
-    let after = git::commits(repo, &format!("{onto}..{new}"))?;
+    let after = own_commits(repo, &format!("{onto}..{new}"))?;
     if after.is_empty() {
         return refuse(l.branch, "no own commit is left after the rebase");
     }
