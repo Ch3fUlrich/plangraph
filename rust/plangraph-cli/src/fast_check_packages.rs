@@ -1,4 +1,4 @@
-use super::fast_checks::Result;
+use super::fast_checks::{Result, NEXTEST_CONFIG};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -60,7 +60,7 @@ pub(super) fn packages(root: &Path, paths: &[String], full: bool) -> Result<Vec<
         || paths.iter().any(|p| {
             matches!(
                 p.as_str(),
-                "rust/Cargo.toml" | "rust/Cargo.lock" | "rust-toolchain.toml"
+                "rust/Cargo.toml" | "rust/Cargo.lock" | "rust-toolchain.toml" | NEXTEST_CONFIG
             )
         });
     let mut selected: BTreeSet<String> = crates
@@ -89,4 +89,19 @@ pub(super) fn packages(root: &Path, paths: &[String], full: bool) -> Result<Vec<
         .filter(|(_, name, _)| selected.contains(name))
         .map(|(m, n, _)| (m, n))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nextest_config_alone_selects_all_packages() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let paths = [NEXTEST_CONFIG.into()];
+        assert_eq!(
+            packages(&root, &paths, false).unwrap(),
+            packages(&root, &paths, true).unwrap()
+        );
+    }
 }

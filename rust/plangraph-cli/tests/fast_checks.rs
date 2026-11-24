@@ -56,32 +56,61 @@ fn fast_checks_matches_ci_for_three_fixture_diffs() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .current_dir(root)
-        .args([
-            "fast-checks",
-            "--plan",
-            "--files",
-            "rust/worker-core/src/lib.rs",
-        ])
-        .output()
-        .unwrap();
-    assert!(result.status.success());
-    let plan = String::from_utf8(result.stdout).unwrap();
-    for required in [
-        "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
-        "pg-spawnd/clippy:",
-        "pg-worker/clippy:",
-        "pg-worker/test: cargo run",
-        "--bin ci-temporal -- cargo test",
-        "--local --files-only --run",
+    let bin = tempfile::tempdir().unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin.path().to_owned())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    for (version_status, runner) in [
+        (
+            0,
+            "cargo nextest run --config-file rust/.config/nextest.toml",
+        ),
+        (101, "cargo test"),
     ] {
-        assert!(plan.contains(required), "missing {required}: {plan}");
+        plangraph_cli::atomic::write_executable(
+            &bin.path().join("cargo"),
+            format!(
+                "#!/bin/sh\n[ \"$*\" = 'nextest --version' ] || exit 1\nexit {version_status}\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .current_dir(&root)
+            .env("PATH", &path)
+            .args([
+                "fast-checks",
+                "--plan",
+                "--files",
+                "rust/worker-core/src/lib.rs",
+            ])
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let plan = String::from_utf8(result.stdout).unwrap();
+        let diagnostics = String::from_utf8(result.stderr).unwrap();
+        assert_eq!(
+            diagnostics.contains("falling back to cargo test"),
+            version_status != 0,
+        );
+        for required in [
+            "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
+            "pg-spawnd/clippy:",
+            "pg-worker/clippy:",
+            "pg-worker/test: cargo run",
+            &format!("--bin ci-temporal -- {runner}"),
+            "--local --files-only --run",
+        ] {
+            assert!(plan.contains(required), "missing {required}: {plan}");
+        }
+        assert!(!plan.contains("temporal-spike/test:"));
     }
-    assert!(!plan.contains("temporal-spike/test:"));
 }
 
 #[test]
@@ -313,7 +342,7 @@ fn fast_checks_plan_for_a_spawner_python_change_tests_pg_spawnd() {
             .unwrap();
         assert!(result.status.success());
         let plan = String::from_utf8(result.stdout).unwrap();
-        for required in ["pg-spawnd/clippy:", "pg-spawnd/test: cargo test"] {
+        for required in ["pg-spawnd/clippy:", "pg-spawnd/test: cargo "] {
             assert!(plan.contains(required), "{path} misses {required}: {plan}");
         }
     }
@@ -381,4 +410,156 @@ fn dispatch_refuses_a_host_below_its_memory_floor() {
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("worker-a: MemAvailable"), "{stderr}");
     assert!(!dir.path().join("dispatch.log").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preflight_reports_a_hanging_rust_test_and_reaps_its_child() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if !Command::new("cargo")
+        .current_dir(&root)
+        .args(["nextest", "--version"])
+        .output()
+        .is_ok_and(|probe| probe.status.success())
+    {
+        eprintln!("skipping hang test: cargo nextest --version failed");
+        return;
+    }
+
+    let fixture = tempfile::tempdir().unwrap();
+    let path = fixture.path();
+    std::fs::create_dir(path.join("src")).unwrap();
+    std::fs::write(
+        path.join("Cargo.toml"),
+        "[package]\nname = \"pg-timeout-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        path.join("src/lib.rs"),
+        r#"
+#[test]
+fn hangs_with_child() {
+    let child = std::process::Command::new("sleep").arg("120").spawn().unwrap();
+    std::fs::write(std::env::var_os("CHILD_PID").unwrap(), child.id().to_string()).unwrap();
+    loop { std::thread::park(); }
+}
+"#,
+    )
+    .unwrap();
+    let config = std::fs::read_to_string(root.join("rust/.config/nextest.toml")).unwrap();
+    let deadline = path.join("nextest.toml");
+    assert_eq!(
+        config.matches("period = \"120s\"").count(),
+        1,
+        "rust/.config/nextest.toml must keep exactly one slow-timeout period of 120s for this fixture to shorten"
+    );
+    std::fs::write(
+        &deadline,
+        config.replace("period = \"120s\"", "period = \"2s\""),
+    )
+    .unwrap();
+    let pidfile = path.join("child.pid");
+    let output = preflight_command()
+        .current_dir(&root)
+        .env("CHILD_PID", &pidfile)
+        .args(["cargo", "nextest", "run", "--manifest-path"])
+        .arg(path.join("Cargo.toml"))
+        .arg("--config-file")
+        .arg(deadline)
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "{log}");
+    assert!(
+        log.contains("HUNG pg-timeout-fixture hangs_with_child"),
+        "{log}\n{:?}",
+        output.stderr
+    );
+    assert_child_stopped(&pidfile);
+}
+
+#[cfg(target_os = "linux")]
+fn assert_child_stopped(pidfile: &std::path::Path) {
+    let pid: u32 = std::fs::read_to_string(pidfile).unwrap().parse().unwrap();
+    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        assert!(
+            stat.rsplit_once(") ").unwrap().1.starts_with("Z "),
+            "{stat}"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn preflight_command() -> Command {
+    let mut command = test_python::command();
+    command.args([
+        "-c",
+        r#"
+import os, sys
+from pathlib import Path
+sys.path.insert(0, 'tools')
+import preflight
+preflight.check_timeout = lambda *args: int(os.environ.get('PREFLIGHT_FIXTURE_TIMEOUT', '45'))
+code, output = preflight.run(sys.argv[1:], Path.cwd(), os.environ)
+print(output, end='')
+sys.exit(code)
+"#,
+    ]);
+    command
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preflight_reports_a_nextest_timeout_without_an_installed_runner() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = tempfile::tempdir().unwrap();
+    plangraph_cli::atomic::write_executable(
+        &fixture.path().join("cargo"),
+        br#"#!/bin/sh
+[ "$1 $2" = 'nextest run' ] || exit 2
+case "$3" in
+    report-timeout)
+        printf '    TIMEOUT [   2.004s] ( 1/ 1) pg-timeout-fixture hangs_with_child\n' >&2
+        exit 100
+        ;;
+    stall)
+        sleep 120 &
+        printf '%s' "$!" > "$CHILD_PID"
+        wait
+        ;;
+    *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    let search_path = std::env::join_paths(
+        std::iter::once(fixture.path().to_owned())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let pidfile = fixture.path().join("child.pid");
+    let run = |mode| {
+        preflight_command()
+            .current_dir(&root)
+            .env("PATH", &search_path)
+            .env("CHILD_PID", &pidfile)
+            .env("PREFLIGHT_FIXTURE_TIMEOUT", "3")
+            .args(["cargo", "nextest", "run", mode])
+            .output()
+            .unwrap()
+    };
+
+    let output = run("report-timeout");
+    assert_eq!(output.status.code(), Some(100), "{output:?}");
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        log.contains("HUNG pg-timeout-fixture hangs_with_child"),
+        "{log}"
+    );
+
+    let output = run("stall");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(log.contains("check exceeded 3 second timeout"), "{log}");
+    assert_child_stopped(&pidfile);
 }
