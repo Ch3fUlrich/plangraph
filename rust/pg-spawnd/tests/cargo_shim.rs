@@ -174,3 +174,63 @@ fn the_shim_holds_its_lease_inside_the_writer_sandbox() {
         lock.display()
     );
 }
+
+#[test]
+fn an_idle_writer_between_cargo_steps_releases_the_lease_so_trim_succeeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let checkout = tmp.path().join("checkout");
+    let target = tmp.path().join("target");
+    let profile = target.join("debug");
+    std::fs::create_dir_all(profile.join("build")).unwrap();
+    std::fs::create_dir(&checkout).unwrap();
+    std::fs::write(profile.join(".cargo-lock"), []).unwrap();
+    std::fs::write(
+        target.join("CACHEDIR.TAG"),
+        b"Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+    let old = std::time::SystemTime::now() - Duration::from_secs(7 * 3600);
+    for n in 0..10 {
+        let unit = profile.join("build").join(format!("pg-core-{n:016x}"));
+        std::fs::create_dir_all(&unit).unwrap();
+        std::fs::write(unit.join("build-script-build"), vec![0u8; 100]).unwrap();
+        for p in [unit.join("build-script-build"), unit] {
+            std::fs::File::open(p).unwrap().set_modified(old).unwrap();
+        }
+    }
+    pg_worker_core::cargo_cache::ensure_lease_file(&target).unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    script(&real, "cargo", "exit 0");
+    let shim = tmp.path().join("shim");
+    install_shim(&shim, Path::new(env!("CARGO_BIN_EXE_pg-spawnd"))).unwrap();
+
+    let idle_flag = tmp.path().join("idle.flag");
+    let trimmed_flag = tmp.path().join("trimmed.flag");
+    let writer_script = format!(
+        "cargo build && touch {idle} && while [ ! -f {trimmed} ]; do sleep 0.05; done && cargo check",
+        idle = idle_flag.display(),
+        trimmed = trimmed_flag.display()
+    );
+    let mut supervisor = Command::new("sh")
+        .args(["-c", &writer_script])
+        .env("CARGO_TARGET_DIR", &target)
+        .env(
+            "PATH",
+            format!("{}:{}:/usr/bin:/bin", shim.display(), real.display()),
+        )
+        .env_remove("PLANGRAPH_CARGO_LEASE_HELD")
+        .spawn()
+        .unwrap();
+    assert!(wait_for(|| idle_flag.exists()), "writer never reached idle");
+    assert!(lease_holders(&target).is_empty());
+    let report =
+        pg_worker_core::disk_runtime::reclaim_before_push_using(&checkout, &target, 700, || {
+            Ok((vec![], false))
+        })
+        .expect("trim between cargo steps must succeed");
+    assert!(report.freed_bytes > 0);
+    assert!(pg_worker_core::disk_hygiene::scan(&target).unwrap().0 <= 700);
+    std::fs::write(&trimmed_flag, "done").unwrap();
+    assert!(supervisor.wait().unwrap().success());
+}
