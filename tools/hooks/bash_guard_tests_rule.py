@@ -1,4 +1,5 @@
-"""Opt-in placement policy; command inspection itself has no host I/O."""
+"""Opt-in placement policy. Command inspection reads no host state, except that the cargo target rule
+probes the filesystem with `git rev-parse` (2 s timeout) to find the checkout a cargo build would fill."""
 import os
 import re
 import subprocess

@@ -86,8 +86,10 @@ fn sweep_owned(
         ));
         return Ok(());
     }
+    // `rust/target` itself is a plain directory (checked above); the checkout may be reached
+    // through a symlinked ancestor, so the canonical path is only compared with the pins.
     let canonical = target.canonicalize()?;
-    if canonical != target || names_target(guards, &canonical) {
+    if names_target(guards, &canonical) {
         report.skipped.push(format!(
             "{}: main checkout target pinned or live; not touched",
             target.display()
@@ -224,6 +226,39 @@ mod tests {
         };
         assert!(run_with(&ancestors).freed_bytes > 0);
         assert!(!repo.join("rust/target").exists());
+    }
+
+    #[test]
+    fn a_checkout_reached_through_a_symlinked_ancestor_is_still_swept() {
+        let (tmp, repo) = fixture(7200);
+        let link = tmp.path().join("data-link");
+        std::os::unix::fs::symlink(tmp.path(), &link).unwrap();
+        let through_link = link.join("proj");
+        let report = run(&through_link, true, false);
+        assert!(report.freed_bytes > 0, "{:?}", report.skipped);
+        assert!(!repo.join("rust/target").exists());
+        // A relative checkout path works the same way.
+        let (_tmp, repo) = fixture(7200);
+        let relative = std::env::current_dir().unwrap();
+        let relative = pathdiff(&repo, &relative);
+        assert!(run(&relative, true, false).freed_bytes > 0);
+        assert!(!repo.join("rust/target").exists());
+    }
+
+    fn pathdiff(path: &Path, base: &Path) -> std::path::PathBuf {
+        let (path, base) = (
+            path.components().collect::<Vec<_>>(),
+            base.components().collect::<Vec<_>>(),
+        );
+        let common = path.iter().zip(&base).take_while(|(a, b)| a == b).count();
+        let mut out = std::path::PathBuf::new();
+        for _ in common..base.len() {
+            out.push("..");
+        }
+        for part in &path[common..] {
+            out.push(part);
+        }
+        out
     }
 
     #[test]
