@@ -53,3 +53,45 @@ fn round_refusal_is_saved_before_launch_and_does_not_consume_a_round() {
         assert_eq!(saved["reason"], "round_cap");
     }
 }
+
+#[test]
+fn a_dry_run_round_nine_refusal_through_the_spawn_path_queues_no_replan() {
+    use pg_worker_core::run::{supervise::Config, supervisor::SupervisorCfg};
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = SupervisorCfg::new(Config {
+        state_dir: dir.path().to_owned(),
+        ..Config::default()
+    });
+    cfg.max_runs = 1;
+    let runs = Runs::new(Arc::new(Supervisor::new(cfg).unwrap()));
+    for index in 1..=8 {
+        create(
+            dir.path(),
+            &format!("run-r{index}"),
+            "fixture",
+            json!({"role":"implement", "item_key":"p:I", "round_pr":"https://forge/p/1",
+            "writer_round":index, "round_cause":"red_ci", "round_failing_checks":3,
+            "round_verdict_file":null}),
+            Status::Completed,
+        )
+        .ok()
+        .unwrap();
+    }
+    let args = json!({"card":{"item_key":"p:I", "pr":"https://forge/p/1",
+        "round_cause":"red_ci", "failing_checks":3}, "prompt":"p", "dry_run":true});
+    let result = runs
+        .spawn_using(
+            dir.path(),
+            args.as_object().unwrap(),
+            "fixture",
+            json!("implement"),
+            json!({}),
+            |_, _| panic!("refused writer launched"),
+        )
+        .ok()
+        .unwrap();
+    assert_eq!(result["status"], "refused");
+    assert_eq!(result["reason"], "round_cap");
+    assert!(result.get("replan").is_none());
+    assert!(!dir.path().join("replans").exists());
+}

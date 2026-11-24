@@ -194,6 +194,10 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     }
     let cause = crate::round_escalate::cause(card)?;
     let checks = crate::round_escalate::failing_checks(card)?;
+    if cause != crate::round_escalate::CAUSES[0] && checks.is_none() {
+        // A check-triggered round must show its failure evidence, else a red round reads as green.
+        return Err(refused("round_failing_checks_missing"));
+    }
     std::fs::create_dir_all(state).map_err(|_| refused("round_history_unavailable"))?;
     let lock_name = format!("writer-rounds-{:x}.lock", Sha256::digest(item.as_bytes()));
     let lock = pg_worker_core::lockfile::try_lock(&state.join(lock_name))
@@ -257,9 +261,12 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     if next > MAX_ROUNDS {
         return Err(refused("round_cap"));
     }
-    if summaries
-        .last()
-        .is_some_and(|s| s["verdict"]["verdict"] == "ACCEPT")
+    // An accepted review ends the review loop only; red checks or a moved main still get a
+    // counted fix round.
+    if cause == crate::round_escalate::CAUSES[0]
+        && summaries
+            .last()
+            .is_some_and(|s| s["verdict"]["verdict"] == "ACCEPT")
     {
         return Err(refused("round_accepted"));
     }
@@ -280,21 +287,22 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     }
     let (mut new_level, mut why, mut replan) = (level, Value::Null, Value::Null);
     if let (Some(reason), false) = (reason, narrow) {
-        (new_level, why) = (level + 1, json!(reason));
-        replan = if args.get("dry_run") == Some(&json!(true)) {
-            json!("dry_run")
-        } else {
-            match crate::round_replan::enqueue_escalation(
-                state,
-                item,
-                pr.as_str().unwrap_or(""),
-                new_level,
-            ) {
-                Ok(true) => json!("queued"),
-                Ok(false) => json!("exists"),
-                Err(e) => json!(format!("error: {}", e.into_error_data().message)),
-            }
+        // A stall needs a durable replan job, and the round launches only after that replan
+        // planned its slices and reported; until then it is refused without using a round.
+        let Some(pr) = pr.as_str() else {
+            return Err(refused(reason));
         };
+        new_level = level + 1;
+        why = json!(reason);
+        let dry = args.get("dry_run") == Some(&json!(true));
+        if !crate::round_replan::escalation_sent(state, item, pr, new_level) {
+            if !dry {
+                crate::round_replan::enqueue_escalation(state, item, pr, new_level)
+                    .map_err(|_| refused("round_replan_unavailable"))?;
+            }
+            return Err(refused("round_replan_pending"));
+        }
+        replan = json!("done");
     }
     Ok(Admission {
         _lock: Some(lock),
@@ -321,7 +329,10 @@ pub(crate) fn record_refusal(
         "refusal":"SpawnRefused", "error":error.message, "exit_code":2});
     crate::records::annotate_item(&mut base, &args["card"], &mut vec![]);
     // A stop of the round rule starts the durable replan of the PR (round_replan).
-    if let (Some(item), Some(pr)) = (base["item_key"].as_str(), args["card"]["pr"].as_str()) {
+    let dry = args.get("dry_run") == Some(&json!(true));
+    if let (Some(item), Some(pr), false) =
+        (base["item_key"].as_str(), args["card"]["pr"].as_str(), dry)
+    {
         match crate::round_replan::enqueue(state, item, pr, reason) {
             Ok(true) => base["replan"] = json!("queued"),
             Ok(false) => {}

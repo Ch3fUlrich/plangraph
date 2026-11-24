@@ -69,10 +69,34 @@ fn replans(dir: &Path) -> Vec<Value> {
     jobs
 }
 
+/// Mark every queued replan job as planned and reported, as the replan runner leaves it.
+fn finish_replans(dir: &Path) {
+    for entry in std::fs::read_dir(dir.join("replans")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let mut job: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        job["plan"] = json!({"leg":"strong", "slices":[]});
+        job["report"] = json!("sent");
+        std::fs::write(path, job.to_string()).unwrap();
+    }
+}
+
 #[test]
-fn three_red_ci_rounds_without_fewer_failures_queue_a_replan_and_keep_the_writer() {
+fn three_red_ci_rounds_without_fewer_failures_wait_for_a_replan_then_keep_the_writer() {
     let dir = tempfile::tempdir().unwrap();
     book(dir.path(), &[red(5), red(5), red(5)]);
+    // The stalled round is refused, uses no round, and the replan job is queued once.
+    for _ in 0..2 {
+        assert!(message(run(dir.path(), &card("red_ci", 5))).starts_with("round_replan_pending"));
+    }
+    let jobs = replans(dir.path());
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0]["reason"], "escalated");
+    assert_eq!(jobs[0]["level"], 1);
+    assert_eq!(jobs[0]["pr"], PR);
+    finish_replans(dir.path());
     let admitted = run(dir.path(), &card("red_ci", 5)).ok().unwrap();
     assert_eq!(admitted.fields["writer_round"], 4);
     assert_eq!(
@@ -83,14 +107,30 @@ fn three_red_ci_rounds_without_fewer_failures_queue_a_replan_and_keep_the_writer
     assert_eq!(admitted.fields["round_escalation_reason"], "no_progress");
     assert_eq!(admitted.fields["round_cause"], "red_ci");
     assert_eq!(admitted.fields["round_failing_checks"], 5);
-    assert_eq!(admitted.fields["round_replan"], "queued");
+    assert_eq!(admitted.fields["round_replan"], "done");
     // The writer is never switched: the admission names no leg.
     assert!(admitted.fields.get("round_leg").is_none());
-    let jobs = replans(dir.path());
-    assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0]["reason"], "escalated");
-    assert_eq!(jobs[0]["level"], 1);
-    assert_eq!(jobs[0]["pr"], PR);
+}
+
+#[test]
+fn a_stall_without_a_pr_goes_back_instead_of_advancing_the_level() {
+    let mut args = card("red_ci", 5);
+    args["card"].as_object_mut().unwrap().remove("pr");
+    let dir2 = tempfile::tempdir().unwrap();
+    for index in 1..=3 {
+        crate::runs::create(
+            dir2.path(),
+            &format!("run-r{index}"),
+            "fixture",
+            json!({"role":"implement", "item_key":"p:I", "writer_round":index,
+            "round_verdict_file":null, "round_cause":"red_ci", "round_failing_checks":5}),
+            pg_worker_core::run::record::Status::Completed,
+        )
+        .ok()
+        .unwrap();
+    }
+    assert!(message(run(dir2.path(), &args)).starts_with("no_progress"));
+    assert!(replans(dir2.path()).is_empty());
 }
 
 #[test]
@@ -109,19 +149,17 @@ fn a_batch_whose_failures_fall_keeps_its_writer() {
 
 #[test]
 fn a_check_judged_round_followed_by_a_card_without_failing_checks_is_admitted() {
-    for next in ["review_finding", "red_ci"] {
-        let dir = tempfile::tempdir().unwrap();
-        book(dir.path(), &[red(5)]);
-        let mut args = card(next, 0);
-        args["card"]
-            .as_object_mut()
-            .unwrap()
-            .remove("failing_checks");
-        let admitted = run(dir.path(), &args).ok().unwrap();
-        assert_eq!(admitted.fields["writer_round"], 2);
-        // The unknown check count after the round is 0: green.
-        assert_eq!(admitted.fields["previous_confirmed_blockers"], json!([0]));
-    }
+    let dir = tempfile::tempdir().unwrap();
+    book(dir.path(), &[red(5)]);
+    let mut args = card("review_finding", 0);
+    args["card"]
+        .as_object_mut()
+        .unwrap()
+        .remove("failing_checks");
+    let admitted = run(dir.path(), &args).ok().unwrap();
+    assert_eq!(admitted.fields["writer_round"], 2);
+    // The unknown check count after the round is 0: green.
+    assert_eq!(admitted.fields["previous_confirmed_blockers"], json!([0]));
 }
 
 #[test]
@@ -140,15 +178,66 @@ fn a_review_round_without_a_verdict_is_refused_even_when_the_next_card_reports_z
 }
 
 #[test]
-fn a_dry_run_admission_queues_no_replan() {
+fn a_dry_run_admission_queues_no_replan_and_a_dry_run_refusal_closes_no_pr() {
     let dir = tempfile::tempdir().unwrap();
     book(dir.path(), &[red(5), red(5), red(5)]);
     let mut args = card("red_ci", 5);
     args.insert("dry_run".into(), json!(true));
-    let admitted = run(dir.path(), &args).ok().unwrap();
-    assert_eq!(admitted.fields["round_escalation"], 1);
-    assert_eq!(admitted.fields["round_replan"], "dry_run");
+    assert!(message(run(dir.path(), &args)).starts_with("round_replan_pending"));
     assert!(replans(dir.path()).is_empty());
+    // Round nine on a dry run: the refusal is recorded but queues no job that closes the PR.
+    let dir = tempfile::tempdir().unwrap();
+    let eight: Vec<Round> = (0..8).map(|_| red(5)).collect();
+    book(dir.path(), &eight);
+    let error = run(dir.path(), &args).err().unwrap();
+    let refusal = crate::round_progress::record_refusal(dir.path(), "fixture", &args, error)
+        .ok()
+        .unwrap();
+    assert_eq!(refusal["reason"], "round_cap");
+    assert!(refusal.get("replan").is_none());
+    assert!(replans(dir.path()).is_empty());
+}
+
+#[test]
+fn an_accepted_review_still_allows_a_counted_fix_for_red_checks_or_a_moved_main() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("v.json");
+    std::fs::write(
+        &source,
+        json!({"writer_run_id":"run-r1", "item_key":"p:I", "pr":PR,
+        "verdict":"ACCEPT", "findings":[]})
+        .to_string(),
+    )
+    .unwrap();
+    crate::runs::create(
+        dir.path(),
+        "run-r1",
+        "fixture",
+        json!({"role":"implement", "item_key":"p:I", "round_pr":PR, "writer_round":1,
+        "round_verdict_file":source, "round_cause":"review_finding"}),
+        pg_worker_core::run::record::Status::Completed,
+    )
+    .ok()
+    .unwrap();
+    assert!(message(run(dir.path(), &card("review_finding", 0))).starts_with("round_accepted"));
+    for cause in ["red_ci", "rebase_main", "fast_check"] {
+        let admitted = run(dir.path(), &card(cause, 2)).ok().unwrap();
+        assert_eq!(admitted.fields["writer_round"], 2);
+        assert_eq!(admitted.fields["previous_confirmed_blockers"], json!([2]));
+    }
+}
+
+#[test]
+fn a_check_triggered_round_must_carry_its_failing_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    for cause in ["red_ci", "rebase_main", "fast_check"] {
+        let mut args = card(cause, 0);
+        args["card"]
+            .as_object_mut()
+            .unwrap()
+            .remove("failing_checks");
+        assert!(message(run(dir.path(), &args)).starts_with("round_failing_checks_missing"));
+    }
 }
 
 #[test]
@@ -225,10 +314,12 @@ fn each_new_stall_window_queues_one_more_replan_and_the_ceiling_ends_the_loop() 
             escalated(5, 1),
         ],
     );
+    assert!(message(run(dir.path(), &card("red_ci", 5))).starts_with("round_replan_pending"));
+    assert_eq!(replans(dir.path())[0]["level"], 2);
+    finish_replans(dir.path());
     let again = run(dir.path(), &card("red_ci", 5)).ok().unwrap();
     assert_eq!(again.fields["writer_round"], 7);
     assert_eq!(again.fields["round_escalation"], 2);
-    assert_eq!(replans(dir.path())[0]["level"], 2);
     drop(again);
     // Round 9 is refused whatever the history.
     let dir = tempfile::tempdir().unwrap();
@@ -266,6 +357,8 @@ fn failing_checks_added_to_review_findings_decide_progress() {
         .ok()
         .unwrap();
     }
+    assert!(message(run(dir.path(), &card("fast_check", 4))).starts_with("round_replan_pending"));
+    finish_replans(dir.path());
     let admitted = run(dir.path(), &card("fast_check", 4)).ok().unwrap();
     // 3+1, 2+3, 1+4: 4, 5, 5 never beats 4 after round 1.
     assert_eq!(
@@ -298,6 +391,8 @@ fn round_nine_is_refused_and_the_batch_goes_back_with_a_replan() {
 fn the_report_counts_rounds_by_cause_escalations_and_replans_per_day() {
     let dir = tempfile::tempdir().unwrap();
     book(dir.path(), &[red(5), red(5), red(5)]);
+    assert!(message(run(dir.path(), &card("fast_check", 5))).starts_with("round_replan_pending"));
+    finish_replans(dir.path());
     let admitted = run(dir.path(), &card("fast_check", 5)).ok().unwrap();
     let mut fields = admitted.fields.clone();
     drop(admitted);
