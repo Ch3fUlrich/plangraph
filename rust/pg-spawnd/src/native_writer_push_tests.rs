@@ -167,3 +167,20 @@ fn a_preflight_cap_refusal_keeps_the_accepted_head_for_a_push_only_retry() {
     assert_eq!(driver.reviews.len(), reviews);
     assert_eq!(driver.pushed, ["final-head", "final-head"]);
 }
+
+/// Run an accepted writer lifecycle whose host reclaim and push are the real host's.
+/// Returns the record, the writer turns taken and the reviews run.
+pub(crate) fn run_with_host_handoff(
+    accepted: &str,
+    reclaim: Box<dyn FnMut() -> Result<(), String>>,
+    push: Box<dyn FnMut(&str) -> Result<Option<String>, String>>,
+) -> (serde_json::Value, usize, usize) {
+    let mut driver = Fake {
+        head_script: vec!["base", Box::leak(accepted.to_owned().into_boxed_str())],
+        host_reclaim: Some(reclaim),
+        host_push: Some(push),
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    (record, driver.calls.len(), driver.reviews.len())
+}
