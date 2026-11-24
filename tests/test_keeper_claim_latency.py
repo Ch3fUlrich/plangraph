@@ -5,6 +5,7 @@ import pytest
 
 from keeper_util import defn
 from plangraph.keeper.cli_verbs import Session
+from plangraph.keeper.errors import Refused
 from test_keeper_api import _claim_checkouts, call, jbody, srv, w  # noqa: F401  (fixtures and helpers)
 
 
@@ -49,18 +50,34 @@ def test_claim_batch_runs_one_fresh_preflight_per_repository(w, tmp_path, monkey
     calls = _spy_work_indexes(monkeypatch)
     rows = w.store.claim_batch(w.p("l1main"), keys)["results"]
     assert [row["epoch"] for row in rows] == [1] * 5
-    # One origin refresh for the item's repository; the other repository is read from its cache.
-    assert [call for call in calls if call[1]] == [("demo", True)]
+    # Five keys, two repositories (the other one was never built): one origin refresh each.
+    assert sorted(call for call in calls if call[1]) == [("demo", True), ("related", True)]
 
 
-def test_each_claim_refreshes_only_its_own_repository_again(w, tmp_path, monkeypatch):
+def test_a_recent_other_repository_is_not_refreshed_by_the_next_claim(w, tmp_path, monkeypatch):
     keys = _claim_lanes(w, tmp_path, 2)
     builds = _count_index_builds(monkeypatch)
     for key in keys:
         w.store.claim(w.p("l1main"), key)
-    # The item's repository is rebuilt for every claim; the other one is built once and served from cache.
+    # The item's repository is rebuilt for every claim; the other one, built a moment ago, is served as built.
     assert builds["demo"] == 2
     assert builds["related"] == 1
+
+
+def test_a_claim_refreshes_another_repository_whose_index_expired(w, tmp_path, monkeypatch):
+    from subprocess import run
+
+    keys = _claim_lanes(w, tmp_path, 2)
+    w.store.claim(w.p("l1main"), keys[0])
+    git = w.store._adapter("git")
+    # Age every built index past the ready read's TTL, then merge the second item's work in the other repository.
+    git._context_work_index = {k: (stamp - 3600, index) for k, (stamp, index) in git._context_work_index.items()}
+    run(["git", "-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-qm",
+         f"work\n\nPlan-Item: {keys[1]}"], cwd=git.repo_path("related"), check=True)
+    builds = _count_index_builds(monkeypatch)
+    with pytest.raises(Refused, match="already merged"):
+        w.store.claim(w.p("l1main"), keys[1])
+    assert builds["related"] == 1 and w.store._item(keys[1])["state"] == "open"
 
 
 def test_health_reports_the_claim_budget_and_the_cli_timeout_follows_it(srv, w, monkeypatch):

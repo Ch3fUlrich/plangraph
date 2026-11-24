@@ -93,6 +93,14 @@ def test_validator_accepts_and_rejects(use_library):
             assert cs.problems(value, name, use_library), (name, value)
 
 
+@pytest.mark.parametrize("use_library", [False, True])
+def test_validator_checks_the_health_budget_is_positive(use_library):
+    assert cs.problems({"status": "ok"}, "Health", use_library) == []
+    assert cs.problems({"status": "ok", "claim_preflight_s": 30}, "Health", use_library) == []
+    for bad in (0, -1):
+        assert cs.problems({"status": "ok", "claim_preflight_s": bad}, "Health", use_library), bad
+
+
 def test_validator_handles_events_and_oneof():
     event = {"seq": 1, "ts": "2030-01-01T00:00:00Z", "actor": None, "role": None, "model": None,
              "key": None, "type": "x", "payload": {}, "prev_hash": "", "hash": "a" * 64}

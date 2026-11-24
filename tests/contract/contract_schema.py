@@ -4,7 +4,7 @@ Uses ``jsonschema`` (Draft 2020-12) when it is installed; otherwise a tiny
 validator covering the keywords the contract uses: ``$ref`` (local ``#/$defs``),
 ``type``, ``enum``, ``const``, ``required``, ``properties``,
 ``additionalProperties``, ``items``, ``minItems``, ``maxItems``, ``minimum``,
-``pattern``, ``oneOf`` and ``anyOf``.
+``exclusiveMinimum``, ``pattern``, ``oneOf`` and ``anyOf``.
 """
 from __future__ import annotations
 
@@ -49,6 +49,8 @@ def _errors(value, schema, path):
         yield f"{path}: {value!r} != {schema['const']!r}"
     if "minimum" in schema and _TYPES["number"](value) and value < schema["minimum"]:
         yield f"{path}: {value} < {schema['minimum']}"
+    if "exclusiveMinimum" in schema and _TYPES["number"](value) and value <= schema["exclusiveMinimum"]:
+        yield f"{path}: {value} <= {schema['exclusiveMinimum']} (exclusive)"
     if "pattern" in schema and isinstance(value, str) and not re.search(schema["pattern"], value):
         yield f"{path}: {value!r} does not match {schema['pattern']}"
     for word in ("oneOf", "anyOf"):

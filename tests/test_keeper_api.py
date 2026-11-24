@@ -518,25 +518,39 @@ def _claim_checkouts(tmp_path, names):
 ])
 def test_parallel_claim_refuses_if_any_work_index_fails(
         srv, w, tmp_path, monkeypatch, failure, force_stale):
-    """A claim whose repository refresh fails or runs out of time is refused and claims nothing."""
     from types import SimpleNamespace
     from keeper_util import Clock
     from plangraph.keeper import context_sources, timing
     from plangraph.keeper.errors import Refused
 
-    w.store.ctx = {"git": _claim_checkouts(tmp_path, ("demo", "related"))}
+    git = _claim_checkouts(tmp_path, ("demo", "related"))
+    w.store.ctx = {"git": git}
     clock = Clock(0)
     monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic=clock))
+    slow_started, good_finished = threading.Event(), threading.Event()
     request_indexes = []
+    read_index = context_sources.work_index
+    share = timing.share_inflight
     work_indexes = w.store._work_indexes
-    step = "work index for demo"
+    step = "work index for related"
 
     def read(git, project, **kwargs):
-        assert project == "demo"   # the claim refreshes only the item's repository
+        if project == "demo":
+            assert slow_started.wait(8)
+            return read_index(git, project, **kwargs)
+        slow_started.set()
+        assert good_finished.wait(8)
         if failure == "refusal":
             raise Refused("conflict", f"{step}: refresh refused")
         clock.advance(w.store.claim_preflight_s + 1)
-        return None
+        return read_index(git, project, **kwargs)
+
+    def observe_share(key, fetch, **kwargs):
+        result = share(key, fetch, **kwargs)
+        if key == ("work", id(git), "demo"):
+            assert result is not None and not result["stale"]
+            good_finished.set()
+        return result
 
     def observe_indexes(projects, *, fresh=False, shared=None):
         if fresh:
@@ -544,6 +558,7 @@ def test_parallel_claim_refuses_if_any_work_index_fails(
         return work_indexes(projects, fresh=fresh, shared=shared)
 
     monkeypatch.setattr(context_sources, "work_index", read)
+    monkeypatch.setattr(timing, "share_inflight", observe_share)
     monkeypatch.setattr(w.store, "_work_indexes", observe_indexes)
     body = {"key": "demo:A"}
     if force_stale:
@@ -552,6 +567,7 @@ def test_parallel_claim_refuses_if_any_work_index_fails(
     message = (f"{step}: refresh refused" if failure == "refusal"
                else f"claim preflight exceeded its deadline during {step}")
     assert (status, jbody(raw)) == (409, {"error": "conflict", "msg": message})
+    assert good_finished.is_set()
     assert request_indexes == [{}]
     assert w.store._item("demo:A")["state"] == "open"
     assert not w.conn.execute("SELECT 1 FROM events WHERE type='claimed'").fetchone()
@@ -582,6 +598,7 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch,
                 phases[name].append(perf_counter() - start)
         return run
 
+    index_barrier = threading.Barrier(4)
     index_lock = threading.Lock()
     active_indexes = peak_indexes = 0
 
@@ -592,7 +609,9 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch,
             active_indexes += 1
             peak_indexes = max(peak_indexes, active_indexes)
         try:
-            sleep(.3)  # Keep real refreshes in flight while requests overlap.
+            if project != "related-3":
+                index_barrier.wait(timeout=8)
+            sleep(.75)  # Keep real refreshes in flight while requests overlap.
             return original(git, project, **kwargs)
         finally:
             with index_lock:
@@ -630,10 +649,8 @@ def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch,
     print("HTTP p95", round(samples[-1], 3),
           "phase maxima", {name: round(max(values), 4) for name, values in phases.items()})
     assert samples[-1] < 5
-    # Claims running together share one in-flight refresh of the item's repository; a claim that
-    # starts later refreshes it again. Each other repository is built once, then served from its cache.
-    assert len(names) <= len(phases["index"]) <= len(names) + len(keys[:8])
-    assert peak_indexes <= 2
+    assert len(phases["index"]) == len(names)
+    assert peak_indexes == 4
 
 
 def test_batch_claim_and_heartbeat_commit_once_and_replay(srv, w, monkeypatch):
