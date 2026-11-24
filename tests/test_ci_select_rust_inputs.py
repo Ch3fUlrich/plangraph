@@ -208,12 +208,18 @@ def test_pg_hook_runs_in_windows_job():
     steps = workflow["jobs"]["rust-windows"]["steps"]
     assert all("pg-hook" not in step.get("run", "") for step in steps)
     assert "slice 1 is Unix-only" in (ROOT / "docs/rust-hooks.md").read_text()
-    portable = {"lesson_gate.rs", "message_time.rs"}
+    # One list for this test and for rust/pg-hook/tests/unix_header.rs (the cargo-side check).
+    portable = set((ROOT / "rust/pg-hook/tests/portable.txt").read_text().split())
     sources = {source.name: source for source in (ROOT / "rust/pg-hook/tests").glob("*.rs")}
     assert portable <= sources.keys()
     for name, source in sources.items():
         unix_only = source.read_text(encoding="utf-8").startswith("#![cfg(unix)]\n")
-        assert unix_only == (name not in portable), source
+        if name in portable:
+            assert not unix_only, f"{source}: listed in tests/portable.txt, so it must not start with #![cfg(unix)]"
+        else:
+            assert unix_only, (f"{source} is missing `#![cfg(unix)]` as its first line: add it "
+                               "(the Windows job does not build pg-hook tests), or list the file in "
+                               "rust/pg-hook/tests/portable.txt only if it is portable")
     lesson_gate = sources["lesson_gate.rs"].read_text(encoding="utf-8")
     assert '#[cfg(unix)]\n#[test]\nfn session_installer_builds_copies_and_checksums_the_hook' in lesson_gate
     for name in ("lib.rs", "main.rs"):

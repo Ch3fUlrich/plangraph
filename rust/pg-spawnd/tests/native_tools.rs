@@ -32,6 +32,10 @@ fn native_spawn_refuses_each_missing_tool_before_record_creation() {
             .current_dir(&root)
             .env("PYTHONPATH", root.join("src"))
             .env("PATH", &bin)
+            // harness_path adds ~/.cargo/bin and ~/.local/bin when a tool is absent from
+            // PATH; an empty HOME keeps the result independent of the host's installs.
+            .env("HOME", &dir)
+            .env_remove("NVM_DIR")
             .env("NATIVE_BINARY", env!("CARGO_BIN_EXE_pg-spawnd"))
             .env("MISSING", missing)
             .args(["-c", r#"

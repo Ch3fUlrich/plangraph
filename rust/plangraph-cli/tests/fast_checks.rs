@@ -85,6 +85,31 @@ fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
 }
 
 #[test]
+fn fast_checks_plan_for_a_rust_test_file_runs_the_bare_python_guard_and_affected_tests() {
+    // Cargo alone does not run test_no_bare_python_subprocesses; the plan must.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(root)
+        .args([
+            "fast-checks",
+            "--plan",
+            "--files",
+            "rust/pg-spawnd/tests/head_gate.rs",
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let plan = String::from_utf8(result.stdout).unwrap();
+    for required in [
+        "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
+        "affected-tests: python3 tools/affected_tests.py",
+        "--run --changed rust/pg-spawnd/tests/head_gate.rs",
+    ] {
+        assert!(plan.contains(required), "missing {required}: {plan}");
+    }
+}
+
+#[test]
 fn fast_checks_keeps_external_rust_inputs_in_a_mixed_diff() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
