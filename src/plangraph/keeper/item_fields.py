@@ -384,7 +384,9 @@ def similar_items(definition, items):
     for other in items:
         if (other["key"] == definition["key"] or other["key"] in related
                 or other.get("state") in _TERMINAL or other["project"] != definition["project"]
-                or definition["key"] in (other.get("depends_on") or [])):
+                or definition["key"] in (other.get("depends_on") or [])
+                or (definition.get("slice_parent")
+                    and other.get("slice_parent") == definition["slice_parent"])):
             continue
         # The title carries the weight: boilerplate descriptions alone never match.
         score = _jaccard(mine, _tokens(other, "title"))

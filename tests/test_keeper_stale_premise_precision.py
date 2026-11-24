@@ -1,9 +1,8 @@
 """KEEPER-STALE-PREMISE-PRECISION: the premise gate ignores the decision that
 defines or orders the item, and one verb re-confirms a premise.
 
-The clock starts at 22:13:20Z; decision rows carry the ``(HH:MMZ`` stamp the
-decisions log uses, so a row stamped within two hours after the define counts
-as logged with it.
+Decision rows carry the ``(HH:MMZ`` stamp of the decisions log; the log has
+neither a date nor a session, so a time of day proves nothing.
 """
 from __future__ import annotations
 
@@ -11,6 +10,7 @@ import pytest
 
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
+from plangraph.keeper import events as keeper_events
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 
 
@@ -55,19 +55,33 @@ def _claims(w, key):
         return False
 
 
-def test_the_four_cases_of_2026_11_13_claim_without_force(w, decisions):
+def test_the_cases_of_2026_11_13_claim_without_force(w, decisions):
     _items(w, PROD={"source": "D-5862"})
     # (a) the item's own source decision
     _decide(decisions, 5862, "(05:0xZ) PROD-FROM-MAIN-ONLY discussion of the rollout")
-    # (b) a row that orders or GOes the item without changing scope
+    # (b) rows that order, GO or define the item without changing scope
     _decide(decisions, 5858, "(05:0xZ) OPERATOR order: demo:SPAWNER-DEFAULT ordered first, GO")
-    # (c) logged within two hours after the define
-    _decide(decisions, 5837, "(23:4xZ) note on demo:PHASE-LINE-GREEN wording")
+    _decide(decisions, 5837, "(23:4xZ) GO: demo:PHASE-LINE-GREEN defined and queued")
     _decide(decisions, 5853, "(00:1xZ) lesson items: demo:LESSON-ITEM queued in the plan")
     assert _claims(w, "demo:PROD-FROM-MAIN-ONLY")
     assert _claims(w, "demo:SPAWNER-DEFAULT")
     assert _claims(w, "demo:PHASE-LINE-GREEN")
     assert _claims(w, "demo:LESSON-ITEM")
+
+
+def test_a_row_near_the_define_in_time_of_day_is_not_trusted_without_session_and_date(w, decisions):
+    _items(w)
+    # the log has neither: a stamp inside two hours of the define could be another day and session
+    _decide(decisions, 5860, "(23:4xZ) note on demo:SCOPE-ITEM wording")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:SCOPE-ITEM")
+    assert "premise outdated: D-5860" in exc.value.msg
+    # a later scope change after an ordering row still refuses
+    _decide(decisions, 5861, "(01:0xZ) demo:SPAWNER-DEFAULT ordered first")
+    _decide(decisions, 5862, "(07:0xZ) demo:SPAWNER-DEFAULT now covers the web too")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:SPAWNER-DEFAULT")
+    assert "D-5862" in exc.value.msg
 
 
 def test_a_decision_that_changes_scope_after_the_define_still_refuses(w, decisions):
@@ -93,7 +107,8 @@ def test_reconfirm_clears_the_premise_without_an_edit_and_is_audited(w, decision
     assert w.store.show(w.p("router"), "demo:SCOPE-ITEM")["newer_decisions"] == []
     from plangraph.keeper import events as keeper_events
     marks = [e for e in keeper_events.read_events(w.conn)
-             if e["key"] == "demo:SCOPE-ITEM" and e["payload"].get("reconfirmed") == "D-5900"]
+             if e["key"] == "demo:SCOPE-ITEM" and e["type"] == "premise_reconfirmed"
+             and e["payload"].get("decision") == "D-5900"]
     assert marks and marks[0]["actor"] == "router"
     # a newer decision after the reconfirm refuses again
     _decide(decisions, 5950, "(07:0xZ) demo:SCOPE-ITEM changes again")
@@ -129,3 +144,30 @@ def test_alerts_report_the_force_stale_claims(w, decisions):
     assert w.store.alerts(w.p("router"))["force_stale_claims"] == 0
     w.store.claim(w.p("l1main"), "demo:SCOPE-ITEM", force_stale="read D-5900")
     assert w.store.alerts(w.p("router"))["force_stale_claims"] == 1
+
+
+def test_reconfirm_is_not_a_definition_change_and_does_not_clear_a_supersedes_link(w, decisions):
+    _items(w)
+    _decide(decisions, 5900, "(05:0xZ) demo:SCOPE-ITEM premise changed")
+    before = [e for e in keeper_events.read_events(w.conn) if e["type"] == "item_defined"]
+    w.store.reconfirm(w.p("router"), "demo:SCOPE-ITEM", "D-5900")
+    assert [e for e in keeper_events.read_events(w.conn) if e["type"] == "item_defined"] == before
+    assert w.store.verify_integrity() == []
+    w.store.create_items(w.p("router"), [defn("NEWER", supersedes=["demo:SCOPE-ITEM"], under="demo:GOAL")])
+    with pytest.raises(Refused) as exc:
+        w.store.reconfirm(w.p("router"), "demo:SCOPE-ITEM", "D-5900")
+    assert "not a supersedes link" in exc.value.msg or "reconfirm clears a premise" in exc.value.msg
+    with pytest.raises(Refused):
+        w.store.claim(w.p("l1main"), "demo:SCOPE-ITEM")
+
+
+def test_force_stale_claims_count_every_audited_claim_even_after_the_item_closes(w, decisions):
+    _items(w)
+    _decide(decisions, 5900, "(05:0xZ) demo:SCOPE-ITEM premise changed")
+    key = "demo:SCOPE-ITEM"
+    w.store.claim(w.p("l1main"), key, force_stale="read D-5900")
+    w.store.release(w.p("l1main"), key, 1)
+    w.store.claim(w.p("l1main"), key, force_stale="read D-5900 again")       # same item, second claim
+    assert w.store.alerts(w.p("router"))["force_stale_claims"] == 2
+    w.store.cancel(w.p("router"), key, "closed")
+    assert w.store.alerts(w.p("router"))["force_stale_claims"] == 2

@@ -217,7 +217,7 @@ class CreateMixin:
             if gate is not None:
                 attach.append((definition, gate))
         before = self._all_items()
-        warnings = self._answer_similar(defs, before, legacy)
+        warnings = self._answer_similar(principal, defs, before, legacy)
         # A standing ``depends_on_cancelled`` edge on the gate is not this define's
         # doing (``_validate_change`` only refuses what a change newly introduces),
         # so the define goes through and says so; repair the edge with the
@@ -534,7 +534,7 @@ class CreateMixin:
                     value, item["kind"], key)
             elif field in ("supersedes", "category"):
                 value = edit_fields[field] = me[field] = self._checked_ref(
-                    field, key, value, by_key, item["project"])
+                    field, key, value, by_key, item["project"], principal)
             elif field == "fixes" and value is not None:
                 if not isinstance(value, str) or not value:
                     raise Refused("validation", "fixes must be a key string or null")
@@ -561,7 +561,7 @@ class CreateMixin:
                 edit_fields.get("done_criteria", item.get("done_criteria")),
                 resulting_tier)
         check_fix_limit(candidate, {key})
-        self._edit_similar(key, me, edit_fields, candidate)
+        self._edit_similar(principal, key, me, edit_fields, candidate)
         self._validate_change(candidate, before, affected={key})
         assignments = [field for field in edit_fields if field not in ("depends_on", "similar")]
         # F4 audit: the claimed/in-review exception is the router editing an

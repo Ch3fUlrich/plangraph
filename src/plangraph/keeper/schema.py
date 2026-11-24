@@ -80,7 +80,7 @@ EVENT_TYPES = (
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
     "kind_set", "state_set", "exec_owner_changed", "oversight_token_minted",
     "apply_granted", "apply_revoked", "question_asked", "question_resolved",
-    "incident_appended",
+    "incident_appended", "premise_reconfirmed",
 )
 
 def _in(values):

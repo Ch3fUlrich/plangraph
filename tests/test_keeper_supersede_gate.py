@@ -141,7 +141,8 @@ def test_each_answer_lets_the_define_through_and_is_recorded(w, answer):
 def test_an_unanswered_match_stays_refused_when_another_is_answered(w):
     router = w.p("router")
     w.store.create_items(router, [defn("ORIG", title=LONG, description=LONG),
-                                  defn("ORIG2", title=LONG, description=LONG + " twice"),
+                                  defn("ORIG2", title=LONG, description=LONG + " twice",
+                                       similar={"demo:ORIG": "distinct"}),
                                   defn("GOAL", ["ORIG", "ORIG2"], kind="goal")])
     with pytest.raises(Refused) as exc:
         w.store.create_items(router, [defn("COPY", title=NEAR, description=NEAR, under=G,
@@ -299,3 +300,60 @@ def test_a_database_without_the_category_column_upgrades_and_loads(tmp_path):
         assert conn.execute("SELECT category FROM items WHERE key='demo:A'").fetchone()[0] is None
     finally:
         conn.close()
+
+
+# ------------------------------------------------------------ review round 2
+def test_system_and_worker_claims_refuse_a_superseded_item_too(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("OLD"), defn("GOAL", ["OLD"], kind="goal")])
+    w.store.create_items(router, [defn("NEW", supersedes=["demo:OLD"], under=G)])
+    with pytest.raises(Refused) as exc:
+        w.store.worker_claim_lease(w.p("system"), "demo:OLD")      # the system claim skips the stale checks
+    assert "superseded by demo:NEW" in exc.value.msg
+    assert w.store.show(router, "demo:OLD")["state"] == "open"
+
+
+def test_a_link_added_after_the_prepare_step_still_refuses_the_claim(w, monkeypatch):
+    router = w.p("router")
+    w.store.create_items(router, [defn("OLD"), defn("NEW"),
+                                  defn("GOAL", ["OLD", "NEW"], kind="goal")])
+    real = w.store._prepare_claim
+
+    def racing(*args, **kwargs):
+        prepared = real(*args, **kwargs)
+        w.store.edit_definition(router, "demo:NEW", {"supersedes": ["demo:OLD"]})   # lands after the check
+        return prepared
+    monkeypatch.setattr(w.store, "_prepare_claim", racing)
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:OLD")
+    assert "superseded by demo:NEW" in exc.value.msg
+
+
+def test_similar_answers_cannot_link_across_projects_without_the_router(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("ORIG", project="other", title=LONG, description=LONG),
+                                  defn("GOAL", ["ORIG"], project="other", kind="goal")])
+    w.store.create_items(router, [defn("MINE"), defn("DGOAL", ["MINE"], kind="goal")])
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(w.p("l1main"), "demo:MINE", {"supersedes": ["other:ORIG"]})
+    assert exc.value.code == "forbidden"
+    with pytest.raises(Refused) as exc:
+        w.store.create_items(w.p("l1main"), [defn("COPY", title=LONG, description=LONG, under="demo:DGOAL",
+                                                  similar={"other:ORIG": "supersedes"})])
+    assert exc.value.code == "forbidden"
+    w.store.edit_definition(router, "demo:MINE", {"supersedes": ["other:ORIG"]})   # the router may
+
+
+def test_a_batch_cannot_hold_two_near_copies(w):
+    router = w.p("router")
+    with pytest.raises(Refused) as exc:
+        w.store.create_items(router, [defn("ONE", title=LONG, description=LONG),
+                                      defn("TWO", title=LONG, description=LONG),
+                                      defn("GOAL", ["ONE", "TWO"], kind="goal")])
+    assert "demo:ONE" in exc.value.msg and "demo:TWO" in exc.value.msg
+    w.store.create_items(router, [defn("ONE", title=LONG, description=LONG),
+                                  defn("TWO", title=LONG, description=LONG, similar={"demo:ONE": "distinct"}),
+                                  defn("GOAL", ["ONE", "TWO"], kind="goal")])
+    # slices of one parent are the same job split on purpose
+    w.store.create_items(router, [defn("S1", title=OTHER_LONG + " part one", slice_parent="demo:ONE", under=G),
+                                  defn("S2", title=OTHER_LONG + " part one", slice_parent="demo:ONE", under=G)])

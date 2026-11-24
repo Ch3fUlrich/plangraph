@@ -27,7 +27,6 @@ them still, and the state checks are repeated under the lock as before.
 from __future__ import annotations
 
 import bisect
-from datetime import timezone
 import json
 import re
 import time
@@ -149,7 +148,9 @@ class ContextMixin:
         row = self.conn.execute(
             "SELECT COUNT(*) AS n, MAX(seq) AS m, COALESCE(SUM(seq), 0) AS s"
             f" FROM events WHERE {DEFINITION_EVENTS}").fetchone()
-        stamp = (row["n"], row["m"], row["s"])
+        again = self.conn.execute(
+            "SELECT COUNT(*) AS n, MAX(seq) AS m FROM events WHERE type='premise_reconfirmed'").fetchone()
+        stamp = (row["n"], row["m"], row["s"], again["n"], again["m"])
         clock = getattr(self, "_ctx_clock", None)
         if clock is not None and clock["stamp"] == stamp:
             return clock
@@ -163,12 +164,14 @@ class ContextMixin:
             ids = src.decision_ids(raw)
             if ids:
                 mark = max(mark, _num(ids[-1]))
-            if '"reconfirmed"' in raw and ids:
-                clock["reconfirmed"][row["key"]] = max(
-                    clock["reconfirmed"].get(row["key"], -1), _num(ids[-1]))
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
             clock["last"][row["key"]] = row["seq"]
+        for row in self.conn.execute(      # a re-read of the premise, not a change of the definition
+                "SELECT key, payload FROM events WHERE type='premise_reconfirmed' ORDER BY seq"):
+            did = _payload(row["payload"]).get("decision")
+            if did:
+                clock["reconfirmed"][row["key"]] = max(clock["reconfirmed"].get(row["key"], -1), _num(did))
         self._ctx_clock = clock
         return clock
 
@@ -248,20 +251,10 @@ class ContextMixin:
         ctx["stale"] = self._stale_reason(item, ctx)
         return ctx
 
-    def _premise_neutral(self, item, did, inputs):
+    @staticmethod
+    def _premise_neutral(item, did, inputs):
         """KEEPER-STALE-PREMISE-PRECISION: a newer decision that only defines or orders the item."""
-        clock, key = inputs["clock"], item["key"]
-        seq = clock["last"].get(key)
-        defined_min = at = None
-        if seq is not None:
-            row = self.conn.execute("SELECT ts FROM events WHERE seq=?", (seq,)).fetchone()
-            at = self._parse_iso(row["ts"]) if row else None
-            at = at.astimezone(timezone.utc) if at else None
-            defined_min = at.hour * 60 + at.minute if at else None
-            at = clock["marks"][bisect.bisect_right(clock["seqs"], seq) - 1]
-        gap = _num(did) - at if at is not None else 10**9
-        return premise_neutral(inputs["book"]["rows"].get(did, ()), did, item.get("source"),
-                               defined_min, gap)
+        return premise_neutral(inputs["book"]["rows"].get(did, ()), did, item.get("source"))
 
     def _stale_reason(self, item, ctx):
         why = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
@@ -494,10 +487,14 @@ class ContextMixin:
                 self._may_manage(principal, item["project"])
                 if item["state"] in views.TERMINAL:
                     raise Refused("bad_state", f"{key} is {item['state']}")
+                if self._superseders(key):
+                    raise Refused("bad_state", f"{key} is superseded by {', '.join(self._superseders(key))}: "
+                                  "reconfirm clears a premise, not a supersedes link; cancel the "
+                                  "superseding item or drop the link")
                 if not self._adapter("decisions").has(did):
                     raise Refused("not_found", f"no decision {did} in the decisions log")
-                self._append(principal, key, "item_defined",
-                             {"fields": [], "reconfirmed": did, "who": principal.name}, now)
+                self._append(principal, key, "premise_reconfirmed",
+                             {"decision": did, "who": principal.name}, now)
             return {"key": key, "reconfirmed": did}
         return self._run(principal, "reconfirm", key, record)
 
@@ -513,6 +510,15 @@ class ContextMixin:
             raise Refused("validation",
                           f"force_stale reason is over {FORCE_STALE_MAX} chars")
         return value.strip()
+
+    def _refuse_superseded(self, key):
+        """Refuse every claim of an item that a non-cancelled item supersedes; the
+        superseder keys otherwise (the one gate for every role, also under the lock)."""
+        found = self._superseders(key)
+        if found:
+            raise Refused("bad_state", f"{key} superseded by {', '.join(found)} (cancel the "
+                          "superseding item, or drop its supersedes link while it is open)")
+        return found
 
     def _claim_guard(self, item, reason, *, shared=None, stale_checks=True):
         """Refuse a stale claim with the facts, or return the override record."""
@@ -559,11 +565,7 @@ class ContextMixin:
             timing.check_io_deadline("decision book")
             path = getattr(self._adapter("decisions"), "_path", None)
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
-        superseded = {item["key"]: self._superseders(item["key"])}
-        if superseded[item["key"]]:
-            raise Refused("bad_state", f"{item['key']} superseded by "
-                          + ", ".join(superseded[item["key"]])
-                          + " (cancel the superseding item, or drop its supersedes link while it is open)")
+        superseded = {item["key"]: self._refuse_superseded(item["key"])}
         ctx = self._task_context(item, index, inputs={
             "graph": _graph(index), "book": shared["book"], "clock": shared["clock"],
             "superseded": superseded}, git=False)

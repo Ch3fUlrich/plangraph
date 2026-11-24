@@ -145,6 +145,17 @@ class MetricsMixin:
         self._audit(principal, "governor_override", None, True, "", msg, now)
         return {"logged": True}
 
+    def _count_metrics(self, counts):
+        """Add *counts* to today's counters (the near-copy and category experiments)."""
+        now = self.now()
+        with self._write():
+            for name, n in counts.items():
+                self.conn.execute(
+                    "INSERT INTO metrics(day,metric,value,source,computed_at) VALUES(?,?,?,?,?)"
+                    " ON CONFLICT(day,metric) DO UPDATE SET value=metrics.value+excluded.value,"
+                    "computed_at=excluded.computed_at",
+                    (self._iso(now)[:10], name, float(n), "count", self._iso(now)))
+
     # ------------------------------------------------ ITEM-CATEGORY-RANKED
     def _category_list(self, project):
         """Ranked category names of *project* (its own list, else the default ``*`` list)."""

@@ -328,7 +328,9 @@ class ReadMixin:
                 if since is not None and now - since.timestamp() > self.review_overdue_s:
                     review_overdue.append(item["key"])
         findings, refusals, history = self._alert_rows(now, scope)
-        forced = sum(1 for f in findings if f["code"] == "force_stale_claim")
+        forced = self.conn.execute(      # every audited claim of the window, closed items included
+            "SELECT COUNT(*) FROM alert_log WHERE action='force_stale_claim' AND ts>=?",
+            (self._iso(now - self.alert_window_s),)).fetchone()[0]
         return {"force_stale_claims": forced,
                 "lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
                 "review_overdue": sorted(review_overdue),

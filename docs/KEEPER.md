@@ -137,11 +137,12 @@ token overlap of title (60%) and description (40%), files when both name them, t
 copy with the matching keys until each is answered `similar={KEY: supersedes|depends_on|distinct}`; the answer is stored in the
 `item_created` event. A legacy import only warns.
 
-**Premise precision (KEEPER-STALE-PREMISE-PRECISION).** The premise gate ignores a newer decision that is the item's own `source`, whose
-row orders, GOes or defines the item without a scope word, or whose `(HH:MMZ` stamp lies within 2 h after the define (id within 150 of the
-counter then; the log has no class column or session, so the rows are read by text). `reconfirm KEY D-NNN` records, as an audited
-`item_defined` event with no field change, that the premise was read against that decision: it clears `newer_decisions` and retired premises
-up to it. `alerts` reports `force_stale_claims` in the alert window.
+**Premise precision (KEEPER-STALE-PREMISE-PRECISION).** The premise gate ignores a newer decision that is the item's own `source` or whose
+row orders, GOes or defines the item without a scope word (the log has no class column, so rows are read by text). The operator's third
+case, "logged within 2 h of the define by the same session", is not applied: the log carries neither date nor session, so a time of day
+would let a row of another day mask a later scope change. `reconfirm KEY D-NNN` records, as an audited `premise_reconfirmed` event, that
+the premise was read against that decision: it clears `newer_decisions` and retired premises up to it, not an explicit `supersedes` link
+(cancel the superseder or drop the link). `alerts` reports `force_stale_claims`, counted from the audited claims of the alert window.
 
 **Effective priority (PRIORITY-INHERIT-FROM-BLOCKED).** `views.effective_priorities` gives every non-terminal item max(own, effective of each
 non-terminal item that depends on it), transitively (a cycle is reported, its back edge ignored); the stored priority never changes and

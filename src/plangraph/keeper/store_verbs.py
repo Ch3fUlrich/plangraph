@@ -178,6 +178,7 @@ class VerbsMixin:
             self._require_project(principal, item["project"])
         if item["state"] == "claimed":
             raise Refused("conflict", f"{key} already claimed")
+        self._refuse_superseded(key)      # all roles, under the claim transaction
         train = self._claim_train_for(item) if item["state"] == "open" else False
         if train is False:
             facts = self._not_open_facts(item, self._item_neighborhood(item))
@@ -195,6 +196,7 @@ class VerbsMixin:
             payload["via"] = "worker_claim"
         if override is not None:
             payload["force_stale"] = override
+            self._alert_telemetry("force_stale_claim", key, "force_stale_claim", now)   # one audited row per claim
             self._alerts_raise_finding(key, "force_stale_claim",
                                        f"claimed past: {'; '.join(override['overrode'])[:200]}", now)
         if train is not None:

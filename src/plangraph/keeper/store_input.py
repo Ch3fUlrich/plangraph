@@ -246,30 +246,40 @@ class InputMixin:
             raise Refused("validation", f"{key}: supersedes must be a list of item keys")
         return list(value)
 
-    def _checked_ref(self, field, key, value, index, project):
+    def _checked_ref(self, field, key, value, index, project, principal=None):
         """The checked value of an edited ``supersedes`` list or ``category``."""
         return (self._checked_category(key, value, project) if field == "category"
-                else self._checked_supersedes(key, value, index, project))
+                else self._checked_supersedes(key, value, index, project, principal))
 
     def _checked_category(self, key, value, project):
         if value is not None and value not in self._category_list(project):
             raise Refused("validation", f"{key}: category must be one of {self._category_list(project)}")
         return value
 
-    def _checked_supersedes(self, key, value, index, project):
+    @staticmethod
+    def _may_link(principal, project, target, what):
+        """A link (dependency or supersession) to another project's item is the router's."""
+        if principal is not None and principal.role != "router" and not target.startswith(project + ":"):
+            raise Refused("forbidden", f"cross-project {what} needs the router")
+
+    def _checked_supersedes(self, key, value, index, project, principal=None):
         """Qualified, existing, acyclic ``supersedes`` list (edit and create)."""
         out = sorted({self._qualify(project, k) for k in self._key_list(value, key)})
         for target in out:
             if target == key:
                 raise Refused("validation", f"{key}: an item cannot supersede itself")
+            self._may_link(principal, project, target, "supersedes")
             if target not in index:
                 raise Refused("validation", f"{key}: supersedes unknown item {target}")
             if key in (index[target].get("supersedes") or []):
                 raise Refused("validation", f"{key}: {target} already supersedes it (cycle)")
         return out
 
-    @staticmethod
-    def _refuse_unanswered(key, matches, answers):
+    def _refuse_unanswered(self, key, matches, answers):
+        """Count what the near-copy experiment shows (rule 3.76), then refuse unanswered matches."""
+        if matches:
+            self._count_metrics({"similar_matches_shown": len(matches),
+                                 **{f"similar_answered.{answers[m]}": 1 for m, _ in matches if m in answers}})
         open_ = [(m, s) for m, s in matches if m not in answers]
         if open_:
             raise Refused("conflict", f"{key} looks like open item(s) "
@@ -277,7 +287,15 @@ class InputMixin:
                           + "; answer each as similar={key: supersedes|depends_on|distinct}"
                           " (supersedes, depends_on or distinct) and retry")
 
-    def _edit_similar(self, key, me, fields, items):
+    def _apply_answers(self, principal, key, project, answers, index, deps, sups):
+        """The links the answers add: ``(depends_on, supersedes)`` as sets, each authorised."""
+        for target, answer in answers.items():
+            if target in index and answer in ("depends_on", "supersedes"):
+                self._may_link(principal, project, target, answer.replace("_", " "))
+                (deps if answer == "depends_on" else sups).add(target)
+        return deps, sups
+
+    def _edit_similar(self, principal, key, me, fields, items):
         """The near-copy gate for an edit that changes title or description: the
         resulting item must not look like another open item unless each match is
         answered; the answers are applied exactly as at create."""
@@ -289,37 +307,36 @@ class InputMixin:
             fields["similar"] = answers      # recorded in the event; an edit without answers stays byte-identical
         self._refuse_unanswered(key, similar_items(me, items), answers)
         index = {item["key"]: item for item in items}
-        for field, answer in (("depends_on", "depends_on"), ("supersedes", "supersedes")):
-            added = {k for k, v in answers.items() if v == answer and k in index}
-            if added - set(me.get(field) or []):
-                me[field] = sorted(set(me.get(field) or []) | added)
-                fields[field] = (self._checked_supersedes(key, me[field], index, me["project"])
-                                 if field == "supersedes" else me[field])
+        deps, sups = self._apply_answers(principal, key, me["project"], answers, index,
+                                         set(me.get("depends_on") or []), set(me.get("supersedes") or []))
+        if sups - set(me.get("supersedes") or []):
+            me["supersedes"] = fields["supersedes"] = self._checked_supersedes(
+                key, sorted(sups), index, me["project"], principal)
+        if deps - set(me.get("depends_on") or []):
+            me["depends_on"] = fields["depends_on"] = sorted(deps)
 
-    def _answer_similar(self, defs, before, legacy):
-        """One check for every creation path: refuse a near copy of an open item
-        until each match is answered; apply the answers; return warnings."""
+    def _answer_similar(self, principal, defs, before, legacy):
+        """One check for every creation path (define, apply_ops/md-sync, plan import):
+        refuse a near copy of an open item or of a batch peer until each match is
+        answered; apply the answers; return warnings."""
         index = {item["key"]: item for item in before}
-        warnings = []
+        peers = []
         for definition in defs:
-            self._checked_category(definition["key"], definition.get("category"), definition["project"])
-            key, answers = definition["key"], definition.get("similar") or {}
-            matches = similar_items(definition, before)
-            if legacy:   # existing data must stay loadable: say, never refuse
-                warnings += [f"{key} looks like open item {m} ({s:.2f})" for m, s in matches]
-                continue
+            key, project = definition["key"], definition["project"]
+            self._checked_category(key, definition.get("category"), project)
+            answers = definition.get("similar") or {}
+            # An import keeps its own sibling items; it still answers for what is already in the keeper.
+            matches = similar_items(definition, before if legacy else before + peers)
             self._refuse_unanswered(key, matches, answers)
-            deps, sups = set(definition["depends_on"]), set(definition["supersedes"])
-            for target, answer in answers.items():
-                if answer == "depends_on" and target in index:
-                    deps.add(target)
-                if answer == "supersedes" and target in index:
-                    sups.add(target)
+            deps, sups = self._apply_answers(principal, key, project, answers,
+                                             {**index, **{d["key"]: d for d in peers}},
+                                             set(definition["depends_on"]), set(definition["supersedes"]))
             definition["depends_on"] = sorted(deps)
             definition["supersedes"] = self._checked_supersedes(
                 key, sorted(sups), {**index, **{d["key"]: d for d in defs if d is not definition}},
-                definition["project"])
-        return warnings
+                project, principal)
+            peers.append(definition)
+        return []
 
     def _check_definition_dependency_caps(self, definitions, attachments):
         if not attachments and not any(item["depends_on"] for item in definitions):

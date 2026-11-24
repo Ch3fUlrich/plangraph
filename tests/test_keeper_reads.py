@@ -215,7 +215,7 @@ def test_alerts_call_reads_only_the_alerts_table(w, monkeypatch):
     reads = [sql.lower() for sql in spy.sql if sql.upper().startswith(("SELECT ", "WITH "))]
     tables = {table for sql in reads for table in re.findall(r'\b(?:from|join) +"?(\w+)', sql)}
     # Principal authentication and item scoping still read their own tables.
-    assert tables - {"principals", "items", "edges"} == {"alerts"}, reads
+    assert tables - {"principals", "items", "edges"} == {"alerts", "alert_log"}, reads
 
 
 def test_backfill_builds_the_table_from_history_and_is_idempotent(w):
