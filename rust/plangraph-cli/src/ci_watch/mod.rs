@@ -159,6 +159,7 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
             }
             main_freeze_gh::route_or_define(&dir, task, now, keeper_define)
         },
+        |task| main_freeze_gh::route_owned(&dir, task, now),
         |key: &str, reason: &str| cancel_item(use_keeper, env, key, reason),
     )?;
     if args.iter().any(|a| a == "--main-freeze") && !dry {
@@ -206,6 +207,7 @@ fn cancel_item(
 
 /// One pass: the sweep first, so an item of an old head is cancelled before the scan files the same
 /// failing test on the moved head, then the scan.
+#[allow(clippy::too_many_arguments)]
 fn scan_and_sweep(
     gh: &mut impl Github,
     repo: &str,
@@ -213,20 +215,37 @@ fn scan_and_sweep(
     flakes: &BTreeMap<String, String>,
     dry: bool,
     define: impl FnMut(&mut Task) -> Result<bool>,
+    owner: impl FnMut(&mut Task) -> Result<bool>,
     cancel: impl FnMut(&str, &str) -> Result<()>,
 ) -> Result<Vec<String>> {
     let mut rows = sweep::sweep(gh, dir, dry, cancel)?;
-    rows.extend(scan(gh, repo, dir, flakes, dry, define)?);
+    rows.extend(scan_with_owner(gh, repo, dir, flakes, dry, define, owner)?);
     Ok(rows)
 }
 
+/// The scan of a repository without landing trains' owner delivery.
+#[cfg(test)]
 fn scan(
     gh: &mut impl Github,
     repo: &str,
     dir: &Path,
     flakes: &BTreeMap<String, String>,
     dry: bool,
+    define: impl FnMut(&mut Task) -> Result<bool>,
+) -> Result<Vec<String>> {
+    scan_with_owner(gh, repo, dir, flakes, dry, define, |_| Ok(false))
+}
+
+/// `owner` hears the failures of landing trains (true when a recorded batch took it); `define` files
+/// the fix items of every other live pull request and of main.
+fn scan_with_owner(
+    gh: &mut impl Github,
+    repo: &str,
+    dir: &Path,
+    flakes: &BTreeMap<String, String>,
+    dry: bool,
     mut define: impl FnMut(&mut Task) -> Result<bool>,
+    mut owner: impl FnMut(&mut Task) -> Result<bool>,
 ) -> Result<Vec<String>> {
     // Dry runs do not create even a lock file or directory.
     let _lock = if dry {
@@ -241,12 +260,14 @@ fn scan(
     let prs = gh.pages("pulls?state=open&per_page=100", None)?;
     let mut heads = BTreeMap::new();
     for pr in prs {
-        // A draft, a CI probe and a landing train belong to their own writer, never to a fix lane.
-        if sweep::not_a_fix_lane_pr(&pr) {
+        // A draft and a CI probe belong to their own writer; a landing train reaches only its recorded
+        // owner. Neither gets a fix lane.
+        let lane = sweep::lane(&pr);
+        if lane == sweep::Lane::None {
             continue;
         }
         let sha = text(&pr["head"], "sha")?.to_owned();
-        heads.insert(sha, number(&pr, "number")?);
+        heads.insert(sha, (number(&pr, "number")?, lane == sweep::Lane::Owner));
     }
     let workflow = "actions/workflows/tests.yml/runs?status=completed&per_page=100";
     // Only the newest completed run per head/event is used and GitHub lists
@@ -261,7 +282,10 @@ fn scan(
     let mut output = Vec::new();
     for run in runs {
         let sha = text(&run, "head_sha")?;
-        let pr = heads.get(sha).copied();
+        let (pr, owner_only) = match heads.get(sha) {
+            Some((pr, owner_only)) => (Some(*pr), *owner_only),
+            None => (None, false),
+        };
         let event = text(&run, "event")?;
         let head = if let Some(pr) = pr {
             format!("pr-{pr}")
@@ -373,10 +397,47 @@ fn scan(
             }
             let digest = Sha256::digest(format!("{repo}\0{head}\0{test}").as_bytes());
             let key = format!("plangraph:CI-FIX-{digest:x}");
+            if owner_only {
+                let mut task = Task {
+                    key: key.clone(),
+                    head: head.clone(),
+                    pr,
+                    run_id,
+                    job,
+                    test,
+                    excerpt,
+                    priority: 10,
+                    keeper_defined: false,
+                    keeper_key: None,
+                    sha: Some(sha.to_owned()),
+                };
+                if dry {
+                    output.push(format!("would route train failure: {key}"));
+                } else {
+                    match owner(&mut task) {
+                        Ok(true) => {
+                            output.push(format!("routed train failure to its batch: {key}"))
+                        }
+                        Ok(false) => {
+                            output.push(format!("train failure has no recorded batch: {key}"))
+                        }
+                        Err(error) => output.push(format!(
+                            "keeper delivery pending: {key}: {}",
+                            logs::scrub(&error)
+                        )),
+                    }
+                }
+                continue;
+            }
             // The sweep could not cancel the item of an older head (keeper down): keep that row, and
-            // its keeper lane, for the next pass instead of reusing the lane for the new head.
+            // its keeper lane, for the next pass instead of reusing the lane for the new head. A row
+            // that never stored its head counts as moved when it was filed by another run.
             if let Some(old) = tasks.get(&key) {
-                if !dry && pr.is_some() && old.sha.as_deref().is_some_and(|then| then != sha) {
+                let moved = match &old.sha {
+                    Some(then) => then != sha,
+                    None => old.run_id != run_id,
+                };
+                if !dry && pr.is_some() && moved {
                     output.push(format!("cancel pending: {key}"));
                     continue;
                 }

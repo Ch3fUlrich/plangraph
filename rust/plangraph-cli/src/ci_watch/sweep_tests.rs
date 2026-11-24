@@ -1,4 +1,5 @@
 use super::github::Github;
+use super::main_freeze_gh::{load_failures, route_owned};
 use super::sweep::{not_a_fix_lane_pr, sweep};
 use super::{cancel_item, load_tasks, save_tasks, scan, scan_and_sweep, Result, Task};
 use serde_json::{json, Value};
@@ -207,6 +208,7 @@ fn pass(
             task.keeper_key = Some(format!("lane-{}", task.run_id));
             Ok(true)
         },
+        |_| Ok(false),
         |key, _| {
             if keeper_up {
                 cancelled.push(key.to_owned());
@@ -402,4 +404,160 @@ fn without_the_keeper_a_cancel_fails_so_the_row_is_kept() {
         "{rows:?}"
     );
     assert_eq!(tasks(temp.path()).len(), 1);
+}
+
+fn train(number: u64, sha: &str) -> Value {
+    pr(number, sha, "Landing train 33", false, "land/train-33")
+}
+
+/// A landing train's failure reaches the writer recorded for it, and files no fix item.
+#[test]
+fn a_failing_landing_train_goes_to_its_recorded_batch_and_files_no_fix_item() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("owners.json"),
+        json!({"prs": {"7": "batch-a"}, "writers": {}}).to_string(),
+    )
+    .unwrap();
+    let mut defined = 0;
+    let rows = scan_and_sweep(
+        &mut World {
+            prs: vec![train(7, "t7"), train(8, "t8"), live(5, "s5")],
+        },
+        "o/r",
+        temp.path(),
+        &BTreeMap::new(),
+        false,
+        |_| {
+            defined += 1;
+            Ok(true)
+        },
+        |task| route_owned(temp.path(), task, 100),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    // Only the live pull request files a fix item; train 7 is recorded for its batch, train 8 has none.
+    assert_eq!(defined, 1, "{rows:?}");
+    assert_eq!(tasks(temp.path()).len(), 1);
+    assert_eq!(tasks(temp.path())[0].pr, Some(5));
+    let records = load_failures(temp.path()).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!((records[0].pr, records[0].batch.as_str()), (7, "batch-a"));
+    assert!(
+        rows.iter().any(|r| r.starts_with("routed train failure")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r.starts_with("train failure has no recorded batch")),
+        "{rows:?}"
+    );
+    // A second pass records nothing new and still files nothing for the trains.
+    scan_and_sweep(
+        &mut World {
+            prs: vec![train(7, "t7"), train(8, "t8"), live(5, "s5")],
+        },
+        "o/r",
+        temp.path(),
+        &BTreeMap::new(),
+        false,
+        |_| Ok(true),
+        |task| route_owned(temp.path(), task, 200),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(load_failures(temp.path()).unwrap().len(), 1);
+    assert_eq!(tasks(temp.path()).len(), 1);
+}
+
+#[test]
+fn a_pending_cancel_of_a_row_without_a_stored_head_is_not_overwritten_by_the_new_head() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut cancelled = Vec::new();
+    pass(
+        &mut World {
+            prs: vec![live(5, "s5")],
+        },
+        temp.path(),
+        &mut cancelled,
+        true,
+    );
+    // The row as the format before the stored head wrote it.
+    let path = temp.path().join("tasks.jsonl");
+    let mut all = load_tasks(&path).unwrap();
+    for task in all.values_mut() {
+        task.sha = None;
+    }
+    save_tasks(&path, &all).unwrap();
+    let old_run = tasks(temp.path())[0].run_id;
+    // GitHub cannot name the old run's head and the keeper is down: the row must stay as it is.
+    let rows = pass(
+        &mut World {
+            prs: vec![live(5, "s5-new")],
+        },
+        temp.path(),
+        &mut cancelled,
+        false,
+    );
+    assert!(
+        rows.iter().any(|r| r.starts_with("cancel pending")),
+        "{rows:?}"
+    );
+    let kept = tasks(temp.path());
+    assert_eq!((kept.len(), kept[0].run_id), (1, old_run));
+    assert_eq!(
+        kept[0].keeper_key.as_deref(),
+        Some(&*format!("lane-{old_run}"))
+    );
+}
+
+#[test]
+fn an_item_whose_create_reply_was_lost_is_cancelled_under_every_key_before_its_row_goes() {
+    let temp = tempfile::tempdir().unwrap();
+    // The keeper create succeeded but its reply was lost: the row is not defined and has no key.
+    scan(
+        &mut World {
+            prs: vec![live(5, "s5")],
+        },
+        "o/r",
+        temp.path(),
+        &BTreeMap::new(),
+        false,
+        |_| Err("reply lost".into()),
+    )
+    .unwrap();
+    let row = tasks(temp.path()).remove(0);
+    assert!(!row.keeper_defined && row.keeper_key.is_none());
+    let mut asked = Vec::new();
+    let rows = sweep(&mut World { prs: vec![] }, temp.path(), false, |key, _| {
+        asked.push(key.to_owned());
+        // The successor lane is the one that exists and the keeper refuses it.
+        if key.contains("-R") {
+            Err("keeper down".into())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        asked,
+        [row.key.clone(), format!("{}-R{}", row.key, row.run_id)]
+    );
+    assert!(
+        rows.iter().any(|r| r.starts_with("cancel pending")),
+        "{rows:?}"
+    );
+    assert_eq!(
+        tasks(temp.path()).len(),
+        1,
+        "row kept until every key is closed"
+    );
+    sweep(
+        &mut World { prs: vec![] },
+        temp.path(),
+        false,
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    assert!(tasks(temp.path()).is_empty());
 }
