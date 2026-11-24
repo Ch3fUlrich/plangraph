@@ -134,7 +134,7 @@ record a supplementary review with a full `HEAD` and final `VERDICT`.
 head, status and conclusion; repeat push after CI completes. A push without an ID
 refreshes an existing run only on the same head; a new head clears it.
 `go-req --name NAME` prints one batch GO-REQ with PR, full head, diff stat, part
-reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
+reviews, CI, the deploy blocks and the final PLAN block. The deploy blocks come from `plangraph land-train deploy-plan` over the batch parts with the host install dry run (`host-sync --install-dry-run`): `deploy: unit@host` for passing targets, then `READY unit@host` or `NOT READY unit@host ... blocker KEY (MISSING ...)` per family and host, with the blocker items filed by `pg define --file` ([landing train](docs/landing-train.md#deploy-table-and-computed-go)); with no `~/.config/plangraph/hosts.json` it prints `deploy: unchecked`. It refuses absent/stale ACCEPT evidence,
 non-green or missing CI, and workflow edits whose touching commits lack a
 `Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution (a main-into-lane merge that resolves a workflow conflict carries the trailer in its own message: the commit gate refuses it at push and in CI, and `build` refuses a PR head with such a merge before it builds). The batch key appears in both GO-KEYS and the landing merge trailers; part Plan-Items do not
 stand in for the batch's PLAN key. The PR body, GO request, Keeper preparation, and single-PR part count use the parts still active at the pinned train head. `tools/merge_batch.py land` always passes a merge commit `--subject` ending with `(#N)` for the batch PR and refuses a custom `--subject` without `(#N)`. When the keeper schema advances, copy the
