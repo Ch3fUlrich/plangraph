@@ -234,6 +234,6 @@ repeatable-read, read-only transaction and a single timestamp. The optional
 window applies to event counts. Readiness and fanout use the full graph.
 
 The PostgreSQL fixture runs with
-`cargo test -p pg-telemetry --features postgres-tests` from `rust`.
+`cargo test -p pg-telemetry -- --ignored` from `rust`; a plain `cargo test` compiles it and skips it.
 Set `PG_TELEMETRY_TEST_DSN` to a disposable PostgreSQL database for fixture
 setup. The fixture switches to a restricted reader to run the report.

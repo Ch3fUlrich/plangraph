@@ -1,5 +1,3 @@
-#![cfg(feature = "postgres-tests")]
-
 use postgres::{Client, NoTls};
 use serde_json::json;
 use std::io::Write;
@@ -28,6 +26,7 @@ fn keeper_ready(fixture: &mut Client) -> serde_json::Value {
 }
 
 #[test]
+#[ignore = "requires PG_TELEMETRY_TEST_DSN"]
 fn keeper_queries_share_the_full_graph_and_report_unknown_idle() {
     let dsn = std::env::var("PG_TELEMETRY_TEST_DSN").expect("PG_TELEMETRY_TEST_DSN is required");
     let mut fixture = Client::connect(&dsn, NoTls).unwrap();

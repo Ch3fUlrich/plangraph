@@ -7,6 +7,3 @@ edition = "2021"
 chrono = "0.4"
 postgres = "0.19"
 serde_json = "1"
-
-[features]
-postgres-tests = []
