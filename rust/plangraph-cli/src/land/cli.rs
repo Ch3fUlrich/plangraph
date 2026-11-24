@@ -189,10 +189,10 @@ pub(super) fn run_inner(
         return Ok(vec![format!("pushed {branch}")]);
     }
     if cmd == "deploy-plan" {
-        return super::deploy::run_cli(&flags);
+        return super::deploy::run_cli(&flags, python);
     }
     if cmd == "keeper-schema" {
-        return super::keeper_schema::run_cli(&flags);
+        return super::keeper_schema::run_cli(&flags, python);
     }
     if cmd == "go-verify" {
         return super::go_verify::run_cli(&flags);

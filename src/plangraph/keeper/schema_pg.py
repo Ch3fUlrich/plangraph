@@ -18,6 +18,7 @@ shipped.  ``db_pg.migrate`` applies the pending ones under an advisory lock.
 """
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 
@@ -388,6 +389,27 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(27, "definition design reference",
                         'ALTER TABLE items ADD COLUMN IF NOT EXISTS design_ref TEXT COLLATE "C";'))
 LATEST = MIGRATIONS[-1].version
+
+
+def registry_version(source):
+    """The latest version of the top-level ``MIGRATIONS`` registry in *source* (the text of this file at some
+    revision), read by AST and never executed. One reader for the batch land gate and the Rust train gate
+    (``plangraph land-train keeper-schema``). ``ValueError`` when the registry is missing, repeated,
+    not a sequence of ``Migration(N, ...)`` calls numbered 1..n, or the source does not parse."""
+    try:
+        registry, = [node.value for node in ast.parse(source).body if isinstance(node, ast.Assign)
+                     and any(isinstance(target, ast.Name) and target.id == "MIGRATIONS"
+                             for target in node.targets)]
+        versions = [entry.args[0].value for entry in registry.elts
+                    if isinstance(entry, ast.Call) and isinstance(entry.func, ast.Name)
+                    and entry.func.id == "Migration"]
+        if (not versions or len(versions) != len(registry.elts)
+                or any(type(version) is not int for version in versions)
+                or versions != list(range(1, len(versions) + 1))):
+            raise ValueError("migration versions must be consecutive from 1")
+        return versions[-1]
+    except (SyntaxError, AttributeError, IndexError, ValueError) as exc:
+        raise ValueError(f"the MIGRATIONS registry is unreadable: {exc}") from None
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
 _COLUMN = re.compile(r'^    "?(\w+)"?\s+\S')

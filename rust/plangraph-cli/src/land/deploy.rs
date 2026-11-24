@@ -236,8 +236,12 @@ fn hosts_of(
 /// The keeper schema version the whole train raises to: the manifest base against the final train commit,
 /// so a part branched from an older main never reads as a regression and a migration brought in by an
 /// adopted resolution is not missed.
-pub fn train_migration(repo: &Path, manifest: &Manifest) -> Result<Option<u32>, String> {
-    super::keeper_schema::rise(repo, &manifest.base, &manifest.train_sha)
+pub fn train_migration(
+    repo: &Path,
+    manifest: &Manifest,
+    python: &dyn Fn() -> std::process::Command,
+) -> Result<Option<u32>, String> {
+    super::keeper_schema::rise(repo, &manifest.base, &manifest.train_sha, python)
 }
 
 /// The plan: probe each (family, host) of each part that ships one. Unitless parts contribute nothing.
@@ -318,7 +322,10 @@ pub fn deploy_plan(
 /// `land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd "CMD ARGS"
 /// [--declared FILE] [--blockers-out FILE]`: the deploy table of a built train. `--declared` is a JSON
 /// object of item key -> hosts from the items' `Deploy-Hosts:` lines.
-pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
+pub(super) fn run_cli(
+    flags: &BTreeMap<String, String>,
+    python: &dyn Fn() -> std::process::Command,
+) -> Result<Vec<String>, String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
     let read = |p: &str| std::fs::read(p).map_err(|e| format!("{p}: {e}"));
     let manifest: Manifest =
@@ -340,7 +347,7 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
     };
     let parts = derive(Path::new(need("repo")?), &manifest)?;
     let mut plan = deploy_plan(&parts, &declared, &authorized, &probe);
-    plan.keeper_migration = train_migration(Path::new(need("repo")?), &manifest)?;
+    plan.keeper_migration = train_migration(Path::new(need("repo")?), &manifest, python)?;
     if let Some(out) = flags.get("blockers-out") {
         let text = serde_json::to_vec_pretty(&plan.blocker_items()).map_err(|e| e.to_string())?;
         std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;

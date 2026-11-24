@@ -2,6 +2,7 @@ use super::build::{build, BuildInput};
 use super::build_tests::{g, part, Fx};
 use super::deploy::*;
 use super::deploy_probe::parse_findings;
+use super::keeper_schema_tests::python;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One commit on a new branch from main: writes `files`, with `message`; returns the head.
@@ -250,7 +251,7 @@ fn a_part_branched_before_main_raised_the_schema_is_not_a_regression_of_the_trai
     let two = commit(&fx, &[(SCHEMA, &registry(2))], "s2");
     move_main(&fx, &two);
     let manifest = built(&fx, &[&docs]);
-    assert_eq!(train_migration(fx.path(), &manifest), Ok(None));
+    assert_eq!(train_migration(fx.path(), &manifest, &python), Ok(None));
     let plan = deploy_plan(
         &derive(fx.path(), &manifest).unwrap(),
         &BTreeMap::new(),
@@ -271,7 +272,7 @@ fn deploy_plan_line(fx: &Fx, manifest: &super::train::Manifest) -> String {
         ("authorized-hosts".to_string(), "alpha".to_string()),
         ("probe-cmd".to_string(), "true".to_string()),
     ]);
-    run_cli(&flags).unwrap().remove(0)
+    run_cli(&flags, &python).unwrap().remove(0)
 }
 
 #[test]
@@ -319,5 +320,5 @@ fn a_migration_that_only_the_final_train_commit_carries_is_found() {
     g(fx.path(), &["add", "-A"]);
     g(fx.path(), &["commit", "-q", "-m", "resolve"]);
     manifest.train_sha = g(fx.path(), &["rev-parse", "HEAD"]);
-    assert_eq!(train_migration(fx.path(), &manifest), Ok(Some(3)));
+    assert_eq!(train_migration(fx.path(), &manifest, &python), Ok(Some(3)));
 }

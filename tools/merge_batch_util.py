@@ -1,7 +1,6 @@
 """Plumbing for tools/merge_batch.py: git/gh subprocess wrappers, batch state files, PR records."""
 from __future__ import annotations
 
-import ast
 import json
 import os
 import re
@@ -186,20 +185,10 @@ def keeper_migration(st):
     def latest(rev):
         if not git("ls-tree", rev, "--", path, cwd=cwd).stdout:
             return 0
+        from plangraph.keeper.schema_pg import registry_version
         try:
-            tree = ast.parse(git("show", f"{rev}:{path}", cwd=cwd).stdout)
-            registry, = [node.value for node in tree.body if isinstance(node, ast.Assign)
-                         and any(isinstance(target, ast.Name) and target.id == "MIGRATIONS"
-                                 for target in node.targets)]
-            versions = [entry.args[0].value for entry in registry.elts
-                        if isinstance(entry, ast.Call) and isinstance(entry.func, ast.Name)
-                        and entry.func.id == "Migration"]
-            if (not versions or len(versions) != len(registry.elts)
-                    or any(type(version) is not int for version in versions)
-                    or versions != list(range(1, len(versions) + 1))):
-                raise ValueError("migration versions must be consecutive from 1")
-            return versions[-1]
-        except (SyntaxError, AttributeError, IndexError, ValueError) as exc:
+            return registry_version(git("show", f"{rev}:{path}", cwd=cwd).stdout)
+        except ValueError as exc:
             raise MergeBatchError(f"keeper migration version is unreadable at {rev}: {exc}") from None
 
     previous, current = latest(base), latest(head)

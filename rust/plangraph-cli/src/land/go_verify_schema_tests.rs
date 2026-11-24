@@ -90,7 +90,7 @@ fn collected_schema_evidence_accepts_or_refuses_the_exact_go_row_by_its_migratio
             ("pr".to_string(), "9".to_string()),
             ("slug".to_string(), "owner/name".to_string()),
         ]);
-        super::keeper_schema::run_cli(&flags)
+        super::keeper_schema::run_cli(&flags, &super::keeper_schema_tests::python)
     };
     let verdict = |statement: &str| {
         let line = collect(statement)?.remove(0);
