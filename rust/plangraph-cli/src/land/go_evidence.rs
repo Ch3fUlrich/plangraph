@@ -49,7 +49,7 @@ pub fn manifest_digest(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-pub(in crate::land) use rows_source::read_decisions_origin;
+pub(in crate::land) use rows_source::{read_decisions_origin, rows as rows_of};
 
 pub struct Inputs<'a> {
     pub repo: &'a str,

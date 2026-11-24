@@ -141,6 +141,15 @@ fn write(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// One read of a file: the value parsed from the bytes, and those same bytes.
+pub(super) fn read_with_bytes<T: serde::de::DeserializeOwned>(
+    path: &str,
+) -> Result<(T, Vec<u8>), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let value = serde_json::from_slice(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    Ok((value, bytes))
+}
+
 fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
     serde_json::from_slice(&std::fs::read(path).map_err(|e| format!("{path}: {e}"))?)
         .map_err(|e| format!("{path}: {e}"))
@@ -160,14 +169,14 @@ fn prove(
     flags: &std::collections::BTreeMap<String, String>,
     parts: &[PartIn],
     protected: &[String],
-) -> Result<(Manifest, super::delta::Delta), String> {
+) -> Result<(Manifest, Vec<u8>, super::delta::Delta), String> {
     let need = |k: &str| {
         flags
             .get(k)
             .cloned()
             .ok_or_else(|| format!("{USAGE}\nmissing --{k}"))
     };
-    let manifest: Manifest = read(&need("manifest")?)?;
+    let (manifest, manifest_bytes): (Manifest, Vec<u8>) = read_with_bytes(&need("manifest")?)?;
     let repo = PathBuf::from(need("repo")?);
     let open: BuildOpen = read(&need("open")?)?;
     let freeze: Freeze = read(&need("freeze")?)?;
@@ -185,7 +194,7 @@ fn prove(
     }
     let delta = build::verify_manifest_with(&repo, &manifest, parts, &adopted, protected)?;
     build::verify_result(&repo, &manifest.base, &result, Some(&manifest))?;
-    Ok((manifest, delta))
+    Ok((manifest, manifest_bytes, delta))
 }
 
 pub fn run(home: &Path, args: &[String]) -> i32 {
@@ -304,15 +313,21 @@ pub(super) fn run_inner(
             )
         }
         "verify" | "review" | "admit" | "go-evidence" => {
-            let (manifest, delta) = prove(&flags, &parts, &protected)?;
+            let (manifest, manifest_bytes, delta) = prove(&flags, &parts, &protected)?;
             let repo = PathBuf::from(need("repo")?);
             if cmd == "go-evidence" {
                 // The admit proof is re-run here, so the evidence rests on it and not on a file a caller wrote.
                 let packet = super::delta::ReviewPacket::new(&delta, &repo, &manifest, python)?;
                 let run_id = need("review-run")?;
                 packet.require_review(&keeper_config(home), &need("item")?, &run_id, python)?;
-                let bytes = std::fs::read(need("manifest")?).map_err(|e| e.to_string())?;
-                return super::go_evidence::run_cli(home, &flags, &manifest, &bytes, &run_id);
+                // The bytes the proof parsed are the bytes the evidence is bound to.
+                return super::go_evidence::run_cli(
+                    home,
+                    &flags,
+                    &manifest,
+                    &manifest_bytes,
+                    &run_id,
+                );
             }
             let mut lines = vec![format!(
                 "train {} matches its manifest, result and freeze",
