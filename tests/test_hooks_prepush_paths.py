@@ -113,16 +113,15 @@ def manifest(tmp_path, heads):
     return {"PLANGRAPH_TRAIN_MANIFEST": str(path)}
 
 
-def test_a_lane_push_runs_preflight_in_lane_mode_and_no_tests(repo, tmp_path):
+def test_a_lane_push_runs_no_preflight_and_no_tests(repo, tmp_path):
+    """A lane/* ref is scrub, commit gate and stamp only (WRITER-PUSHES-EACH-ITEM-COMMIT); preflight is for trains."""
     r, base = repo
     env = install_preflight(r, tmp_path / "argv")
     # a failing unit test in the pushed tree: the lane hook does not run it
     head = commit_file(r, "tests/test_broken.py", "def test_broken():\n    assert False\n")
-    res = run_hook(r, [push_line("lane/x", head, base)], env)
+    res = run_hook(r, [push_line("lane/x", head, base)], {**env, "PG_LANE_PUSH_UNSTAMPED": "1"})
     assert res.returncode == 0, res.stdout + res.stderr
-    argv = json.loads((tmp_path / "argv").read_text())
-    assert "--lane" in argv
-    assert "--fast" not in argv or "--lane" in argv
+    assert not (tmp_path / "argv").exists(), "preflight ran for a lane push"
 
 
 @pytest.mark.usefixtures("train_validator_on_path")
@@ -227,7 +226,8 @@ def test_scrub_still_refuses_on_both_paths(repo, tmp_path, ref):
         "p\n\nPlan-Item: plangraph:TEST\nWriter: codex/test")
     head = git(r, "rev-parse", "HEAD").strip()
     res = run_hook(r, [push_line(ref, head, "0" * 40)],
-                   {"TEST_PREFLIGHT_MARKER": str(tmp_path / "argv"), "PLANGRAPH_TRAIN_MANIFEST": str(_one(tmp_path, part))})
+                   {"TEST_PREFLIGHT_MARKER": str(tmp_path / "argv"), "PLANGRAPH_TRAIN_MANIFEST": str(_one(tmp_path, part)),
+                    "PG_LANE_PUSH_UNSTAMPED": "1"})
     assert res.returncode == 1
     assert "app/net.py:1: ipv4" in res.stdout + res.stderr
     assert not (tmp_path / "argv").exists()
@@ -257,7 +257,8 @@ def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
         "merge the part")
     head = git(r, "rev-parse", "HEAD").strip()
     res = run_hook(r, [push_line(ref, head, "0" * 40)],
-                   {"TEST_PREFLIGHT_MARKER": str(tmp_path / "argv"), "PLANGRAPH_TRAIN_MANIFEST": str(_one(tmp_path, part))})
+                   {"TEST_PREFLIGHT_MARKER": str(tmp_path / "argv"), "PLANGRAPH_TRAIN_MANIFEST": str(_one(tmp_path, part)),
+                    "PG_LANE_PUSH_UNSTAMPED": "1"})
     assert res.returncode == 1, res.stdout + res.stderr
     assert "missing Writer trailer" in res.stdout + res.stderr
     assert "outside its manifest" not in res.stderr and "out of manifest order" not in res.stderr
@@ -267,13 +268,17 @@ def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
 @pytest.mark.parametrize("ref,lane", [("refs/heads/lane/x", True), ("refs/heads/main", False), ("refs/tags/v9", False)])
 @pytest.mark.usefixtures("train_validator_on_path")
 def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, lane):
+    """A lane ref skips preflight altogether; main and tags run it without --lane."""
     r, base = repo
-    env = install_preflight(r, tmp_path / "argv")
+    env = {**install_preflight(r, tmp_path / "argv"), "PG_LANE_PUSH_UNSTAMPED": "1"}
     head = commit_file(r, "app/other.py", "y = 2\n")
     line = f"{ref} {head} {ref} {base}" if ref != "refs/tags/v9" else f"{ref} {head} {ref} {'0' * 40}"
     res = run_hook(r, [line], env)
     assert res.returncode == 0, res.stdout + res.stderr
-    assert ("--lane" in json.loads((tmp_path / "argv").read_text())) is lane
+    if lane:
+        assert not (tmp_path / "argv").exists()
+    else:
+        assert "--lane" not in json.loads((tmp_path / "argv").read_text())
 
 
 @pytest.mark.parametrize("extra", [None, "unrelated", "no-harness", "drop-no-harness", "foreign-parent"])
