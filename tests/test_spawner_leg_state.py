@@ -516,3 +516,8 @@ def test_failed_agy_reprobe_preserves_a_recent_429_without_reset(store):
     store.record_provider_response(model, 429, 'quota', {}, 'fixture', now=100)
     store.record_probe_fail(model, 'review probe failed', 'review-probe', now=101)
     assert store.leg_status(model, now=102)['state'] == 'limited'
+
+
+def test_review_route_offers_the_gateway_deepseek_leg_after_mimo_pro():
+    from plangraph.planner.legs import REVIEW_ORDER
+    assert REVIEW_ORDER.index('omniroute-deepseek-flash') == REVIEW_ORDER.index('mimo-v2.6-pro') + 1

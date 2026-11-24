@@ -108,7 +108,7 @@ def test_spawner_review_routes_hydrogen_in_retired_flash_position(tmp_path, monk
     ids = [leg.id for leg in plan.legs]
     # D-6652 puts the two required OpenCode seats first, then Hydrogen, and retains Codex for writers of another family.
     ordered = ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-hydrogen-high',
-               'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free', 'agy-gemini-4-neon-medium']
+               'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'omniroute-deepseek-flash', 'opencode-deepseek-v4.1-flash-free', 'agy-gemini-4-neon-medium']
     expected = [id for id in ordered if writer != 'gpt' or id != 'gpt-6.2-sol-medium'][:5]
     assert ids[:5] == expected
     from plangraph.planner.legs import spawnable_legs

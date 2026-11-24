@@ -18,9 +18,10 @@ def _needs_fallback(status):
 
 @lru_cache(maxsize=1)
 def default_reader():
-    from .leg_state import LegAdapter, _default_store
+    from .leg_state import LegAdapter, _default_store, tcp_gateway_probe
     from .quota_snapshots import CACHE_S, QuotaGate, from_env
-    reader = LegAdapter(_default_store(), from_env(), enabled=enabled())
+    reader = LegAdapter(_default_store(), from_env(), enabled=enabled(),
+                       gateway_probe=tcp_gateway_probe)
     # A local snapshot can change between routing and launch. Cache only the remote API.
     original, gate = reader.leg_status, QuotaGate(ttl_s=0 if os.environ.get('QUOTA_SNAPSHOT_DB') else CACHE_S)
     def status(model, **scope):
