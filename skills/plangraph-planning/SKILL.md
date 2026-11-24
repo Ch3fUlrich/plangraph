@@ -200,11 +200,11 @@ ops:
 1. Optional: detail researchers for facts the plan lacks, using the research rules above.
 2. Refine task contracts against section 3; keep each card in sync with its contract.
 3. Design review before every writer launch. Spawn it with `--role research`, read-only in a
-   checkout, on a tools-capable leg that the route lists for the research role and whose family
-   differs from the family that wrote the spec. The research route applies no family
-   exclusion (`--exclude-family` reaches review routing only): read the family of the leg
-   `route --role research` returns and, when it is the spec author's, pin another
-   research-capable leg with `--leg` and an override reason. It is not a `--role review` run,
+   checkout, and pin the leg on every launch with `--leg` and an override reason: a
+   tools-capable leg that the route lists for the research role and whose family differs from
+   the family that wrote the spec. Do not rely on the route's order: the research route
+   applies no family exclusion (`--exclude-family` reaches review routing only), so even when
+   its first leg qualifies a spawn can fall through to a leg of the author's family. It is not a `--role review` run,
    whose verdict parser accepts only ACCEPT and REQUEST_CHANGES. When no such leg serves, the
    launch waits and the orchestrator reports it; no other role or family stands in. The
    answer starts with `VERDICT: DESIGN-OK` or `VERDICT: DESIGN-CHANGE`,

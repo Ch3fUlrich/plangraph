@@ -129,12 +129,16 @@ resume message of a native run).
    refute it with a named test that shows it does not hold: an existing test when one already
    shows it, a new committed test only where coverage is missing. When every finding is
    refuted by existing tests and nothing is to commit, write `REFUTED <finding> <test>` per
-   finding and `BLOCKED refutation-only` to STATUS_FILE and end. A script-driven lane has
-   the same head reviewed again with that evidence. A native run knows no review of an
-   unchanged head: its driver resumes you, you answer each resume with the same lines and no
-   edit, the run ends as `no_commit`, and the orchestrator starts the review of that head
-   by hand from your status lines. A line tagged NEW-REQ or PROCESS is not yours to fix
-   unless the findings say so.
+   finding to STATUS_FILE. When REVIEW_CMD is yours to run, run it once more on the unchanged
+   head with `REVIEW_PREV=<the previous review file>` and your `refuted:` lines in the review
+   notes (the driver script alone reads the existing verdict and stops without a new
+   review). When the driver owns the review, write `BLOCKED refutation-only` and end: the
+   orchestrator starts the review of that head from your lines. A native run knows no review
+   of an unchanged head: its driver resumes you, you answer each resume with the same lines
+   and no edit, the run ends as `no_commit`, and the orchestrator starts the review of that
+   head by hand from your status lines. A finding that names the orchestrator as the supplier
+   of missing evidence gets `BLOCKED evidence <finding>: orchestrator` and no commit; fix the
+   others. A line tagged NEW-REQ or PROCESS is not yours to fix unless the findings say so.
 3. For every finding search its class once through your whole diff (the same defect in a
    sibling function, a second path, another test) and fix what you find; write one line
    `CLASS <finding> | <class> | searched: <files and symbols> | <n more fixed or none>`.

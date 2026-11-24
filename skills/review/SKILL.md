@@ -66,7 +66,8 @@ does not affect the verdict. Do not pad: **no findings is a valid result.**
   the done criteria. Own line; the orchestrator's; never counts against the head.
 - Never accept what you could not judge (an ACCEPT lets the driver push the head): report
   `MED <where> - cannot judge <criterion>: missing <evidence>, to be supplied by
-  <writer|orchestrator>` and request changes.
+  <writer|orchestrator>` and request changes. The drivers send that round to the writer
+  too: a writer answers an orchestrator-supplied gap with a BLOCKED line, not a commit.
 
 ## Output
 
