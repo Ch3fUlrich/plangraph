@@ -43,3 +43,20 @@ same pull request and head. Red CI ends this sequence at classification.
 References identify evidence supplied by each step. Validation checks the
 record shape, sequence and consistency of those references. Consumers verify
 the referenced evidence against the authoritative source before acting.
+
+## Running a list
+
+`pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B --base SHA --brief FILE`
+runs the list of one batch. `RUN_ID` is the native run whose record holds the worktree and
+the writer card. A missing steps file starts the list; an existing one is validated and
+resumed after its last recorded row, so a killed run repeats no finished step. The steps
+file is rewritten after every attempt. Optional flags: `--check "ARGV"` (repeatable fast
+check), `--keeper-cmd "ARGV"` (default `pg --json`), `--train-cmd "ARGV"` (prints
+`{"train":..,"manifest":..}` for `--head --pr --run --attempt`), `--branch`, `--no-journal`.
+Exit 0 means the part joined a train, 3 red CI, 1 any other stop.
+
+The service steps are `claim` (`claim-batch`, all keys or none), `ci_class` (green when every
+workflow run of the head completed without a failure, red naming the failing run, an error
+when the runs do not finish within the waiting budget) and `train_join`. The agent steps
+are the native writer `Driver`: `write` is its first turn, `review` one review run on the
+stamped head, `fix` a turn of the same session with the kept review text.
