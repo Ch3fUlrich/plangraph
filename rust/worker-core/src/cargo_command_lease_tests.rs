@@ -1,12 +1,8 @@
 use super::*;
 use crate::cargo_cache::{lease_holders, try_exclusive_lease};
-use std::os::unix::fs::PermissionsExt;
 
 fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-    let path = dir.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
+    crate::executable_test_support::write_script(dir, name, &format!("#!/bin/sh\n{body}\n"))
 }
 
 #[test]
