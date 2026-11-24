@@ -10,7 +10,12 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+mod consumers;
+pub mod roles;
 pub mod scan;
+mod validate;
+
+pub use roles::{host_roles, this_host_roles};
 
 /// The role that every host has.
 pub const ALL: &str = "all";
@@ -34,9 +39,12 @@ pub struct UnitEntry {
     pub name: String,
     /// File names under `deploy/<dir>` (`deploy/systemd` unless `dir` says otherwise).
     pub files: Vec<String>,
-    /// The directory under `deploy/` that holds the unit files; units that ship beside their tooling
-    /// (`liveness`, `pganchor`, `watchdog`) name it.
+    /// The directory under `deploy/` that holds the unit files (`systemd` unless named): units that ship
+    /// beside their tooling (`liveness`, `pganchor`, `watchdog`) name it, and `.` is `deploy/` itself.
     pub dir: Option<String>,
+    /// How a file that is a template (`*.service.in`, or a unit with `@ROOT@` placeholders) becomes an
+    /// installed unit: the script in the tree that runs the step and the unit names it writes.
+    pub installer: Option<Installer>,
     /// The unit that is enabled and must be active: the timer of a timer family, else the service.
     pub enable: Option<String>,
     #[serde(default)]
@@ -53,6 +61,43 @@ pub struct UnitEntry {
     /// What proves the unit works after the first start; the status also reads the last run result.
     pub first_run: Option<String>,
     pub not_deployed: Option<String>,
+}
+
+/// The installer of a unit family whose files are templates, not units to copy verbatim.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Installer {
+    /// A tracked file of the repository that runs the step (`deploy/bootstrap.sh`).
+    pub via: String,
+    /// The command the script runs, as one fixed statement (`python -m ... install --host linux`).
+    pub step: String,
+    /// The unit names the step writes.
+    pub renders: Vec<String>,
+}
+
+impl Installer {
+    fn validate(&self, what: &str) -> Result<(), String> {
+        let via_ok = !self.via.starts_with('/')
+            && !self.via.is_empty()
+            && !self
+                .via
+                .split('/')
+                .any(|c| c.is_empty() || c == "." || c == "..");
+        if !via_ok {
+            return Err(format!(
+                "{what}: installer via must be a repository file path"
+            ));
+        }
+        if self.step.trim().is_empty() || self.renders.is_empty() {
+            return Err(format!(
+                "{what}: installer needs a step and the unit names it renders"
+            ));
+        }
+        if self.renders.iter().any(|r| !scan::is_unit_name(r)) {
+            return Err(format!("{what}: installer renders must be unit file names"));
+        }
+        Ok(())
+    }
 }
 
 /// One place a consumer runs a binary from, on the hosts that hold one of `hosts`.
@@ -107,15 +152,31 @@ impl BinaryEntry {
 }
 
 impl UnitEntry {
+    /// The directory under `deploy/` of the unit files; the empty string is `deploy/` itself.
+    fn dir_name(&self) -> &str {
+        match self.dir.as_deref() {
+            None => "systemd",
+            Some(".") => "",
+            Some(dir) => dir,
+        }
+    }
+
     /// The repository directory of the unit files.
     pub fn source_dir(&self) -> String {
-        format!("deploy/{}", self.dir.as_deref().unwrap_or("systemd"))
+        match self.dir_name() {
+            "" => "deploy".to_owned(),
+            dir => format!("deploy/{dir}"),
+        }
     }
 
     /// How coverage names one of its files: the path under `deploy/`, always with its directory, so
-    /// `deploy/foo.service` and `deploy/systemd/foo.service` are two different files.
+    /// `deploy/foo.service` (`foo.service`) and `deploy/systemd/foo.service` (`systemd/foo.service`)
+    /// are two different files. Validation and coverage both use this one identity.
     pub fn coverage_key(&self, file: &str) -> String {
-        format!("{}/{file}", self.dir.as_deref().unwrap_or("systemd"))
+        match self.dir_name() {
+            "" => file.to_owned(),
+            dir => format!("{dir}/{file}"),
+        }
     }
 
     /// The unit that must be active: `enable`, else the only timer, else the only file.
@@ -133,7 +194,7 @@ impl UnitEntry {
         let timers: Vec<&String> = self
             .files
             .iter()
-            .filter(|f| f.ends_with(".timer"))
+            .filter(|f| f.trim_end_matches(".in").ends_with(".timer"))
             .collect();
         match (timers.as_slice(), self.files.as_slice()) {
             ([timer], _) => Ok(timer),
@@ -148,9 +209,13 @@ impl UnitEntry {
     /// The service the enabled timer starts (`foo.timer` starts `foo.service`), if the family has one.
     pub fn service_unit(&self) -> Option<String> {
         let enable = self.enable_unit().ok()?;
-        let service = enable
+        let (stem, template) = match enable.strip_suffix(".in") {
+            Some(stem) => (stem, ".in"),
+            None => (enable, ""),
+        };
+        let service = stem
             .strip_suffix(".timer")
-            .map(|s| format!("{s}.service"))?;
+            .map(|s| format!("{s}.service{template}"))?;
         self.files.contains(&service).then_some(service)
     }
 }
@@ -158,43 +223,6 @@ impl UnitEntry {
 /// `true` when `hosts` names a role in `roles` (or the role `all`).
 pub fn on_roles(hosts: &[String], roles: &BTreeSet<String>) -> bool {
     hosts.iter().any(|h| h == ALL || roles.contains(h))
-}
-
-fn check_hosts(what: &str, hosts: &[String]) -> Result<(), String> {
-    for host in hosts {
-        if host != ALL && !ROLES.contains(&host.as_str()) {
-            return Err(format!(
-                "{what}: unknown host role {host:?} (roles: all, {})",
-                ROLES.join(", ")
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn check_disposition(
-    what: &str,
-    hosts: &[String],
-    first_run: &Option<String>,
-    not_deployed: &Option<String>,
-) -> Result<(), String> {
-    check_hosts(what, hosts)?;
-    match not_deployed {
-        Some(reason) if reason.trim().is_empty() => {
-            Err(format!("{what}: not_deployed needs a reason"))
-        }
-        Some(_) if !hosts.is_empty() || first_run.is_some() => {
-            Err(format!("{what}: not_deployed excludes hosts and first_run"))
-        }
-        Some(_) => Ok(()),
-        None if hosts.is_empty() => Err(format!(
-            "{what}: name hosts or give not_deployed = \"<reason>\""
-        )),
-        None if first_run.as_deref().is_none_or(|c| c.trim().is_empty()) => {
-            Err(format!("{what}: a deployed entry needs a first_run check"))
-        }
-        None => Ok(()),
-    }
 }
 
 impl Manifest {
@@ -211,93 +239,6 @@ impl Manifest {
 
     pub fn load_from_repo(repo: &Path) -> Result<Manifest, String> {
         Self::load(&repo.join(MANIFEST_PATH))
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        let mut names = BTreeSet::new();
-        let mut files: BTreeSet<String> = BTreeSet::new();
-        for unit in &self.unit {
-            let what = format!("unit {}", unit.name);
-            if !names.insert(unit.name.as_str()) {
-                return Err(format!("{what}: listed twice"));
-            }
-            if unit.files.is_empty() {
-                return Err(format!("{what}: no files"));
-            }
-            if unit.dir.as_deref().is_some_and(|d| {
-                d.is_empty()
-                    || d.starts_with('/')
-                    || d.ends_with('/')
-                    || d.split('/').any(|c| c.is_empty() || c == "." || c == "..")
-            }) {
-                return Err(format!("{what}: dir must be a relative path under deploy/"));
-            }
-            for file in &unit.files {
-                if file.is_empty() || file.contains(['/', '\\']) || file == ".." {
-                    return Err(format!(
-                        "{what}: file {file:?} must be a bare file name; name its directory in dir"
-                    ));
-                }
-                if !files.insert(unit.coverage_key(file)) {
-                    return Err(format!("{what}: {file} belongs to two entries"));
-                }
-            }
-            unit.enable_unit()?;
-            for env in unit.env_files.iter().flat_map(|e| e.split('|')) {
-                if env.starts_with('/')
-                    || env.contains(['=', ' ', '\\'])
-                    || env.contains("..")
-                    || !env.ends_with(".env")
-                {
-                    return Err(format!(
-                        "{what}: env file {env:?} must be a relative file name ending in .env"
-                    ));
-                }
-            }
-            check_disposition(&what, &unit.hosts, &unit.first_run, &unit.not_deployed)?;
-        }
-        let mut bins = BTreeSet::new();
-        for binary in &self.binary {
-            let what = format!("binary {}/{}", binary.package, binary.bin);
-            if !bins.insert((binary.package.as_str(), binary.bin.as_str())) {
-                return Err(format!("{what}: listed twice"));
-            }
-            for place in &binary.install_paths {
-                let abs = place.path.starts_with('/') || place.path.starts_with("~/");
-                if !abs || place.path.contains("..") || place.path.ends_with('/') {
-                    return Err(format!(
-                        "{what}: install path {:?} must be an absolute file path or start with ~/",
-                        place.path
-                    ));
-                }
-                if place.hosts.is_empty() {
-                    return Err(format!(
-                        "{what}: install path {} names no hosts",
-                        place.path
-                    ));
-                }
-                check_hosts(
-                    &format!("{what}: install path {}", place.path),
-                    &place.hosts,
-                )?;
-                if binary.not_deployed.is_some() {
-                    return Err(format!("{what}: not_deployed excludes install_paths"));
-                }
-            }
-            let mut seen = BTreeSet::new();
-            for place in &binary.install_paths {
-                if !seen.insert(place.path.as_str()) {
-                    return Err(format!("{what}: install path {} listed twice", place.path));
-                }
-            }
-            check_disposition(
-                &what,
-                &binary.hosts,
-                &binary.first_run,
-                &binary.not_deployed,
-            )?;
-        }
-        Ok(())
     }
 
     /// Every problem between the manifest and the tree: a unit file or binary target it does not name,
@@ -349,56 +290,6 @@ impl Manifest {
         problems
     }
 
-    /// Every problem between the binaries and the places units run them from (`consumers`: bin name and
-    /// the path of its `ExecStart`, `%h` written `~`): a path the entry does not declare. Names no
-    /// binary of this manifest (python, logger, claude) are not its business.
-    pub fn consumer_problems(&self, consumers: &BTreeSet<(String, String)>) -> Vec<String> {
-        let mut problems = Vec::new();
-        for (bin, path) in consumers {
-            for entry in self.binary.iter().filter(|b| &b.bin == bin) {
-                let declared = if entry.install_paths.is_empty() {
-                    path == &format!("~/.local/bin/{bin}")
-                } else {
-                    entry.install_paths.iter().any(|p| &p.path == path)
-                };
-                if !declared {
-                    problems.push(format!(
-                        "a unit runs {path}, which binary {}/{bin} does not declare: add it to its install_paths (with ~/.local/bin/{bin} when that is used too)",
-                        entry.package
-                    ));
-                }
-            }
-        }
-        problems
-    }
-
-    /// Every problem between the unit files and the env files the manifest names for them (`env`: unit
-    /// key and the file name its `EnvironmentFile=` reads): a file the unit reads that its entry omits.
-    pub fn env_problems(&self, env: &BTreeSet<(String, String)>) -> Vec<String> {
-        let mut problems = Vec::new();
-        for (key, name) in env {
-            let Some(entry) = self
-                .unit
-                .iter()
-                .find(|u| u.files.iter().any(|f| &u.coverage_key(f) == key))
-            else {
-                continue; // an unlisted unit file is reported by `coverage`
-            };
-            if !entry
-                .env_files
-                .iter()
-                .flat_map(|e| e.split('|'))
-                .any(|e| e == name)
-            {
-                problems.push(format!(
-                    "deploy/{key} reads env file {name}, which unit {} does not list in env_files",
-                    entry.name
-                ));
-            }
-        }
-        problems
-    }
-
     /// The deployed binaries a host with `roles` installs, as (package, bin).
     pub fn binaries_for(&self, roles: &BTreeSet<String>) -> Vec<(&str, &str)> {
         self.binary
@@ -417,41 +308,9 @@ impl Manifest {
     }
 }
 
-/// The roles of this host: `PG_HOST_ROLES` (comma or space separated), else the words of
-/// `<config>/plangraph/host-roles`. Unknown words are an error, so a typo never silently drops a role.
-pub fn host_roles(
-    env_value: Option<&str>,
-    file_text: Option<&str>,
-) -> Result<BTreeSet<String>, String> {
-    let text = match (env_value.filter(|v| !v.trim().is_empty()), file_text) {
-        (Some(v), _) => v,
-        (None, Some(f)) => f,
-        (None, None) => "",
-    };
-    let mut roles = BTreeSet::new();
-    for word in text
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|w| !w.is_empty())
-    {
-        if !ROLES.contains(&word) {
-            return Err(format!(
-                "unknown host role {word:?} (roles: {})",
-                ROLES.join(", ")
-            ));
-        }
-        roles.insert(word.to_owned());
-    }
-    Ok(roles)
-}
-
-/// The roles of the host that runs this process; `config_dir` is `~/.config/plangraph`.
-pub fn this_host_roles(config_dir: &Path) -> Result<BTreeSet<String>, String> {
-    let file = std::fs::read_to_string(config_dir.join("host-roles")).ok();
-    host_roles(
-        std::env::var("PG_HOST_ROLES").ok().as_deref(),
-        file.as_deref(),
-    )
-}
-
+#[cfg(test)]
+mod consumer_tests;
+#[cfg(test)]
+mod scan_tests;
 #[cfg(test)]
 mod tests;

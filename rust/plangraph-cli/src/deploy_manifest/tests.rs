@@ -25,39 +25,11 @@ bin = "helper"
 not_deployed = "test helper"
 "#;
 
-fn set(items: &[&str]) -> BTreeSet<String> {
+pub(super) fn set(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|s| (*s).to_owned()).collect()
 }
 
-/// A temporary repository with `tracked` committed to the index and `untracked` only on disk.
-fn repo_with(tracked: &[(&str, &str)], untracked: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let write = |files: &[(&str, &str)]| {
-        for (path, text) in files {
-            let full = dir.path().join(path);
-            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
-            std::fs::write(full, text).unwrap();
-        }
-    };
-    let git = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(args)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_INDEX_FILE")
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?}");
-    };
-    git(&["init", "-q"]);
-    write(tracked);
-    git(&["add", "-A"]);
-    write(untracked);
-    dir
-}
-
-fn bins(items: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+pub(super) fn bins(items: &[(&str, &str)]) -> BTreeSet<(String, String)> {
     items
         .iter()
         .map(|(p, b)| ((*p).to_owned(), (*b).to_owned()))
@@ -173,175 +145,6 @@ fn host_roles_come_from_the_env_then_the_file_and_reject_typos() {
 }
 
 #[test]
-fn unit_files_outside_deploy_systemd_need_a_placement_or_an_exclusion() {
-    let dir = repo_with(
-        &[
-            ("deploy/systemd/a.service", "[Unit]\n"),
-            ("deploy/liveness/w@.service", "[Unit]\n"),
-            ("deploy/pganchor/p.socket", "[Unit]\n"),
-            ("deploy/liveness/router.toml", "x = 1\n"),
-        ],
-        &[],
-    );
-    let shipped = super::scan::unit_files(dir.path()).unwrap();
-    assert_eq!(
-        shipped.iter().map(String::as_str).collect::<Vec<_>>(),
-        [
-            "liveness/w@.service",
-            "pganchor/p.socket",
-            "systemd/a.service"
-        ]
-    );
-    let only_systemd =
-        Manifest::parse("[[unit]]\nname='a'\nfiles=['a.service']\nhosts=['all']\nfirst_run='x'\n")
-            .unwrap();
-    let problems = only_systemd.coverage(&shipped, &Default::default());
-    assert_eq!(problems.len(), 2, "{problems:?}");
-    assert!(problems
-        .iter()
-        .any(|p| p.contains("deploy/liveness/w@.service")));
-    assert!(problems
-        .iter()
-        .any(|p| p.contains("deploy/pganchor/p.socket")));
-    let covered = Manifest::parse(
-        "[[unit]]\nname='a'\nfiles=['a.service']\nhosts=['all']\nfirst_run='x'\n\
-         [[unit]]\nname='w'\ndir='liveness'\nfiles=['w@.service']\nhosts=['all']\nfirst_run='x'\n\
-         [[unit]]\nname='p'\ndir='pganchor'\nfiles=['p.socket']\nscope='system'\nhosts=['keeper']\nfirst_run='x'\n",
-    )
-    .unwrap();
-    assert!(covered.coverage(&shipped, &Default::default()).is_empty());
-    let excluded = Manifest::parse(
-        "[[unit]]\nname='a'\nfiles=['a.service']\nhosts=['all']\nfirst_run='x'\n\
-         [[unit]]\nname='w'\ndir='liveness'\nfiles=['w@.service']\nnot_deployed='needs a collector'\n\
-         [[unit]]\nname='p'\ndir='pganchor'\nfiles=['p.socket']\nnot_deployed='root only'\n",
-    )
-    .unwrap();
-    assert!(excluded.coverage(&shipped, &Default::default()).is_empty());
-}
-
-#[test]
-fn an_unlisted_unit_of_any_systemd_type_fails_coverage() {
-    for ext in [
-        "service",
-        "timer",
-        "socket",
-        "target",
-        "mount",
-        "path",
-        "automount",
-        "swap",
-        "slice",
-        "scope",
-        "device",
-    ] {
-        let dir = repo_with(
-            &[
-                (&format!("deploy/systemd/x.{ext}"), "[Unit]\n"),
-                ("deploy/systemd/x.example", "not a unit\n"),
-            ],
-            &[],
-        );
-        let shipped = super::scan::unit_files(dir.path()).unwrap();
-        assert_eq!(shipped.len(), 1, "{ext}: {shipped:?}");
-        let empty = Manifest::default();
-        let problems = empty.coverage(&shipped, &Default::default());
-        assert!(
-            problems
-                .iter()
-                .any(|p| p.contains(&format!("deploy/systemd/x.{ext}"))),
-            "{ext}: {problems:?}"
-        );
-    }
-}
-
-#[test]
-fn the_scan_lists_tracked_files_at_any_depth_with_their_directory() {
-    let dir = repo_with(
-        &[
-            ("deploy/a/b/deep.timer", "[Timer]\n"),
-            ("deploy/top.service", "[Service]\n"),
-            ("deploy/systemd/top.service", "[Service]\n"),
-            ("deploy/systemd/x.service.d/kg.conf", "[Service]\n"),
-        ],
-        &[],
-    );
-    let shipped = super::scan::unit_files(dir.path()).unwrap();
-    assert_eq!(
-        shipped.iter().map(String::as_str).collect::<Vec<_>>(),
-        ["a/b/deep.timer", "systemd/top.service", "top.service"]
-    );
-}
-
-#[test]
-fn one_entry_cannot_cover_the_same_name_in_two_directories() {
-    let dir = repo_with(
-        &[
-            ("deploy/foo.service", "[Service]\n"),
-            ("deploy/systemd/foo.service", "[Service]\n"),
-        ],
-        &[],
-    );
-    let shipped = super::scan::unit_files(dir.path()).unwrap();
-    let m = Manifest::parse(
-        "[[unit]]\nname='foo'\nfiles=['foo.service']\nhosts=['all']\nfirst_run='x'\n",
-    )
-    .unwrap();
-    let problems = m.coverage(&shipped, &Default::default());
-    assert_eq!(problems.len(), 1, "{problems:?}");
-    assert!(problems[0].contains("deploy/foo.service"), "{problems:?}");
-    // Naming the same file name in both directories takes two entries, one per directory.
-    let both = Manifest::parse(
-        "[[unit]]\nname='a'\nfiles=['foo.service']\nhosts=['all']\nfirst_run='x'\n\
-         [[unit]]\nname='b'\ndir='.'\nfiles=['foo.service']\nhosts=['all']\nfirst_run='x'\n",
-    );
-    assert!(both.unwrap_err().contains("relative path"));
-    let m = Manifest::parse(
-        "[[unit]]\nname='a'\nfiles=['foo.service']\nhosts=['all']\nfirst_run='x'\n\
-         [[unit]]\nname='b'\ndir='other'\nfiles=['foo.service']\nhosts=['all']\nfirst_run='x'\n",
-    )
-    .unwrap();
-    assert_eq!(
-        m.coverage(&shipped, &Default::default()).len(),
-        2,
-        "other/foo.service is not top-level foo.service, and deploy/foo.service is still unnamed"
-    );
-}
-
-#[test]
-fn an_untracked_unit_file_is_not_shipped() {
-    let dir = repo_with(
-        &[("deploy/systemd/a.service", "[Unit]\n")],
-        &[("deploy/systemd/scratch.timer", "[Timer]\n")],
-    );
-    let shipped = super::scan::unit_files(dir.path()).unwrap();
-    assert_eq!(shipped, set(&["systemd/a.service"]));
-    // A manifest entry for the untracked file does not count as covering it.
-    let m = Manifest::parse(
-        "[[unit]]\nname='s'\nfiles=['scratch.timer']\nhosts=['all']\nfirst_run='x'\n",
-    )
-    .unwrap();
-    let problems = m.coverage(&shipped, &Default::default());
-    assert!(problems
-        .iter()
-        .any(|p| p.contains("deploy/systemd/scratch.timer") && p.contains("not a tracked file")));
-}
-
-#[test]
-fn a_tracked_file_missing_from_the_working_tree_is_an_error() {
-    let dir = repo_with(&[("deploy/systemd/a.service", "[Unit]\n")], &[]);
-    std::fs::remove_file(dir.path().join("deploy/systemd/a.service")).unwrap();
-    let err = super::scan::unit_files(dir.path()).unwrap_err();
-    assert!(err.contains("tracked but missing"), "{err}");
-}
-
-#[test]
-fn a_directory_that_is_not_a_repository_is_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("deploy")).unwrap();
-    assert!(super::scan::unit_files(dir.path()).is_err());
-}
-
-#[test]
 fn a_not_deployed_entry_passes_only_with_a_reason() {
     let units = set(&["systemd/x.service"]);
     let with = Manifest::parse(
@@ -411,141 +214,68 @@ fn install_paths_are_validated() {
 }
 
 #[test]
-fn a_manifest_entry_whose_source_file_is_gone_fails_coverage() {
-    let dir = repo_with(&[("deploy/systemd/a.service", "[Unit]\n")], &[]);
-    let shipped = super::scan::unit_files(dir.path()).unwrap();
-    let m = Manifest::parse(
-        "[[unit]]\nname='a'\nfiles=['a.service','gone.timer']\nenable='gone.timer'\nhosts=['all']\nfirst_run='x'\n",
-    )
-    .unwrap();
-    let problems = m.coverage(&shipped, &Default::default());
-    assert_eq!(problems.len(), 1, "{problems:?}");
-    assert!(
-        problems[0].contains("deploy/systemd/gone.timer")
-            && problems[0].contains("not a tracked file")
+fn units_at_the_deploy_root_and_in_systemd_are_distinct_and_both_declarable() {
+    let root_only =
+        "[[unit]]\nname='r'\ndir='.'\nfiles=['foo.service']\nnot_deployed='root unit'\n";
+    let m = Manifest::parse(root_only).unwrap();
+    assert_eq!(m.unit[0].coverage_key("foo.service"), "foo.service");
+    assert_eq!(m.unit[0].source_dir(), "deploy");
+    let both = format!(
+        "{root_only}[[unit]]\nname='s'\nfiles=['foo.service']\nnot_deployed='systemd unit'\n"
     );
-}
-
-fn workspace(members: &str, crates: &[&str]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let rust = dir.path().join("rust");
-    std::fs::create_dir_all(&rust).unwrap();
-    std::fs::write(
-        rust.join("Cargo.toml"),
-        format!("[workspace]\nmembers = {members}\nexclude = [\"crates/skipped\"]\n"),
-    )
-    .unwrap();
-    for name in crates {
-        let crate_dir = rust.join(name);
-        std::fs::create_dir_all(crate_dir.join("src")).unwrap();
-        let package = name.rsplit('/').next().unwrap();
-        std::fs::write(
-            crate_dir.join("Cargo.toml"),
-            format!("[package]\nname = \"{package}\"\n"),
-        )
-        .unwrap();
-        std::fs::write(crate_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let m = Manifest::parse(&both).unwrap();
+    let shipped = set(&["foo.service", "systemd/foo.service"]);
+    assert!(m.coverage(&shipped, &Default::default()).is_empty());
+    let only_systemd =
+        Manifest::parse("[[unit]]\nname='s'\nfiles=['foo.service']\nnot_deployed='systemd unit'\n")
+            .unwrap();
+    let problems = only_systemd.coverage(&shipped, &Default::default());
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("deploy/foo.service"), "{problems:?}");
+    let twice = "[[unit]]\nname='a'\ndir='.'\nfiles=['x.service']\nnot_deployed='r'\n\
+                 [[unit]]\nname='b'\ndir='.'\nfiles=['x.service']\nnot_deployed='r'\n";
+    assert!(Manifest::parse(twice).unwrap_err().contains("two entries"));
+    for bad in ["", "..", "a/../b", "/abs", "a/"] {
+        let text =
+            format!("[[unit]]\nname='x'\ndir='{bad}'\nfiles=['x.service']\nnot_deployed='r'\n");
+        assert!(
+            Manifest::parse(&text)
+                .unwrap_err()
+                .contains("relative path"),
+            "{bad:?}"
+        );
     }
-    dir
 }
 
 #[test]
-fn workspace_member_globs_are_expanded_like_cargo_does() {
-    let dir = workspace(
-        "[\"crates/*\", \"tool-?\", \"plain\"]",
-        &[
-            "crates/one",
-            "crates/two",
-            "crates/skipped",
-            "tool-a",
-            "plain",
-        ],
-    );
-    let bins = super::scan::bin_targets(dir.path()).unwrap();
-    let names: Vec<&str> = bins.iter().map(|(_, b)| b.as_str()).collect();
-    assert_eq!(
-        names,
-        ["one", "plain", "tool-a", "two"],
-        "skipped is excluded"
-    );
-    let none = workspace("[\"nothing/*\"]", &["other"]);
-    assert!(super::scan::bin_targets(none.path()).is_err());
-}
-
-#[test]
-fn a_binary_run_from_a_path_its_entry_does_not_declare_is_named() {
-    let m = Manifest::parse(
-        "[[binary]]\npackage='p'\nbin='tool'\nhosts=['all']\nfirst_run='c'\n\
-         install_paths=[{path='/usr/local/bin/tool',hosts=['keeper']}]\n\
-         [[binary]]\npackage='p'\nbin='plain'\nhosts=['all']\nfirst_run='c'\n",
-    )
-    .unwrap();
-    let ok = [
-        ("tool", "/usr/local/bin/tool"),
-        ("plain", "~/.local/bin/plain"),
-        ("python", "/usr/local/bin/python"),
-    ]
-    .iter()
-    .map(|(b, p)| ((*b).to_owned(), (*p).to_owned()))
-    .collect();
-    assert!(m.consumer_problems(&ok).is_empty());
-    let bad = [
-        ("tool", "~/.local/bin/tool"),
-        ("plain", "/usr/local/bin/plain"),
-    ]
-    .iter()
-    .map(|(b, p)| ((*b).to_owned(), (*p).to_owned()))
-    .collect();
-    let problems = m.consumer_problems(&bad);
-    assert_eq!(problems.len(), 2, "{problems:?}");
-}
-
-#[test]
-fn consumer_paths_and_env_files_are_read_from_the_unit_files() {
-    let dir = repo_with(
-        &[
-            (
-                "deploy/systemd/a.service",
-                "[Service]\nEnvironmentFile=-%h/.config/plangraph/a.env\nEnvironmentFile=/etc/plangraph/b.env\n\
-                 ExecStartPre=-%h/.local/bin/pre --x\nExecStart=/usr/local/bin/tool run\n\
-                 ExecStart=/usr/bin/python3 -m x\nExecStopPost=-/usr/local/bin/post\nExecReload=%h/.local/bin/reload\n",
-            ),
-            ("deploy/systemd/t@.service", "[Service]\nEnvironmentFile=%h/.config/plangraph/sub/%i.env\n"),
-        ],
-        &[],
-    );
-    let shipped = super::scan::unit_files(dir.path()).unwrap();
-    let consumers = super::scan::consumer_paths(dir.path(), &shipped).unwrap();
-    assert_eq!(
-        consumers,
-        [
-            ("post", "/usr/local/bin/post"),
-            ("pre", "~/.local/bin/pre"),
-            ("reload", "~/.local/bin/reload"),
-            ("tool", "/usr/local/bin/tool"),
-        ]
-        .iter()
-        .map(|(b, p)| ((*b).to_owned(), (*p).to_owned()))
-        .collect()
-    );
-    let env = super::scan::unit_env_files(dir.path(), &shipped).unwrap();
-    assert_eq!(
-        env,
-        [
-            ("systemd/a.service", "a.env"),
-            ("systemd/a.service", "b.env"),
-            ("systemd/t@.service", "sub/%i.env")
-        ]
-        .iter()
-        .map(|(u, e)| ((*u).to_owned(), (*e).to_owned()))
-        .collect()
-    );
-    let m = Manifest::parse(
-        "[[unit]]\nname='a'\nfiles=['a.service']\nhosts=['all']\nfirst_run='x'\nenv_files=['a.env']\n\
-         [[unit]]\nname='t'\nfiles=['t@.service']\nenable='t@.service'\nnot_deployed='r'\nenv_files=['sub/%i.env']\n",
-    )
-    .unwrap();
-    let problems = m.env_problems(&env);
-    assert_eq!(problems.len(), 1, "{problems:?}");
-    assert!(problems[0].contains("b.env") && problems[0].contains("unit a"));
+fn a_template_family_enables_its_timer_template_and_needs_an_installer() {
+    let text = "[[unit]]\nname='t'\ndir='ctx'\nfiles=['t.service.in','t.timer.in']\nhosts=['all']\nfirst_run='x'\n\
+                [unit.installer]\nvia='deploy/bootstrap.sh'\nstep='render t'\nrenders=['t.service','t.timer']\n";
+    let m = Manifest::parse(text).unwrap();
+    assert_eq!(m.unit[0].enable_unit().unwrap(), "t.timer.in");
+    assert_eq!(m.unit[0].service_unit().as_deref(), Some("t.service.in"));
+    let installer = |extra: &str| {
+        format!(
+            "[[unit]]\nname='t'\nfiles=['t.service']\nhosts=['all']\nfirst_run='x'\n[unit.installer]\n{extra}\n"
+        )
+    };
+    for (extra, want) in [
+        (
+            "via='/abs'\nstep='s'\nrenders=['t.service']",
+            "repository file path",
+        ),
+        (
+            "via='a/../b'\nstep='s'\nrenders=['t.service']",
+            "repository file path",
+        ),
+        ("via='b.sh'\nstep=' '\nrenders=['t.service']", "step"),
+        ("via='b.sh'\nstep='s'\nrenders=[]", "step"),
+        (
+            "via='b.sh'\nstep='s'\nrenders=['t.conf']",
+            "unit file names",
+        ),
+    ] {
+        let err = Manifest::parse(&installer(extra)).unwrap_err();
+        assert!(err.contains(want), "{extra}: {err}");
+    }
 }

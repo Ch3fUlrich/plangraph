@@ -227,7 +227,7 @@ literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
 and environment template they read. The merge-close test reads both the
 `pg-reconcile-merged.service` and `pg-reconcile-merged.timer` units.
-`deploy/manifest.toml` is a `RUST_INPUTS` entry (the `deploy_manifest` tests read it); unit files under `deploy/` are not `KNOWN_PREFIXES`, so they run the full suite.
+`deploy/manifest.toml` and every unit suffix of `DEPLOY_UNIT_SUFFIXES` (also as `.in` templates) are `RUST_INPUTS` entries: the `deploy_manifest` tests read them.
 Add an explicit test case in `tests/test_ci_select_rust_inputs.py` for inputs the scan misses, such as unit
 filenames joined to a deployment directory by a helper. `rust/pg-spawnd/` and
 `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
