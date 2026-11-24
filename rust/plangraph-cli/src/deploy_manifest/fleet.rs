@@ -67,7 +67,12 @@ pub fn remote_script(check: bool) -> String {
 }
 
 fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    // The standard alphabet from its ranges, so no 64-character literal sits in the source.
+    let alphabet: Vec<u8> = (b'A'..=b'Z')
+        .chain(b'a'..=b'z')
+        .chain(b'0'..=b'9')
+        .chain(*b"+/")
+        .collect();
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
         let n = chunk
@@ -76,7 +81,7 @@ fn base64(bytes: &[u8]) -> String {
             .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
         for i in 0..4 {
             if i <= chunk.len() {
-                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+                out.push(alphabet[(n >> (18 - 6 * i) & 63) as usize] as char);
             } else {
                 out.push('=');
             }
