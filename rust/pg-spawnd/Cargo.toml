@@ -13,6 +13,7 @@ rmcp = { version = "2.2", default-features = false, features = ["server", "trans
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 serde = "1"
 sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 regex = "1"
 tokio = { version = "1.53", features = ["rt", "net", "io-util", "macros", "time"] }
 

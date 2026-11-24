@@ -151,12 +151,23 @@ pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
     }
     let text = crate::cli_review::select(args, run(state, argv, Duration::from_secs(30), false)?)?;
     let text = resolve_work_mode(mode, &text)?;
-    if args.get("role").and_then(Value::as_str) != Some("review") || args.contains_key("leg") {
+    let role = args
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("implement");
+    let review = role == "review" && !args.contains_key("leg");
+    // A hand-picked leg is never reordered; with the health switch off nothing else changes.
+    if args.contains_key("leg")
+        || (!review && crate::overlay::configured(role) == crate::overlay::Mode::Off)
+    {
         return Ok(text);
     }
     let mut plan: Value = serde_json::from_str(&text)
         .map_err(|_| ToolError::Internal("invalid review plan".into()))?;
-    crate::review_health::demote(state, &mut plan, &crate::records::list_runs(state));
+    if review {
+        crate::review_health::demote(state, &mut plan, &crate::records::list_runs(state));
+    }
+    crate::overlay::run(state, role, &mut plan);
     Ok(plan.to_string())
 }
 

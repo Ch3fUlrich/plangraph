@@ -1,0 +1,1 @@
+pg-spawnd reads OmniRoute provider state (breakers and shared rate-limit windows, 60 s TTL, never clamped) and, behind the `health` switch (off, shadow, on; `on` needs `route_gate` on), reorders the adapter plan inside a tier and drops only OPEN legs.

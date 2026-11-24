@@ -41,10 +41,12 @@ mod native_writer_host;
 mod native_writer_sandbox;
 mod native_writer_tool;
 mod native_writer_tools;
+mod overlay;
 mod placement;
 mod pre_review;
 mod prompt;
 mod prompt_git;
+mod provider_state;
 use pg_spawnd::{pyjson, role_header};
 mod reconcile;
 #[allow(dead_code)]

@@ -31,6 +31,25 @@ fn distribution(mut values: Vec<f64>) -> Value {
     };
     json!({"samples":values.len(),"p50":rank(0.5),"p95":rank(0.95)})
 }
+/// One corrected evidence row as a fold row; `None` when ts or outcome is unusable.
+pub(crate) fn health_row(r: &Value) -> Option<health::Row> {
+    let leg = r["leg_key"].as_str().unwrap_or("unknown");
+    let role = serde_json::from_value::<Role>(r["role"].clone()).unwrap_or(Role::Research);
+    Some(health::Row {
+        leg_key: leg.into(),
+        route_key: r["route_key"].as_str().unwrap_or("unknown").into(),
+        ts: r["ts"].as_i64()?,
+        role,
+        outcome: parse_class(r["outcome"].as_str()?)?,
+        run_id: r["run_id"].as_str().unwrap_or("").into(),
+        attempt: r["attempt"].as_u64().unwrap_or(0) as u32,
+        duration_s: Some(r["duration_s"].as_i64().unwrap_or(0).max(0)),
+        reset_at: r["reset_at"].as_i64(),
+        reset_assumed: false,
+        reset_clamped: false,
+        kind: None,
+    })
+}
 pub(crate) fn build_report(
     records: &[Value],
     evidence: &[Value],
@@ -98,25 +117,10 @@ pub(crate) fn build_report(
         if class == Some("HANG_NO_ACTIVITY") {
             populations[4] += 1;
         }
-        let Some(class) = parsed_class else {
+        let Some(row) = health_row(r) else {
             continue;
         };
-        let leg = r["leg_key"].as_str().unwrap_or("unknown");
-        let role = serde_json::from_value::<Role>(r["role"].clone()).unwrap_or(Role::Research);
-        legs.entry(leg.into()).or_default().push(health::Row {
-            leg_key: leg.into(),
-            route_key: r["route_key"].as_str().unwrap_or("unknown").into(),
-            ts,
-            role,
-            outcome: class,
-            run_id: r["run_id"].as_str().unwrap_or("").into(),
-            attempt: r["attempt"].as_u64().unwrap_or(0) as u32,
-            duration_s: Some(duration),
-            reset_at: r["reset_at"].as_i64(),
-            reset_assumed: false,
-            reset_clamped: false,
-            kind: None,
-        });
+        legs.entry(row.leg_key.clone()).or_default().push(row);
     }
     let mut per_leg = BTreeMap::new();
     for (leg, mut rs) in legs {

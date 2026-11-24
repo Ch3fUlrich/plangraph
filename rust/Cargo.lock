@@ -2480,6 +2480,7 @@ dependencies = [
  "syn 2.0.119",
  "tempfile",
  "tokio",
+ "ureq",
  "windows-sys 0.61.2",
 ]
 

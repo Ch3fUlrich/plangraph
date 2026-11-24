@@ -111,15 +111,21 @@ pub(crate) fn configured_mode(role: &str) -> LegRefMode {
         role,
     )
 }
-// No process environment mutation; callers inject lookup and platform config path.
-pub(crate) fn mode(env: Option<&str>, path: &Path, role: &str) -> LegRefMode {
+/// A switch from `reliability.json`: `key` is a string, or an object of per-role strings.
+pub(crate) fn switch_value(path: &Path, key: &str, role: &str) -> Option<String> {
     let file = std::fs::read(path)
         .ok()
-        .and_then(|v| serde_json::from_slice::<serde_json::Value>(&v).ok());
-    let configured = file.as_ref().and_then(|v| v.get("leg_ref"));
-    let configured =
-        configured.and_then(|v| v.as_str().or_else(|| v.get(role).and_then(|v| v.as_str())));
-    match env.or(configured).unwrap_or("off") {
+        .and_then(|v| serde_json::from_slice::<serde_json::Value>(&v).ok())?;
+    let configured = file.get(key)?;
+    configured
+        .as_str()
+        .or_else(|| configured.get(role).and_then(|v| v.as_str()))
+        .map(str::to_owned)
+}
+// No process environment mutation; callers inject lookup and platform config path.
+pub(crate) fn mode(env: Option<&str>, path: &Path, role: &str) -> LegRefMode {
+    let configured = switch_value(path, "leg_ref", role);
+    match env.or(configured.as_deref()).unwrap_or("off") {
         "on" => LegRefMode::On,
         "warn" | "shadow" => LegRefMode::Warn,
         "off" => LegRefMode::Off,
