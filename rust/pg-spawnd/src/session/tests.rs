@@ -146,3 +146,41 @@ fn subprocess_capture_times_out_without_waiting_for_exit() {
     assert_eq!(error.kind(), ErrorKind::TimedOut);
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn a_batch_brief_for_a_held_item_is_refused_unless_overridden_with_a_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = dir.path().join("state/runs/run-a");
+    std::fs::create_dir_all(&run).unwrap();
+    let record = serde_json::json!({"run_id":"run-a","run_kind":"native-codex","status":"running"});
+    std::fs::write(run.join("record.json"), record.to_string()).unwrap();
+    let request = serde_json::json!({"prompt":"Item key: demo:FIXTURE\nNAME: held-lane\n"});
+    std::fs::write(run.join("native-request.json"), request.to_string()).unwrap();
+    let dirs = (dir.path().join("state"), dir.path().join("sessions"));
+    let dirs = (dirs.0.as_path(), dirs.1.as_path());
+
+    let fixture = include_str!("../../tests/fixtures/batch-writer-input.txt");
+    let brief = crate::batch_writer_brief::render(fixture)
+        .unwrap()
+        .into_owned();
+    let refused = guard_lanes_in(dirs, fixture, &brief)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("demo:FIXTURE is held by native run held-lane (run-a)"),
+        "{refused}"
+    );
+
+    let with =
+        |reason: &str| fixture.replacen('{', &format!("{{\"lane_override\":\"{reason}\","), 1);
+    let blank = guard_lanes_in(dirs, &with(""), &brief)
+        .unwrap_err()
+        .to_string();
+    assert!(blank.contains("non-empty reason"), "{blank}");
+    guard_lanes_in(dirs, &with("retry after a wedged lane"), &brief).unwrap();
+    let log = std::fs::read_to_string(dirs.0.join("lane-overrides.jsonl")).unwrap();
+    assert!(
+        log.contains("retry after a wedged lane") && log.contains("\"context\":\"brief\""),
+        "{log}"
+    );
+}

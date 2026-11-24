@@ -394,8 +394,25 @@ fn read_writer_prompt(path: &Path) -> io::Result<String> {
     match crate::batch_writer_brief::render(&text).map_err(io::Error::other)? {
         Cow::Borrowed(_) => Ok(text),
         Cow::Owned(brief) => {
+            guard_batch_lanes(&text, &brief)?;
             const SKILL: &str = include_str!("../../../../skills/batch-writer/SKILL.md");
             Ok(crate::role_header::compose("claude", &brief, Some(SKILL)))
         }
     }
+}
+
+/// Refuse a batch brief whose items a live native or Claude writer lane already holds.
+fn guard_batch_lanes(input: &str, brief: &str) -> io::Result<()> {
+    let state = crate::state::resolve_state(None, |key| std::env::var_os(key)).unwrap_or_default();
+    guard_lanes_in(
+        (&state, &crate::lane_admission::claude_sessions_dir()),
+        input,
+        brief,
+    )
+}
+
+fn guard_lanes_in(dirs: (&Path, &Path), input: &str, brief: &str) -> io::Result<()> {
+    let keys = crate::lane_admission::submission_keys(brief, &Value::Null);
+    let reason = crate::batch_writer_brief::lane_override(input);
+    crate::lane_admission::check(dirs, "brief", &keys, reason.as_deref()).map_err(io::Error::other)
 }

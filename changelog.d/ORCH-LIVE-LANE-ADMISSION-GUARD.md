@@ -1,0 +1,1 @@
+Refuse a batch brief or native submit whose item a live native run or Claude writer lane already holds, naming the lane; a second lane is admitted only with a recorded `lane_override` reason (`lane-overrides.jsonl`).

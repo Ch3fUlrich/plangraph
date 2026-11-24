@@ -10,6 +10,8 @@ const PREFIX: &str = "PLANGRAPH-BATCH-INPUT-V1\n";
 struct BatchInput {
     items: Vec<Item>,
     run: RunValues,
+    /// The reason a second lane may take an item a live lane already holds.
+    lane_override: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -83,6 +85,17 @@ impl RunValues {
     }
 }
 
+/// The `lane_override` reason a versioned batch input carries, if any.
+pub fn lane_override(text: &str) -> Option<String> {
+    let payload = text.strip_prefix(PREFIX).or_else(|| {
+        text.strip_prefix(PREFIX.trim_end_matches('\n'))?
+            .strip_prefix("\r\n")
+    })?;
+    serde_json::from_str::<BatchInput>(payload)
+        .ok()?
+        .lane_override
+}
+
 /// Render a versioned batch input in the prompt transport. Plain briefs pass through.
 pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
     let payload = text.strip_prefix(PREFIX).or_else(|| {
@@ -92,7 +105,7 @@ pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
     let Some(payload) = payload else {
         return Ok(Cow::Borrowed(text));
     };
-    let BatchInput { items, run } = serde_json::from_str(payload)
+    let BatchInput { items, run, .. } = serde_json::from_str(payload)
         .map_err(|err| format!("invalid batch writer input: {err}"))?;
     if items.is_empty() {
         return Err("batch writer input requires at least one item".into());
