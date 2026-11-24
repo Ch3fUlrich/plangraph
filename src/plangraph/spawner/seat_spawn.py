@@ -364,7 +364,7 @@ def admit(service, options, *, card=None, preview=False):
             decision = overflow.decide(memory, role_mb, floor, rows, public,
                                        remote_first=remote_first, local_refusal=health,
                                        host_order=tuple(config.get('hosts', {})), compare_local=compare_local,
-                                       local_fallback=local_host.get('placement_fallback', False))
+                                       local_fallback=local_host.get('placement_fallback', False), leg=options.get('leg'))
             if benchmark_local and decision.reason == 'local_fallback_no_remote':
                 decision = overflow.Decision(None, 'local_benchmark_database')
             if options.get('benchmark') is not None and decision.host is not None:
