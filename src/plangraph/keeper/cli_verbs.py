@@ -545,6 +545,10 @@ def cmd_incident(args, session):
                  {"key": args.key, "text": args.text, "evidence": args.evidence})
 
 
+def cmd_reconfirm(args, session):
+    return write(session, "reconfirm", {"key": args.key, "decision": args.decision})
+
+
 def cmd_evidence(args, session):
     ref = evidence_ref(args)
     return write(session, "add_evidence",

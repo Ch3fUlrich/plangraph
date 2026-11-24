@@ -27,6 +27,7 @@ them still, and the state checks are repeated under the lock as before.
 from __future__ import annotations
 
 import bisect
+from datetime import timezone
 import json
 import re
 import time
@@ -38,7 +39,7 @@ from .. import views
 from . import context_sources as src, timing
 from .brief import ensure_cap, superseded_contract
 from .errors import Refused
-from .evidence_decisions import decision_book, decisions_naming
+from .evidence_decisions import decision_book, decisions_naming, premise_neutral
 from .evidence_pr import landing_record
 from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
@@ -151,15 +152,19 @@ class ContextMixin:
         clock = getattr(self, "_ctx_clock", None)
         if clock is not None and clock["stamp"] == stamp:
             return clock
-        clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp}
+        clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp, "reconfirmed": {}}
         mark = -1
         for row in self.conn.execute(
                 f"SELECT seq, key, payload FROM events WHERE {DEFINITION_EVENTS}"
                 " ORDER BY seq"):
             raw = row["payload"]
-            ids = src.decision_ids(raw if isinstance(raw, str) else json.dumps(raw))
+            raw = raw if isinstance(raw, str) else json.dumps(raw)
+            ids = src.decision_ids(raw)
             if ids:
                 mark = max(mark, _num(ids[-1]))
+            if '"reconfirmed"' in raw and ids:
+                clock["reconfirmed"][row["key"]] = max(
+                    clock["reconfirmed"].get(row["key"], -1), _num(ids[-1]))
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
             clock["last"][row["key"]] = row["seq"]
@@ -219,7 +224,11 @@ class ContextMixin:
         mark = self._watermark(item, inputs["clock"], cited)
         newer = [d for d in naming if d not in cited
                  and mark is not None and _num(d) > mark]
-        superseded = inputs["book"]["superseded"]
+        confirmed = inputs["clock"]["reconfirmed"].get(key, -1)
+        newer = [d for d in newer if _num(d) > confirmed
+                 and not self._premise_neutral(item, d, inputs)]
+        superseded = {old: new for old, new in inputs["book"]["superseded"].items()
+                      if _num(new) > confirmed}
         ctx = {
             "dep_states": [entry(k) for k in deps],
             "dependents": [entry(k) for k in dependents],
@@ -237,6 +246,21 @@ class ContextMixin:
             ctx["superseded_contract"] = contract
         ctx["stale"] = self._stale_reason(item, ctx)
         return ctx
+
+    def _premise_neutral(self, item, did, inputs):
+        """KEEPER-STALE-PREMISE-PRECISION: a newer decision that only defines or orders the item."""
+        clock, key = inputs["clock"], item["key"]
+        seq = clock["last"].get(key)
+        defined_min = at = None
+        if seq is not None:
+            row = self.conn.execute("SELECT ts FROM events WHERE seq=?", (seq,)).fetchone()
+            at = self._parse_iso(row["ts"]) if row else None
+            at = at.astimezone(timezone.utc) if at else None
+            defined_min = at.hour * 60 + at.minute if at else None
+            at = clock["marks"][bisect.bisect_right(clock["seqs"], seq) - 1]
+        gap = _num(did) - at if at is not None else 10**9
+        return premise_neutral(inputs["book"]["rows"].get(did, ()), did, item.get("source"),
+                               defined_min, gap)
 
     def _stale_reason(self, item, ctx):
         why = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
@@ -449,6 +473,30 @@ class ContextMixin:
                           server_items=True, needs_reconcile=groups["needs_reconcile"],
                           in_progress=groups["in_progress"], unknown=groups["unknown"],
                           warnings=groups["warnings"])
+
+    def reconfirm(self, principal, key, decision):
+        """Record that the premise of *key* was read against *decision* (no edit).
+
+        Later ``newer_decisions`` and retired premises up to that decision no
+        longer refuse a claim; the event names who and which decision.
+        """
+        def record(now):
+            self._require_role(principal, "l1", "router")
+            did = re.fullmatch(r"D-0*(\d+)", decision.strip()) if isinstance(decision, str) else None
+            if did is None:
+                raise Refused("validation", "decision must be a D-NNN id")
+            did = f"D-{int(did.group(1))}"
+            with self._write():
+                item = self._get_or_refuse(key)
+                self._may_manage(principal, item["project"])
+                if item["state"] in views.TERMINAL:
+                    raise Refused("bad_state", f"{key} is {item['state']}")
+                if not self._adapter("decisions").has(did):
+                    raise Refused("not_found", f"no decision {did} in the decisions log")
+                self._append(principal, key, "item_defined",
+                             {"fields": [], "reconfirmed": did, "who": principal.name}, now)
+            return {"key": key, "reconfirmed": did}
+        return self._run(principal, "reconfirm", key, record)
 
     # -------------------------------------------------------------- claim
     @staticmethod

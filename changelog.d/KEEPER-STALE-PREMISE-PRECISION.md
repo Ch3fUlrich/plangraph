@@ -1,0 +1,1 @@
+The stale-premise gate no longer fires on the decision that defines or orders the item (own source, order/GO rows, rows within 2 h of the define); `reconfirm KEY D-NNN` records a premise re-read without an edit, and `alerts` counts force_stale claims.
