@@ -134,3 +134,10 @@ them into a keeper table needs a keeper schema step that is not part of this cha
 `Review-Run: <key> <seat run id> <part head>` per item and part, the run and head from the manifest's part
 receipt. These are the lines the close reads (`store_runs._REVIEW_RUN`). `--check BODYFILE` refuses a body that
 lacks any of them, and a part without a `Plan-Item` has no body.
+
+`land-train build` also requires `--part-ci FILE` (a JSON array of `{pr, head, run_id, base, workflow,
+conclusion}`, the full `tests.yml` run of each part's lane) and `--previous-train SHA` (the merge commit of the
+last train on main). It refuses before it reads main when a part has no run for its exact head, a run of another
+workflow, a run that did not conclude `success` (the part goes back to its writer with the run's job log), or a run
+whose base does not contain the previous train or is not under the part head. The train run stays the integration
+check.
