@@ -216,7 +216,7 @@ def registry_sources(directory):
     The registry is the one source of a host's checkout path: a stale `ps-hosts.json` must not
     make a healthy host report `host src missing`. An id or alias names one host. An SSH
     target can be shared (a Windows host and its WSL guest), so it is kept as a list and used
-    only when it names exactly one host of the configured operating system. No readable, valid
+    only when it names exactly one host with the configured transport and WSL distribution. No readable, valid
     registry gives empty maps and the configured paths stand.
     """
     from plangraph.fleet_sync import genconfig
@@ -242,10 +242,12 @@ def _registry_entry(host, sources):
     names, targets = sources
     if (found := names.get(str(host.get('name')).lower())) is not None:
         return found
-    # A Windows host and a Linux one never stand in for each other on a shared target.
-    same_os = [entry for entry in targets.get(str(host.get('target')).lower(), [])
-               if ('win_src' in entry) == ('win_src' in host)]
-    return same_os[0] if len(same_os) == 1 else None
+    # A shared target hosts several guests: only the entry with the configured transport (direct,
+    # Windows, or the same WSL distribution) can stand in for the configured host.
+    same_transport = [entry for entry in targets.get(str(host.get('target')).lower(), [])
+                      if ('win_src' in entry, entry.get('wsl_distro')) ==
+                      ('win_src' in host, host.get('wsl_distro'))]
+    return same_transport[0] if len(same_transport) == 1 else None
 
 
 def configured_hosts():
@@ -292,22 +294,41 @@ def configured_hosts():
     return validated
 
 
+_ACTIVE = {}
+_ACTIVE_LOCK = threading.Lock()
+
+
 def _bounded(host, transport):
     """Run one host's transport in a daemon thread and give up after its budget.
 
     A transport that never returns must not outlive the call: executor workers are joined at
     interpreter exit, a daemon thread is not, so `ps` prints and exits while it stays blocked.
+    A thread cannot be cancelled, so a long-lived caller (the MCP server) never starts a second
+    transport for a host whose last one is still running, nor more than MAX_WORKERS at once:
+    those hosts are listed as failed until the blocked transport ends.
     """
     budget = host_timeout(host)
     outcome = []
+    name = str(host.get('name'))
 
     def run():
         try:
             outcome.append((True, transport(host, budget)))
         except BaseException as exc:  # handed to the caller, which classifies it
             outcome.append((False, exc))
+        finally:
+            with _ACTIVE_LOCK:
+                if _ACTIVE.get(name) is threading.current_thread():
+                    del _ACTIVE[name]
 
-    thread = threading.Thread(target=run, daemon=True)
+    thread = threading.Thread(target=run, daemon=True, name='ps-transport-' + name)
+    with _ACTIVE_LOCK:
+        for key, running in list(_ACTIVE.items()):
+            if not running.is_alive():
+                del _ACTIVE[key]
+        if name in _ACTIVE or len(_ACTIVE) >= MAX_WORKERS:
+            raise TimeoutError('host query failed')
+        _ACTIVE[name] = thread
     thread.start()
     thread.join(budget + 1)  # the transport's own deadline answers first when it holds
     if not outcome:

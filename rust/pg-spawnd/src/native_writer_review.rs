@@ -369,11 +369,12 @@ impl Host {
         let serialized_card = card.to_string();
         let mut command = self.command(&self.review_cli[0]);
         if let Some(host) = writer["host"].as_str().filter(|host| !host.is_empty()) {
-            // The owning host has the private writer record used at review admission.
+            // The owning host names itself; the review is not pinned to it, so placement may
+            // send it to an eligible remote host (a writer placed remotely carries the pin).
             command
                 .env("PLANGRAPH_HOST_NAME", host)
                 .env("PLANGRAPH_HOST", host)
-                .env("PLANGRAPH_PLACED_HOST", host);
+                .env_remove("PLANGRAPH_PLACED_HOST");
         }
         command
             .args(&self.review_cli[1..])

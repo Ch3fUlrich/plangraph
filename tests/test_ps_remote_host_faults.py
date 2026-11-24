@@ -38,7 +38,7 @@ def test_ps_source_follows_registry_checkout_not_stale_config(config):
 
 
 def test_ps_source_registry_alias_and_wsl_hop(config):
-    write(config, [dict(name='ws-build', target='ws', src='/stale/src')], root='/x')
+    write(config, [dict(name='ws-build', target='ws', src='/stale/src', wsl_distro='Ubuntu')], root='/x')
     (host,) = remote_ps.configured_hosts()
     assert (host['src'], host['wsl_distro']) == ('/srv/guest/pg/src', 'Ubuntu')
 
@@ -206,3 +206,49 @@ def test_doctor_probe_gets_the_registry_resolved_hosts_and_slow_budget(config, m
     (host,) = json.loads(seen['env']['PLANGRAPH_PS_HOSTS_JSON'])['hosts']
     assert (host['src'], host['wsl_distro']) == ('/srv/guest/pg/src', 'Ubuntu')
     assert seen['timeout'] == remote_ps.host_timeout(host) + doctor.TIMEOUT
+
+
+def test_repeated_calls_keep_the_transport_cap_while_hosts_stay_blocked(config, monkeypatch):
+    monkeypatch.setattr(remote_ps, 'MAX_WORKERS', 2)
+    monkeypatch.setattr(remote_ps, 'TIMEOUT', 0.05)
+    write(config, [dict(name=f'h{i}', target=f'h{i}', src='/s/src') for i in range(3)])
+    release = threading.Event()
+
+    def alive():
+        return [t for t in threading.enumerate() if t.name.startswith('ps-transport-')]
+    try:
+        for _ in range(3):
+            rows = remote_ps.list_runs([], transport=lambda h, t: release.wait(30))
+            assert [r['status'] for r in rows] == ['unknown'] * 3
+            assert len(alive()) <= 2
+    finally:
+        release.set()
+        for thread in alive():
+            thread.join(5)
+    # Once the blocked transports end, hosts are queried again.
+    rows = remote_ps.list_runs([], transport=lambda h, t: json.dumps(
+        {'runs': [dict(run_id='r', host='x', status='running')]}))
+    assert [r['status'] for r in rows] == ['running'] * 3
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_shared_target_picks_the_entry_of_the_configured_wsl_distribution(config, reverse):
+    base = {'caps': {'mem_floor_mb': 1}, 'transport': 'ssh', 'ssh_target': 'ws', 'os': 'linux'}
+    guests = [dict(base, id='guest-a', wsl_distro='DistroA', repos={'plangraph': {'root': '/srv/a'}}),
+              dict(base, id='guest-b', wsl_distro='DistroB', repos={'plangraph': {'root': '/srv/b'}}),
+              dict(base, id='native', os='windows', repos={'plangraph': {'root': 'C:/pg'}})]
+    (config / 'hosts.json').write_text(json.dumps({'version': 1, 'self': 'controller', 'hosts': (
+        guests[::-1] if reverse else guests)}))
+    write(config, [dict(name='q-a', target='ws', src='/stale/src', wsl_distro='DistroA'),
+                   dict(name='q-b', target='ws', src='/stale/src', wsl_distro='DistroB'),
+                   dict(name='q-c', target='ws', src='/stale/src', wsl_distro='DistroC'),
+                   dict(name='q-direct', target='ws', src='/stale/src'),
+                   dict(name='q-win', target='ws', win_src='C:/stale/src')])
+    # Write the registry after write(): write() only touches it when a root is given.
+    (config / 'hosts.json').write_text(json.dumps({'version': 1, 'self': 'controller', 'hosts': (
+        guests[::-1] if reverse else guests)}))
+    got = {h['name']: (h.get('src') or h.get('win_src'), h.get('wsl_distro'))
+           for h in remote_ps.configured_hosts()}
+    assert got == {'q-a': ('/srv/a/src', 'DistroA'), 'q-b': ('/srv/b/src', 'DistroB'),
+                   'q-c': ('/stale/src', 'DistroC'), 'q-direct': ('/stale/src', None),
+                   'q-win': ('C:/pg/src', None)}
