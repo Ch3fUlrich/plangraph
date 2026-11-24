@@ -4,6 +4,7 @@ pub mod external_run;
 pub mod head_gate;
 pub mod landing_journal;
 pub mod lane_guard;
+pub mod lane_keeper;
 pub mod pyjson;
 pub mod role_header;
 #[cfg(target_os = "linux")]

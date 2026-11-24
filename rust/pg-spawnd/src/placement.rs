@@ -250,7 +250,6 @@ pub(crate) fn admit_lane(state: &Path, args: &Args) -> Result<Args, ToolError> {
     else {
         return Ok(args.clone());
     };
-    let brief = pg_spawnd::batch_writer_brief::render(prompt).map_err(parameter)?;
     let card = &args["card"];
     let explicit = match card.get("lane_override_reason") {
         None | Some(Value::Null) => None,
@@ -263,12 +262,11 @@ pub(crate) fn admit_lane(state: &Path, args: &Args) -> Result<Args, ToolError> {
         .filter(|item| crate::records::valid_item(item))
         .map(str::to_owned)
         .collect();
-    let observed = pg_spawnd::lane_guard::Observed {
-        state: state.to_owned(),
-        repo: repo.into(),
-    };
-    let (reason, keys) =
-        pg_spawnd::lane_guard::admit(&brief, &item, &observed, explicit).map_err(parameter)?;
+    let pg_spawnd::lane_guard::Launched {
+        keys,
+        lane_override: reason,
+    } = pg_spawnd::lane_guard::admit_launch(prompt, &item, state, Path::new(repo), explicit)
+        .map_err(parameter)?;
     let mut admitted = args.clone();
     // Only this guard may record an override; a caller-supplied one is dropped.
     admitted["card"]

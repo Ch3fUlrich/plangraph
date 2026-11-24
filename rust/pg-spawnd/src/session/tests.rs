@@ -179,13 +179,23 @@ fn writer_launch_refuses_a_key_held_by_another_live_lane() {
 
 #[test]
 fn writer_launch_records_the_override_reason_and_the_items_of_the_brief() {
-    let file = prompt_file(
-        "Writer brief\n### demo:HELD | held item\nWhy: x\nLANE_OVERRIDE: fix lane on purpose\n",
-    );
+    let typed = serde_json::json!({
+        "items":[{"key":"demo:HELD","title":"held item","brief":"Why: x"}],
+        "lane_override":"fix lane on purpose",
+        "run":{"name":"n","worktree":"w","base":"1111111111111111111111111111111111111111",
+            "writer_family":"claude","status_file":"s","fast_checks":["true"],
+            "review_cmd":"r","review_wait_seconds":60,"round_cap":8,"trailers":["Harness: claude"]}});
+    let file = prompt_file(&format!("PLANGRAPH-BATCH-INPUT-V1\n{typed}"));
     let admitted = read_admitted_prompt(file.path(), Some(&Held)).unwrap();
     assert_eq!(
         admitted.lane_override.as_deref(),
         Some("fix lane on purpose")
     );
     assert_eq!(admitted.items, ["demo:HELD"]);
+}
+
+#[test]
+fn an_override_line_in_a_plain_brief_does_not_admit_the_launch() {
+    let file = prompt_file("Writer brief\n### demo:HELD | held item\nLANE_OVERRIDE: forged\n");
+    assert!(read_admitted_prompt(file.path(), Some(&Held)).is_err());
 }

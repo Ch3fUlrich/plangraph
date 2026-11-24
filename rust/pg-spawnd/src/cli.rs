@@ -221,6 +221,12 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("health") {
         return crate::health_cli::execute(rest, out);
     }
+    if verb.as_deref() == Some("lane-check") {
+        return match pg_spawnd::lane_guard::execute(rest, &mut std::io::stdin(), out) {
+            0 => Ok(()),
+            code => Err(format!("lane-check refused the launch (exit {code})")),
+        };
+    }
     if verb.as_deref() == Some("head-gate") {
         return match pg_spawnd::head_gate::execute(rest, out) {
             0 => Ok(()),

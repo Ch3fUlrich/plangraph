@@ -25,16 +25,36 @@ pub trait LaneSource {
     fn lanes(&self, keys: &[String]) -> Vec<Lane>;
 }
 
-/// Run records of the spawner state directory plus the remote lane branches of a checkout.
+/// Run records of the spawner state directory, the remote lane branches of a checkout and
+/// the open lanes Keeper reports (a lane another host pushed before this checkout fetched).
 pub struct Observed {
     pub state: PathBuf,
     pub repo: PathBuf,
+    pub keeper: Option<crate::lane_keeper::Fetch>,
+}
+
+impl Observed {
+    /// The production source: Keeper is read when `PG_URL` and `PG_TOKEN_FILE` name it.
+    pub fn new(state: PathBuf, repo: PathBuf) -> Self {
+        Self {
+            state,
+            repo,
+            keeper: crate::lane_keeper::from_env(),
+        }
+    }
 }
 
 impl LaneSource for Observed {
     fn lanes(&self, keys: &[String]) -> Vec<Lane> {
         let mut lanes = run_lanes(&live_runs(&self.state));
         lanes.extend(branch_lanes(&self.repo, keys));
+        if let Some(fetch) = &self.keeper {
+            lanes.extend(crate::lane_keeper::lanes(
+                fetch,
+                keys,
+                head_branch(&self.repo).as_deref(),
+            ));
+        }
         lanes
     }
 }
@@ -50,14 +70,6 @@ pub fn item_keys(brief: &str) -> Vec<String> {
         .map(|capture| capture[1].to_owned())
         .collect();
     found.into_iter().collect()
-}
-
-/// The reason of a `LANE_OVERRIDE: <reason>` line of a rendered brief, blank when empty.
-pub fn override_line(brief: &str) -> Option<String> {
-    brief
-        .lines()
-        .find_map(|line| line.strip_prefix("LANE_OVERRIDE:"))
-        .map(|reason| reason.trim().to_owned())
 }
 
 /// Records of the runs that are queued or running.
@@ -115,19 +127,26 @@ fn slug(key: &str) -> String {
     key.rsplit(':').next().unwrap_or(key).to_ascii_lowercase()
 }
 
+fn git_output(repo: &Path, args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The branch a checkout is on; none when detached or not a repository.
+fn head_branch(repo: &Path) -> Option<String> {
+    git_output(repo, &["symbolic-ref", "--short", "-q", "HEAD"]).map(|name| name.trim().to_owned())
+}
+
 /// Remote branches that carry a key's slug and are not merged into `origin/main`.
 /// The branch the checkout itself is on is its own lane, never a collision.
 pub fn branch_lanes(repo: &Path, keys: &[String]) -> Vec<Lane> {
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|out| out.status.success())
-            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
-    };
+    let git = |args: &[&str]| git_output(repo, args);
     let Some(refs) = git(&[
         "for-each-ref",
         "--no-merged=origin/main",
@@ -136,7 +155,7 @@ pub fn branch_lanes(repo: &Path, keys: &[String]) -> Vec<Lane> {
     ]) else {
         return Vec::new();
     };
-    let own = git(&["symbolic-ref", "--short", "-q", "HEAD"]).map(|name| name.trim().to_owned());
+    let own = head_branch(repo);
     refs.lines()
         .filter(|name| !name.ends_with("/HEAD") && *name != "origin/main")
         .filter(|name| own.as_deref() != name.strip_prefix("origin/"))
@@ -190,8 +209,9 @@ pub fn refuse_held(
 }
 
 /// The admission check of a rendered or plain brief: its keys, and `extra` keys the launch
-/// card names, against the observed lanes. Returns the override reason that admitted a
-/// deliberate second lane and the keys admitted.
+/// card names, against the observed lanes. `override_reason` comes from explicit launch
+/// metadata only (the typed input or the card), never from the brief text. Returns the
+/// override reason that admitted a deliberate second lane and the keys admitted.
 pub fn admit(
     brief: &str,
     extra: &[String],
@@ -204,15 +224,97 @@ pub fn admit(
             keys.push(key.clone());
         }
     }
-    let override_reason = override_reason
-        .map(str::to_owned)
-        .or_else(|| override_line(brief));
     let lanes = if keys.is_empty() {
         Vec::new()
     } else {
         source.lanes(&keys)
     };
-    refuse_held(&keys, &lanes, override_reason.as_deref()).map(|reason| (reason, keys))
+    refuse_held(&keys, &lanes, override_reason).map(|reason| (reason, keys))
+}
+
+/// What a launch was admitted with: its keys, and the reason of a deliberate second lane.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Launched {
+    pub keys: Vec<String>,
+    pub lane_override: Option<String>,
+}
+
+/// The one admission of a writer launch (native dispatch, the spawner CLI, the feeder): render
+/// the prompt, take the override from `explicit` or the typed input, and check the keys of the
+/// brief and of the card (`extra`) against the live runs, the remote lane branches of `repo`
+/// and the Keeper's open lanes.
+pub fn admit_launch(
+    prompt: &str,
+    extra: &[String],
+    state: &Path,
+    repo: &Path,
+    explicit: Option<&str>,
+) -> Result<Launched, String> {
+    let rendered = crate::batch_writer_brief::render_input(prompt)?;
+    let observed = Observed::new(state.to_owned(), repo.to_owned());
+    let reason = explicit.or(rendered.lane_override.as_deref());
+    admit(&rendered.brief, extra, &observed, reason).map(|(lane_override, keys)| Launched {
+        keys,
+        lane_override,
+    })
+}
+
+/// `pg-spawnd lane-check [--state DIR] --repo DIR [--item KEY]... [--override REASON]` with the
+/// prompt on stdin: prints `{"item_keys":[..],"lane_override":..}` and exits 0 when the launch
+/// is admitted; exits 2 with the refusal on stderr otherwise.
+pub fn execute(
+    args: Vec<String>,
+    prompt: &mut dyn std::io::Read,
+    out: &mut dyn std::io::Write,
+) -> i32 {
+    let (mut state, mut repo, mut explicit) = (None, None, None);
+    let mut items = Vec::new();
+    let mut it = args.into_iter();
+    while let Some(flag) = it.next() {
+        match (flag.as_str(), it.next()) {
+            ("--state", Some(v)) => state = Some(PathBuf::from(v)),
+            ("--repo", Some(v)) => repo = Some(PathBuf::from(v)),
+            ("--item", Some(v)) => items.push(v),
+            ("--override", Some(v)) => explicit = Some(v),
+            _ => {
+                eprintln!("lane-check: usage: [--state DIR] --repo DIR [--item KEY]... [--override REASON] < prompt");
+                return 2;
+            }
+        }
+    }
+    let Some(repo) = repo else {
+        eprintln!("lane-check: --repo is required");
+        return 2;
+    };
+    let state = match state.map_or_else(
+        || crate::state::resolve_state(None, |key| std::env::var_os(key)),
+        Ok,
+    ) {
+        Ok(state) => state,
+        Err(error) => {
+            eprintln!("lane-check: {error}");
+            return 2;
+        }
+    };
+    let mut text = String::new();
+    if let Err(error) = prompt.read_to_string(&mut text) {
+        eprintln!("lane-check: prompt unreadable: {error}");
+        return 2;
+    }
+    match admit_launch(&text, &items, &state, &repo, explicit.as_deref()) {
+        Ok(admitted) => {
+            let _ = writeln!(
+                out,
+                "{}",
+                serde_json::json!({"item_keys":admitted.keys,"lane_override":admitted.lane_override})
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            2
+        }
+    }
 }
 
 /// `admit` for a brief without card keys.
@@ -273,12 +375,96 @@ mod tests {
     }
 
     #[test]
-    fn rendered_override_line_survives_the_forwarded_launch() {
+    fn an_override_line_in_the_brief_text_is_not_an_override() {
         let brief = format!("{BRIEF}LANE_OVERRIDE: second lane on purpose\n");
-        let reason = check_brief(&brief, &held("demo:ALPHA"), None);
-        assert_eq!(reason, Ok(Some("second lane on purpose".into())));
-        let blank = format!("{BRIEF}LANE_OVERRIDE:  \n");
-        assert!(check_brief(&blank, &held("demo:ALPHA"), None).is_err());
+        assert!(check_brief(&brief, &held("demo:ALPHA"), None).is_err());
+    }
+
+    #[test]
+    fn keeper_lanes_refuse_a_key_before_its_branch_exists_locally() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git(repo, &["init", "-q", "-b", "main"]);
+        git(repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let show = json!({"work_exists":{"lanes":["lane/other-host-beta"]}});
+        let observed = Observed {
+            state: repo.join("state"),
+            repo: repo.to_owned(),
+            keeper: Some(Box::new(move |_| Ok(show.clone()))),
+        };
+        let error = check_brief(BRIEF, &observed, None).unwrap_err();
+        assert!(
+            error.starts_with(
+                "lane_collision: demo:ALPHA is held by live lane lane/other-host-beta (keeper)"
+            ),
+            "{error}"
+        );
+        assert_eq!(
+            check_brief(BRIEF, &observed, Some(" on purpose ")),
+            Ok(Some("on purpose".into()))
+        );
+    }
+
+    #[test]
+    fn lane_check_verb_refuses_a_held_key_and_admits_an_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = dir.path().join("runs/run-held");
+        fs::create_dir_all(&run).unwrap();
+        fs::write(
+            run.join("record.json"),
+            json!({"run_id":"run-held","status":"running","role":"implement",
+                   "fleet_session_name":"writer-0673","item_key":"demo:ALPHA"})
+            .to_string(),
+        )
+        .unwrap();
+        let args = |extra: &[&str]| -> Vec<String> {
+            [
+                "--state",
+                dir.path().to_str().unwrap(),
+                "--repo",
+                "/nonexistent",
+                "--item",
+                "demo:ALPHA",
+            ]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .map(str::to_owned)
+            .collect()
+        };
+        let mut out = Vec::new();
+        assert_eq!(execute(args(&[]), &mut "brief".as_bytes(), &mut out), 2);
+        assert!(out.is_empty());
+        assert_eq!(
+            execute(args(&["--override", "  "]), &mut "".as_bytes(), &mut out),
+            2
+        );
+        assert_eq!(
+            execute(
+                args(&["--override", "fix lane"]),
+                &mut "".as_bytes(),
+                &mut out
+            ),
+            0
+        );
+        let admitted: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(admitted["lane_override"], "fix lane");
+        assert_eq!(admitted["item_keys"], json!(["demo:ALPHA"]));
+        // A key nobody holds needs no override.
+        let free = [
+            "--state",
+            dir.path().to_str().unwrap(),
+            "--repo",
+            "/nonexistent",
+            "--item",
+            "demo:FREE",
+        ];
+        let mut out = Vec::new();
+        let code = execute(
+            free.iter().map(|s| s.to_string()).collect(),
+            &mut "".as_bytes(),
+            &mut out,
+        );
+        assert_eq!(code, 0);
     }
 
     #[test]

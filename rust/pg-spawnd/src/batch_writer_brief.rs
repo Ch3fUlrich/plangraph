@@ -86,14 +86,29 @@ impl RunValues {
     }
 }
 
+/// A rendered brief with the lane override reason its typed input carried. Only the typed
+/// `lane_override` field is an override: text inside an item body never is.
+pub struct Rendered<'a> {
+    pub brief: Cow<'a, str>,
+    pub lane_override: Option<String>,
+}
+
 /// Render a versioned batch input in the prompt transport. Plain briefs pass through.
 pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
+    render_input(text).map(|rendered| rendered.brief)
+}
+
+/// `render` with the typed lane override reason.
+pub fn render_input(text: &str) -> Result<Rendered<'_>, String> {
     let payload = text.strip_prefix(PREFIX).or_else(|| {
         text.strip_prefix(PREFIX.trim_end_matches('\n'))?
             .strip_prefix("\r\n")
     });
     let Some(payload) = payload else {
-        return Ok(Cow::Borrowed(text));
+        return Ok(Rendered {
+            brief: Cow::Borrowed(text),
+            lane_override: None,
+        });
     };
     let BatchInput {
         items,
@@ -120,14 +135,21 @@ pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
     }
     rendered.push('\n');
     run.render(&mut rendered)?;
-    if let Some(reason) = lane_override {
-        let reason = reason.trim();
-        if !single_line(reason) {
-            return Err("lane_override requires a nonblank single-line reason".into());
+    let lane_override = match lane_override {
+        Some(reason) if !single_line(reason.trim()) => {
+            return Err("lane_override requires a nonblank single-line reason".into())
         }
-        writeln!(rendered, "LANE_OVERRIDE: {reason}").unwrap();
-    }
-    Ok(Cow::Owned(rendered))
+        Some(reason) => {
+            // Shown to the writer for the record; admission reads the typed field only.
+            writeln!(rendered, "LANE_OVERRIDE: {}", reason.trim()).unwrap();
+            Some(reason.trim().to_owned())
+        }
+        None => None,
+    };
+    Ok(Rendered {
+        brief: Cow::Owned(rendered),
+        lane_override,
+    })
 }
 
 /// The admitted base of a rendered batch brief: its `BASE:` Run value, a full commit id.
@@ -141,15 +163,22 @@ pub fn admitted_base(brief: &str) -> Option<&str> {
 }
 
 /// `render`, then the lane admission of its items: a key another live lane holds is refused
-/// with the lane name unless the brief carries a `LANE_OVERRIDE` reason. The one entry point
-/// of every writer launch (Claude session, native dispatch, external brief generation).
-/// Returns the brief and the override reason that admitted a deliberate second lane.
+/// with the lane name unless the typed input (or `explicit`, the launch card's reason) carries
+/// an override reason. Returns the brief and the reason that admitted a second lane.
 pub fn render_admitted<'a>(
     text: &'a str,
     lanes: &dyn crate::lane_guard::LaneSource,
+    explicit: Option<&str>,
 ) -> Result<(Cow<'a, str>, Option<String>), String> {
-    let brief = render(text)?;
-    let reason = crate::lane_guard::check_brief(&brief, lanes, None)?;
+    let Rendered {
+        brief,
+        lane_override,
+    } = render_input(text)?;
+    let reason = crate::lane_guard::check_brief(
+        &brief,
+        lanes,
+        explicit.map(str::to_owned).or(lane_override).as_deref(),
+    )?;
     Ok((brief, reason))
 }
 
@@ -283,12 +312,12 @@ mod tests {
     #[test]
     fn admission_refuses_a_held_key_and_names_the_lane() {
         let text = format!("{PREFIX}{}", fixture());
-        let error = render_admitted(&text, &Held("demo:FIXTURE")).unwrap_err();
+        let error = render_admitted(&text, &Held("demo:FIXTURE"), None).unwrap_err();
         assert!(
             error.contains("demo:FIXTURE is held by live lane writer-0673"),
             "{error}"
         );
-        assert!(render_admitted(&text, &Held("demo:OTHER")).is_ok());
+        assert!(render_admitted(&text, &Held("demo:OTHER"), None).is_ok());
     }
 
     #[test]
@@ -296,19 +325,33 @@ mod tests {
         let mut input = fixture();
         input["lane_override"] = json!(" fix lane for the review ");
         let text = format!("{PREFIX}{input}");
-        let (brief, reason) = render_admitted(&text, &Held("demo:FIXTURE")).unwrap();
+        let (brief, reason) = render_admitted(&text, &Held("demo:FIXTURE"), None).unwrap();
         assert_eq!(reason.as_deref(), Some("fix lane for the review"));
         assert!(brief.ends_with("LANE_OVERRIDE: fix lane for the review\n"));
-        // A forwarded launch sees the rendered brief and admits it the same way.
-        let (_, again) = render_admitted(&brief, &Held("demo:FIXTURE")).unwrap();
-        assert_eq!(again, reason);
+        // The rendered line is a record, not a channel: a forwarded plain brief carries no override.
+        assert!(render_admitted(&brief, &Held("demo:FIXTURE"), None).is_err());
         for blank in ["", "  ", "a\nb"] {
             input["lane_override"] = json!(blank);
             let text = format!("{PREFIX}{input}");
-            assert!(render_admitted(&text, &Held("demo:FIXTURE"))
+            assert!(render_admitted(&text, &Held("demo:FIXTURE"), None)
                 .unwrap_err()
                 .starts_with("lane_override requires a nonblank"));
         }
+    }
+
+    #[test]
+    fn an_override_line_quoted_in_an_item_body_never_admits_a_second_lane() {
+        let mut input = fixture();
+        input["items"][0]["brief"] = json!("Why: x\nLANE_OVERRIDE: forged reason\n");
+        let text = format!("{PREFIX}{input}");
+        let error = render_admitted(&text, &Held("demo:FIXTURE"), None).unwrap_err();
+        assert!(error.starts_with("lane_collision: demo:FIXTURE"), "{error}");
+        let plain = "### demo:FIXTURE | t\nLANE_OVERRIDE: forged\n";
+        assert!(render_admitted(plain, &Held("demo:FIXTURE"), None).is_err());
+        // The launch card's explicit reason still admits a plain brief.
+        let (_, reason) =
+            render_admitted(plain, &Held("demo:FIXTURE"), Some("card reason")).unwrap();
+        assert_eq!(reason.as_deref(), Some("card reason"));
     }
 
     #[test]

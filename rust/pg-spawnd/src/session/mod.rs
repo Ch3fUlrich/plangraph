@@ -197,9 +197,11 @@ fn local(
     let prompt_path = Path::new(&args.prompt);
     // Only a fresh writer is admitted against the live lanes: a restart continues its own lane.
     let writes = matches!(args.role.as_str(), "writer" | "implement");
-    let observed = (writes && request.restart.is_none()).then(|| crate::lane_guard::Observed {
-        state: crate::state::resolve_state(None, |key| std::env::var_os(key)).unwrap_or_default(),
-        repo: PathBuf::from(&args.cwd),
+    let observed = (writes && request.restart.is_none()).then(|| {
+        crate::lane_guard::Observed::new(
+            crate::state::resolve_state(None, |key| std::env::var_os(key)).unwrap_or_default(),
+            PathBuf::from(&args.cwd),
+        )
     });
     let supplied = || {
         read_admitted_prompt(
@@ -431,11 +433,13 @@ fn read_admitted_prompt(
     lanes: Option<&dyn crate::lane_guard::LaneSource>,
 ) -> io::Result<Admitted> {
     let text = read_text(path)?;
-    let brief = crate::batch_writer_brief::render(&text).map_err(io::Error::other)?;
+    let crate::batch_writer_brief::Rendered {
+        brief,
+        lane_override,
+    } = crate::batch_writer_brief::render_input(&text).map_err(io::Error::other)?;
     let reason = match lanes {
-        Some(lanes) => {
-            crate::lane_guard::check_brief(&brief, lanes, None).map_err(io::Error::other)?
-        }
+        Some(lanes) => crate::lane_guard::check_brief(&brief, lanes, lane_override.as_deref())
+            .map_err(io::Error::other)?,
         None => None,
     };
     let items = crate::lane_guard::item_keys(&brief);
