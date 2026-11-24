@@ -95,9 +95,10 @@ fn scissors_marker<'a>(
         })
 }
 
-/// Refusals for the Class-Search lines of the message Git keeps (`kept`, before the scissors cut):
-/// the lines are read before whitespace cleanup, because `--cleanup=verbatim` keeps trailing
-/// whitespace that the range check then refuses.
+/// Refusals for every Class-Search line of the message file, below a scissors line too: Git cuts
+/// there only for an editor message (a `-m` message keeps it under any cleanup), and the hook cannot
+/// tell the cases apart. The lines are read before whitespace cleanup, because `--cleanup=verbatim`
+/// keeps trailing whitespace that the range check then refuses.
 fn class_search_violations(kept: &[u8]) -> Vec<String> {
     let mut violations = Vec::new();
     for (index, line) in kept.split(|b| *b == b'\n').enumerate() {
@@ -134,7 +135,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let configured = config_value("core.commentString")?.or(config_value("core.commentChar")?);
     let marker = scissors_marker(&raw, strip_comments, configured.as_deref());
     let cut = marker.map_or(raw.len(), |(offset, _)| offset);
-    let class_search = class_search_violations(&raw[..cut]);
+    let class_search = class_search_violations(&raw);
     if merge.status.success() {
         // A merge needs no attribution, but its Class-Search lines reach the same range check.
         for violation in &class_search {
