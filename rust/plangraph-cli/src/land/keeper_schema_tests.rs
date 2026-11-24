@@ -23,7 +23,7 @@ fn commit(fx: &Fx, text: Option<&str>) -> String {
 fn the_version_counts_registry_entries_and_ignores_the_class_line() {
     assert_eq!(parse_latest(ONE), Ok(2));
     assert_eq!(parse_latest(THREE), Ok(3));
-    assert_eq!(parse_latest("nothing here"), Ok(0));
+    assert!(parse_latest("nothing here").is_err());
     assert!(parse_latest("MIGRATIONS = (Migration(1, a), Migration(3, c))").is_err());
     assert!(parse_latest("MIGRATIONS = (Migration(1, a), Migration(1, a))").is_err());
 }
@@ -48,7 +48,7 @@ fn only_direct_registry_entries_count_and_strings_comments_and_other_mentions_ar
     assert_eq!(parse_latest(text), Ok(2));
     assert!(parse_latest("MIGRATIONS = (Migration(1, a), g(2))\n").is_err());
     assert!(parse_latest("MIGRATIONS = (Migration(1, a),\n").is_err());
-    assert_eq!(parse_latest("x = 1\n"), Ok(0));
+    assert!(parse_latest("x = 1\n").is_err());
 }
 
 #[test]
@@ -82,9 +82,35 @@ fn the_keeper_schema_command_prints_both_versions_and_refuses_a_bad_revision() {
     };
     assert_eq!(
         run_cli(&flags(&two, &three)).unwrap(),
-        ["keeper-schema base 2 head 3"]
+        [r#"{"keeper_schema":{"base":2,"head":3},"migration":null}"#]
     );
     assert!(run_cli(&flags(&two, &"0".repeat(40))).is_err());
     let missing = std::collections::BTreeMap::from([("repo".to_string(), ".".to_string())]);
     assert!(run_cli(&missing).unwrap_err().contains("missing --base"));
+}
+
+#[test]
+fn a_registry_example_in_a_docstring_or_comment_is_not_the_registry() {
+    let real = "MIGRATIONS = (Migration(1, a), Migration(2, b))\n";
+    let doc = format!("\"\"\"Shape:\nMIGRATIONS = (Migration(1, a),)\n\"\"\"\n{real}");
+    assert_eq!(parse_latest(&doc), Ok(2));
+    let single = format!("'''\nMIGRATIONS = (Migration(1, a),)\n'''\n{real}");
+    assert_eq!(parse_latest(&single), Ok(2));
+    let comment = format!("# MIGRATIONS = (Migration(1, a),)\n{real}");
+    assert_eq!(parse_latest(&comment), Ok(2));
+    assert!(parse_latest("\"\"\"\nMIGRATIONS = (Migration(1, a),)\n\"\"\"\n").is_err());
+    let twice = format!("MIGRATIONS = (Migration(1, a),)\n{real}");
+    assert!(parse_latest(&twice).is_err());
+}
+
+#[test]
+fn the_migration_field_is_read_like_the_batch_land_gate_reads_it() {
+    assert_eq!(
+        migration_field("GO #9 GO-HEAD abc; MIGRATION 3; PLAN x"),
+        Ok(Some(3))
+    );
+    assert_eq!(migration_field("GO #9 GO-HEAD abc"), Ok(None));
+    assert_eq!(migration_field("MIGRATION 3 GO #9"), Ok(None));
+    assert!(migration_field("GO #9; MIGRATION 3; MIGRATION 3").is_err());
+    assert!(migration_field("GO #9; MIGRATION three").is_err());
 }

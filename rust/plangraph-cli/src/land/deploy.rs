@@ -22,9 +22,6 @@ pub struct PartDeploy {
     pub items: BTreeSet<String>,
     /// Hosts of the `Deploy:` trailers of the part's own commits.
     pub trailer_hosts: BTreeSet<String>,
-    /// The keeper schema version this part raises to (above its own base); `None` when it does not raise it.
-    #[serde(default)]
-    pub keeper_migration: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,7 +199,6 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
         families,
         items,
         trailer_hosts: hosts,
-        keeper_migration: super::keeper_schema::rise(repo, from, &part.head)?,
     })
 }
 
@@ -235,6 +231,13 @@ fn hosts_of(
         item_level
     };
     named.into_iter().partition(|h| authorized.contains(h))
+}
+
+/// The keeper schema version the whole train raises to: the manifest base against the final train commit,
+/// so a part branched from an older main never reads as a regression and a migration brought in by an
+/// adopted resolution is not missed.
+pub fn train_migration(repo: &Path, manifest: &Manifest) -> Result<Option<u32>, String> {
+    super::keeper_schema::rise(repo, &manifest.base, &manifest.train_sha)
 }
 
 /// The plan: probe each (family, host) of each part that ships one. Unitless parts contribute nothing.
@@ -290,7 +293,7 @@ pub fn deploy_plan(
         }
     }
     DeployPlan {
-        keeper_migration: parts.iter().filter_map(|p| p.keeper_migration).max(),
+        keeper_migration: None,
         targets: ok
             .into_iter()
             .map(|((family, host), parts)| Target {
@@ -336,7 +339,8 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
             .collect(),
     };
     let parts = derive(Path::new(need("repo")?), &manifest)?;
-    let plan = deploy_plan(&parts, &declared, &authorized, &probe);
+    let mut plan = deploy_plan(&parts, &declared, &authorized, &probe);
+    plan.keeper_migration = train_migration(Path::new(need("repo")?), &manifest)?;
     if let Some(out) = flags.get("blockers-out") {
         let text = serde_json::to_vec_pretty(&plan.blocker_items()).map_err(|e| e.to_string())?;
         std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
