@@ -179,6 +179,14 @@ fn reconcile(item: &Task) -> bool {
             .iter()
             .any(|k| item.fields.get(*k).is_some_and(signal))
 }
+/// The keeper's effective priority (own value raised by what the item blocks);
+/// the stored priority when the row carries none. The feeder never recomputes it.
+fn effective(item: &Task) -> i64 {
+    item.fields
+        .get("effective_priority")
+        .and_then(Value::as_i64)
+        .unwrap_or(item.priority)
+}
 fn age(item: &Task) -> i64 {
     item.created_at
         .as_deref()
@@ -212,7 +220,7 @@ fn eligible(ready: &Value, runs: &[Run]) -> Option<Vec<Task>> {
     items.sort_by(|a, b| {
         class(a)
             .cmp(&class(b))
-            .then(b.priority.cmp(&a.priority))
+            .then(effective(b).cmp(&effective(a)))
             .then(age(a).cmp(&age(b)))
             .then(a.key.cmp(&b.key))
     });

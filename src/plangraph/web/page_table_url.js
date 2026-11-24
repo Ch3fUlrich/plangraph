@@ -145,6 +145,12 @@
   PlanUI.tableUrlDecode = tableUrlDecode;
   PlanUI.tableUrlMerge = tableUrlMerge;
 
+  /* The keeper's effective priority (own value raised by what the item blocks);
+   * the stored value when the row carries none. */
+  PlanUI.effectivePriority = function (r) {
+    return Number(r.effective_priority != null ? r.effective_priority : r.priority) || 0;
+  };
+
   if (typeof module !== "undefined" && module.exports) {
     module.exports = PlanUI;
   }

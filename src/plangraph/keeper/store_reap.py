@@ -6,6 +6,7 @@ have run too long, using the shared plumbing on the ``Store`` base class.
 """
 from __future__ import annotations
 
+from .. import views
 from .store_input import GATE_DEPENDENCY_WARNING, GATE_KINDS
 
 
@@ -54,10 +55,22 @@ class ReapMixin:
                         overdue.append(item["key"])
             gate_alerts = self._check_gate_capacity(items, now)
             aged = self._age_priorities(principal, now)
+            self._record_inheritance(self._all_items(), now)   # the graph after aging
             alerts = self._alerts_expire(now)
         if expired or aged or findings or alerts or gate_alerts:
             self._reap_revision = getattr(self, "_reap_revision", 0) + 1
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}
+
+    def _record_inheritance(self, items, now):
+        """The day's count of items raised by priority inheritance and the longest chain."""
+        stats = views.inheritance_stats(views.effective_priorities(items)[0])
+        stamp = self._iso(now)
+        for metric, value in (("priority_inherit_raised", stats["raised"]),
+                              ("priority_inherit_longest_chain", stats["longest_chain"])):
+            self.conn.execute(
+                "INSERT INTO metrics(day,metric,value,source,computed_at) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
+                "computed_at=excluded.computed_at", (stamp[:10], metric, float(value), "reap", stamp))
 
     def _check_gate_capacity(self, items, now):
         code = "gate_dependency_capacity"
