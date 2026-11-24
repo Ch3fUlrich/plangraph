@@ -108,3 +108,28 @@ fn push_only_retry_refuses_a_head_that_moved() {
         .contains("no longer the accepted head"));
     assert!(driver.calls.is_empty() && driver.pushed.is_empty());
 }
+
+#[test]
+fn resume_of_an_ended_run_with_a_pending_push_only_pushes() {
+    // `pg-spawnd resume` enters through `run_resume`, never `run`.
+    let mut driver = Fake {
+        reclaim_failures: 1,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["push_pending"]["head"], "final-head");
+    let reviews = driver.reviews.len();
+
+    let retried = run_resume(&mut driver, record, "same-session", "operator retry");
+    assert_eq!(retried["status"], "completed", "{retried}");
+    assert_eq!(retried["pushed"], "refs/heads/lane/fixture");
+    assert!(retried["push_pending"].is_null());
+    // No writer turn (the operator prompt never reaches the writer) and no new review.
+    assert_eq!(driver.calls, [None]);
+    assert!(driver
+        .prompts
+        .iter()
+        .all(|prompt| !prompt.contains("operator retry")));
+    assert_eq!(driver.reviews.len(), reviews);
+    assert_eq!(driver.pushed, ["final-head"]);
+}
