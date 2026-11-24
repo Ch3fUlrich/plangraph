@@ -13,6 +13,12 @@ import merge_batch_land as land  # noqa: E402
 JOBS = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
 
 
+DRAFT_LANE_SKIP = (
+    "!(github.event_name == 'pull_request' && github.event.pull_request.draft"
+    " && startsWith(github.head_ref, 'lane/'))"
+)
+
+
 def _static(name: str) -> str:
     return re.sub(r"\$\{\{.*?\}\}", "N", name)
 
@@ -52,11 +58,12 @@ def test_job_readers_accept_new_and_old_names():
 def _runs(job: str, event: str, head_ref: str = "", draft: bool = False) -> bool:
     """Evaluate a job's `if:` for an event; jobs needing select follow select."""
     body = JOBS[job]
-    cond = str(body.get("if", "true")).strip()
+    cond = str(body.get("if", "True")).strip()
     if "needs.select" in cond:
         return _runs("select", event, head_ref, draft)
     expr = re.sub(r"^\$\{\{(.*)\}\}$", r"\1", cond).strip()
     expr = expr.replace("&&", " and ").replace("||", " or ").replace("!(", " not (")
+    expr = re.sub(r"\btrue\b", "True", re.sub(r"\bfalse\b", "False", expr))
     expr = re.sub(r"always\(\)", "True", expr)
     expr = re.sub(r"startsWith\(([\w.]+), '([^']*)'\)", r"\1.startswith('\2')", expr)
     expr = expr.replace("github.event_name", "ev").replace("github.event.pull_request.draft", "draft")
@@ -89,3 +96,7 @@ def test_draft_lane_pr_skips_the_required_ci_gate_too():
     # A skipped required job reports success, so no check stays pending.
     assert not _runs("ci-gate", "pull_request", "lane/b", True)
     assert _runs("ci-gate", "pull_request", "land/train-1", True)
+    # always() stays: the gate must still judge a skipped or failed needed job on every other run.
+    assert JOBS["ci-gate"]["if"] == "${{ always() && " + DRAFT_LANE_SKIP + " }}"
+    for job in ("select", "scrub", "file-size", "new-code-lang", "changelog-docs"):
+        assert JOBS[job]["if"] == "${{ " + DRAFT_LANE_SKIP + " }}"
