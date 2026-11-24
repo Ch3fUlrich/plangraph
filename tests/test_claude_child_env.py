@@ -460,25 +460,26 @@ def _fake_messages_api(commands, log):
     return server
 
 
-def _launch_claude_writer_against_fake_api(monkeypatch, tmp_path, *, enforce):
-    """Launch the claude writer through SpawnerRunner.spawn, the route's own launch function, with a
-    user settings file that excludes ``cat`` from the sandbox. The factory only adds the fake endpoint
-    the route's environment filter drops. The run reads a denied fixture and a control fixture."""
+def _launch_claude_writer_against_fake_api(monkeypatch, root, *, enforce, rules=True, masks=True):
+    """Launch the claude writer through SpawnerRunner.spawn, the route's own launch function, in ``root``
+    as its working directory, with a user settings file that excludes ``cat`` from the sandbox. The factory
+    only adds the fake endpoint the route's environment filter drops. One process reads a control fixture
+    in the working directory and then a fixture under the denied config path, in two tool calls.
+    ``rules=False`` leaves out the generated Read permission rules and ``masks=False`` the generated
+    sandbox denyRead paths (variants of the generated settings, to tell the layers apart)."""
     import json
     import shutil
     from plangraph.routing_support import claude_seat
-    home = tmp_path / 'home'
+    home = root / 'home'
     denied = home / '.config' / 'plangraph' / 'fixture-secret'
-    control = tmp_path / 'control-fixture'
-    denied.parent.mkdir(parents=True)
+    control = root / 'control-fixture'
+    denied.parent.mkdir(parents=True, exist_ok=True)
     denied.write_text('DENIED-FIXTURE-TEXT')
     control.write_text('CONTROL-FIXTURE-TEXT')
-    (home / '.claude').mkdir()
+    (home / '.claude').mkdir(exist_ok=True)
     (home / '.claude' / 'settings.json').write_text(json.dumps({'sandbox': {'excludedCommands': ['cat']}}))
-    link = tmp_path / 'link-to-denied'       # a path the permission rules do not name: only the sandbox can stop it
-    link.symlink_to(denied)
     results = []
-    server = _fake_messages_api([f'cat {control}', f'cat {denied}', f'cat {link}'], results)
+    server = _fake_messages_api([f'cat {control}', f'cat {denied}'], results)
     for name in ('XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR'):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv('HOME', str(home))
@@ -486,16 +487,20 @@ def _launch_claude_writer_against_fake_api(monkeypatch, tmp_path, *, enforce):
     if not enforce:       # plumbing check only: the gates are open and the run is unconfined
         monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: True)
         monkeypatch.setattr(claude_seat, 'sandbox_denies_reads', lambda env: True)
+    if not rules:
+        monkeypatch.setattr(claude_seat, 'read_deny_rules', lambda paths: [])
+    if not masks:
+        monkeypatch.setattr(claude_seat, '_credential_paths', lambda env: [])
 
     async def factory(exe, *args, **kw):
         kw['env'] = dict(kw['env'], ANTHROPIC_BASE_URL=f'http://127.0.0.1:{server.server_port}',
                          ANTHROPIC_API_KEY='sk-' + 'ant-fixture-not-real')
         return await asyncio.create_subprocess_exec(exe, *args, **kw)
 
-    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    runner = SpawnerRunner(default_cwd=str(root), process_factory=factory)
     try:
         job = asyncio.run(runner.spawn('read the fixtures', 'claude-haiku-5-5', role='implement', client='claude',
-                                       cwd=str(tmp_path), wait_seconds=90))
+                                       cwd=str(root), wait_seconds=90))
     finally:
         server.shutdown()
     return job, results
@@ -512,26 +517,57 @@ def _claude_sandbox_runs_here():
     return bool(shutil.which('claude')) and all(gate(dict(os.environ)) for gate in _REAL_SANDBOX_GATES)
 
 
-def test_a_launched_claude_writer_cannot_read_a_denied_fixture_under_a_user_sandbox_exclusion(monkeypatch, tmp_path):
-    """The one real-boundary test: the seat process starts through the route's launch function with the
-    generated settings, a user settings file names a sandbox exclusion for cat, and the run tries to read a
-    fixture under the denied config directory. The read fails and the failure is what the model is shown."""
+def _fixture_root_outside_dev_shm():
+    """A fresh directory on an ordinary file system. The sandbox builds its own /dev, so a fixture under
+    /dev/shm (where a test base temp may live) is missing there for a reason that is not a denial."""
+    import tempfile
+    for base in ('/var/tmp', str(Path.home() / '.cache')):
+        if os.path.isdir(base) and os.access(base, os.W_OK):
+            return Path(tempfile.mkdtemp(prefix='plangraph-claude-fixture-', dir=base))
+    return None
+
+
+def test_a_launched_claude_writer_cannot_read_a_denied_fixture_under_a_user_sandbox_exclusion(monkeypatch):
+    """The real-boundary test, in three launches of the real claude binary through the route's launch function.
+    Each launch is one process that reads a control fixture in its working directory and then a fixture under
+    the denied config path, with a user settings file that excludes cat from the sandbox.
+    (1) masks and rules left out: both reads reach the shell and show their text, so the fixture is visible.
+    (2) generated sandbox denyRead only, no permission rule: the control read works and the same kind of read
+        of the denied fixture fails inside the shell (a cat error), not at a permission prompt: the masking.
+    (3) the generated settings in full: the denied read is refused, whichever layer answers first."""
+    import shutil
     if not _claude_sandbox_runs_here():
         pytest.skip('needs the claude binary and a sandbox that starts and hides a fixture (bwrap and socat); '
                     'on other hosts the route is refused, see test_a_claude_writer_is_not_started_where_enforcement_cannot_be_verified')
-    job, results = _launch_claude_writer_against_fake_api(monkeypatch, tmp_path, enforce=True)
+    root = _fixture_root_outside_dev_shm()
+    if root is None:
+        pytest.skip('no writable directory outside /dev/shm for the fixtures')
+    try:
+        with monkeypatch.context() as patch:
+            job, (control, denied) = _check_two_results(
+                _launch_claude_writer_against_fake_api(patch, root / 'open', enforce=True, rules=False, masks=False))
+        assert 'CONTROL-FIXTURE-TEXT' in control and 'DENIED-FIXTURE-TEXT' in denied, (control, denied)
+        with monkeypatch.context() as patch:
+            job, (control, denied) = _check_two_results(
+                _launch_claude_writer_against_fake_api(patch, root / 'masked', enforce=True, rules=False))
+        assert 'CONTROL-FIXTURE-TEXT' in control, 'the launched shell did not run the permitted control read'
+        assert 'DENIED-FIXTURE-TEXT' not in denied
+        assert 'has been denied' not in denied and 'Permission to use' not in denied, 'a permission refusal, not masking'
+        assert 'No such file' in denied or 'Permission denied' in denied, denied
+        with monkeypatch.context() as patch:
+            job, (control, denied) = _check_two_results(
+                _launch_claude_writer_against_fake_api(patch, root / 'full', enforce=True))
+        assert 'CONTROL-FIXTURE-TEXT' in control
+        assert 'DENIED-FIXTURE-TEXT' not in denied and 'denied' in denied.lower()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_two_results(launched):
+    job, results = launched
     assert job.status == 'completed', (job.status, job.stderr)
-    assert len(results) == 3, f'expected one result per tool call, got {len(results)}'
-    control, denied, via_link = results
-    # What a launched writer may run through Bash under the generated settings (observed with the sandbox
-    # removed: plan mode, -p): a simple read-only command on an allowed path runs; a command that names a
-    # path of the deny list is refused by the generated Read rule; shells and interpreters are not run.
-    assert 'CONTROL-FIXTURE-TEXT' in control, 'the launched shell did not run the permitted control read'
-    assert 'DENIED-FIXTURE-TEXT' not in denied and 'denied' in denied.lower()          # the permission layer
-    # The symlink name is not on the deny list: this read reaches the file system, so only the sandbox
-    # (denyRead, with the user exclusion for cat ignored) can stop it.
-    assert 'DENIED-FIXTURE-TEXT' not in via_link
-    assert any(word in via_link for word in ('Permission denied', 'No such file', 'denied', 'blocked')), via_link
+    assert len(results) == 2, f'expected one result per tool call, got {len(results)}'
+    return job, results
 
 
 def test_the_real_claude_binary_fails_closed_under_the_generated_settings_when_its_sandbox_cannot_start(monkeypatch, tmp_path):
