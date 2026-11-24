@@ -346,3 +346,17 @@ def test_self_matching_pgrep_wait_loops():
         "while true; do pgrep -f fixture; sleep 5; done",
     ):
         assert run_bash(command).returncode == 0, command
+
+
+@cases([
+    ("while_gh", "while true; do gh pr view 1270 --json statusCheckRollup; sleep 30; done", "plangraph wait ci"),
+    ("until_gh_run", "until gh run view 45370719249 | grep -q completed; do sleep 20; done", "plangraph wait ci"),
+    ("for_ssh", "for i in 1 2 3; do ssh host test -f /x && break; sleep 10; done", "plangraph wait ci"),
+    ("nested_shell", "bash -c 'while ! gh pr checks 5; do sleep 9; done'", "plangraph wait ci"),
+])
+def test_a_sleep_loop_over_gh_or_ssh_is_refused(name, cmd, needle):
+    from bash_guard_support import run_bash
+
+    output = run_bash(cmd)
+    assert output.returncode == 2, output.stderr
+    assert needle in output.stderr.decode()

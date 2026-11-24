@@ -16,7 +16,8 @@ import time
 import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pgtest import affected_pytest, keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
+from pgtest import (affected_parser, affected_pytest, build_fleet_spawnd, keeper_postgres_files, postgres_bin, report_batches,
+                    run_flag_in, run_keeper_postgres, test_environment, with_result_line)
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
@@ -648,24 +649,13 @@ def pushed_parts_files(root, base, head, union=False, standalone=False):
         return None
 
 
-def main(root=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True)
-    parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
-    parser.add_argument("--run", action="store_true")
-    parser.add_argument("--fleet-spawnd-prebuilt", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--collect-only", action="store_true", help="validate the unsharded selection without running tests")
-    parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
-    parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
-    parser.add_argument("--loud", action="store_true", help="pytest's default report, no quiet flags")
-    parser.add_argument("--keep-local-bound", action="store_true", help="keep the local test bound for spawner/planner core changes (the pre-push hook has a fixed deadline)")
-    parser.add_argument("--parts-union", action="store_true", help="a pushed batch or train selects the union of every part's changed files, not only the files parts share")
-    parser.add_argument("--maxfail", type=int, default=0)
-    parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
-    parser.add_argument("-n", "--workers", default="auto")
-    parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
-    parser.add_argument("--root", default=None, help="repository root")
-    args = parser.parse_args()
+def build_parser():
+    return affected_parser(__doc__)
+
+
+def _main(root=None):
+    args = build_parser().parse_args()
+    _RUN_MODE[:] = [args.run]
     if root is None:
         root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parents[1]
     else:
@@ -702,10 +692,10 @@ def main(root=None):
         return 1
     if args.within is not None and not plan["tests"]:
         print("no pg-affected tests")
-        return 0
+        return report_batches([]) if args.run else 0
     if args.run and not plan["tests"]:
         print("no affected tests")
-        return 0
+        return report_batches([])
     if args.run and plan["tests"]:
         if importlib.util.find_spec("pytest") is None:
             print(f"FAIL pytest-missing: {sys.executable}; install with {sys.executable} -m pip install -e .[test]", file=sys.stderr)
@@ -727,18 +717,9 @@ def main(root=None):
         fleet = (args.local and not args.collect_only
                  and 'tests/test_fleet_snapshot.py' in plan['tests'])
         if fleet and not args.fleet_spawnd_prebuilt:
-            # Push preflight runs in a detached checkout, even when the writer
-            # already built pg-spawnd in the worktree that launched the hook.
-            print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
-            try:
-                build = subprocess.run(
-                    ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'pg-spawnd'],
-                    cwd=root, env=env)
-                if build.returncode:
-                    return build.returncode
-            except OSError as error:
-                print(f'CARGO FAIL: could not prepare pg-spawnd ({error})', file=sys.stderr)
-                return 1
+            failed = build_fleet_spawnd(root, env)
+            if failed:
+                return failed
         if args.collect_only:
             env.pop("PYTEST_SHARD", None)
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
@@ -789,11 +770,25 @@ def main(root=None):
                 hashes.append(tree_hash(root))
                 for line in flake_labels(failed, low, high, hashes, parallel=ran_workers):
                     print(line)
-            if args.within is not None:
-                return code
-            postgres = run_keeper_postgres(root, changed, env, runner=run_pytest)
-            return code or postgres
+            batches = [("pytest", code)]
+            if args.within is None and keeper_postgres_files(root, changed):
+                batches.append(("keeper-postgres", run_keeper_postgres(root, changed, env, runner=run_pytest)))
+            return report_batches(batches)
     return 0
+
+
+_RUN_MODE = []
+
+
+def _wants_run():
+    """The one parse's answer; only a failed parse falls back to reading argv (never a second parse)."""
+    return _RUN_MODE[0] if _RUN_MODE else run_flag_in(sys.argv[1:])
+
+
+def main(root=None):
+    """Every `--run` ends with one AFFECTED line, also when the selection is refused before a batch runs."""
+    _RUN_MODE.clear()
+    return with_result_line(lambda: _main(root), _wants_run)
 
 
 if __name__ == "__main__":

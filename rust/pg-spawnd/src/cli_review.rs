@@ -122,11 +122,10 @@ pub(crate) fn prepare(
         }
     }
     let gitdir = git(&launch.cwd, &["rev-parse", "--absolute-git-dir"])?;
-    if !Path::new(&gitdir).join("fast-checks").join(&head).is_file()
-        && !pg_worker_core::worktree::fast_check_stamp(&launch.cwd, &head)
-            .map_err(|e| parameter(e.to_string()))?
-            .is_file()
-    {
+    // A missing or red receipt refuses the review: only a green one of exactly this head passes.
+    let own = std::fs::read_to_string(Path::new(&gitdir).join("fast-checks").join(&head))
+        .is_ok_and(|text| pg_worker_core::fast_check_stamp::text_is_green(&text, &head));
+    if !own && !pg_worker_core::fast_check_stamp::green(&launch.cwd, &head) {
         return Err(parameter("CLI review requires fast-checks stamp for HEAD"));
     }
     let dispatch = Dispatch::new(&launch.cwd, head, reference)?;

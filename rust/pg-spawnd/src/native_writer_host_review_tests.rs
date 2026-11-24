@@ -232,3 +232,89 @@ fn native_sonnet_pass_requires_reported_tests() {
         assert_eq!(verdict["verdict"], expected, "{verdict}");
     }
 }
+
+/// A PATH whose `plangraph` stands in for the shared exact-head fast checks (the real command is
+/// tested in plangraph-cli): it publishes a receipt through the same files and refs the producer
+/// uses, so the host's use of it (run, read green, copy to its stamp, push) is what is tested.
+#[cfg(unix)]
+pub(super) fn fake_plangraph_path(dir: &Path) -> String {
+    let bin = dir.join("fake-bin");
+    fs::create_dir_all(&bin).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        bin.join("plangraph"),
+        format!(
+            "#!/bin/sh\n{}",
+            include_str!("../tests/fixtures/fake-plangraph-fast-checks.txt")
+        ),
+    );
+    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
+}
+
+/// Windows has no shell to stand in for the command: the host tests that need it are unix-only.
+#[cfg(not(unix))]
+pub(super) fn fake_plangraph_path(_: &Path) -> String {
+    std::env::var("PATH").unwrap()
+}
+
+/// The fast-check receipt is the shared producer's (structured, in the shared state and as one
+/// parentless commit), and the push sends the head and its per-lane receipt ref in one atomic push.
+#[cfg(unix)]
+pub(super) fn assert_shared_receipt_and_push(host: &mut Host, dir: &Path, head: &str) {
+    let cwd = host.cwd.clone();
+    let receipt = fs::read_to_string(host.stamp(head).unwrap()).unwrap();
+    assert!(
+        receipt.starts_with(&format!(
+            "head {head}\nresult green\ncheck fake-fast-checks rc=0 "
+        )),
+        "{receipt}"
+    );
+    assert!(pg_worker_core::fast_check_stamp::green(&cwd, head));
+    let remote = dir.join("receipts-remote.git");
+    host.git(&["init", "-q", "--bare", remote.to_str().unwrap()])
+        .unwrap();
+    host.git(&["remote", "set-url", "origin", remote.to_str().unwrap()])
+        .unwrap();
+    host.push_ref = Some("refs/heads/lane/h".into());
+    host.push(head).unwrap();
+    let tip = pg_worker_core::git::git(
+        &remote,
+        &["rev-parse", "refs/notes/plangraph-fast-checks-lane%2fh"],
+    )
+    .unwrap();
+    assert_eq!(
+        pg_worker_core::fast_check_stamp::notes_commit_green(&remote, &tip, Some(head)),
+        Ok(())
+    );
+    assert_eq!(
+        pg_worker_core::git::git(&remote, &["rev-parse", "refs/heads/lane/h"]).unwrap(),
+        head
+    );
+    host.push_ref = None;
+}
+
+/// A fresh feeder launch renders its brief before the worktree exists: the gate paths come from
+/// the host repository, not from the display `WORKTREE` sentence or the missing worktree.
+#[test]
+fn a_fresh_feeder_launch_renders_the_gate_paths_before_its_worktree_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(repo.join("tools")).unwrap();
+    fs::write(
+        repo.join("tools/ci_commit_gate.py"),
+        "GATE_PATHS: tuple[str, ...] = (\n    'tools/ci_commit_gate.py',\n    '.github/workflows/*',\n)\n",
+    )
+    .unwrap();
+    let record_path = dir.path().join("state/runs/run-fresh/record.json");
+    let record = json!({"run_id":"run-fresh", "repo":repo, "base_ref":"refs/heads/main",
+        "tool_path":"/nonexistent", "cwd":dir.path().join("worktree-not-yet-created")});
+    let request = json!({"record":record, "record_path":record_path, "card":{},
+        "prompt": include_str!("../tests/fixtures/feeder-batch-input.txt")});
+    let mut host = Host::from_request(&request, &record, record_path).unwrap();
+    host.configure(&request).unwrap();
+    let line = host
+        .brief
+        .lines()
+        .find(|line| line.starts_with("GATE_PATHS "))
+        .unwrap_or_else(|| panic!("no GATE_PATHS line in {}", host.brief));
+    assert!(line.contains("tools/ci_commit_gate.py") && line.contains(".github/workflows/*"));
+}

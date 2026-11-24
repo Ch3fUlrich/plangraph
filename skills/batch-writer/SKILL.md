@@ -65,6 +65,12 @@ Use grep for text that is not a symbol.
    A merge of main into
    your lane that resolves a conflict in `.github/workflows/*` or another gate file needs
    the item's `Gate-Edit: D-id` trailer in the merge message, or the pre-push gate refuses it.
+   When the Run values carry a `PUSH:` line, after every item commit run the one stamp
+   command (`plangraph fast-checks --owned-worktree`), then run the PUSH command exactly as
+   printed: one atomic push of `lane/<NAME>` and its designated receipt ref (one parentless receipt commit), no pull request.
+   For a `lane/*` ref the pre-push hook runs the public scrub, the commit gate and the receipt
+   gate only (seconds, no test, no worktree); it refuses a head whose green receipt is not in
+   the same push, with no bypass. Without a `PUSH:` line the orchestrator or the host pushes.
 6. An item that still fails after two attempts: before any commit of it, discard its
    edits (`git restore` and remove its new files), write `SKIPPED <key> <reason>`, take
    the next item. Skip a later item that needs the skipped one. One failing item never
@@ -73,7 +79,11 @@ Use grep for text that is not a symbol.
 ## When all items are committed
 
 7. Run FAST_CHECKS on WORKTREE (affected tests and lints; it writes the stamp for this
-   exact head). Fix, commit and rerun until green.
+   exact head: `plangraph fast-checks --owned-worktree --base BASE`, one command). Read its
+   exit code and the stamp (`head`, `result`, one `check` line each), never the tail of a
+   log: `affected_tests.py --run` ends with `AFFECTED rc=<n> batches=<k> failed=<m>`.
+   Fix, commit and rerun until green. A head without a green stamp is neither pushed nor
+   reviewed.
 8. Write the review prompt file: the item keys with their Done-when lines, the skipped
    items with their reasons, the range BASE..HEAD. From round 2 on add the previously
    reviewed head and every earlier finding with what you did: `fixed in <sha>` or
@@ -94,7 +104,7 @@ Use grep for text that is not a symbol.
 
 ## Never
 
-- Never push, open a pull request, merge, rebase, switch branches, `git reset` a commit
+- Never push (except the lane push of step 5), open a pull request, merge, rebase, switch branches, `git reset` a commit
   away or touch another worktree. After your ACCEPT the orchestrator pushes your head
   once, opens the draft pull request and merges it with the other batches into one batch
   branch; the full test suite runs once there. A push per round wastes a CI run.

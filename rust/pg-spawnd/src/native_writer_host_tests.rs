@@ -499,7 +499,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
         reviews: dir.path().join("reviews"),
         record_path: state.join("runs/run-host/record.json"),
         base_ref: "refs/heads/main".into(),
-        tool_path: std::env::var("PATH").unwrap(),
+        tool_path: super::review_tests::fake_plangraph_path(dir.path()),
         effort: WRITER_EFFORT.into(),
         state: state.clone(),
         brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n\nPlan item: plangraph:OTHER-HOST-ITEM\n"
@@ -536,6 +536,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     host.fast_checks(&head).unwrap();
     assert!(host.stamped(&head));
     assert!(!host.stamped(&base));
+    super::review_tests::assert_shared_receipt_and_push(&mut host, dir.path(), &head);
     host.gates().unwrap();
     let runs = fs::read_to_string(dir.path().join("gate-runs.txt")).unwrap();
     let expected = format!("check --base refs/plangraph/native/run-host/base --head HEAD {head}");
@@ -755,7 +756,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
         reviews: dir.path().join("reviews"),
         record_path: run.join("record.json"),
         base_ref: "refs/heads/main".into(),
-        tool_path: std::env::var("PATH").unwrap(),
+        tool_path: super::review_tests::fake_plangraph_path(dir.path()),
         effort: WRITER_EFFORT.into(),
         state: dir.path().to_path_buf(),
         brief: "brief".into(),

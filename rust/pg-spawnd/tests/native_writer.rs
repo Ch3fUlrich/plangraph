@@ -231,6 +231,14 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
         dir.join("supervisor-bin/df"),
         df_script,
     );
+    // The shared exact-head fast checks the writer host runs (the real command is tested in plangraph-cli).
+    pg_worker_core::executable_test_support::write_executable(
+        bin.join("plangraph"),
+        format!(
+            "#!/bin/sh\n{}",
+            include_str!("fixtures/fake-plangraph-fast-checks.txt")
+        ),
+    );
     let cargo = bin.join("cargo");
     pg_worker_core::executable_test_support::write_executable(
         &cargo,

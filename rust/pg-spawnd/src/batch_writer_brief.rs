@@ -1,9 +1,10 @@
 //! The batch writer input shared by the fleet Claude launcher and native Codex.
 
 use serde::Deserialize;
-use std::{borrow::Cow, fmt::Write};
+use std::{borrow::Cow, fmt::Write, path::Path};
 
 const PREFIX: &str = "PLANGRAPH-BATCH-INPUT-V1\n";
+const FAST_CHECKS_COMMAND: &str = "plangraph fast-checks --owned-worktree";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,11 +29,22 @@ struct RunValues {
     base: String,
     writer_family: String,
     status_file: String,
+    /// Older producers still send their own list; the brief names the one stamp command instead.
+    #[serde(default)]
+    #[allow(dead_code)]
     fast_checks: Vec<String>,
+    /// The writer pushes `lane/<NAME>` with its receipt after every item commit; a producer whose
+    /// host pushes the accepted head itself (the feeder) sets this to `false`.
+    #[serde(default = "push_by_default")]
+    push: bool,
     review_cmd: String,
     review_wait_seconds: u64,
     round_cap: u8,
     trailers: Vec<String>,
+}
+
+fn push_by_default() -> bool {
+    true
 }
 
 fn single_line(value: &str) -> bool {
@@ -40,9 +52,11 @@ fn single_line(value: &str) -> bool {
 }
 
 impl RunValues {
-    fn render(self, brief: &mut String) -> Result<(), String> {
+    fn render(self, brief: &mut String, checkout: &Path) -> Result<(), String> {
+        let worktree = self.worktree.clone();
+        let name = self.name.clone();
         let fields = [
-            ("NAME", self.name),
+            ("NAME", self.name.clone()),
             ("WORKTREE", self.worktree),
             ("BASE", self.base),
             ("WRITER_FAMILY", self.writer_family),
@@ -52,13 +66,8 @@ impl RunValues {
             || !single_line(&self.review_cmd)
             || self.review_wait_seconds == 0
             || !(1..=8).contains(&self.round_cap)
-            || self.fast_checks.is_empty()
             || self.trailers.is_empty()
-            || self
-                .fast_checks
-                .iter()
-                .chain(&self.trailers)
-                .any(|value| !single_line(value))
+            || self.trailers.iter().any(|value| !single_line(value))
         {
             return Err("invalid batch writer Run values".into());
         }
@@ -66,9 +75,16 @@ impl RunValues {
         for (label, value) in fields {
             writeln!(brief, "{label}: {value}").unwrap();
         }
-        brief.push_str("FAST_CHECKS:\n");
-        for check in self.fast_checks {
-            writeln!(brief, "- {check}").unwrap();
+        // One command runs every fast check of the head and writes its receipt; a list of
+        // separate commands is how a failing early batch was once read past.
+        writeln!(brief, "FAST_CHECKS: {FAST_CHECKS_COMMAND}").unwrap();
+        if self.push {
+            // The writer's own head, expanded by its shell: the receipt ref is keyed by the head sha.
+            let argv = pg_worker_core::fast_check_stamp::push_argv(
+                "$(git rev-parse HEAD)",
+                &format!("lane/{name}"),
+            );
+            writeln!(brief, "PUSH: git {}", argv.join(" ")).unwrap();
         }
         writeln!(
             brief,
@@ -79,12 +95,32 @@ impl RunValues {
         for trailer in self.trailers {
             writeln!(brief, "{trailer}").unwrap();
         }
+        // The live list of the checkout, never a copy: an edit of one of these needs a router Gate-Edit D-id.
+        // The real checkout of the caller is read first; `WORKTREE` may be a display value.
+        let paths = match crate::brief_gate_paths::read(&checkout.to_string_lossy())? {
+            Some(paths) => Some(paths),
+            None => crate::brief_gate_paths::read(&worktree)?,
+        };
+        if let Some(paths) = paths {
+            writeln!(
+                brief,
+                "GATE_PATHS (do not edit; a Gate-Edit D-id is required): {}",
+                paths.join(" ")
+            )
+            .unwrap();
+        }
         Ok(())
     }
 }
 
-/// Render a versioned batch input in the prompt transport. Plain briefs pass through.
+/// Render a versioned batch input for the checkout of the current directory.
 pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
+    render_in(text, &std::env::current_dir().unwrap_or_default())
+}
+
+/// Render a versioned batch input in the prompt transport. Plain briefs pass through. `checkout`
+/// is the writer's real checkout, where the live gate path list is read.
+pub fn render_in<'a>(text: &'a str, checkout: &Path) -> Result<Cow<'a, str>, String> {
     let payload = text.strip_prefix(PREFIX).or_else(|| {
         text.strip_prefix(PREFIX.trim_end_matches('\n'))?
             .strip_prefix("\r\n")
@@ -112,13 +148,13 @@ pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
         .unwrap();
     }
     rendered.push('\n');
-    run.render(&mut rendered)?;
+    run.render(&mut rendered, checkout)?;
     Ok(Cow::Owned(rendered))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{render, Cow, PREFIX};
+    use super::{render, render_in, Cow, PREFIX};
     use serde_json::{json, Value};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/batch-writer-input.txt");
@@ -167,18 +203,86 @@ mod tests {
             ("round_cap", json!(0)),
             ("round_cap", json!(9)),
             ("review_wait_seconds", json!(0)),
-            ("fast_checks", json!([])),
             ("trailers", json!([])),
             ("name", json!(" ")),
             ("worktree", json!("first\nsecond")),
             ("review_cmd", json!("review\tcommand")),
-            ("fast_checks", json!(["check\r"])),
             ("trailers", json!(["Writer: fixture\u{0000}"])),
         ] {
             let mut input = fixture();
             input["run"][field] = value;
             assert_rejected(input, "invalid batch writer Run values");
         }
+    }
+
+    #[test]
+    fn a_brief_lists_every_gate_path_of_the_checked_out_tree() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut input = fixture();
+        input["run"]["worktree"] = json!(root.to_str().unwrap());
+        let text = format!("{PREFIX}{input}");
+        let rendered = render(&text).unwrap();
+        let line = rendered
+            .lines()
+            .find(|line| line.starts_with("GATE_PATHS "))
+            .unwrap();
+        let live = crate::brief_gate_paths::read(root.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(live.len() >= 7, "{live:?}");
+        for path in &live {
+            assert!(line.contains(path.as_str()), "{path} missing from {line}");
+        }
+        // A worktree that is not a checkout has no list to print and the brief stays valid.
+        assert!(!render(FIXTURE).unwrap().contains("GATE_PATHS"));
+    }
+
+    #[test]
+    fn a_brief_names_the_one_stamp_command_and_pushes_the_lane_by_default() {
+        let mut input = fixture();
+        input["run"]["fast_checks"] = json!(["git diff --check", "cargo fmt --check"]);
+        let text = format!("{PREFIX}{input}");
+        let rendered = render(&text).unwrap();
+        assert!(
+            rendered.contains("\nFAST_CHECKS: plangraph fast-checks --owned-worktree\n"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("cargo fmt --check"), "{rendered}");
+        let name = input["run"]["name"].as_str().unwrap();
+        // The head and its receipt ref in one atomic push, the form the lane hook requires.
+        assert!(
+            rendered.contains(&format!(
+                "\nPUSH: git push --atomic origin $(git rev-parse HEAD):refs/heads/lane/{name} +refs/plangraph/receipts/$(git rev-parse HEAD):{}\n",
+                pg_worker_core::fast_check_stamp::receipt_ref_for(&format!("lane/{name}"))
+            )),
+            "{rendered}"
+        );
+        // A producer whose host pushes the accepted head itself opts out.
+        input["run"]["push"] = json!(false);
+        let text = format!("{PREFIX}{input}");
+        assert!(!render(&text).unwrap().contains("\nPUSH:"));
+    }
+
+    #[test]
+    fn the_feeder_brief_lists_the_gate_paths_of_the_real_checkout_not_its_display_worktree() {
+        // The feeder's WORKTREE is a sentence, not a path: the caller's checkout supplies the list.
+        let text = include_str!("../tests/fixtures/feeder-batch-input.txt");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let rendered = render_in(text, &root).unwrap();
+        let line = rendered
+            .lines()
+            .find(|line| line.starts_with("GATE_PATHS "))
+            .unwrap_or_else(|| panic!("no GATE_PATHS line in {rendered}"));
+        let live = crate::brief_gate_paths::read(root.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        for path in &live {
+            assert!(line.contains(path.as_str()), "{path} missing from {line}");
+        }
+        assert!(
+            !rendered.contains("\nPUSH:"),
+            "the feeder's host pushes the head itself"
+        );
     }
 
     #[test]
