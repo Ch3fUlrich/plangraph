@@ -96,7 +96,10 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
     .is_err());
 }
 /// A completed agy review of a one-commit repository that answered `answer`, finished through the real run path.
-fn finished_agy_review(answer: &str) -> (tempfile::TempDir, RunRecord, String, String) {
+fn finished_agy_review(
+    answer: &str,
+    card: Value,
+) -> (tempfile::TempDir, RunRecord, String, String) {
     let dir = tempfile::tempdir().unwrap();
     git_ok(dir.path(), &["init", "-q"]);
     git_ok(
@@ -116,9 +119,10 @@ fn finished_agy_review(answer: &str) -> (tempfile::TempDir, RunRecord, String, S
     let id = new_run_id();
     let leg = json!({"id":"agy-gemini-4-hydrogen-high", "harness":"agy", "model":"gemini-4-hydrogen-high", "family":"gemini"});
     let mut metadata = json!({
-        "role":"review", "cwd":dir.path(), "item_key":"demo:A", "exit_code":0,
+        "role":"review", "cwd":dir.path(), "exit_code":0,
         "attempts":[{"leg":leg,"status":"running"}]
     });
+    crate::records::annotate_item(&mut metadata, &card, &mut Vec::new());
     Dispatch::new(dir.path(), head.clone(), &json!({"base":"HEAD"}))
         .ok()
         .unwrap()
@@ -143,8 +147,10 @@ fn finished_agy_review(answer: &str) -> (tempfile::TempDir, RunRecord, String, S
 
 #[test]
 fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
-    let (dir, record, head, id) =
-        finished_agy_review("No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n");
+    let (dir, record, head, id) = finished_agy_review(
+        "No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n",
+        json!({"item_key":"demo:A"}),
+    );
     let value = record.to_value();
     assert_eq!(value["served_model"], "gemini-4-hydrogen-high");
     assert_eq!(value["served_family"], "google");
@@ -159,79 +165,36 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     assert_keeper_accepts_cli_review(dir.path(), record.path(), &head, &id);
 }
 
-/// The native record of an ACCEPT review (no CLI-reported verdict) is an unwitnessed seat the keeper counts.
+/// The native record of an ACCEPT review of a batch card (no `item_key`, parts in `item_keys`) is an
+/// unwitnessed seat the keeper counts: a merged close of a part cited on it records no `seats_missing`.
 #[cfg(unix)]
 #[test]
 fn an_accept_review_record_is_an_unwitnessed_seat_the_keeper_counts() {
     let (dir, record, head, id) = finished_agy_review(
         "HEAD: {head}\nTESTS: none: no shell\nFILES READ: src/lib.rs:1\nTEST_GAMING: no\nVERDICT: ACCEPT\n",
+        json!({"item_keys":["demo:A", "demo:B"]}),
     );
     let value = record.to_value();
+    assert_eq!(value["item_key"], Value::Null);
+    assert_eq!(value["item_keys"], json!(["demo:A", "demo:B"]));
     assert_eq!(value["served_model"], "unwitnessed");
     assert_eq!(value["completion"]["head_sha"], head);
     assert_eq!(value["finish_reason"], "stop");
     assert!(value.get("witness_kind").is_none_or(Value::is_null));
     record.save().unwrap();
-    let mirror = dir.path().join("mirror/fixture").join(&id);
-    std::fs::create_dir_all(&mirror).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for path in [mirror.clone(), mirror.parent().unwrap().into()] {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-    }
-    std::fs::copy(record.path(), mirror.join("record.json")).unwrap();
-    std::fs::set_permissions(
-        mirror.join("record.json"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o600),
-    )
-    .unwrap();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = test_python::command()
-        .current_dir(&root)
-        .env("PYTHONPATH", root.join("src"))
-        .args([
-            "-c",
-            r#"
-import sys
-from pathlib import Path
-from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
-mirror, head, run_id = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-item = {'key': 'demo:A', 'run_ids': '["%s"]' % run_id}
-(seat,) = SpawnerRecordAdapter(mirror).review_seats(item, head, '', allow_unwitnessed=True)
-assert (seat['harness'], seat['witness'], seat['head']) == ('agy', 'recorded-harness', head), seat
-"#,
-        ])
-        .arg(dir.path().join("mirror"))
-        .arg(&head)
-        .arg(&id)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let closed = keeper_close(dir.path(), record.path(), &head, &id, UNWITNESSED_CHECKS);
+    assert_eq!(closed["state"], "done");
+    assert!(!closed.to_string().contains("seats_missing"), "{closed}");
 }
 
 #[cfg(unix)]
-fn assert_keeper_accepts_cli_review(dir: &Path, record: &Path, head: &str, id: &str) {
-    let mirror = dir.join("mirror/fixture").join(id);
-    std::fs::create_dir_all(&mirror).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for path in [mirror.clone(), mirror.parent().unwrap().into()] {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-    }
-    std::fs::copy(record, mirror.join("record.json")).unwrap();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = test_python::command()
-        .current_dir(&root)
-        .env("PYTHONPATH", root.join("src"))
-        .args([
-            "-c",
-            r#"
+const UNWITNESSED_CHECKS: &str = r#"
+(seat,) = reader.review_seats({'key': 'demo:A', 'run_ids': json.dumps([run_id])}, head, '', allow_unwitnessed=True)
+assert (seat['harness'], seat['witness'], seat['head']) == ('agy', 'recorded-harness', head), seat
+"#;
+
+#[cfg(unix)]
+const KEEPER_PRELUDE: &str = r#"
 import json, sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -249,6 +212,10 @@ mirror = root / 'mirror'
 run_dir = mirror / 'fixture' / run_id
 reader = SpawnerRecordAdapter(mirror)
 record = json.loads((run_dir / 'record.json').read_text())
+"#;
+
+#[cfg(unix)]
+const CLI_CHECKS: &str = r#"
 binding = record['review_binding']
 item = {'key':'demo:A', 'run_ids':json.dumps([run_id]), 'review_binding':binding}
 assert len(reader.review_seats(item, head, '', allow_cli_reported=True)) == 1
@@ -269,6 +236,11 @@ except ValueError as exc:
     assert 'review diff binding mismatch' in str(exc)
 else:
     raise AssertionError('seat reader accepted a completion for another diff')
+"#;
+
+/// Closes demo:A on the cited run through the keeper store: sensitive lanes refuse, the others close.
+#[cfg(unix)]
+const KEEPER_CLOSE: &str = r#"
 class MergedGit:
     def repo_path(self, project):
         assert project == 'demo'
@@ -313,8 +285,31 @@ with patch.object(context_sources, 'plan_item_commits', return_value=[
     result = store.close_merged(router, 'demo:A', 'D-5504')
     print(json.dumps(result))
 conn.close()
-"#,
-        ])
+"#;
+
+#[cfg(unix)]
+fn assert_keeper_accepts_cli_review(dir: &Path, record: &Path, head: &str, id: &str) {
+    let closed = keeper_close(dir, record, head, id, CLI_CHECKS);
+    assert_eq!(closed["state"], "done");
+}
+
+/// Mirrors the record as the keeper reads it, runs `checks` on the reader, then closes demo:A on it.
+#[cfg(unix)]
+fn keeper_close(dir: &Path, record: &Path, head: &str, id: &str, checks: &str) -> Value {
+    let mirror = dir.join("mirror/fixture").join(id);
+    std::fs::create_dir_all(&mirror).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in [mirror.clone(), mirror.parent().unwrap().into()] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    std::fs::copy(record, mirror.join("record.json")).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = test_python::command()
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .args(["-c", &[KEEPER_PRELUDE, checks, KEEPER_CLOSE].concat()])
         .arg(dir)
         .arg(head)
         .arg(id)
@@ -325,8 +320,7 @@ conn.close()
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let closed: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(closed["state"], "done");
+    serde_json::from_slice(&output.stdout).unwrap()
 }
 #[test]
 fn cli_kind_cannot_select_a_skipped_model() {
