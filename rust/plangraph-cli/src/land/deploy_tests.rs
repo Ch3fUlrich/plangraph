@@ -209,3 +209,91 @@ fn dry_run_output_is_parsed_strictly() {
     let missing = cmd(&["sh", "-c", "echo MISSING file /etc/x; exit 1", "sh"]).probe("h", "f");
     assert_eq!(missing.unwrap_err()[0].name, "/etc/x");
 }
+
+#[test]
+fn the_report_is_one_quotable_block_per_family_and_host() {
+    let fx = Fx::new();
+    let parts = train(&fx, "unit\n\nPlan-Item: demo:B\nDeploy: alpha, beta");
+    let dry = Dry(BTreeMap::from([(
+        ("beta", "train.service"),
+        vec![
+            Finding {
+                kind: "env".into(),
+                name: "PG_PINS".into(),
+            },
+            Finding {
+                kind: "file".into(),
+                name: "~/.config/p/a.env".into(),
+            },
+        ],
+    )]));
+    let plan = deploy_plan(&parts, &BTreeMap::new(), &hosts(&["alpha", "beta"]), &dry);
+    assert_eq!(
+        plan.report(),
+        [
+            "deploy: train.service@alpha",
+            "READY train.service@alpha parts #1",
+            "NOT READY train.service@beta parts #1 blocker plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-BETA",
+            "MISSING env PG_PINS",
+            "MISSING file ~/.config/p/a.env",
+        ]
+    );
+}
+
+#[test]
+fn a_refusal_that_is_not_a_missing_thing_is_reported_as_refused_once() {
+    let fx = Fx::new();
+    let parts = train(&fx, "unit\n\nPlan-Item: demo:B\nDeploy: stranger");
+    let plan = deploy_plan(&parts, &BTreeMap::new(), &hosts(&["alpha"]), &pass());
+    assert_eq!(
+        plan.report(),
+        [
+            "deploy: none",
+            "NOT READY train.service@stranger parts #1 blocker plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-STRANGER",
+            "REFUSED host stranger is not authorized",
+        ]
+    );
+}
+
+#[test]
+fn two_parts_of_one_family_share_one_block_and_one_set_of_reasons() {
+    let parts: Vec<_> = [1u64, 2]
+        .into_iter()
+        .map(|pr| PartDeploy {
+            pr,
+            families: ["a.service".to_string()].into(),
+            items: BTreeSet::new(),
+            trailer_hosts: ["alpha".to_string()].into(),
+        })
+        .collect();
+    let dry = Dry(BTreeMap::from([(
+        ("alpha", "a.service"),
+        vec![Finding {
+            kind: "env".into(),
+            name: "K".into(),
+        }],
+    )]));
+    let plan = deploy_plan(&parts, &BTreeMap::new(), &hosts(&["alpha"]), &dry);
+    assert_eq!(plan.blockers.len(), 1);
+    assert_eq!(plan.blockers[0].parts, [1, 2]);
+    assert_eq!(plan.blockers[0].reasons, ["missing env K"]);
+}
+
+#[test]
+fn spans_attribute_parts_without_a_manifest() {
+    let fx = Fx::new();
+    let unit = commit(
+        &fx,
+        &[("deploy/systemd/s.service", "[Service]\n")],
+        "unit\n\nPlan-Item: demo:B\nDeploy: alpha",
+    );
+    let spans = [Span {
+        pr: 7,
+        from: fx.base(),
+        head: unit,
+    }];
+    let parts = derive_spans(fx.path(), &spans).unwrap();
+    assert_eq!(parts[0].pr, 7);
+    assert_eq!(parts[0].families, ["s.service".to_string()].into());
+    assert_eq!(parts[0].trailer_hosts, ["alpha".to_string()].into());
+}
