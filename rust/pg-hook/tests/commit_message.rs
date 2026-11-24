@@ -442,10 +442,10 @@ fn saved_body(root: &Path) -> String {
 fn the_hook_follows_the_cutoff_git_applies_to_a_literal_scissors_marker() {
     let dir = repo();
     let root = dir.path();
-    // Verbatim -m keeps a marker with a copied hint and everything below it: the bad line is refused.
-    let message = format!(
-        "x\n\nWriter: codex\n\n{MARKER}\n# Do not modify or remove the line above.\n{BAD}\n"
-    );
+    // Verbatim -m keeps a marker with a copied hint and everything below it: the bad line is refused,
+    // although the attribution is valid (the Writer trailer is the last paragraph).
+    let message =
+        format!("x\n\n{MARKER}\n# Do not modify or remove the line above.\n{BAD}\n\nWriter: codex");
     let output = git(
         root,
         &[
@@ -457,6 +457,7 @@ fn the_hook_follows_the_cutoff_git_applies_to_a_literal_scissors_marker() {
         ],
     );
     assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed Class-Search"));
     // `--verbose -m` discards the tail below a literal marker: the same text commits and is not kept.
     let message = format!(
         "x\n\nClass-Search: fixture -> 1 hit, 1 changed\n\nWriter: codex\n\n{MARKER}\n{BAD}\n"
@@ -508,4 +509,90 @@ fn an_edited_scissors_hint_does_not_make_the_hook_refuse_a_discarded_tail() {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     assert!(!saved_body(root).contains("Class-Search"));
+}
+
+fn commit_with_env(root: &Path, args: &[&str], editor: &str, config: &[(&str, &str)]) -> Output {
+    let mut command = pg_worker_core::git_test_support::command(root);
+    for (key, value) in config {
+        command.args(["-c", &format!("{key}={value}")]);
+    }
+    command
+        .arg("commit")
+        .args(args)
+        .env("GIT_EDITOR", editor)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn git_overrides_of_verbose_and_cleanup_reach_the_hook_as_git_reads_them() {
+    let dir = repo();
+    let root = dir.path();
+    let message = format!("x\n\n{MARKER}\n{BAD}\n\nWriter: codex");
+    // --no-verb (an abbreviated --no-verbose) turns --verbose off: Git keeps the tail.
+    let output = git(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "--verbose",
+            "--no-verb",
+            "-m",
+            &message,
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed Class-Search"));
+    // --no-cleanup drops commit.cleanup=scissors: an editor message keeps the tail too.
+    let output = commit_with_env(
+        root,
+        &["--allow-empty", "--edit", "--no-cleanup", "-m", &message],
+        ":",
+        &[("commit.cleanup", "scissors")],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed Class-Search"));
+    // An explicit `:` editor with --edit --cleanup=scissors does cut at the marker, and the saved
+    // body has no tail.
+    let message = format!("x\n\nWriter: codex\n\n{MARKER}\n{BAD}\n");
+    let output = commit_with_env(
+        root,
+        &[
+            "--allow-empty",
+            "--edit",
+            "--cleanup=scissors",
+            "-m",
+            &message,
+        ],
+        ":",
+        &[],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let body = saved_body(root);
+    assert!(
+        !body.contains("Class-Search") && body.contains("Writer: codex"),
+        "{body}"
+    );
+}
+
+#[test]
+fn with_auto_comment_char_a_literal_hash_marker_is_not_the_scissors_line() {
+    let dir = repo();
+    let root = dir.path();
+    // Git picks a prefix no message line starts with, so the "#" marker line is kept with its tail.
+    let message = format!("x\n\n{MARKER}\n{BAD}\n\nWriter: codex");
+    let output = commit_with_env(
+        root,
+        &["--allow-empty", "--verbose", "-m", &message],
+        ":",
+        &[("core.commentChar", "auto")],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed Class-Search"));
 }
