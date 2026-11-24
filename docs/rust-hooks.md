@@ -15,6 +15,9 @@ and user-site behavior. `PG_HOOK_PYTHON` can select an absolute interpreter path
 relative or empty overrides are refused with `PG_HOOK_PYTHON must be an absolute path`,
 a best-effort JSONL harness fault and exit 0. Otherwise the default is `python3`.
 RUST-HOOKS slice 1 is Unix-only; non-Unix test branches are gated with `cfg(unix)`.
+A new `rust/pg-hook/tests/*.rs` file starts with `#![cfg(unix)]` unless `tests/portable.txt` lists it;
+`cargo test -p pg-hook` (`tests/unix_header.rs`) and the Windows-job pytest both name the file that lacks the line.
+The guard-hook tests give a guard that must finish a 20 s budget, so a loaded host reports "crashed", not "timed out".
 Python's exit code, stdout and stderr remain authoritative; Rust errors, unwind panics
 and log-write failures cannot change that result. Logs append JSONL `{entry, same, py, rust}`;
 successful outputs use the existing parity fields `exit`, `stdout`, `stderr`.
