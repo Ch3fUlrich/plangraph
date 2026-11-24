@@ -19,6 +19,14 @@ from plangraph.keeper.evidence_git import GitAdapter
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The session fixture sweep_binary runs `cargo build` under a file lock: the first test of a
+# shard to reach it pays the build, and a worker that waits on the lock pays another worker's.
+pytestmark = pytest.mark.long_test_deadline(
+    600, reason="Hosted CI shard 2 of 3 reported HUNG at the 120 s default in the setup of "
+    "test_bootstrap_creates_sweep_env_and_pins_and_dry_run_lists_merged_worktree, which was "
+    "building the pg-worktree-sweep binary (sweep_binary fixture) on a cold runner.",
+)
+
 
 @pytest.fixture
 def host(tmp_path, monkeypatch):
