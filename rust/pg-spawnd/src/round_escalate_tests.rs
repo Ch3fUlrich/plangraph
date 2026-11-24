@@ -165,17 +165,36 @@ fn a_check_judged_round_followed_by_a_card_without_failing_checks_is_admitted() 
 #[test]
 fn consecutive_cards_without_a_check_count_carry_the_last_observed_count() {
     let dir = tempfile::tempdir().unwrap();
-    let unknown = || Round {
-        checks: None,
-        ..red(0)
-    };
-    book(dir.path(), &[red(5), unknown(), unknown()]);
+    // Round 1 saw 5 red checks; rounds 2 and 3 are review rounds with bound verdicts and no
+    // check count: the known red count stays, the stall is not reset to zero.
+    book(dir.path(), &[red(5)]);
+    for index in 2..=3 {
+        let id = format!("run-r{index}");
+        let source = dir.path().join(format!("v{index}.json"));
+        std::fs::write(
+            &source,
+            json!({"writer_run_id":id, "item_key":"p:I", "pr":PR,
+            "verdict":"REQUEST_CHANGES", "findings":[]})
+            .to_string(),
+        )
+        .unwrap();
+        crate::runs::create(
+            dir.path(),
+            &id,
+            "fixture",
+            json!({"role":"implement", "item_key":"p:I", "round_pr":PR, "writer_round":index,
+            "round_verdict_file":source, "round_cause":"review_finding",
+            "round_failing_checks":null}),
+            pg_worker_core::run::record::Status::Completed,
+        )
+        .ok()
+        .unwrap();
+    }
     let mut args = card("review_finding", 0);
     args["card"]
         .as_object_mut()
         .unwrap()
         .remove("failing_checks");
-    // 5, then two omissions: the known red count stays, the stall is not reset to zero.
     assert!(message(run(dir.path(), &args)).starts_with("round_replan_pending"));
 }
 

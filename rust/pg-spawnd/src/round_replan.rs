@@ -236,6 +236,16 @@ pub(crate) fn escalation_sent(state: &Path, item: &str, pr: &str, level: u64) ->
         .is_ok_and(|job| job["report"] == "sent" && !job["plan"].is_null())
 }
 
+fn file_secs(path: &Path) -> Option<f64> {
+    let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    Some(
+        mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs_f64(),
+    )
+}
+
 /// Every saved replan job of the state directory.
 pub(crate) fn jobs(state: &Path) -> Vec<Value> {
     std::fs::read_dir(job_dir(state))
@@ -433,7 +443,7 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         };
         // Saved before the send and kept when the process dies in between: the next run sends
         // the same line under the same key and the receiver drops the repeat.
-        job["report_line"] = json!(line);
+        job["report_line"] = json!(bounded(line, path));
         job["report"] = json!("sending");
         save(path, job)?;
     }
@@ -445,6 +455,22 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         save(path, job)?;
     }
     Ok(())
+}
+
+/// The longest routing line sent: the fleet bus refuses a message of 2000 characters.
+const LINE_MAX: usize = 1800;
+
+/// `line` cut to `LINE_MAX` characters with a pointer to the job file that keeps the full text.
+fn bounded(line: String, path: &Path) -> String {
+    if line.chars().count() <= LINE_MAX {
+        return line;
+    }
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let tail = format!(" ... (full text in replans/{name})");
+    let keep = LINE_MAX - tail.chars().count();
+    format!("{}{tail}", line.chars().take(keep).collect::<String>())
 }
 
 /// Drive one job to its end; on failure the step and the reason stay in the file for the next run.
@@ -461,6 +487,12 @@ fn run_job(path: &Path, ports: &dyn Ports) -> String {
     };
     if job["report"] == "sent" {
         return "done".into();
+    }
+    if job["queued_at"].as_f64().is_none() {
+        // A job of the earlier schema keeps the date of its file from before the first rewrite.
+        if let Some(secs) = file_secs(path) {
+            job["queued_at"] = json!(secs);
+        }
     }
     let outcome = drive(path, &mut job, ports);
     let text = outcome.err().map(message);
