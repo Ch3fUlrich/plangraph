@@ -41,6 +41,7 @@ fn single_line(value: &str) -> bool {
 
 impl RunValues {
     fn render(self, brief: &mut String) -> Result<(), String> {
+        let worktree = self.worktree.clone();
         let fields = [
             ("NAME", self.name),
             ("WORKTREE", self.worktree),
@@ -78,6 +79,15 @@ impl RunValues {
         .unwrap();
         for trailer in self.trailers {
             writeln!(brief, "{trailer}").unwrap();
+        }
+        // The live list of the checkout, never a copy: an edit of one of these needs a router Gate-Edit D-id.
+        if let Some(paths) = crate::brief_gate_paths::read(&worktree)? {
+            writeln!(
+                brief,
+                "GATE_PATHS (do not edit; a Gate-Edit D-id is required): {}",
+                paths.join(" ")
+            )
+            .unwrap();
         }
         Ok(())
     }
@@ -179,6 +189,28 @@ mod tests {
             input["run"][field] = value;
             assert_rejected(input, "invalid batch writer Run values");
         }
+    }
+
+    #[test]
+    fn a_brief_lists_every_gate_path_of_the_checked_out_tree() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut input = fixture();
+        input["run"]["worktree"] = json!(root.to_str().unwrap());
+        let text = format!("{PREFIX}{input}");
+        let rendered = render(&text).unwrap();
+        let line = rendered
+            .lines()
+            .find(|line| line.starts_with("GATE_PATHS "))
+            .unwrap();
+        let live = crate::brief_gate_paths::read(root.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(live.len() >= 7, "{live:?}");
+        for path in &live {
+            assert!(line.contains(path.as_str()), "{path} missing from {line}");
+        }
+        // A worktree that is not a checkout has no list to print and the brief stays valid.
+        assert!(!render(FIXTURE).unwrap().contains("GATE_PATHS"));
     }
 
     #[test]
