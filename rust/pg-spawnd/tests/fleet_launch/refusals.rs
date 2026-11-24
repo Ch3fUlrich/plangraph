@@ -272,3 +272,41 @@ pub fn check_cargo_target(launcher: &Launcher) {
         .collect::<Vec<_>>();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
+
+/// The configured target reaches the session the launcher starts, and nothing is created at the default.
+pub fn check_cargo_target_reaches_the_child(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let data = s.path("data-drive/cargo-target");
+    let out = s
+        .launch("review")
+        .env("PLANGRAPH_CARGO_TARGET_DIR", &data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    let child = s.json("child.json");
+    assert_eq!(child["cargo_target"], data.to_str().unwrap());
+    assert_eq!(child["plangraph_cargo_target"], data.to_str().unwrap());
+    assert!(!s.path("home/.cache/plangraph/cargo-target").exists());
+
+    // A target the caller already set is kept.
+    let s = Sandbox::new(launcher);
+    let out = s
+        .launch("review")
+        .env("CARGO_TARGET_DIR", "/caller/target")
+        .env("PLANGRAPH_CARGO_TARGET_DIR", &data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    assert_eq!(s.json("child.json")["cargo_target"], "/caller/target");
+
+    // Unconfigured, the child builds into the host's default shared target under its home.
+    let s = Sandbox::new(launcher);
+    let out = s.launch("review").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    assert_eq!(
+        s.json("child.json")["cargo_target"],
+        s.path("home/.cache/plangraph/cargo-target")
+            .to_str()
+            .unwrap()
+    );
+}
