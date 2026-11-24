@@ -129,6 +129,20 @@ def test_land_refuses_an_approval_for_an_older_head(env):
     assert land(env, approval).returncode == 0 and len(env.calls("pr", "merge")) == 1
 
 
+def test_land_refuses_an_approval_whose_seat_run_is_held_by_process_findings(env):
+    approval = pushed(env, prs=(1, 2))
+    head = head_of(env)
+    approval.write_text(f"HEAD: {head}\nVERDICT: PASS\n")
+    hold = approval.with_name("process.json")
+    hold.write_text(json.dumps({"head_sha": head, "run_id": "run-held", "lines": ["MED x"]}))
+    res = land(env, approval)
+    assert res.returncode == 1 and "held by process findings" in res.stderr and not env.calls("pr", "merge")
+    fresh = env.tmp / "fresh-seat"
+    fresh.mkdir()
+    (fresh / "review.txt").write_text(f"HEAD: {head}\nVERDICT: PASS\n")
+    assert land(env, fresh / "review.txt").returncode == 0 and len(env.calls("pr", "merge")) == 1
+
+
 @pytest.mark.parametrize("state, row, word", [
     ("red", None, "main_red"), ("pending", None, "main_pending"), ("unknown", None, "unknown"),
     ("ref_not_forward_only", None, "ref_not_forward_only"),

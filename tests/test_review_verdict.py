@@ -366,10 +366,12 @@ def test_process_class_needs_the_defect_in_the_prompt_and_an_untouched_file():
 
 
 def test_typed_process_line_that_fails_verification_counts_as_med():
-    review = "PROCESS skills/review/SKILL.md:1 - rubric missing\n> MED quoted a.py:1 - x\n"
+    review = "PROCESS skills/review/SKILL.md:1 - the callers field is empty\n> MED quoted a.py:1 - x\n"
     assert v.classify_findings(review).med == 1
     found = v.classify_findings(review, prompt=EMPTY_PROMPT, changed_paths={"a.py"})
     assert (found.med, len(found.process)) == (0, 1)
+    vague = "PROCESS skills/review/SKILL.md:1 - rubric missing\n"
+    assert v.classify_findings(vague, prompt=EMPTY_PROMPT, changed_paths={"a.py"}).med == 1
 
 
 def test_diff_paths_reads_the_dispatched_git_diff_in_the_seat_checkout(tmp_path):
@@ -390,3 +392,23 @@ def test_diff_paths_reads_the_dispatched_git_diff_in_the_seat_checkout(tmp_path)
     assert v.diff_paths(prompt, str(tmp_path)) == {"b.txt"}
     assert v.diff_paths(prompt) is None  # no checkout: scope unknown, fail closed
     assert v.diff_paths("no diff here") is None
+
+
+def test_process_finding_must_name_an_empty_field_and_have_the_brief_as_its_file():
+    prompt = EMPTY_PROMPT + LANE_DIFF
+    scope = {"src/a.py"}
+    advice = "MED src/a.py:3 - symbols callers wrong; see src/plangraph/review/review_brief.md:26"
+    assert v.classify_findings(advice, prompt=prompt, changed_paths=scope).med == 1
+    other = "MED src/plangraph/review/review_brief.md:12 - the rubric wording is vague"
+    assert v.classify_findings(other, prompt=prompt, changed_paths=scope).med == 1
+
+
+def test_item_context_check_stops_at_the_end_of_the_rendered_block():
+    from plangraph.review.prompt import item_context_defects, render_brief, verified_empty
+
+    context = {"item_key": "k", "public_symbols": "run", "callers": verified_empty("x"),
+               "test_output_paths": "l.log"}
+    brief = render_brief("review", context, require_item_context=True)
+    prose = "\n=== NOTES\nthe heading === ITEM CONTEXT is described here\nChanged public symbols: \n"
+    assert item_context_defects(brief + prose) == []
+    assert item_context_defects(brief + "\nsee === ITEM CONTEXT above") == []

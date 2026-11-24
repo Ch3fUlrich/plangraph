@@ -271,3 +271,76 @@ for launch in (False, True):
 
 #[path = "native_writer_moving_main_tests.rs"]
 mod moving_main;
+
+fn commit_file(repo: &Path, name: &str, text: &str) -> String {
+    fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
+    fs::write(repo.join(name), text).unwrap();
+    git_in(repo, &["add", "."]);
+    git_in(repo, &["commit", "-q", "-m", name]);
+    git_in(repo, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn brief_context_marks_a_searched_empty_result_and_leaves_failed_reads_unset() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.cwd = host.repo.clone();
+    let base = git_in(&host.repo, &["rev-parse", "HEAD"]);
+    // A docs-only head: the searches ran and found nothing.
+    let docs = commit_file(&host.repo, "docs/a.md", "text\n");
+    let context = host.brief_context(&base, &docs);
+    assert!(context["public_symbols"]
+        .as_str()
+        .unwrap()
+        .starts_with("none (verified empty"));
+    assert!(context["callers"]
+        .as_str()
+        .unwrap()
+        .starts_with("none (verified empty"));
+    // A public symbol nobody calls: symbols named, callers verified empty.
+    let lone = commit_file(&host.repo, "src/lib.rs", "pub fn lone_symbol() {}\n");
+    let context = host.brief_context(&docs, &lone);
+    assert_eq!(context["public_symbols"], json!("lone_symbol"));
+    assert!(context["callers"]
+        .as_str()
+        .unwrap()
+        .starts_with("none (verified empty"));
+    // A caller committed after the head is not searched: callers come from the pinned head.
+    commit_file(&host.repo, "src/use.rs", "fn user() { lone_symbol(); }\n");
+    let context = host.brief_context(&docs, &lone);
+    assert!(context["callers"]
+        .as_str()
+        .unwrap()
+        .starts_with("none (verified empty"));
+    // An unreadable repository is a failed read, never a verified-empty search.
+    host.cwd = dir.path().join("not-a-repo");
+    fs::create_dir_all(&host.cwd).unwrap();
+    let context = host.brief_context(&docs, &lone);
+    assert!(context.get("public_symbols").is_none() && context.get("callers").is_none());
+}
+
+#[test]
+fn only_a_git_grep_with_no_line_is_no_match() {
+    let dir = tempfile::tempdir().unwrap();
+    commit_file(
+        &{
+            git_in(dir.path(), &["init", "-q", "-b", "main", "r"]);
+            dir.path().join("r")
+        },
+        "a.rs",
+        "fn a() {}\n",
+    );
+    let grep = |args: &[&str]| {
+        output(
+            Command::new("git")
+                .arg("-C")
+                .arg(dir.path().join("r"))
+                .arg("grep")
+                .args(args),
+        )
+    };
+    assert!(grep(&["-n", "-w", "-e", "absent", "HEAD", "--", "*.rs"])
+        .is_err_and(|e| super::review::no_match(&e)));
+    assert!(grep(&["-n", "-w", "-e", "a", "nosuchrev", "--", "*.rs"])
+        .is_err_and(|e| !super::review::no_match(&e)));
+}

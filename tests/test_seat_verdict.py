@@ -417,8 +417,10 @@ def test_served_model_witness_precedes_admissible_request_side(tmp_path, capsys)
     assert "glm-5.3-flash-free" not in reason
 
 
-def _process_seat(tmp_path, review, prompt):
-    argv = seat(tmp_path, review)
+def _process_seat(tmp_path, review, prompt, digest=None):
+    import hashlib
+
+    argv = seat(tmp_path, review, prompt_sha256=digest or hashlib.sha256(prompt.encode()).hexdigest())
     seat_dir = Path(argv[argv.index("--seat-dir") + 1])
     (seat_dir / "prompt.txt").write_text(prompt)
     return argv, seat_dir
@@ -452,6 +454,35 @@ def test_brief_finding_stays_a_fix_when_the_head_changes_the_brief(tmp_path, cap
     changed = "diff --git a/src/plangraph/review/review_brief.md b/src/plangraph/review/review_brief.md\n+x\n"
     argv, seat_dir = _process_seat(tmp_path, f"{BRIEF_MED}\nVERDICT: REQUEST_CHANGES\n",
                                    PROCESS_PROMPT + changed)
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    assert not (seat_dir / "process.json").exists()
+
+
+def test_saved_prompt_with_another_digest_suppresses_nothing(tmp_path, capsys):
+    argv, seat_dir = _process_seat(tmp_path, f"{BRIEF_MED}\nVERDICT: REQUEST_CHANGES\n",
+                                   PROCESS_PROMPT + PROCESS_DIFF, digest="cd" * 32)
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    assert not (seat_dir / "process.json").exists()
+
+
+def test_accept_with_a_process_finding_is_held_and_never_posts_a_pass(tmp_path, capsys):
+    argv, seat_dir = _process_seat(
+        tmp_path, f"{BRIEF_MED}\nTESTS: none: x\nVERDICT: ACCEPT\n", PROCESS_PROMPT + PROCESS_DIFF)
+    assert sv.main(argv + ["--dry-run"]) == sv.EXIT_PROCESS
+    assert "body" not in json.loads(capsys.readouterr().out)
+    argv, seat_dir = _process_seat(
+        tmp_path / "mixed", f"{BRIEF_MED}\nHIGH src/a.py:3 - real bug\nVERDICT: ACCEPT\n",
+        PROCESS_PROMPT + PROCESS_DIFF) if (tmp_path / "mixed").mkdir() is None else None
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+
+
+def test_finding_citing_the_brief_only_in_its_advice_stays_a_real_finding(tmp_path, capsys):
+    review = ("MED src/a.py:3 - the symbols callers are wrong; fix by editing review_brief.md\n"
+              "VERDICT: REQUEST_CHANGES\n")
+    argv, seat_dir = _process_seat(tmp_path, review, PROCESS_PROMPT + PROCESS_DIFF)
     assert sv.main(argv + ["--dry-run"]) == 0
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
     assert not (seat_dir / "process.json").exists()
