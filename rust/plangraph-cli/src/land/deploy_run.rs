@@ -17,8 +17,9 @@ pub struct RunRead {
     pub oneshot: bool,
 }
 
-/// What the step verifies a first run against: the commit time of the verified landed head, the clock
-/// (read after a target's first run is read), and the (family, host) targets the preflight refused.
+/// What the step verifies a first run against: the commit time of the verified landed head (microseconds),
+/// the clock in microseconds (read after a target's first run is read), and the (family, host) targets the
+/// preflight refused.
 #[derive(Clone, Debug)]
 pub struct Gate {
     pub fresh_after: i64,
@@ -26,15 +27,19 @@ pub struct Gate {
     pub excluded: BTreeSet<(String, String)>,
 }
 
-/// Epoch seconds of a systemd exit timestamp: RFC 3339, or the `Sun 2026-11-01 12:01:00 UTC` form.
-pub fn exit_epoch(text: &str) -> Option<i64> {
+/// `is_active` a read reports for a unit that is not installed yet: the baseline before an install.
+pub const ABSENT: &str = "absent";
+
+/// Microseconds since the epoch of a systemd exit timestamp, keeping its fractional seconds like the keeper
+/// does: RFC 3339, or the `Sun 2026-11-01 12:01:00 UTC` form (also with a fraction).
+pub fn exit_micros(text: &str) -> Option<i64> {
     use chrono::{DateTime, NaiveDateTime};
     let text = text.trim();
     DateTime::parse_from_rfc3339(text)
-        .map(|d| d.timestamp())
+        .map(|d| d.timestamp_micros())
         .or_else(|_| {
-            NaiveDateTime::parse_from_str(text.trim_end_matches(" UTC"), "%a %Y-%m-%d %H:%M:%S")
-                .map(|d| d.and_utc().timestamp())
+            NaiveDateTime::parse_from_str(text.trim_end_matches(" UTC"), "%a %Y-%m-%d %H:%M:%S%.f")
+                .map(|d| d.and_utc().timestamp_micros())
         })
         .ok()
 }
@@ -42,14 +47,14 @@ pub fn exit_epoch(text: &str) -> Option<i64> {
 impl RunRead {
     /// Whether the first run counts as good: a oneshot reports `success` and an exit time after the landed
     /// head, strictly after the exit time it showed before this install (`before`: the run is a new one, not
-    /// the previous deploy's) and not after `now`, as the keeper requires; a binary is `installed`, anything
+    /// the previous deploy's) and not after `now` (microseconds, as the keeper compares them); a binary is `installed`, anything
     /// else is `active`.
     pub fn good(&self, family: &str, gate: &Gate, before: Option<i64>, now: i64) -> bool {
         if self.oneshot {
             let exited = self
                 .exec_main_exit_timestamp
                 .as_deref()
-                .and_then(exit_epoch);
+                .and_then(exit_micros);
             return self.result.as_deref() == Some("success")
                 && exited.is_some_and(|e| {
                     e > gate.fresh_after && before.is_none_or(|b| e > b) && e <= now

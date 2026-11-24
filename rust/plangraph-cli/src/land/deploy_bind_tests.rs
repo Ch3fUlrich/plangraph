@@ -1,7 +1,7 @@
 use super::build_tests::{g, Fx};
 use super::deploy::{DeployPlan, Target};
 use super::deploy_bind::{bind, Approved};
-use super::deploy_cmd_tests::{approved, commit_at, landed, plan_of, Landed, GO};
+use super::deploy_cmd_tests::{approved, commit_at, landed, plan_of, target, Landed, GO};
 use std::collections::BTreeSet;
 
 fn bind_it(
@@ -28,7 +28,7 @@ fn bind_accepts_a_plan_the_landed_train_really_ships() {
     let l = landed(&fx);
     let (targets, gate) = bind_it(&fx, &l, &plan_of(&l), GO, &l.landed).unwrap();
     assert_eq!(targets.len(), 1);
-    assert_eq!(gate.fresh_after, 1_767_225_600);
+    assert_eq!(gate.fresh_after, 1_767_225_600_000_000);
 }
 
 #[test]
@@ -120,4 +120,71 @@ fn bind_withholds_a_preflight_refused_timer_in_the_gate() {
         gate.excluded,
         BTreeSet::from([("a.timer".to_string(), "alpha".to_string())])
     );
+}
+
+/// Two parts merged into the train: part one carries a tagged commit (demo:X) and an untagged commit that
+/// adds `u.service`, part two a tagged commit of demo:Y. The untagged commit counts for part one's items only.
+#[test]
+fn an_untagged_commit_counts_for_its_own_part_and_never_for_another_part() {
+    let fx = Fx::new();
+    let p = fx.path();
+    let base = fx.base();
+    g(p, &["checkout", "-q", "-b", "p1", &base]);
+    commit_at(
+        &fx,
+        1_700_000_000,
+        &[("docs/x.md", "x\n")],
+        "x\n\nPlan-Item: demo:X",
+    );
+    commit_at(
+        &fx,
+        1_700_000_010,
+        &[("deploy/systemd/u.service", "[Service]\n")],
+        "unit without trailers",
+    );
+    g(p, &["checkout", "-q", "main"]);
+    g(
+        p,
+        &["merge", "-q", "--no-ff", "-m", "Train 1: merge p1", "p1"],
+    );
+    g(p, &["checkout", "-q", "-b", "p2", &base]);
+    commit_at(
+        &fx,
+        1_700_000_020,
+        &[("docs/y.md", "y\n")],
+        "y\n\nPlan-Item: demo:Y",
+    );
+    g(p, &["checkout", "-q", "main"]);
+    g(
+        p,
+        &["merge", "-q", "--no-ff", "-m", "Train 1: merge p2", "p2"],
+    );
+    let train = g(p, &["rev-parse", "HEAD"]);
+    let landed = commit_at(&fx, 1_767_225_600, &[("landed.txt", "x\n")], "landed");
+    let l = Landed {
+        base,
+        train,
+        landed,
+    };
+    let plan_for = |key: &str| DeployPlan {
+        targets: vec![target("u.service", "alpha", &[key])],
+        blockers: vec![],
+        train_sha: l.train.clone(),
+        base: l.base.clone(),
+    };
+    let go = "deploy: u.service@alpha";
+    let ok = plan_for("demo:X");
+    assert!(bind(&ok, &approved(&l), go, p, &l.landed, "main", &ok.digest()).is_ok());
+    let other = plan_for("demo:Y");
+    let e = bind(
+        &other,
+        &approved(&l),
+        go,
+        p,
+        &l.landed,
+        "main",
+        &other.digest(),
+    )
+    .unwrap_err();
+    assert!(e.contains("does not ship u.service@alpha"), "{e}");
 }

@@ -35,7 +35,7 @@ pub(super) fn oneshot_ok() -> RunRead {
 }
 
 /// The fixture oneshot exits at this instant; the test clock starts there.
-pub(super) const T0: i64 = 1_795_482_000; // 2026-11-24T01:00:00Z
+pub(super) const T0: i64 = 1_795_482_000_000_000; // 2026-11-24T01:00:00Z, in microseconds
 
 thread_local! {
     static NOW: std::cell::Cell<i64> = const { std::cell::Cell::new(T0) };
@@ -55,6 +55,8 @@ pub(super) struct Host {
     pub(super) unreadable: BTreeSet<String>,
     /// What a oneshot shows before its install (it is absent before it unless listed here).
     pub(super) before: BTreeMap<String, RunRead>,
+    /// Oneshots whose read before the install fails (a transient error, not an absent unit).
+    pub(super) before_fails: BTreeSet<String>,
     pub(super) installed: RefCell<BTreeSet<String>>,
 }
 
@@ -63,7 +65,7 @@ impl Installer for Host {
         self.calls
             .borrow_mut()
             .push(format!("install {family}@{host}"));
-        NOW.with(|n| n.set(n.get() + self.install_takes));
+        NOW.with(|n| n.set(n.get() + self.install_takes * 1_000_000));
         self.installed.borrow_mut().insert(family.to_owned());
         Ok(())
     }
@@ -76,11 +78,15 @@ impl Installer for Host {
         }
         let oneshot = self.runs.get(family).is_some_and(|r| r.oneshot);
         if oneshot && !self.installed.borrow().contains(family) {
-            return self
-                .before
-                .get(family)
-                .cloned()
-                .ok_or_else(|| "not installed yet".into());
+            if self.before_fails.contains(family) {
+                return Err("transient".into());
+            }
+            return Ok(self.before.get(family).cloned().unwrap_or(RunRead {
+                is_active: ABSENT.into(),
+                result: None,
+                exec_main_exit_timestamp: None,
+                oneshot: false,
+            }));
         }
         self.runs
             .get(family)
@@ -109,7 +115,7 @@ impl RowSink for Rows {
 pub(super) fn gate() -> Gate {
     NOW.with(|n| n.set(T0));
     Gate {
-        fresh_after: 1_000_000_000,
+        fresh_after: 1_000_000_000_000_000,
         clock,
         excluded: BTreeSet::new(),
     }
@@ -198,7 +204,12 @@ fn an_install_failure_is_a_failed_first_run() {
             Err("no space".into())
         }
         fn read_run(&self, _: &str, _: &str) -> Result<RunRead, String> {
-            Err("not installed".into())
+            Ok(RunRead {
+                is_active: ABSENT.into(),
+                result: None,
+                exec_main_exit_timestamp: None,
+                oneshot: false,
+            })
         }
         fn disable(&self, _: &str, _: &str) -> Result<(), String> {
             Ok(())

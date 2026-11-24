@@ -1,9 +1,9 @@
 //! Binding of a deploy plan to the approved train and the landed tree, before anything is installed.
 use super::deploy::{DeployPlan, Target};
-use super::deploy_derive::{families_between, touched_in};
+use super::deploy_derive::{families_between, part_revs, touched_in};
 use super::deploy_post::{named_targets, Gate};
 use super::git;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// The train the protected GO evidence approved (its `head` is the train and its `base` the train's base).
@@ -14,7 +14,7 @@ pub struct Approved {
 }
 
 pub(super) fn wall_clock() -> i64 {
-    chrono::Utc::now().timestamp()
+    chrono::Utc::now().timestamp_micros()
 }
 
 fn name_of(t: &Target) -> String {
@@ -26,7 +26,19 @@ fn name_of(t: &Target) -> String {
 /// the family (or, for a family an untagged commit touches, to the train).
 fn check_in_tree(plan: &DeployPlan, repo: &Path, landed_head: &str) -> Result<(), String> {
     let net = families_between(repo, &plan.base, &plan.train_sha)?;
-    let touched = touched_in(repo, &format!("{}..{}", plan.base, plan.train_sha), &net)?;
+    // Items allowed per family, part by part: a commit without `Plan-Item` counts for the items of its own
+    // part only, never for another part's.
+    let mut allowed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for revs in part_revs(repo, &plan.base, &plan.train_sha)? {
+        let touched = touched_in(repo, &revs, &net)?;
+        for (family, shipped) in &touched.by_family {
+            let e = allowed.entry(family.clone()).or_default();
+            e.extend(shipped.items.iter().cloned());
+            if touched.untagged.contains(family) {
+                e.extend(touched.items.iter().cloned());
+            }
+        }
+    }
     for t in &plan.targets {
         if !net.contains_key(&t.family) {
             return Err(format!(
@@ -50,11 +62,12 @@ fn check_in_tree(plan: &DeployPlan, repo: &Path, landed_head: &str) -> Result<()
                 t.family
             ));
         }
-        let own = touched.by_family.get(&t.family).map(|s| &s.items);
-        let any = touched.untagged.contains(&t.family);
-        let allowed =
-            |k: &String| own.is_some_and(|o| o.contains(k)) || (any && touched.items.contains(k));
-        if let Some(k) = t.items.iter().find(|k| !allowed(k)) {
+        let own = allowed.get(&t.family);
+        if let Some(k) = t
+            .items
+            .iter()
+            .find(|k| !own.is_some_and(|o| o.contains(*k)))
+        {
             return Err(format!(
                 "item {k} does not ship {} in train {}",
                 name_of(t),
@@ -106,10 +119,11 @@ pub fn bind(
         return Err(format!("landed head {landed_head} is not on {main_ref}"));
     }
     check_in_tree(plan, repo, landed_head)?;
-    let fresh_after = git::out(repo, &["show", "-s", "--format=%ct", landed_head])?
-        .trim()
-        .parse::<i64>()
-        .map_err(|e| format!("commit time of {landed_head}: {e}"))?;
+    let fresh_after = 1_000_000
+        * git::out(repo, &["show", "-s", "--format=%ct", landed_head])?
+            .trim()
+            .parse::<i64>()
+            .map_err(|e| format!("commit time of {landed_head}: {e}"))?;
     let excluded: BTreeSet<(String, String)> = plan
         .blockers
         .iter()
