@@ -493,3 +493,52 @@ fn a_replan_of_a_lockfile_only_diff_still_hands_the_open_findings_to_the_writer(
     assert!(brief.contains("Open finding: HIGH a/one.rs:3 keep\nverbatim"));
     assert!(brief.contains("MED b/three.rs: two"));
 }
+
+#[test]
+fn an_oversized_findings_list_is_cut_to_the_bus_limit_with_a_pointer_to_the_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let findings: Vec<String> = (0..80)
+        .map(|n| format!("HIGH file{n}.rs:{n} {}", "x".repeat(60)))
+        .collect();
+    assert!(enqueue_return(dir.path(), "p:I", "round_cap", &findings)
+        .ok()
+        .unwrap());
+    let ports = Fixture::default();
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    let line = ports.calls.borrow().last().unwrap().clone();
+    assert!(line.chars().count() < 2000);
+    assert!(line.contains(" ... (full text in replans/replan-"));
+    // The job file keeps every finding.
+    let job = jobs(dir.path()).pop().unwrap();
+    assert_eq!(job["plan"]["findings"].as_array().unwrap().len(), 80);
+}
+
+#[test]
+fn a_legacy_job_keeps_one_date_across_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(job_dir(dir.path())).unwrap();
+    let path = job_dir(dir.path()).join("replan-old.json");
+    std::fs::write(
+        &path,
+        json!({"item":"p:Old", "pr":"https://forge/p/1", "reason":"no_progress", "plan":null,
+        "defined":[], "closed":false, "report":"pending", "error":null})
+        .to_string(),
+    )
+    .unwrap();
+    let past = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+    let ports = Fixture::default();
+    *ports.fail_send.borrow_mut() = true;
+    // Two failing runs rewrite the file; the date stays the one of the first look.
+    for _ in 0..2 {
+        run_pending(dir.path(), &ports);
+    }
+    let job = load(&path).ok().unwrap();
+    assert_eq!(job["queued_at"].as_f64(), Some(1_000_000.0));
+    assert_eq!(jobs(dir.path())[0]["queued_at"].as_f64(), Some(1_000_000.0));
+}

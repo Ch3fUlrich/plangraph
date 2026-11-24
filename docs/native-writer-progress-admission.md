@@ -62,12 +62,13 @@ findings. A card that omits `failing_checks` keeps the round's own start count (
 credit), and the last observed count is carried over any number of omissions. A stall without
 a PR refuses `no_progress` or `slow_progress` and queues a return job (one routing line with the
 open findings, nothing planned): the batch goes back. The replan keeps the findings at plan
-level, so a diff with no counted file still hands them to the writer. A check-triggered round must carry `card.failing_checks`
+level, so a diff with no counted file still hands them to the writer. A routing line is cut to 1800
+characters with a pointer to the job file that keeps the full text (the bus refuses 2000). A check-triggered round must carry `card.failing_checks`
 (`round_failing_checks_missing`), an accepted review still allows a counted red-check or
 moved-main fix, and a dry run queues no job. Writer 9 always
 refuses with `round_cap`. `health report` carries `fix_rounds`: rounds by cause per item, escalations and replans
 counted from the replan jobs by their queue time (a waiting batch shows; a job of the
-earlier schema is dated by its file), returns apart from replans, escalations per day, items
+earlier schema keeps the file date of its first run), returns apart from replans, escalations per day, items
 over the ceiling. At a stall only,
 `card.narrow_fix: true` permits one additional narrow round if the latest
 verdict has exactly 1–2 confirmed MED, every one has `clear_fix: true`, and
