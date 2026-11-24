@@ -412,7 +412,7 @@ def test_an_imported_session_stays_out_of_the_premise(w, decisions, tmp_path):
     assert "D-5900" in _refuses(w, "demo:Z")
 
 
-@pytest.mark.parametrize("bad", [7, "", "a\nb", "a\rb", "x" * 201, "pass" + "word: " + "svc" + "acct/" + "Zq9xk2LmPw"])
+@pytest.mark.parametrize("bad", [7, "", "a\nb", "a\rb", "a\n", "a\r", "a\u2028", "a\x85b", "x" * 201, "pass" + "word: " + "svc" + "acct/" + "Zq9xk2LmPw"])
 def test_a_session_must_be_a_one_line_credential_free_string(w, bad):
     with pytest.raises(Refused) as exc:
         _mk(w, defn("A", session=bad))
@@ -422,7 +422,7 @@ def test_a_session_must_be_a_one_line_credential_free_string(w, bad):
 
 @pytest.mark.parametrize("field", ["title", "description", "done_criteria", "note", "source"])
 def test_every_premise_field_of_a_definition_moves_the_clock(w, decisions, field):
-    value = "D-5800" if field == "source" else "per D-5800"     # a source counts as one whole reference
+    value = "per D-5800"
     _mk(w, defn("X", **{field: value}))
     _mk(w, defn("B"))
     assert _created(w, "demo:X")[field] == value
@@ -575,11 +575,17 @@ def test_the_cli_and_the_api_carry_the_verb():
     assert (args.key, args.decision) == ("demo:A", "D-5900")
 
 
-def test_a_free_text_source_is_not_provenance_of_a_decision(w, decisions):
-    _mk(w, defn("C", description="per D-5800"))
-    _mk(w, defn("A", source="operator order, see D-5862 and the thread"))
-    _decide(decisions, 5862, "demo:A discussion of the rollout")
-    assert "D-5862" in _refuses(w, "demo:A")
+def test_a_citation_embedded_in_a_free_text_source_is_a_premise_citation(w, decisions):
+    _mk(w, defn("A", source="Implementation per D-5"))
+    _decide(decisions, 5, "an old plan")
+    _decide(decisions, 9, "supersedes D-5 for demo")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:A")
+    assert "premise D-5 superseded by D-9" in exc.value.msg
+    # the same text raises the watermark of the item: a decision it cites is not newer
+    _mk(w, defn("B", source="Implementation per D-5862"))
+    _decide(decisions, 5862, "demo:B discussion of the rollout")
+    assert _newer(w, "demo:B") == []
 
 
 def test_unconfirmed_order_and_same_session_rows_refuse_claim(w, decisions):
@@ -644,3 +650,42 @@ def test_system_and_phase_worker_leases_read_the_decision_log_fresh_and_strict(w
         with pytest.raises(Refused) as exc:
             w.store.worker_claim_lease(who, "demo:A")
         assert "cannot read decisions file" in exc.value.msg
+
+
+@pytest.mark.parametrize("field", ["category", "similar", "supersedes"])
+def test_a_multiline_metadata_value_stays_out_of_the_note_and_the_clock(w, decisions, field):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("A", **{field: "first line\nsecond line cites D-999999\nthird line"}))
+    _mk(w, defn("B"))
+    assert w.store._item("demo:A")["note"] is None                 # never folded into the note
+    assert w.store._decision_clock()["marks"][-1] == 5800
+    _decide(decisions, 5900, "demo:B scope changed")
+    assert "D-5900" in _refuses(w, "demo:B")
+
+
+def test_a_note_that_begins_with_a_metadata_name_keeps_its_citations(w, decisions):
+    _mk(w, defn("A", note="category: see D-5 for the history"))
+    _decide(decisions, 5, "an old plan")
+    _decide(decisions, 9, "supersedes D-5 for demo")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:A")
+    assert "premise D-5 superseded by D-9" in exc.value.msg
+
+
+def test_saving_an_identical_note_does_not_move_the_anchor(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("U", note="plain note"))
+    _mk(w, defn("E", description="per D-6000"))
+    w.store.edit_definition(w.p("router"), "demo:U", {"note": "plain note"})    # the same text
+    _decide(decisions, 5950, "demo:U scope changed")
+    assert _newer(w, "demo:U") == ["D-5950"]                  # the anchor is still U's creation
+
+
+def test_saving_an_identical_note_keeps_the_floor_and_a_changed_one_voids_it(w, decisions):
+    _mk(w, defn("V", description="per D-5800", note="plain note"))
+    _decide(decisions, 5950, "demo:V scope changed")
+    w.store.reconfirm(w.p("router"), "demo:V", "D-5950")
+    w.store.edit_definition(w.p("router"), "demo:V", {"note": "plain note"})
+    assert _newer(w, "demo:V") == []                          # a re-save does not reopen the refusal
+    w.store.edit_definition(w.p("router"), "demo:V", {"note": "another note"})
+    assert _newer(w, "demo:V") == ["D-5950"]                  # a change of the premise does

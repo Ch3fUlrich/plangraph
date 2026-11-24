@@ -42,7 +42,7 @@ from .evidence_decisions import decision_book, decisions_naming
 from .evidence_pr import landing_record
 from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
-from .item_fields import PREMISE_FIELDS, premise_texts
+from .item_fields import PREMISE_FIELDS, premise_digest, premise_texts
 from .schema import DEFINITION_EVENTS
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
@@ -89,11 +89,22 @@ def _premise_ids(payload):
 def _changes_premise(kind, payload):
     """Does this definition event create the item or change one of its premise fields?
 
-    An edit that touches only other fields (``depends_on``, a tier, a host) leaves the
-    premise the item was last read against: it must not move the watermark anchor.
+    An edit that touches only other fields (``depends_on``, a tier, a host), or that lists
+    a premise field without changing its text, leaves the premise the item was last read
+    against: it must not move the watermark anchor.  ``premise_unchanged`` names the
+    listed fields whose text was the same; an event without it changed every field it lists.
     """
-    return kind == "item_created" or bool(
-        set(payload.get("fields") or ()) & set(PREMISE_FIELDS))
+    if kind == "item_created":
+        return True
+    fields = set(payload.get("fields") or ())
+    if (fields & {"title", "note", "description"}) - set(payload.get("premise_unchanged") or ()):
+        return True
+    if "done_criteria" not in fields:
+        return False
+    before, after = payload.get("before"), payload.get("after")
+    return not (isinstance(before, dict) and isinstance(after, dict)
+                and "done_criteria" in before and "done_criteria" in after
+                and before["done_criteria"] == after["done_criteria"])
 
 
 def _graph(index):
@@ -154,10 +165,10 @@ class ContextMixin:
         as ``session``); ``last`` maps a key to the seq of its creation or last premise
         change, the anchor of its fallback watermark (a metadata-only edit never moves
         it; an event that lacks premise text raises nothing and is never filled from the
-        item's current text); ``reconfirmed`` maps a key to the highest decision a
-        ``premise_reconfirmed`` event named for it, the per-item floor every claim path
-        reads.  A later premise change of the key clears its floor: the router read the
-        premise as it was then.  Kept on
+        item's current text); ``reconfirmed`` maps a key to ``{premise digest: highest
+        decision a premise_reconfirmed event named}``: the floor every claim path reads
+        counts only for the premise (:func:`premise_digest`) the router read, so a later
+        edit of the premise text voids it and a re-save of the same text does not.  Kept on
         the store and rebuilt whenever the (count, max, sum of seq) of these
         events changes, so a rollback or an out-of-order commit never leaves
         it behind.
@@ -178,8 +189,9 @@ class ContextMixin:
             if row["type"] == "premise_reconfirmed":     # a re-read, not a change of the definition
                 did = src.decision_ids(payload.get("decision"))
                 if did:
-                    clock["reconfirmed"][row["key"]] = max(
-                        clock["reconfirmed"].get(row["key"], -1), _num(did[-1]))
+                    floors = clock["reconfirmed"].setdefault(row["key"], {})
+                    floors[payload.get("premise")] = max(floors.get(payload.get("premise"), -1),
+                                                         _num(did[-1]))
                 continue
             ids = _premise_ids(payload)
             if ids:
@@ -188,7 +200,6 @@ class ContextMixin:
             clock["marks"].append(mark)
             if _changes_premise(row["type"], payload):
                 clock["last"][row["key"]] = row["seq"]
-                clock["reconfirmed"].pop(row["key"], None)
         self._ctx_clock = clock
         return clock
 
@@ -271,7 +282,7 @@ class ContextMixin:
         cited = src.decision_ids(*self._texts(item))
         naming = src.decisions_naming(book, key)
         mark = self._watermark(item, clock, cited)
-        confirmed = clock["reconfirmed"].get(key, -1)
+        confirmed = clock["reconfirmed"].get(key, {}).get(premise_digest(item), -1)
         newer = [d for d in naming if d not in cited
                  and mark is not None and mark < _num(d) and confirmed < _num(d)]
         superseded = {old: new for old, new in book["superseded"].items()
@@ -511,7 +522,8 @@ class ContextMixin:
                 if not self._adapter("decisions").has(did):
                     raise Refused("not_found", f"no decision {did} in the decisions log")
                 self._append(principal, key, "premise_reconfirmed",
-                             {"decision": did, "who": principal.name}, now)
+                             {"decision": did, "who": principal.name,
+                              "premise": premise_digest(item)}, now)
             return {"key": key, "reconfirmed": did}
         return self._run(principal, "reconfirm", key, record)
 

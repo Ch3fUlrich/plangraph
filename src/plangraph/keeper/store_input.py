@@ -16,7 +16,7 @@ from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
 from .context_sources import decision_ids
 from .item_fields import (MODEL_FIELDS, SMALL_FIELDS, check_choices, check_design_ref, check_host, check_kg_refs, check_kind, check_model_fields,
-                          check_session, check_wait, kind_defaults, premise_text)
+                          check_metadata, check_wait, kind_defaults)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
@@ -41,14 +41,13 @@ def citing_premise(values, names):
 
     Definition events carry the premise text the decision clock reads.  Only a
     field that cites an id is carried: the clock needs nothing else, and an event
-    of an item that cites none keeps the payload (and hash) it always had.  The
-    text is the premise text (:func:`premise_text`): no folded metadata line.
+    of an item that cites none keeps the payload (and hash) it always had.
     """
-    return {name: text for name in names
-            if (text := premise_text(name, values.get(name))) is not None and decision_ids(text)}
+    return {name: values[name] for name in names
+            if isinstance(values.get(name), str) and decision_ids(values[name])}
 
 
-def _defined_payload(fields):
+def _defined_payload(fields, before=None):
     """``item_defined`` payload: the changed field names plus the new tier value.
 
     The fold replays this to reconstruct ``review_tier``; it needs the value,
@@ -67,6 +66,14 @@ def _defined_payload(fields):
         if name in fields:
             payload[name] = fields[name]
     payload.update(citing_premise(fields, ("title", "note")))   # done_criteria rides in before/after
+    named = [name for name in ("title", "note", "description") if name in fields]
+    if named and before is not None:
+        # An edit that lists a field is not a change of it: the clock moves the anchor of the
+        # item's fallback watermark only for the premise fields whose text really changed.  An
+        # edit that changed every field it lists keeps the payload (and hash) it always had.
+        same = [name for name in named if fields[name] == before.get(name)]
+        if same:
+            payload["premise_unchanged"] = same
     for name in ("estimate_h", "estimate_src"):
         if name in fields:
             payload[name] = fields[name]
@@ -223,9 +230,9 @@ class InputMixin:
             if not isinstance(slice_parent, str) or not slice_parent.strip():
                 raise Refused("validation", f"{key}: slice_parent must be a non-empty key")
             slice_parent = self._qualify(project, slice_parent)
-        session = check_session(raw.get("session"), key)
         return {
-            "key": key, "project": project, "id": identifier, "session": session,
+            "key": key, "project": project, "id": identifier,
+            "metadata": check_metadata(raw, key),
             "title": raw.get("title", ""), "description": raw.get("description"),
             "host": raw.get("host"), "wait": wait, "kind": kind,
             **{name: raw.get(name) for name in MODEL_FIELDS},
