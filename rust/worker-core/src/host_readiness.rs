@@ -103,6 +103,7 @@ pub fn writer_sandbox_args(roots: &[PathBuf], deny: &[PathBuf]) -> io::Result<Ve
     .flat_map(|value| ["-c".to_owned(), value])
     .collect();
     args.extend(crate::credential_isolation::profile_args(roots, deny)?);
+    args.extend(crate::credential_isolation::env_policy_args());
     Ok(args)
 }
 
@@ -344,6 +345,14 @@ impl Runner for Native {
                     Duration::from_secs(30),
                 )?;
                 if out.status.success() {
+                    if sandbox == WRITER_SANDBOX {
+                        crate::credential_isolation::check_fixture_denied(
+                            &self.codex,
+                            &self.executable,
+                            scratch,
+                            self.tool_path.as_deref(),
+                        )?;
+                    }
                     return Ok(());
                 }
                 let stderr = String::from_utf8_lossy(&out.stderr);
