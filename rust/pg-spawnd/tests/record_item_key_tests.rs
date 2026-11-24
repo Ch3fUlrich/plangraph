@@ -5,7 +5,6 @@ mod binary;
 mod common;
 use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
-use std::os::unix::fs::PermissionsExt;
 pub struct Fixture {
     pub(crate) _state: TempDir,
     _guard: ChildGuard,
@@ -28,8 +27,10 @@ impl Fixture {
             ),
         ] {
             let path = state.path().join(name);
-            std::fs::write(&path, format!("#!/bin/sh\nprintf '%s' '{value}'\n")).unwrap();
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            pg_worker_core::executable_test_support::write_executable(
+                &path,
+                format!("#!/bin/sh\nprintf '%s' '{value}'\n"),
+            );
         }
         let socket = state.path().join("socket");
         let child = std::process::Command::new(binary::spawnd())

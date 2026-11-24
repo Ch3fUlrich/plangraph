@@ -8,6 +8,7 @@ fn unit_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/systemd")
 }
 
+#[cfg(unix)]
 #[test]
 fn units_verify_with_systemd_analyze() {
     let probe = Command::new("systemd-analyze").arg("--version").output();
@@ -16,9 +17,11 @@ fn units_verify_with_systemd_analyze() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let bin = tmp.path().join("pg-keeper-backup");
-    fs::write(&bin, "#!/bin/sh\n").unwrap();
-    fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let bin = pg_worker_core::executable_test_support::write_script(
+        tmp.path(),
+        "pg-keeper-backup",
+        "#!/bin/sh\n",
+    );
     let service = fs::read_to_string(unit_dir().join("pg-keeper-backup.service"))
         .unwrap()
         .replace("%h/.local/bin/pg-keeper-backup", bin.to_str().unwrap())
