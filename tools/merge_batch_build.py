@@ -16,7 +16,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from merge_batch_plan import high_patterns, plan_batches, runner_wide_receipts, set_problems, stack_parents, stack_sorted
+from merge_batch_plan import (high_patterns, plan_batches, replay_receipt, runner_wide_receipts, set_problems, stack_parents,
+                              stack_sorted)
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
@@ -372,7 +373,7 @@ def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
         found = ci_select.ready_problems({
             "fast_checks": green, "entry_set": green, "windows_required": rust, "windows": green if rust else None,
             "attempts": attempts, "flake_dispositions": dispositions, "head": pr["head"], "files": pr["files"],
-            "truncated": pr["truncated"], "replay": ci_select.replay_receipt(pr["head"])})
+            "truncated": pr["truncated"], "replay": replay_receipt(pr["head"])})
         problems += [f"PR #{num}: {p}" for p in found]
     return problems
 
