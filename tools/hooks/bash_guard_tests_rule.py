@@ -302,6 +302,12 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
         if _basename(words[i]) == "unset":
             state.update({name: None for name in words[i + 1:] if not name.startswith("-")})
             continue
+        if _basename(words[i]) in ("export", "declare", "typeset"):
+            # `export NAME=VAL` and `declare -x NAME=VAL` reach every later command; without -x declare only sets a shell variable.
+            flags = "".join(w[1:] for w in words[i + 1:] if re.match(r"^-[A-Za-z]+$", w))
+            if _basename(words[i]) == "export" or "x" in flags:
+                state.update(w.split("=", 1) for w in words[i + 1:] if _ENV_ASSIGN_RE.match(w))
+            continue
         # Wrapper options are not modelled: every later word may be the command, as check_command reads it.
         wrapped = _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS or any(_basename(w) in _PGTEST for w in words[i:i + 3])
         evaled = False
