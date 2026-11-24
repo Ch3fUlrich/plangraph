@@ -728,7 +728,7 @@ from a checkout. Use `--base <revision>` to override `origin/main`, or
 The command delegates job selection to `tools/ci_select.py`, includes committed,
 tracked local and untracked changes, and prints CI job booleans before its steps.
 Use `--owned-worktree` for committed-head checks. It runs in a disposable
-checkout and saves a review stamp by commit SHA in the repository's shared Git state.
+checkout and saves a review receipt binding the resolved base and head in shared Git state.
 It runs the four always-required tree guards, commit and whitespace gates,
 affected Python tests with the existing full-suite refusal, and fmt/clippy/tests
 for touched Rust crates and local reverse dependencies in their own workspaces.
@@ -738,19 +738,19 @@ inputs with CRLF fail early with a normalization diagnostic. Worker tests use
 the existing CI Temporal wrapper and require the Temporal CLI and protobuf tools.
 Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
 The fleet snapshot selection builds `pg-spawnd` from the checkout under the
-Cargo pool lease before pytest. Fast checks and the native writer gate validate
+Cargo pool lease before pytest. Exact replay stages a separate binary from each checkout. Fast checks and the native writer gate validate
 Class-Search body lines in the commit range using `pg-policy`.
 A non-Rust lane push can reuse a current cached policy executable even when
 the shared target is at the build cap.
 Each step and the total report wall seconds; exceeding 300 seconds emits a
 warning and returns failure after checks, without interrupting or weakening them.
-Affected tests and base replays run with context, session and Python path
+Changed pytest nodes and target-qualified Cargo tests must pass on committed HEAD and fail in their bodies against base code with the test overlay. Affected tests and base replays run with context, session and Python path
 overrides removed. To record a known base failure, use one `Fails-at-Base:`
 commit trailer per pytest node, with the pinned base SHA followed by the node
 ID. Fast checks print the replay command and its output from a disposable
 checkout. A passing or unreproduced base failure rejects the claim, and the
-affected tests must still pass on the proposed head.
-This is the cheap local projection of CI; hosted browser, Postgres and Windows
+affected tests must still pass on the proposed head. For an automatic replay that cannot fail on the base, add `Test-Replay-Exception: "<exact test ID>" <reason>` to a commit containing the current test file. A changed file invalidates its previous exception.
+For keeper tests, SQLite and Postgres outcomes are paired by exact node. A skip or deselection is inconclusive and needs a conclusive pair on an applicable backend. Hosted browser, full Postgres and Windows
 runners remain CI responsibilities. A typical build host timing measurement is still
 required before claiming that host's five-minute done criterion.
 
