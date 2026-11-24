@@ -33,7 +33,8 @@ pub fn read(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// Per host: median wall minutes of a round and the share of each cause, in percent.
+/// Per host: median wall minutes of a round and the share of each cause (between-round
+/// time included), in percent.
 pub fn digest(rows: &[Value]) -> Vec<Value> {
     let mut hosts: Vec<&str> = rows.iter().filter_map(|r| r["host"].as_str()).collect();
     hosts.sort_unstable();
@@ -49,10 +50,14 @@ pub fn digest(rows: &[Value]) -> Vec<Value> {
                 n if n % 2 == 1 => walls[n / 2] as f64,
                 n => (walls[n / 2 - 1] + walls[n / 2]) as f64 / 2.0,
             };
-            let total: i64 = walls.iter().sum();
+            // Shares count the wait between rounds too; the median stays on wall time.
+            let between: i64 = mine
+                .iter()
+                .filter_map(|r| r["causes"][Cause::BetweenRounds.name()].as_i64())
+                .sum();
+            let total: i64 = walls.iter().sum::<i64>() + between;
             let share: serde_json::Map<String, Value> = Cause::ALL
                 .iter()
-                .filter(|cause| **cause != Cause::BetweenRounds)
                 .map(|cause| {
                     let ms: i64 = mine
                         .iter()

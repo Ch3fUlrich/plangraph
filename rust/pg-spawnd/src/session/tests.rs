@@ -146,3 +146,33 @@ fn subprocess_capture_times_out_without_waiting_for_exit() {
     assert_eq!(error.kind(), ErrorKind::TimedOut);
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn a_blocked_round_refuses_the_automatic_restart_of_its_session_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = round_watch::state_file(dir.path(), "writer-0884");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        json!({"actions": {}, "blocked": {"round_key": "k", "command": "cargo test -p x",
+            "reason": "second wait over the cap in one round"}})
+        .to_string(),
+    )
+    .unwrap();
+    let reason = blocked_reason(true, "writer-0884", dir.path()).unwrap();
+    assert!(
+        reason.contains("cargo test -p x") && reason.contains("second wait"),
+        "{reason}"
+    );
+    assert_eq!(
+        blocked_reason(false, "writer-0884", dir.path()),
+        None,
+        "a plain launch"
+    );
+    assert_eq!(
+        blocked_reason(true, "writer-0885", dir.path()),
+        None,
+        "another session"
+    );
+    assert_eq!(blocked_reason(true, "../x", dir.path()), None);
+}
