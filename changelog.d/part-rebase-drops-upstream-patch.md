@@ -1,0 +1,1 @@
+The native writer's rebase of a part head onto main now drops commits whose patch main already holds (`--empty=drop`, no `--reapply-cherry-picks`) instead of keeping them as empty commits; a conflict is still reported only with at least one unmerged path.
