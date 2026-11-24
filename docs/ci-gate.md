@@ -60,3 +60,14 @@ Audit of what a full run executes (no job was merged or re-wired; that needs a r
 | `rust-worker` | Rust worker crate: fmt, clippy, tests | standalone `rust/worker` crate (not in the workspace) | none |
 | `rust-spike` | Rust replay spike tests | `rust/spikes/temporal-spike` replay test | none |
 | `ci-gate` | ci-gate | aggregates the jobs above | none |
+
+## Reusing the green run of a reworded train commit (rule 3.42)
+
+Rule 3.42 a runs the full suite once on the merge candidate; a reword that leaves the Git tree unchanged does not change what was tested.
+On a `pull_request` run the select job passes the previous head (`github.event.before`), its commit statuses, its tree and the Actions run
+record of the run its `ci-full` status names to `tools/ci_select.py select` (`--old-head --old-tree --old-run --statuses`). `reword_evidence`
+reuses that run only when both commits have the same non-empty tree, the newest `ci-full` of the old head is success for that tree, and the run
+record shows the same run id, the old head as its commit, this workflow on a pull request, the latest attempt, concluded success. It prints
+`tested=true` and `evidence=run R attempt A tree T reused from <old> for <new>`; the gate accepts `tested=true` like a landing record and the
+new head gets its own `ci-full` status with the same run and tree, so a second reword chains. A different tree, a missing or unverified run, or
+a newer or red attempt runs the suite again. Branch protection and the required-check list are unchanged.
