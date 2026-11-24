@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -36,6 +37,9 @@ from .. import views
 from . import context_sources as src, timing
 from .brief import ensure_cap, superseded_contract
 from .errors import Refused
+from .evidence_decisions import decision_book, decisions_naming
+from .evidence_pr import landing_record
+from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
 from .schema import DEFINITION_EVENTS
 
@@ -500,6 +504,88 @@ class ContextMixin:
         if unknown:
             facts.append("work index unverified: open PR inventory unavailable: " + ", ".join(unknown))
         return self._stale_override(item["key"], reason, facts)
+
+    # ----------------------------------------------- automatic close: landing evidence
+    #: The operator decision (a ``D-NNN`` row) that stands behind every automatic merge close;
+    #: the keeper config sets it. It is recorded in the close evidence, never required to close.
+    merge_close_decision = None
+    _LANDING_MISS_S = 600
+
+    def _landing_for(self, project, sha):
+        """The forge's cached record of the landing at *sha*, or ``None`` when it proves nothing.
+
+        A landing never changes, so a record is kept for good; "no merged PR" is kept for
+        ``_LANDING_MISS_S``. The forge is asked outside the keeper lock (``warm_merge_scan``);
+        a frozen run reads only what is cached, and a forge failure is retried on the next run.
+        """
+        cache = self.__dict__.setdefault("_landings", {})
+        found = cache.get((project, sha))
+        now = self.now()
+        if found is not None and (found[0] is not None or now - found[1] < self._LANDING_MISS_S):
+            return found[0]
+        ci, git = self._adapter("ci"), self._adapter("git")
+        if (self.__dict__.get("_frozen_lanes") or not valid_commit_ref(sha)
+                or not callable(getattr(ci, "merged_pr_for", None)) or git is None):
+            return None
+        try:
+            record = landing_record(ci, project, sha, git.repo_ref(project))
+        except Exception:  # noqa: BLE001 - an unreadable forge proves nothing
+            return None
+        cache[(project, sha)] = (record, now)
+        return record
+
+    def _landing_evidence(self, item, proofs, now):
+        """Standing authority, pre-merge required checks and GO rows of an automatic close.
+
+        A gap is a flag, never a refusal: the merge itself is the proved landing.
+        """
+        flags, landings, project = {}, [], self._merge_project(item)
+        decisions = self._adapter("decisions")
+        decision = self.merge_close_decision
+        authority = None
+        if decision:
+            known = bool(getattr(decisions, "has", lambda _: False)(decision))
+            authority = {"decision": decision, "verified": known}
+            if not known:
+                flags["standing_authority_unverified"] = decision
+        else:
+            flags["standing_authority_missing"] = True
+        unverified = []
+        for proof in proofs:
+            record = self._landing_for(project, proof["merge_sha"])
+            checks = record["checks"] if record else None
+            landings.append({"pr": proof["pr"], "merge_sha": proof["merge_sha"], "head": proof["head"],
+                             "merged_at": record["merged_at"] if record else proof["merged_at"],
+                             "checks": checks})
+            if checks is None:
+                unverified.append({"pr": proof["pr"], "detail": "forge_record_unavailable"})
+            elif not checks["verified"]:
+                unverified.append({"pr": proof["pr"], "detail": checks["detail"]})
+        if unverified:
+            flags["required_checks_unverified"] = unverified
+        go_rows = self._landing_go_rows(item, proofs, decisions)
+        if missing := [p["pr"] for p in proofs if p["pr"] not in {row["pr"] for row in go_rows}]:
+            flags["go_row_missing"] = {"prs": missing}
+        return {"authority": authority, "landings": landings, "go_rows": go_rows, "flags": flags}
+
+    def _landing_go_rows(self, item, proofs, decisions):
+        """``[{decision_id, pr}]``: the GO rows that name this item and bind a landed PR or head."""
+        from .store_waiver import _go_binding as go_binding, _go_statement as go_statement, _names_item as names_item
+
+        project, rows = self._merge_project(item), []
+        try:
+            book = decision_book(decisions)
+            for did in decisions_naming(book, item["key"]):
+                statement = go_statement(decisions.text(did))
+                if statement is None or not names_item(statement, item["key"]):
+                    continue
+                pr, _ = go_binding(statement, project)
+                bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", statement)
+                rows += [{"decision_id": did, "pr": p["pr"]} for p in proofs
+                         if p["pr"] == pr or (pr is None and bound and p["head"].startswith(bound[1].lower()))]
+        except Exception:  # noqa: BLE001 - an unreadable decisions file names no GO row
+            return []
+        return rows
 
     @staticmethod
     def _stale_override(key, reason, facts):
