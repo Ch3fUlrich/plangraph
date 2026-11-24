@@ -5,6 +5,8 @@ read by every claim path.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from keeper_util import World, defn
@@ -60,36 +62,68 @@ def _created(w, key):
                 if e["key"] == key and e["type"] == "item_created")
 
 
-def test_a_session_id_on_one_item_does_not_move_the_watermark_of_another(w, decisions):
-    # C cites D-5800; A carries a session; B cites nothing and is defined after A, so B's
-    # watermark is the clock at its own definition and no session id may be in it.
+_METADATA = [("session", "D-999999"), ("design_ref", "docs/D-999999.md"), ("similar", ["D-999999"]),
+             ("category", "D-999999"), ("supersedes", "D-999999")]
+
+
+@pytest.mark.parametrize("field,value", _METADATA)
+def test_definition_metadata_does_not_advance_another_items_watermark(w, decisions, field, value):
+    # C cites D-5800; A carries the metadata; B cites nothing and is defined after A, so B's
+    # watermark is the clock at its own definition and no metadata id may be in it.
     _mk(w, defn("C", description="per D-5800"))
-    _mk(w, defn("A", session="D-999999"))
+    _mk(w, defn("A", **{field: value}))
     _mk(w, defn("B"))
-    assert _created(w, "demo:A")["session"] == "D-999999"      # the metadata is on the event
-    assert "D-999999" not in (w.store._item("demo:A")["note"] or "")
+    assert "D-999999" not in _created(w, "demo:A").get("note", "")
     assert w.store._decision_clock()["marks"][-1] == 5800
     _decide(decisions, 5900, "demo:B now also covers the web; supersedes the old scope")
     assert "D-5900" in _refuses(w, "demo:B")
     assert _newer(w, "demo:B") == ["D-5900"]
-    # the claimed item itself: its own session never counts as a citation either
+    # the item itself: its own metadata is never a citation either
     _decide(decisions, 5901, "demo:A scope changed")
     assert "D-5901" in _refuses(w, "demo:A")
 
 
-def test_a_session_must_be_a_one_line_string(w):
-    for bad in (7, "", "a\nb", "x" * 201):
-        with pytest.raises(Refused) as exc:
-            _mk(w, defn("A", session=bad))
-        assert "session must be a one-line string" in exc.value.msg
+def test_a_session_is_metadata_on_the_creation_event(w):
+    _mk(w, defn("A", session="D-999999"))
+    assert _created(w, "demo:A")["session"] == "D-999999"
+    assert "D-999999" not in (w.store._item("demo:A")["note"] or "")
+
+
+def test_an_imported_session_stays_out_of_the_premise(w, decisions, tmp_path):
+    from plangraph.keeper.importer import load_dir
+    plan = tmp_path / "plan"
+    plan.mkdir()
+    (plan / "p.yaml").write_text(
+        "items:\n"
+        "- {project: demo, id: C, title: c, description: per D-5800, owner: tester, track: T0, estimate_h: 1, kind: lane}\n"
+        "- {project: demo, id: A, title: a, session: D-999999, owner: tester, track: T0, estimate_h: 1, kind: lane}\n"
+        "- {project: demo, id: Z, title: z, owner: tester, track: T0, estimate_h: 1, kind: lane}\n"
+        "- {project: demo, id: GOAL, title: g, kind: goal, depends_on: [A, Z, C], owner: tester, track: T0, estimate_h: 1}\n",
+        encoding="utf-8")
+    items = load_dir(plan)
+    assert [i["session"] for i in items if i["id"] == "A"] == ["D-999999"]
+    assert all("D-999999" not in (i.get("note") or "") for i in items)
+    w.store.import_items(w.p("router"), items)
+    assert _created(w, "demo:A")["session"] == "D-999999"
+    assert w.store._decision_clock()["marks"][-1] == 5800
+    _decide(decisions, 5900, "demo:Z scope changed")          # Z is imported after C: its watermark is 5800
+    assert "D-5900" in _refuses(w, "demo:Z")
+
+
+@pytest.mark.parametrize("bad", [7, "", "a\nb", "a\rb", "x" * 201, "password: svcacct/Zq9xk2LmPw"])
+def test_a_session_must_be_a_one_line_credential_free_string(w, bad):
+    with pytest.raises(Refused) as exc:
+        _mk(w, defn("A", session=bad))
+    assert "session" in exc.value.msg
     _mk(w, defn("OK", session="sess-1"))       # the same batch shape passes with a good one
 
 
 @pytest.mark.parametrize("field", ["title", "description", "done_criteria", "note", "source"])
 def test_every_premise_field_of_a_definition_moves_the_clock(w, decisions, field):
-    _mk(w, defn("X", **{field: "per D-5800"}))
+    value = "D-5800" if field == "source" else "per D-5800"     # a source counts as one whole reference
+    _mk(w, defn("X", **{field: value}))
     _mk(w, defn("B"))
-    assert _created(w, "demo:X")[field] == "per D-5800"
+    assert _created(w, "demo:X")[field] == value
     assert not {"title", "done_criteria", "note", "source"} & set(_created(w, "demo:B"))   # no cite, no key
     assert w.store._decision_clock()["marks"][-1] == 5800
     _decide(decisions, 5900, "demo:B scope changed")
@@ -237,3 +271,74 @@ def test_the_cli_and_the_api_carry_the_verb():
     assert "reconfirm" in api_routes.WRITE_VERBS and "reconfirm" in api_routes.ROLE_CHECKED_VERBS
     args = cli.build_parser().parse_args(["reconfirm", "demo:A", "D-5900"])
     assert (args.key, args.decision) == ("demo:A", "D-5900")
+
+
+def test_a_free_text_source_is_not_provenance_of_a_decision(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("A", source="operator order, see D-5862 and the thread"))
+    _decide(decisions, 5862, "demo:A discussion of the rollout")
+    assert "D-5862" in _refuses(w, "demo:A")
+
+
+def test_unconfirmed_order_and_same_session_rows_refuse_claim(w, decisions):
+    # the old lane let a terse GO row and a row of the item's own session claim without a
+    # reconfirm; nothing is read from the prose of a row, so both refuse until reconfirmed
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("A", session="sess-77"), defn("B"))
+    _decide(decisions, 5858, "GO demo:A")
+    _decide(decisions, 5859, "(sess-77) demo:B ordered first, GO")
+    assert "D-5858" in _refuses(w, "demo:A")
+    assert "D-5859" in _refuses(w, "demo:B")
+    w.store.reconfirm(w.p("router"), "demo:A", "D-5858")
+    assert w.store.claim(w.p("l1main"), "demo:A")["epoch"] == 1
+
+
+def test_a_metadata_only_edit_does_not_move_the_fallback_anchor(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("U"))
+    _mk(w, defn("E", description="per D-6000"))
+    w.store.edit_definition(w.p("router"), "demo:U", {"host": "elsewhere"})   # no premise text
+    _decide(decisions, 5950, "demo:U scope changed")
+    assert _newer(w, "demo:U") == ["D-5950"]           # still read against the premise at its creation
+    w.store.edit_definition(w.p("router"), "demo:U", {"note": "reworded"})    # a real premise change
+    assert _newer(w, "demo:U") == []                   # now anchored after D-6000
+
+
+def test_a_premise_edit_invalidates_the_floor_of_the_earlier_read(w, decisions):
+    _mk(w, defn("A", description="per D-5800"))
+    _decide(decisions, 5, "an old plan")
+    _decide(decisions, 9, "supersedes D-5 for demo")
+    _decide(decisions, 5900, "demo:A scope changed")
+    w.store.reconfirm(w.p("router"), "demo:A", "D-5900")
+    assert w.store.claim(w.p("l1main"), "demo:A")["epoch"] == 1
+    w.store.release(w.p("router"), "demo:A", 1)
+    # the router read a premise that did not cite D-5; a later edit introduces the retired id
+    w.store.edit_definition(w.p("router"), "demo:A", {"description": "per D-5800 and D-5"})
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:A")
+    assert "premise D-5 superseded by D-9" in exc.value.msg
+    w.store.reconfirm(w.p("router"), "demo:A", "D-5900")      # a new read clears it again
+    assert w.store.claim(w.p("l1main"), "demo:A")["epoch"] == 2
+
+
+def test_system_and_phase_worker_leases_read_the_decision_log_fresh_and_strict(w, decisions):
+    from plangraph.keeper import auth
+    token = auth.add_principal(w.conn, "phase-runner", "phase-worker", ["demo"])
+    runner = auth.authenticate(w.conn, token)
+    _mk(w, defn("A", description="per D-5800"))
+    _decide(decisions, 5900, "demo:Z scope changed")           # same length as the row below
+    assert _newer(w, "demo:A") == []                           # caches the book of this file version
+    stat = decisions.stat()
+    decisions.write_text(decisions.read_text(encoding="utf-8").replace("demo:Z", "demo:A"), encoding="utf-8")
+    os.utime(decisions, ns=(stat.st_atime_ns, stat.st_mtime_ns))     # same size, same mtime
+    for who in (w.p("system"), runner):
+        with pytest.raises(Refused) as exc:
+            w.store.worker_claim_lease(who, "demo:A")
+        assert "premise outdated: D-5900" in exc.value.msg
+    with pytest.raises(Refused):                               # the ordinary claim agrees
+        w.store.claim(w.p("l1main"), "demo:A")
+    decisions.unlink()                                         # an unreadable log refuses both doors
+    for who in (w.p("system"), runner):
+        with pytest.raises(Refused) as exc:
+            w.store.worker_claim_lease(who, "demo:A")
+        assert "cannot read decisions file" in exc.value.msg

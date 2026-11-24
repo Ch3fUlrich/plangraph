@@ -8,12 +8,25 @@ one helper, so the same item gives the same note whichever door it came by.
 from __future__ import annotations
 
 import json
+import re
 
 from .errors import Refused
 
 NOTE_CAP = 2000
 #: ``description`` is a real column (MODEL-NAMES), no longer folded; same cap.
 DESCRIPTION_CAP = 2000
+
+
+#: Item metadata that is not premise text.  A create or import that does not know the field
+#: folds it into ``note`` as a ``name: value`` line (:func:`fold_note`); the decision gate must
+#: not read an id from such a line, whichever door folded it.
+METADATA_FIELDS = ("session", "similar", "category", "supersedes")
+_METADATA_LINE = re.compile(r"(?m)^(?:" + "|".join(METADATA_FIELDS) + r"): .*(?:\n|\Z)")
+
+
+def premise_note(note):
+    """*note* without the folded metadata lines: the text a decision may be cited in."""
+    return _METADATA_LINE.sub("", note).rstrip("\n") if isinstance(note, str) else note
 
 
 def render(value):
