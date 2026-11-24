@@ -13,6 +13,12 @@ def git(cwd, *args):
                    check=True, capture_output=True)
 
 
+@pytest.fixture(autouse=True)
+def _tmp_is_outside_any_enclosing_repository(tmp_path, monkeypatch):
+    """pytest's tmp dir may sit inside the checkout running the tests: git must not climb out of it."""
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+
+
 @pytest.fixture
 def repos(tmp_path, monkeypatch):
     monkeypatch.delenv("CARGO_TARGET_DIR", raising=False)
@@ -230,3 +236,31 @@ def test_unrelated_unsets_and_a_target_given_after_the_unset_stay_allowed(repos,
     main, _ = repos
     monkeypatch.setenv("CARGO_TARGET_DIR", "/var/cache/shared")
     assert hook(command, main / "rust").returncode == 0, command
+
+
+@pytest.mark.parametrize("command", [
+    "export CARGO_TARGET_DIR=/var/cache/shared; cargo build",
+    "export CARGO_TARGET_DIR=/var/cache/shared && cargo test",
+    "export RUSTFLAGS=-Dwarnings CARGO_TARGET_DIR=/var/cache/shared; cargo check",
+    "declare -x CARGO_TARGET_DIR=/var/cache/shared; cargo build",
+    "bash -c 'export CARGO_TARGET_DIR=/var/cache/shared; cargo build'",
+    "export CARGO_TARGET_DIR=rust/target; export CARGO_TARGET_DIR=/var/cache/shared; cargo build",
+])
+def test_an_exported_shared_target_reaches_the_later_cargo_build(repos, command):
+    main, _ = repos
+    assert hook(command, main / "rust").returncode == 0, command
+
+
+@pytest.mark.parametrize("command", [
+    "export CARGO_TARGET_DIR=rust/target; cargo build",
+    "export CARGO_TARGET_DIR=/var/cache/shared; unset CARGO_TARGET_DIR; cargo build",
+    "export CARGO_TARGET_DIR=/var/cache/shared; export CARGO_TARGET_DIR=rust/target; cargo build",
+    "declare CARGO_TARGET_DIR=/var/cache/shared; cargo build",
+    "export RUSTFLAGS=-Dwarnings; cargo build",
+    "declare -x CARGO_TARGET_DIR=rust/target; cargo test",
+])
+def test_an_export_that_is_not_the_shared_target_leaves_the_build_refused(repos, command):
+    """`declare` without -x sets a shell variable cargo never sees; an export of a checkout target is no shared target."""
+    main, _ = repos
+    result = hook(command, main)
+    assert result.returncode == 2, (command, result.stderr)
