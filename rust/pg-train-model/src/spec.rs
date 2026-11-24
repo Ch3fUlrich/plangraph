@@ -72,6 +72,10 @@ impl Model {
         if t.tested != Some(t.tree) {
             return Err(Denied::TreeChanged);
         }
+        // Promotion needs the same current verification as a settlement.
+        if !t.checked {
+            return Err(Denied::Unverified);
+        }
         self.land(train, true);
         Ok(Outcome::Applied)
     }

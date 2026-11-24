@@ -326,7 +326,7 @@ fn a_whitespace_only_change_to_a_string_is_a_different_patch() {
 }
 
 #[test]
-fn a_verified_carry_is_persisted_and_the_builder_admits_the_receipt_of_the_old_head() {
+fn a_carry_is_reassessed_at_admission_and_a_superseded_one_is_cleared() {
     use super::train::{Parent, PartIn, PartReceipt};
     let fx = Fx::new();
     let base = fx.base();
@@ -340,18 +340,17 @@ fn a_verified_carry_is_persisted_and_the_builder_admits_the_receipt_of_the_old_h
         serde_json::to_vec(&recorded(&fx, &base, &head)).unwrap(),
     )
     .unwrap();
-    let carry = dir.path().join("carry.json");
-    let assess = flags(&[
-        ("repo", fx.path().to_str().unwrap()),
-        ("evidence", ev.to_str().unwrap()),
-        ("main", &main1),
-        ("head", &new_head),
-        ("trains-now", "1"),
-        ("carry-out", carry.to_str().unwrap()),
-    ]);
-    super::evidence_cli::assess_cli(&assess).unwrap();
-    let carries: Vec<super::train::Carry> =
-        vec![serde_json::from_slice(&std::fs::read(&carry).unwrap()).unwrap()];
+    let carries = dir.path().join("carries.json");
+    let assess = |main: &str, head: &str, trains: &str| {
+        flags(&[
+            ("repo", fx.path().to_str().unwrap()),
+            ("evidence", ev.to_str().unwrap()),
+            ("main", main),
+            ("head", head),
+            ("trains-now", trains),
+            ("carry-out", carries.to_str().unwrap()),
+        ])
+    };
     let part = |receipt_head: &str| PartIn {
         pr: 7,
         head: new_head.clone(),
@@ -362,18 +361,98 @@ fn a_verified_carry_is_persisted_and_the_builder_admits_the_receipt_of_the_old_h
             carried: None,
         },
     };
-    // Without the carry the receipt of the old head is refused; with it, only for exactly these heads.
-    let mut parts = vec![part(&head)];
-    assert!(parts[0].check_receipt().is_err());
-    super::evidence_cli::attach_carries(&mut parts, &carries);
-    assert!(parts[0].check_receipt().is_ok());
-    let mut other = vec![part(&base)];
-    super::evidence_cli::attach_carries(&mut other, &carries);
-    assert!(other[0].check_receipt().is_err());
-    // A void decision writes no carry.
-    let mut void = assess.clone();
-    std::fs::remove_file(&carry).unwrap();
-    void.insert("head".into(), base.clone());
-    let _ = super::evidence_cli::assess_cli(&void);
-    assert!(!carry.exists());
+    let admit = |build_base: &str, trains: &str, receipt_head: &str| {
+        let mut parts = vec![part(receipt_head)];
+        let f = flags(&[
+            ("carries", carries.to_str().unwrap()),
+            ("trains-landed", trains),
+        ]);
+        super::evidence_cli::admit_carries(fx.path(), build_base, &f, &mut parts).unwrap();
+        parts[0].check_receipt().is_ok()
+    };
+    // One format for both entry points: assess writes the file that build reads.
+    super::evidence_cli::assess_cli(&assess(&main1, &new_head, "1")).unwrap();
+    assert!(!part(&head).check_receipt().is_ok());
+    assert!(admit(&main1, "1", &head));
+    // Only for exactly the heads the carry names.
+    assert!(!admit(&main1, "1", &base));
+    // Four trains landed since the evidence base: the CI must run again, so the old carry is refused
+    // although its heads still match.
+    assert!(!admit(&main1, "4", &head));
+    // Main moved onto a path of the batch since the assessment: refused at the base being built.
+    let main2 = advance_main(&fx, "a.txt", "other\n");
+    assert!(!admit(&main2, "1", &head));
+    // Reassessing without a carry clears the entry the earlier assessment left.
+    super::evidence_cli::assess_cli(&assess(&main1, &new_head, "4")).unwrap();
+    assert_eq!(std::fs::read_to_string(&carries).unwrap(), "[]");
+    assert!(!admit(&main1, "1", &head));
+}
+
+#[test]
+fn a_merge_is_judged_by_what_it_changed_against_main_and_a_reverted_branch_commit_still_counts() {
+    let fx = Fx::new();
+    let base0 = fx.base();
+    let p = fx.path();
+    // Main already changed shared.txt before the evidence base.
+    let ev_base = advance_main(
+        &fx,
+        "shared.txt",
+        "head change\nline 2\nline 3\nline 4\nline 5\nline 6\n",
+    );
+    let head = fx.commit(
+        &ev_base,
+        "shared.txt",
+        "head change\nline 2\nline 3\nline 4\nline 5\nmine\n",
+    );
+    let old = recorded(&fx, &ev_base, &head);
+    // A branch from before that change adds other.txt and is merged into main.
+    let side = fx.commit(&base0, "other.txt", "x\n");
+    g(p, &["checkout", "-q", "--detach", &ev_base]);
+    g(p, &["merge", "--no-ff", "-q", "-m", "merge side", &side]);
+    let merged = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["update-ref", "refs/heads/main", &merged]);
+    g(p, &["checkout", "-q", "main"]);
+    let d = assess(&fx, &old, &merged, &head, 1);
+    assert!(matches!(d.accept, Accept::Carried { .. }), "{d:?}");
+    // A branch that adds and removes a path the batch touches: the merge itself changes nothing there.
+    let fx = Fx::new();
+    let base = fx.base();
+    let head = fx.commit(&base, "a.txt", "a\n");
+    let old = recorded(&fx, &base, &head);
+    let add = fx.commit(&base, "a.txt", "other\n");
+    let p = fx.path();
+    g(p, &["checkout", "-q", "--detach", &add]);
+    g(p, &["rm", "-q", "a.txt"]);
+    g(p, &["commit", "-q", "-m", "remove a.txt"]);
+    let side = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["checkout", "-q", "--detach", &base]);
+    g(p, &["merge", "--no-ff", "-q", "-m", "merge side", &side]);
+    let merged = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["update-ref", "refs/heads/main", &merged]);
+    g(p, &["checkout", "-q", "main"]);
+    let d = assess(&fx, &old, &merged, &head, 1);
+    assert!(
+        matches!(&d.accept, Accept::Void { reason: Void::MainTouched(t), .. } if t.contains("a.txt")),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn only_a_rewritten_head_is_a_rebase_an_amendment_or_a_merge_of_main_is_not() {
+    let fx = Fx::new();
+    let base = fx.base();
+    let head = fx.commit(&base, "a.txt", "a\n");
+    let on_top = fx.commit(&head, "b.txt", "b\n");
+    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
+    let moved = rebased(&fx, &head, &main1);
+    let p = fx.path();
+    g(p, &["checkout", "-q", "--detach", &head]);
+    g(p, &["merge", "--no-ff", "-q", "-m", "merge main", &main1]);
+    let merged = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["checkout", "-q", "main"]);
+    let was = |new: &str| evidence_git::was_rebased(p, &head, new).unwrap();
+    assert!(!was(&head));
+    assert!(!was(&on_top));
+    assert!(!was(&merged));
+    assert!(was(&moved));
 }

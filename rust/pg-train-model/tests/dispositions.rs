@@ -191,3 +191,30 @@ fn a_drop_from_an_open_train_leaves_a_reason_the_verifier_accepts() {
         Outcome::Accepted
     );
 }
+
+#[test]
+fn an_overlap_reason_is_refused_once_the_part_has_waited_its_bound_whatever_was_recorded() {
+    let specs = vec![spec(1, None), spec(1, None)];
+    let mut m = Model::new(policy(9, 2, 0, Order::Oldest), specs);
+    register_all(&mut m, [0, 1]);
+    ok(&mut m, Event::Select);
+    assert_eq!(
+        m.left_out(0),
+        [(1, Disposition::Overlap { with: 0, waited: 0 })]
+    );
+    assert_eq!(
+        ok(&mut m, Event::VerifyComplete { train: 0 }),
+        Outcome::Accepted
+    );
+    // Two ticks: the part is due now, so the recorded wait of 0 no longer justifies leaving it out.
+    ok(&mut m, Event::Tick);
+    ok(&mut m, Event::Tick);
+    assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
+    assert_eq!(
+        denied(&mut m, Event::VerifyComplete { train: 0 }),
+        Denied::Disposition
+    );
+    // A forged record of a small wait does not help either.
+    record(&mut m, 1, Disposition::Overlap { with: 0, waited: 0 });
+    assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
+}

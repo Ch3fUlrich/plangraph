@@ -32,13 +32,13 @@ pub struct PartReceipt {
     pub carried: Option<Carry>,
 }
 
-/// A verified carry-over (`evidence-assess --carry-out`): both the ACCEPT and the part CI of
-/// `old_head` hold for `new_head`, whose own patch has this patch identity.
+/// A carry-over (`evidence-assess --carry-out`): the evidence of `old_head` and the head it was asked to
+/// carry to. The builder re-assesses it against the base it builds on before it takes the receipt.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Carry {
     pub old_head: String,
     pub new_head: String,
-    pub patch_id: String,
+    pub evidence: super::evidence::Evidence,
 }
 
 impl PartIn {

@@ -74,11 +74,16 @@ starts, trains still land one after the other): the same parts per hour as the s
 arrivals are the limit, and 1.24 instead of 0.95 (every ready part rides) and 1.21 instead of 1.14 ((a),
 target 8) at C = 60 min. Main only ever advances to a train whose CI finished, after its predecessor.
 
-How long an ordinary part waits behind retry groups: bounded, so no D-6102 change is needed. Retry groups
-are a tree of at most 2n - 2 runs for a red train of n parts (n - 1 with a named culprit), no ordinary
-selection or candidate starts while any group is pending, and new red trains cannot start meanwhile, so
-repeated red trains do not stack: the invariant `retry_bounded` holds in every explored interleaving, and
-the waiting part rides in the next ordinary train. Rebuilds after `MainMove` come on top of that count.
+How long an ordinary part waits behind retry groups: bounded in groups, not in time. Retry groups are a
+tree of at most 2n - 2 runs for a red train of n parts (n - 1 with a named culprit), and no ordinary
+selection or candidate starts while any group is pending (D-6102). But the bound counts groups, not CI
+restarts: every move of main makes the running retry train stale, a stale train is rebuilt and tested
+again, and the invariant counts one run for it. Three moves of main gave four CI runs of the first retry
+train while the ordinary part stayed ready (`main_moves_restart_a_retry_train_without_a_bound...`), so
+with main moving without end the wait has no bound. A rule that would bound it changes D-6102 and goes
+to the operator: either (a) after k rebuilds of one retry train (k = 2, say) the next ordinary selection
+is allowed to run beside it, or (b) a retry train that went stale k times lands on a tested
+fast-forward in place of being rebuilt. The model does not pick one.
 
 ## Limits
 

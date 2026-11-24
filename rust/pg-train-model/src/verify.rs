@@ -4,6 +4,14 @@ use super::select::overlap;
 use super::*;
 
 impl Model {
+    /// A part that has waited its bound, or (policy (a)) been deferred often enough, rides despite an
+    /// overlap: an Overlap reason is only true while the part is not due. The count already holds the
+    /// deferral this reason records.
+    fn due_now(&self, p: &Part) -> bool {
+        let policy = &self.policy;
+        p.waited >= policy.bound || (policy.order == Order::Count && p.deferrals > policy.due_after)
+    }
+
     fn descends_from(&self, mut part: PartId, of: PartId) -> bool {
         while let Some(q) = self.parts[part as usize].spec.parent {
             if q == of {
@@ -30,6 +38,7 @@ impl Model {
                         && t.parts.contains(&with)
                         && overlap(&p.spec, &self.parts[with as usize].spec)
                         && waited < self.policy.bound
+                        && !self.due_now(p)
                 }
                 Disposition::ParentNotLanded { parent } => {
                     p.spec.parent == Some(parent)

@@ -300,3 +300,20 @@ fn ci_and_settlement_need_the_train_verified_complete_as_it_stands() {
         Denied::Disposition
     );
 }
+
+#[test]
+fn the_red_rounds_of_the_whole_lineage_count_for_a_retry_group() {
+    let mut m = started(3);
+    red(&mut m, 0, 0);
+    assert_eq!(ok(&mut m, Event::StartRetry), Outcome::Train(1));
+    // The ordinary train was the first red round: the retry may not be fixed in place.
+    assert_eq!(denied_fix_red(&mut m, 1), Denied::TwoRounds);
+    assert_eq!(
+        ci(&mut m, 1, false),
+        Outcome::Red {
+            groups: 2,
+            escalated: true
+        }
+    );
+    assert_eq!(m.escalated_lineages(), 1);
+}
