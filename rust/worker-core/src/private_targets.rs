@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-fn cargo_target(path: &Path) -> bool {
+pub(crate) fn cargo_target(path: &Path) -> bool {
     path.join(".rustc_info.json").is_file()
         && ["debug", "release"].iter().any(|p| path.join(p).is_dir())
         && !path.join("Cargo.toml").exists()
@@ -84,7 +84,7 @@ fn sweep_using(
                 continue;
             }
             if cargo_target(&path) {
-                targets.push((path, None));
+                targets.push((path.clone(), None, path));
             } else if let Some(children) = skip_vanished(fs::read_dir(&path))? {
                 for child in children {
                     let Some(child) = skip_vanished(child)? else {
@@ -93,7 +93,7 @@ fn sweep_using(
                     if skip_vanished(child.file_type().map(|t| t.is_dir()))? == Some(true)
                         && cargo_target(&child.path())
                     {
-                        targets.push((child.path(), None));
+                        targets.push((child.path(), None, child.path()));
                     }
                 }
             }
@@ -122,12 +122,13 @@ fn sweep_using(
                 .and_then(|seconds| {
                     SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
                 });
-            targets.push((tree.join("rust/target"), last_commit));
+            targets.push((tree.join("rust/target"), last_commit, tree.clone()));
         }
     }
-    for (target, last_commit) in targets {
+    for (target, last_commit, owner) in targets {
         reclaim(
             &target,
+            &owner,
             guards,
             last_commit,
             now,
@@ -178,14 +179,27 @@ fn sweep_fast_check_using(
         let path = entry.path();
         let named = entry.file_name().to_string_lossy().starts_with("fc-");
         if named && skip_vanished(entry.file_type().map(|t| t.is_dir()))? == Some(true) {
-            reclaim(&path, guards, None, now, apply, report, &mut processes)?;
+            reclaim(
+                &path,
+                &path,
+                guards,
+                None,
+                now,
+                apply,
+                report,
+                &mut processes,
+            )?;
         }
     }
     Ok(())
 }
 
+/// `owner` is the directory whose live processes make `target` busy: the worktree for its
+/// `rust/target`, the target itself otherwise. A process elsewhere on the host does not.
+#[allow(clippy::too_many_arguments)]
 fn reclaim(
     target: &Path,
+    owner: &Path,
     guards: &Guards,
     last_commit: Option<SystemTime>,
     now: SystemTime,
@@ -213,8 +227,12 @@ fn reclaim(
     {
         return Ok(());
     }
-    let (cwds, building) = processes()?;
-    if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
+    let (cwds, _) = processes()?;
+    let owner = owner.canonicalize().unwrap_or_else(|_| owner.to_path_buf());
+    if cwds
+        .iter()
+        .any(|p| p.starts_with(&canonical) || p.starts_with(&owner))
+    {
         return Ok(());
     }
     if apply {

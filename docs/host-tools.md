@@ -63,7 +63,7 @@ Candidates must be idle over six hours; recent, unknown and sole variants surviv
 The cap is a reclamation trigger, not a hard size limit: protected/newest data may
 exceed it. Build dependencies and other cached artifacts remain rebuildable but
 are retained. Each removal rechecks processes and eligibility; a live Cargo
-process anywhere defers cleanup, including when its cwd is outside the target.
+process keeps only the target it uses: its cwd, an open file, its executable or `CARGO_TARGET_DIR` inside the target or its worktree. A build elsewhere on the host defers nothing.
 Process discovery fails closed; symlinked cache roots and children are refused.
 Linux may hide cwds of non-dumpable user services even from their owner. Install
 `pg-process-cwds` root-owned at `/usr/local/libexec/pg-process-cwds` with only
@@ -75,8 +75,11 @@ reader; its output is `[absolute_cwd_paths, build_running_boolean]`. The helper 
 used only when direct discovery is denied. An absent/failed reader still blocks
 cleanup; a denied cwd is never silently ignored, including a foreign or root-owned
 proc entry. Inode ownership is not used to waive process protection. Inspect a dry run after install. Cache cleanup
-is deferred while Cargo, rustc or other recognized build tools run. Build
-processes must not be launched concurrently with a host maintenance apply run.
+is decided per path, never by a host-wide build flag. Below the cleanup floor the run
+removes idle Cargo targets (worktree `rust/target`, scratch, `fc-*`) largest first until free space
+is back above it; a target untouched for 15 minutes with no process, lease, pin or unfinished run
+counts as idle. Each kept path is reported as `<path>: kept: <reason>`. An `--apply` run that ends
+below the floor with `freed_bytes` 0 exits non-zero with an `ALERT` naming the five largest kept paths.
 
 Every invocation with a usable state destination replaces
 `~/.local/state/plangraph/disk-hygiene.json` and appends `disk-hygiene.ndjson`.

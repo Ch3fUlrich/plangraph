@@ -40,6 +40,7 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
     let guards = Guards::default();
     reclaim(
         &target,
+        &target,
         &guards,
         None,
         SystemTime::now(),
@@ -54,6 +55,7 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
         .unwrap();
     reclaim(
         &target,
+        &target,
         &guards,
         None,
         SystemTime::now(),
@@ -63,8 +65,12 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
     )
     .unwrap();
     drop(lease);
-    for facts in [(vec![], true), (vec![target.join("debug")], false)] {
+    for facts in [
+        (vec![target.join("debug/deps/object")], true),
+        (vec![target.join("debug")], false),
+    ] {
         reclaim(
+            &target,
             &target,
             &guards,
             None,
@@ -77,6 +83,7 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
         assert!(target.exists());
     }
     reclaim(
+        &target,
         &target,
         &Guards {
             pinned: vec![tmp.path().into()],
@@ -91,6 +98,7 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
     .unwrap();
     reclaim(
         &target,
+        &target,
         &guards,
         None,
         SystemTime::now(),
@@ -101,6 +109,7 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
     .unwrap_err();
     assert!(target.exists());
     reclaim(
+        &target,
         &target,
         &guards,
         None,
@@ -113,6 +122,7 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
     assert!(target.exists());
     assert_eq!(report.freed_bytes, 0);
     reclaim(
+        &target,
         &target,
         &guards,
         None,
@@ -152,6 +162,7 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
     let mut report = report();
     reclaim(
         &link.join("rust/target"),
+        &link,
         &Guards::default(),
         None,
         SystemTime::now(),
@@ -207,6 +218,7 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
     fs::write(tree.join("rust/target/Cargo.toml"), b"source").unwrap();
     reclaim(
         &tree.join("rust/target"),
+        &tree,
         &Guards::default(),
         None,
         SystemTime::now(),
@@ -393,4 +405,34 @@ fn stale_fast_check_targets_go_and_the_shared_target_stays() {
     for kept in ["fc-g81", "cargo-target", "fc-recent", "fc-not-cargo"] {
         assert!(cache.join(kept).exists(), "{kept}");
     }
+}
+
+#[test]
+fn a_build_elsewhere_on_the_host_does_not_keep_an_idle_target_but_one_in_its_tree_does() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tree = tmp.path().join("tree-b");
+    let busy_tree = tmp.path().join("tree-a");
+    fs::create_dir_all(&tree).unwrap();
+    fs::create_dir_all(&busy_tree).unwrap();
+    let (idle, busy) = (tree.join("rust/target"), busy_tree.join("rust/target"));
+    fixture(&idle, true);
+    fixture(&busy, true);
+    let mut report = report();
+    let guards = Guards::default();
+    // The host reports a running build (flag true) with a process only inside tree A.
+    for (target, owner) in [(&idle, &tree), (&busy, &busy_tree)] {
+        reclaim(
+            target,
+            owner,
+            &guards,
+            None,
+            SystemTime::now(),
+            true,
+            &mut report,
+            || Ok((vec![busy_tree.canonicalize().unwrap().join("rust")], true)),
+        )
+        .unwrap();
+    }
+    assert!(!idle.exists(), "{:?}", report.actions);
+    assert!(busy.exists());
 }
