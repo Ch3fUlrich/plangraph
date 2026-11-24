@@ -222,12 +222,23 @@ def _created_answers(conn):
     return out
 
 
+def _current_answers(item, answers):
+    """The answers recorded at creation, as far as they still hold: an answer that added a link
+    (``supersedes``, ``depends_on``) the operator later removed is kept as ``distinct``, so a
+    re-import is not refused and does not bring the removed link back."""
+    kept = {}
+    for key, answer in (answers or {}).items():
+        link = {"supersedes": "supersedes", "depends_on": "depends_on"}.get(answer)
+        kept[key] = answer if link is None or key in (item.get(link) or []) else "distinct"
+    return kept
+
+
 def _read_items(source):
     """Store rows in definition shape, from a Store or a raw connection."""
     if hasattr(source, "_all_items"):
         answers = _created_answers(source.conn)
-        return [dict(item, similar=answers[item["key"]]) if item["key"] in answers else item
-                for item in source._all_items()]
+        return [dict(item, similar=_current_answers(item, answers[item["key"]]))
+                if item["key"] in answers else item for item in source._all_items()]
     deps = {}
     for row in source.execute("SELECT src,dst FROM edges"):
         deps.setdefault(row["src"], []).append(row["dst"])
@@ -242,12 +253,12 @@ def _read_items(source):
         item["evidence_kinds"] = kinds
         item["operator"] = bool(item.get("operator"))
         item["depends_on"] = sorted(deps.get(item["key"], []))
-        if item["key"] in answers:
-            item["similar"] = answers[item["key"]]
         try:
             item["supersedes"] = json.loads(item.get("supersedes") or "[]")
         except (ValueError, TypeError):
             item["supersedes"] = []
+        if item["key"] in answers:
+            item["similar"] = _current_answers(item, answers[item["key"]])
         out.append(item)
     return out
 

@@ -257,7 +257,7 @@ class ContextMixin:
     @staticmethod
     def _premise_neutral(item, did, inputs):
         """KEEPER-STALE-PREMISE-PRECISION: a newer decision that only defines or orders the item."""
-        return premise_neutral(inputs["book"]["rows"].get(did, ()), did, item.get("source"))
+        return premise_neutral(inputs["book"]["rows"].get(did, ()), did, item.get("source"), item["key"])
 
     def _stale_reason(self, item, ctx):
         why = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []

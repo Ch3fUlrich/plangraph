@@ -585,20 +585,24 @@ _ORDER_WORDS = frozenset((
     "create created priority prioritize prioritise prioritized prioritised sequence sequenced first "
     "next now the a an is are was be and or in of to for on at it its this that as by with plan plans "
     "item items lesson lessons").split())
-_TERSE_LEFTOVER = 2
+_TERSE_LEFTOVER = 0
 
 
-def _terse_order(lines):
-    """Is the row only an order of the item: after the stamp, keys and ordering words at most two
-    other words remain?  A row that says more (a backend change, a new rule) is read by a human."""
+def _terse_order(lines, key=""):
+    """Is the row only an order of the item: after the stamp, keys (the item's bare id too) and
+    ordering words nothing else remains?  A row that says more ("GO x; use Postgres") is read
+    by a human."""
     cells = " ".join(lines).split("|")
     text = re.sub(r"\(\d\d:\d[\dx]Z[^)]*\)", " ", cells[3] if len(cells) > 3 else " ".join(cells))
     text = re.sub(r"[\w.-]+:[\w.-]+|D-\d+", " ", text)
+    bare = key.split(":", 1)[-1]
+    if bare:
+        text = re.sub(re.escape(bare), " ", text, flags=re.I)
     left = [w for w in re.findall(r"[A-Za-z]+", text) if w.lower() not in _ORDER_WORDS]
     return len(left) <= _TERSE_LEFTOVER
 
 
-def premise_neutral(lines, did, source):
+def premise_neutral(lines, did, source, key=""):
     """May the decision *did* (its row *lines*) be ignored by the premise gate?
 
     (a) it is the item's own ``source`` decision, or (b) its row orders, GOes or
@@ -613,4 +617,4 @@ def premise_neutral(lines, did, source):
         return True
     text = " ".join(lines)
     return (not _CHANGES_SCOPE.search(text) and bool(_ORDERS_ITEM.search(text))
-            and _terse_order(lines))
+            and _terse_order(lines, key))

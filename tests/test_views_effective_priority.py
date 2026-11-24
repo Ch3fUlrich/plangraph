@@ -85,3 +85,10 @@ def test_a_merged_pr_object_in_the_note_is_not_a_live_pr_like_in_the_feeder():
     quoted = {**_it("QUOTED", 1), "note": 'pr: 12\npr_state: "closed"'}
     fix = {**_it("PLAIN", 1), "note": "ci_fix: true"}
     assert [views.work_class(i) for i in (merged, live, flagged, quoted, fix)] == [2, 0, 2, 2, 1]
+
+
+def test_a_repeated_note_field_takes_the_last_value_like_the_feeder():
+    open_then_merged = {**_it("A", 1), "note": 'pr: {"number": 8, "state": "open"}\npr: {"number": 8, "state": "merged"}'}
+    merged_then_open = {**_it("B", 1), "note": 'pr: {"number": 8, "state": "merged"}\npr: {"number": 9, "state": "open"}'}
+    explicit_wins = {**_it("C", 1), "note": "pr: 5", "pr": "false"}
+    assert [views.work_class(i) for i in (open_then_merged, merged_then_open, explicit_wins)] == [2, 0, 2]

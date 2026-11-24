@@ -264,3 +264,15 @@ def test_a_system_lease_honours_the_same_reconfirmation_watermark(w, decisions):
     assert w.store.claim(w.p("l1main"), "demo:PREM")["epoch"] == 1       # an ordinary claim passes
     w.store.release(w.p("l1main"), "demo:PREM", 1)
     assert w.store.worker_claim_lease(w.p("system"), "demo:PREM")["epoch"] == 2
+
+
+# ------------------------------------------------------------ review round 5
+def test_a_go_row_with_a_trailing_instruction_is_not_a_terse_order(w, decisions):
+    _items(w)
+    _decide(decisions, 5890, "(05:0xZ) GO demo:SPAWNER-DEFAULT; use Postgres")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:SPAWNER-DEFAULT")
+    assert "premise outdated: D-5890" in exc.value.msg
+    # the bare id of the item (rows often drop the project) is not a remainder
+    _decide(decisions, 5891, "(05:0xZ) GO PHASE-LINE-GREEN")
+    assert _claims(w, "demo:PHASE-LINE-GREEN")

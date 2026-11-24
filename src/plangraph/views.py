@@ -235,15 +235,15 @@ def _signal(value):
 def _metadata(item):
     """The item's PR/CI fields: explicit non-null fields win over ``name: value`` note
     lines, whose value is JSON when it parses (as the feeder decodes them)."""
-    found = {k: item[k] for k in _NOTE_FIELDS if item.get(k) is not None}
+    found = {}
     for line in (item.get("note") or "").splitlines():
         name, sep, value = line.partition(": ")
-        if sep and name in _NOTE_FIELDS and name not in found:
+        if sep and name in _NOTE_FIELDS:
             try:
                 found[name] = json.loads(value)
             except ValueError:
-                found[name] = value
-    return found
+                found[name] = value                  # a repeated name: the last line wins, as in the feeder
+    return {**found, **{k: item[k] for k in _NOTE_FIELDS if item.get(k) is not None}}
 
 
 def work_class(item):

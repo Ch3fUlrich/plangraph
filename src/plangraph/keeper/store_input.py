@@ -345,6 +345,10 @@ class InputMixin:
             # An import answers for its siblings like any batch; an exported plan carries the
             # answers given when its items were created (``similar``).
             matches = similar_items(definition, before + peers)
+            # A pair is answered once, by either side: an earlier peer that already answers
+            # for this item covers it, whatever the key order of the batch.
+            answers = {**{p["key"]: "distinct" for p in peers
+                          if definition["key"] in (p.get("similar") or {})}, **answers}
             self._refuse_unanswered(key, matches, answers)
             deps, sups = self._apply_answers(principal, key, project, answers,
                                              {**index, **{d["key"]: d for d in peers}},

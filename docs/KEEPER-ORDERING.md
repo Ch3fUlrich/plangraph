@@ -11,13 +11,13 @@ is the router's. `reconfirm KEY D-NNN --supersession SUPERSEDER` clears exactly 
 and added again is a new one); cycle checks resolve aliases too.
 Every create path (`define`, `define --edit` of a title or description, `apply_ops`/md-sync, plan import) runs one similarity check
 (`item_fields.similar_items`: token overlap of title 60% and description 40%, files when both name them, titles of 3+ words, threshold 0.6, an exact
-title+description copy at any length, same project, open items, batch and import peers (an export carries each item's recorded answers), slices of one parent excepted) and refuses a near copy with the matching keys until each is answered
+title+description copy at any length, same project, open items, batch and import peers (an export carries each item's recorded answers, a removed link's answer as `distinct`; a pair answered by either side counts), slices of one parent excepted) and refuses a near copy with the matching keys until each is answered
 `similar={KEY: supersedes|depends_on|distinct}` (md-sync: a `Similar: KEY=answer, ...` token ending the step cell; YAML plans: a `similar`
 mapping); the answer is stored in the event. EXPERIMENT (rule 3.76): `reap`-independent day counters `similar_matches_shown`,
 `similar_answered.<answer>` count matches shown and answers (not for a dry run); a later `supersedes` edit by hand is the duplicate found afterwards.
 
 **Premise precision (KEEPER-STALE-PREMISE-PRECISION).** The premise gate ignores a newer decision that is the item's own `source` or whose
-row orders, GOes or defines the item with no scope or condition word (approval, requirement, "but", "also" ...) and nothing else but the item's keys and ordering words (at most two others): the
+row orders, GOes or defines the item with no scope or condition word (approval, requirement, "but", "also" ...) and nothing else but the item's keys and ordering words ("GO x; use Postgres" is not terse): the
 log has no class column, so a longer row is left to a human and `reconfirm`. The operator's third
 case, "logged within 2 h of the define by the same session", is not applied: the log carries neither date nor session, so a time of day
 would let a row of another day mask a later scope change. `reconfirm KEY D-NNN` records, as an audited `premise_reconfirmed` event, that

@@ -304,3 +304,32 @@ def test_siblings_differing_by_one_word_in_one_import_need_an_answer_and_the_exp
     assert exported["demo:S2"]["similar"] == {"demo:S1": "distinct"} and "similar" not in exported["demo:S1"]
     other = World(tmp_path / "again" if (tmp_path / "again").mkdir() is None else tmp_path)
     other.store.import_items(other.p("router"), load_dir(tmp_path / "out"))      # re-imports without a refusal
+
+
+def test_an_export_does_not_replay_a_link_the_operator_removed(tmp_path):
+    world = World(tmp_path)
+    world.store.create_items(world.p("router"), [
+        defn("ORIG", title=LONG_TITLE, description=LONG_TITLE), defn("GOAL", ["ORIG"], kind="goal")])
+    world.store.create_items(world.p("router"), [defn(
+        "COPY", title=LONG_TITLE + " today", description=LONG_TITLE, under="demo:GOAL",
+        similar={"demo:ORIG": "supersedes"})])
+    world.store.edit_definition(world.p("router"), "demo:COPY", {"supersedes": []})      # the link is removed
+    export_yaml(world.store, tmp_path / "out")
+    exported = {it["key"]: it for it in load_dir(tmp_path / "out")}
+    assert "supersedes" not in exported["demo:COPY"]
+    assert exported["demo:COPY"]["similar"] == {"demo:ORIG": "distinct"}      # answered, no link
+    (tmp_path / "other").mkdir()
+    other = World(tmp_path / "other")
+    other.store.import_items(other.p("router"), load_dir(tmp_path / "out"))
+    assert other.store.show(other.p("router"), "demo:COPY").get("supersedes") in (None, [])
+    assert other.store.claim(other.p("l1main"), "demo:ORIG")["epoch"] == 1          # not retired again
+
+
+def test_a_recorded_answer_counts_whichever_of_the_pair_sorts_first(tmp_path):
+    world = World(tmp_path)
+    goal = {"project": "demo", "id": "GOAL", "title": "Goal", "kind": "goal", "owner": "o",
+            "depends_on": ["A1", "Z1"], "evidence_kinds": ["any"]}
+    early = _item("A1", title=LONG_TITLE, description=LONG_TITLE, similar={"demo:Z1": "distinct"})
+    late = _item("Z1", title=LONG_TITLE + " today", description=LONG_TITLE)       # no answer of its own
+    world.store.import_items(world.p("router"), load_dir(_plan_dir(tmp_path, early, late, goal)))
+    assert world.store.show(world.p("router"), "demo:Z1")["state"] == "open"
