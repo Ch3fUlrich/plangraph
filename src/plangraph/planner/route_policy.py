@@ -29,7 +29,7 @@ __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("route_policy.json")
 _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families",
-         "review_tools_denied_legs")
+         "review_tools_denied_legs", "review_seat_admission")
 
 
 def review_priority(leg) -> int:
@@ -101,6 +101,9 @@ class RoutePolicy:
     paused_harnesses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     review_allowed_families: tuple[str, ...] = ()
     review_tools_denied_legs: tuple[str, ...] = ()
+    #: ``{"legs": {leg id: max concurrent seats}, "queue_wait_seconds": n, "poll_seconds": n}``;
+    #: the native spawner queues seats beyond a leg's bound (``seat_admission.rs``).
+    review_seat_admission: Mapping = field(default_factory=dict)
 
     def allows(self, harness: str, role: str) -> bool:
         """False when ``harness`` is paused and ``role`` is not one it still serves."""
@@ -148,6 +151,25 @@ def _str_list(doc, key, problems):
     return tuple(value)
 
 
+def _seat_admission(raw, problems):
+    """``review_seat_admission``: a bound per leg and the queue timing; empty means unbounded."""
+    if not isinstance(raw, Mapping):
+        problems.append("review_seat_admission: must be an object")
+        return {}
+    for key in set(raw) - {"legs", "queue_wait_seconds", "poll_seconds"}:
+        problems.append(f"review_seat_admission: unknown field {key!r}")
+    legs = raw.get("legs", {})
+    if not isinstance(legs, Mapping) or not all(
+            isinstance(k, str) and k and type(v) is int and v >= 1 for k, v in legs.items()):
+        problems.append("review_seat_admission.legs: must map leg ids to integers >= 1")
+        return {}
+    for key in ("queue_wait_seconds", "poll_seconds"):
+        value = raw.get(key, 0)
+        if type(value) not in (int, float) or value < 0:
+            problems.append(f"review_seat_admission.{key}: must be a number >= 0")
+    return dict(raw) if legs else {}
+
+
 def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
     """Read the policy at ``path``, else ``$PLANGRAPH_ROUTE_POLICY``, else the default.
 
@@ -186,9 +208,10 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
             problems.append(f"paused_harnesses.{harness}: needs allowed_roles, a subset of {LEG_ROLES}")
             continue
         paused[harness] = tuple(roles)
+    admission = _seat_admission(doc.get("review_seat_admission", {}), problems)
     if problems:
         raise ValueError("invalid route policy: " + "; ".join(problems))
-    return RoutePolicy(banned, off, paused, review_allowed, tools_denied)
+    return RoutePolicy(banned, off, paused, review_allowed, tools_denied, admission)
 
 
 def codex_leg_effort(leg, card):

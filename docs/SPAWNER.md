@@ -108,6 +108,12 @@ See [doctor checks](operations/spawner-doctor.md). To check Omnigraph health and
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged. See [session stop and Linux tool cleanup](spawner-sessions.md).
 
+Review seat admission per leg: `route_policy.json` `review_seat_admission` (`legs`: leg id to maximum concurrent
+seats, `queue_wait_seconds`, `poll_seconds`) rides on the review route as `seat_admission`. The native spawner
+counts live review runs plus fresh slot reservations (`<state>/seat-slots/`) per leg, queues a seat beyond the bound,
+routes again each poll (a leg that booked a 429 leaves the route at once), and past the wait bound moves to the next
+routed leg with room or refuses `seat_queue_timeout` so the caller starts its fallback seats.
+
 CLI and overflow admission use the worker-core memory rule:
 `effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as
 free memory and `warmup.ramp_mb[role]` as the reservation (an unknown role
