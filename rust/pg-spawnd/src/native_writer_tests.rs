@@ -3,6 +3,9 @@ use crate::test_python;
 use super::*;
 use serde_json::json;
 
+/// The real host's push, in place of the fixture's.
+pub(crate) type HostPush = Box<dyn FnMut(&str) -> Result<Option<String>, String>>;
+
 #[derive(Default)]
 pub(crate) struct Fake {
     calls: Vec<Option<String>>,
@@ -44,7 +47,7 @@ pub(crate) struct Fake {
     quota_booked: Vec<crate::native_writer::quota::Limit>,
     /// The real host's reclaim and push, in place of the fixture's, when set.
     host_reclaim: Option<Box<dyn FnMut() -> Result<(), String>>>,
-    host_push: Option<Box<dyn FnMut(&str) -> Result<Option<String>, String>>>,
+    host_push: Option<HostPush>,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
