@@ -358,3 +358,108 @@ fn terminal_spawn_projects_final_leg_once() {
     let row: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(row["route"]["pin"], true);
 }
+
+/// One terminal fixture per spawn path yields exactly one attempt row that carries the
+/// task class, leg, harness, host and exit class that route-shadow reads.
+#[test]
+fn every_run_path_projects_one_complete_row() {
+    let paths = [
+        (
+            "seat review",
+            "seat",
+            "review",
+            "claude",
+            "completed",
+            0,
+            "ok",
+        ),
+        (
+            "spawner implement",
+            "spawner",
+            "implement",
+            "codex",
+            "completed",
+            0,
+            "ok",
+        ),
+        (
+            "native-codex ok",
+            "native-codex",
+            "implement",
+            "codex",
+            "completed",
+            0,
+            "ok",
+        ),
+        (
+            "native-codex crash",
+            "native-codex",
+            "implement",
+            "codex",
+            "failed",
+            1,
+            "worker_crash",
+        ),
+        (
+            "fleet-launch writer",
+            "fleet-session",
+            "implement",
+            "claude",
+            "completed",
+            0,
+            "ok",
+        ),
+        (
+            "fleet-launch stopped",
+            "fleet-session",
+            "implement",
+            "claude",
+            "cancelled",
+            130,
+            "cancelled",
+        ),
+        (
+            "hand writer",
+            "external-harness",
+            "implement",
+            "codex",
+            "completed",
+            0,
+            "ok",
+        ),
+        (
+            "hand review",
+            "external-harness",
+            "review",
+            "agy",
+            "cancelled",
+            143,
+            "cancelled",
+        ),
+    ];
+    for (path, kind, role, harness, status, code, outcome) in paths {
+        for host in ["dell", "workstation"] {
+            let record = json!({
+                "run_id":"run-fixture", "host":host, "role":role, "run_kind":kind,
+                "harness":harness, "status":status, "exit_code":code, "started":1, "ended":2
+            });
+            let output = call("project-spawn-attempt", &record);
+            assert!(output.status.success(), "{path}");
+            let row: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(row["attempt_id"], "run-fixture", "{path}");
+            for field in ["task_class", "leg", "harness", "host", "exit_class"] {
+                assert!(
+                    row[field].as_str().is_some_and(|text| !text.is_empty()),
+                    "{path} on {host} has no {field}: {row}"
+                );
+            }
+            assert_eq!(
+                (&row["host"], &row["harness"]),
+                (&json!(host), &json!(harness)),
+                "{path}"
+            );
+            assert_eq!(row["exit_class"], outcome, "{path}");
+            assert_eq!(row["task_class"], "adhoc", "{path}");
+        }
+    }
+}
