@@ -86,7 +86,7 @@ fn the_keeper_schema_command_prints_both_versions_and_refuses_a_bad_revision() {
     );
     assert!(run_cli(&flags(&two, &"0".repeat(40))).is_err());
     let missing = std::collections::BTreeMap::from([("repo".to_string(), ".".to_string())]);
-    assert!(run_cli(&missing).unwrap_err().contains("missing --base"));
+    assert!(run_cli(&missing).unwrap_err().contains("missing --head"));
 }
 
 #[test]
@@ -104,13 +104,13 @@ fn a_registry_example_in_a_docstring_or_comment_is_not_the_registry() {
 }
 
 #[test]
-fn the_migration_field_is_read_like_the_batch_land_gate_reads_it() {
-    assert_eq!(
-        migration_field("GO #9 GO-HEAD abc; MIGRATION 3; PLAN x"),
-        Ok(Some(3))
-    );
-    assert_eq!(migration_field("GO #9 GO-HEAD abc"), Ok(None));
-    assert_eq!(migration_field("MIGRATION 3 GO #9"), Ok(None));
-    assert!(migration_field("GO #9; MIGRATION 3; MIGRATION 3").is_err());
-    assert!(migration_field("GO #9; MIGRATION three").is_err());
+fn the_registry_is_found_whatever_its_spacing_and_a_duplicate_is_refused() {
+    let one = "MIGRATIONS=(Migration(1, a),\n  Migration(2, b))\n";
+    assert_eq!(parse_latest(one), Ok(2));
+    assert_eq!(parse_latest("MIGRATIONS  =\t[Migration(1, a)]\n"), Ok(1));
+    let twice = "MIGRATIONS = (Migration(1, a),)\nMIGRATIONS=(Migration(1, a), Migration(2, b))\n";
+    assert!(parse_latest(twice).is_err());
+    assert!(parse_latest("MIGRATIONS = tuple(load())\n").is_err());
+    assert!(parse_latest("MIGRATIONS == (Migration(1, a),)\nOTHER = 1\n").is_err());
+    assert!(parse_latest("MIGRATIONS = (Migration(1, a), [Migration(2, b)])\n").is_err());
 }
