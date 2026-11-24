@@ -1,8 +1,12 @@
 """Minimal context pack for one worker attempt (design 4.4 / 4.5 / 8).
 
-A pack is plain text: the card (without the held-out check), an optional tail of the last
-failing check output, then the files of the card's write set followed by its read set,
-bounded by a token budget.  A ``check_fail`` retry is the same pack plus ``check_tail``.
+A pack is plain text ordered for prompt-cache reuse: the stable material first (the card
+without the held-out check, then the files of the write set followed by the read set,
+bounded by a token budget), the per-run material last (an optional tail of the last failing
+check output).  A ``check_fail`` retry is the same pack plus ``check_tail``: the bytes before
+the tail (``Pack.prefix_chars``) do not change with the check output.  When a tail is given,
+``TAIL_RESERVE_TOKENS`` of the budget are held back for it, a fixed amount, so the files
+chosen never depend on the tail; the tail is clipped to that reserve.
 
 Pure: reads files under ``repo_root`` only.  Entries may be files, directories (files at
 depth <= 2, no deeper) or globs; every file is resolved and must stay inside the root
@@ -27,12 +31,14 @@ from typing import Any, Mapping
 from plangraph.keeper.schema import RISK_TAGS, WINDOW_CLASSES
 from .readiness import WINDOW_TOKENS
 
-__all__ = ["CHARS_PER_TOKEN", "WINDOW_TOKENS", "PackFile", "Pack", "PackTooBig",
+__all__ = ["CHARS_PER_TOKEN", "TAIL_RESERVE_TOKENS", "WINDOW_TOKENS", "PackFile", "Pack", "PackTooBig",
            "estimate_tokens", "pack_budget", "build_pack"]
 
 CHARS_PER_TOKEN = 4
 ENTRY_CAP = 50
 TAIL_MIN, TAIL_MAX = 40, 60
+#: budget held back for the check-output tail (and the cap of that tail) when one is given.
+TAIL_RESERVE_TOKENS = 2000
 _BINARY_SNIFF = 8192
 #: files above this many bytes are never read at all (avoids loading huge blobs).
 _MAX_READ_BYTES = 16 * 1024 * 1024
@@ -74,11 +80,14 @@ class Pack:
     tokens: int
     files: tuple[PackFile, ...]
     skipped: tuple[tuple[str, str], ...]  # (path, reason)
+    #: length of the stable leading part of ``text`` (everything before the check tail).
+    prefix_chars: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "text": self.text,
             "tokens": self.tokens,
+            "prefix_chars": self.prefix_chars,
             "files": [{"path": f.path, "tokens": f.tokens, "truncated": f.truncated,
                        "role": f.role} for f in self.files],
             "skipped": [[p, r] for p, r in self.skipped],
@@ -229,6 +238,21 @@ def _header(card: Mapping[str, Any], key: str | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _tail_block(check_tail: str | None, tail_lines: int) -> str | None:
+    """The per-run ``# CHECK OUTPUT`` section, clipped to ``TAIL_RESERVE_TOKENS``."""
+    if check_tail is None:
+        return None
+    n = min(max(tail_lines, TAIL_MIN), TAIL_MAX)
+    lines = check_tail.splitlines()[-n:]
+    cap = TAIL_RESERVE_TOKENS * CHARS_PER_TOKEN - 100  # room for the heading
+    while len(lines) > 1 and sum(len(x) + 1 for x in lines) > cap:
+        del lines[0]  # keep the newest lines
+    body = "\n".join(lines)
+    if len(body) > cap:
+        body = body[-cap:]
+    return f"# CHECK OUTPUT (last {len(lines)} lines)\n" + body + "\n"
+
+
 def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = None,
                budget_tokens: int, check_tail: str | None = None, tail_lines: int = 50,
                max_file_tokens: int = 20000) -> Pack:
@@ -252,14 +276,12 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
     for rel in [r for r in reads if r in writes or r in new_writes]:
         del reads[rel]  # a file in both sets is shown once, as write
 
-    parts = [_header(card, key)]
-    if check_tail is not None:
-        n = min(max(tail_lines, TAIL_MIN), TAIL_MAX)
-        tail = check_tail.splitlines()[-n:]
-        parts.append(f"# CHECK OUTPUT (last {len(tail)} lines)\n" + "\n".join(tail) + "\n")
+    tail_block = _tail_block(check_tail, tail_lines)
+    if tail_block is not None:
+        budget_tokens = max(0, budget_tokens - TAIL_RESERVE_TOKENS)  # files never see the tail
 
     files: list[PackFile] = []
-    cur = "\n".join(parts)
+    cur = _header(card, key)
     over = False
     todo = [(rel, "write") for rel in sorted(set(writes) | new_writes)]
     todo += [(rel, "read") for rel in sorted(reads)]
@@ -289,4 +311,5 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
             continue
         cur += "\n" + block
         files.append(PackFile(rel, estimate_tokens(block), truncated, role))
-    return Pack(cur, estimate_tokens(cur), tuple(files), tuple(skipped))
+    text = cur if tail_block is None else cur + "\n" + tail_block
+    return Pack(text, estimate_tokens(text), tuple(files), tuple(skipped), len(cur))
