@@ -195,22 +195,40 @@ fn local(
         return Ok(2);
     }
     let prompt_path = Path::new(&args.prompt);
-    let supplied = || read_writer_prompt(prompt_path);
-    let prompt = match request
-        .restart
-        .as_ref()
-        .map_or_else(supplied, |restart| Ok(restart.prompt.clone()))
-    {
-        Ok(prompt) => prompt,
+    // Only a fresh writer is admitted against the live lanes: a restart continues its own lane.
+    let writes = matches!(args.role.as_str(), "writer" | "implement");
+    let observed = (writes && request.restart.is_none()).then(|| crate::lane_guard::Observed {
+        state: crate::state::resolve_state(None, |key| std::env::var_os(key)).unwrap_or_default(),
+        repo: PathBuf::from(&args.cwd),
+    });
+    let supplied = || {
+        read_admitted_prompt(
+            prompt_path,
+            observed
+                .as_ref()
+                .map(|o| o as &dyn crate::lane_guard::LaneSource),
+        )
+    };
+    let admitted = match request.restart.as_ref().map_or_else(supplied, |restart| {
+        Ok(Admitted {
+            text: restart.prompt.clone(),
+            items: Vec::new(),
+            lane_override: None,
+        })
+    }) {
+        Ok(admitted) => admitted,
         Err(error) => {
             log("refused", None);
-            eprintln!(
-                "fleet-launch: prompt file: {}",
-                io_text(&error, prompt_path)
-            );
+            let text = io_text(&error, prompt_path);
+            if text.starts_with("lane_") {
+                eprintln!("fleet-launch: {text}");
+            } else {
+                eprintln!("fleet-launch: prompt file: {text}");
+            }
             return Ok(2);
         }
     };
+    let prompt = admitted.text.as_str();
     let mcp = args
         .option("mcp")
         .filter(|s| !s.is_empty())
@@ -293,7 +311,7 @@ fn local(
         deny,
         "--append-system-prompt",
         style,
-        &prompt,
+        prompt,
     ];
     if args.dry {
         eprintln!("fleet-launch: admission allowed{admission_suffix}");
@@ -322,7 +340,7 @@ fn local(
         eprintln!("fleet-launch: fallback ledger unavailable; not starting");
         return Ok(2);
     }
-    let mut lifecycle = external_run::register(args, admission, &name, host)?;
+    let mut lifecycle = external_run::register(args, admission, &name, host, &admitted)?;
     let launched_ms = storage::epoch_millis();
     let output = Command::new(argv[0])
         .args(&argv[1..])
@@ -390,12 +408,44 @@ fn local(
 }
 
 fn read_writer_prompt(path: &Path) -> io::Result<String> {
+    read_admitted_prompt(path, None).map(|prompt| prompt.text)
+}
+
+/// A writer launch prompt with what the launch record keeps of its brief.
+struct Admitted {
+    text: String,
+    /// Plan-item keys of the brief, so a later launch finds this session as their lane.
+    items: Vec<String>,
+    /// The reason that admitted a deliberate second lane.
+    lane_override: Option<String>,
+}
+
+/// The launch prompt of a writer. With `lanes` the item keys of its brief are admitted
+/// first: a key another live lane holds is refused with the lane name unless the brief
+/// carries a `LANE_OVERRIDE` reason, which is returned for the launch record.
+fn read_admitted_prompt(
+    path: &Path,
+    lanes: Option<&dyn crate::lane_guard::LaneSource>,
+) -> io::Result<Admitted> {
     let text = read_text(path)?;
-    match crate::batch_writer_brief::render(&text).map_err(io::Error::other)? {
-        Cow::Borrowed(_) => Ok(text),
+    let brief = crate::batch_writer_brief::render(&text).map_err(io::Error::other)?;
+    let reason = match lanes {
+        Some(lanes) => {
+            crate::lane_guard::check_brief(&brief, lanes, None).map_err(io::Error::other)?
+        }
+        None => None,
+    };
+    let items = crate::lane_guard::item_keys(&brief);
+    let text = match brief {
+        Cow::Borrowed(_) => text,
         Cow::Owned(brief) => {
             const SKILL: &str = include_str!("../../../../skills/batch-writer/SKILL.md");
-            Ok(crate::role_header::compose("claude", &brief, Some(SKILL)))
+            crate::role_header::compose("claude", &brief, Some(SKILL))
         }
-    }
+    };
+    Ok(Admitted {
+        text,
+        items,
+        lane_override: reason,
+    })
 }

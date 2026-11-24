@@ -10,6 +10,7 @@ pub(super) fn register(
     admission: &Admission,
     name: &str,
     host: &str,
+    brief: &super::Admitted,
 ) -> io::Result<Registered> {
     let state =
         crate::state::resolve_state(None, |key| std::env::var_os(key)).map_err(io::Error::other)?;
@@ -24,6 +25,7 @@ pub(super) fn register(
             "run_kind":"fleet-session", "fleet_session_name":name, "host":host, "role":role,
             "harness":"claude", "requested_model":args.model, "effort":args.effort,
             "item_key":admission.fields["card"],
+            "brief_items":brief.items, "lane_override":brief.lane_override,
         }),
     )
 }

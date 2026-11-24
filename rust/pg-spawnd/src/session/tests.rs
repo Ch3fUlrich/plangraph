@@ -146,3 +146,46 @@ fn subprocess_capture_times_out_without_waiting_for_exit() {
     assert_eq!(error.kind(), ErrorKind::TimedOut);
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+
+struct Held;
+impl crate::lane_guard::LaneSource for Held {
+    fn lanes(&self, _: &[String]) -> Vec<crate::lane_guard::Lane> {
+        vec![crate::lane_guard::Lane {
+            name: "writer-0673".into(),
+            keys: vec!["demo:HELD".into()],
+            source: "run",
+        }]
+    }
+}
+
+fn prompt_file(text: &str) -> tempfile::NamedTempFile {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), text).unwrap();
+    file
+}
+
+#[test]
+fn writer_launch_refuses_a_key_held_by_another_live_lane() {
+    let file = prompt_file("Writer brief\n### demo:HELD | held item\nWhy: x\n");
+    let error = read_admitted_prompt(file.path(), Some(&Held))
+        .err()
+        .expect("a held key is refused");
+    assert!(error
+        .to_string()
+        .starts_with("lane_collision: demo:HELD is held by live lane writer-0673"));
+    // Without the admission (restart, remote forward) the prompt is read as before.
+    assert!(read_admitted_prompt(file.path(), None).is_ok());
+}
+
+#[test]
+fn writer_launch_records_the_override_reason_and_the_items_of_the_brief() {
+    let file = prompt_file(
+        "Writer brief\n### demo:HELD | held item\nWhy: x\nLANE_OVERRIDE: fix lane on purpose\n",
+    );
+    let admitted = read_admitted_prompt(file.path(), Some(&Held)).unwrap();
+    assert_eq!(
+        admitted.lane_override.as_deref(),
+        Some("fix lane on purpose")
+    );
+    assert_eq!(admitted.items, ["demo:HELD"]);
+}
