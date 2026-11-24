@@ -10,6 +10,8 @@ mod deploy_probe;
 #[cfg(test)]
 mod deploy_tests;
 pub mod git;
+#[cfg(test)]
+mod go_deploy_tests;
 pub mod go_verify;
 #[cfg(test)]
 mod go_verify_tests;
