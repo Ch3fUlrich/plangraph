@@ -119,7 +119,8 @@ after a change to either list.
 Reads are denied too: the same command line carries the `plangraph_isolated` Codex permission
 profile (`credential_isolation.rs`), which reads everywhere except the paths of
 `src/plangraph/config/secret_paths.json` (the plangraph config directory under `~/.config` and
-`XDG_CONFIG_HOME`, the ssh, aws, gnupg and gcloud directories, git, netrc and docker credentials).
+`XDG_CONFIG_HOME`, the keeper daemon config file under `~/.local/share/plangraph`, the ssh, aws, gnupg and gcloud directories, and the git, netrc and docker files).
+Admission probes `pg-spawnd` itself, so its `--child-open` handler is the one the probe needs.
 Codex also drops `OPENAI_*` (the same data file) from the environment of the commands the agent
 runs; Codex itself keeps its harness auth. A card that names `sandbox: danger-full-access` is
 refused with `sandbox_refused:`. Readiness is only `sandbox_ok` when the effective writer policy

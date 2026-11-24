@@ -120,6 +120,16 @@ pub(crate) fn execute(
     if first.as_deref() == Some("--child-start") && args.len() == 0 {
         return Ok(());
     }
+    // The sandbox probe re-executes this binary as its child: the same handler as pg-host-readiness.
+    if first.as_deref() == Some("--child-open") && args.len() == 1 {
+        let path = args.next().unwrap_or_default();
+        return writeln!(
+            out,
+            "{}",
+            pg_worker_core::credential_isolation::child_open(std::path::Path::new(&path))
+        )
+        .map_err(|e| e.to_string());
+    }
     if first.as_deref() == Some("native-tools") {
         let check_sandbox = match args.as_slice() {
             [] => false,

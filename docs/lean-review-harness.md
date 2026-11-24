@@ -106,5 +106,6 @@ reasoning effort: `omniroute/cx-gpt-6.2-sol-medium` and `gpt-6.2-sol-medium` bot
 Native review launches look for the client in `PLANGRAPH_CODEX_BIN`, the user install,
 then the PATH prepared by the shared harness resolver, which can include NVM directories.
 A missing executable returns exit 10 and a `client_missing` diagnostic before review starts.
+The Codex run starts under a read-only permission profile that denies the secret paths of `secret_paths.json`, with a core-only tool environment and an allow-listed process environment; every Claude run carries Read deny rules on the same list.
 
 If the wait ends while a seat is live, `plangraph review` prints its run ID, expected end, and late review file path. It exits 3 while the review is pending, or exits 1 if a seat has already failed. Late files use `MISSING` for successful runs without a verdict and `ERROR` for failed runs or unusable verdicts. The foreground command issues approvals after all seats pass.

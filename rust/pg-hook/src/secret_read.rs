@@ -277,16 +277,77 @@ fn base(word: &str) -> &str {
     word.rsplit('/').next().unwrap_or(word)
 }
 
-/// A grep that prints no line: it lists names or counts.
-fn grep_is_quiet(args: &[String]) -> bool {
-    args.iter().any(|arg| {
-        matches!(
-            arg.as_str(),
-            "--files-with-matches" | "--files-without-match" | "--count" | "--quiet" | "--silent"
-        ) || (arg.starts_with('-')
-            && !arg.starts_with("--")
-            && arg[1..].chars().any(|c| matches!(c, 'l' | 'L' | 'c' | 'q')))
-    })
+/// Short options that take a value: the rest of their cluster, or else the next word, is that
+/// value and never a flag.
+fn short_takes_value(verb: &str, flag: char) -> bool {
+    let set = if verb.ends_with("grep") {
+        "efmABCdD"
+    } else {
+        "efmABCgtTjMEr"
+    };
+    set.contains(flag)
+}
+
+const LONG_WITH_VALUE: &[&str] = &[
+    "--regexp",
+    "--file",
+    "--max-count",
+    "--after-context",
+    "--before-context",
+    "--context",
+    "--binary-files",
+    "--devices",
+    "--directories",
+    "--include",
+    "--exclude",
+    "--exclude-dir",
+    "--exclude-from",
+    "--label",
+    "--glob",
+    "--type",
+    "--type-not",
+    "--replace",
+    "--threads",
+];
+
+/// A grep that prints no line: it lists names or counts. Option values (`-e PATTERN`, an attached
+/// `-ePATTERN`, `--regexp=PATTERN`) are skipped, so a pattern never counts as a flag.
+fn grep_is_quiet(verb: &str, args: &[String]) -> bool {
+    let (mut quiet, mut index) = (false, 0);
+    while index < args.len() {
+        let arg = &args[index];
+        index += 1;
+        if arg == "--" {
+            break;
+        }
+        if let Some(long) = arg.strip_prefix("--") {
+            let name = format!("--{}", long.split('=').next().unwrap_or_default());
+            if matches!(
+                name.as_str(),
+                "--files-with-matches"
+                    | "--files-without-match"
+                    | "--count"
+                    | "--quiet"
+                    | "--silent"
+            ) {
+                quiet = true;
+            } else if LONG_WITH_VALUE.contains(&name.as_str()) && !arg.contains('=') {
+                index += 1;
+            }
+        } else if arg.len() > 1 && arg.starts_with('-') {
+            let mut cluster = arg[1..].chars();
+            while let Some(flag) = cluster.next() {
+                if short_takes_value(verb, flag) {
+                    if cluster.as_str().is_empty() {
+                        index += 1;
+                    }
+                    break;
+                }
+                quiet |= matches!(flag, 'l' | 'L' | 'c' | 'q');
+            }
+        }
+    }
+    quiet
 }
 
 fn refusal(verb: &str, file: &Path, ctx: &Context) -> String {
@@ -341,7 +402,7 @@ fn check_depth(command: &str, ctx: &Context, depth: usize) -> Option<String> {
         }
         let grep_family = verb.ends_with("grep") || matches!(verb, "rg" | "ag");
         let prints = if grep_family {
-            !grep_is_quiet(args)
+            !grep_is_quiet(verb, args)
         } else {
             PRINT_VERBS.contains(&verb)
         };

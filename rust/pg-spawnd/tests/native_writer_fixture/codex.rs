@@ -1,11 +1,11 @@
 pub(super) const CODEX: &str = r#"#!/usr/bin/env python3
-import sys, pathlib, subprocess, json
+import os, sys, pathlib, subprocess, json
 if sys.argv[1] == 'sandbox':
     command = sys.argv[sys.argv.index('--') + 1:]
-    # The readiness check opens a denied fixture file; this stand-in enforces that denial.
+    # The readiness check opens a denied fixture file; this stand-in enforces the denial by
+    # removing the file's permissions, and the real child reports what its open returned.
     if '--child-open' in command and 'credential-fixture' in command[-1]:
-        print('denied')
-        sys.exit(0)
+        os.chmod(command[-1], 0)
     sys.exit(subprocess.call(command))
 prompt = sys.stdin.read()
 if 'sandbox error marker' in prompt:

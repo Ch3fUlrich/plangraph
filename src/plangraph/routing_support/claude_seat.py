@@ -29,10 +29,15 @@ _FAST_CHECKS = "plangraph fast-checks --base"
 _SANDBOX_CACHE_SECONDS = 600
 
 
+def secret_data():
+    """The one data file of secret paths and tool-environment exclusions."""
+    return json.loads(files("plangraph").joinpath("config/secret_paths.json").read_text())
+
+
 def secret_paths(env=None):
     """Secret paths of the one deny list the Rust sandbox also reads, resolved against the
     effective config home: the default ``~/.config`` and a relocated ``XDG_CONFIG_HOME``."""
-    data = json.loads(files("plangraph").joinpath("config/secret_paths.json").read_text())
+    data = secret_data()
     paths = [f"~/{rel}" for rel in data["home_relative"]]
     paths += [f"~/.config/{rel}" for rel in data["config_home_relative"]]
     xdg = (env or {}).get("XDG_CONFIG_HOME") or os.environ.get("XDG_CONFIG_HOME")
@@ -179,6 +184,36 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
+def merge_settings(argv, patch):
+    """Merge ``patch`` into the JSON of the argv's ``--settings`` flag, or add the flag: lists
+    are concatenated without duplicates, so a second caller never creates a second flag."""
+    def merge(base, extra):
+        for key, value in extra.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                merge(base[key], value)
+            elif isinstance(value, list) and isinstance(base.get(key), list):
+                base[key] = base[key] + [item for item in value if item not in base[key]]
+            else:
+                base[key] = value
+        return base
+    if "--settings" in argv:
+        index = argv.index("--settings") + 1
+        try:
+            current = json.loads(argv[index])
+        except ValueError:
+            current = None
+        if isinstance(current, dict):
+            argv[index] = json.dumps(merge(current, patch))
+            return
+    argv.extend(["--settings", json.dumps(patch)])
+
+
+def deny_secret_reads(argv, env):
+    """Deny the built-in read tools on the secret paths for every Claude run, whatever its role:
+    permission rules hold without the Bash sandbox and for the writer route."""
+    merge_settings(argv, {"permissions": {"deny": read_deny_rules(_credential_paths(env))}})
+
+
 def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
                            worktree=None, review_target=None):
     """Apply Sonnet's review profile and return the read-only fallback event, if any."""
@@ -196,9 +231,8 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
         ]:
             argv[argv.index(flag) + 1] = value
         # Read, Grep and Glob stay, so the secret paths are denied by permission rule.
-        settings = {"permissions": {"deny": read_deny_rules(_credential_paths(env))}}
-        argv.extend(["--settings", json.dumps(settings),
-                     "--restricted", "--append-system-prompt",
+        deny_secret_reads(argv, env)
+        argv.extend(["--restricted", "--append-system-prompt",
                      "Review with Read, Grep and Glob. Skip requests to run commands or tests. "
                      f"Write this exact standalone line: TESTS: none: sandbox unavailable on {host}"])
         return {"event": "sandbox_unavailable", "host": host, "python_job_id": job_id}
@@ -247,7 +281,8 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     for flag in ("--allowedTools", "--disallowedTools"):
         index = argv.index(flag)
         del argv[index:index + 2]
-    argv.extend(["--restricted", "--settings", json.dumps(settings), "--append-system-prompt",
+    merge_settings(argv, settings)
+    argv.extend(["--restricted", "--append-system-prompt",
                  "Use Read, Grep and Glob to inspect the repository. Run scoped tests from the "
                  "review checkout, for example pytest -q tests/test_example.py or "
                  "cargo test --manifest-path rust/Cargo.toml -p CRATE TEST_FILTER. "
