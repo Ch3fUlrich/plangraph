@@ -118,6 +118,14 @@ impl Model {
             .filter(|t| t.landed && matches!(t.kind, Kind::Speculative { .. }))
             .count()
     }
+    /// Retry trains landed on a main that had moved since their tested base (the D-6840 experiment).
+    pub fn stale_landings(&self) -> usize {
+        self.trains.iter().filter(|t| t.stale_landed).count()
+    }
+    /// Times the train was rebuilt on a moved main.
+    pub fn rebuilds(&self, train: TrainId) -> u8 {
+        self.trains[train as usize].rebuilds
+    }
     pub fn train_count(&self) -> usize {
         self.trains.len()
     }
