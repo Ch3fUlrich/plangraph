@@ -105,7 +105,7 @@ fn worker_and_temporal_helper_share_the_cached_target() {
     // Every later step (worker tests and the temporal helper) reads the one exported dir.
     assert_eq!(steps.matches("CARGO_TARGET_DIR=").count(), 2);
     let cache = steps
-        .split("uses: actions/cache@v4\n")
+        .split("uses: actions/cache/restore@v4\n")
         .nth(1)
         .unwrap()
         .split("      - ")
@@ -121,6 +121,11 @@ fn worker_and_temporal_helper_share_the_cached_target() {
     for input in ["rust/Cargo.lock", "rust/pg-spawnd/Cargo.toml"] {
         assert!(key.contains(input), "cache key misses {input}");
     }
+    // The cache is restored on every run (a prefix match finds main's build) and saved by the default branch only.
+    assert!(cache.contains("restore-keys: rust-worker-dev-"));
+    let save = steps.split("uses: actions/cache/save@v4\n").nth(1).unwrap();
+    assert!(steps.contains("github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"));
+    assert!(save.contains("rust/worker/target"));
 }
 
 #[cfg(unix)]
