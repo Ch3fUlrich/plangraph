@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,7 +14,7 @@ import time
 from pathlib import Path
 
 from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, gh_json, git,
-                              pr_labels, save_state)
+                              keeper_landing_configured, pr_labels, save_state)
 
 try:
     from ci_commit_gate import AUTH_DOOR_PATHS, GATE_PATHS
@@ -378,3 +381,64 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
         if not data["jobs"]:
             raise MergeBatchError("full_ci: incomplete job pagination")
         page += 1
+
+
+def plangraph_binary():
+    """The plangraph binary the tool calls: PLANGRAPH_BIN, else the one on PATH (None when there is none)."""
+    return os.environ.get("PLANGRAPH_BIN") or shutil.which("plangraph")
+
+
+def deploy_report(st, active):
+    """The deploy part of the GO-REQ: ``plangraph land-train deploy-plan`` over the train parts, with the host
+    install dry run as the probe. A refused target is listed with its blocker item key and its MISSING lines; the
+    blocker items are filed with ``pg define --file`` when the keeper is configured."""
+    registry = Path.home() / ".config" / "plangraph" / "hosts.json"
+    if not registry.is_file():
+        return "deploy: unchecked (no hosts registry)"
+    binary, wt = plangraph_binary(), st["worktree"]
+    if not binary:
+        raise MergeBatchError("deploy-plan failed: the plangraph binary is not on PATH (set PLANGRAPH_BIN)")
+    if any(re.search(r"\s", str(value)) for value in (binary, registry, wt)):
+        raise MergeBatchError("deploy-plan failed: the binary, registry and worktree paths must not hold spaces")
+    spans = [{"pr": rec["pr"], "from": git("rev-parse", f"{rec['merge']}^1", cwd=wt).stdout.strip(),
+              "head": rec["head"]} for rec in active["merged"]]
+    with tempfile.TemporaryDirectory() as tmp:
+        spans_file, blockers = Path(tmp) / "spans.json", Path(tmp) / "blockers.json"
+        spans_file.write_text(json.dumps(spans))
+        probe = f"{binary} host-sync --install-dry-run --registry {registry} --repo {wt}"
+        argv = [binary, "land-train", "deploy-plan", "--repo", wt, "--spans", str(spans_file), "--registry",
+                str(registry), "--probe-cmd", probe, "--blockers-out", str(blockers)]
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=600, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise MergeBatchError(f"deploy-plan failed: {exc}") from None
+        if proc.returncode:
+            raise MergeBatchError(f"deploy-plan failed: {(proc.stderr.strip().splitlines() or ['no output'])[-1]}")
+        if blockers.is_file() and json.loads(blockers.read_text()).get("items"):
+            file_deploy_blockers(blockers)
+    segments, missing = [], []
+    for line in proc.stdout.splitlines():
+        if line.startswith(("MISSING ", "REFUSED ")) and segments:
+            missing.append(line)
+            continue
+        if missing:
+            segments[-1] += f" ({', '.join(missing)})"
+            missing = []
+        segments.append(line)
+    if missing:
+        segments[-1] += f" ({', '.join(missing)})"
+    return "; ".join(segments)
+
+
+def file_deploy_blockers(path):
+    """File the blocker items of refused deploy targets with ``pg define --file``; a failure is reported, not fatal."""
+    if not keeper_landing_configured():
+        print("deploy blocker items not filed: the keeper is not configured", file=sys.stderr)
+        return
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[1] / "src"),
+                                                                      os.environ.get("PYTHONPATH")])))
+    proc = subprocess.run([sys.executable, "-m", "plangraph.keeper.cli", "define", "--file", str(path)],
+                          capture_output=True, text=True, timeout=120, check=False, env=env)
+    if proc.returncode:
+        print(f"deploy blocker items not filed: {(proc.stderr.strip().splitlines() or ['no output'])[-1]}",
+              file=sys.stderr)
