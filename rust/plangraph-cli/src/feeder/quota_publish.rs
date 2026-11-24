@@ -229,7 +229,7 @@ mod tests {
         }
         for bad in [
             "",
-            "/etc/passwd",
+            "/etc/feeder.toml",
             "-oProxyCommand=x",
             "a/../b",
             "a//b",
