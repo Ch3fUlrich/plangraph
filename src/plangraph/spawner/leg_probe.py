@@ -334,6 +334,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                     quota = redact_output(redact_env_values(quota, env))
             if not quota:
                 serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
+        if not ok and not infra and (cause := leg_state.harness_error_reason(excerpt or stderr)):
+            reason, serving = cause, False   # a managed-service port conflict is its own reason, never "exit 1"
         if not infra:
             caller = 'review-probe' if review_mode else 'leg-probe'
             if ok:

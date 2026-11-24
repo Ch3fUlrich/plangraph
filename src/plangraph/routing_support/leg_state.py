@@ -462,6 +462,51 @@ def model_admitted(model, *, enabled=False):
                      and not mid.lower().startswith('cxa/gpt-6-luna')))
 
 
+#: opencode refuses every CLI call while another ``opencode serve --service`` holds its managed port.
+PORT_CONFLICT = re.compile(r'Managed service port \d+ on \S+ is already in use', re.I)
+PORT_CONFLICT_REASON = 'managed_service_port_conflict'
+
+
+def harness_error_reason(text):
+    """A harness failure with its own cause (port conflict), else None; the text stays as evidence."""
+    return PORT_CONFLICT_REASON if PORT_CONFLICT.search(str(text or '')) else None
+
+
+def host_served_legs(legs, listing, probe_failures=None):
+    """Per-host leg truth: ``{leg id: {served, reason}}`` for the opencode legs of ``legs``.
+
+    ``listing`` is this host's ``opencode models --standalone`` result (a list of ids or a
+    :class:`DiscoveryFailed`); ``probe_failures`` maps a leg id to the reason its tiny call
+    failed.  A leg is served only when the host lists its model and its tiny call did not fail.
+    """
+    out = {}
+    for leg in legs:
+        if leg.harness != 'opencode':
+            continue
+        if isinstance(listing, DiscoveryFailed):
+            reason = ('harness_missing' if listing.reason.startswith('harness_not_found')
+                      else listing.reason if listing.reason == PORT_CONFLICT_REASON
+                      else harness_error_reason(listing.reason) or 'discovery_failed: ' + listing.reason)
+            out[leg.id] = dict(served=False, reason=reason)
+        elif LegAdapter.identity(leg.model) not in {LegAdapter.identity(mid) for mid in listing}:
+            out[leg.id] = dict(served=False, reason='not_listed: ' + leg.model)
+        elif (probe_failures or {}).get(leg.id):
+            out[leg.id] = dict(served=False, reason=probe_failures[leg.id])
+        else:
+            out[leg.id] = dict(served=True, reason='listed')
+    return out
+
+
+def served_digest(hosts):
+    """One digest line: ``legs served per host: ws 3/5 (not served: id reason; ...); coding.vm 5/5``."""
+    parts = []
+    for host in sorted(hosts):
+        rows = hosts[host]
+        bad = [f'{leg} {row["reason"]}' for leg, row in sorted(rows.items()) if not row['served']]
+        parts.append(f'{host} {len(rows) - len(bad)}/{len(rows)}' + (f' (not served: {"; ".join(bad)})' if bad else ''))
+    return 'legs served per host: ' + ('; '.join(parts) or 'no host reported')
+
+
 class DiscoveryFailed(list):
     """The empty result of a model discovery that failed (timeout, missing binary, error)."""
 
@@ -519,7 +564,8 @@ class LegAdapter:
             result = subprocess.run([binary.path, 'models', '--standalone'], capture_output=True,
                                     text=True, timeout=8, shell=False, check=True, env=env)
         except (OSError, subprocess.SubprocessError) as exc:
-            return DiscoveryFailed(type(exc).__name__)
+            stderr = getattr(exc, 'stderr', None)
+            return DiscoveryFailed(harness_error_reason(stderr) or type(exc).__name__)
         return result.stdout.splitlines()
     @staticmethod
     def identity(model):

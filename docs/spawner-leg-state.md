@@ -169,3 +169,5 @@ recorded observation time. `--db` selects an explicit read-only snapshot store.
 Model discovery runs the harness found by `resolve_harness_binary` (`routing_support/clients.py`), never a bare `opencode` on the unit's PATH. A missing binary is a host fault: the leg state is `down` with reason `harness_missing: <name> <searched paths>`, not `unknown`, `unreachable` or a timeout.
 
 A leg reads its provider state under the OmniRoute provider id of its model prefix (`omniroute_provider_id`, catalog seed: `mimo` is `xiaomi-mimo`). A prefix missing from the snapshot is `down` / `unreachable` with `evidence.looked_up_provider` naming the id looked up.
+
+Per-host truth: `host_served_legs` (model listing plus tiny-call failures) gives each opencode leg `served` or `not served` with a reason (`not_listed`, `harness_missing`, `managed_service_port_conflict`, the probe reason); `served_digest` prints the `legs served per host` digest line. A host record that carries `served_legs` makes `overflow.decide(leg=...)` refuse that host for an unserved leg as `leg_not_served`. A port conflict from `opencode serve --service` is its own reason, not `exit 1`.
