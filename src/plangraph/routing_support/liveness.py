@@ -30,11 +30,11 @@ def provider_exhausted(skipped):
     policy = {'banned_family', 'off_family', 'paused_harness', 'excluded_family',
               'inline_only_needs_diff', 'no_verdict_seat', 'explicit_only',
               'review_route_excluded', 'low_risk_only', 'claude_requires_gpt_and_hydrogen_limits',
-              'claude_requires_codex_limited'}
+              'claude_requires_codex_limited', 'effort_channel', 'stale_row', 'canary_pending'}
     unavailable_legs = {'not_listed', 'provider_inactive', 'unreachable'}
     exhausted = lambda r: r in capacity_reasons or r.startswith(('quota_until ', 'limited_until '))
     return any(exhausted(r) for r in reasons) and all(
-        exhausted(r) or r in policy or r in unavailable_legs or r.startswith('disabled:') for r in reasons)
+        exhausted(r) or r in policy or r in unavailable_legs or r.startswith(('disabled:', 'needs_')) for r in reasons)
 
 
 def read_leg_model(read, leg, model, **scope):

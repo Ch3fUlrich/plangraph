@@ -40,6 +40,27 @@ HARNESSES = ("qodercli", "opencode", "agy", "claude", "codex")
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
 TOOL_MODES = ("tools", "inline-only", "prompt-only")
+#: Families whose models read images; a text-only leg fails a card that needs vision.
+VISION_FAMILIES = frozenset({"gpt", "openai", "claude", "gemini"})
+#: What a card can need of a leg (``card["needs"]``); ``card["tool_mode"]`` names a minimum tool mode.
+CARD_NEEDS = ("tools", "shell", "long_context", "vision")
+
+
+def unmet_need(leg, card):
+    """The first card need the leg lacks (``tools``, ``shell``, ``long_context``, ``vision``, ``tool_mode``), or None."""
+    for need in card.get("needs") or ():
+        if need in ("tools", "shell"):   # a shell runs only where the leg has its own tools
+            ok = leg.tool_mode == "tools"
+        elif need == "long_context":
+            ok = "1m" in leg.windows
+        else:
+            ok = leg.vision if leg.vision is not None else leg.family in VISION_FAMILIES
+        if not ok:
+            return need
+    required = card.get("tool_mode")
+    if required is not None and TOOL_MODES.index(leg.tool_mode) > TOOL_MODES.index(required):
+        return "tool_mode"
+    return None
 #: Models that never sit as a review seat, routed or hand-picked (D-3225:
 #: opencode-go/qwen3.8-flash via OmniRoute returned empty content 6/6, ~289 s).
 NO_VERDICT_SEATS = frozenset({"opencode-go/qwen3.8-flash"})
@@ -82,6 +103,8 @@ class Leg:
     #: Why the model's own harness was not used (``client_missing``); None when it was.
     harness_fallback: str | None = None
     web_access: bool = False
+    #: Reads images; None takes the family default (:data:`VISION_FAMILIES`).
+    vision: bool | None = None
 
     @property
     def has_web_tools(self) -> bool:
@@ -419,7 +442,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         mrt = raw["max_request_tokens"]
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
-    for key in ("trains_on_data", "claude_family", "benchmark_optional", "web_access"):
+    for key in ("trains_on_data", "claude_family", "benchmark_optional", "web_access", "vision"):
         if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
     if len(problems) > start:
