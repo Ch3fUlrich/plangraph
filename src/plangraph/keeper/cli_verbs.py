@@ -597,7 +597,8 @@ def cmd_set_kind(args, session):
 
 
 def cmd_lift_operator_gate(args, session):
-    return write(session, "lift_operator_gate", {"key": args.key, "decision_id": args.decision},
+    return write(session, "lift_operator_gate",
+                 {"key": args.key, "decision_id": args.decision_id, "decision": args.decision},
                  lambda r: f"{r.get('key')} operator gate lifted by {r.get('decision_id')}")
 
 

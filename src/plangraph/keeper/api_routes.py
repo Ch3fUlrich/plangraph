@@ -209,10 +209,10 @@ def _set_kind(store, principal, body, need):
 
 
 def _lift_operator_gate(store, principal, body, need):
-    extra = set(body) - {"key", "decision_id"}
+    extra = set(body) - {"key", "decision_id", "decision"}
     if extra and getattr(principal, "role", None) == "router":   # a non-router gets 403 first
         raise Refused("validation", f"unexpected fields {sorted(extra)}")
-    return store.lift_operator_gate(principal, need(body, "key"), body.get("decision_id"))
+    return store.lift_operator_gate(principal, need(body, "key"), body.get("decision_id"), body.get("decision"))
 
 
 def _grant_verb(name):

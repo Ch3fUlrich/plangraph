@@ -61,7 +61,7 @@ _OPS = {
     "priority": {"op", "key", "priority"},
     "rehome": {"op", "key", "new_project", "host"},
     "set_kind": {"op", "key", "kind"},
-    "lift_operator_gate": {"op", "key", "decision_id"},
+    "lift_operator_gate": {"op", "key", "decision_id", "decision"},
     "add_dep": {"op", "key", "dep"},
     "remove_dep": {"op", "key", "dep"},
 }
@@ -87,7 +87,7 @@ class OpBatch:
         self.allow_new = set()   # codes an op is expected to introduce
         self.strict = set()      # keys of ops that may introduce NO new code
         self.pre = {}            # (key, kind, ref json) -> (result, state, epoch)
-        self.lifts = None        # the one pre-lock read of the decisions of every gate release
+        self.lifts = None        # the one pre-lock read of which decision ids every gate release names are recorded
 
     def note(self, affected, allow_new):
         self.touched.setdefault(self.current, set()).update(affected or ())
@@ -338,7 +338,7 @@ class OpsMixin:
             return self._set_kind(principal, key, op["kind"], now)
         if name == "lift_operator_gate":
             return self._lift_operator_gate(
-                principal, key, op["decision_id"], now, snapshot=self._batch.lifts)
+                principal, key, op["decision_id"], op.get("decision"), now, recorded=self._batch.lifts)
         if name == "rehome":
             return self._rehome(principal, key, op.get("new_project"),
                                 op.get("host"), now)

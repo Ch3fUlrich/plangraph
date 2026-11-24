@@ -319,7 +319,9 @@ Router. `{key, kind:"question"|"operator_task"}` for an `open` `lane`; sets
 [SetKind]. `400 validation|bad_state`.
 
 ### `POST /v1/lift_operator_gate`
-Router. `{key, decision_id:"D-<n>"}`: the decision row must be an OPERATOR row
-opening with `Lifts-Gate: <key>` (a list of keys only), not superseded, BY OPERATOR or with `Operator-Answer: D-n` linking a relayed operator answer whose one `DECISION: the operator step of <key> ... is lifted` statement is read at fixed positions (quotes, denials and conditions are no release). Clears `operator`; `200 {key, operator:false,
-waits_on_operator:false, decision_id}` [LiftOperatorGate]. `400 validation|
-evidence_unverified|bad_state`, `403 forbidden`.
+Router. `{key, decision_id:"D-<n>", decision:"release"}`: `decision` is the structured
+release the caller sets (anything else, or absent, is `400 validation` and lifts nothing);
+`decision_id` must be recorded in the decisions file (`400 evidence_unverified`), whose text
+is stored and never read to decide. Clears `operator`; `200 {key, operator:false,
+waits_on_operator:false, decision_id, decision:"release"}` [LiftOperatorGate]. `400
+validation|evidence_unverified|bad_state`, `403 forbidden`.
