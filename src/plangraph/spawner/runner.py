@@ -568,8 +568,8 @@ class SpawnerRunner:
                 self._stdin_payloads.pop(job_id, None)
                 oc_dir = self._ocdata_dirs.pop(job_id, None)
                 if oc_dir is not None:
-                    import shutil
-                    shutil.rmtree(oc_dir, ignore_errors=True)
+                    from .review_slot import remove_run_dir
+                    remove_run_dir(oc_dir)
             else:
                 # D-2921 F3: a monitor cancelled before its first step never
                 # runs its own finally; sweep its store dir once it settles
@@ -577,8 +577,8 @@ class SpawnerRunner:
                 def _sweep(_task, _self=self, _jid=job_id):
                     _oc = _self._ocdata_dirs.pop(_jid, None)
                     if _oc is not None:
-                        import shutil
-                        shutil.rmtree(_oc, ignore_errors=True)
+                        from .review_slot import remove_run_dir
+                        remove_run_dir(_oc)
                 self._tasks[job_id].add_done_callback(_sweep)
 
     def _nt(self) -> bool:
@@ -768,8 +768,8 @@ class SpawnerRunner:
             self._processes.pop(job_id, None)
             oc_dir = self._ocdata_dirs.pop(job_id, None)
             if oc_dir is not None:
-                import shutil
-                shutil.rmtree(oc_dir, ignore_errors=True)
+                from .review_slot import remove_run_dir
+                remove_run_dir(oc_dir)
             getattr(self, '_reaped_jobs', set()).discard(job_id)
 
     @staticmethod

@@ -42,7 +42,7 @@ pub(super) fn monitor(
                     .unwrap_or(false);
                 if finished {
                     for slot in owned {
-                        crate::cargo_pool::remove_review_slot(&slot);
+                        let _ = crate::cargo_pool::remove_review_slot(&slot);
                     }
                 }
                 return;
@@ -102,6 +102,14 @@ fn attempt(
             .filter(|slot| crate::cargo_pool::is_review_slot(slot))
         {
             match crate::cargo_cache::writer_lease(slot) {
+                // The lease alone does not make the slot exist: admission cleanup may have
+                // removed it between the adapter's preparation and this launch.
+                Ok(lease) if !slot.is_dir() => {
+                    drop(lease);
+                    record.set("error", json!("review slot unavailable"));
+                    record.set("reason", json!("review slot was removed before launch"));
+                    return (1, false, StopOutcome::Empty);
+                }
                 Ok(lease) => slot_lease = Some(lease),
                 Err(error) => {
                     record.set("error", json!("review slot unavailable"));

@@ -305,3 +305,49 @@ def test_the_native_adapters_tempdir_does_not_hide_the_hosts_tmpdir(tmp_path, mo
     # A target outside every temp root keeps its own pool.
     elsewhere = Path("/srv/plangraph-fixture/cache/cargo-target")
     assert review_pool(elsewhere) == Path("/srv/plangraph-fixture/cache/cargo-target-pool")
+
+
+def test_a_held_review_slot_is_not_dropped_and_keeps_its_lock(tmp_path):
+    from plangraph.spawner.host_ready import _cargo_lease_for
+    from plangraph.spawner.launch_spec import drop_review_slot
+
+    slot = tmp_path / "cargo-target-pool" / "slot-review-job1"
+    (slot / "target").mkdir(parents=True)
+    held = _cargo_lease_for(slot)  # a seat (or hygiene) holds the slot
+    drop_review_slot(str(slot))
+    assert (slot / "target").exists() and Path(str(slot) + ".plangraph-lock").exists()
+    held.close()
+    drop_review_slot(str(slot))
+    assert not slot.exists() and not Path(str(slot) + ".plangraph-lock").exists()
+
+
+def test_a_symlinked_tmpdir_is_followed_for_a_target_that_does_not_exist_yet(tmp_path, monkeypatch):
+    """Seat placement and hygiene (Rust under_roots) resolve existing ancestors the same way."""
+    from plangraph.spawner.host_ready_source import review_pool
+
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TMPDIR", str(link))
+    fallback = tmp_path / "home/.cache/plangraph/cargo-target-pool"
+    assert review_pool(real / "absent/cargo-target") == fallback
+    assert review_pool(link / "absent/cargo-target") == fallback
+    monkeypatch.setenv("TMPDIR", str(real))
+    assert review_pool(link / "absent/cargo-target") == fallback
+
+
+def test_the_runners_cleanup_takes_a_review_slots_lock_file_and_leaves_other_dirs_plain(tmp_path):
+    from plangraph.spawner.host_ready import _cargo_lease_for
+    from plangraph.spawner.review_slot import remove_run_dir
+
+    slot = tmp_path / "cargo-target-pool" / "slot-review-job9"
+    slot.mkdir(parents=True)
+    _cargo_lease_for(slot).close()  # what the seat's lease leaves behind
+    other = tmp_path / "pg-ocdata-x"
+    other.mkdir()
+    remove_run_dir(str(slot))
+    remove_run_dir(str(other))
+    assert not slot.exists() and not Path(str(slot) + ".plangraph-lock").exists()
+    assert not other.exists()

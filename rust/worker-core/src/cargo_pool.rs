@@ -147,16 +147,27 @@ pub fn existing_pool_slots(primary: &Path) -> Vec<PathBuf> {
     slots
 }
 
-/// Remove a review slot and then its lock file. The slot's name is unique to one run, so once
-/// the directory is gone nothing else asks for that lock, and the file need not be kept.
-pub fn remove_review_slot(slot: &Path) {
+/// Remove a review slot and then its lock file, but only while holding the slot's exclusive
+/// lease: a seat running in it, a leg about to launch in it or hygiene reclaiming it each hold a
+/// lease, and then the slot and its lock stay untouched. The slot's name is unique to one run, so
+/// once the directory is gone nothing else asks for that lock and the file need not be kept.
+/// Returns whether the slot is gone.
+pub fn remove_review_slot(slot: &Path) -> bool {
     if !is_review_slot(slot) {
-        return;
+        return false;
     }
-    let _ = fs::remove_dir_all(slot);
+    let Ok(Some(_lease)) = try_exclusive_lease(slot) else {
+        return false;
+    };
+    match fs::remove_dir_all(slot) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return false,
+    }
     if let Some(name) = slot.file_name().and_then(|n| n.to_str()) {
         let _ = fs::remove_file(slot.with_file_name(format!("{name}.plangraph-lock")));
     }
+    true
 }
 
 /// Remove lock files of review slots whose directory is gone and that nothing has touched for

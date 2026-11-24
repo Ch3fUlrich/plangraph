@@ -378,10 +378,12 @@ fn a_review_slot_stays_leased_while_its_run_lives_and_goes_with_it() {
     let d = tempfile::tempdir().unwrap();
     let slot = review_slot(d.path(), "seat");
     let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
-    let mut run = spec(d.path(), 70, HOLD);
+    // The child touches a marker once it runs: the lease is taken before that, not before the
+    // admission permit, so the marker is what proves the lease exists.
+    let mut run = spec(d.path(), 70, &format!("touch started; {HOLD}"));
     run.review_slot = Some(slot.clone());
     s.start(run).unwrap();
-    until(|| s.counts().running == 1);
+    until(|| d.path().join("started").exists());
     // Hygiene's exclusive lease on the slot is refused while the run is alive.
     assert!(crate::cargo_cache::try_exclusive_lease(&slot)
         .unwrap()
@@ -420,7 +422,38 @@ fn a_slot_hygiene_is_reclaiming_is_refused_and_the_child_never_starts() {
         !d.path().join("child-ran").exists(),
         "the child must not start unleased"
     );
+    // Hygiene still holds the slot: the refused run must neither delete it nor unlink its lock.
+    assert!(slot.join("target/object").exists(), "slot kept");
+    assert!(
+        d.path()
+            .join("cargo-target-pool/slot-review-reclaimed.plangraph-lock")
+            .exists(),
+        "lock file kept"
+    );
     drop(reclaiming);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_slot_removed_before_launch_is_refused_not_launched_without_its_directories() {
+    let d = tempfile::tempdir().unwrap();
+    let gone = d.path().join("cargo-target-pool/slot-review-gone");
+    std::fs::create_dir_all(d.path().join("cargo-target-pool")).unwrap();
+    let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
+    let mut run = spec(d.path(), 74, "touch child-ran");
+    run.review_slot = Some(gone);
+    s.start(run).unwrap();
+    assert!(s.wait_finished("run-74", Duration::from_secs(2)));
+    let record = read(&s, 74);
+    assert_eq!(record["status"], "failed", "{record}");
+    assert!(
+        record["reason"]
+            .as_str()
+            .unwrap()
+            .contains("removed before launch"),
+        "{record}"
+    );
+    assert!(!d.path().join("child-ran").exists());
 }
 
 #[cfg(target_os = "linux")]
@@ -429,18 +462,14 @@ fn a_retry_that_switches_slots_leases_its_own_and_both_slots_go_with_the_run() {
     let d = tempfile::tempdir().unwrap();
     let (first_slot, second_slot) = (review_slot(d.path(), "one"), review_slot(d.path(), "two"));
     let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
-    let mut second = spec(d.path(), 72, HOLD);
+    let mut second = spec(d.path(), 72, &format!("touch second-started; {HOLD}"));
     second.review_slot = Some(second_slot.clone());
     let mut first = spec(d.path(), 72, "exit 0");
     first.review_slot = Some(first_slot.clone());
     first.finish = Some(Box::new(move |_, _| Some(second)));
     s.start(first).unwrap();
-    until(|| {
-        s.counts().running == 1
-            && d.path()
-                .join("cargo-target-pool/slot-review-two.plangraph-lock")
-                .exists()
-    });
+    // The marker is touched by the second leg's child, so its lease is certainly held.
+    until(|| d.path().join("second-started").exists());
     // The second leg runs in its own slot, which hygiene cannot take; the first leg's is free.
     assert!(crate::cargo_cache::try_exclusive_lease(&second_slot)
         .unwrap()

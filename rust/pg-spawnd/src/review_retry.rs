@@ -126,9 +126,15 @@ fn next(
             leg,
             group.as_ref().map(|(i, t, p)| (*i, *t, p.as_slice())),
         ) {
-            Ok(_) if record.path().with_file_name("cancelled").exists() => return Ok(None),
+            Ok(prepared) if record.path().with_file_name("cancelled").exists() => {
+                // Nothing will run in the slot this leg's launch allocated.
+                drop(crate::slot_guard::SlotGuard::new(prepared.1.review_slot));
+                return Ok(None);
+            }
             Ok(prepared) => {
-                return advance(
+                let mut slot_guard =
+                    crate::slot_guard::SlotGuard::new(prepared.1.review_slot.clone());
+                let spec = advance(
                     record,
                     args,
                     previous,
@@ -136,8 +142,9 @@ fn next(
                     leg.clone(),
                     prepared,
                     group,
-                )
-                .map(Some)
+                )?;
+                slot_guard.release();
+                return Ok(Some(spec));
             }
             Err(error) => {
                 let mut attempts = record.get("attempts").cloned().unwrap_or(json!([]));
