@@ -87,7 +87,7 @@ consumed round. A session without a handle is never stopped.
   every minute (`systemctl --user enable --now pg-session-resume.timer`). The service uses
   `KillMode=process` and a resumed Codex/OpenCode writer starts in its own process group, so
   the oneshot's exit does not kill it.
-- Launcher (plangraph-data `fleet-launch`, a recorded slice): write `lane`, `agent`, the
+- Launcher (the session launcher that writes the launch records; a recorded slice): write `lane`, `agent`, the
   Codex `thread_id` / OpenCode `opencode_session`, `pid` and `pid_start`, and for OpenCode an
   `activity_path`. Claude records already work as they are.
 - Orchestrator: write `<lane>.fix-round-<N>.head` before the `.txt`.
