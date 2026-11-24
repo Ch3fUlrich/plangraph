@@ -75,7 +75,7 @@ fn install_throughput(home: &Path, env_file: &Path) -> io::Result<()> {
     create(env_file, contents.as_bytes())
 }
 
-fn install(family: &str, home: &Path, args: &[OsString]) -> io::Result<()> {
+pub(super) fn install(family: &str, home: &Path, args: &[OsString]) -> io::Result<()> {
     // The unit EnvironmentFile= directives use %h/.config.
     let config = home.join(".config/plangraph");
     match (family, args) {

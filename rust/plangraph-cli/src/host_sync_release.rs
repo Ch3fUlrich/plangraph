@@ -63,7 +63,7 @@ pub(super) fn publish(source: &Path, destination: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
+pub(super) fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
     let repo = repo.canonicalize()?;
     let binaries = binaries(&repo, home, keeper)?;
     let bin = home.join(".local/bin");

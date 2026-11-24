@@ -36,13 +36,13 @@ fn copy_if_changed(from: &Path, to: &Path) -> Result<bool, String> {
 }
 
 /// Env files a family reads whose names carry an instance placeholder (`INSTANCE`, `ROLE`) are made per
-/// instance, so a missing one is not the family's fault.
-fn missing_env(entry: &UnitEntry, config_dir: &Path) -> Vec<String> {
+/// instance, so a missing one is not the family's fault. `a|b` is satisfied by either file.
+pub fn missing_env(entry: &UnitEntry, config_dir: &Path) -> Vec<String> {
     entry
         .env_files
         .iter()
         .filter(|name| !name.contains("INSTANCE") && !name.contains("ROLE"))
-        .filter(|name| !config_dir.join(name).is_file())
+        .filter(|name| !name.split('|').any(|file| config_dir.join(file).is_file()))
         .cloned()
         .collect()
 }

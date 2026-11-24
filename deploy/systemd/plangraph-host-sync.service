@@ -1,0 +1,16 @@
+[Unit]
+Description=Install and repair everything the deploy manifest assigns to this host (host-sync --install)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+EnvironmentFile=-%h/.config/plangraph/host-sync.env
+Environment=CARGO_TARGET_DIR=%h/.cache/plangraph/cargo-target
+# Follow main; a checkout that cannot fast-forward is reported by the install, not forced.
+ExecStartPre=-/usr/bin/git -C %h/code/plangraph pull --ff-only --quiet
+# Exit status 1 means "something is still missing" (named in the journal); the unit stays successful so
+# its own state is not mistaken for the entries it reports.
+SuccessExitStatus=1
+ExecStart=%h/.local/bin/host-sync --install --repo %h/code/plangraph
+TimeoutStartSec=3600
+UMask=0077
