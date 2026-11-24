@@ -15,7 +15,9 @@ It uses the same process and temporary-directory handling on Linux and Windows.
 
 ## Merge tiers and environment evidence
 
-Draft PRs and PRs into a phase branch run policy gates and affected suites;
+A draft PR from a `lane/*` branch (a batch part) runs no job; the root jobs and
+`ci-gate` are skipped and a skipped required check reports success. Other draft
+PRs and PRs into a phase branch run policy gates and affected suites;
 ready PRs into main and all `batch/*` PRs select every suite. Full-tier Python
 jobs use the complete suite rather than affected-test selection. The same
 runner variables and fork guards apply to PRs and main; this change does not

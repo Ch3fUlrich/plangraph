@@ -46,3 +46,46 @@ def test_job_readers_accept_new_and_old_names():
     assert not land.shard_named(shards, "pytest-postgres", 0)
     assert land.shard_named({"pytest-postgres (1)"}, "pytest-postgres", 1)
     assert not land.shard_named({f"{land.SHARD_DISPLAY['pytest']} (shard 2 of 3)"}, "pytest", 0)
+
+
+# A draft lane/* PR (a batch part) runs no job: the root jobs and ci-gate carry one condition.
+def _runs(job: str, event: str, head_ref: str = "", draft: bool = False) -> bool:
+    """Evaluate a job's `if:` for an event; jobs needing select follow select."""
+    body = JOBS[job]
+    cond = str(body.get("if", "true")).strip()
+    if "needs.select" in cond:
+        return _runs("select", event, head_ref, draft)
+    expr = re.sub(r"^\$\{\{(.*)\}\}$", r"\1", cond).strip()
+    expr = expr.replace("&&", " and ").replace("||", " or ").replace("!(", " not (")
+    expr = re.sub(r"always\(\)", "True", expr)
+    expr = re.sub(r"startsWith\(([\w.]+), '([^']*)'\)", r"\1.startswith('\2')", expr)
+    expr = expr.replace("github.event_name", "ev").replace("github.event.pull_request.draft", "draft")
+    expr = expr.replace("github.head_ref", "head")
+    return bool(eval(expr, {"ev": event, "draft": draft, "head": head_ref}))  # noqa: S307
+
+
+CASES = [
+    ("pull_request", "lane/batch1-x", True, False),
+    ("pull_request", "lane/batch1-x", False, True),
+    ("pull_request", "land/train-20261124-33", False, True),
+    ("pull_request", "land/train-20261124-33", True, True),
+    ("pull_request", "feature/x", False, True),
+    ("pull_request", "feature/x", True, True),
+    ("pull_request", "batch/x", False, True),
+    ("push", "", False, True),
+    ("merge_group", "", False, True),
+    ("workflow_dispatch", "", False, True),
+    ("schedule", "", False, True),
+]
+
+
+def test_only_a_draft_lane_pull_request_runs_no_job():
+    for event, head, draft, expected in CASES:
+        got = {job: _runs(job, event, head, draft) for job in JOBS}
+        assert set(got.values()) == {expected}, (event, head, draft, got)
+
+
+def test_draft_lane_pr_skips_the_required_ci_gate_too():
+    # A skipped required job reports success, so no check stays pending.
+    assert not _runs("ci-gate", "pull_request", "lane/b", True)
+    assert _runs("ci-gate", "pull_request", "land/train-1", True)
