@@ -150,23 +150,30 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
-def pytest_bin_dir():
-    """The bin directory holding pytest: the service's own venv, else the checkout's .venv."""
-    for bin_dir in (Path(sys.prefix) / "bin", Path(__file__).resolve().parents[3] / ".venv/bin"):
-        if (bin_dir / "pytest").is_file():
-            return bin_dir
-    return None
+def pytest_bin_dir(cwd=None):
+    """The bin directory holding pytest, in the pre-push hook's order.
+
+    The review checkout's .venv, the configured PREFLIGHT_PYTHON, the service's own venv,
+    then the service checkout's .venv.
+    """
+    configured = os.environ.get("PREFLIGHT_PYTHON")
+    candidates = [Path(cwd) / ".venv/bin"] if cwd else []
+    if configured:
+        candidates.append(Path(configured).expanduser().parent)
+    candidates += [Path(sys.prefix) / "bin", Path(__file__).resolve().parents[3] / ".venv/bin"]
+    return next((bin_dir for bin_dir in candidates if (bin_dir / "pytest").is_file()), None)
 
 
-def review_tool_path(path, home):
+def review_tool_path(path, home, cwd=None):
     """``path`` with a pytest venv first (so `python -m pytest` works) and ~/.cargo/bin last.
 
-    ``home`` is the seat's launching user's home, read before a seat swaps HOME for its own dir.
+    ``home`` is the seat's launching user's home, read before a seat swaps HOME for its own dir;
+    ``cwd`` is the review checkout. The venv is placed first even when a later PATH entry holds
+    the same directory, so a bare system python never shadows it.
     """
     path = path or os.defpath
-    venv = pytest_bin_dir()
-    if venv is not None and str(venv) not in path.split(os.pathsep):
-        path = str(venv) + os.pathsep + path
+    if venv := pytest_bin_dir(cwd):
+        path = os.pathsep.join([str(venv), *(d for d in path.split(os.pathsep) if d != str(venv))])
     cargo_bin = Path(home or Path.home()) / ".cargo/bin"
     if not shutil.which("cargo", path=path) and (cargo_bin / "cargo").is_file():
         path = path + os.pathsep + str(cargo_bin)
