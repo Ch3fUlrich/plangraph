@@ -61,6 +61,7 @@ pub mod host_probe;
 pub mod host_readiness;
 pub mod hosts;
 pub mod janitor;
+pub mod lane_delete;
 pub mod live_probe;
 pub mod lockfile;
 pub mod merged_sweep;

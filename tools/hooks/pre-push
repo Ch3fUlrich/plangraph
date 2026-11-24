@@ -19,6 +19,8 @@ if absent, warn once. remote.<name>.plangraph-private=true skips private matchin
 Public patterns always run; PLANGRAPH_SCRUB_RULES adds rules. Any hit refuses (exit 1); output
 is file:line and rule id only -- a matched value is never printed, nor the words-file
 path. Existing tags are immutable, even when the move would fast-forward.
+A delete-only push passes only for refs/heads/lane/* on a remote with `plangraph-lane-delete=app`, when
+PLANGRAPH_LANE_DELETE_RECORD names a restore record holding the exact ref and SHA and the commit is pinned.
 Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 """
 from __future__ import annotations
@@ -427,14 +429,41 @@ def hook_checkout_status():
     return 0
 
 
+def lane_delete_allowed(remote, remote_ref, remote_sha):
+    """One lane/* delete: the remote is marked as the land App's, and the restore record named by
+    PLANGRAPH_LANE_DELETE_RECORD holds this exact ref and SHA with the object pinned."""
+    record = os.environ.get("PLANGRAPH_LANE_DELETE_RECORD", "")
+    if (not remote_ref.startswith("refs/heads/lane/") or not record or is_zero(remote_sha)
+            or git_out("config", "--get", f"remote.{remote}.plangraph-lane-delete") != "app"):
+        return False
+    try:
+        rows = Path(record).read_text().splitlines()
+    except OSError:
+        return False
+    if not any(len(row.split("\t")) == 5 and row.split("\t")[2] == remote_ref
+               and row.split("\t")[3] == remote_sha for row in rows):
+        return False
+    return git_out("rev-parse", "--verify", "-q",
+                   f"refs/plangraph/restore/{remote_sha}^{{commit}}") == remote_sha
+
+
 def push_main():
+    refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
+    remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
+    if refs and all(len(rec) == 4 and is_zero(rec[1]) for rec in refs):
+        # A delete-only push is judged by the lane-delete authority alone.
+        for rec in refs:
+            if (not re.fullmatch(r"[0-9a-fA-F]+", rec[3]) or git("check-ref-format", rec[2]).returncode != 0
+                    or not lane_delete_allowed(remote, rec[2], rec[3])):
+                print(f"pre-push: refused delete of {rec[2]}", file=sys.stderr)
+                return 1
+        return 0
     if hook_checkout_status():
         return 1
     global PYTHON
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():
         os.environ['PATH'] = str(cargo_bin) + os.pathsep + os.environ.get('PATH', '')
-    refs = [rec.split(maxsplit=3) for rec in sys.stdin.read().splitlines()]
     if not refs:
         return 0
     skip_tests = os.environ.get("PREFLIGHT_SKIP") == "1"
