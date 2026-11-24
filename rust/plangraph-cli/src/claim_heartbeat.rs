@@ -46,6 +46,33 @@ pub fn claims_from_snapshot(snapshot: &Value) -> Vec<Claim> {
         .collect()
 }
 
+impl Report {
+    /// Report the rows a batch answered, and every key of `sent` it left unanswered.
+    fn rows(&mut self, sent: &[(String, i64)], rows: &[Value]) {
+        for row in rows {
+            let key = row["key"].as_str().unwrap_or("?");
+            if let Some(code) = row["error"].as_str() {
+                self.refused += 1;
+                let msg = row["msg"].as_str().unwrap_or("");
+                self.lines.push(format!("refused {key} {code}: {msg}"));
+            } else {
+                self.renewed += 1;
+                let (epoch, lease) = (&row["epoch"], row["lease_until"].as_str().unwrap_or("?"));
+                self.lines
+                    .push(format!("renewed {key} epoch {epoch} lease {lease}"));
+            }
+        }
+        for (key, _) in sent {
+            if !rows.iter().any(|row| row["key"] == key.as_str()) {
+                self.refused += 1;
+                self.lines.push(format!(
+                    "refused {key} no_result: the keeper returned no row"
+                ));
+            }
+        }
+    }
+}
+
 /// One pass: plan from the claims and lanes, renew, and report each key.
 pub fn pass(keeper: &mut impl Keeper, lanes: &[Lane]) -> Result<Report, String> {
     let principal = keeper.principal()?;
@@ -59,18 +86,16 @@ pub fn pass(keeper: &mut impl Keeper, lanes: &[Lane]) -> Result<Report, String> 
         }
     }
     for chunk in plan.renew.chunks(BATCH) {
-        for row in keeper.heartbeat(chunk)? {
-            let key = row["key"].as_str().unwrap_or("?");
-            if let Some(code) = row["error"].as_str() {
-                report.refused += 1;
-                let msg = row["msg"].as_str().unwrap_or("");
-                report.lines.push(format!("refused {key} {code}: {msg}"));
-            } else {
-                report.renewed += 1;
-                let (epoch, lease) = (&row["epoch"], row["lease_until"].as_str().unwrap_or("?"));
-                report
-                    .lines
-                    .push(format!("renewed {key} epoch {epoch} lease {lease}"));
+        match keeper.heartbeat(chunk) {
+            Ok(rows) => report.rows(chunk, &rows),
+            Err(error) => {
+                // A failed batch keeps the earlier reports and names every key it carried.
+                for (key, _) in chunk {
+                    report.refused += 1;
+                    report
+                        .lines
+                        .push(format!("refused {key} batch_error: {error}"));
+                }
             }
         }
     }
@@ -141,7 +166,8 @@ pub fn run(env: &BTreeMap<String, String>, home: &Path, args: &[String]) -> i32 
     let state = std::env::var_os("PLANGRAPH_SPAWN_STATE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| crate::paths::state(home));
-    let mut lanes = local_lanes(&state, &routing.join("launch/sessions"), now);
+    let live = pg_worker_core::lane_roster::live_claude_sessions();
+    let mut lanes = local_lanes(&state, &routing.join("launch/sessions"), live.as_ref(), now);
     let mut degraded = false;
     match open_pull_requests() {
         Ok(prs) => lanes.extend(prs),

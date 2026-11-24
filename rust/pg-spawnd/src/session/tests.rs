@@ -148,7 +148,7 @@ fn subprocess_capture_times_out_without_waiting_for_exit() {
 }
 
 #[test]
-fn a_batch_brief_for_a_held_item_is_refused_unless_overridden_with_a_reason() {
+fn a_writer_brief_for_a_held_item_is_refused_unless_overridden_with_a_reason() {
     let dir = tempfile::tempdir().unwrap();
     let run = dir.path().join("state/runs/run-a");
     std::fs::create_dir_all(&run).unwrap();
@@ -156,29 +156,32 @@ fn a_batch_brief_for_a_held_item_is_refused_unless_overridden_with_a_reason() {
     std::fs::write(run.join("record.json"), record.to_string()).unwrap();
     let request = serde_json::json!({"prompt":"Item key: demo:FIXTURE\nNAME: held-lane\n"});
     std::fs::write(run.join("native-request.json"), request.to_string()).unwrap();
-    let dirs = (dir.path().join("state"), dir.path().join("sessions"));
-    let dirs = (dirs.0.as_path(), dirs.1.as_path());
+    let state = dir.path().join("state");
+    let dirs = (state.as_path(), dir.path());
 
-    let fixture = include_str!("../../tests/fixtures/batch-writer-input.txt");
-    let brief = crate::batch_writer_brief::render(fixture)
-        .unwrap()
-        .into_owned();
-    let refused = guard_lanes_in(dirs, fixture, &brief)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        refused.contains("demo:FIXTURE is held by native run held-lane (run-a)"),
-        "{refused}"
-    );
+    // The versioned batch input and a plain brief naming the same item are both refused.
+    let batch = include_str!("../../tests/fixtures/batch-writer-input.txt");
+    let plain = "Batch writer brief\n## demo:FIXTURE | title\n";
+    for text in [batch, plain] {
+        let refused = guard_text(dirs, text, dir.path(), true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("demo:FIXTURE is held by native run held-lane (run-a)"),
+            "{refused}"
+        );
+    }
 
-    let with =
-        |reason: &str| fixture.replacen('{', &format!("{{\"lane_override\":\"{reason}\","), 1);
-    let blank = guard_lanes_in(dirs, &with(""), &brief)
+    let with = |reason: &str| batch.replacen('{', &format!("{{\"lane_override\":\"{reason}\","), 1);
+    let blank = guard_text(dirs, &with(""), dir.path(), true)
         .unwrap_err()
         .to_string();
     assert!(blank.contains("non-empty reason"), "{blank}");
-    guard_lanes_in(dirs, &with("retry after a wedged lane"), &brief).unwrap();
-    let log = std::fs::read_to_string(dirs.0.join("lane-overrides.jsonl")).unwrap();
+    // A dry run previews the admission without recording the override.
+    guard_text(dirs, &with("retry after a wedged lane"), dir.path(), false).unwrap();
+    assert!(!state.join("lane-overrides.jsonl").exists());
+    guard_text(dirs, &with("retry after a wedged lane"), dir.path(), true).unwrap();
+    let log = std::fs::read_to_string(state.join("lane-overrides.jsonl")).unwrap();
     assert!(
         log.contains("retry after a wedged lane") && log.contains("\"context\":\"brief\""),
         "{log}"

@@ -1,14 +1,22 @@
-//! Duplicate-assignment guard shared by native submit and the Claude writer launch.
+//! Duplicate-assignment guard shared by native submit, the Claude writer launch and the
+//! Python dispatch boundary (`pg-spawnd lane-check`).
 //!
 //! An item a live lane already holds is refused with the holding lane named; a second lane
 //! gets in only with a recorded `lane_override` reason (appended to `lane-overrides.jsonl`).
+//! The roster is native runs, reservations of submits in flight, Claude writer sessions that
+//! `claude agents` still lists, and the keeper's open lanes (unmerged branches carrying the id).
 use pg_worker_core::lane_guard::{admit, record_override, GuardError};
-use pg_worker_core::lane_roster::{item_keys, local_lanes, valid_key};
+pub use pg_worker_core::lane_roster::live_claude_sessions;
+use pg_worker_core::lane_roster::{
+    branch_lanes, item_keys, local_lanes, valid_key, write_reservation,
+};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 pub const OVERRIDE_LOG: &str = "lane-overrides.jsonl";
+const LOCK_FILE: &str = "lane-admission.lock";
 
 /// The fleet launcher's record directory of Claude sessions.
 pub fn claude_sessions_dir() -> PathBuf {
@@ -38,23 +46,137 @@ pub fn submission_keys(prompt: &str, card: &Value) -> BTreeSet<String> {
     keys
 }
 
-/// Refuse a submission that a live lane already holds. `state` holds the native runs,
-/// `sessions` the Claude launch records; `context` names the entry point in the override log.
-pub fn check(
-    (state, sessions): (&Path, &Path),
-    context: &str,
-    keys: &BTreeSet<String>,
-    override_reason: Option<&str>,
-) -> Result<(), String> {
-    if keys.is_empty() && override_reason.is_none() {
+/// The keeper's open lanes of `repo`: branches not merged into `origin/main`.
+fn open_branches(repo: &Path) -> Vec<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "branch",
+            "-a",
+            "--no-merged",
+            "origin/main",
+            "--format=%(refname:short)",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let Some(out) = out.ok().filter(|o| o.status.success()) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().trim_start_matches("origin/").to_owned())
+        .filter(|l| !l.is_empty() && !l.contains("HEAD"))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// One admission decision.
+pub struct Request<'a> {
+    pub state: &'a Path,
+    pub sessions: &'a Path,
+    /// The repository whose unmerged branches are the keeper's open lanes.
+    pub repo: Option<&'a Path>,
+    pub context: &'a str,
+    pub keys: &'a BTreeSet<String>,
+    pub override_reason: Option<&'a str>,
+    /// The lane being dispatched: never its own conflict.
+    pub own: Option<&'a str>,
+    /// Append an authorized override to the log (a preview never does).
+    pub record: bool,
+    /// Lists the live Claude sessions (`live_claude_sessions` in production).
+    pub live: fn() -> Option<BTreeSet<String>>,
+    /// `(run id, lane name)`: hold the items for a submit that has not published a record yet.
+    pub reserve: Option<(&'a str, &'a str)>,
+}
+
+/// Refuse a submission that a live lane already holds; admit it, record the override and
+/// reserve the items otherwise. Check and reserve run under one lock, so two concurrent
+/// submits cannot both pass.
+pub fn check(request: &Request) -> Result<(), String> {
+    if request.keys.is_empty() && request.override_reason.is_none() {
         return Ok(());
     }
+    let _lock = lock(request.state);
     let now = unix_now();
-    let lanes = local_lanes(state, sessions, now);
-    let admission =
-        admit(keys, &lanes, None, override_reason).map_err(|e: GuardError| e.to_string())?;
-    record_override(&state.join(OVERRIDE_LOG), context, &admission, now)
-        .map_err(|e| format!("cannot record the lane override: {e}"))
+    let mut lanes = local_lanes(
+        request.state,
+        request.sessions,
+        (request.live)().as_ref(),
+        now,
+    );
+    if let Some(repo) = request.repo {
+        lanes.extend(branch_lanes(open_branches(repo).iter().map(String::as_str)));
+    }
+    let own = request.reserve.map(|(id, _)| id).or(request.own);
+    let admission = admit(request.keys, &lanes, own, request.override_reason)
+        .map_err(|e: GuardError| e.to_string())?;
+    if request.record {
+        record_override(
+            &request.state.join(OVERRIDE_LOG),
+            request.context,
+            &admission,
+            now,
+        )
+        .map_err(|e| format!("cannot record the lane override: {e}"))?;
+    }
+    if let Some((run_id, name)) = request.reserve {
+        write_reservation(request.state, run_id, name, request.keys, now)
+            .map_err(|e| format!("cannot reserve the items: {e}"))?;
+    }
+    Ok(())
+}
+
+/// An exclusive advisory lock on the state directory's admission lock file, held until drop.
+fn lock(state: &Path) -> Option<std::fs::File> {
+    std::fs::create_dir_all(state).ok()?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(state.join(LOCK_FILE))
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
+}
+
+/// `pg-spawnd lane-check`: the Python dispatch boundary and brief generator call this with one
+/// JSON object on stdin (`state`, `prompt`, `card`, optional `repo`, `sessions`, `reason`,
+/// `own`, `reserve` {run_id,name}, `record`, `context`). An error message means refused.
+pub fn cli(input: &str) -> Result<(), String> {
+    let request: Value =
+        serde_json::from_str(input).map_err(|e| format!("lane-check input: {e}"))?;
+    let text = |key: &str| request[key].as_str();
+    let state = PathBuf::from(text("state").ok_or("lane-check needs state")?);
+    let sessions = text("sessions").map_or_else(claude_sessions_dir, PathBuf::from);
+    let mut keys = submission_keys(text("prompt").unwrap_or(""), &request["card"]);
+    keys.extend(
+        request["keys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|k| k.as_str().filter(|k| valid_key(k)).map(str::to_owned)),
+    );
+    let reserve = request["reserve"]["run_id"]
+        .as_str()
+        .zip(request["reserve"]["name"].as_str());
+    check(&Request {
+        state: &state,
+        sessions: &sessions,
+        repo: text("repo").map(Path::new),
+        context: text("context").unwrap_or("lane-check"),
+        keys: &keys,
+        override_reason: request
+            .get("reason")
+            .filter(|r| !r.is_null())
+            .map(|r| r.as_str().unwrap_or("")),
+        own: text("own"),
+        live: live_claude_sessions,
+        record: request["record"].as_bool().unwrap_or(true),
+        reserve,
+    })
 }
 
 #[cfg(test)]

@@ -120,6 +120,12 @@ pub(crate) fn execute(
     if first.as_deref() == Some("--child-start") && args.len() == 0 {
         return Ok(());
     }
+    if first.as_deref() == Some("lane-check") && args.len() == 0 {
+        let mut input = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)
+            .map_err(|e| e.to_string())?;
+        return pg_spawnd::lane_admission::cli(&input);
+    }
     if first.as_deref() == Some("native-tools") {
         let check_sandbox = match args.as_slice() {
             [] => false,

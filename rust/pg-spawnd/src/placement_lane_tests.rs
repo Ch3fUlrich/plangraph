@@ -34,7 +34,7 @@ fn native_submit_refuses_a_held_item_naming_the_lane() {
 }
 
 #[test]
-fn native_submit_override_needs_a_reason_and_records_it() {
+fn native_submit_override_needs_a_reason_and_only_previews() {
     let dir = tempfile::tempdir().unwrap();
     live_run(dir.path());
     let sessions = dir.path().join("sessions");
@@ -44,9 +44,6 @@ fn native_submit_override_needs_a_reason_and_records_it() {
     assert!(guard_lanes(dir.path(), &sessions, &submit(json!(7)), "p").is_err());
     let allowed = submit(json!("lane-one is wedged"));
     assert!(guard_lanes(dir.path(), &sessions, &allowed, "p").is_ok());
-    let log = std::fs::read_to_string(dir.path().join("lane-overrides.jsonl")).unwrap();
-    assert!(
-        log.contains("lane-one is wedged") && log.contains("native-submit"),
-        "{log}"
-    );
+    // The wrapper only previews; the dispatcher that creates the run records the override.
+    assert!(!dir.path().join("lane-overrides.jsonl").exists());
 }

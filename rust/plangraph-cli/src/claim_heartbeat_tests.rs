@@ -6,6 +6,7 @@ struct Fake {
     items: Value,
     refuse: Vec<&'static str>,
     sent: Vec<(String, i64)>,
+    fail_batch: bool,
 }
 
 impl Keeper for Fake {
@@ -17,6 +18,9 @@ impl Keeper for Fake {
     }
     fn heartbeat(&mut self, claims: &[(String, i64)]) -> Result<Vec<Value>, String> {
         self.sent.extend(claims.iter().cloned());
+        if self.fail_batch {
+            return Err("keeper unreachable".into());
+        }
         Ok(claims
             .iter()
             .map(|(key, epoch)| {
@@ -56,9 +60,10 @@ fn the_roster_decides_what_is_renewed_and_failures_carry_their_keys() {
     let record = json!({"name":"writer","session_name":"writer-0001","prompt_file":brief});
     fs::write(sessions.join("writer-0001.json"), record.to_string()).unwrap();
     let mut lanes = native_lanes(&dir.path().join("state"));
-    lanes.extend(claude_lanes(&sessions, 0));
+    lanes.extend(claude_lanes(&sessions, None));
     lanes.extend(pull_request_lanes(
-        r#"[{"number":9,"headRefName":"lane/x","title":"x","body":"Plan-Item: p:PR\nPlan-Item: p:REFUSED"}]"#,
+        r#"[{"number":9,"headRefName":"lane/x","title":"x","body":"Plan-Item: p:PR\nPlan-Item: p:REFUSED"},
+            {"number":10,"headRefName":"lane/branchonly","title":"x","body":""}]"#,
     ));
 
     let mut keeper = Fake {
@@ -70,14 +75,19 @@ fn the_roster_decides_what_is_renewed_and_failures_carry_their_keys() {
             item("p:DONE", "plan-order", false),
             item("p:OTHER", "someone-else", false),
             item("p:MERGED", "plan-order", true),
+            item("p:BRANCHONLY", "plan-order", false),
         ]),
         refuse: vec!["p:REFUSED"],
         sent: vec![],
+        fail_batch: false,
     };
     let report = pass(&mut keeper, &lanes).unwrap();
     let sent: Vec<_> = keeper.sent.iter().map(|(k, _)| k.as_str()).collect();
-    assert_eq!(sent, ["p:NATIVE", "p:CLAUDE", "p:PR", "p:REFUSED"]);
-    assert_eq!((report.renewed, report.refused), (3, 1));
+    assert_eq!(
+        sent,
+        ["p:NATIVE", "p:CLAUDE", "p:PR", "p:REFUSED", "p:BRANCHONLY"]
+    );
+    assert_eq!((report.renewed, report.refused), (4, 1));
     for line in [
         "renewed p:NATIVE epoch 4 lease T1",
         "renewed p:CLAUDE epoch 4 lease T1",
@@ -85,7 +95,8 @@ fn the_roster_decides_what_is_renewed_and_failures_carry_their_keys() {
         "refused p:REFUSED stale_epoch: epoch moved",
         "skipped p:DONE no_live_lane",
         "skipped p:MERGED merged",
-        "claim-heartbeat: 3 renewed, 1 refused, 3 not renewed",
+        "renewed p:BRANCHONLY epoch 4 lease T1",
+        "claim-heartbeat: 4 renewed, 1 refused, 3 not renewed",
     ] {
         assert!(
             report.lines.contains(&line.to_owned()),
@@ -94,4 +105,46 @@ fn the_roster_decides_what_is_renewed_and_failures_carry_their_keys() {
         );
     }
     assert!(!report.lines.iter().any(|l| l.contains("p:OTHER")));
+}
+
+#[test]
+fn a_failed_batch_names_every_key_and_keeps_the_earlier_reports() {
+    struct Flaky(Fake, usize);
+    impl Keeper for Flaky {
+        fn principal(&mut self) -> Result<String, String> {
+            self.0.principal()
+        }
+        fn claims(&mut self) -> Result<Vec<Claim>, String> {
+            self.0.claims()
+        }
+        fn heartbeat(&mut self, claims: &[(String, i64)]) -> Result<Vec<Value>, String> {
+            self.1 += 1;
+            self.0.fail_batch = self.1 > 1;
+            self.0.heartbeat(claims)
+        }
+    }
+    let keys: Vec<String> = (0..BATCH + 2).map(|n| format!("p:K{n}")).collect();
+    let items: Vec<Value> = keys.iter().map(|k| item(k, "plan-order", false)).collect();
+    let lane = Lane {
+        name: "all".into(),
+        kind: pg_worker_core::lane_roster::LaneKind::Native,
+        detail: "run-x".into(),
+        keys: keys.iter().cloned().collect(),
+        branch: None,
+    };
+    let fake = Fake {
+        items: json!(items),
+        refuse: vec![],
+        sent: vec![],
+        fail_batch: false,
+    };
+    let report = pass(&mut Flaky(fake, 0), &[lane]).unwrap();
+    assert_eq!((report.renewed, report.refused), (BATCH, 2));
+    assert!(report.lines.contains(&format!(
+        "refused p:K{BATCH} batch_error: keeper unreachable"
+    )));
+    assert!(report.lines.contains(&format!(
+        "refused p:K{} batch_error: keeper unreachable",
+        BATCH + 1
+    )));
 }

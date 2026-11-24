@@ -58,11 +58,7 @@ pub fn admit(
         .flat_map(|key| {
             lanes
                 .iter()
-                .filter(|lane| {
-                    own != Some(lane.name.as_str())
-                        && own != Some(lane.detail.as_str())
-                        && lane.keys.contains(key)
-                })
+                .filter(|lane| !is_own(lane, own) && lane.holds(key))
                 .map(|lane| Conflict {
                     key: key.clone(),
                     lane: lane.describe(),
@@ -77,6 +73,14 @@ pub fn admit(
             reason: Some(reason.to_owned()),
         }),
     }
+}
+
+/// The lane being dispatched is never its own conflict: it matches by name, by run or session
+/// id, or by the `lane/<name>` branch it works on.
+fn is_own(lane: &Lane, own: Option<&str>) -> bool {
+    own.is_some_and(|own| {
+        lane.name == own || lane.detail == own || lane.name.strip_prefix("lane/") == Some(own)
+    })
 }
 
 /// Append the recorded override (items, holding lanes, reason) to the private override log.
@@ -131,7 +135,7 @@ pub fn heartbeat_plan(claims: &[Claim], principal: &str, lanes: &[Lane]) -> Plan
             Some("other_holder")
         } else if claim.merged {
             Some("merged")
-        } else if !lanes.iter().any(|lane| lane.keys.contains(&claim.key)) {
+        } else if !lanes.iter().any(|lane| lane.holds(&claim.key)) {
             Some("no_live_lane")
         } else {
             None

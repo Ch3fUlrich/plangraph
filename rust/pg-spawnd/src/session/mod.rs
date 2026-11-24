@@ -211,6 +211,13 @@ fn local(
             return Ok(2);
         }
     };
+    if args.role == "writer" && request.restart.is_none() {
+        if let Err(error) = guard_launch(prompt_path, &args.cwd, args.dry) {
+            log("refused", None);
+            eprintln!("fleet-launch: {error}");
+            return Ok(2);
+        }
+    }
     let mcp = args
         .option("mcp")
         .filter(|s| !s.is_empty())
@@ -394,25 +401,40 @@ fn read_writer_prompt(path: &Path) -> io::Result<String> {
     match crate::batch_writer_brief::render(&text).map_err(io::Error::other)? {
         Cow::Borrowed(_) => Ok(text),
         Cow::Owned(brief) => {
-            guard_batch_lanes(&text, &brief)?;
             const SKILL: &str = include_str!("../../../../skills/batch-writer/SKILL.md");
             Ok(crate::role_header::compose("claude", &brief, Some(SKILL)))
         }
     }
 }
 
-/// Refuse a batch brief whose items a live native or Claude writer lane already holds.
-fn guard_batch_lanes(input: &str, brief: &str) -> io::Result<()> {
+/// Refuse a writer launch whose items a live lane already holds. A dry run previews the
+/// refusal but records no override.
+fn guard_launch(prompt: &Path, cwd: &str, dry: bool) -> io::Result<()> {
+    let text = read_text(prompt)?;
     let state = crate::state::resolve_state(None, |key| std::env::var_os(key)).unwrap_or_default();
-    guard_lanes_in(
+    guard_text(
         (&state, &crate::lane_admission::claude_sessions_dir()),
-        input,
-        brief,
+        &text,
+        Path::new(cwd),
+        !dry,
     )
 }
 
-fn guard_lanes_in(dirs: (&Path, &Path), input: &str, brief: &str) -> io::Result<()> {
-    let keys = crate::lane_admission::submission_keys(brief, &Value::Null);
-    let reason = crate::batch_writer_brief::lane_override(input);
-    crate::lane_admission::check(dirs, "brief", &keys, reason.as_deref()).map_err(io::Error::other)
+fn guard_text(dirs: (&Path, &Path), text: &str, repo: &Path, record: bool) -> io::Result<()> {
+    use crate::lane_admission::{check, submission_keys, Request};
+    let keys = submission_keys(text, &Value::Null);
+    let reason = crate::batch_writer_brief::lane_override(text);
+    check(&Request {
+        state: dirs.0,
+        sessions: dirs.1,
+        repo: Some(repo).filter(|repo| repo.is_dir()),
+        context: "brief",
+        keys: &keys,
+        override_reason: reason.as_deref(),
+        own: None,
+        live: crate::lane_admission::live_claude_sessions,
+        record,
+        reserve: None,
+    })
+    .map_err(io::Error::other)
 }

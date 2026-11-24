@@ -7,6 +7,7 @@ fn lane(name: &str, kind: LaneKind, keys: &[&str]) -> Lane {
         kind,
         detail: "d1".into(),
         keys: keys.iter().map(|k| (*k).to_owned()).collect(),
+        branch: None,
     }
 }
 
@@ -24,6 +25,21 @@ fn a_held_item_is_refused_naming_the_lane() {
         "{text}"
     );
     assert!(!text.contains("p:B is held"), "{text}");
+}
+
+#[test]
+fn a_branch_lane_holds_by_the_keeper_convention_and_its_own_branch_is_not_a_conflict() {
+    let branch = Lane {
+        branch: Some("lane/batch1".into()),
+        ..lane("lane/batch1", LaneKind::Branch, &[])
+    };
+    let held = Lane {
+        branch: Some("lane/p-a".into()),
+        ..lane("lane/p-a", LaneKind::Branch, &[])
+    };
+    assert!(admit(&keys(&["p:A"]), &[held.clone()], None, None).is_err());
+    assert!(admit(&keys(&["p:A"]), &[held], Some("p-a"), None).is_ok());
+    assert!(admit(&keys(&["p:Z"]), &[branch], None, None).is_ok());
 }
 
 #[test]

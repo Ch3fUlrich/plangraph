@@ -236,7 +236,14 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
         args,
         prompt,
     )?;
-    let mut argv = route_args(args)?;
+    let mut args = args.clone();
+    if let Some(reason) = lane_override(&args, prompt) {
+        // The dispatcher records the override: it travels in the card the run is created from.
+        if let Some(card) = args.get_mut("card").and_then(Value::as_object_mut) {
+            card.insert("lane_override".into(), Value::String(reason));
+        }
+    }
+    let mut argv = route_args(&args)?;
     argv[0] = "spawn".into();
     argv.extend(["--".into(), prompt.into()]);
     if let Some(wait) = args.get("wait_seconds") {
@@ -247,19 +254,37 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
     }
     native_call(state, &argv, Duration::from_secs(200))
 }
-/// Refuse an item another live lane holds; `lane_override` (a reason) admits a second lane.
+/// Preview the dispatch guard: refuse an item another live lane holds before the run is
+/// created. It records and reserves nothing; `native_spawn` in the Python dispatcher checks
+/// again under the admission lock, records an authorized override and reserves the items.
 fn guard_lanes(state: &Path, sessions: &Path, args: &Args, prompt: &str) -> Result<(), ToolError> {
-    let reason = match args.get("lane_override") {
+    let reason = lane_override(args, prompt);
+    let keys = pg_spawnd::lane_admission::submission_keys(prompt, &args["card"]);
+    let repo = args["card"]["repo"].as_str().map(Path::new);
+    pg_spawnd::lane_admission::check(&pg_spawnd::lane_admission::Request {
+        state,
+        sessions,
+        repo,
+        context: "native-submit",
+        keys: &keys,
+        override_reason: reason.as_deref(),
+        own: None,
+        live: pg_spawnd::lane_admission::live_claude_sessions,
+        record: false,
+        reserve: None,
+    })
+    .map_err(|message| ToolError::Refused {
+        kind: RefusalKind::Spawn,
+        message,
+        legs: vec![],
+    })
+}
+/// The override reason of a submit: its `lane_override` argument, else the batch input's.
+fn lane_override(args: &Args, prompt: &str) -> Option<String> {
+    match args.get("lane_override") {
         None | Some(Value::Null) => pg_spawnd::batch_writer_brief::lane_override(prompt),
         Some(value) => Some(value.as_str().unwrap_or("").to_owned()),
-    };
-    let keys = pg_spawnd::lane_admission::submission_keys(prompt, &args["card"]);
-    pg_spawnd::lane_admission::check((state, sessions), "native-submit", &keys, reason.as_deref())
-        .map_err(|message| ToolError::Refused {
-            kind: RefusalKind::Spawn,
-            message,
-            legs: vec![],
-        })
+    }
 }
 fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value, ToolError> {
     let (code, bytes, line) = Adapter(state).run(argv, timeout)?;
