@@ -141,3 +141,11 @@ last train on main). It refuses before it reads main when a part has no run for 
 workflow, a run that did not conclude `success` (the part goes back to its writer with the run's job log), or a run
 whose base does not contain the previous train or is not under the part head. The train run stays the integration
 check.
+
+`land::go_publish` publishes a computed GO as one row of the protected decisions branch. It never pushes to that
+branch: it reads the fresh tip, runs the staleness check, allocates the next D-id, submits tip text plus one row on a
+`go-row/*` branch and has the trusted principal (`RowPr`) merge it only while the branch is still at that tip. A moved
+branch (a colliding D-id) repeats the read, the check and the allocation. After the merge it reads the branch again:
+the row must be there once and byte for byte, every earlier line kept, and the keeper's canonical reader
+(`DecisionsAdapter`, `_go_binding`) must bind it to the PR and head. A missing branch or a missing or different row is
+refused. It runs on a local fixture; the live principal and publish are a separate authorized step.
