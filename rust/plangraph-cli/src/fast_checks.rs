@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 pub(super) type Result<T> = std::result::Result<T, String>;
 
+#[path = "fast_check_fleet.rs"]
+mod fleet;
 #[path = "fast_check_worktree.rs"]
 mod owned;
 #[path = "fast_check_target.rs"]
@@ -253,6 +255,9 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 fn execute(args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("--dispatch") {
+        return fleet::run(&args[1..]);
+    }
     let start = Instant::now();
     let root = PathBuf::from(
         output(

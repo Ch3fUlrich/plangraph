@@ -135,7 +135,10 @@ changes at the round stop, 4 no verdict, 5 base or card refusal (stale or unpush
 `effort_needs_decision`, a `push_ref` outside `refs/heads/`), 6 writer failure,
 7 final gate failure, 8 start disk refusal. Worktrees and logs remain for recovery.
 Exit 9 reports `result: BLOCKED` when writer relaunches are exhausted or their
-disk/base preparation fails.
+disk/base preparation fails. Exit 11 reports `result: QUOTA` when a turn hits the Codex
+usage limit: the run does not relaunch, books the limit for every routed Codex leg, pushes
+the committed head and sets `status_line` to `QUOTA <reset>` (`quota_limited` holds the
+message and reset time); a resume clears these fields.
 
 Run `pg-spawnd resume RUN_ID --prompt-file PATH` on the writer's host for an
 external fix round. Use `--state PATH` when the run has a custom state root.

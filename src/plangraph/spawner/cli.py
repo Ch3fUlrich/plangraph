@@ -204,6 +204,20 @@ def _read_result(service, run_id):
     return asyncio.run(service.refresh_result(run_id))
 
 
+def _quota_models(model, harness):
+    """The models one usage limit books: a Codex limit is account-wide, so every routed Codex leg
+    (its model and its id, the keys the route reads, review seats included) is limited with the run's own model."""
+    if harness != 'codex':
+        return [model]
+    from plangraph.planner.legs import review_route_pool
+    keys = [model]
+    # The review route's Codex seats (REVIEW_GPT) share the account: the whole route pool.
+    for leg in review_route_pool():
+        if leg.harness == 'codex':
+            keys += [leg.model, leg.id]
+    return list(dict.fromkeys(keys))
+
+
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
         return _supervise()
@@ -248,7 +262,7 @@ def main(argv=None):
     commands.add_parser('catalog')
     p = commands.add_parser('quota-result')
     p.add_argument('--model', required=True)
-    p.add_argument('--harness', choices=('agy', 'claude'), default='agy')
+    p.add_argument('--harness', choices=('agy', 'claude', 'codex'), default='agy')
     p.add_argument('--error', required=True)
     p.add_argument('--reset-at', type=float)
     p.add_argument('--account')
@@ -278,9 +292,10 @@ def main(argv=None):
         if line:
             if args.reset_at is not None and args.reset_at > time.time():
                 line += f' Resets in {args.reset_at - time.time()}s.'
-            record_harness_limit(key(SimpleNamespace(model=args.model, harness=args.harness)),
-                                 line, 'pg-spawnd:cli-result', harness=args.harness,
-                                 account=args.account, combo=args.combo)
+            for model in _quota_models(args.model, args.harness):
+                record_harness_limit(key(SimpleNamespace(model=model, harness=args.harness)),
+                                     line, 'pg-spawnd:cli-result', harness=args.harness,
+                                     account=args.account, combo=args.combo)
         print('{}')
         return 0
     if args.verb == 'catalog':

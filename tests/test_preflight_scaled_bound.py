@@ -48,6 +48,7 @@ def test_the_scaled_bound_is_named_when_it_is_exceeded(tmp_path, monkeypatch):
     monkeypatch.setattr(preflight, 'TEST_PER_PATH_TIMEOUT', 0.05)
     monkeypatch.setattr(preflight, 'MAX_TEST_TIMEOUT', 20)
     script = plan_script(tmp_path, 40, 'time.sleep(10)')
+    monkeypatch.setattr(preflight, 'host_load', lambda: (0.0, 8))  # a busy host adds a reason line
     code, text = preflight.run([sys.executable, str(script), '--run'], tmp_path, dict(__import__('os').environ))
     assert code == 1
     assert text == 'tests: affected-tests step exceeded its 2.0 second bound (40 selected test paths)\n'
