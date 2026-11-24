@@ -62,7 +62,7 @@ pub struct Policy {
     pub estimate_tokens: u64,
     /// Related ready items one writer batch may hold; 1 keeps one item per run.
     pub batch_max_items: usize,
-    /// Seconds of one live tick after which no further batch is claimed (the service stops at 110).
+    /// Seconds from service entry within which a live tick may begin a claim attempt (the service stops at 110).
     pub tick_budget_seconds: u64,
 }
 impl Default for Policy {
@@ -81,7 +81,7 @@ impl Default for Policy {
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
             batch_max_items: 1,
-            tick_budget_seconds: 90,
+            tick_budget_seconds: 100,
         }
     }
 }
@@ -266,6 +266,11 @@ pub fn same_host(a: &str, b: &str, p: &Policy) -> bool {
 
 /// HTTP claim result carries its epoch through compensation; no priority writes.
 pub trait Launch {
+    /// Time since the service entered, one absolute clock for the tick's whole deadline
+    /// (preflight reads included). Tests substitute a virtual clock.
+    fn elapsed(&mut self) -> std::time::Duration {
+        workflow::service_elapsed()
+    }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError>;
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String>;
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String>;

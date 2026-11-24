@@ -1,7 +1,7 @@
 //! Thin I/O adapter. No selection logic belongs here; these calls can become activities.
 use super::adapters::{Adapters, Env, Keeper, Transport};
 use super::*;
-use super::{capacity, sources, windows_ram};
+use super::{capacity, sources, windows_ram, workflow};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -209,6 +209,7 @@ fn exit_code(row: &Value) -> i32 {
 }
 
 pub fn run(home: &Path, env: &Env, args: &[String]) -> i32 {
+    workflow::mark_service_entry();
     let o = match options(home, args) {
         Ok(o) => o,
         Err(e) => {

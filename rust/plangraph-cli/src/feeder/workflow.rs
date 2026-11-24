@@ -162,18 +162,32 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
         "review_wait_seconds":1800, "round_cap":8, "trailers":trailers}});
     format!("PLANGRAPH-BATCH-INPUT-V1\n{input}")
 }
-/// Longest a claim and its reservation check can take (each call is bounded at 20 seconds):
-/// the least time left a live tick needs to begin another batch safely.
-const MIN_BATCH_SECONDS: u64 = 20;
+/// Time reserved for one claim attempt: claim, reservation check, launch and cleanup each
+/// take up to about 20 seconds. A live tick begins an attempt only if this much (or the last
+/// attempt's duration, if longer) still fits before its deadline.
+const ATTEMPT_RESERVE_SECONDS: u64 = 60;
 
-/// Whether a live tick that has run `elapsed` may claim another batch after one that took
-/// `last`: the next batch is assumed to take as long as the last one, and at least a claim.
-fn another_batch_fits(
+static SERVICE_ENTRY: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Mark the moment the service entered; the tick deadline counts from here.
+pub(super) fn mark_service_entry() {
+    SERVICE_ENTRY.get_or_init(std::time::Instant::now);
+}
+
+/// Time since `mark_service_entry` (since the first call when it was never marked).
+pub(super) fn service_elapsed() -> std::time::Duration {
+    SERVICE_ENTRY.get_or_init(std::time::Instant::now).elapsed()
+}
+
+/// Whether a live tick `elapsed` after service entry may begin another claim attempt after one
+/// that took `last`: it must still fit before the budget, assuming the next takes as long as
+/// the last or the fixed reserve, whichever is longer.
+fn attempt_fits(
     elapsed: std::time::Duration,
     last: std::time::Duration,
     budget_seconds: u64,
 ) -> bool {
-    elapsed + last.max(std::time::Duration::from_secs(MIN_BATCH_SECONDS))
+    elapsed + last.max(std::time::Duration::from_secs(ATTEMPT_RESERVE_SECONDS))
         <= std::time::Duration::from_secs(budget_seconds)
 }
 
@@ -210,19 +224,29 @@ pub fn tick(
         }
         row
     };
-    let tick_start = std::time::Instant::now();
-    let mut last_batch = std::time::Duration::ZERO;
+    let mut last_attempt = std::time::Duration::ZERO;
+    let mut attempt_started: Option<std::time::Duration> = None;
     loop {
         // The service kills a tick at its timeout, possibly between a claim and its launch:
-        // past the budget no further batch is claimed, and the next tick takes over.
-        if !dry
-            && !rows.is_empty()
-            && !another_batch_fits(tick_start.elapsed(), last_batch, policy.tick_budget_seconds)
-        {
-            stopped = "tick_budget".into();
+        // no attempt begins unless claim, reservation, launch and cleanup still fit before the
+        // budget counted from service entry (this covers refused attempts and the first one).
+        let now = if dry {
+            std::time::Duration::ZERO
+        } else {
+            launch.elapsed()
+        };
+        if let Some(begun) = attempt_started {
+            last_attempt = now.saturating_sub(begun);
+        }
+        if !dry && !attempt_fits(now, last_attempt, policy.tick_budget_seconds) {
+            stopped = format!(
+                "tick_budget: {}s of {}s used",
+                now.as_secs(),
+                policy.tick_budget_seconds
+            );
             break;
         }
-        let batch_start = std::time::Instant::now();
+        attempt_started = Some(now);
         let batch = pick_batch(&ready, &sim_runs, policy);
         let Some(seed) = batch.first() else { break };
         if let Admission::Refuse(reason) = admit(&sim_facts, policy) {
@@ -304,7 +328,6 @@ pub fn tick(
         sim_facts.free_ram_bytes = sim_facts
             .free_ram_bytes
             .saturating_sub(policy.ram_per_run_bytes);
-        last_batch = batch_start.elapsed();
     }
     if let Some(first) = rows.first() {
         let mut row = first.clone();
@@ -317,6 +340,9 @@ pub fn tick(
         row["stopped"] = json!(stopped);
         return row;
     }
+    if stopped.starts_with("tick_budget") {
+        return json!({"decision":"refused","reason":stopped,"skipped":skipped});
+    }
     json!({"decision":"idle","reason":"no_eligible_item","skipped":skipped})
 }
 
@@ -326,15 +352,16 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn another_batch_needs_the_time_the_last_one_took_and_at_least_one_claim() {
+    fn an_attempt_needs_the_reserve_or_the_last_attempt_before_the_deadline() {
         let s = Duration::from_secs;
-        // 90 s budget: 70 s used leaves exactly the 20 s a claim needs; 71 s does not.
-        assert!(another_batch_fits(s(70), s(0), 90));
-        assert!(!another_batch_fits(s(71), s(0), 90));
-        // A slow last batch is assumed to repeat.
-        assert!(another_batch_fits(s(40), s(50), 90));
-        assert!(!another_batch_fits(s(41), s(50), 90));
-        // Budget zero allows no second batch whatever happened.
-        assert!(!another_batch_fits(s(0), s(0), 0));
+        // 100 s budget, 60 s reserve: an attempt may begin at 40 s but not at 41 s.
+        assert!(attempt_fits(s(40), s(0), 100));
+        assert!(!attempt_fits(s(41), s(0), 100));
+        // A slow last attempt is assumed to repeat.
+        assert!(attempt_fits(s(20), s(80), 100));
+        assert!(!attempt_fits(s(21), s(80), 100));
+        // 38 s of preflight leaves room for one attempt, not for a second after a 40 s batch.
+        assert!(attempt_fits(s(38), s(0), 100));
+        assert!(!attempt_fits(s(78), s(40), 100));
     }
 }

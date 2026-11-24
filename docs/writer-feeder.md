@@ -18,7 +18,11 @@ additional caller module paths are preserved.
 creates feeder state, or appends an event. Normal ticks append one JSON line to
 `~/.local/state/plangraph/feeder/events.jsonl`, including refusals and adapter
 errors. A live tick starts every batch its slots allow, one after the other, by the same loop (`started`
-lists them, with `slots` and `stopped`); a failed start reports the batches already started. Policy `tick_budget_seconds` (default 90, the service stops at 110) bounds the tick: once a live tick has used the budget less the time the last batch took (at least 20 s, one claim), it claims no further batch and reports `stopped` as `tick_budget`. A
+lists them, with `slots` and `stopped`); a failed start reports the batches already started. Policy `tick_budget_seconds` (default 100; the service stops at 110) is one absolute deadline counted
+from service entry, so the preflight reads count. A live tick begins a claim attempt (also a
+retry after a refused claim, and the first one) only if 60 s, or the last attempt's duration if
+longer, still fit before the deadline; otherwise it stops with `tick_budget: <n>s of <limit>s used`
+(a refusal when nothing started, `stopped` on a tick that started batches). A dry run is not limited. A
 dry run plays the same loop without claiming: `would_start` lists every batch (item key,
 card, brief) the tick would start, each taking one slot and one run's RAM and avoiding
 the files of the batches before it; `slots` counts them and `stopped` says why the list

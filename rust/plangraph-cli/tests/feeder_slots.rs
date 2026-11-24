@@ -120,40 +120,58 @@ fn a_launch_failure_after_a_started_batch_still_lists_the_started_one() {
     assert_eq!(registry.lock().unwrap().released, ["plangraph:BBB-1"]);
 }
 
-#[test]
-fn a_live_tick_past_its_budget_claims_no_further_batch() {
-    let items = vec![
+fn items3() -> Vec<Value> {
+    vec![
         item("AAA-1", 9, &["src/a.rs"]),
         item("BBB-1", 8, &["src/b.rs"]),
         item("CCC-1", 7, &["src/c.rs"]),
-    ];
+    ]
+}
+
+#[test]
+fn a_slow_later_batch_is_not_claimed_when_it_cannot_finish_before_the_service_timeout() {
+    let items = items3();
     let registry: Arc<Mutex<Registry>> = Arc::default();
     let mut host = Host::new(&registry, &items);
-    // Budget zero: the first batch always runs, every later one would pass the budget.
-    let spent = Policy {
-        tick_budget_seconds: 0,
-        ..policy(1)
-    };
-    let row = tick(
-        &ready(items.clone()),
-        &[],
-        &facts("dell"),
-        &spent,
-        "rules",
-        "/repo",
-        "/reviews",
-        false,
-        &mut host,
-    );
-    assert_eq!(registry.lock().unwrap().started, [vec!["plangraph:AAA-1"]]);
-    assert_eq!(row["stopped"], "tick_budget");
-    assert_eq!(row["decision"], "spawned");
-    // Only the started batch holds a claim; the next ones were never claimed.
-    let claimed = registry.lock().unwrap().claimed.len();
-    assert_eq!(claimed, 1);
-    // The default budget fills both slots of the host's RAM.
-    let registry: Arc<Mutex<Registry>> = Arc::default();
-    let mut host = Host::new(&registry, &items);
+    // 38 s of preflight, then 20 s to claim and 20 s to launch each batch (100 s budget).
+    host.clock = 38;
+    host.claim_secs = 20;
+    host.start_secs = 20;
     let row = drive(&ready(items), &mut host, "dell", 1, false);
-    assert_eq!(row["slots"], 2);
+    // The first attempt fits (38 + 60 <= 100); a second would begin at 78 s and run past 110 s.
+    assert_eq!(registry.lock().unwrap().started, [vec!["plangraph:AAA-1"]]);
+    assert!(row["stopped"].as_str().unwrap().starts_with("tick_budget"));
+    assert_eq!(registry.lock().unwrap().claimed.len(), 1);
+    assert_eq!(row["decision"], "spawned");
+}
+
+#[test]
+fn refused_attempts_count_against_the_budget_before_any_writer_starts() {
+    let items = items3();
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    // The top item is claimed elsewhere: that attempt only burns 20 s of claim time.
+    registry
+        .lock()
+        .unwrap()
+        .claimed
+        .insert("plangraph:AAA-1".into(), vec!["src/a.rs".into()]);
+    let mut host = Host::new(&registry, &items);
+    host.clock = 30;
+    host.claim_secs = 20;
+    host.start_secs = 20;
+    let row = drive(&ready(items.clone()), &mut host, "dell", 1, false);
+    // At 50 s the next attempt would need 60 s more: no further claim, nothing started.
+    assert!(registry.lock().unwrap().started.is_empty());
+    assert_eq!(row["decision"], "refused");
+    assert!(row["reason"].as_str().unwrap().starts_with("tick_budget"));
+    // A preflight that already used 50 s leaves no room for even the first attempt.
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    host.clock = 50;
+    let row = drive(&ready(items.clone()), &mut host, "dell", 1, false);
+    assert_eq!(row["decision"], "refused");
+    assert!(registry.lock().unwrap().claimed.is_empty());
+    // A dry run is never limited by the deadline.
+    let row = drive(&ready(items), &mut host, "dell", 1, true);
+    assert_eq!(row["decision"], "would_spawn");
 }

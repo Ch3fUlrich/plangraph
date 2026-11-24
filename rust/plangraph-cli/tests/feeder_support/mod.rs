@@ -51,6 +51,11 @@ pub struct Host {
     pub queued: bool,
     /// Held after the first claim until the other host has claimed as well.
     pub meet: Option<Arc<Barrier>>,
+    /// A virtual service clock in seconds: it starts at the preflight time and each claim and
+    /// start advances it, so tests can place a tick against its deadline.
+    pub clock: u64,
+    pub claim_secs: u64,
+    pub start_secs: u64,
 }
 impl Host {
     pub fn new(registry: &Arc<Mutex<Registry>>, items: &[Value]) -> Self {
@@ -73,11 +78,18 @@ impl Host {
             rival_error_at: None,
             queued: false,
             meet: None,
+            clock: 0,
+            claim_secs: 0,
+            start_secs: 0,
         }
     }
 }
 impl Launch for Host {
+    fn elapsed(&mut self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.clock)
+    }
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError> {
+        self.clock += self.claim_secs;
         let mut registry = self.registry.lock().unwrap();
         let result = if self.unavailable_at.as_deref() == Some(key) {
             Err(ClaimError::Unavailable("keeper offline".into()))
@@ -124,6 +136,7 @@ impl Launch for Host {
             .map(|(other, _)| other.clone()))
     }
     fn start(&mut self, card: &Value, _: &str) -> Result<Value, String> {
+        self.clock += self.start_secs;
         let started = self.registry.lock().unwrap().started.len();
         if self.fail_start || self.fail_start_after.is_some_and(|n| started >= n) {
             return Err("spawner denied".into());
