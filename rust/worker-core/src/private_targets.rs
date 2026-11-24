@@ -149,14 +149,33 @@ pub fn sweep_fast_check_targets(
     apply: bool,
     report: &mut Report,
 ) -> io::Result<()> {
-    sweep_fast_check_using(
-        cache,
-        guards,
-        SystemTime::now(),
-        apply,
-        report,
-        crate::disk_runtime::process_references,
-    )
+    sweep_fast_check_targets_at(None, cache, guards, apply, report)
+}
+
+/// `proc_root` replaces `/proc` (and the external reader) for the process inventory. The
+/// inventory names every working directory, open file, executable and `CARGO_TARGET_DIR`, so a
+/// build running from another checkout still keeps its `fc-*` target.
+pub fn sweep_fast_check_targets_at(
+    proc_root: Option<&Path>,
+    cache: &Path,
+    guards: &Guards,
+    apply: bool,
+    report: &mut Report,
+) -> io::Result<()> {
+    let now = SystemTime::now();
+    match proc_root {
+        None => sweep_fast_check_using(
+            cache,
+            guards,
+            now,
+            apply,
+            report,
+            crate::disk_runtime::process_references,
+        ),
+        Some(root) => sweep_fast_check_using(cache, guards, now, apply, report, || {
+            crate::disk_runtime::process_references_at(root)
+        }),
+    }
 }
 
 fn sweep_fast_check_using(

@@ -161,8 +161,62 @@ fn a_checkout_that_changes_while_the_lock_is_awaited_is_not_removed() {
     }
 }
 
+/// A sweep of `tree` whose protection check reads the state directory fresh, as the binary's does.
+fn sweep_waiting_for_the_lock(
+    repo: &std::path::Path,
+    state: &std::path::Path,
+    pins: &std::path::Path,
+    record_run: Option<&std::path::Path>,
+) -> Report {
+    let lock = pg_worker_core::worktree::mutation_lock(repo).unwrap();
+    let (repo_owned, state_owned, pins_owned) =
+        (repo.to_owned(), state.to_owned(), pins.to_owned());
+    let sweeper = std::thread::spawn(move || {
+        let mut report = report();
+        let now = SystemTime::now() + Duration::from_secs(90000);
+        sweep_stray_worktrees(
+            &repo_owned,
+            &[],
+            &Guards::default(),
+            now,
+            true,
+            &mut report,
+            |tree| Ok(!Guards::load(&pins_owned, &state_owned)?.protects(tree)),
+        )
+        .unwrap();
+        report
+    });
+    // The sweep has passed its unlocked checks and is waiting for the lock.
+    std::thread::sleep(Duration::from_millis(1200));
+    if let Some(tree) = record_run {
+        let dir = state.join("runs/run-late");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("record.json"),
+            serde_json::json!({"status": "running", "cwd": tree}).to_string(),
+        )
+        .unwrap();
+    }
+    drop(lock);
+    sweeper.join().unwrap()
+}
+
 #[test]
-fn a_run_that_appears_before_the_final_check_keeps_the_checkout() {
+fn a_run_recorded_while_the_sweep_waits_for_the_lock_keeps_the_checkout() {
+    for (late_run, survives) in [(true, true), (false, false)] {
+        let (tmp, repo, tree) = merged_tree();
+        let state = tmp.path().join("state");
+        fs::create_dir_all(state.join("runs")).unwrap();
+        let pins = tmp.path().join("pins.json");
+        fs::write(&pins, "[]").unwrap();
+        let report =
+            sweep_waiting_for_the_lock(&repo, &state, &pins, late_run.then_some(tree.as_path()));
+        assert_eq!(tree.exists(), survives, "late run {late_run}: {report:?}");
+    }
+}
+
+#[test]
+fn a_protection_that_refuses_keeps_the_checkout() {
     let (_tmp, repo, tree) = merged_tree();
     let mut report = report();
     let now = SystemTime::now() + Duration::from_secs(90000);

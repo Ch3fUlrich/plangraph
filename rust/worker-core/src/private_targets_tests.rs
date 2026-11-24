@@ -458,3 +458,36 @@ fn a_fast_check_target_named_by_a_build_elsewhere_is_kept() {
     assert!(cache.join("fc-used").exists());
     assert!(!cache.join("fc-idle").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn the_fast_check_sweep_reads_cargo_target_dir_from_the_process_environment() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("cache");
+    fs::create_dir(&cache).unwrap();
+    let cache = cache.canonicalize().unwrap();
+    fixture(&cache.join("fc-used"), true);
+    fixture(&cache.join("fc-idle"), true);
+    // A build whose working directory is another checkout and whose only link to the target is
+    // its environment: a cwd-only reader sees nothing here.
+    let proc = tmp.path().join("proc/4242");
+    fs::create_dir_all(&proc).unwrap();
+    fs::write(proc.join("comm"), "cargo\n").unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("elsewhere"), proc.join("cwd")).unwrap();
+    let environ = format!(
+        "HOME=/h\0CARGO_TARGET_DIR={}\0",
+        cache.join("fc-used").display()
+    );
+    fs::write(proc.join("environ"), environ).unwrap();
+    let mut report = report();
+    sweep_fast_check_targets_at(
+        Some(&tmp.path().join("proc")),
+        &cache,
+        &Guards::default(),
+        true,
+        &mut report,
+    )
+    .unwrap();
+    assert!(cache.join("fc-used").exists(), "{:?}", report.actions);
+    assert!(!cache.join("fc-idle").exists());
+}
