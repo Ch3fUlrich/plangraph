@@ -204,3 +204,75 @@ fn run_keeper_fixture(fixture: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn last_trains_report_names_the_slowest_stage_per_train_and_over_all() {
+    let row = |stage: &str, start: u64, end: u64| json!({"stage":stage,"head":"h".repeat(40),"attempt":1,"started_at_ms":start*1000,"ended_at_ms":end*1000});
+    let train = |key: &str, base: u64, review: u64| {
+        json!({"batch_key": key, "timeline": {"stages": [
+            row("fast_checks", base, base + 300),
+            row("push", base + 400, base + 2200),
+            row("ci", base + 2250, base + 3250),
+            row("review", base + 3300, base + 3300 + review),
+            row("go", base + 3300 + review, base + 3900 + review),
+            row("merge", base + 3900 + review, base + 3960 + review),
+            row("host_sync", base + 3960 + review, base + 4100 + review),
+        ], "jobs": []}})
+    };
+    let result = report(
+        &["--last", "10"],
+        &json!({"trains": [train("train-1", 0, 1500), train("train-2", 100_000, 9000)]}),
+    );
+    assert_eq!(result["trains"].as_array().unwrap().len(), 2);
+    assert_eq!(result["top_stages"][0][0], "review");
+    let lines = result["lines"].as_array().unwrap();
+    assert!(lines
+        .iter()
+        .any(|l| l.as_str().unwrap().starts_with("train-2:")
+            && l.as_str().unwrap().contains("bottleneck review 9000s")));
+    assert!(lines
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .starts_with("slowest stage over 2 trains: review"));
+}
+
+#[test]
+#[cfg(unix)]
+fn keeper_recent_lists_only_landed_trains_newest_first() {
+    run_keeper_fixture(
+        r#"
+from plangraph.keeper.auth import Principal, add_principal
+from plangraph.keeper.db import open_db
+from plangraph.keeper.errors import Refused
+from plangraph.keeper.store import Store
+
+db = open_db(':memory:', create=True, backend='sqlite')
+add_principal(db, 'lander', 'router', [])
+principal = Principal('lander', 'router', [])
+store = Store(db)
+repo = 'example/repo'
+lease = store.land(principal, dict(repo=repo, action='acquire', owner='test'))
+
+def land(action, **fields):
+    return store.land(principal, dict(lease, repo=repo, action=action, **fields))
+
+for pr, key in ((3, 'train-3'), (5, 'train-5'), (7, 'train-7')):
+    land('prepare', pr=pr, base='a'*40, head='b'*40, batch_key=key,
+         parts=[dict(pr=pr + 100, head='c'*40)])
+land('landed', pr=3, merge='1'*40)
+land('landed', pr=5, merge='2'*40)
+land('abandon', pr=7)
+assert [t['batch_key'] for t in land('recent', limit=10)['trains']] == ['train-5', 'train-3']
+assert [t['batch_key'] for t in land('recent', limit=1)['trains']] == ['train-5']
+for bad in (0, 101, True, '5'):
+    try:
+        land('recent', limit=bad)
+    except Refused as exc:
+        assert exc.code == 'validation'
+    else:
+        raise AssertionError(bad)
+"#,
+    );
+}

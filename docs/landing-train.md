@@ -120,12 +120,15 @@ candidate (rule 3.52 (8), D-6535).
 
 ## Stage timeline and bottleneck report
 
-`plangraph land-timeline record|report` (rust/plangraph-cli/src/land/timeline.rs) keeps one append-only row per stage of a
-batch or train (fast checks, push gate per stage, CI per job from the GitHub job list, review, GO request, merge, host sync):
-subject, head, host, start, end, result. `report --last N` prints, per train, the wall time from writer done to merge, the
-critical path (parallel jobs count once), idle time between stages and the bottleneck stage, then the stage with the most
-critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
-them into a keeper table needs a keeper schema step that is not part of this change.
+The keeper database holds the timeline: `landing_stages` (fast checks, push, CI, review, delta review, GO, merge, host sync
+per batch or train, every attempt) and `landing_ci_jobs` (one row per CI job of a run from the GitHub API).
+`plangraph landing report OWNER/REPO --last N` (rust/plangraph-cli/src/land/timeline.rs, landing_report.rs) reads the newest N
+landed trains through the keeper's `land` actions `recent` and `timeline` and prints, per train, the wall time from writer
+done to merge, the critical path (parallel jobs count once, the CI jobs replace the whole-run row), idle time between stages
+and the bottleneck stage; a train with no row for a required stage is marked `incomplete`. The last line names the stage with
+the most critical-path time over the N trains. `landing report OWNER/REPO BATCH` and `--day DATE` keep their meaning. The
+GO request and train card print the same timeline. Host and result per stage and the push-gate sub-stages are not columns of
+`landing_stages` yet; they need a keeper schema step.
 
 ## Settlement after the merge
 
