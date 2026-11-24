@@ -255,7 +255,7 @@ fn guard_lanes(state: &Path, sessions: &Path, args: &Args, prompt: &str) -> Resu
     };
     let keys = pg_spawnd::lane_admission::submission_keys(prompt, &args["card"]);
     pg_spawnd::lane_admission::check(
-        (state, &sessions),
+        (state, sessions),
         "native-submit",
         &keys,
         reason.as_deref(),
