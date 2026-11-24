@@ -5,6 +5,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Host capacity probe CLI"
 
+[package.metadata.plangraph]
+host-binaries = ["pg-spawnd"]
+
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 tempfile = "3"
