@@ -126,8 +126,6 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
             .map_err(|_| "invalid host facts")?;
         (sample, None, None)
     };
-    // What the capacity line shows if quota refuses before the facts are complete.
-    let sampled = sample.clone();
     let mut facts = match sources::facts(
         env,
         &o.repo,
@@ -136,20 +134,14 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
         home,
         &policy,
         local.as_deref(),
-    ) {
-        Ok(facts) => facts,
+    )? {
+        sources::FactsOutcome::Ready(facts) => facts,
         // A stale center snapshot is a routine refusal that names its age, not a fault; the
-        // sampled RAM, load and writer count still go out with it.
-        Err(reason) if reason.starts_with("quota_stale") => {
-            let mut shown = sampled;
-            shown.running_writers = running
-                .iter()
-                .filter(|r| r.writer() && same_host(&r.host, &shown.host, &policy))
-                .count();
-            let capacity = capacity_line(&mut shown, &mut policy, load, ram_views)?;
+        // capacity line carries the same numbers (writers, RAM reservation) as any other tick.
+        sources::FactsOutcome::QuotaStale { reason, mut facts } => {
+            let capacity = capacity_line(&mut facts, &mut policy, load, ram_views)?;
             return Ok(json!({"decision":"refused","reason":reason,"capacity":capacity}));
         }
-        Err(e) => return Err(e),
     };
     let measurement = capacity_line(&mut facts, &mut policy, load, ram_views)?;
     if !eligible {

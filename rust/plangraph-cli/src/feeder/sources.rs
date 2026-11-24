@@ -263,6 +263,35 @@ fn apply_facts(
     }
     Ok(f)
 }
+/// What `facts` settled: complete facts, or the facts of a host whose quota snapshot is stale.
+/// The stale case still carries the disk limit, writer count and RAM reservation, so its
+/// refusal reports the same capacity numbers a fresh-quota tick would.
+#[derive(Debug)]
+pub(super) enum FactsOutcome {
+    Ready(HostFacts),
+    QuotaStale { reason: String, facts: HostFacts },
+}
+#[allow(clippy::too_many_arguments)]
+fn finish_facts(
+    f: HostFacts,
+    runs: &[Run],
+    p: &Policy,
+    now: i64,
+    off: bool,
+    local: Option<&str>,
+    quota: Result<Option<Value>, String>,
+) -> Result<FactsOutcome, String> {
+    match quota {
+        Ok(rows) => {
+            apply_facts(f, runs, p, now, off, local, rows.as_ref()).map(FactsOutcome::Ready)
+        }
+        Err(reason) if reason.starts_with("quota_stale") => {
+            apply_facts(f, runs, p, now, off, local, None)
+                .map(|facts| FactsOutcome::QuotaStale { reason, facts })
+        }
+        Err(e) => Err(e),
+    }
+}
 pub(super) fn facts(
     env: &Env,
     repo: &Path,
@@ -271,7 +300,7 @@ pub(super) fn facts(
     home: &Path,
     p: &Policy,
     local: Option<&str>,
-) -> Result<HostFacts, String> {
+) -> Result<FactsOutcome, String> {
     f.free_disk_bytes = disk_limit(
         f.free_disk_bytes,
         work_disks::worktree_disk_with(
@@ -291,15 +320,16 @@ pub(super) fn facts(
         &center,
         now,
         p.quota_facts_max_age_seconds,
-    )?;
-    apply_facts(
+        p.quota_max_age_seconds,
+    );
+    finish_facts(
         f,
         runs,
         p,
         now,
         home.join(".config/plangraph/feeder.off").exists(),
         env.get("PLANGRAPH_HOST_NAME").map(String::as_str).or(local),
-        rows.as_ref(),
+        rows,
     )
 }
 
@@ -423,6 +453,46 @@ mod tests {
         .unwrap();
         let f = apply_facts(f, &runs, &p, 1001, false, None, None).unwrap();
         assert_eq!(f.running_writers, 2);
+    }
+    #[test]
+    fn a_stale_quota_refusal_keeps_the_writers_and_ram_reservation_of_a_fresh_tick() {
+        // One writer started after the sample (no measurement of it yet) on this host.
+        let runs = vec![Run {
+            run_id: "r1".into(),
+            started: Some(2000.0),
+            host: "dell".into(),
+            status: "running".into(),
+            role: "implement".into(),
+            ..Run::default()
+        }];
+        let f: HostFacts = serde_json::from_value(json!({"host":"dell",
+            "free_ram_bytes":20000000000u64,"free_disk_bytes":20000000000u64,
+            "quota_remaining_percent":null,"observed_at":1000}))
+        .unwrap();
+        let p = Policy::default();
+        let stale = "quota_stale: center quota snapshot is 5400s old (limit 900s)".to_string();
+        let fresh_rows =
+            json!([{"provider":"codex:a","windowKey":"5h","timestamp":1500,"remainingPct":70}]);
+        let outcome =
+            finish_facts(f.clone(), &runs, &p, 1600, false, None, Err(stale.clone())).unwrap();
+        let ready = finish_facts(f, &runs, &p, 1600, false, None, Ok(Some(fresh_rows))).unwrap();
+        let (FactsOutcome::QuotaStale { reason, facts: s }, FactsOutcome::Ready(r)) =
+            (outcome, ready)
+        else {
+            panic!("outcomes")
+        };
+        assert_eq!(reason, stale);
+        assert_eq!((s.running_writers, s.free_ram_bytes), (1, 16_000_000_000));
+        assert_eq!(
+            (s.running_writers, s.free_ram_bytes),
+            (r.running_writers, r.free_ram_bytes)
+        );
+        assert_eq!(r.quota_remaining_percent, Some(70.0));
+        // Other quota errors stay faults.
+        let f2: HostFacts = serde_json::from_value(json!({"host":"dell","free_ram_bytes":1,
+            "free_disk_bytes":1,"quota_remaining_percent":null,"observed_at":1000}))
+        .unwrap();
+        assert!(finish_facts(f2, &[], &p, 1600, false, None, Err("other".into())).is_err());
     }
     #[test]
     fn a_spawner_row_holding_the_whole_card_is_split_into_its_keys() {

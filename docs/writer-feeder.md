@@ -217,7 +217,12 @@ SSH_DESTINATION` installs it on a worker over SSH; the coordinator's
 `pg-quota-facts@<worker-id>.timer` (`deploy/systemd`) runs that every 5 minutes with the
 worker's `HOST_LINK_SSH`. A missing or unreadable file, or one older than
 `quota_facts_max_age_seconds` (default 900), refuses the tick as `quota_stale` and names
-the snapshot's age; quota is never null on such a host.
+the snapshot's age; quota is never null on such a host. `--export` and `--push` publish only
+while a codex observation within `quota_max_age_seconds` (10800) exists; otherwise they exit 2
+and leave the previous file to age. A worker that finds a fresh envelope around old or no codex
+rows also refuses as `quota_stale`, naming the envelope's age and the newest observation's age.
+The `quota_stale` refusal carries the same `capacity` line as any other tick (writers, RAM
+reservation for writers started after the sample).
 
 Policy `batch_max_items` (default 1, range 1..=50; any other value refuses every tick as `invalid_policy`) lets one writer run hold related ready items: the
 first eligible item in launch order plus later eligible items of its family or sharing its

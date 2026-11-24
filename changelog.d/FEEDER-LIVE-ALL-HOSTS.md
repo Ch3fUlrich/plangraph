@@ -10,3 +10,4 @@ A live feeder tick starts every batch its free slots allow (started, slots, stop
 Hand-lane detection merges with the spawner's runs by run id, honours ROUTING_STATE_DIR and CLAUDE_CONFIG_DIR, checks pid and the Claude roster instead of a fixed cutoff, and holds every key of a lane's card.
 A feeder refusal for a stale quota snapshot keeps the sampled RAM, load and writer count in its capacity line.
 Hand-lane detection keeps a slot on any one of fresh job state, Claude roster or live pid, reads the roster whole through the bounded host-command capture, and splits the spawner's whole-card item_key into the card's keys.
+The quota snapshot is published only with a usable codex observation, a worker names both ages when a fresh snapshot holds only old observations, and the quota_stale refusal keeps the RAM reservation for post-sample writers.
