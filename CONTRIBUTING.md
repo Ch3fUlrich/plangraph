@@ -278,6 +278,12 @@ Only the shared setup may use actions whose names contain `rust` or `toolchain`.
 Its upstream action is commit-pinned with an action-version comment; update that
 SHA explicitly in a reviewed PR when needed, not the shared Rust release pin.
 
+The UI job (`UI tests in headless Chromium`) installs the Chromium system packages before the timed
+tests: the list comes from `playwright install-deps --dry-run`, the .deb files are cached by that list,
+and apt runs as root in at most 3 tries (process group killed on timeout, `dpkg --configure -a` before
+each; the third failure fails the job). `tests/test_ci_ui_browser_deps.py` checks the order, cache key,
+retry bound and job timeout; a workflow-only change selects it.
+
 ## Lanes
 
 Completed Rust ports remove only their own Python waiver from

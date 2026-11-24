@@ -702,7 +702,8 @@ def test_local_init_selects_explicit_imports_and_changed_exports(tmp_path):
 def test_workflow_only_changes_select_ci_regressions(tmp_path, local):
     regressions = {"test_ci_select.py", "test_ci_select_rust_inputs.py",
                    "test_workflow_archive.py", "test_affected_tests.py",
-                   "test_affected_tests_head.py", "test_split_ci_test_affected_tests.py"}
+                   "test_affected_tests_head.py", "test_split_ci_test_affected_tests.py",
+                   "test_ci_ui_browser_deps.py"}
     directory = tmp_path / "tests"
     directory.mkdir()
     for name in regressions | {"test_other.py"}:

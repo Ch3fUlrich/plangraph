@@ -176,6 +176,7 @@ WORKFLOW_TESTS = {
     "tests/test_ci_select_rust_inputs.py",
     "tests/test_workflow_archive.py",
     "tests/test_split_ci_test_affected_tests.py",
+    "tests/test_ci_ui_browser_deps.py",
 }
 SMOKE_TEST = "tests/test_affected_tests.py"
 # A change under these packages reaches most of the suite through the runner; the local bound

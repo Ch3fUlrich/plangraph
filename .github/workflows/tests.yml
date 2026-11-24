@@ -264,7 +264,10 @@ jobs:
     needs: select
     if: needs.select.outputs.browser == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Sum of the step timeouts (every step running to its own limit): checkout 3 + Python 3
+    # + pip 5 + browser cache 3 + package list 4 + apt cache restore 3 + deps 17 + apt cache
+    # save 3 + Chromium 5 + browser tests 10 + screenshots 3 = 59.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         timeout-minutes: 3
@@ -284,12 +287,77 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
+      # Chromium's system packages come from apt on a mirror that can be slow. The package list
+      # comes from Playwright's own dry run, the downloaded .deb files are cached by that list,
+      # and the install runs apt directly: as root, with the whole process group killed on a
+      # timeout and dpkg repaired before each of at most 3 tries. The third failure fails the job.
+      - name: List Chromium system dependencies
+        timeout-minutes: 4
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 225
+          command: |
+            packages="$GITHUB_WORKSPACE/.ci-apt-packages.txt"
+            for try in 1 2 3; do
+              if sudo timeout -k 5s 60 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60; then
+                break
+              fi
+              if [ "$try" = 3 ]; then
+                exit 1
+              fi
+            done
+            status=0
+            timeout -k 5s 30 python -m playwright install-deps --dry-run chromium > "$RUNNER_TEMP/deps-dry-run.txt" 2>&1 || status=$?
+            cat "$RUNNER_TEMP/deps-dry-run.txt"
+            awk '/^Missing system dependencies/{f=1;next} f && /^  [^ ]/{print $1}' "$RUNNER_TEMP/deps-dry-run.txt" > "$packages"
+            if [ "$status" -ne 0 ] && [ ! -s "$packages" ]; then
+              echo "install-deps --dry-run failed without a package list"
+              exit 1
+            fi
+      - name: Restore apt package cache
+        id: apt-cache
+        timeout-minutes: 3
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/apt-archives/*.deb
+          key: apt-chromium-${{ runner.os }}-${{ hashFiles('.ci-apt-packages.txt') }}
+      - name: Install Chromium system dependencies
+        timeout-minutes: 17
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 960
+          command: |
+            mapfile -t pkgs < "$GITHUB_WORKSPACE/.ci-apt-packages.txt"
+            if [ "${#pkgs[@]}" -eq 0 ]; then
+              echo "no missing system packages"
+              exit 0
+            fi
+            archives="$HOME/apt-archives"
+            mkdir -p "$archives/partial"
+            limits=(400 200 200)
+            for try in 1 2 3; do
+              if ! sudo timeout -k 15s 45 dpkg --configure -a; then
+                echo "dpkg --configure -a failed before try $try"
+              fi
+              if sudo env DEBIAN_FRONTEND=noninteractive timeout -k 15s "${limits[$((try - 1))]}" apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 -o Dir::Cache::archives="$archives" "${pkgs[@]}"; then
+                exit 0
+              fi
+              echo "apt-get install try $try failed"
+            done
+            exit 1
+      - name: Save apt package cache
+        if: always() && steps.apt-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        uses: actions/cache/save@v4
+        with:
+          path: ~/apt-archives/*.deb
+          key: apt-chromium-${{ runner.os }}-${{ hashFiles('.ci-apt-packages.txt') }}
       - name: Install Chromium
         timeout-minutes: 5
         uses: ./.github/actions/bounded-step
         with:
           seconds: 285
-          command: python -m playwright install --with-deps chromium
+          command: python -m playwright install chromium
       - name: browser tests
         timeout-minutes: 10
         uses: ./.github/actions/bounded-step
