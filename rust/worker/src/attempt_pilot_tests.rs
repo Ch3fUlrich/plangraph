@@ -50,17 +50,34 @@ fn pilot_leak_guard_explains_oversized_floor() {
     let short = ["gh", "p_", "abc"].concat();
     assert_eq!(crate::output_redact::history_text(&short), short);
 }
+/// How long either side of the owner test waits for the other before it panics
+/// with the reason, instead of hanging the whole test binary.
+const PILOT_GATE_WAIT: Duration = Duration::from_secs(30);
+
+/// A two-party hand-off with a deadline: `Barrier::wait` blocks forever when the
+/// other side already ended (for example the attempt failed before it reached
+/// the harness), this one panics with the stage that never arrived.
+struct Gate {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
 #[test]
 fn pilot_activity_owner_and_empty_claim() {
-    struct Held(std::sync::Barrier, std::sync::Barrier, Fake);
+    struct Held(Gate, Fake);
     impl Harness for Held {
         fn name(&self) -> &str {
             "held"
         }
         fn command(&self, run: &HarnessRun) -> Command {
-            self.0.wait();
-            self.1.wait();
-            self.2.command(run)
+            self.0.entered.send(()).expect("test side hung up before the harness ran");
+            self.0
+                .release
+                .lock()
+                .unwrap()
+                .recv_timeout(PILOT_GATE_WAIT)
+                .expect("the second attempt never released the held harness");
+            self.1.command(run)
         }
     }
     let (r, base) = repo();
@@ -71,9 +88,13 @@ fn pilot_activity_owner_and_empty_claim() {
         root.path(),
     );
     inp.leg.harness = "held".into();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
     let held = Arc::new(Held(
-        std::sync::Barrier::new(2),
-        std::sync::Barrier::new(2),
+        Gate {
+            entered: entered_tx,
+            release: std::sync::Mutex::new(release_rx),
+        },
         Fake::new("echo hi > out.txt"),
     ));
     let cfg = Config {
@@ -90,11 +111,27 @@ fn pilot_activity_owner_and_empty_claim() {
             })
         }
     });
-    held.0.wait();
+    // The first attempt must reach its harness. If it ended before, say how: on a
+    // host without PG_JAIL=off and PG_TEST_ALLOW_UNJAILED=1 it ends at once with
+    // the jail refusal, and waiting for it would only hang.
+    let deadline = std::time::Instant::now() + PILOT_GATE_WAIT;
+    while entered_rx.recv_timeout(Duration::from_millis(50)).is_err() {
+        if first.is_finished() {
+            panic!(
+                "the first attempt ended before its harness ran (a worker test run needs \
+                 PG_JAIL=off and PG_TEST_ALLOW_UNJAILED=1): {:?}",
+                first.join()
+            );
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first attempt did not reach its harness within {PILOT_GATE_WAIT:?}"
+        );
+    }
     let never = Fake::new("exit 99");
     let second =
         crate::card_admit::run_attempt(Some(&never), &cfg, &Patterns::default(), &inp, &|| false);
-    held.1.wait();
+    release_tx.send(()).unwrap();
     let error = second.unwrap_err();
     assert!(
         matches!(&error, crate::card_admit::EntryError::Attempt(AttemptError::Admission(crate::AdmissionReason::Overlap(card))) if card == &inp.claim.card)
