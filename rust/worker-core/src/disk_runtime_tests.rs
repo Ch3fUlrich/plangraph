@@ -495,19 +495,25 @@ fn trim_refusals_name_the_live_holder_pid() {
     );
 }
 
+/// Half of what the fixture occupies on disk: over the cap before, under it once the units go.
+#[cfg(target_os = "linux")]
+fn half_allocated(target: &Path) -> u64 {
+    crate::disk_measure::allocated_bytes(target).unwrap() / 2
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn push_reclaim_brings_an_over_cap_target_under_the_cap_under_the_exclusive_lease() {
     let parent = tempfile::tempdir().unwrap();
     let (checkout, target, _) = over_cap_target(parent.path());
-    let bytes = crate::disk_hygiene::scan(&target).unwrap().0;
-    assert!(bytes > 700);
+    let cap = half_allocated(&target);
+    assert!(crate::disk_measure::allocated_bytes(&target).unwrap() > cap);
     let report =
-        reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap();
+        reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap();
     assert!(report.freed_bytes > 0);
-    assert!(crate::disk_hygiene::scan(&target).unwrap().0 <= 700);
+    assert!(crate::disk_measure::allocated_bytes(&target).unwrap() <= cap);
     // Under the cap nothing is touched, whatever is running.
-    let kept = reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], true))).unwrap();
+    let kept = reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], true))).unwrap();
     assert!(kept.actions.is_empty() && kept.freed_bytes == 0);
 }
 
@@ -516,9 +522,10 @@ fn push_reclaim_brings_an_over_cap_target_under_the_cap_under_the_exclusive_leas
 fn push_reclaim_refuses_a_target_with_a_real_git_directory_and_keeps_it() {
     let parent = tempfile::tempdir().unwrap();
     let (checkout, target, units) = over_cap_target(parent.path());
+    let cap = half_allocated(&target);
     fs::create_dir(target.join(".git")).unwrap();
     let error =
-        reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap_err();
+        reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap_err();
     assert!(error.starts_with("cargo_target_not_reclaimed:"), "{error}");
     assert!(
         error.contains(".git") && error.contains("retry the push"),
@@ -532,8 +539,9 @@ fn push_reclaim_refuses_a_target_with_a_real_git_directory_and_keeps_it() {
 fn push_reclaim_leaves_a_receipt_while_a_second_build_runs_or_a_lease_is_held() {
     let parent = tempfile::tempdir().unwrap();
     let (checkout, target, units) = over_cap_target(parent.path());
+    let cap = half_allocated(&target);
     let error =
-        reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], true))).unwrap_err();
+        reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], true))).unwrap_err();
     assert!(
         error.contains("still holds") && error.contains("retry the push"),
         "{error}"
@@ -541,7 +549,7 @@ fn push_reclaim_leaves_a_receipt_while_a_second_build_runs_or_a_lease_is_held() 
     assert!(units.iter().all(|unit| unit.exists()));
     let lease = crate::cargo_cache::writer_lease(&target).unwrap();
     let error =
-        reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap_err();
+        reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap_err();
     assert!(
         error.contains(&format!("held by pid {}", std::process::id())),
         "{error}"
@@ -549,7 +557,7 @@ fn push_reclaim_leaves_a_receipt_while_a_second_build_runs_or_a_lease_is_held() 
     assert!(error.contains("cache lease held"), "{error}");
     assert!(units.iter().all(|unit| unit.exists()));
     drop(lease);
-    assert!(reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).is_ok());
+    assert!(reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], false))).is_ok());
 }
 
 #[test]
@@ -557,26 +565,51 @@ fn push_reclaim_leaves_a_receipt_while_a_second_build_runs_or_a_lease_is_held() 
 fn push_reclaim_follows_a_symlinked_target_to_its_real_directory() {
     let parent = tempfile::tempdir().unwrap();
     let (checkout, real, units) = over_cap_target(parent.path());
+    let cap = half_allocated(&real);
     let link = parent.path().join("configured-target");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     // Held at the real path (as a writer's shim holds it): the receipt names the holder.
     let command = crate::cargo_cache::writer_lease(&real).unwrap();
     let error =
-        reclaim_before_push_using(&checkout, &link, 700, || Ok((vec![], false))).unwrap_err();
+        reclaim_before_push_using(&checkout, &link, cap, || Ok((vec![], false))).unwrap_err();
     assert!(
         error.contains("not_reclaimed") && error.contains("held by pid"),
         "{error}"
     );
     assert!(units.iter().all(|unit| unit.exists()));
     drop(command);
-    reclaim_before_push_using(&checkout, &link, 700, || Ok((vec![], false))).unwrap();
-    assert!(crate::disk_hygiene::scan(&real).unwrap().0 <= 700);
+    reclaim_before_push_using(&checkout, &link, cap, || Ok((vec![], false))).unwrap();
+    assert!(crate::disk_measure::allocated_bytes(&real).unwrap() <= cap);
     // A target that is not cargo output is refused through the link too, never counted as empty.
     let (_, other, _) = over_cap_target(&parent.path().join("second"));
     let other_link = parent.path().join("other-link");
     std::os::unix::fs::symlink(&other, &other_link).unwrap();
     fs::create_dir(other.join(".git")).unwrap();
     let error =
-        reclaim_before_push_using(&checkout, &other_link, 700, || Ok((vec![], false))).unwrap_err();
+        reclaim_before_push_using(&checkout, &other_link, cap, || Ok((vec![], false))).unwrap_err();
     assert!(error.contains("not identified"), "{error}");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_counts_allocated_bytes_like_the_push_preflight() {
+    let parent = tempfile::tempdir().unwrap();
+    let checkout = parent.path().join("checkout");
+    let target = parent.path().join("target");
+    fs::create_dir(&checkout).unwrap();
+    fs::create_dir_all(target.join("debug")).unwrap();
+    fs::write(
+        target.join("CACHEDIR.TAG"),
+        b"Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+    // 43 apparent bytes under a 1024-byte cap, but the file occupies a whole block on disk.
+    assert!(crate::disk_hygiene::scan(&target).unwrap().0 < 1024);
+    assert!(crate::disk_measure::allocated_bytes(&target).unwrap() > 1024);
+    let error =
+        reclaim_before_push_using(&checkout, &target, 1024, || Ok((vec![], false))).unwrap_err();
+    assert!(
+        error.starts_with("cargo_target_not_reclaimed:") && error.contains("retry the push"),
+        "{error}"
+    );
 }

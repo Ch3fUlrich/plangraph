@@ -1,4 +1,5 @@
 //! Shared cache paths and the host_ready.py cargo_lease contract.
+//! Lock-file naming, holder lookup and refusal text live in `cargo_lease_diag`.
 use std::{
     env,
     ffi::OsStr,
@@ -6,6 +7,14 @@ use std::{
     io,
     path::{Path, PathBuf},
 };
+
+#[cfg(unix)]
+use crate::cargo_lease_diag::create_lease_file;
+#[cfg(unix)]
+pub use crate::cargo_lease_diag::ensure_lease_file;
+#[cfg(target_os = "linux")]
+pub use crate::cargo_lease_diag::lease_holders;
+pub use crate::cargo_lease_diag::{describe_holders, lease_file};
 
 /// Set to the target path by every process that holds the lease on it for its children, so a
 /// nested Cargo command reuses the outer lease instead of waiting for it.
@@ -164,104 +173,9 @@ pub fn writer_lease(target: &Path) -> io::Result<CacheLease> {
     })
 }
 
-/// The lock file beside a cache root, `<root>.plangraph-lock`.
-pub fn lease_file(target: &Path) -> Option<PathBuf> {
-    let mut name = target.file_name()?.to_os_string();
-    name.push(".plangraph-lock");
-    Some(target.parent()?.join(name))
-}
-
-/// Pids that hold a flock on the root's lease file now, read from the kernel's lock table so a
-/// dead process never shows and a cancelled one leaves nothing behind. Empty when unreadable.
-#[cfg(target_os = "linux")]
-pub fn lease_holders(target: &Path) -> Vec<u32> {
-    use std::os::unix::fs::MetadataExt;
-    let Some(meta) = lease_file(target).and_then(|file| std::fs::metadata(file).ok()) else {
-        return vec![];
-    };
-    let table = std::fs::read_to_string("/proc/locks").unwrap_or_default();
-    holders_in(
-        &table,
-        libc::major(meta.dev()),
-        libc::minor(meta.dev()),
-        meta.ino(),
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn holders_in(table: &str, major: u32, minor: u32, inode: u64) -> Vec<u32> {
-    let mut pids: Vec<u32> = table
-        .lines()
-        .filter_map(|line| {
-            let fields: Vec<_> = line.split_whitespace().collect();
-            let (kind, pid, id) = (fields.get(1)?, fields.get(4)?, fields.get(5)?);
-            let mut id = id.split(':');
-            let (maj, min, ino) = (id.next()?, id.next()?, id.next()?);
-            (*kind == "FLOCK"
-                && u32::from_str_radix(maj, 16).ok()? == major
-                && u32::from_str_radix(min, 16).ok()? == minor
-                && ino.parse::<u64>().ok()? == inode)
-                .then(|| pid.parse().ok())
-                .flatten()
-        })
-        .collect();
-    pids.sort_unstable();
-    pids.dedup();
-    pids
-}
-
-/// Holders are unnamed where the kernel offers no lock table.
-#[cfg(not(target_os = "linux"))]
-pub fn describe_holders(_: &Path) -> String {
-    String::new()
-}
-
-/// ` (held by pid 12, 34)` for refusals, or an empty string when no holder can be named.
-#[cfg(target_os = "linux")]
-pub fn describe_holders(target: &Path) -> String {
-    let pids = lease_holders(target);
-    if pids.is_empty() {
-        return String::new();
-    }
-    let list: Vec<_> = pids.iter().map(u32::to_string).collect();
-    format!(" (held by pid {})", list.join(", "))
-}
-
-#[cfg(unix)]
-fn create_lease_file(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(path)
-}
-
-/// Create the lock file beside `target` from the host, before a sandboxed child needs it: the
-/// child takes shared leases on it read-only.
-#[cfg(unix)]
-pub fn ensure_lease_file(target: &Path) -> io::Result<PathBuf> {
-    let path = lease_file(target).ok_or_else(|| io::Error::other("cache root needs a name"))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    create_lease_file(&path)?;
-    Ok(path)
-}
-
 #[cfg(unix)]
 fn try_lease(target: &Path, mode: libc::c_int) -> io::Result<Option<CacheLease>> {
-    let mut name = target
-        .components()
-        .next_back()
-        .map(|c| c.as_os_str())
-        .filter(|name| *name != OsStr::new("/"))
-        .ok_or_else(|| io::Error::other("cache root needs a name"))?
-        .to_os_string();
-    name.push(".plangraph-lock");
-    let path = target
-        .parent()
-        .ok_or_else(|| io::Error::other("cache root needs a parent"))?
-        .join(name);
+    let path = lease_file(target).ok_or_else(|| io::Error::other("cache root needs a name"))?;
     // A shared lease needs no write access: flock works on a read-only descriptor, and the writer
     // sandbox grants writes to the target but not to its sibling lock file.
     let lease = if mode == libc::LOCK_SH {
@@ -318,20 +232,6 @@ mod tests {
         assert!(writer_lease(&cache).is_ok());
     }
     #[test]
-    #[cfg(target_os = "linux")]
-    fn lease_holders_name_the_live_pid_and_forget_it_on_release() {
-        let parent = tempfile::tempdir().unwrap();
-        let cache = parent.path().join("target");
-        assert!(lease_holders(&cache).is_empty());
-        let lease = writer_lease(&cache).unwrap();
-        assert!(lease_holders(&cache).contains(&std::process::id()));
-        let refused = try_exclusive_lease(&cache).unwrap();
-        assert!(refused.is_none());
-        assert!(describe_holders(&cache).contains(&format!("{}", std::process::id())));
-        drop(lease);
-        assert!(!lease_holders(&cache).contains(&std::process::id()));
-    }
-    #[test]
     #[cfg(unix)]
     fn a_shared_lease_needs_only_read_access_to_the_lock_file() {
         use std::os::unix::fs::PermissionsExt;
@@ -352,16 +252,6 @@ mod tests {
         assert!(try_exclusive_lease(&cache).unwrap().is_none());
         drop((first, second));
         assert!(try_exclusive_lease(&cache).unwrap().is_some());
-    }
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn holder_table_rows_of_other_files_and_kinds_are_ignored() {
-        let table = "1: FLOCK  ADVISORY  READ 77 08:01:500 0 EOF\n\
-                     2: FLOCK  ADVISORY  WRITE 78 08:01:501 0 EOF\n\
-                     3: POSIX  ADVISORY  WRITE 79 08:01:500 0 EOF\n\
-                     4: FLOCK  ADVISORY  READ 77 08:01:500 0 EOF\n\
-                     5: FLOCK  ADVISORY  READ 80 08:02:500 0 EOF\n";
-        assert_eq!(holders_in(table, 8, 1, 500), vec![77]);
     }
     #[test]
     #[cfg(unix)]

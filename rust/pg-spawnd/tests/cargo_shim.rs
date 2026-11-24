@@ -226,13 +226,14 @@ fn an_idle_writer_between_cargo_steps_releases_the_lease_so_trim_succeeds() {
         .unwrap();
     assert!(wait_for(|| idle_flag.exists()), "writer never reached idle");
     assert!(lease_holders(&target).is_empty());
+    let cap = pg_worker_core::disk_measure::allocated_bytes(&target).unwrap() / 2;
     let report =
-        pg_worker_core::disk_runtime::reclaim_before_push_using(&checkout, &target, 700, || {
+        pg_worker_core::disk_runtime::reclaim_before_push_using(&checkout, &target, cap, || {
             Ok((vec![], false))
         })
         .expect("trim between cargo steps must succeed");
     assert!(report.freed_bytes > 0);
-    assert!(pg_worker_core::disk_hygiene::scan(&target).unwrap().0 <= 700);
+    assert!(pg_worker_core::disk_measure::allocated_bytes(&target).unwrap() <= cap);
     std::fs::write(&trimmed_flag, "done").unwrap();
     assert!(supervisor.wait().unwrap().success());
 }

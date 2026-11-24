@@ -104,3 +104,13 @@ fn the_real_cargo_search_skips_the_shim_itself() {
     assert_eq!(real_cargo(&path, &exe), Some(real));
     assert_eq!(real_cargo(shim_dir.as_os_str(), &exe), None);
 }
+
+#[test]
+fn a_child_whose_shim_already_exited_refuses_to_run_cargo() {
+    // In `pre_exec` the child's parent is the shim; any other parent means the shim is gone.
+    // SAFETY: getppid has no preconditions.
+    let parent = unsafe { libc::getppid() };
+    die_with_parent(parent).expect("the real parent passes");
+    let error = die_with_parent(libc::pid_t::MAX).unwrap_err();
+    assert!(error.to_string().contains("shim exited"), "{error}");
+}

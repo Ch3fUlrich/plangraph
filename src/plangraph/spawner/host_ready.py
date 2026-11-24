@@ -186,7 +186,8 @@ def _open_lease_file(path, exclusive):
 
 
 def _cargo_lease_for(target, exclusive=False, wait=0.0):
-    target = Path(target)
+    # Lease the resolved target: the native shim and the host reclaim do, so every path to it contends.
+    target = Path(target).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     path = target.with_name(target.name + '.plangraph-lock')
     deadline = time.monotonic() + wait
