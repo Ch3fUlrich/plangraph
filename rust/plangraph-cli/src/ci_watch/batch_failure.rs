@@ -53,7 +53,7 @@ impl Owners {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureRecord {
     pub id: String,
     pub batch: String,
@@ -62,6 +62,9 @@ pub struct FailureRecord {
     pub job: String,
     pub test: String,
     pub excerpt: String,
+    /// The class lines of the red job (`classify::brief_lines`): class, run class, where to start, failed job id.
+    #[serde(default)]
+    pub class_brief: String,
     pub created_at: i64,
     pub delivered_to: Option<String>,
     pub acked: bool,
@@ -112,6 +115,7 @@ pub fn record_failure(
             job: task.job.clone(),
             test: task.test.clone(),
             excerpt: task.excerpt.clone(),
+            class_brief: super::classify::brief_lines(&task.class, &task.run_class, task.job_id),
             created_at: now,
             delivered_to: None,
             acked: false,

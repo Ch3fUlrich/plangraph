@@ -181,20 +181,8 @@ fn contract_text(text: &str, cap: usize) -> String {
     }
     text.chars().take(cap).collect()
 }
-/// The class of the red job, where the fix starts and the failed job id (empty for a row older than the classifier).
-fn class_lines(task: &Task) -> String {
-    if task.class.is_empty() {
-        return String::new();
-    }
-    let start = super::classify::RedClass::from_name(&task.class)
-        .map_or("the log lines below", |class| class.start_at());
-    format!(
-        "Class: {} (run: {})\nStart at: {}\nFailed job id: {}\n",
-        task.class, task.run_class, start, task.job_id
-    )
-}
 fn definition(task: &Task, key: &str) -> Value {
-    let description=format!("Why: CI tests failed on {} (PR {}), run {}.\nHow: Reproduce the failure, fix its cause, and verify the failing test and CI.\n[ci-watch-run:{}]\n{}Job: {}\nTest: {}\nLocal task: {}\n{}",task.head,task.pr.map(|n|n.to_string()).unwrap_or_else(||"none".into()),task.run_id,task.run_id,class_lines(task),contract_text(&task.job,100),contract_text(&task.test,300),task.key,task.excerpt);
+    let description=format!("Why: CI tests failed on {} (PR {}), run {}.\nHow: Reproduce the failure, fix its cause, and verify the failing test and CI.\n[ci-watch-run:{}]\n{}Job: {}\nTest: {}\nLocal task: {}\n{}",task.head,task.pr.map(|n|n.to_string()).unwrap_or_else(||"none".into()),task.run_id,task.run_id,super::classify::brief_lines(&task.class, &task.run_class, task.job_id),contract_text(&task.job,100),contract_text(&task.test,300),task.key,task.excerpt);
     serde_json::json!({
         "project":"plangraph", "id":key.trim_start_matches("plangraph:"),
         "title":contract_text(&format!("Fix CI {} {}",task.head,task.test),200),
