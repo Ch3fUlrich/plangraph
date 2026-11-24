@@ -52,6 +52,7 @@ Audit of what a full run executes (no job was merged or re-wired; that needs a r
 | `file-size` | File size limit (400 lines) | `tools/check_file_size.py` | none |
 | `new-code-lang` | New code is Rust | `tools/check_new_code_lang.py` | none |
 | `changelog-docs` | Changelog fragment and docs | `tools/check_changelog_docs.py`, commit gate | none |
+| `build-spawnd` | Build pg-spawnd once for the run | `cargo build --release -p pg-spawnd` (also builds `ci-flake`); uploads the `pg-spawnd-bin` artifact every pytest shard downloads | none: the only pg-spawnd release build of a run |
 | `pytest` | Python tests, SQLite keeper (shard N of M) | `tests` (sharded), minus `tests/browser`, on the SQLite keeper | none: shards are disjoint; `tests/contract` also runs on Postgres, a different store |
 | `pytest-postgres` | Python tests, Postgres keeper: contract and storage (shard N of 3) | `tests/contract`, `test_keeper_pg_*`, `test_projector_ddl`, `test_worker_claim`, `test_claim_parity_dispatch`, keeper tests that do not name sqlite3 | none: same files as `pytest` run on a different store on purpose |
 | `browser` | UI tests in headless Chromium | `tests/browser` (excluded from `pytest`) | none |
@@ -80,3 +81,22 @@ every Rust `#[test]` fn it added or touched, five runs each on the part's own he
 `--replay-dir` (`python-run-N.log`, `cargo-run-N.log`) with `replay.json`. A test that passed and failed among the runs is printed as
 `entry-set: FLAKY: <test id> (logs <failing log> and <passing log>)`; a test that fails every run, or a run with no test outcome, is `FAIL`.
 Either one makes the entry run fail, so the part is not READY. A stable test clears the entry.
+
+## CI speed and flake handling (tests.yml)
+
+- **One build, shared.** `build-spawnd` builds `pg-spawnd` and `ci-flake` once per run; the SQLite and Postgres pytest shards download the
+  `pg-spawnd-bin` artifact (`.github/actions/fetch-spawnd`) instead of building. Cargo caches (`rust`, `rust-windows`, `rust-worker`,
+  `rust-spike`, `build-spawnd`) are restored on every run with a `restore-keys` prefix and saved only by a push to the default branch, so a
+  pull request starts from main's build and never plants one.
+- **Balanced shards.** Every shard of a suite reads the same pinned map, `.github/pytest-durations-sqlite.json` or
+  `.github/pytest-durations-postgres.json` (`PYTEST_SHARD_DURATIONS_FILE`; `{}` weighs every test 1 s), and each green shard writes its own
+  `PYTEST_SHARD_DURATIONS_OUT` and uploads `durations-<suite>-<shard>`. On a full run `ci-gate` merges them per suite (`ci-flake
+  combine-durations`) into the `pytest-durations-combined` artifact; committing that file is the pin for the next train.
+- **Same-SHA retry.** A red pytest or `cargo test` step stays red. A step after it reruns the failed test ids once on the same SHA
+  (`.github/actions/pytest-retry`, the Rust step) and `ci-flake classify` writes `flake-record.json` (runner, run, attempt, SHA, test ids, both
+  logs) and `flake-items.json` (a priority-10 Keeper item definition per fail-then-pass test) into the `flake-*` artifact and the job summary.
+  Fail-pass and fail-fail are both red; more than 50 failures are not retried.
+- **Quarantine.** Every run pins one UTC timestamp (`select` output `as-of`) and the ledger `.github/pytest-quarantine.json` of the pull
+  request's base (`.github/actions/quarantine-ledger`). The blocking pytest and `cargo test` steps leave out the active entries; shard 0
+  (and the `rust` job) runs only them in a reporting step that never blocks; `ci-gate` publishes the owner and expiry of every entry in its
+  summary. An entry past its expiry blocks again. A Rust entry is `cargo:<package>:<test path>`.
