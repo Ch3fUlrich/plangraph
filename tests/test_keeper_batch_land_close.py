@@ -116,6 +116,15 @@ def test_a_landed_batch_closes_every_part_and_the_batch_item_without_manual_evid
     assert batch.store.verify_integrity() == []
 
 
+def test_a_train_whose_parts_have_seat_runs_records_no_seats_missing_flag(batch):
+    """LE-MERGED-CLOSE-FLAGS-SEATS-MISSING Done-when: every part cited with a seat run closes unflagged, gate off too."""
+    batch.store.require_seats = False
+    land(batch, cited=("A", "B", "C"))
+    result = batch.store.close_merged_auto(batch.p("system"))
+    assert {c["key"] for c in result["closed"]} == {"demo:A", "demo:B", "demo:C", "demo:BATCH"}
+    assert [c["key"] for c in result["closed"] if c.get("flags")] == []
+
+
 def test_a_part_without_a_seat_run_still_refuses_with_no_witness(batch):
     land(batch, cited=("A",))
     result = batch.store.close_merged_auto(batch.p("system"))
