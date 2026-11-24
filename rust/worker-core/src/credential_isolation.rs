@@ -127,7 +127,10 @@ fn toml_string(path: &Path) -> io::Result<String> {
     let text = path
         .to_str()
         .ok_or_else(|| io::Error::other("sandbox path is not UTF-8"))?;
-    serde_json::to_string(text).map_err(io::Error::other)
+    // JSON escapes every control character below U+0020; TOML also forbids a bare DEL.
+    serde_json::to_string(text)
+        .map(|quoted| quoted.replace('\u{7f}', "\\u007f"))
+        .map_err(io::Error::other)
 }
 
 /// Codex `-c` arguments of the isolated profile: read everywhere except `deny`, write to the

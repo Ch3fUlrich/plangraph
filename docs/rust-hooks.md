@@ -85,7 +85,7 @@ less, sed, awk, grep without -l/-c/-q, source, `< file`, `find -exec`, and the l
 it would put a file of `src/plangraph/config/secret_paths.json` plus the Codex auth file into the
 session output. `ls`, `stat`, `test -s` and `wc -c` stay allowed. It reads command text only:
 a script that opens the file itself is out of scope. Register it as printed by
-`tools/hooks/install_hooks.sh --help`; a session that printed a secret writes
+`tools/hooks/install_hooks.sh --help` (host install: plangraph:SECRET-PRINT-GUARD-INSTALL-LIVE-HOSTS; transcript scan: plangraph:SECRET-PRINT-TRANSCRIPT-WATCHDOG); a session that printed a secret writes
 `SECRET-PRINTED <file>` to its status file.
 
 ### Lesson Stop hook

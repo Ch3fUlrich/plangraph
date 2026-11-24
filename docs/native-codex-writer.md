@@ -127,7 +127,7 @@ refused with `sandbox_refused:`. Readiness is only `sandbox_ok` when the effecti
 also denies a fixture file (`credential isolation is not enforced` otherwise).
 `pg-host-readiness --credential-probe` runs that policy against every existing secret path and
 prints `denied <path>` lines, then `ISOLATED` only when the plangraph config directory itself was
-denied; run it on every host after a deploy.
+denied; run it on every host after a deploy (live hosts: plangraph:SANDBOX-CREDENTIAL-PROBE-LIVE-HOSTS; resume and ssh: plangraph:SANDBOX-RESUME-AND-SSH-LIVE-CHECK; keeper account: plangraph:KEEPER-SECRETS-SEPARATE-ACCOUNT).
 Package placement requires a fresh `workspace-write` record from `pg-host-readiness`.
 The probe starts Codex's sandbox and commits in a scratch linked worktree using the
 same sandbox overrides as the writer. On Linux, the writer account's AppArmor policy
