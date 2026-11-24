@@ -530,8 +530,6 @@ class RunsMixin:
         return None
 
     def _merged_open_prs_checked(self, item, decision_id, head, now, require_each_go=False):
-        from . import context_sources
-        from .evidence_types import valid_commit_ref
         git = self._adapter("git")
         project = self._merge_project(item)
         default_head = item.get("_close_head")
