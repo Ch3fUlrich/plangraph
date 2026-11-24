@@ -150,19 +150,25 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
-def pytest_python():
+def pytest_python(review_checkout=None):
     """The first trusted interpreter, in the pre-push hook's order, that really runs `python -m pytest`.
 
-    The configured PREFLIGHT_PYTHON, the service's own venv, then the service checkout's .venv. Nothing
-    inside the review checkout is run or trusted here: it is the code under review. A pytest console
+    The configured PREFLIGHT_PYTHON (a relative setting is read against the service checkout), the
+    service's own venv, then the service checkout's .venv. Nothing inside ``review_checkout`` is run
+    or trusted here, whichever setting names it: that tree is the code under review. A pytest console
     script is neither required (a user-site install has none) nor enough (it may sit beside an
     interpreter that cannot import pytest).
     """
+    service = Path(__file__).resolve().parents[3]
     configured = os.environ.get("PREFLIGHT_PYTHON")
-    candidates = [Path(configured).expanduser()] if configured else []
-    candidates += [Path(sys.prefix) / "bin/python", Path(__file__).resolve().parents[3] / ".venv/bin/python"]
+    candidates = [service / Path(configured).expanduser()] if configured else []
+    candidates += [Path(sys.prefix) / "bin/python", service / ".venv/bin/python"]
+    review = Path(review_checkout).resolve() if review_checkout else None
     for python in candidates:
+        python = Path(os.path.abspath(python))
         if not os.access(python, os.X_OK):
+            continue
+        if review and (python.is_relative_to(review) or python.resolve().is_relative_to(review)):
             continue
         try:  # from the interpreter's own directory with safe-path, so no cwd module can shadow pytest
             ran = subprocess.run([str(python), "-m", "pytest", "--version"], capture_output=True, timeout=30,
@@ -175,22 +181,23 @@ def pytest_python():
     return None
 
 
-def pytest_bin_dir():
+def pytest_bin_dir(review_checkout=None):
     """The bin directory of ``pytest_python``, or None."""
-    python = pytest_python()
+    python = pytest_python(review_checkout)
     return python.parent if python else None
 
 
-def review_tool_path(path, home, shim_dir=None):
+def review_tool_path(path, home, shim_dir=None, review_checkout=None):
     """``path`` with a pytest interpreter first (so `python -m pytest` works) and ~/.cargo/bin last.
 
-    ``home`` is the seat's launching user's home, read before a seat swaps HOME for its own dir.
+    ``home`` is the seat's launching user's home, read before a seat swaps HOME for its own dir;
+    ``review_checkout`` is the tree under review, whose interpreters are never run.
     The interpreter's directory is placed first even when a later PATH entry holds it, so a bare
     system python never shadows it. With ``shim_dir`` the seat's `python` and `python3` are
     wrappers that exec exactly the interpreter that passed validation, never a sibling.
     """
     path = path or os.defpath
-    if python := pytest_python():
+    if python := pytest_python(review_checkout):
         front = [str(python.parent)]
         if shim_dir:
             Path(shim_dir).mkdir(parents=True, exist_ok=True)
@@ -238,7 +245,7 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
                PYTEST_ADDOPTS="-p no:cacheprovider", CARGO_NET_OFFLINE="true",
                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     # The installed service's venv is outside the disposable review clone.
-    if bin_dir := pytest_bin_dir():
+    if bin_dir := pytest_bin_dir(worktree):
         env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", os.defpath)
     checkout = Path(worktree or Path.cwd()).resolve()
     hook = shlex.join([sys.executable, "-I", str(Path(__file__).resolve()),

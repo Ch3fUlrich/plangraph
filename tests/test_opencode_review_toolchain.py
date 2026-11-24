@@ -242,3 +242,48 @@ def test_launch_preparation_never_runs_the_review_checkout_interpreter(tmp_path,
                                    role='review', cwd=str(checkout), dry_run=True, prepare_launch=True))
     assert str(checkout / '.venv/bin') not in runner._child_envs[job.job_id]['PATH'].split(os.pathsep)
     assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
+@pytest.mark.parametrize('how', ['absolute', 'symlink'])
+def test_a_configured_interpreter_inside_the_review_checkout_is_never_run(tmp_path, monkeypatch, how):
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
+    marker = tmp_path / 'checkout-python-ran'
+    checkout = tmp_path / 'checkout'
+    inside = _interpreter(checkout / '.venv/bin', f'#!/bin/sh\ntouch {marker}\nexit 0\n')
+    configured = inside
+    if how == 'symlink':  # a path outside the checkout that resolves into it
+        configured = tmp_path / 'elsewhere/python'
+        configured.parent.mkdir()
+        configured.symlink_to(inside)
+    (tmp_path / 'service/bin').mkdir(parents=True)
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
+    monkeypatch.setenv('PREFLIGHT_PYTHON', str(configured))
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / 'source.db'
+    source_store(source)
+    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
+    runner = SpawnerRunner(default_cwd=str(checkout))
+    runner._child_envs = _LaunchOwned()
+    job = asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
+                                   role='review', cwd=str(checkout), dry_run=True, prepare_launch=True))
+    assert not marker.exists()
+    assert str(checkout / '.venv/bin') not in runner._child_envs[job.job_id]['PATH'].split(os.pathsep)
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
+def test_a_relative_preflight_python_is_read_against_the_service_checkout(tmp_path, monkeypatch):
+    from plangraph.routing_support import claude_seat
+    service = tmp_path / 'svc'
+    interpreter = _interpreter(service / 'tools/py')
+    monkeypatch.setattr(claude_seat, '__file__', str(service / 'a/b/c/claude_seat.py'))
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'nothing'))
+    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
+    monkeypatch.setenv('PREFLIGHT_PYTHON', 'tools/py/python')
+    monkeypatch.chdir(tmp_path)  # not the service dir: the setting must not depend on the cwd
+    assert claude_seat.pytest_python() == interpreter
+    path = claude_seat.review_tool_path('/usr/bin', str(tmp_path), str(tmp_path / 'job/bin'))
+    assert str(interpreter) in (tmp_path / 'job/bin/python').read_text()
+    ran = subprocess.run([shutil.which('python3', path=path), '-m', 'pytest', '--version'], capture_output=True, text=True)
+    assert ran.returncode == 0, ran.stderr

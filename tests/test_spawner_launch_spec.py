@@ -130,7 +130,8 @@ def test_opencode_review_resolves_the_harness_on_the_launch_path_not_the_interpr
         planted.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n' if name == 'python' else '#!/bin/sh\n')
         planted.chmod(0o755)
     monkeypatch.setenv('PREFLIGHT_PYTHON', str(tmp_path / 'interp/bin/python'))
-    request_data.update(role='review', leg={'id': 'opencode-glm-5.3-flash-free'})
+    (tmp_path / 'checkout').mkdir()  # the interpreter dir is outside the review checkout
+    request_data.update(role='review', leg={'id': 'opencode-glm-5.3-flash-free'}, cwd=str(tmp_path / 'checkout'))
     admitted_on = []
 
     async def admission(row, *, env=None):
