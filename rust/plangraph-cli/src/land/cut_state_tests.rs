@@ -103,9 +103,11 @@ fn a_ref_at_the_name_an_old_hold_ref_would_take_survives_the_cut() {
     std::fs::write(
         &stub,
         "import os, subprocess, sys\n\
-         head = sys.argv[sys.argv.index('--head') + 1]\n\
-         ref = 'refs/plangraph/cut-hold/%d-%s' % (os.getppid(), head)\n\
-         subprocess.run(['git', '-C', os.environ['SEED_REPO'], 'update-ref', ref, os.environ['SEED_BASE']], check=True)\n",
+         GATE_PATHS = ()\n\
+         if __name__ == '__main__':\n\
+         \x20   head = sys.argv[sys.argv.index('--head') + 1]\n\
+         \x20   ref = 'refs/plangraph/cut-hold/%d-%s' % (os.getppid(), head)\n\
+         \x20   subprocess.run(['git', '-C', os.environ['SEED_REPO'], 'update-ref', ref, os.environ['SEED_BASE']], check=True)\n",
     )
     .unwrap();
     let python_seeding = || {

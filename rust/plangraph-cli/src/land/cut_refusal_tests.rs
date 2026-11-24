@@ -18,6 +18,11 @@ fn real_gate() -> Fx {
     fx_with_base_gate(&std::fs::read_to_string(gate()).unwrap())
 }
 
+/// A stand-in commit gate: it lists no gate path and runs `body` when it is run as a script.
+fn stub_gate(body: &str) -> String {
+    format!("import sys\nGATE_PATHS = ()\nif __name__ == '__main__':\n    {body}\n")
+}
+
 pub(super) fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|a| a.to_string()).collect()
 }
@@ -74,7 +79,7 @@ fn run_cut(fx: &Fx, branch: &str, commit: &str, extra: &[&str]) -> Result<Vec<St
 
 #[test]
 fn cut_uses_the_base_gate() {
-    let fx = fx_with_base_gate("import sys\nprint('BASE-GATE', *sys.argv[1:])\nsys.exit(1)\n");
+    let fx = fx_with_base_gate(&stub_gate("print('BASE-GATE', *sys.argv[1:]); sys.exit(1)"));
     let src = fx.source("a.txt", TRAILERS);
     let base = fx.base.clone();
     // The working copy holds a passing gate.
@@ -91,7 +96,7 @@ fn cut_uses_the_base_gate() {
     let err = run_cut(&fx, "slice/a", &src, &["--gate", "tools/ci_commit_gate.py"]).unwrap_err();
     assert!(err.contains("--gate is not accepted"), "{err}");
     // An abbreviated input is recorded as the full id.
-    let ok = fx_with_base_gate("import sys\nsys.exit(0)\n");
+    let ok = fx_with_base_gate(&stub_gate("sys.exit(0)"));
     let src = ok.source("a.txt", TRAILERS);
     run_cut(&ok, "slice/a", &src[..12], &[]).unwrap();
     assert!(ok
@@ -206,76 +211,96 @@ fn a_gate_path_that_is_not_utf8_is_refused() {
 }
 
 #[test]
-fn a_merge_commit_that_brings_in_a_gate_path_is_refused_by_the_check() {
+fn a_merge_commit_that_adds_a_gate_path_itself_is_refused_by_the_check() {
     let fx = real_gate();
-    let flow = fx.source(".github/workflows/w.yml", TRAILERS);
+    // Both parents are clean; only the merge commit's own result carries the workflow file.
+    let side = fx.source("a.txt", TRAILERS);
     g(fx.p(), &["checkout", "-q", "-b", "hand", &fx.base]);
+    std::fs::write(fx.p().join("b.txt"), "y\n").unwrap();
+    g(fx.p(), &["add", "-A"]);
+    g(fx.p(), &["commit", "-q", "-m", &format!("b\n\n{TRAILERS}")]);
+    g(fx.p(), &["merge", "-q", "--no-ff", "--no-commit", &side]);
+    std::fs::create_dir_all(fx.p().join(".github/workflows")).unwrap();
+    std::fs::write(fx.p().join(".github/workflows/w.yml"), "x\n").unwrap();
+    g(fx.p(), &["add", "-A"]);
     g(
         fx.p(),
-        &[
-            "merge",
-            "-q",
-            "--no-ff",
-            "-m",
-            &format!("merge\n\n{TRAILERS}"),
-            &flow,
-        ],
+        &["commit", "-q", "-m", &format!("merge\n\n{TRAILERS}")],
     );
     let merge = g(fx.p(), &["rev-parse", "HEAD"]);
     g(fx.p(), &["checkout", "-q", "main"]);
     let err = run_check(&fx, &merge).unwrap_err();
-    assert!(err.contains("edits the gate path"), "{err}");
+    assert!(
+        err.contains(&merge) && err.contains("edits the gate path"),
+        "{err}"
+    );
 }
 
-/// A well-formed grant file for the very commits, however it is passed, enables nothing.
+#[test]
+fn a_path_the_pinned_gate_matches_by_wildcard_is_refused_before_any_pick() {
+    let fx = Fx::new();
+    // GATE_PATHS has 'tools/ci_commit_gate.py*': a backup copy matches the gate but not the router's list.
+    let src = fx.source("tools/ci_commit_gate.py.bak", TRAILERS);
+    let err = fx.cut(&[src]).unwrap_err();
+    assert!(
+        err.contains("tools/ci_commit_gate.py.bak") && err.contains("grants are not accepted yet"),
+        "{err}"
+    );
+    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
+    assert_eq!(fx.worktrees(), 1);
+}
+
+/// A well-formed grant file for the very commits, however it is passed, enables nothing: each forbidden flag
+/// is added to an otherwise valid invocation and the flag-specific refusal is asserted.
 #[test]
 fn a_well_formed_grant_file_changes_nothing() {
     let fx = real_gate();
-    let flow = fx.source(
-        ".github/workflows/w.yml",
-        &format!("{TRAILERS}\nGate-Edit: D-5"),
-    );
+    let plain = fx.source("a.txt", TRAILERS);
     let grants = fx.p().join(".git/grants.json");
     std::fs::write(
         &grants,
-        format!(r#"[{{"d_id":"D-5","prefix":".github/workflows/","head":"{flow}"}}]"#),
+        format!(r#"[{{"d_id":"D-5","prefix":"a.txt","head":"{plain}"}}]"#),
     )
     .unwrap();
     let file = grants.to_str().unwrap();
-    for extra in [
-        vec!["--grants", file],
-        vec!["--gate-edits", &format!("{flow}=D-5")],
-    ] {
-        let err = run_cut(&fx, "slice/a", &flow, &extra).unwrap_err();
+    let edits = format!("{plain}=D-5");
+    for (flag, value) in [("grants", file), ("gate-edits", edits.as_str())] {
+        let err = run_cut(&fx, "slice/a", &plain, &[&format!("--{flag}"), value]).unwrap_err();
         assert!(
-            err.contains("grants are not accepted yet: LAND-CUT-GRANT-RECORD-PRODUCER"),
+            err.contains(&format!(
+                "--{flag}: grants are not accepted yet: LAND-CUT-GRANT-RECORD-PRODUCER"
+            )),
             "{err}"
         );
         assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
     }
-    let hand = hand_cut(&fx, ".github/workflows/w.yml", "x\n", "Gate-Edit: D-5");
-    let a = args(&[
-        "cut-check",
-        "--repo",
-        fx.p().to_str().unwrap(),
-        "--base",
-        &fx.base,
-        "--head",
-        &hand,
-        "--grants",
-        file,
-    ]);
-    let err = super::cli::run_inner(fx.p(), &a, &python).unwrap_err();
+    // The same invocation without the flag cuts.
+    run_cut(&fx, "slice/a", &plain, &[]).unwrap();
+    let hand = hand_cut(&fx, "b.txt", "x\n", "");
+    let args_for = |extra: &[&str]| {
+        let mut a = args(&[
+            "cut-check",
+            "--repo",
+            fx.p().to_str().unwrap(),
+            "--base",
+            &fx.base,
+            "--head",
+            &hand,
+        ]);
+        a.extend(extra.iter().map(|e| e.to_string()));
+        super::cli::run_inner(fx.p(), &a, &python)
+    };
+    args_for(&[]).unwrap();
+    let err = args_for(&["--grants", file]).unwrap_err();
     assert!(
-        err.contains("grants are not accepted yet: LAND-CUT-GRANT-RECORD-PRODUCER"),
+        err.contains("--grants: grants are not accepted yet"),
         "{err}"
     );
-    // Without the flag the same range is refused for its gate path and its Gate-Edit line.
-    assert!(run_check(&fx, &hand)
-        .unwrap_err()
-        .contains("grants are not accepted yet"));
-    // And the file was not read: a malformed one gives the same refusal.
+    // The file is not read: a malformed one gives the same refusal.
     std::fs::write(&grants, "not json").unwrap();
-    let err = run_cut(&fx, "slice/a", &flow, &["--grants", file]).unwrap_err();
-    assert!(err.contains("grants are not accepted yet"), "{err}");
+    let err = args_for(&["--grants", file]).unwrap_err();
+    assert!(
+        err.contains("--grants: grants are not accepted yet"),
+        "{err}"
+    );
 }

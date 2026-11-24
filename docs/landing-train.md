@@ -144,8 +144,8 @@ afterwards is a warning line, never a failed cut. A merge commit as a source is 
 No grant is accepted yet. Before the first pick, `cut` refuses a source, and `land-train cut-check --repo DIR --base REV --head REV`
 refuses a commit of a hand-cut range, that carries a `Gate-Edit:` line anywhere in its message (also where git's trailer parser
 misses it; lines are split like the gate's Python `splitlines()`, so CR, FF, U+2028 and others count) or that changes a gate path
-(the operator-class list of the GO verifier, read NUL-delimited and, for a merge, against every parent). The pinned gate then
-runs as the backstop for its own, wider list of gate paths. `--grants` and `--gate-edits` are refused with
+(`GATE_PATHS` read from the pinned gate script itself, so its wildcard rules apply, plus the operator-class list of the GO verifier;
+paths are read NUL-delimited and, for a merge, against every parent). The pinned gate then runs as the backstop. `--grants` and `--gate-edits` are refused with
 `grants are not accepted yet: LAND-CUT-GRANT-RECORD-PRODUCER`: the producer of a protected pre-cut grant record is a separate
-slice, and until it lands a gate-path change is cut by an operator by hand, never by this verb. `cut-check` also refuses a
+slice. Interim exception, the same as in the batch card (R-batch-10): until it lands, an operator cuts a gate-path or `Gate-Edit` range by hand (without `-x`), never with this verb. `cut-check` also refuses a
 `cherry-pick -x` line.
