@@ -22,6 +22,7 @@ pub mod disk_hygiene;
 #[cfg(target_os = "linux")]
 pub mod disk_pressure;
 pub mod disk_runtime;
+#[cfg(target_os = "linux")]
 pub mod disk_watermark;
 pub mod events;
 #[cfg(all(unix, any(test, feature = "test-support")))]

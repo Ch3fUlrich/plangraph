@@ -1,9 +1,11 @@
+#[cfg(target_os = "linux")]
+use pg_worker_core::disk_pressure;
 use pg_worker_core::{
     disk_hygiene::{self, Guards, Report, Thresholds},
-    disk_pressure, disk_runtime, sweep_facts, work_disks,
+    disk_runtime, sweep_facts, work_disks,
 };
 use std::{
-    env, fs, io,
+    env, io,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -305,46 +307,92 @@ fn execute_with(
     }
     // Below the floor, idle Cargo targets go largest first; every kept one carries a reason,
     // and a run that frees nothing there fails with the largest kept paths named.
-    let mut kept = Vec::new();
-    let mut below_floor = false;
-    let trees: Vec<PathBuf> = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"])?
+    #[cfg(target_os = "linux")]
+    {
+        let roots: Vec<_> = available
+            .iter()
+            .map(|(root, space)| {
+                let floor = thresholds.for_filesystem(space.total).cleanup_free_bytes;
+                (root.clone(), space.free, floor)
+            })
+            .collect();
+        let cache = shared.first().and_then(|primary| primary.parent());
+        reclaim_below_floor(
+            &repo,
+            &roots,
+            &scratch,
+            cache,
+            &guards,
+            &refs,
+            apply,
+            &mut report,
+        )?;
+    }
+    Ok(report)
+}
+#[cfg(target_os = "linux")]
+fn device(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|meta| meta.dev())
+}
+
+/// One reclaim per filesystem: roots sharing a device share one free-space figure, so
+/// cleanup that already restored the floor for one root ends the work for the others.
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+fn reclaim_below_floor(
+    repo: &Path,
+    roots: &[(PathBuf, u64, u64)],
+    scratch: &[PathBuf],
+    cache: Option<&Path>,
+    guards: &Guards,
+    refs: &[PathBuf],
+    apply: bool,
+    report: &mut Report,
+) -> io::Result<()> {
+    let trees: Vec<PathBuf> = disk_hygiene::git(repo, &["worktree", "list", "--porcelain"])?
         .lines()
         .filter_map(|line| line.strip_prefix("worktree "))
         .skip(1)
         .filter_map(|path| Path::new(path).canonicalize().ok())
         .collect();
-    for (root, space) in &available {
-        let floor = thresholds.for_filesystem(space.total).cleanup_free_bytes;
-        if space.free >= floor {
-            continue;
+    let mut devices = std::collections::BTreeMap::<u64, Vec<&(PathBuf, u64, u64)>>::new();
+    for row in roots {
+        if row.1 < row.2 {
+            if let Some(dev) = device(&row.0) {
+                devices.entry(dev).or_default().push(row);
+            }
         }
-        below_floor = true;
-        let here = |path: &Path| same_device(path, root);
+    }
+    let mut kept = Vec::new();
+    let below_floor = !devices.is_empty();
+    for (dev, rows) in devices {
+        let free = rows.iter().map(|row| row.1).min().unwrap_or(0);
+        let floor = rows.iter().map(|row| row.2).max().unwrap_or(0);
+        let under = |tree: &PathBuf| rows.iter().any(|row| tree.starts_with(&row.0));
         let mut candidates = disk_pressure::worktree_targets(
             &trees
                 .iter()
-                .filter(|tree| tree.starts_with(root))
+                .filter(|tree| under(tree))
                 .cloned()
                 .collect::<Vec<_>>(),
         );
-        for path in scratch.iter().filter(|path| here(path)) {
+        for path in scratch.iter().filter(|path| device(path) == Some(dev)) {
             candidates.extend(disk_pressure::scratch_targets(path));
         }
-        if let Some(cache) = shared.first().and_then(|primary| primary.parent()) {
-            if here(cache) {
-                candidates.extend(disk_pressure::fast_check_targets(cache));
-            }
+        if let Some(cache) = cache.filter(|cache| device(cache) == Some(dev)) {
+            candidates.extend(disk_pressure::fast_check_targets(cache));
         }
         let mut seen = std::collections::BTreeSet::new();
         candidates.retain(|c| seen.insert(c.target.clone()));
         kept.extend(disk_pressure::reclaim(
             &candidates,
-            &guards,
-            &refs,
-            (space.free, floor),
+            guards,
+            refs,
+            (free, floor),
             SystemTime::now(),
             apply,
-            &mut report,
+            report,
         ));
     }
     if below_floor && apply && report.freed_bytes == 0 {
@@ -354,11 +402,7 @@ fn execute_with(
         report.alarm = true;
         report.error.get_or_insert(alert);
     }
-    Ok(report)
-}
-fn same_device(a: &Path, b: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    matches!((fs::metadata(a), fs::metadata(b)), (Ok(a), Ok(b)) if a.dev() == b.dev())
+    Ok(())
 }
 fn run() -> io::Result<()> {
     let args: Vec<_> = env::args().skip(1).collect();
@@ -622,5 +666,35 @@ mod tests {
             "{error}"
         );
         assert!(report.alarm);
+    }
+
+    #[test]
+    fn roots_on_one_filesystem_reclaim_the_deficit_once() {
+        let (fixture, repo, root, _args) = pressure_fixture();
+        let canonical = root.canonicalize().unwrap();
+        // Both roots sit on one filesystem and each sees the same 3000-byte deficit; one
+        // 4098-byte target restores the floor, so the second root's target must stay.
+        let rows = vec![
+            (canonical.clone(), 0, 3000),
+            (fixture.path().canonicalize().unwrap(), 0, 3000),
+        ];
+        let mut report = Report::default();
+        reclaim_below_floor(
+            &repo,
+            &rows,
+            &[],
+            None,
+            &Guards::default(),
+            &[],
+            true,
+            &mut report,
+        )
+        .unwrap();
+        let left = ["tree-a", "tree-b"]
+            .iter()
+            .filter(|n| canonical.join(n).join("rust/target").exists())
+            .count();
+        assert_eq!(left, 1, "{report:?}");
+        assert!(report.freed_bytes > 0 && report.freed_bytes < 2 * 4098);
     }
 }
