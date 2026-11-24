@@ -93,6 +93,8 @@ def test_stale_source_preserves_non_launch_tools(tmp_path, monkeypatch):
     identity = Mock(return_value=OLD)
     server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
     identity.return_value = NEW
+    # Route would reload the planner code on a moved head (test_spawner_mcp_reload); here the stale server keeps its service.
+    monkeypatch.setattr(server, 'refresh_route_code', lambda: None)
     spawn = AsyncMock(return_value={'status': 'dry_run'})
     monkeypatch.setattr(server.service, 'spawn', spawn)
     monkeypatch.setattr(server.service, 'route', lambda *a, **kw: Mock(to_dict=lambda: {'plan': 'ok'}))
