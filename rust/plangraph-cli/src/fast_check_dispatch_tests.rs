@@ -5,6 +5,7 @@ fn host(name: &str, floor: u64) -> Candidate {
     Candidate {
         name: name.into(),
         route: None,
+        wsl_distro: None,
         cwd: ".".into(),
         mem_floor_mb: floor,
     }
