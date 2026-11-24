@@ -126,6 +126,18 @@ impl Host {
         );
         let mut command = self.command(codex);
         crate::native_writer_sandbox::apply_env(&mut command, std::env::vars_os(), &self.tool_path);
+        #[cfg(target_os = "linux")]
+        {
+            // `cargo` resolves to a link to this executable: one shared lease per Cargo command.
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let shim = pg_worker_core::cargo_command_lease::install_shim(
+                &directory.join("cargo-shim"),
+                &exe,
+            )
+            .map_err(|e| format!("cargo shim: {e}"))?;
+            let dir = shim.parent().unwrap_or(directory);
+            command.env("PATH", format!("{}:{}", dir.display(), self.tool_path));
+        }
         // Exec-level flags apply to fresh and resumed turns, including saved sessions
         // whose sandbox permissions were built from an earlier invocation.
         command
