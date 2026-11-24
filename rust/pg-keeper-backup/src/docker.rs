@@ -3,7 +3,7 @@
 //! put on a command line, in a log or in an error message. The container runs with
 //! `--log-driver none`, so the docker daemon keeps no copy of its output either.
 
-use crate::pg::{check_ident, read_archive_seq, redact, Pg, ScratchState};
+use crate::pg::{check_ident, read_archive_seq, redact, LiveState, Pg, ScratchState};
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, Stdio};
@@ -118,14 +118,20 @@ impl Docker {
 }
 
 impl Pg for Docker {
-    fn max_seq(&self, schema: &str) -> Result<u64, String> {
+    fn live_state(&self, schema: &str) -> Result<LiveState, String> {
+        let schema = check_ident(schema)?;
         let sql = format!(
-            "SELECT COALESCE(max(seq), 0) FROM \"{}\".events",
-            check_ident(schema)?
+            "SELECT COALESCE(max(seq), 0), \
+             (SELECT count(*) FROM information_schema.tables \
+              WHERE table_schema = '{schema}' AND table_type = 'BASE TABLE') \
+             FROM \"{schema}\".events"
         );
-        self.query(None, &sql)?
-            .parse()
-            .map_err(|_| "max(seq) is not a number".to_owned())
+        let text = self.query(None, &sql)?;
+        let (seq, tables) = text.split_once('|').ok_or("live state")?;
+        Ok(LiveState {
+            seq: seq.parse().map_err(|_| "max(seq) is not a number")?,
+            tables: tables.parse().map_err(|_| "table count is not a number")?,
+        })
     }
 
     fn dump(&self, schema: &str, out: &mut dyn Write) -> Result<(), String> {

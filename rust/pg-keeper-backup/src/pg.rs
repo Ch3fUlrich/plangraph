@@ -10,9 +10,18 @@ pub struct ScratchState {
     pub max_seq: u64,
 }
 
+/// What the live keeper schema holds, read in one SELECT.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LiveState {
+    /// Highest `events.seq`.
+    pub seq: u64,
+    /// Base tables of the schema in `information_schema.tables`.
+    pub tables: usize,
+}
+
 pub trait Pg {
-    /// Highest `events.seq` of the live keeper schema.
-    fn max_seq(&self, schema: &str) -> Result<u64, String>;
+    /// Highest `events.seq` and the table count of the live keeper schema, one read.
+    fn live_state(&self, schema: &str) -> Result<LiveState, String>;
     /// Stream a custom-format `pg_dump` of the schema into `out`.
     fn dump(&self, schema: &str, out: &mut dyn Write) -> Result<(), String>;
     /// `pg_restore -l` of a dump file.

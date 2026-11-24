@@ -17,16 +17,17 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 pub const KEEP: usize = 14;
-pub const TABLES: usize = 43;
 
 pub struct DumpOutcome {
     pub entry: ledger::Entry,
     pub pruned: Vec<String>,
 }
 
-/// Restore-test settings for a dump run: expected table count and the seq floor.
+/// Restore-test settings for a dump run: the seq floor and an optional table count.
+/// Without `tables` the run expects the count it read from the live catalog together
+/// with the dump's seq.
 pub struct Verify {
-    pub tables: usize,
+    pub tables: Option<usize>,
     pub min_seq: u64,
 }
 
@@ -48,7 +49,8 @@ pub fn run_dump(
 ) -> Result<DumpOutcome, String> {
     check_ident(schema)?;
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let seq = pg.max_seq(schema)?;
+    let live = pg.live_state(schema)?;
+    let seq = live.seq;
     let name = names::dump_name(seq, now);
     let part = dir.join(format!(".{name}.part"));
     let file = OpenOptions::new()
@@ -73,6 +75,7 @@ pub fn run_dump(
             (sha256, size),
             schema,
             verify,
+            live.tables,
         ),
         Err(error) => Err(error),
     };
@@ -103,13 +106,23 @@ fn publish(
     (sha256, size): (String, u64),
     schema: &str,
     verify: Option<&Verify>,
+    live_tables: usize,
 ) -> Result<Published, String> {
     fs::File::open(part)
         .and_then(|f| f.sync_all())
         .and_then(|()| fs::set_permissions(part, fs::Permissions::from_mode(0o600)))
         .map_err(|e| e.to_string())?;
     let failure = match verify {
-        Some(v) => check_dump(pg, part, name, seq, schema, v.tables, v.min_seq).err(),
+        Some(v) => check_dump(
+            pg,
+            part,
+            name,
+            seq,
+            schema,
+            Some(v.tables.unwrap_or(live_tables)),
+            v.min_seq,
+        )
+        .err(),
         None => None,
     };
     let verified = match (verify, &failure) {
@@ -160,11 +173,13 @@ pub struct RestoreReport {
 }
 
 /// Refuse a dump older than `min_seq`; list it; load it into a scratch database.
+/// `expected_tables` of `None` reads the live catalog's table count (read-only), after
+/// the seq floor has refused an old dump.
 pub fn restore_test(
     pg: &dyn Pg,
     dump: &Path,
     schema: &str,
-    expected_tables: usize,
+    expected_tables: Option<usize>,
     min_seq: u64,
 ) -> Result<RestoreReport, String> {
     check_ident(schema)?;
@@ -184,12 +199,16 @@ fn check_dump(
     name: &str,
     seq: u64,
     schema: &str,
-    expected_tables: usize,
+    expected_tables: Option<usize>,
     min_seq: u64,
 ) -> Result<RestoreReport, String> {
     if seq < min_seq {
         return Err(format!("{name}: seq {seq} is older than {min_seq}; keeper state that old is never restored (D-5796)"));
     }
+    let expected_tables = match expected_tables {
+        Some(n) => n,
+        None => pg.live_state(schema)?.tables,
+    };
     let tables = count_tables(&pg.list(dump)?, schema);
     if tables != expected_tables {
         return Err(format!(
