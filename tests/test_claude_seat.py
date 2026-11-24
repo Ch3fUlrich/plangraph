@@ -340,7 +340,7 @@ def test_a_symlinked_tmpdir_is_followed_for_a_target_that_does_not_exist_yet(tmp
 
 def test_the_runners_cleanup_takes_a_review_slots_lock_file_and_leaves_other_dirs_plain(tmp_path):
     from plangraph.spawner.host_ready import _cargo_lease_for
-    from plangraph.spawner.review_slot import remove_run_dir
+    from plangraph.spawner.host_ready_source import remove_run_dir
 
     slot = tmp_path / "cargo-target-pool" / "slot-review-job9"
     slot.mkdir(parents=True)

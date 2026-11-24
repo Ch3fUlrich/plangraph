@@ -173,7 +173,7 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     target = Path(review_target).resolve() if review_target else None
     slot = None
     if target is None:
-        from plangraph.spawner.review_slot import review_cargo_slot
+        from plangraph.spawner.host_ready_source import review_cargo_slot
         slot = review_cargo_slot(job_id, leases).resolve()
     scratch = Path(mkdtemp(prefix="plangraph-claude-review-",
                            dir=target.parent if target else slot)).resolve()
