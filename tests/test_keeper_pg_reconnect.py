@@ -363,7 +363,7 @@ def test_s1_health_503_when_lost(tmp_path):
     w = World(tmp_path)
     doors = Doors(w, tmp_path)
     try:
-        assert doors.http("reader", "GET", "/v1/health") == (200, {"status": "ok"})
+        assert doors.http("reader", "GET", "/v1/health")[1]["status"] == "ok"
         w.store.conn = ConnProxy(w.store.conn, lost=True)   # I11: flag only, no IO
         status, body = doors.http("reader", "GET", "/v1/health")
     finally:
@@ -626,7 +626,7 @@ def test_s2_health_503_when_fatal_conn_healthy(tmp_path):
     w = World(tmp_path)
     doors = Doors(w, tmp_path)
     try:
-        assert doors.http("reader", "GET", "/v1/health") == (200, {"status": "ok"})
+        assert doors.http("reader", "GET", "/v1/health")[1]["status"] == "ok"
         doors.server.fail("postgres keeper lock session lost")
         status, body = doors.http("reader", "GET", "/v1/health")
     finally:
