@@ -59,3 +59,5 @@ from `~/.config/plangraph/plangraph.env` and the role-specific configuration
 from `state-shadow/ROLE.env`. The role defaults use `state-shadow/ROLE.json`
 and `state-shadow/ROLE.token`. Supply the authorized sources and token file
 for each role before starting the instances.
+
+The cutover of a role to this wait is designed as an executable model: [session-cutover-model.md](session-cutover-model.md).
