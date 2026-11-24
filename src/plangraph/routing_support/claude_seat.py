@@ -150,30 +150,56 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
-def pytest_bin_dir(cwd=None):
-    """The bin directory holding pytest, in the pre-push hook's order.
+def pytest_python(cwd=None):
+    """The first interpreter, in the pre-push hook's order, that really runs `python -m pytest`.
 
-    The review checkout's .venv, the configured PREFLIGHT_PYTHON, the service's own venv,
-    then the service checkout's .venv.
+    The review checkout's .venv, the configured PREFLIGHT_PYTHON, the service's own venv, then the
+    service checkout's .venv. A pytest console script is not required (a user-site install has
+    none) and one is not enough (it may sit beside an interpreter that cannot import pytest).
     """
     configured = os.environ.get("PREFLIGHT_PYTHON")
-    candidates = [Path(cwd) / ".venv/bin"] if cwd else []
+    candidates = [Path(cwd) / ".venv/bin/python"] if cwd else []
     if configured:
-        candidates.append(Path(configured).expanduser().parent)
-    candidates += [Path(sys.prefix) / "bin", Path(__file__).resolve().parents[3] / ".venv/bin"]
-    return next((bin_dir for bin_dir in candidates if (bin_dir / "pytest").is_file()), None)
+        candidates.append(Path(configured).expanduser())
+    candidates += [Path(sys.prefix) / "bin/python", Path(__file__).resolve().parents[3] / ".venv/bin/python"]
+    for python in candidates:
+        if not os.access(python, os.X_OK):
+            continue
+        try:
+            ran = subprocess.run([str(python), "-m", "pytest", "--version"], capture_output=True, timeout=30,
+                                 stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if ran.returncode == 0:
+            return python
+    return None
 
 
-def review_tool_path(path, home, cwd=None):
-    """``path`` with a pytest venv first (so `python -m pytest` works) and ~/.cargo/bin last.
+def pytest_bin_dir(cwd=None):
+    """The bin directory of ``pytest_python``, or None."""
+    python = pytest_python(cwd)
+    return python.parent if python else None
+
+
+def review_tool_path(path, home, cwd=None, shim_dir=None):
+    """``path`` with a pytest interpreter first (so `python -m pytest` works) and ~/.cargo/bin last.
 
     ``home`` is the seat's launching user's home, read before a seat swaps HOME for its own dir;
-    ``cwd`` is the review checkout. The venv is placed first even when a later PATH entry holds
-    the same directory, so a bare system python never shadows it.
+    ``cwd`` is the review checkout. The interpreter's directory is placed first even when a later
+    PATH entry holds it, so a bare system python never shadows it. An interpreter whose directory
+    has no executable named ``python`` (a system python3) gets one in ``shim_dir``.
     """
     path = path or os.defpath
-    if venv := pytest_bin_dir(cwd):
-        path = os.pathsep.join([str(venv), *(d for d in path.split(os.pathsep) if d != str(venv))])
+    if python := pytest_python(cwd):
+        venv = python.parent
+        front = [str(venv)]
+        if not os.access(venv / "python", os.X_OK) and shim_dir:
+            Path(shim_dir).mkdir(parents=True, exist_ok=True)
+            link = Path(shim_dir) / "python"
+            link.unlink(missing_ok=True)
+            link.symlink_to(python)
+            front.insert(0, str(shim_dir))
+        path = os.pathsep.join([*front, *(d for d in path.split(os.pathsep) if d not in front)])
     cargo_bin = Path(home or Path.home()) / ".cargo/bin"
     if not shutil.which("cargo", path=path) and (cargo_bin / "cargo").is_file():
         path = path + os.pathsep + str(cargo_bin)

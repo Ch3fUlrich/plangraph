@@ -192,12 +192,15 @@ async def _await_completion(runner, job, deadline):
         await asyncio.sleep(0.02)
 
 
-def probe_quota_line(leg, review_mode, exit_code, stdout, stderr):
+def probe_quota_line(leg, review_mode, exit_code, stdout, stderr, refusal=None):
     """The limit line of a failed probe: a review probe's (agy, OpenCode), and any Codex probe's (its account limit)."""
     if leg.harness == 'opencode' and review_mode:
-        # An OpenCode run is read the way a real run's exit is: without its progress lines.
+        # An OpenCode run is read the way a real run's exit is: without its progress lines. The display
+        # output keeps only a partial answer that precedes the error frame, so the runner's confirmed
+        # refusal (a refused dispatch, exit 7) is the evidence then.
         from .exit_outcome import without_progress
-        return harness_limit_line(exit_code, without_progress(stdout), without_progress(stderr))
+        return (harness_limit_line(exit_code, without_progress(stdout), without_progress(stderr))
+                or (refusal if exit_code == 7 and isinstance(refusal, str) else None))
     if leg.harness == 'codex' or (review_mode and leg.harness == 'agy'):
         return harness_limit_line(exit_code, stdout, stderr)
     return None
@@ -332,7 +335,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
             if not leaked and diagnostic is not None:
                 quota = probe_quota_line(leg, review_mode, getattr(diagnostic, 'exit_code', None),
-                                         getattr(diagnostic, 'stdout', '') or '', stderr)
+                                         getattr(diagnostic, 'stdout', '') or '', stderr,
+                                         getattr(diagnostic, 'refusal', None))
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
             if not quota:

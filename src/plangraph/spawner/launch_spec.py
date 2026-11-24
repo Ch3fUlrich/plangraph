@@ -212,13 +212,13 @@ def build(request: dict) -> dict:
         env = service.runner._child_envs[job.job_id]
         argv, events = list(cmd), rec['events'] + job.events
         if not request['dry_run']:
-            reason = asyncio.run(host_skip_reason_async(dict(model=leg.model, harness=cmd[0]), env=env))
+            # Host admission runs the harness too: on the PATH the launch had, never the seat's toolchain PATH.
+            exe_path = service.runner._exe_paths.get(job.job_id, env.get('PATH'))
+            reason = asyncio.run(host_skip_reason_async(dict(model=leg.model, harness=cmd[0]), env=dict(env, PATH=exe_path)))
             if reason:
                 raise LaunchRefused('unavailable', reason)
             if admitted_by_render(leg.model):
                 events.append(dict(event='admitted_by_render', model=leg.model))
-            # The harness is found on the PATH the launch had, not the seat's toolchain PATH.
-            exe_path = service.runner._exe_paths.get(job.job_id, env.get('PATH'))
             exe = codex or shutil.which(cmd[0], path=exe_path) or cmd[0]
             exe, reason = runner._resolve_launch(exe, cmd[1:], is_nt=runner._is_nt())
             if reason:

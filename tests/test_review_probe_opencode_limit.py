@@ -1,6 +1,8 @@
 """The scheduled review probe books an OpenCode leg's usage-limit reply as limited and exits 0
 (LE-REVIEW-PROBE-UNIT-FAILS-ON-LIMITED-LEGS); a failed leg still exits 1."""
+import asyncio
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -80,3 +82,32 @@ def test_any_skipped_row_does_not_fail_the_sweep(tmp_path, monkeypatch):
     reply = asyncio.run(leg_probe.probe_many(SimpleNamespace(leg_reader=LegStateStore(':memory:')),
                                              all_reviewers=True))
     assert reply['ok'] and reply['limited_legs'] == []
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='shell stub')
+def test_a_limit_frame_after_a_partial_answer_is_still_limited_through_the_real_runner(tmp_path, monkeypatch):
+    """The runner's display output keeps only the partial answer; the confirmed refusal still books the leg."""
+    from plangraph.spawner.launch_spec import _LaunchOwned  # noqa: F401
+    from plangraph.spawner.opencode_isolation import GO_AUTH_DB_ENV
+    from plangraph.spawner.runner import SpawnerRunner
+    from test_opencode_isolation_go import source_store
+    leg = next(row for row in legs.routed_review_legs() if row.id == 'opencode-go-deepseek-v4-flash')
+    text = json.dumps({'type': 'text', 'part': {'type': 'text', 'text': 'Looking at the diff'}})
+    error = json.dumps({'type': 'error', 'error': {'status': 429, 'retryAfterMs': 60000}})
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    fake = bin_dir / 'opencode'
+    fake.write_text(f"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{text}'\nsleep 1\nprintf '%s\\n' '{error}'\nsleep 5\nexit 1\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin')
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    source = tmp_path / 'source.db'
+    source_store(source)
+    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    runner = SpawnerRunner(default_cwd=str(tmp_path))
+    runner.leg_reader = store
+    reply = asyncio.run(leg_probe.probe(runner, leg, timeout_s=30, store=store, role='review'))
+    assert reply['reason'] == 'limited' and reply['skipped'] == 'limited', reply
+    assert store.leg_status(leg_probe.key(leg), harness='opencode')['state'] == 'limited'

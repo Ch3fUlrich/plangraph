@@ -111,8 +111,9 @@ def test_the_harness_is_resolved_before_the_review_checkout_venv_joins_the_path(
     trusted = tmp_path / 'trusted'
     _tool(trusted / 'opencode')
     checkout = tmp_path / 'checkout'
-    _tool(checkout / '.venv/bin/pytest')
-    _tool(checkout / '.venv/bin/opencode')  # a harness planted next to the checkout's pytest
+    _tool(checkout / '.venv/bin/python', f'#!/bin/sh\nexec {sys.executable} "$@"\n')
+    _tool(checkout / '.venv/bin/opencode')  # a harness planted next to the checkout's interpreter
+    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
     monkeypatch.setenv('PATH', f'{trusted}{os.pathsep}/usr/bin')
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
@@ -133,3 +134,63 @@ def test_the_harness_is_resolved_before_the_review_checkout_venv_joins_the_path(
     exe, path = started[0]
     assert exe == str(trusted / 'opencode')
     assert path.split(os.pathsep)[0] == str(checkout / '.venv/bin')  # pytest still comes from the venv
+
+
+@pytest.mark.real_probe
+@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
+def test_host_admission_never_runs_a_harness_from_the_review_checkout_venv(tmp_path, monkeypatch):
+    from plangraph.spawner import resolver
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
+    marker = tmp_path / 'planted-ran'
+    trusted = tmp_path / 'trusted'
+    listing = f'#!/bin/sh\necho {leg.model}\n'
+    _tool(trusted / 'opencode', listing)
+    checkout = tmp_path / 'checkout'
+    _tool(checkout / '.venv/bin/pytest')
+    _tool(checkout / '.venv/bin/opencode', f'#!/bin/sh\ntouch {marker}\necho {leg.model}\n')
+    monkeypatch.setenv('PATH', f'{trusted}{os.pathsep}/usr/bin{os.pathsep}/bin')
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    source = tmp_path / 'source.db'
+    source_store(source)
+    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
+    resolver.served_models.cache_clear()
+
+    async def factory(*args, **kwargs):
+        raise RuntimeError('stop before exec')
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    with pytest.raises(RuntimeError):
+        asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
+                                 role='review', cwd=str(checkout)))
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
+def test_a_configured_interpreter_without_a_pytest_script_gets_a_python_on_the_seat_path(tmp_path, monkeypatch):
+    from plangraph.routing_support.claude_seat import review_tool_path
+    configured = tmp_path / 'sys/bin'  # like /usr/bin: python3 only, pytest in the user site
+    _tool(configured / 'python3', f'#!/bin/sh\nexec {sys.executable} "$@"\n')
+    bare = tmp_path / 'bare/bin'
+    _tool(bare / 'python', '#!/bin/sh\necho "No module named pytest" >&2\nexit 1\n')
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
+    monkeypatch.setenv('PREFLIGHT_PYTHON', str(configured / 'python3'))
+    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
+    path = review_tool_path(str(bare), str(tmp_path), str(tmp_path / 'empty'), str(tmp_path / 'job/bin'))
+    python = shutil.which('python', path=path)
+    assert python == str(tmp_path / 'job/bin/python')
+    ran = subprocess.run([python, '-m', 'pytest', '--version'], capture_output=True, text=True)
+    assert ran.returncode == 0 and 'pytest' in (ran.stdout + ran.stderr).lower()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
+def test_a_pytest_script_beside_an_interpreter_that_cannot_import_pytest_is_not_enough(tmp_path, monkeypatch):
+    from plangraph.routing_support.claude_seat import review_tool_path
+    checkout = tmp_path / 'checkout'
+    _tool(checkout / '.venv/bin/pytest')
+    _tool(checkout / '.venv/bin/python', '#!/bin/sh\necho "No module named pytest" >&2\nexit 1\n')
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
+    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
+    path = review_tool_path('/usr/bin', str(tmp_path), str(checkout))
+    assert str(checkout / '.venv/bin') not in path.split(os.pathsep)
