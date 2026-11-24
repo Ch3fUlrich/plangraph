@@ -105,6 +105,49 @@ def resolve_codex_client(env=None):
     return found.path, ("PATH" if found.source in ("search", "missing") else found.path)
 
 
+def _node_version(entry):
+    version = re.fullmatch(r'v([0-9]+)\.([0-9]+)\.([0-9]+)(-.+)?', entry.name)
+    if not version:
+        return (), False, entry.name
+    return tuple(map(int, version.groups()[:3])), version[4] is None, entry.name
+
+
+def harness_path(env, *, native_writer=False):
+    """Find user-installed tools for systemd, a bare PATH, or native Codex admission."""
+    inherited = env.get('PATH', os.defpath)
+    system_dirs = {'/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin'}
+    path = inherited.split(os.pathsep)
+    if os.name != 'posix':
+        return inherited
+    custom_path = any(entry and entry not in system_dirs for entry in path)
+    if custom_path and not native_writer and not env.get('INVOCATION_ID'):
+        return inherited
+    if custom_path and native_writer and shutil.which('codex', path=inherited):
+        return inherited
+    home = Path(env.get('HOME') or Path.home())
+    versions = Path(env.get('NVM_DIR') or home / '.nvm') / 'versions/node'
+    try:
+        node = [entry / 'bin' for entry in sorted(
+            (entry for entry in versions.iterdir() if not entry.name.startswith('.')),
+            key=_node_version, reverse=True)]
+    except OSError:
+        node = []
+    installed = [home / '.local/bin', *node, home / '.qoder/entry']
+    added = [str(entry) for entry in installed if entry.is_dir() and str(entry) not in path]
+    if custom_path and not native_writer:
+        # A service may inherit manager additions or an EnvironmentFile PATH.
+        # Keep the inherited lookup order and fill in the user installs.
+        path.extend(added)
+    else:
+        system_start = next((i for i, entry in enumerate(path) if entry in system_dirs), len(path))
+        path[system_start:system_start] = added
+    if native_writer and not shutil.which('cargo', path=os.pathsep.join(path)):
+        cargo_bin = home / '.cargo/bin'
+        if cargo_bin.is_dir() and str(cargo_bin) not in path:
+            path.append(str(cargo_bin))
+    return os.pathsep.join(path)
+
+
 @dataclass(frozen=True)
 class HarnessBinary:
     """Result of :func:`resolve_harness_binary`: ``path`` is None when nothing was found."""
@@ -125,8 +168,7 @@ class HarnessBinary:
 def _host_harness_table(name):
     """``harness_bins`` of this host in the hosts registry (absolute path per harness)."""
     try:   # read quietly: a host without a registry is normal, and every lookup would log it
-        from plangraph.fleet_sync.genconfig import config_dir
-        from plangraph.spawner.overflow import host_config
+        from plangraph.fleet_sync.genconfig import config_dir, host_config
         registry = json.loads((config_dir() / "hosts.json").read_text(encoding="utf-8"))
         host = host_config(registry, os.environ.get("PLANGRAPH_HOST_NAME") or registry.get("self"))
         table = host.get("harness_bins")
@@ -143,13 +185,12 @@ def resolve_harness_binary(name, env=None, *, search=None):
     """The one lookup of a harness executable (opencode, agy, qodercli, claude, codex).
 
     Order: ``PLANGRAPH_<NAME>_BIN``, the host's ``harness_bins`` table, then the search path
-    (the child's PATH plus the user install dirs systemd units lack, host_ready.harness_path;
+    (the child's PATH plus the user install dirs systemd units lack, :func:`harness_path`;
     a caller that already computed that path passes it as ``search``).
     The search path answers with a logged warning: a host that relies on it should list the
     binary in its table.  A miss returns ``HarnessBinary.refusal``.
     """
     import logging
-    from plangraph.spawner.host_ready import harness_path
     env = os.environ if env is None else env
     var = "PLANGRAPH_" + re.sub(r"\W", "_", str(name)).upper() + "_BIN"
     for source, candidate in (("env", env.get(var) or os.environ.get(var)), ("host_table", _host_harness_table(name))):

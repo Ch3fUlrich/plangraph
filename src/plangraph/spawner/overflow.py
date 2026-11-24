@@ -16,7 +16,7 @@ import uuid
 from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
-from plangraph.fleet_sync.genconfig import config_dir, generate
+from plangraph.fleet_sync.genconfig import config_dir, generate, host_config  # noqa: F401  (host_config is re-exported)
 from plangraph.routing_errors import ParameterRefused
 
 from .private_io import atomic_write_private
@@ -74,19 +74,6 @@ def placement_config(registry, role=None):
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         logging.warning('invalid hosts registry routes; overflow disabled')
         return {'hosts': {}, 'public_repos': []}
-
-
-def host_config(registry, name):
-    for host in registry.get('hosts', []):
-        if not isinstance(host, dict):
-            continue
-        aliases = host.get('aliases')
-        names = [host.get('id'), *(aliases if isinstance(aliases, list) else [])]
-        if not isinstance(name, str) or not any(
-                isinstance(alias, str) and alias.lower() == name.lower() for alias in names):
-            continue
-        return host
-    return {}
 
 
 def placement_policy(registry, config):
