@@ -527,6 +527,8 @@ def host_skip_reason(row, *, probe=None, env=None):
         return resolve_harness_binary(harness, {**os.environ, **(env or {})}, search=exec_path).refusal
     if harness != 'opencode':
         return None
+    if missing := resolve_harness_binary('opencode', {**os.environ, **(env or {})}).refusal:
+        return missing   # before every admission shortcut: an absent binary refuses, never a bare-command launch
     model = row.get('model') or row.get('id') or row.get('model_id')
     if not model or '/' not in model:
         return None
@@ -556,9 +558,6 @@ def host_skip_reason(row, *, probe=None, env=None):
                            probe=probe)
     if present:
         return None
-    missing = resolve_harness_binary('opencode', child).refusal
-    if missing:   # an absent binary is not "model not served": name it before any run
-        return missing
     reason = 'not_served_on_host: ' + model
     if child.get(OVERLAY_ROOT_MISSING):
         reason += f' (root_provider_config_missing: {child[OVERLAY_ROOT_MISSING]})'

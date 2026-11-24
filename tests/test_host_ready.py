@@ -672,3 +672,15 @@ def test_host_record_keeps_native_sandbox_failure(tmp_path):
     assert result['sandbox_ok'] is False
     assert result['sandbox_error'] == error
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result
+
+
+def test_local_record_carries_served_legs_and_main_prints_the_digest(tmp_path, monkeypatch):
+    from plangraph.routing_support import leg_state
+    from plangraph.routing_support.leg_state import DiscoveryFailed
+    monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models',
+                        staticmethod(lambda: DiscoveryFailed('managed_service_port_conflict')))
+    result = h.check_host('fiction', dict(CONFIG, local=True, registry=True), tmp_path, plan_runner([]))
+    glm = result['served_legs']['opencode-go-glm-5.3-flash']
+    assert glm == dict(served=False, reason='managed_service_port_conflict')
+    assert json.loads((tmp_path / 'fiction.json').read_text())['served_legs'] == result['served_legs']
+    assert leg_state.served_digest({'fiction': result['served_legs']}).startswith('legs served per host: fiction 0/')

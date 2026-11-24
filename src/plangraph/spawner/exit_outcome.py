@@ -536,7 +536,8 @@ _VERSION_TIMEOUT_S = 10
 @lru_cache(maxsize=None)
 def client_version(name: str) -> str:
     """First line of ``<name> --version`` or ``unknown``."""
-    path = shutil.which(name)
+    from plangraph.routing_support.clients import resolve_harness_binary
+    path = resolve_harness_binary(name).path
     if not path:
         return UNKNOWN_HARNESS
     try:

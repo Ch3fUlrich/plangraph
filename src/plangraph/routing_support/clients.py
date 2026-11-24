@@ -87,7 +87,7 @@ CODEX_REVIEW_CLIENT_MISSING = 10
 
 
 def resolve_codex_client(env=None):
-    """Use the configured executable, the user install, then the process PATH."""
+    """Use the configured executable, the user install, then the shared harness resolver (host table, PATH)."""
     env = os.environ if env is None else env
     configured = env.get("PLANGRAPH_CODEX_BIN")
     if configured:
@@ -99,7 +99,8 @@ def resolve_codex_client(env=None):
         local = Path(home) / ".local" / "bin" / ("codex.exe" if os.name == "nt" else "codex")
         if local.is_absolute() and (executable := shutil.which(str(local))):
             return executable, str(local)
-    return shutil.which("codex", path=env.get("PATH", os.defpath)), "PATH"
+    found = resolve_harness_binary("codex", env)   # the host's harness_bins table, then the search path
+    return found.path, ("PATH" if found.source in ("search", "missing") else found.path)
 
 
 @dataclass(frozen=True)
@@ -150,8 +151,8 @@ def resolve_harness_binary(name, env=None, *, search=None):
     env = os.environ if env is None else env
     var = "PLANGRAPH_" + re.sub(r"\W", "_", str(name)).upper() + "_BIN"
     for source, candidate in (("env", env.get(var) or os.environ.get(var)), ("host_table", _host_harness_table(name))):
-        if candidate and Path(candidate).is_absolute() and (found := shutil.which(candidate)):
-            return HarnessBinary(name, found, (candidate,), source)
+        if candidate and Path(candidate).is_absolute() and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return HarnessBinary(name, candidate, (candidate,), source)
     search = harness_path(dict(env)) if search is None else search
     found = shutil.which(name, path=search)
     entries = tuple(entry for entry in search.split(os.pathsep) if entry)

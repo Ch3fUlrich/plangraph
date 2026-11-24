@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import CX_EFFORTS, DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
 
 REGISTRY = Path(__file__).resolve().parents[1] / "configuration/opencode/providers.json"
@@ -66,3 +66,20 @@ def test_400k_review_card_offers_mimo_pro():
 def test_model_without_a_registry_entry_gets_the_safe_bound():
     from plangraph.planner import legs
     assert legs._registry_request_tokens("nope", "nope") == 100_000
+
+
+def test_opencode_counterparts_of_codex_legs_are_bound_by_the_registry_window():
+    from plangraph.planner.legs import EXPLICIT_LEGS, opencode_counterpart
+    registry = _registry_by_model_id()
+    seen = 0
+    for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS):
+        counterpart = opencode_counterpart(leg) if leg.family == "gpt" and leg.harness == "codex" else None
+        if counterpart is None:
+            continue
+        key = counterpart.model.removeprefix("omniroute/")
+        base = next((key[:-len(e) - 1] for e in CX_EFFORTS if key.endswith("-" + e)), key)
+        limit = registry.get("omniroute/" + key) or registry.get("omniroute/" + base)
+        assert limit, counterpart.model
+        assert counterpart.max_request_tokens <= limit["context"] - limit["output"], counterpart.id
+        seen += 1
+    assert seen >= 10

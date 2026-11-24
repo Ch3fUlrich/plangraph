@@ -497,6 +497,12 @@ def host_served_legs(legs, listing, probe_failures=None):
     return out
 
 
+def local_served_legs(legs=None):
+    """This host's own per-leg truth: its model listing and the harness it resolves (no remote call)."""
+    from plangraph.planner.legs import DEFAULT_LEGS
+    return host_served_legs(DEFAULT_LEGS if legs is None else legs, LegAdapter.standalone_models())
+
+
 def served_digest(hosts):
     """One digest line: ``legs served per host: host-b 3/5 (not served: id reason; ...); host-a 5/5``."""
     parts = []
