@@ -48,10 +48,17 @@ one shared state directory. Copying state between hosts is not implemented.
 The stop rule has one owner, `stop_reason` in `rust/pg-spawnd/src/round_progress.rs`; the
 Python setting, the batch-writer skill and R-batch-04 quote it. A count must be strictly
 below every earlier count to reset the miss streak, and round 1 counts as a miss until a
-later round is lower. 3 rounds in a row without a new best refuse the next writer with
-`no_progress` (`5,5,5` refuses writer 4; `6,4,3,2` admits writer 5). From round 3 on a
-count above half of the round-1 count refuses with `slow_progress` (`8,7,6` refuses
-writer 4). Writer 9 always refuses with `round_cap`. At a stop only,
+later round is lower. Every fix round counts whatever started it (`card.round_cause`:
+`review_finding` (default), `red_ci`, `rebase_main`, `fast_check`), and a round's count is its
+confirmed HIGH+MED plus `card.failing_checks` of the next round (a round without a verdict
+file is judged by the failing checks alone). 3 rounds in a row without a new best stall
+(`5,5,5` stalls at writer 4; `6,4,3,2` admits writer 5), and from round 3 on a count above
+half of the round-1 count stalls too (`8,7,6`). A stall admits the round on the same writer and
+queues a replan record (`round_escalation` +1, `round_replan: queued`; `round_escalate.rs`):
+the job's strongest planning leg plans the slices and reports them, the PR stays open and
+nothing is defined or closed; 3 more misses queue the next one. Writer 9 always
+refuses with `round_cap`. `health report` carries `fix_rounds`: rounds by cause, escalations
+and replans per item, escalations per day, items over the ceiling. At a stall only,
 `card.narrow_fix: true` permits one additional narrow round if the latest
 verdict has exactly 1–2 confirmed MED, every one has `clear_fix: true`, and
 there are no confirmed HIGH. No further writer is admitted after that round.
