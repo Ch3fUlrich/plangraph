@@ -83,7 +83,22 @@ train while the ordinary part stayed ready (`main_moves_restart_a_retry_train_wi
 with main moving without end the wait has no bound. A rule that would bound it changes D-6102 and goes
 to the operator: either (a) after k rebuilds of one retry train (k = 2, say) the next ordinary selection
 is allowed to run beside it, or (b) a retry train that went stale k times lands on a tested
-fast-forward in place of being rebuilt. The model does not pick one.
+fast-forward in place of being rebuilt.
+
+Ruling D-6840 (routing, an EXPERIMENT): option (b) with k = 2 in tested fast-forward, option (a) with k = 2
+in pull request merge mode (the live path, rule 3.44 (3)); `Policy::stale_k` is k, coded by `Policy::landing`.
+In tested fast-forward a retry train rebuilt twice is not rebuilt a third time (`Denied::StaleBound`): its
+green result lands on the main as it is now (`Model::stale_landings`). In pull request merge mode, once the
+live retry train was rebuilt twice an ordinary selection runs beside it. `stale_k` 0 (`without_stale_bound`)
+is the plain per-group bound; the test `with_the_plain_per_group_bound_main_moves_restart_a_retry_train_without_end_*`
+keeps the three moves of main giving four runs under it.
+
+What the experiment records, per retry train and per day, from the live landing journal (the model counts
+runs and rebuilds, not minutes): CI runs of the retry train (`run`; model: 3 at most in tested fast-forward,
+4 and more under the plain bound), minutes an ordinary part waited from ready to its train's start (model:
+behind two rebuilds, not behind the main-move rate), and red main after a stale-k landing (a landing that
+went stale; model: `stale_landings`). At the first red main after a stale-k landing, set `stale_k` to 0 and
+return to the plain per-group bound.
 
 ## Limits
 

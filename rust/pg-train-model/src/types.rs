@@ -108,6 +108,10 @@ pub(crate) struct Train {
     pub red_rounds: u8,
     /// The CI run in flight or last started; a result names the run it belongs to.
     pub run: u8,
+    /// Times a stale train was rebuilt on a moved main.
+    pub rebuilds: u8,
+    /// Landed on a main that had moved since its tested base (D-6840).
+    pub stale_landed: bool,
     /// `VerifyComplete` accepted this exact membership, reasons and tree.
     pub checked: bool,
     /// Landed, closed by a red CI, or discarded.
@@ -139,6 +143,10 @@ pub struct Policy {
     pub due_after: u8,
     pub order: Order,
     pub landing: Landing,
+    /// D-6840 experiment: a retry train stale this many times stops being rebuilt (tested fast-forward:
+    /// it lands on the current main; pull request merge: an ordinary selection runs beside it).
+    /// 0 is the plain per-group bound.
+    pub stale_k: u8,
 }
 
 impl Policy {
@@ -151,7 +159,13 @@ impl Policy {
             due_after: 2,
             order,
             landing: Landing::TestedFf,
+            stale_k: 2,
         }
+    }
+    /// The plain per-group bound: the first stale-k landing that turns main red reverts to this.
+    pub fn without_stale_bound(mut self) -> Policy {
+        self.stale_k = 0;
+        self
     }
     /// Rule 3.74 (1): every ready part rides; only a missing verified parent holds a part back.
     pub fn every_ready_rides(order: Order) -> Policy {
@@ -316,6 +330,8 @@ pub enum Denied {
     StaleRun,
     /// The train's membership, reasons and tree were not verified complete.
     Unverified,
+    /// A retry train already stale `stale_k` times is not rebuilt again (tested fast-forward).
+    StaleBound,
 }
 
 impl Train {
@@ -337,6 +353,8 @@ impl Train {
             tested: None,
             red_rounds: 0,
             run: 0,
+            rebuilds: 0,
+            stale_landed: false,
             checked: false,
             closed: false,
             landed: false,
