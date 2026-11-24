@@ -14,6 +14,14 @@ use std::{
 #[path = "worker_host_liveness.rs"]
 mod liveness;
 pub use liveness::Observation;
+#[path = "worker_host_rejoin.rs"]
+mod rejoin;
+pub use rejoin::{
+    FloorReport, InstallReport, LegReport, RejoinError, RejoinHost, RunFate, SyncReport,
+};
+
+/// An outage longer than this holds the host in `rejoining` until the rejoin gate passes.
+pub const REJOIN_AFTER_SECS: u64 = 600;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +42,8 @@ struct State {
     #[serde(default, rename = "episode", skip_serializing)]
     _legacy_episode: Option<serde::de::IgnoredAny>,
     maintenance_until: Option<u64>,
+    #[serde(default)]
+    needs_rejoin: bool,
     #[serde(default, rename = "rejoin", skip_serializing)]
     _legacy_rejoin: Option<serde::de::IgnoredAny>,
     #[serde(default)]
@@ -53,10 +63,18 @@ impl State {
             self.outage_since.get_or_insert(now);
             self.missed = self.missed.saturating_add(1);
         }
+        if self
+            .outage_since
+            .is_some_and(|since| now.saturating_sub(since) > REJOIN_AFTER_SECS)
+        {
+            self.needs_rejoin = true;
+        }
         self.phase = if self.maintenance_until.is_some() {
             Phase::Rejoining
         } else if !reachable && (self.missed >= 2 || was_rejoining) {
             Phase::Unreachable
+        } else if self.needs_rejoin {
+            Phase::Rejoining
         } else {
             Phase::Ready
         };
