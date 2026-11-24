@@ -1,0 +1,1 @@
+Classify each red CI job (fmt, clippy, file-size, trailer, missing module, flake, code, infrastructure, configuration, unknown) and carry the class, job id and starting point in its fix task and keeper definition.
