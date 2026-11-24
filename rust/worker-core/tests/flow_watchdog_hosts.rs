@@ -11,14 +11,23 @@ fn run(host: serde_json::Value) -> (String, Vec<String>) {
 
 fn run_with(host: serde_json::Value, env: &[(&str, &std::path::Path)]) -> (String, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
+    pass_in(dir.path(), host, env)
+}
+
+/// One watchdog pass over `dir`, which keeps the state between passes.
+fn pass_in(
+    dir: &std::path::Path,
+    host: serde_json::Value,
+    env: &[(&str, &std::path::Path)],
+) -> (String, Vec<String>) {
     let snapshot = serde_json::json!({"pace":66,"budget":66,"ci_failed":0,
         "ci_total":10,"infra_failed":0,"review_age_hours":0,"review_rounds":0,
         "critical_idle_hours":0,"coding_vm_runs":0,"worker_idle":false,
         "host_drift":false,"closes_recent":4,"closes_previous":4,"hosts":[host]});
-    let input = dir.path().join("input.json");
+    let input = dir.join("input.json");
     fs::write(&input, snapshot.to_string()).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_flow-watchdog"))
-        .args([input.as_os_str(), dir.path().as_os_str()])
+        .args([input.as_os_str(), dir.as_os_str()])
         .env_remove("PLANGRAPH_WATCHDOG_DELIVERY")
         .env_remove("PLANGRAPH_FLOW_PUSH")
         .env_remove("PLANGRAPH_DISK_WATERMARKS")
@@ -27,7 +36,7 @@ fn run_with(host: serde_json::Value, env: &[(&str, &std::path::Path)]) -> (Strin
         .output()
         .unwrap();
     assert!(output.status.success(), "{:?}", output);
-    let queue: Vec<serde_json::Value> = fs::read(dir.path().join("queue.json"))
+    let queue: Vec<serde_json::Value> = fs::read(dir.join("queue.json"))
         .ok()
         .map(|bytes| serde_json::from_slice(&bytes).unwrap())
         .unwrap_or_default();
@@ -36,7 +45,7 @@ fn run_with(host: serde_json::Value, env: &[(&str, &std::path::Path)]) -> (Strin
         .map(|event| event["message"].as_str().unwrap().to_owned())
         .collect();
     (
-        fs::read_to_string(dir.path().join("active")).unwrap_or_default(),
+        fs::read_to_string(dir.join("active")).unwrap_or_default(),
         messages,
     )
 }
@@ -155,4 +164,41 @@ fn the_local_hosts_alert_names_the_consumers_the_hygiene_watermark_measured() {
         "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
     let (_, messages) = run_with(other, &[("PLANGRAPH_DISK_WATERMARKS", &marks)]);
     assert!(!messages[0].contains("/data/"), "{messages:?}");
+}
+
+#[test]
+fn an_alert_queued_before_hygiene_sampled_is_followed_by_one_naming_the_consumers() {
+    let state = tempfile::tempdir().unwrap();
+    let watch = tempfile::tempdir().unwrap();
+    let marks = state.path().join("disk-watermarks.json");
+    let host = serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":86,
+        "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
+    let env = [("PLANGRAPH_DISK_WATERMARKS", marks.as_path())];
+    // Pass 1: 86% seen, the thirty-minute hygiene timer has not written its watermark yet.
+    let (_, queued) = pass_in(watch.path(), host.clone(), &env);
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    assert!(!queued[0].contains("top="), "{queued:?}");
+    // Pass 2 (same state): hygiene has written it.
+    let rows = serde_json::json!([{"path": "/data/big", "bytes": 900}, {"path": "/data/small", "bytes": 1}]);
+    fs::write(
+        &marks,
+        serde_json::json!({"64769": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+    )
+    .unwrap();
+    let (active, queued) = pass_in(watch.path(), host.clone(), &env);
+    assert_eq!(
+        queued.len(),
+        2,
+        "the measured alert is queued once more: {queued:?}"
+    );
+    assert!(queued[1].contains("/data/big=900"), "{queued:?}");
+    // Pass 3: sizes move, nothing new is queued.
+    let rows = serde_json::json!([{"path": "/data/big", "bytes": 950}]);
+    fs::write(
+        &marks,
+        serde_json::json!({"64769": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+    )
+    .unwrap();
+    let (again, queued) = pass_in(watch.path(), host, &env);
+    assert_eq!((active, queued.len()), (again, 2));
 }
