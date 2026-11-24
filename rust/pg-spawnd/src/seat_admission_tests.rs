@@ -363,8 +363,15 @@ fn a_split_larger_than_the_bound_never_holds_more_slots_than_the_leg_allows() {
     let mut tokens = Vec::new();
     let mut refused = 0;
     for index in 1..=5 {
-        match crate::review_split::admit_group(state.path(), &bound, index, false, &args, &mut held)
-        {
+        match crate::review_split::admit_group(
+            state.path(),
+            &bound,
+            index,
+            false,
+            &args,
+            &mut held,
+            &mut Fixed(bound.clone()),
+        ) {
             Ok(group) => tokens.push(group[TOKEN_FIELD].as_str().unwrap().to_owned()),
             Err(ToolError::Refused { message, .. }) => {
                 assert!(message.starts_with("seat_queue_timeout:"), "{message}");
@@ -378,10 +385,159 @@ fn a_split_larger_than_the_bound_never_holds_more_slots_than_the_leg_allows() {
     assert_eq!(tokens[0], first.token());
     assert_ne!(tokens[1], first.token());
     // A dry split never admits.
-    let none = crate::review_split::admit_group(state.path(), &bound, 4, true, &args, &mut held)
-        .ok()
-        .unwrap();
+    let none = crate::review_split::admit_group(
+        state.path(),
+        &bound,
+        4,
+        true,
+        &args,
+        &mut held,
+        &mut Fixed(bound.clone()),
+    )
+    .ok()
+    .unwrap();
     assert!(none
         .get(TOKEN_FIELD)
         .is_some_and(|t| *t == json!(first.token())));
+}
+
+/// A group that waits routes again: when the route stops serving its leg it is refused at once, and the
+/// groups already started stay in a failed seat group that names their run ids.
+#[test]
+fn a_queued_group_whose_leg_left_the_route_is_refused_and_started_runs_are_kept() {
+    let state = tempfile::tempdir().unwrap();
+    let bound = plan(&[HYDROGEN], 1, 600.0);
+    let first = ok(admit(state.path(), bound.clone(), &mut quiet()))
+        .1
+        .unwrap();
+    let mut args = crate::placement::Args::new();
+    args.insert(TOKEN_FIELD.into(), json!(first.token()));
+    // The route no longer serves hydrogen while group 2 waits for the one slot.
+    let moved = json!({"first_leg": leg("opencode-go-deepseek-v4-flash"),
+        "legs": [leg("opencode-go-deepseek-v4-flash")]});
+    let mut ports = Fake::new(vec![moved], |_| {});
+    let mut held = Vec::new();
+    let error = match crate::review_split::admit_group(
+        state.path(),
+        &bound,
+        2,
+        false,
+        &args,
+        &mut held,
+        &mut ports,
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("the group must not run on another leg"),
+    };
+    assert!(held.is_empty());
+    assert_eq!(
+        *ports.clock.borrow(),
+        1005.0,
+        "refused at the first poll, not after the wait"
+    );
+    // The started group's run is kept in a failed seat group.
+    let record = |id: &str| {
+        let dir = state.path().join("runs").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("record.json"),
+            json!({"run_id": id, "role": "review", "status": "running", "started": 1.0,
+                "plan": {"first_leg": {"id": HYDROGEN}}})
+            .to_string(),
+        )
+        .unwrap();
+    };
+    record("run-aaaa1111");
+    let answer = crate::review_split::unstarted_groups(
+        state.path(),
+        "seats-abc123",
+        &["run-aaaa1111".to_owned()],
+        3,
+        error,
+    )
+    .ok()
+    .unwrap();
+    assert_eq!(answer["status"], "failed");
+    assert_eq!(answer["passed"], false);
+    assert_eq!(answer["verdict"], "FAIL");
+    assert_eq!(answer["unstarted_groups"], 2);
+    assert_eq!(answer["seats"][0]["run_id"], "run-aaaa1111");
+    assert!(answer["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("seat_leg_limited:"));
+    let saved =
+        std::fs::read_to_string(state.path().join("seat-groups/seats-abc123.json")).unwrap();
+    assert!(saved.contains("run-aaaa1111"), "{saved}");
+}
+
+/// The wait budget is a deadline: the last sleep is the time left, and a slot that frees at the
+/// deadline is not taken by a seat that has used its budget.
+#[test]
+fn a_seat_past_its_wait_budget_never_takes_a_slot_that_just_freed() {
+    let state = tempfile::tempdir().unwrap();
+    let held: RefCell<Vec<Reservation>> = RefCell::new(vec![ok(admit(
+        state.path(),
+        plan(&[HYDROGEN], 1, 600.0),
+        &mut quiet(),
+    ))
+    .1
+    .unwrap()]);
+    let slept = RefCell::new(Vec::new());
+    let mut waiting = Fake::new(vec![plan(&[HYDROGEN], 1, 7.0)], |now| {
+        slept.borrow_mut().push(now);
+        // The slot frees exactly when the 7 s budget is spent.
+        if now >= 1007.0 {
+            held.borrow_mut().clear();
+        }
+    });
+    match admit(state.path(), plan(&[HYDROGEN], 1, 7.0), &mut waiting) {
+        Err(ToolError::Refused { message, .. }) => {
+            assert!(message.starts_with("seat_queue_timeout:"), "{message}")
+        }
+        _ => panic!("a spent budget must refuse even when a slot is free"),
+    }
+    // Polls of 5 s, then the 2 s left: the clock never passes the deadline.
+    assert_eq!(*slept.borrow(), [1005.0, 1007.0]);
+}
+
+/// A run on a quota retry occupies the leg of its running attempt, not its first leg.
+#[test]
+fn a_retried_run_counts_on_the_leg_it_runs_on() {
+    let state = tempfile::tempdir().unwrap();
+    let dir = state.path().join("runs/run-r1");
+    std::fs::create_dir_all(&dir).unwrap();
+    let record = json!({"run_id": "run-r1", "role": "review", "status": "running", "started": 5.0,
+        "plan": {"first_leg": {"id": "opencode-go-deepseek-v4-flash"}},
+        "attempts": [{"leg": {"id": "opencode-go-deepseek-v4-flash"}, "status": "failed"},
+            {"leg": {"id": HYDROGEN}, "status": "running"}]});
+    std::fs::write(dir.join("record.json"), record.to_string()).unwrap();
+    let records = crate::records::list_runs(state.path());
+    assert_eq!(occupied(state.path(), &records, HYDROGEN, 10.0).0, 1);
+    assert_eq!(
+        occupied(
+            state.path(),
+            &records,
+            "opencode-go-deepseek-v4-flash",
+            10.0
+        )
+        .0,
+        0
+    );
+    // A reserve-now for the leg is refused while the retried run holds the only slot.
+    let policy = json!({"legs": {HYDROGEN: 1}, "queue_wait_seconds": 900.0});
+    match reserve_now(state.path(), &leg(HYDROGEN), &policy) {
+        Err(ToolError::Refused { message, .. }) => {
+            assert!(message.starts_with("seat_queue_timeout:"), "{message}")
+        }
+        _ => panic!("a retry into a saturated leg must be refused without waiting"),
+    }
+    assert!(reserve_now(
+        state.path(),
+        &leg(HYDROGEN),
+        &json!({"legs": {HYDROGEN: 2}})
+    )
+    .ok()
+    .unwrap()
+    .is_some());
 }

@@ -16,3 +16,11 @@ keeps the review's), so a split larger than the bound waits like any other burst
 starts both fallback seats itself (`opencode-go-deepseek-v4-flash` and `opencode-go-glm-5.3-flash`, from the
 route without the selector) and answers with their seat group; if either leg is not routable none starts
 (`seat_fallback_unavailable`).
+
+The wait budget is a monotonic deadline: a queued seat that has used its budget is refused even when a slot
+just freed, and the last poll sleeps only the time left. A quota retry into a later leg takes a slot there
+first (a full leg is skipped like any unavailable leg) and the run counts on the leg of its running attempt.
+A split group that waits routes again each poll and is refused `seat_leg_limited` when its leg left the
+route; the groups already started stay in a failed seat group that keeps their run ids. A fallback seat that
+itself split answers with every run it started, and a second seat that fails to launch leaves the first in
+a failed seat group.

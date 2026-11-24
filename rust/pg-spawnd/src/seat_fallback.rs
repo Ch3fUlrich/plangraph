@@ -33,22 +33,49 @@ pub(crate) fn seat_plans(open_route: &Value) -> Result<Vec<Value>, ToolError> {
         .collect()
 }
 
-/// Starts both fallback seats through `start` (which spawns one seat without waiting and returns its
-/// run record) and returns their run ids.
+/// The run ids a seat launch answered with: one record, or a seat group when the seat split.
+fn run_ids(answer: &Value) -> Result<Vec<String>, ToolError> {
+    let ids: Vec<String> = match (answer["run_id"].as_str(), answer["seats"].as_array()) {
+        (Some(id), _) => vec![id.to_owned()],
+        (None, Some(seats)) => seats
+            .iter()
+            .filter_map(|seat| seat["run_id"].as_str().map(str::to_owned))
+            .collect(),
+        _ => vec![],
+    };
+    if ids.is_empty() {
+        return Err(ToolError::Internal("fallback seat has no run id".into()));
+    }
+    Ok(ids)
+}
+
+/// What a fallback start left running: every started run id, and the failure that stopped the rest.
+pub(crate) struct Started {
+    pub ids: Vec<String>,
+    pub failure: Option<ToolError>,
+}
+
+/// Starts both fallback seats through `start` (which launches one seat without waiting and answers
+/// with its record). A launch that fails after another seat started stops there and keeps the started
+/// run ids in `Started`; `Err` only when no seat could be planned, so nothing started.
 pub(crate) fn start_seats(
     open_route: &Value,
     mut start: impl FnMut(Value) -> Result<Value, ToolError>,
-) -> Result<Vec<String>, ToolError> {
-    seat_plans(open_route)?
-        .into_iter()
-        .map(|plan| {
-            let record = start(plan)?;
-            record["run_id"]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| ToolError::Internal("fallback seat has no run id".into()))
-        })
-        .collect()
+) -> Result<Started, ToolError> {
+    let mut started = Started {
+        ids: vec![],
+        failure: None,
+    };
+    for plan in seat_plans(open_route)? {
+        match start(plan).and_then(|answer| run_ids(&answer)) {
+            Ok(ids) => started.ids.extend(ids),
+            Err(error) => {
+                started.failure = Some(error);
+                break;
+            }
+        }
+    }
+    Ok(started)
 }
 
 /// The request for a fallback seat: no leg selector, and no waiting (the group waits once).

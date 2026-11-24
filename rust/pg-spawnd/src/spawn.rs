@@ -139,14 +139,30 @@ fn fallback_seats(
         .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
     let mut seat = open;
     seat.insert("wait_seconds".into(), json!(0));
-    let ids = crate::seat_fallback::start_seats(&route, |plan| {
+    let started = crate::seat_fallback::start_seats(&route, |plan| {
         runs.spawn(state, &seat, host, role.clone(), plan)
     })?;
     let group = format!(
         "seats-{}",
         &pg_worker_core::run::record::new_run_id()["run-".len()..]
     );
-    crate::review_split::finish_group_seats(state, &group, &ids, args.get("wait_seconds"), false)
+    if let Some(error) = started.failure {
+        // A seat is running already: its run id is kept in a failed seat group, never dropped.
+        return crate::review_split::unstarted_groups(
+            state,
+            &group,
+            &started.ids,
+            crate::seat_fallback::LEGS.len(),
+            error,
+        );
+    }
+    crate::review_split::finish_group_seats(
+        state,
+        &group,
+        &started.ids,
+        args.get("wait_seconds"),
+        false,
+    )
 }
 pub(crate) fn spawn(
     state: &Path,

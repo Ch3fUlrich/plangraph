@@ -120,6 +120,18 @@ fn next(
         if record.path().with_file_name("cancelled").exists() {
             return Ok(None);
         }
+        // A later leg with a seat bound takes a slot like any other seat; a full leg is skipped.
+        let slot = match crate::seat_admission::reserve_now(
+            state_of(record),
+            leg,
+            &value["plan"]["seat_admission"],
+        ) {
+            Ok(slot) => slot,
+            Err(error) => {
+                skip(record, leg, error.into_error_data().message);
+                continue;
+            }
+        };
         match prepare(
             record,
             &args,
@@ -136,21 +148,30 @@ fn next(
                     leg.clone(),
                     prepared,
                     group,
+                    slot,
                 )
                 .map(Some)
             }
-            Err(error) => {
-                let mut attempts = record.get("attempts").cloned().unwrap_or(json!([]));
-                attempts
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!({"leg":leg,"status":"skipped",
-                    "skip_reason":error.into_error_data().message}));
-                record.set("attempts", attempts);
-            }
+            Err(error) => skip(record, leg, error.into_error_data().message),
         }
     }
     Ok(None)
+}
+fn skip(record: &mut RunRecord, leg: &Value, reason: impl Into<String>) {
+    let mut attempts = record.get("attempts").cloned().unwrap_or(json!([]));
+    attempts
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"leg":leg,"status":"skipped","skip_reason":reason.into()}));
+    record.set("attempts", attempts);
+}
+fn state_of(record: &RunRecord) -> &Path {
+    record
+        .path()
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .unwrap()
 }
 type Prepared = (
     String,
@@ -203,6 +224,7 @@ fn prepare(
     Ok((job_id, launch, review))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn advance(
     record: &mut RunRecord,
     args: Args,
@@ -211,6 +233,7 @@ fn advance(
     leg: Value,
     prepared: Prepared,
     group: Option<(usize, usize, Vec<String>)>,
+    slot: Option<crate::seat_admission::Reservation>,
 ) -> Result<RunSpec, crate::errors::ToolError> {
     let value = record.to_value();
     let state = record
@@ -260,6 +283,11 @@ fn advance(
     }
     for (key, val) in metadata.as_object().unwrap() {
         record.set(key, val.clone());
+    }
+    // The attempt's slot rides on the record, so the leg it now runs on counts it once.
+    if let Some(slot) = slot {
+        record.set(crate::seat_admission::TOKEN_FIELD, json!(slot.token()));
+        slot.keep();
     }
     let mut attempts = value["attempts"].as_array().unwrap().clone();
     attempts.push(json!({"leg":leg,"status":"running"}));
@@ -426,6 +454,7 @@ mod tests {
             leg.clone(),
             (new_job_id(), launch, review),
             None,
+            None,
         )
         .is_ok());
         let saved = crate::records::read_record(state.path(), &json!(run_id))
@@ -435,5 +464,57 @@ mod tests {
         assert_eq!(saved["head_sha"], head);
         assert!(saved["review_binding"].is_null());
         assert!(saved["review_base"].is_null());
+    }
+
+    /// A retry into a leg that has no free seat skips that leg and starts nothing there.
+    #[test]
+    fn a_retry_into_a_saturated_leg_is_skipped_and_a_free_leg_keeps_its_slot_on_the_record() {
+        let state = tempfile::tempdir().unwrap();
+        let hydrogen = json!({"id":"agy-gemini-4-hydrogen-high","harness":"agy","model":"gemini-4-hydrogen-high"});
+        let weak = json!({"id":"opencode-go-deepseek-v4-flash","harness":"opencode"});
+        let policy = json!({"legs":{"agy-gemini-4-hydrogen-high":1},"queue_wait_seconds":900.0});
+        // Another seat holds the one hydrogen slot.
+        let held = crate::seat_admission::reserve_now(state.path(), &hydrogen, &policy)
+            .ok()
+            .unwrap()
+            .unwrap();
+        let run_id = new_run_id();
+        let mut record = runs::create(
+            state.path(),
+            &run_id,
+            "fixture",
+            json!({
+                "role":"review","cwd":state.path(),
+                "plan":{"first_leg":weak,"legs":[weak,hydrogen],"seat_admission":policy},
+                "attempts":[{"leg":weak,"status":"failed","skip_reason":"quota"}],
+            }),
+            Status::Failed,
+        )
+        .ok()
+        .unwrap();
+        let args = json!({"role":"review","card":{}})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(next(&mut record, args, &weak, 1, None)
+            .ok()
+            .unwrap()
+            .is_none());
+        let saved = record.to_value();
+        let skipped = &saved["attempts"][1];
+        assert_eq!(skipped["leg"]["id"], "agy-gemini-4-hydrogen-high");
+        assert_eq!(skipped["status"], "skipped");
+        assert!(skipped["skip_reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("seat_queue_timeout:"));
+        // The occupant still holds its slot: the refused retry took none.
+        drop(held);
+        assert!(
+            crate::seat_admission::reserve_now(state.path(), &hydrogen, &policy)
+                .ok()
+                .unwrap()
+                .is_some()
+        );
     }
 }

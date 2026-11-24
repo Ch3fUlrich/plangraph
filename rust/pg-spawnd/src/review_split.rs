@@ -214,8 +214,9 @@ pub(crate) fn save_seat_group(state: &Path, envelope: &Value) -> Result<(), Tool
 
 /// Admits one group of a split review under its own slot of the plan's leg. The first group keeps the
 /// reservation the whole review was admitted under (named by `args`); each later group takes a new
-/// one, so a split larger than the bound still never runs more seats than the leg allows. The slots
-/// stay in `held` until the review ends.
+/// one, so a split larger than the bound still never runs more seats than the leg allows. While a group
+/// waits, `ports` routes again each poll: a group never moves to another leg, so a route that no longer
+/// serves the plan's leg refuses it `seat_leg_limited`. The slots stay in `held` until the review ends.
 pub(crate) fn admit_group(
     state: &Path,
     plan: &Value,
@@ -223,18 +224,55 @@ pub(crate) fn admit_group(
     dry: bool,
     args: &crate::placement::Args,
     held: &mut Vec<crate::seat_admission::Reservation>,
+    ports: &mut impl crate::seat_admission::Ports,
 ) -> Result<crate::placement::Args, ToolError> {
-    use crate::seat_admission::{admit, Fixed, TOKEN_FIELD};
+    use crate::seat_admission::{admit, TOKEN_FIELD};
     let mut group_args = args.clone();
     if index > 1 && !dry {
         group_args.remove(TOKEN_FIELD);
-        let (_, slot) = admit(state, plan.clone(), &mut Fixed(plan.clone()))?;
+        let (routed, slot) = admit(state, plan.clone(), ports)?;
+        let id = &plan["first_leg"]["id"];
+        if routed["first_leg"]["id"] != *id {
+            return Err(ToolError::Refused {
+                kind: crate::errors::RefusalKind::Spawn,
+                message: format!(
+                    "seat_leg_limited: {id} left the route while group {index} queued; the groups already started keep running"
+                ),
+                legs: vec![],
+            });
+        }
         if let Some(slot) = slot {
             group_args.insert(TOKEN_FIELD.into(), json!(slot.token()));
             held.push(slot);
         }
     }
     Ok(group_args)
+}
+
+/// The answer when a later group could not be admitted: the groups already started keep their run ids
+/// in a saved seat group that fails, so no partial review reads as a pass and none is lost.
+pub(crate) fn unstarted_groups(
+    state: &Path,
+    seat_group_id: &str,
+    run_ids: &[String],
+    total: usize,
+    error: ToolError,
+) -> Result<Value, ToolError> {
+    let records = run_ids
+        .iter()
+        .map(|id| crate::records::read_record(state, &json!(id)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut envelope = aggregate_group_seats(state, seat_group_id, &records, false);
+    envelope["status"] = json!("failed");
+    envelope["exit_code"] = json!(1);
+    envelope["passed"] = json!(false);
+    if envelope["verdict"] != json!("REQUEST_CHANGES") {
+        envelope["verdict"] = json!("FAIL");
+    }
+    envelope["reason"] = json!(error.into_error_data().message);
+    envelope["unstarted_groups"] = json!(total.saturating_sub(run_ids.len()));
+    save_seat_group(state, &envelope)?;
+    Ok(envelope)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -265,7 +303,19 @@ pub(crate) fn spawn_rust_split_groups(
     let mut held = Vec::new();
     for (idx, group_paths) in groups.iter().enumerate() {
         let index = idx + 1;
-        let args = &admit_group(state, plan, index, dry, args, &mut held)?;
+        let group_args = match admit_group(
+            state,
+            plan,
+            index,
+            dry,
+            args,
+            &mut held,
+            &mut crate::seat_admission::Live { state, args },
+        ) {
+            Ok(group_args) => group_args,
+            Err(error) => return unstarted_groups(state, &seat_group_id, &run_ids, total, error),
+        };
+        let args = &group_args;
         let (run_id, job_id) = (new_run_id(), new_job_id());
         let mut spec = launch(
             state,
@@ -384,7 +434,18 @@ pub(crate) fn spawn_adapter_split_groups(
     for (idx, group_paths) in groups.iter().enumerate() {
         let index = idx + 1;
         let (run_id, job_id) = (new_run_id(), new_job_id());
-        let mut child_args = admit_group(state, plan, index, dry, args, &mut held)?;
+        let mut child_args = match admit_group(
+            state,
+            plan,
+            index,
+            dry,
+            args,
+            &mut held,
+            &mut crate::seat_admission::Live { state, args },
+        ) {
+            Ok(group_args) => group_args,
+            Err(error) => return unstarted_groups(state, &seat_group_id, &run_ids, total, error),
+        };
         child_args["card"]["diff_ref"]["paths"] = json!(group_paths);
         let group_prompt = format!("{}{}", group_banner(index, total, group_paths), prompt);
         child_args["prompt"] = json!(group_prompt);

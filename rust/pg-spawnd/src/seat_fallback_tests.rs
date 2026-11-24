@@ -96,7 +96,8 @@ fn a_refused_queue_starts_deepseek_and_glm_seats() {
     })
     .ok()
     .unwrap();
-    assert_eq!(started, ["run-1", "run-2"]);
+    assert!(started.failure.is_none());
+    assert_eq!(started.ids, ["run-1", "run-2"]);
     assert_eq!(legs, LEGS);
 }
 
@@ -123,4 +124,51 @@ fn the_fallback_request_drops_the_selector_and_any_reservation_claim() {
     let open = seat_args(&args);
     assert!(open.get("leg").is_none() && open.get("seat_reservation").is_none());
     assert_eq!(open["role"], "review");
+}
+
+#[test]
+fn a_seat_that_split_answers_with_every_run_it_started() {
+    let mut n = 0;
+    let started = start_seats(&route(&[LEGS[0], LEGS[1]]), |_| {
+        n += 1;
+        Ok(if n == 1 {
+            json!({"seat_group": "seats-ab", "seats": [{"run_id": "run-a1"}, {"run_id": "run-a2"}]})
+        } else {
+            json!({"run_id": "run-b"})
+        })
+    })
+    .ok()
+    .unwrap();
+    assert!(started.failure.is_none());
+    assert_eq!(started.ids, ["run-a1", "run-a2", "run-b"]);
+}
+
+#[test]
+fn a_second_launch_that_fails_keeps_the_run_that_started() {
+    let mut n = 0;
+    let started = start_seats(&route(&[LEGS[0], LEGS[1]]), |_| {
+        n += 1;
+        if n == 1 {
+            Ok(json!({"run_id": "run-1"}))
+        } else {
+            Err(ToolError::Internal("launch failed".into()))
+        }
+    })
+    .ok()
+    .unwrap();
+    assert_eq!(started.ids, ["run-1"]);
+    assert!(started.failure.is_some());
+    // An answer with no run id is a failure too, after what already started.
+    let mut n = 0;
+    let started = start_seats(&route(&[LEGS[0], LEGS[1]]), |_| {
+        n += 1;
+        Ok(if n == 1 {
+            json!({"run_id": "run-1"})
+        } else {
+            json!({"status": "refused"})
+        })
+    })
+    .ok()
+    .unwrap();
+    assert_eq!((started.ids.len(), started.failure.is_some()), (1, true));
 }

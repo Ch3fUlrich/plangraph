@@ -2,7 +2,7 @@
 //! `review_seat_admission`), the rest queue, and a leg that gets limited while they queue is dropped
 //! at once because every pass routes again and reads the quota state.
 use crate::errors::ToolError;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::Path, path::PathBuf, time::Duration};
 
 /// A reservation covers the gap between admission and the run record; past this it is stale.
@@ -40,7 +40,12 @@ impl Policy {
 /// What admission needs from the outside, so the queue can be tested without clocks or a router.
 pub(crate) trait Ports {
     fn route(&mut self) -> Result<Value, ToolError>;
+    /// Wall-clock seconds: the time written into slot files shared with other processes.
     fn now(&self) -> f64;
+    /// Seconds on a clock that never jumps, for the wait budget.
+    fn monotonic(&self) -> f64 {
+        self.now()
+    }
     fn sleep(&mut self, duration: Duration);
 }
 
@@ -48,6 +53,14 @@ pub(crate) trait Ports {
 pub(crate) fn is_queue_refusal(error: &ToolError) -> bool {
     matches!(error, ToolError::Refused { message, .. }
         if message.starts_with("seat_queue_timeout:") || message.starts_with("seat_leg_limited:"))
+}
+
+fn monotonic_clock() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
 }
 
 fn clock() -> f64 {
@@ -65,6 +78,9 @@ impl Ports for Fixed {
     }
     fn now(&self) -> f64 {
         clock()
+    }
+    fn monotonic(&self) -> f64 {
+        monotonic_clock()
     }
     fn sleep(&mut self, duration: Duration) {
         std::thread::sleep(duration);
@@ -84,6 +100,9 @@ impl Ports for Live<'_> {
     fn now(&self) -> f64 {
         clock()
     }
+    fn monotonic(&self) -> f64 {
+        monotonic_clock()
+    }
     fn sleep(&mut self, duration: Duration) {
         std::thread::sleep(duration);
     }
@@ -100,6 +119,13 @@ impl Reservation {
             .unwrap_or_default()
     }
 }
+impl Reservation {
+    /// Leaves the slot in place for the run record that names its token; occupancy finishes it once
+    /// that record exists (or after the reservation's time to live).
+    pub(crate) fn keep(self) {
+        std::mem::forget(self);
+    }
+}
 impl Drop for Reservation {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
@@ -114,9 +140,19 @@ fn refused(message: String) -> ToolError {
     }
 }
 
+/// The leg a review run occupies: the leg that served it, else the leg of its running attempt (a
+/// quota retry moves a run to a later leg of its plan), else the plan's first leg.
 fn leg_of(record: &Value) -> Option<&str> {
     record["chosen_leg"]["id"]
         .as_str()
+        .or_else(|| {
+            record["attempts"]
+                .as_array()?
+                .iter()
+                .rev()
+                .find(|attempt| attempt["status"] == "running")?["leg"]["id"]
+                .as_str()
+        })
         .or_else(|| record["plan"]["first_leg"]["id"].as_str())
 }
 
@@ -192,6 +228,20 @@ fn lock_leg(state: &Path, leg: &str) -> Result<pg_worker_core::lockfile::LockGua
     ))
 }
 
+/// A slot on `leg` now or a refusal, never a wait: for a run that moves to a later leg on its own.
+/// `policy` is the `seat_admission` document of the run's route plan.
+pub(crate) fn reserve_now(
+    state: &Path,
+    leg: &Value,
+    policy: &Value,
+) -> Result<Option<Reservation>, ToolError> {
+    let mut plan = json!({"first_leg": leg, "legs": [leg], "seat_admission": policy});
+    if let Some(doc) = plan["seat_admission"].as_object_mut() {
+        doc.insert("queue_wait_seconds".into(), json!(0));
+    }
+    Ok(admit(state, plan.clone(), &mut Fixed(plan))?.1)
+}
+
 /// Takes a slot for the plan's first leg. A full leg queues the seat: it waits and routes again each
 /// poll (a limited leg drops out of the route at once). The seat never falls through to another leg
 /// of the queued leg's harness: past the wait bound it is refused `seat_queue_timeout`, and a route
@@ -202,7 +252,7 @@ pub(crate) fn admit(
     mut plan: Value,
     ports: &mut impl Ports,
 ) -> Result<(Value, Option<Reservation>), ToolError> {
-    let began = ports.now();
+    let began = ports.monotonic();
     let mut queued: Option<(String, Value)> = None;
     loop {
         let leg = plan["first_leg"].clone();
@@ -220,13 +270,15 @@ pub(crate) fn admit(
         let Some(limit) = policy.limits.get(&id).copied() else {
             return Ok((plan, None));
         };
-        let waited = ports.now() - began;
+        let waited = ports.monotonic() - began;
         let lock = lock_leg(state, &id)?;
         let (count, stale) = occupied(state, &crate::records::list_runs(state), &id, ports.now());
         stale.iter().for_each(|p| {
             let _ = std::fs::remove_file(p);
         });
-        if count < limit {
+        // A seat that queued past its budget goes to the fallback even when a slot just freed.
+        let expired = queued.is_some() && waited >= policy.wait.as_secs_f64();
+        if count < limit && !expired {
             let path = slot_dir(state, &id).join(format!("{}-{}", std::process::id(), nonce()));
             std::fs::write(&path, format!("{}\n", ports.now()))
                 .map_err(|e| ToolError::Internal(e.to_string()))?;
@@ -239,7 +291,9 @@ pub(crate) fn admit(
             )));
         }
         queued = Some((id.clone(), leg["harness"].clone()));
-        ports.sleep(policy.poll);
+        // Never sleep past the budget: the last poll is the time left.
+        let left = Duration::from_secs_f64((policy.wait.as_secs_f64() - waited).max(0.0));
+        ports.sleep(policy.poll.min(left));
         plan = match ports.route() {
             Ok(plan) => plan,
             // The `agy-cli` selector found no agy leg left: the queued leg was limited and nothing of
