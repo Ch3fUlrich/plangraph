@@ -84,7 +84,7 @@ def test_429_without_summary_is_a_refusal():
 
 
 def test_resetless_api_refresh_does_not_extend_hold_forever(monkeypatch):
-    """No stated reset: eligible for a probe at once, ok only after a fresher row that is not exhausted."""
+    """No stated reset and no observation time: limited, only a probe run is admitted, until a positive fact."""
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     clock = [1000.0]
@@ -93,16 +93,20 @@ def test_resetless_api_refresh_does_not_extend_hold_forever(monkeypatch):
     fetch = lambda *a: (200, json.dumps({'data': data}).encode())
     gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: clock[0])
     first = gate.apply(SOL, OK)
-    assert first['state'] == 'reprobe' and first['reason'] == 'quota_snapshot_reprobe'
+    assert first['state'] == 'limited' and quota_snapshots.skip_reason(first) == 'quota_probe_pending'
     for later in (2900.0, 1000.0 + 10 * 86400):   # a day or a week later, nothing recorded recovery
         clock[0] = later
-        assert gate.apply(SOL, OK)['state'] == 'reprobe'
+        assert gate.apply(SOL, OK)['state'] == 'limited'
     data[0]['remainingPct'] = 100   # a fresher row showing recovery
     clock[0] += 100
     assert gate.apply(SOL, OK) == OK
     data[0]['remainingPct'] = 0
     clock[0] += 100
-    assert gate.apply(SOL, OK)['state'] == 'reprobe'
+    assert gate.apply(SOL, OK)['state'] == 'limited'
+    # An undated row is the oldest observation: one stored probe clears it, in a fresh gate instance too.
+    for fresh in (gate, QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: clock[0])):
+        fresh.probe_ts = lambda model: 5.0
+        assert fresh.apply(SOL, OK) == OK
 
 
 def test_db_returns_latest_row_of_each_window_in_id_order(tmp_path):
@@ -160,7 +164,8 @@ def test_read_only_snapshot_source_preserves_reset(tmp_path):
     reset = quota_snapshots._ts('2026-11-19T00:00:00Z')
     gate = QuotaGate(lambda: rows)
     assert gate.apply(SOL, OK, now)['evidence']['reset_at'] == reset
-    assert gate.apply(SOL, OK, reset + 1)['state'] == 'reprobe'   # the stored reset alone never returns ok
+    after = gate.apply(SOL, OK, reset + 1)   # the stored reset alone never returns ok
+    assert after['state'] == 'limited' and quota_snapshots.skip_reason(after) == 'quota_probe_pending'
 
 
 def test_missing_or_corrupt_snapshot_db_never_blocks_or_creates_file(tmp_path):
@@ -176,12 +181,13 @@ def test_api_reset_and_resetless_observation_holds(monkeypatch):
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: 1000.0)
-    for extra, state_before in [('', 'reprobe'), (', "next_reset_at": "1970-01-01T02:00:00Z"', 'limited')]:
+    for extra, pending_before in [('', True), (', "next_reset_at": "1970-01-01T02:00:00Z"', False)]:
         def fetch(*args):
             return 200, ('{"data":[{"provider":"codex:a1","remainingPct":0' + extra + '}]}').encode()
         gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: 1000.0)
-        assert gate.apply(SOL, OK, 1001)['state'] == state_before
-        assert gate.apply(SOL, OK, 7201)['state'] == 'reprobe'   # past the stated reset: a probe, never ok
+        before = gate.apply(SOL, OK, 1001)
+        assert before['state'] == 'limited' and (quota_snapshots.skip_reason(before) == 'quota_probe_pending') is pending_before
+        assert quota_snapshots.skip_reason(gate.apply(SOL, OK, 7201)) == 'quota_probe_pending'   # past the stated reset: a probe, never ok
 
 
 def _row(pct, reset, account='a1', window='7d', provider='codex', **extra):
@@ -194,16 +200,21 @@ def test_pool_at_zero_percent_is_skipped_until_its_reset_and_routes_again_after(
     now = time.time()
     reset = now + 3600
     stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset))
-    gate = QuotaGate(lambda: [_row(0, stamp), _row(40, None, window='5h')], clock=lambda: now)
     store = LegStateStore(tmp_path / 'legs.sqlite')
+    gate = QuotaGate(lambda: [_row(0, stamp), _row(40, None, window='5h')], clock=lambda: now,
+                     probe_ts=store.last_quota_clear_ts)
     reader = lambda model, **scope: gate.apply(model, store.leg_status(model, **scope), scope.get('now'))
     card = {'estimate_tokens': 1000}
     assert plan_spawn(card, role='implement', leg_reader=store.leg_status, now=now).legs[0].model == SOL
     during = plan_spawn(card, role='implement', leg_reader=reader, now=now + 60)
     assert SOL not in [leg.model for leg in during.legs]
     assert any(s['leg'] == 'cx-gpt-6.2-sol-medium' and s['reason'] == 'quota_until ' + stamp for s in during.skipped)
+    # The reset passing is no recovery: the leg stays out of the route until a probe newer than the snapshot passed.
     after = plan_spawn(card, role='implement', leg_reader=reader, now=reset + 1)
-    assert after.legs[0].model == SOL
+    assert SOL not in [leg.model for leg in after.legs]
+    assert any(s['leg'] == 'cx-gpt-6.2-sol-medium' and s['reason'] == 'quota_probe_pending' for s in after.skipped)
+    store.record_probe_pass(SOL, 'review-probe', now=reset + 2)
+    assert plan_spawn(card, role='implement', leg_reader=reader, now=reset + 3).legs[0].model == SOL
 
 
 def test_exhausted_codex_pool_skips_every_cx_leg_with_quota_until_and_first_leg_is_next(tmp_path):
@@ -220,8 +231,9 @@ def test_exhausted_codex_pool_skips_every_cx_leg_with_quota_until_and_first_leg_
     assert 'cx-gpt-6.2-sol-medium' in skips and 'cx-gpt-6.2-astra' in skips
     assert set(skips.values()) == {'quota_until ' + stamp}
     past = plan_spawn({'estimate_tokens': 1000}, role='implement', leg_reader=reader, now=now + 7201)
-    assert past.first_leg.id == 'cx-gpt-6.2-sol-medium'
-    assert not any(s['reason'].startswith('quota_until') for s in past.skipped)
+    assert not past.first_leg.id.startswith('cx-gpt-')   # the reset alone does not bring the pool back
+    pending = {s['leg']: s['reason'] for s in past.skipped if s['leg'].startswith('cx-gpt-')}
+    assert pending and set(pending.values()) == {'quota_probe_pending'}
 
 
 def test_pool_stays_up_while_any_account_can_serve_and_other_pools_are_untouched():
@@ -497,21 +509,95 @@ def test_an_exhausted_snapshot_never_returns_ok_by_the_clock():
     gate = QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0)
     assert gate.apply(SOL, OK, reset - 1)['state'] == 'limited'
     at_reset = gate.apply(SOL, OK, reset)
-    assert at_reset['state'] == 'reprobe' and at_reset['reason'] == 'quota_snapshot_reprobe'
+    assert at_reset['state'] == 'limited' and quota_snapshots.skip_reason(at_reset) == 'quota_probe_pending'
     # Case 1: the stated reset lies after the old three-hour freshness deadline.
     far = dict(_row(0, iso(now + 86400)), created_at=iso(now - 60))
     late = QuotaGate(lambda: [far], clock=lambda: now, ttl_s=0)
     assert late.apply(SOL, OK, now + 86400 - 1)['state'] == 'limited'
-    assert late.apply(SOL, OK, now + 86400 + 1)['state'] == 'reprobe'
-    assert late.apply(SOL, OK, now + 90 * 86400)['state'] == 'reprobe'   # no clock ever clears it
+    assert late.apply(SOL, OK, now + 86400 + 1)['state'] == 'limited'
+    assert late.apply(SOL, OK, now + 90 * 86400)['state'] == 'limited'   # no clock ever clears it
     # Case 2: a row without an observation time is the oldest observation.
     undated = _row(0, iso(reset))
     undated.pop('created_at')
     dateless = QuotaGate(lambda: [undated], clock=lambda: now, ttl_s=0)
-    assert dateless.apply(SOL, OK, reset + 1)['state'] == 'reprobe'
+    assert dateless.apply(SOL, OK, reset + 1)['state'] == 'limited'
     assert QuotaGate(lambda: [undated], clock=lambda: now, ttl_s=0, probe_ts=lambda m: 1.0).apply(SOL, OK, reset + 1) == OK
     # Positive facts: a newer row that is not exhausted, or a probe newer than the rows.
     fresh = dict(_row(100, iso(reset + 3600)), created_at=iso(reset + 1))
     assert QuotaGate(lambda: [row, fresh], clock=lambda: now, ttl_s=0).apply(SOL, OK, reset + 5) == OK
     assert QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0, probe_ts=lambda m: reset + 2).apply(SOL, OK, reset + 5) == OK
-    assert QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0, probe_ts=lambda m: now - 120).apply(SOL, OK, reset + 5)['state'] == 'reprobe'
+    assert QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0, probe_ts=lambda m: now - 120).apply(SOL, OK, reset + 5)['state'] == 'limited'
+
+
+# --- one invariant, every reader (round 8): a pool whose last snapshot is exhausted admits ordinary
+# work only when a successful probe NEWER than that snapshot is stored (or a newer row is not
+# exhausted); until then only a probe run is admitted. The probe path never reads the gate.
+
+def _admitted(reader_name, reader, now):
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.routing_support.liveness import require_available
+    if reader_name == 'route':   # route selection: the leg is a candidate of the plan
+        plan = plan_spawn({'estimate_tokens': 1000}, role='implement', leg_reader=reader.leg_status, now=now)
+        return any(leg.model == SOL for leg in plan.legs)
+    if reader_name == 'require_available':   # service spawn and native codex launch admission
+        leg = next(l for l in DEFAULT_LEGS if l.model == SOL)
+        try:
+            require_available(leg, reader, {})
+        except SpawnRefused:
+            return False
+        return True
+    if reader_name == 'launch_skip_reason':   # native launch admission of a non-codex pool leg
+        return quota_snapshots.skip_reason(reader.leg_status(CLAUDE_LEG)) is None
+    assert reader_name == 'admission'         # leg_probe.before_launch: only an ok state admits
+    return reader.leg_status(SOL)['state'] == 'ok'
+
+
+CLAUDE_LEG = 'omniroute/cc-claude-x'
+SEEN_AGO = 120
+
+
+@pytest.mark.parametrize('gate_instance', ['fresh', 'reused'])
+@pytest.mark.parametrize('reader_name', ['route', 'require_available', 'launch_skip_reason', 'admission'])
+@pytest.mark.parametrize('probe', ['none', 'older', 'newer'])
+@pytest.mark.parametrize('reset', ['future', 'passed', 'none'])
+@pytest.mark.parametrize('dated', [True, False])
+@pytest.mark.parametrize('exhausted', [True, False])
+def test_every_reader_admits_ordinary_work_only_after_a_probe_newer_than_an_exhausted_snapshot(
+        tmp_path, monkeypatch, exhausted, dated, reset, probe, reader_name, gate_instance):
+    if not exhausted and (reset != 'future' or not dated):
+        pytest.skip('an open snapshot has no reset to vary and is always dated here')
+    if not dated and probe == 'older':
+        pytest.skip('nothing is older than the oldest observation')
+    now = time.time()
+    seen = now - SEEN_AGO
+    iso = lambda t: time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(t))
+    stamp = {'future': iso(now + 3600), 'passed': iso(now - 60), 'none': None}[reset]
+    provider, model = ('claude', CLAUDE_LEG) if reader_name == 'launch_skip_reason' else ('codex', SOL)
+    row = _row(0 if exhausted else 60, stamp, provider=provider)
+    row['created_at'] = iso(seen) if dated else None
+    if not dated:
+        row.pop('created_at')
+    store = LegStateStore(tmp_path / 'state')
+    monkeypatch.setattr(flag, 'default_reader', _production_reader)
+    monkeypatch.setattr(leg_state, '_default_store', lambda: store)
+    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
+    monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: []))
+    monkeypatch.setattr(quota_snapshots, 'fetch_snapshot_rows', lambda: [dict(row)])
+    flag.default_reader.cache_clear()
+    try:
+        if probe != 'none':
+            store.record_probe_pass(model, 'review-probe', now=seen + (60 if probe == 'newer' else -60))
+        reader = flag.default_reader()
+        if gate_instance == 'reused':
+            reader.leg_status(model, now=now)   # warm the gate; the decision below reuses it
+        else:
+            flag.default_reader.cache_clear()
+            reader = flag.default_reader()
+        expected = (not exhausted) or probe == 'newer'
+        assert _admitted(reader_name, reader, now) is expected
+        # A probe run is admitted in every state: it reads the store, never the gate.
+        assert store.leg_status(model, now=now)['state'] != 'limited'
+    finally:
+        flag.default_reader.cache_clear()
