@@ -80,27 +80,28 @@ pub struct LaunchRequest<'a> {
 pub fn admit_launch(request: &LaunchRequest) -> Result<Launched, String> {
     let rendered = crate::batch_writer_brief::render_input(request.prompt)?;
     let owner = crate::lane_reservation::new_owner();
-    let observed = Observed {
-        state: request.state.to_owned(),
-        repo: request.repo.to_owned(),
-        owner: owner.clone(),
-    };
     let _lock = request
         .reserve
         .then(|| crate::lane_reservation::lock(request.state))
         .transpose()?;
+    // One reading of the claim clock, taken under the lock: the scan of the claims, the sweep of
+    // the lapsed ones and the time stamped on the new claim all decide with it.
+    let at = crate::lane_reservation::now_secs();
+    let observed = Observed {
+        state: request.state.to_owned(),
+        repo: request.repo.to_owned(),
+        owner: owner.clone(),
+        at,
+    };
     let (lane_override, keys) = admit(&rendered.brief, request.extra, &observed, request.explicit)?;
     if keys.len() > MAX_KEYS {
         return Err(format!("a launch holds at most {MAX_KEYS} item keys"));
     }
     let reservation = if request.reserve {
         // The admission passed over any claim that lapsed: take those away for good.
-        crate::lane_reservation::sweep_expired(
-            request.state,
-            &keys,
-            crate::lane_reservation::now_secs(),
-        );
-        if let Err(error) = crate::lane_reservation::reserve(request.state, &keys, &owner) {
+        crate::lane_reservation::sweep_expired(request.state, &keys, at)
+            .map_err(|error| format!("lane reservation: {error}"))?;
+        if let Err(error) = crate::lane_reservation::reserve(request.state, &keys, &owner, at) {
             // Still under the lock: drop what was written before the failure.
             crate::lane_reservation::release(request.state, &keys, &owner);
             crate::lane_reservation::prune(request.state, &keys);

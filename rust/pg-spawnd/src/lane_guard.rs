@@ -36,6 +36,8 @@ pub struct Observed {
     pub repo: PathBuf,
     /// The launch asking: its own reservations are not lanes of another launch.
     pub owner: String,
+    /// The one reading of the claim clock this observation decides with.
+    pub at: u64,
 }
 
 impl LaneSource for Observed {
@@ -49,12 +51,7 @@ impl Observed {
     /// run and only then releases its claim, so a reader that finds no claim reads the runs after
     /// that registration and finds the run: no order of the two steps lets a key through.
     pub fn lanes_between(&self, keys: &[String], between: &dyn Fn()) -> Vec<Lane> {
-        let mut lanes = crate::lane_reservation::lanes(
-            &self.state,
-            keys,
-            &self.owner,
-            crate::lane_reservation::now_secs(),
-        );
+        let mut lanes = crate::lane_reservation::lanes(&self.state, keys, &self.owner, self.at);
         between();
         lanes.extend(run_lanes(&live_runs(&self.state)));
         lanes.extend(branch_lanes(&self.repo, keys));
