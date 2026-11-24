@@ -38,7 +38,7 @@ def test_an_agy_seat_with_a_recorded_harness_counts(tmp_path):
 
 
 @pytest.mark.parametrize("changes", [
-    {"harness": None},                                  # no harness recorded
+    {"harness": None, "chosen_leg": {k: v for k, v in AGY.items() if k != "harness"}},   # no harness recorded anywhere
     {"harness": "unknown"},
     {"chosen_leg": {**AGY, "family": ""}},              # no family
     {"chosen_leg": {**AGY, "model": "unwitnessed"}},
@@ -49,6 +49,17 @@ def test_an_agy_seat_with_a_recorded_harness_counts(tmp_path):
 def test_an_agy_seat_without_its_recorded_facts_is_refused(tmp_path, changes):
     with pytest.raises(ValueError, match="not a passing witnessed seat"):
         seats(mirror(tmp_path, **changes), allow_unwitnessed=True)
+
+
+def test_a_pg_spawnd_record_names_its_harness_only_on_the_chosen_leg(tmp_path):
+    """pg-spawnd writes no top-level harness: the chosen leg's harness stands for it, a mismatch still refuses."""
+    (seat,) = seats(mirror(tmp_path, harness=None), allow_unwitnessed=True)
+    assert seat["harness"] == "agy"
+
+
+def test_a_record_harness_that_contradicts_the_chosen_leg_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="not a passing witnessed seat"):
+        seats(mirror(tmp_path, harness="opencode"), allow_unwitnessed=True)
 
 
 def test_an_unwitnessed_seat_is_refused_unless_the_caller_allows_it(tmp_path):
