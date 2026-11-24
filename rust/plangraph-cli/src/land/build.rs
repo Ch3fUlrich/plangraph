@@ -365,14 +365,48 @@ pub fn verify_manifest_with(
     }
     use super::chain::Step;
     let heads: Vec<&str> = m.parts.iter().map(|part| part.head.as_str()).collect();
-    let chain = super::chain::validate(repo, &m.base, &m.train_sha, &heads)?;
+    // A remerge of main needs main; without the ref a train that carries one is refused.
+    let main = git::out(repo, &["rev-parse", "--verify", super::chain::MAIN_REF]).ok();
+    let chain = super::chain::validate(repo, &m.base, &m.train_sha, &heads, main.as_deref())?;
     let attrs = Attrs::new(&m.policy.attributes)?;
     let date = base_date(repo, &m.base)?;
     let mut replayed = Vec::with_capacity(m.parts.len());
     let mut resolutions = Vec::new();
+    let mut remerges = Vec::new();
     for step in chain {
         let (commit, prev) = match step {
             Step::Merge { commit, parent } => (commit, parent),
+            Step::Remerge {
+                commit,
+                parent,
+                main,
+            } => {
+                // A remerge of main is clean by construction: a conflict or an extra edit is
+                // a hand-made change that has no attribution and no review path.
+                let check = Checkout::new(repo, &parent)?;
+                let merge = git::merge(check.path(), Some(&attrs.path), &main, "replay", &date)?;
+                let actual = git::out(repo, &["rev-parse", &format!("{commit}^{{tree}}")])?;
+                match merge {
+                    Merged::Clean { tree, .. } if tree == actual => {
+                        expected.extend(git::commits(repo, &format!("{parent}..{main}"))?);
+                        expected.insert(commit);
+                        remerges.push(DeltaMerge::new([parent, main], actual, tree, None)?);
+                    }
+                    Merged::Clean { .. } => {
+                        return Err(format!(
+                            "replay: remerge of main {} has an extra or missing edit",
+                            &main[..12]
+                        ))
+                    }
+                    Merged::Conflict { .. } => {
+                        return Err(format!(
+                            "replay: remerge of main {} conflicts; rebuild the train",
+                            &main[..12]
+                        ))
+                    }
+                }
+                continue;
+            }
             Step::Resolution {
                 commit,
                 parent,
@@ -470,6 +504,7 @@ pub fn verify_manifest_with(
         train_sha: m.train_sha.clone(),
         policy: m.policy.clone(),
         merges: replayed,
+        remerges,
         resolutions,
     })
 }
