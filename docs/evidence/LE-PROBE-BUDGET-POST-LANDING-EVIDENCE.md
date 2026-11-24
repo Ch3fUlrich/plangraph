@@ -1,37 +1,49 @@
 # LE-PROBE-BUDGET-POST-LANDING-EVIDENCE
 
 Item: `plangraph:LE-PROBE-BUDGET-POST-LANDING-EVIDENCE`. Named test file: `tests/test_leg_probe_budget.py`
-(split out by commit `29a8edb06`, on main 2026-11-24). Source: `gh api` of the hosted `tests` workflow, runs
-created from 2026-11-24T04:00Z, read at the end of 2026-11-24.
+(split out by `29a8edb06`, on main 2026-11-24). Source: `gh api` of the hosted `tests` workflow, runs created
+from 2026-11-24T04:00Z, read 2026-11-24, refs `main` pushes and `land/train-*` pull requests only.
 
 ## Eligibility
 
-A run is eligible when its head contains `29a8edb06`, its `select` job printed `full=true` (the full
-`pytest -q tests` command runs; an affected-selection run is not provable from its quiet log), and all three
-`Python tests, SQLite keeper` shard jobs finished `success`. The file runs in exactly one of the three
-shards; the shard is not named in the quiet log, so all three job ids are listed. A shard failure would
-make the run ineligible; none occurred. Reruns (`attempt` above 1) count as the one run id.
+The head contains `29a8edb06`; the `select` job printed `full=true` (the full `pytest -q tests` runs; the quiet
+log names no test, so execution is inferred from that command); all three `Python tests, SQLite keeper` shard
+jobs finished `success` or `failure`, not cancelled or skipped. The file runs in one of the three shards, so all
+three job ids are listed. A failed shard is counted, not dropped, and its failures are listed below.
+Reruns (`attempt` above 1) are the one run id.
 
-## Runs (13 eligible)
+## Runs (22 eligible)
 
-| run id | attempt | kind | shard job ids (1, 2, 3) | runner ids | result |
+| run id | attempt | ref | shard job ids (1, 2, 3) | runner ids | shards |
 |---|---|---|---|---|---|
-| 45338475207 | 1 | train | 138256164208, 138256164314, 138256164322 | 1000061974, 1000061977, 1000061979 | success |
-| 45340810098 | 1 | train | 138263828149, 138263828144, 138263828115 | 1000061989, 1000061990, 1000061995 | success |
-| 45344565373 | 2 | main push | 138292719990, 138292720128, 138292720028 | 1000062343, 1000062346, 1000062344 | success |
-| 45347547985 | 1 | lane | 138287275331, 138287275310, 138287275360 | 1000062264, 1000062265, 1000062259 | success |
-| 45352377896 | 1 | lane | 138301863362, 138301863960, 138301863318 | 1000062405, 1000062406, 1000062404 | success |
-| 45365578178 | 1 | train | 138346388054, 138346388142, 138346387975 | 1000062716, 1000062721, 1000062714 | success |
-| 45365882966 | 1 | train | 138347516098, 138347516204, 138347516059 | 1000062731, 1000062735, 1000062729 | success |
-| 45370719249 | 1 | train | 138364129868, 138364129796, 138364129831 | 1000062755, 1000062748, 1000062751 | success |
-| 45376229123 | 1 | main push | 138383290919, 138383290858, 138383290872 | 1000062784, 1000062779, 1000062781 | success |
-| 45376508081 | 1 | train | 138384207088, 138384207031, 138384207009 | 1000062803, 1000062799, 1000062795 | success |
-| 45376763871 | 1 | train | 138385141314, 138385140983, 138385140981 | 1000062820, 1000062815, 1000062812 | success |
-| 45382096214 | 1 | main push | 138403557916, 138403557884, 138403557932 | 1000062833, 1000062837, 1000062836 | success |
-| 45382435951 | 1 | train | 138404812158, 138404812137, 138404812184 | 1000062848, 1000062853, 1000062851 | success |
+| 45338475207 | 1 | train 32 | 138256164208, 138256164314, 138256164322 | 1000061974, 1000061977, 1000061979 | pass |
+| 45340810098 | 1 | train 33 | 138263828149, 138263828144, 138263828115 | 1000061989, 1000061990, 1000061995 | pass |
+| 45344565373 | 2 | main | 138292719990, 138292720128, 138292720028 | 1000062343, 1000062346, 1000062344 | pass |
+| 45365578178 | 1 | train 34 | 138346388054, 138346388142, 138346387975 | 1000062716, 1000062721, 1000062714 | pass |
+| 45365882966 | 1 | train 35 | 138347516098, 138347516204, 138347516059 | 1000062731, 1000062735, 1000062729 | pass |
+| 45370719249 | 1 | train 101 | 138364129868, 138364129796, 138364129831 | 1000062755, 1000062748, 1000062751 | pass |
+| 45376229123 | 1 | main | 138383290919, 138383290858, 138383290872 | 1000062784, 1000062779, 1000062781 | pass |
+| 45376508081 | 1 | train 37 | 138384207088, 138384207031, 138384207009 | 1000062803, 1000062799, 1000062795 | pass |
+| 45376763871 | 1 | train 38 | 138385141314, 138385140983, 138385140981 | 1000062820, 1000062815, 1000062812 | pass |
+| 45382096214 | 1 | main | 138403557916, 138403557884, 138403557932 | 1000062833, 1000062837, 1000062836 | pass |
+| 45382435951 | 1 | train 39 | 138404812158, 138404812137, 138404812184 | 1000062848, 1000062853, 1000062851 | pass |
+| 45385108859 | 1 | train 40 | 138414025172, 138414025052, 138414025232 | 1000062869, 1000062871, 1000062867 | pass |
+| 45386891895 | 1 | main | 138420125454, 138420125426, 138420125672 | 1000062882, 1000062884, 1000062891 | pass |
+| 45389876685 | 1 | train 41 | 138430574411, 138430574410, 138430574878 | 1000062901, 1000062906, 1000062908 | pass |
+| 45392098779 | 1 | train 102 | 138438342748, 138438342538, 138438342480 | 1000062924, 1000062923, 1000062915 | pass |
+| 45392469247 | 1 | train 42 | 138439622602, 138439622501, 138439622474 | 1000062934, 1000062936, 1000062933 | 1 shard failed, other test |
+| 45392622072 | 1 | train 43 | 138440133096, 138440133036, 138440133055 | 1000062957, 1000062950, 1000062952 | pass |
+| 45395250720 | 1 | train 44 | 138449334668, 138449334554, 138449334531 | 1000062977, 1000062976, 1000062971 | pass |
+| 45395621361 | 1 | main | 138450572999, 138450572908, 138450573061 | 1000062987, 1000062983, 1000062988 | pass |
+| 45395984814 | 1 | train 45 | 138451912137, 138451912243, 138451912138 | 1000063005, 1000063009, 1000063004 | pass |
+| 45397812809 | 1 | train 46 | 138458306095, 138458306129, 138458306017 | 1000063026, 1000063025, 1000063024 | pass |
+| 45415062523 | 1 | train 47 | 138519019851, 138519019831, 138519019739 | 1000063054, 1000063057, 1000063059 | pass |
 
-Failures of the probe-budget test among eligible runs: 0 of 13.
-Excluded: `land/train-20261124-36` (cancelled) and every lane run with `full=false` (affected selection).
+## Failures
 
-SKIPPED plangraph:LE-PROBE-BUDGET-POST-LANDING-EVIDENCE needs 7 more runs
-(the work landed on 2026-11-24; 13 full-tier runs exist so far, 20 are required).
+Named test failed: 0 of 22 runs. Failed shards (a different test failed; the log has no `test_leg_probe_budget`):
+- run 45392469247 job 138439622474: failed tests/test_changelog_fragments.py::test_tracked_tree_has_no_case_only_duplicate_paths; mentions of the named test in log: 0
+
+Excluded: train 36 (45374976754) (cancelled before the shards finished), and every `lane/*` run (not main or train).
+
+Target of 20 distinct runs met: 22 runs, 0 failures of the test.
