@@ -56,7 +56,8 @@ def _run_leg(tmp_path, monkeypatch, seed, role='review', exit_code=0, extra_env=
                                 cwd=str(tmp_path),
                                 extra_env={'XDG_DATA_HOME': str(tmp_path), **(extra_env or {})},
                                 wait_seconds=3)
-        await runner._tasks[job.job_id]
+        if job.job_id in runner._tasks:   # a refused launch has no task
+            await runner._tasks[job.job_id]
         return job
     return asyncio.run(run()), ctx
 
@@ -145,7 +146,8 @@ def test_tools_not_denied_yields_no_request_side_model_and_event(tmp_path, monke
                       lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
                       extra_env={'OPENCODE_CONFIG_CONTENT': 'not json'})
     assert job.served_model == 'unwitnessed'
-    assert {'event': 'opencode_tools_not_denied'} in job.events
+    # An unparseable provider config cannot be proven denied: the launch is refused before the process starts.
+    assert any(e.get('event') == 'render_refused' and e['reason'].startswith('review_policy:') for e in job.events)
     assert job.request_side_model is None
     assert calls == []   # the store is never read when tools are not denied
 
@@ -321,7 +323,10 @@ def test_deny_block_condition_removed_yields_not_denied_and_no_witness(tmp_path,
     job, _ = _freeze_leg(tmp_path, monkeypatch,
                          lambda t, home: _store(home, [('s1', t)], [('s1', 'glm-5.2')]),
                          freeze=freeze, bad_cfg=bad_cfg, extra=extra)
-    assert {'event': 'opencode_tools_not_denied'} in job.events
+    if bad_cfg is not None:   # a config that adds tools or lacks the default deny is refused, not launched unwitnessed
+        assert any(e.get('event') == 'render_refused' and e['reason'].startswith('review_policy:') for e in job.events)
+    else:
+        assert {'event': 'opencode_tools_not_denied'} in job.events
     assert job.request_side_model is None
     assert job.witness_kind is None
 

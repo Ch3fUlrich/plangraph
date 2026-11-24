@@ -279,9 +279,9 @@ def apply_review_permissions(env, denied_tools, *, repository_tools):
     try:
         config = json.loads(env.get('OPENCODE_CONFIG_CONTENT') or '{}')
     except (ValueError, TypeError):
-        return  # An unparseable config cannot be proven denied.
+        return 'review_policy: provider config is not JSON'  # cannot be proven denied: refuse
     if not isinstance(config, dict):
-        return
+        return 'review_policy: provider config is not an object'
     permission = dict.fromkeys(('*', *denied_tools), 'deny')
     if repository_tools:
         permission.update(dict.fromkeys(_READ_TOOLS, 'allow'))
@@ -292,20 +292,23 @@ def apply_review_permissions(env, denied_tools, *, repository_tools):
 
 
 def review_policy_refusal(config_json, denied_tools, *, repository_tools):
-    """Why a review child's final config grants more than the seat policy, else None.
+    """Why a review child's final config is not the read-only seat policy, else None.
 
-    Refuses a grant: a permission outside the policy with any value but 'deny' (an unknown key,
-    an extra bash allow, an `edit` or `external_directory` allow), or sharing set to anything but 'disabled'. A
-    config that is missing a deny, malformed, or carries `mcp`/`plugin` is not refused here: it
-    launches unwitnessed through `_opencode_tools_denied` (`opencode_tools_not_denied`).
+    Fails closed. Refuses a config that is not JSON, has no `permission` object or no default deny
+    (`*`), grants a permission outside the policy (an unknown key, an extra bash allow, an `edit` or
+    `external_directory` allow), adds a tool source (`mcp` not `{}`, `plugin` not `[]`) or sets sharing
+    to anything but 'disabled'. Environment layers (managed config dir, OPENCODE_* names, the per-job
+    dirs) are proven by `_opencode_tools_denied` and only mark the run unwitnessed.
     """
     try:
         cfg = json.loads(config_json or '{}')
     except (ValueError, TypeError):
-        return None
+        return 'review_policy: config is not JSON'
     permission = cfg.get('permission') if isinstance(cfg, dict) else None
     if not isinstance(permission, dict):
-        return None
+        return 'review_policy: no permission object'
+    if permission.get('*') != 'deny':
+        return 'review_policy: default deny is missing'
     allowed = set(_READ_TOOLS) if repository_tools else set()
     for tool, value in permission.items():
         if tool in allowed:
@@ -318,6 +321,8 @@ def review_policy_refusal(config_json, denied_tools, *, repository_tools):
             ok = value == 'deny'
         if not ok:
             return f'review_policy: {tool} is allowed'
+    if cfg.get('mcp') != {} or cfg.get('plugin') != []:
+        return 'review_policy: mcp or plugin adds a tool source'
     if cfg.get('share') not in (None, 'disabled'):
         return 'review_policy: sharing is not disabled'
     return None

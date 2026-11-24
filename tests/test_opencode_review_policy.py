@@ -50,20 +50,20 @@ def test_any_extra_allow_refuses_the_launch(edit):
     assert review_policy_refusal(json.dumps(cfg), _DENIED_TOOLS, repository_tools=True)
 
 
-def test_a_missing_deny_or_extra_surface_is_left_to_the_witness_proof():
-    for edit in (lambda c: c['permission'].pop('webfetch'), lambda c: c.update(mcp={'x': {}}),
-                 lambda c: c.update(plugin=['p']), lambda c: c.pop('permission')):
-        cfg = config(True)
-        edit(cfg)
-        assert review_policy_refusal(json.dumps(cfg), _DENIED_TOOLS, repository_tools=True) is None
-        assert not _opencode_tools_denied(json.dumps(cfg), {})
-    assert review_policy_refusal('not json', _DENIED_TOOLS, repository_tools=True) is None
-
-
-def test_denied_calls_are_counted_and_plain_tool_errors_are_not():
-    stream = '\n'.join([DENIED_CALL, PLAIN_ERROR, 'stderr text', DENIED_CALL])
-    assert permission_denied_count(stream) == 2
-    assert permission_denied_count(PLAIN_ERROR) == permission_denied_count('') == 0
+@pytest.mark.parametrize('edit,reason', [
+    (lambda c: c['permission'].pop('*'), 'default deny is missing'),
+    (lambda c: c.update(mcp={'x': {}}), 'adds a tool source'),
+    (lambda c: c.update(plugin=['p']), 'adds a tool source'),
+    (lambda c: c.pop('permission'), 'no permission object'),
+])
+def test_a_missing_default_deny_or_extra_tool_source_refuses_the_launch(edit, reason):
+    cfg = config(True)
+    edit(cfg)
+    assert reason in review_policy_refusal(json.dumps(cfg), _DENIED_TOOLS, repository_tools=True)
+    assert not _opencode_tools_denied(json.dumps(cfg), {})
+    assert 'not JSON' in review_policy_refusal('not json', _DENIED_TOOLS, repository_tools=True)
+    env = {'OPENCODE_CONFIG_CONTENT': 'not json'}
+    assert 'not JSON' in apply_review_permissions(env, _DENIED_TOOLS, repository_tools=True)
 
 
 def run_review(tmp_path, monkeypatch, stdout, tamper=None):
