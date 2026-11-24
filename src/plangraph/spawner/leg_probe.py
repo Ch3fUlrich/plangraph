@@ -193,7 +193,11 @@ async def _await_completion(runner, job, deadline):
 
 
 def probe_quota_line(leg, review_mode, exit_code, stdout, stderr):
-    """The limit line of a failed probe: an agy review probe's, and any Codex probe's (its account limit)."""
+    """The limit line of a failed probe: a review probe's (agy, OpenCode), and any Codex probe's (its account limit)."""
+    if leg.harness == 'opencode' and review_mode:
+        # An OpenCode run is read the way a real run's exit is: without its progress lines.
+        from .exit_outcome import without_progress
+        return harness_limit_line(exit_code, without_progress(stdout), without_progress(stderr))
     if leg.harness == 'codex' or (review_mode and leg.harness == 'agy'):
         return harness_limit_line(exit_code, stdout, stderr)
     return None
@@ -578,7 +582,7 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
         if quota_reprobe:
             probe_kwargs['quota_reprobe'] = True
         results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)))
-    reply = dict(ok=all(row['ok'] for row in results if row.get('skipped') != 'limited'),
+    reply = dict(ok=all(row['ok'] for row in results if not row.get('skipped')),
                  probes=results,
                  limited_legs=[row['id'] for row in results if row.get('skipped') == 'limited'])
     if manage_key is not None:
