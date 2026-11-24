@@ -195,3 +195,65 @@ fn the_blocked_descendants_of_a_dropped_part_leave_with_it_and_return_only_under
     assert_eq!(ok(&mut m, Event::Select), Outcome::Train(3));
     assert_eq!(m.train_parts(3), [0, 1]);
 }
+
+#[test]
+fn an_adopted_conflict_resolution_rejoins_before_ci_and_is_refused_after() {
+    let specs = vec![spec(1, None), spec(2, Some(0)), spec(4, None)];
+    let mut m = Model::new(Policy::every_ready_rides(Order::Oldest), specs);
+    register_all(&mut m, 0..3);
+    ok(&mut m, Event::Select);
+    // A part that never conflicted has no resolution to adopt.
+    assert_eq!(
+        denied(&mut m, Event::Adopt { train: 0, part: 2 }),
+        Denied::Phase
+    );
+    ok(&mut m, Event::Conflict { train: 0, part: 0 });
+    assert_eq!(m.train_parts(0), [2]);
+    // The resolution is adopted: the part and what waited on it ride again, unbound.
+    ok(
+        &mut m,
+        Event::Bind {
+            train: 0,
+            build: 0,
+            base: 0,
+            policy: POLICY,
+        },
+    );
+    ok(&mut m, Event::Adopt { train: 0, part: 0 });
+    assert_eq!(m.train_parts(0), [2, 0, 1]);
+    assert!(m.left_out(0).is_empty() && !m.is_bound(0));
+    assert_eq!(
+        denied(&mut m, Event::Adopt { train: 0, part: 0 }),
+        Denied::Phase
+    );
+    // After the freeze a resolution is refused and the part stays out.
+    let mut m = Model::new(Policy::every_ready_rides(Order::Oldest), disjoint(2));
+    register_all(&mut m, 0..2);
+    ok(&mut m, Event::Select);
+    ok(&mut m, Event::Conflict { train: 0, part: 0 });
+    start(&mut m, 0);
+    assert_eq!(
+        denied(&mut m, Event::Adopt { train: 0, part: 0 }),
+        Denied::CiStarted
+    );
+    assert_eq!(m.status(0), Status::Ready);
+}
+
+#[test]
+fn an_adopted_resolution_leaves_out_a_descendant_whose_parent_was_dropped() {
+    let specs = vec![
+        spec(1, None),
+        spec(2, Some(0)),
+        spec(4, Some(1)),
+        spec(8, None),
+    ];
+    let mut m = Model::new(Policy::every_ready_rides(Order::Oldest), specs);
+    register_all(&mut m, 0..4);
+    ok(&mut m, Event::Select);
+    ok(&mut m, Event::Conflict { train: 0, part: 0 });
+    ok(&mut m, Event::Drop { part: 1 });
+    ok(&mut m, Event::Adopt { train: 0, part: 0 });
+    // Part 2 waited on the dropped part 1: it stays out.
+    assert_eq!(m.train_parts(0), [3, 0]);
+    assert_eq!(m.status(2), Status::Ready);
+}
