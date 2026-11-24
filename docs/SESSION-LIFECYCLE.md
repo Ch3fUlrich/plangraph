@@ -17,14 +17,16 @@ All lane files live in one directory: `$PG_PR_DIR`, default `~/.local/state/pr`.
 
 A findings file is the prompt: its whole text is sent as one argument, byte for byte (no
 header, no wrapping). Producers call `pg-session-resume deliver --lane <lane> --head <sha>
-[--file F]` (text from F or stdin): it takes the next round number, writes the `.head`
-sidecar and then the `.txt`, each by rename. An empty or whitespace-only file is ignored; one
+[--file F]` (text from F or stdin): under a per-lane lock it takes the next round number, writes
+the `.head` sidecar and then the `.txt`, each by rename, so concurrent producers never share a
+round or pair one review's head with another's text. An empty or whitespace-only file is ignored; one
 over 100000 bytes is refused once and logged. Only the highest unacknowledged round is sent.
 
 The sidecar binds a round to the head it reviewed. A round is sent only when its sidecar names
 the head the session was stopped at (`resume.status_head`, else `resume.head`) and the lane
 status still names that head. Otherwise it is refused once and logged: `no-reviewed-head`,
-`head-mismatch`, `head-superseded`, `no-stop-head`. No clock decides anything: a round is
+`head-mismatch`, `head-superseded`, `no-stop-head`, `no-lane-head` (the lane status is missing,
+unreadable or has no valid HEAD: nothing is sent without a verified current head). No clock decides anything: a round is
 delivered when the runtime acknowledges it, and `resume.round` is the last acknowledged round.
 The lane also gets `<lane>.resume.json` (state `stopped|running`, agent, handle, head, round),
 the lane-side copy of the launch record's `resume` object.
@@ -45,7 +47,8 @@ Stopping needs the runtime's own positive idle signal:
 - Codex and OpenCode: `pid` and `pid_start` (field 22 of `/proc/<pid>/stat`; a pid with another
   start time is never signalled, a gone process counts as already stopped), no child process,
   and `turn_end_path`, a file the runtime or launcher touches when a turn ends: its mtime must
-  not be older than the activity. Without it the session is kept (`no-idle-signal`). Activity
+  be strictly newer than the activity (nanosecond mtimes; the same instant or the same second
+  proves nothing). Without it the session is kept (`no-idle-signal`). Activity
   is `activity_path` (a per-session file the launcher names), else the Codex rollout file;
   OpenCode has no other per-session source, so without `activity_path` it is never reaped as idle.
 
@@ -60,10 +63,12 @@ Resume: only the newest stopped record of a lane resumes, never while another re
 is live. A kernel lock (flock on `<state>/launch/pg-session-resume.lock`) keeps two ticks
 apart. The round is claimed first (`resume.claim_round`, `claim_ts`, `claim_offset` = transcript
 length, `claim_pid`, `claim_start`), the launch runs, and the claim is settled against the
-runtime: delivered when the transcript holds the prompt after `claim_offset` (a runtime without
-a transcript: the process this launch started is alive with its recorded start time). A
-delivery sets `resume.round`, `state: "running"`, clears `stopped_ts` and the claim, stores the
-process identity (found again from its command line after a dead tick) and logs
+runtime: delivered when the transcript holds the prompt after `claim_offset` (a user message after `claim_offset` holds the prompt; an assistant message quoting it does not
+count; a runtime without a transcript: the process this launch started is alive (a zombie is
+gone) and carries the prompt in its own arguments). A
+delivery sets `resume.round`, `state: "running"`, clears `stopped_ts` and the claim, keeps the
+verified launch identity (pid and start time, found again from its command line after a dead
+tick) even when the process already exited, so the next stop records it as gone and logs
 `event=resume-acked`. A claim not acknowledged with nothing running, or past 120 s without a
 process, is dropped, the record is stopped again and the round is sent again
 (`event=resume-reconciled outcome=not-acked`).
@@ -98,8 +103,9 @@ process, is dropped, the record is stopped again and the round is sent again
   `agent`, the Codex `thread_id` / OpenCode `opencode_session`, `pid`, `pid_start`, and for
   Codex/OpenCode `activity_path` and `turn_end_path`. Claude records already work as they are.
 - Orchestrator: hand a fix round over with `pg-session-resume deliver` (a recorded slice).
-- Tests: `tests/systemd.rs` runs the binary as a transient systemd user unit with the deployed
-  `KillMode` and checks the resumed writer outlives it and got the text.
+- Tests: `tests/systemd.rs` runs the deployed `tick` as a transient systemd user unit with the
+  deployed `KillMode` and checks the resumed writer is still alive (not a zombie) afterwards and
+  got the text; with `KillMode=control-group` it fails.
 - Stop hook: register `sh -c 'test -x "$1" || exit 1; exec "$1" stop-hook' _ <path>/pg-session-resume`
   on the Claude Code `Stop` event. Without it the timer stops a session about a minute
   after its DONE line.

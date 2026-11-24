@@ -22,6 +22,15 @@ pub fn deliver(dir: &Path, lane: &str, head: &str, text: &str) -> Result<PathBuf
     if text.trim().is_empty() {
         return Err("the findings text is empty".into());
     }
+    // One producer per lane at a time: the round is allocated and both files published while
+    // the lock is held, so no reader sees one review's head next to another review's text.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{lane}.deliver.lock")))
+        .map_err(|e| format!("deliver lock: {e}"))?;
+    lock.lock().map_err(|e| format!("deliver lock: {e}"))?;
     let round = highest_round(dir, lane) + 1;
     put(
         &reviewed_head_path(dir, lane, round),
@@ -29,5 +38,6 @@ pub fn deliver(dir: &Path, lane: &str, head: &str, text: &str) -> Result<PathBuf
     )?;
     let file = dir.join(findings_name(lane, round));
     put(&file, text)?;
+    drop(lock);
     Ok(file)
 }

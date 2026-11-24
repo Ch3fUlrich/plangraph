@@ -199,6 +199,7 @@ fn an_idle_stop_without_a_status_head_keeps_the_git_head_for_the_moved_check() {
     h.activity = Some(1);
     reap_idle(&mut h, &r.cfg);
     assert_eq!(record(&r, "writer")["resume"]["head"], HEAD);
+    write(&r, "lane-a.status", &format!("HEAD: {HEAD}\n")); // the lane still names its head
     write(&r, "lane-a.fix-round-1.txt", "fix it");
     h.head = Some(HEAD2.into());
     resume_findings(&mut h, &r.cfg);

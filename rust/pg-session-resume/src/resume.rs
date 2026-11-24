@@ -89,9 +89,17 @@ pub fn resume_findings(host: &mut dyn Host, cfg: &Config) {
             refuse(host, &mut rec, why);
             continue;
         };
-        if head_of_status(cfg, &lane).is_some_and(|now| now != stopped_at) {
-            refuse(host, &mut rec, "head-superseded");
-            continue;
+        // A verified current head is required: a missing or unreadable status proves nothing.
+        match head_of_status(cfg, &lane) {
+            Some(now) if now == stopped_at => {}
+            Some(_) => {
+                refuse(host, &mut rec, "head-superseded");
+                continue;
+            }
+            None => {
+                refuse(host, &mut rec, "no-lane-head");
+                continue;
+            }
         }
         resume_one(
             host,
@@ -127,13 +135,19 @@ fn settle_claim(host: &mut dyn Host, cfg: &Config, rec: &mut Record, lane: &str)
     let acked = match &prompt {
         Some(text) => host
             .transcript_contains(rec, rec.resume_u64("claim_offset").unwrap_or(0), text)
-            .unwrap_or(alive),
+            .unwrap_or_else(|| {
+                // No transcript: the receipt is the prompt in the started process's own arguments.
+                proc.is_some_and(|(p, s)| {
+                    u32::try_from(p).is_ok_and(|p| host.process_holds_prompt(p, s, text))
+                })
+            }),
         None => false,
     };
     if acked {
         let handle = rec.resume_str("handle").unwrap_or_default().to_owned();
+        // The verified launch identity stays in the record even when the process has already
+        // exited: a later stop sees "gone" and records the session, instead of finding nothing.
         let found = proc
-            .filter(|_| alive)
             .and_then(|(p, s)| Some((u32::try_from(p).ok()?, s)))
             .or_else(|| {
                 host.find_process(&handle)
@@ -258,7 +272,7 @@ fn resume_one(
             return;
         }
     };
-    let start = pid.and_then(|p| host.proc_start(p));
+    let start = pid.and_then(|p| host.launch_start(p));
     rec.set_resume(
         "claim_pid",
         pid.filter(|_| start.is_some())

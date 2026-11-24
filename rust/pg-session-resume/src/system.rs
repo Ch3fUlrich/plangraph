@@ -78,7 +78,9 @@ impl Host for System {
     }
 
     fn proc_start(&self, pid: u32) -> Option<u64> {
-        proc_start_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // An exited process nobody waited for still has a /proc entry and its start time: gone.
+        (proc_state(&stat)? != 'Z').then(|| proc_start_ticks(&stat))?
     }
 
     fn has_children(&self, pid: u32) -> Option<bool> {
@@ -95,6 +97,10 @@ impl Host for System {
         readable.then_some(false)
     }
 
+    fn launch_start(&self, pid: u32) -> Option<u64> {
+        proc_start_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+    }
+
     fn worktree_id(&self, cwd: &Path) -> Option<String> {
         use std::os::unix::fs::MetadataExt;
         let meta = std::fs::metadata(cwd).ok()?;
@@ -103,8 +109,10 @@ impl Host for System {
     }
 
     fn turn_ended(&self, rec: &Record) -> Option<bool> {
-        let marker = mtime_secs(Path::new(rec.str("turn_end_path")?))?;
-        Some(marker >= self.activity_ts(rec)?)
+        // Nanoseconds, and strictly after: a marker from the same instant as the activity (or
+        // the same second) cannot prove that the turn the activity belongs to has ended.
+        let marker = mtime_ns(Path::new(rec.str("turn_end_path")?))?;
+        Some(marker > self.activity_ns(rec)?)
     }
 
     fn transcript_len(&self, rec: &Record) -> Option<u64> {
@@ -117,10 +125,7 @@ impl Host for System {
         file.seek(SeekFrom::Start(from)).ok()?;
         let mut tail = Vec::new();
         file.read_to_end(&mut tail).ok()?;
-        // The transcript holds the message JSON-escaped; compare in that form.
-        let quoted = serde_json::to_string(text).ok()?;
-        let needle = &quoted[1..quoted.len() - 1];
-        Some(String::from_utf8_lossy(&tail).contains(needle))
+        Some(jsonl_has_user_text(&tail, text))
     }
 
     fn find_process(&self, handle: &str) -> Option<(u32, u64)> {
@@ -153,21 +158,17 @@ impl Host for System {
     }
 
     fn activity_ts(&self, rec: &Record) -> Option<u64> {
-        let newest = |paths: Vec<PathBuf>| paths.iter().filter_map(|p| mtime_secs(p)).max();
-        if let Some(own) = rec.str("activity_path") {
-            return newest(vec![PathBuf::from(own)]); // the launcher names the file the runtime writes
-        }
-        let home = PathBuf::from(std::env::var_os("HOME")?);
-        match rec.agent() {
-            Agent::Claude => {
-                let transcript = transcript_path(&home, rec.str("cwd")?, rec.str("session_id")?);
-                newest(vec![transcript, job_dir(&home, rec)?.join("state.json")])
-            }
-            Agent::Codex => newest(codex_rollouts(&home, rec.handle()?)),
-            // OpenCode keeps one shared database: without a per-session `activity_path` the
-            // session has no activity signal and is never reaped as idle.
-            Agent::OpenCode => None,
-        }
+        u64::try_from(self.activity_ns(rec)? / 1_000_000_000).ok()
+    }
+
+    fn process_holds_prompt(&self, pid: u32, start: u64, text: &str) -> bool {
+        // The prompt is an argument of the process this launch started: tied to the launch,
+        // the session handle in the same command line, and the round (the text itself).
+        let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            return false;
+        };
+        self.proc_start(pid) == Some(start)
+            && cmdline.split(|b| *b == 0).any(|a| a == text.as_bytes())
     }
 
     fn job_state(&self, rec: &Record) -> Option<JobState> {
@@ -192,6 +193,56 @@ impl Host for System {
             self.log_failed = true;
         }
     }
+}
+
+impl System {
+    /// Last sign of life in nanoseconds since the epoch.
+    fn activity_ns(&self, rec: &Record) -> Option<u128> {
+        let newest = |paths: Vec<PathBuf>| paths.iter().filter_map(|p| mtime_ns(p)).max();
+        if let Some(own) = rec.str("activity_path") {
+            return newest(vec![PathBuf::from(own)]); // the launcher names the file the runtime writes
+        }
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        match rec.agent() {
+            Agent::Claude => {
+                let transcript = transcript_path(&home, rec.str("cwd")?, rec.str("session_id")?);
+                newest(vec![transcript, job_dir(&home, rec)?.join("state.json")])
+            }
+            Agent::Codex => newest(codex_rollouts(&home, rec.handle()?)),
+            // OpenCode keeps one shared database: without a per-session `activity_path` the
+            // session has no activity signal and is never reaped as idle.
+            Agent::OpenCode => None,
+        }
+    }
+}
+
+fn mtime_ns(path: &Path) -> Option<u128> {
+    let m = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos())
+}
+
+/// Whether one of the JSONL lines carries `text` inside a user message. An assistant
+/// message that quotes the text does not count.
+pub fn jsonl_has_user_text(jsonl: &[u8], text: &str) -> bool {
+    fn walk(v: &serde_json::Value, text: &str, user: bool) -> bool {
+        use serde_json::Value;
+        match v {
+            Value::Object(m) => {
+                let role = m.get("role").and_then(Value::as_str);
+                let kind = m.get("type").and_then(Value::as_str);
+                let user =
+                    user || role == Some("user") || matches!(kind, Some("user" | "user_message"));
+                m.values().any(|c| walk(c, text, user))
+            }
+            Value::Array(a) => a.iter().any(|c| walk(c, text, user)),
+            Value::String(s) => user && s.contains(text),
+            _ => false,
+        }
+    }
+    jsonl
+        .split(|b| *b == b'\n')
+        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .any(|v| walk(&v, text, false))
 }
 
 /// The file the runtime appends the session's messages to.
@@ -248,6 +299,15 @@ pub fn parse_job_state(text: &str) -> Option<JobState> {
         .and_then(|t| t.as_u64())
         .unwrap_or(0);
     Some(JobState { state, tasks })
+}
+
+/// Field 3 of /proc/<pid>/stat (the state letter), counted from the last `)`.
+pub fn proc_state(stat: &str) -> Option<char> {
+    stat[stat.rfind(')')? + 1..]
+        .split_whitespace()
+        .next()?
+        .chars()
+        .next()
 }
 
 /// Field 4 of /proc/<pid>/stat (the parent pid), counted from the last `)`.

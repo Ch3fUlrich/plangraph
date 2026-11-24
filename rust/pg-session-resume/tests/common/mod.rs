@@ -34,6 +34,9 @@ pub struct Fake {
     pub find: Option<(u32, u64)>,
     /// A spawned process that is gone again when it is looked at.
     pub spawn_dies: bool,
+    /// Whether a live process carries the prompt in its arguments.
+    pub holds_prompt: bool,
+    pub launched: HashMap<u32, u64>,
 }
 
 impl Fake {
@@ -62,6 +65,8 @@ impl Fake {
             tcontains: Some(true),
             find: None,
             spawn_dies: false,
+            holds_prompt: true,
+            launched: HashMap::new(),
         }
     }
 }
@@ -83,6 +88,7 @@ impl Host for Fake {
         if self.fail_run {
             return Err("boom".into());
         }
+        self.launched.insert(self.next_pid, 55);
         if !self.spawn_dies {
             self.procs.insert(self.next_pid, 55);
         }
@@ -108,6 +114,12 @@ impl Host for Fake {
     }
     fn transcript_contains(&self, _: &Record, _: u64, _: &str) -> Option<bool> {
         self.tcontains
+    }
+    fn process_holds_prompt(&self, pid: u32, start: u64, _: &str) -> bool {
+        self.holds_prompt && self.procs.get(&pid) == Some(&start)
+    }
+    fn launch_start(&self, pid: u32) -> Option<u64> {
+        self.launched.get(&pid).copied()
     }
     fn find_process(&self, _: &str) -> Option<(u32, u64)> {
         self.find

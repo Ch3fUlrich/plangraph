@@ -84,3 +84,34 @@ fn the_deliver_command_reads_stdin_and_prints_the_file() {
         "from stdin"
     );
 }
+
+#[test]
+fn concurrent_producers_never_share_a_round_or_mix_a_head_with_another_text() {
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let start = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let threads: Vec<_> = (0..8)
+        .map(|i| {
+            let (dir, start) = (dir.clone(), start.clone());
+            std::thread::spawn(move || {
+                let head = format!("{i:040x}");
+                start.wait();
+                deliver(dir.path(), "lane-a", &head, &format!("review {i}")).unwrap();
+                (head, format!("review {i}"))
+            })
+        })
+        .collect();
+    let sent: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    for round in 1..=8u64 {
+        let head =
+            std::fs::read_to_string(dir.path().join(format!("lane-a.fix-round-{round}.head")))
+                .unwrap();
+        let text =
+            std::fs::read_to_string(dir.path().join(format!("lane-a.fix-round-{round}.txt")))
+                .unwrap();
+        assert!(
+            sent.contains(&(head, text)),
+            "round {round}: head and text come from one review"
+        );
+    }
+    assert!(!dir.path().join("lane-a.fix-round-9.txt").exists());
+}

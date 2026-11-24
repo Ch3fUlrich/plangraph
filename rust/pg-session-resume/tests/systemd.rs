@@ -23,14 +23,24 @@ fn systemd_user_available() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-fn deployed_kill_mode() -> String {
+fn unit_line(key: &str) -> String {
     let unit = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../deploy/systemd/pg-session-resume.service");
     let text = std::fs::read_to_string(unit).unwrap();
-    text.lines()
-        .find(|l| l.starts_with("KillMode="))
-        .expect("KillMode in the unit")
-        .to_owned()
+    let line = text
+        .lines()
+        .find(|l| l.starts_with(key))
+        .unwrap_or_else(|| panic!("{key} in the unit"));
+    line[key.len()..].to_owned()
+}
+
+/// The deployed ExecStart minus its binary: the arguments the timer runs the tick with.
+fn deployed_tick_args() -> Vec<String> {
+    unit_line("ExecStart=")
+        .split_whitespace()
+        .skip(1)
+        .map(str::to_owned)
+        .collect()
 }
 
 #[test]
@@ -53,7 +63,7 @@ fn a_resumed_writer_survives_the_tick_unit_and_receives_the_findings() {
     let fake = bin.join("codex");
     std::fs::write(
         &fake,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PG_TEST_OUT\"\nexec sleep 20\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PG_TEST_OUT\"\nsleep 20\n",
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
@@ -61,25 +71,19 @@ fn a_resumed_writer_survives_the_tick_unit_and_receives_the_findings() {
         "state": "stopped", "stopped_ts": 2,
         "resume": {"agent": "codex", "handle": "T-1", "head": null, "status_head": HEAD, "round": 0, "stopped_ts": 2}});
     std::fs::write(state.join("launch/sessions/writer-1.json"), rec.to_string()).unwrap();
-    std::fs::write(pr.join("lane-a.fix-round-1.head"), HEAD).unwrap();
-    std::fs::write(pr.join("lane-a.fix-round-1.txt"), "fix the thing\n").unwrap();
+    std::fs::write(pr.join("lane-a.status"), format!("HEAD: {HEAD}\n")).unwrap();
+    pg_session_resume::deliver::deliver(&pr, "lane-a", HEAD, "fix the thing\n").unwrap();
     let out = dir.path().join("args");
 
     let run = Command::new("systemd-run")
-        .args([
-            "--user",
-            "--wait",
-            "--collect",
-            "-p",
-            "Type=oneshot",
-            "-p",
-            &deployed_kill_mode(),
-        ])
+        .args(["--user", "--wait", "--collect", "-p", "Type=oneshot", "-p"])
+        .arg(format!("KillMode={}", unit_line("KillMode=")))
         .arg(format!("--setenv=PATH={}:/usr/bin:/bin", bin.display()))
         .arg(format!("--setenv=PG_TEST_OUT={}", out.display()))
         .arg(format!("--setenv=HOME={}", dir.path().display()))
         .arg(env!("CARGO_BIN_EXE_pg-session-resume"))
-        .args(["resume", "--min-free-mb", "0", "--state"])
+        .args(deployed_tick_args()) // the deployed `tick`
+        .args(["--min-free-mb", "0", "--state"])
         .arg(&state)
         .arg("--pr-dir")
         .arg(&pr)
@@ -107,6 +111,11 @@ fn a_resumed_writer_survives_the_tick_unit_and_receives_the_findings() {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .expect("the writer outlived the tick unit");
     assert_eq!(proc_start_ticks(&stat), Some(start));
+    let state = pg_session_resume::system::proc_state(&stat);
+    assert!(
+        matches!(state, Some('S' | 'R' | 'D')),
+        "alive, not a zombie: {state:?}"
+    );
     for _ in 0..50 {
         if out.exists() {
             break;

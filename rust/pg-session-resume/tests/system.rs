@@ -131,3 +131,33 @@ fn the_tick_unit_leaves_resumed_writers_running_when_it_exits() {
         "oneshot cleanup would kill the resumed children"
     );
 }
+
+#[test]
+fn only_a_user_message_carrying_the_text_is_a_receipt() {
+    use pg_session_resume::system::jsonl_has_user_text;
+    let text = "fix the thing\nsecond line";
+    let user_claude =
+        serde_json::json!({"type": "user", "message": {"role": "user", "content": text}});
+    let user_codex = serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user",
+        "content": [{"type": "input_text", "text": text}]}});
+    let assistant = serde_json::json!({"type": "assistant", "message": {"role": "assistant",
+        "content": [{"type": "text", "text": format!("you asked: {text}")}]}});
+    let jsonl = |lines: &[&serde_json::Value]| {
+        lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into_bytes()
+    };
+    assert!(jsonl_has_user_text(&jsonl(&[&user_claude]), text));
+    assert!(jsonl_has_user_text(
+        &jsonl(&[&assistant, &user_codex]),
+        text
+    ));
+    assert!(
+        !jsonl_has_user_text(&jsonl(&[&assistant]), text),
+        "an assistant quoting the findings is no receipt"
+    );
+    assert!(!jsonl_has_user_text(b"not json\n{\"type\":\"user\"}", text));
+}

@@ -3,6 +3,7 @@
 
 use pg_session_resume::engine::{reap_idle, Config};
 use pg_session_resume::host::Host;
+use pg_session_resume::record::Record;
 use pg_session_resume::system::{proc_start_ticks, System};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -107,4 +108,80 @@ fn a_session_without_a_turn_end_marker_is_kept_and_the_reason_logged_once() {
     assert!(h.now() > 0);
     r.child.kill().unwrap();
     r.child.wait().unwrap();
+}
+
+#[test]
+fn a_process_holds_the_prompt_only_while_it_is_alive_with_it_in_its_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = System {
+        log_file: dir.path().join("log"),
+        log_failed: false,
+    };
+    let prompt = "fix the thing\nplease";
+    let mut child = Command::new("sh")
+        .args(["-c", "sleep 30", "launch", prompt])
+        .spawn()
+        .unwrap();
+    let start = h.launch_start(child.id()).unwrap();
+    // between fork and exec the child still shows its parent's command line: wait for exec
+    for _ in 0..200 {
+        if h.process_holds_prompt(child.id(), start, prompt) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(h.process_holds_prompt(child.id(), start, prompt));
+    assert!(
+        !h.process_holds_prompt(child.id(), start, "another round"),
+        "not this round's text"
+    );
+    assert!(
+        !h.process_holds_prompt(child.id(), start + 1, prompt),
+        "not this process"
+    );
+    child.kill().unwrap(); // killed, not waited for: a zombie with its start time still readable
+    for _ in 0..100 {
+        if h.proc_start(child.id()).is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(h.proc_start(child.id()), None, "a zombie is gone");
+    assert_eq!(
+        h.launch_start(child.id()),
+        Some(start),
+        "but its launch identity is still readable"
+    );
+    assert!(!h.process_holds_prompt(child.id(), start, prompt));
+    child.wait().unwrap();
+}
+
+#[test]
+fn newer_activity_in_the_same_second_as_the_turn_end_marker_keeps_the_turn_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = System {
+        log_file: dir.path().join("log"),
+        log_failed: false,
+    };
+    let (activity, marker) = (dir.path().join("activity"), dir.path().join("marker"));
+    for f in [&activity, &marker] {
+        std::fs::write(f, "x").unwrap();
+    }
+    let at = |p: &Path, ms: u64| {
+        let f = std::fs::File::options().write(true).open(p).unwrap();
+        f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms))
+            .unwrap();
+    };
+    let rec = Record {
+        path: dir.path().join("r.json"),
+        value: json!({"agent": "opencode", "opencode_session": "S-1", "activity_path": activity, "turn_end_path": marker}),
+    };
+    at(&marker, 1_000_000_100); // the turn ended ...
+    at(&activity, 1_000_000_900); // ... and a new one started within the same second
+    assert_eq!(h.turn_ended(&rec), Some(false));
+    at(&activity, 1_000_000_100); // the same instant proves nothing either
+    assert_eq!(h.turn_ended(&rec), Some(false));
+    at(&marker, 1_000_000_900);
+    at(&activity, 1_000_000_100);
+    assert_eq!(h.turn_ended(&rec), Some(true));
 }
