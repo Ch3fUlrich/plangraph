@@ -174,3 +174,24 @@ fn the_session_guard_list_adds_the_codex_auth_file_to_the_sandbox_list() {
         .all(|path| guard.contains(path)));
     assert!(!deny_read_paths(home, None).contains(&PathBuf::from("/fixture/user/.codex/auth.json")));
 }
+
+/// Every generated `-c` value parses as TOML, also for a config home with a supplementary
+/// Unicode character and a DEL, and the parsed profile keeps the denied paths verbatim.
+#[test]
+fn the_profile_is_valid_toml_for_unicode_and_control_paths() {
+    let xdg = PathBuf::from("/fixture/xdg-\u{1F600}-\u{7f}-\"quoted\"\\");
+    let deny = deny_read_paths(Path::new("/fixture/user"), Some(&xdg));
+    let args = profile_args(&[PathBuf::from("/fixture/target-\u{1F600}")], &deny).unwrap();
+    let filesystem = args
+        .iter()
+        .find(|value| value.contains(".filesystem="))
+        .unwrap();
+    let (key, table) = filesystem.split_once('=').unwrap();
+    let parsed: toml::Table = toml::from_str(&format!("{key} = {table}")).unwrap();
+    let map = &parsed["permissions"][PROFILE]["filesystem"];
+    assert_eq!(
+        map[xdg.join("plangraph").to_str().unwrap()].as_str(),
+        Some("none")
+    );
+    assert_eq!(map["/fixture/target-\u{1F600}"].as_str(), Some("write"));
+}
