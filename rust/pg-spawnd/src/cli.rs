@@ -221,6 +221,12 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("health") {
         return crate::health_cli::execute(rest, out);
     }
+    if verb.as_deref() == Some("head-gate") {
+        return match pg_spawnd::head_gate::execute(rest, out) {
+            0 => Ok(()),
+            code => Err(format!("head-gate rejected the head (exit {code})")),
+        };
+    }
     if verb.as_deref() == Some("land-go") {
         return crate::land_go_shell::execute(rest, out);
     }
