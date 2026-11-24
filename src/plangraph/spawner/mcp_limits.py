@@ -189,6 +189,10 @@ def reload_spawn_sources(namespace, root=None):
     modules = _spawn_modules(root=root, sources=fresh)
     purged = {name for name in set(modules) | set(SPAWN_MODULES) if name not in RELOAD_KEEP}
     saved_modules = {name: sys.modules[name] for name in purged if name in sys.modules}
+    # A package keeps an attribute per imported submodule: rollback must put those back too.
+    missing = object()
+    saved_bindings = {name: getattr(sys.modules.get(name.rpartition('.')[0]), name.rpartition('.')[2], missing)
+                      for name in purged if '.' in name}
     saved_sources, saved_names, saved_namespace = dict(_SPAWN_SOURCES), SPAWN_MODULES, dict(namespace)
     _SPAWN_SOURCES.clear()
     _SPAWN_SOURCES.update(fresh)
@@ -204,6 +208,14 @@ def reload_spawn_sources(namespace, root=None):
         for name in purged:
             sys.modules.pop(name, None)
         sys.modules.update(saved_modules)
+        for name, bound in saved_bindings.items():
+            parent = sys.modules.get(name.rpartition('.')[0])
+            if parent is None:
+                continue
+            if bound is missing:
+                parent.__dict__.pop(name.rpartition('.')[2], None)
+            else:
+                setattr(parent, name.rpartition('.')[2], bound)
         _SPAWN_SOURCES.clear()
         _SPAWN_SOURCES.update(saved_sources)
         SPAWN_MODULES = saved_names

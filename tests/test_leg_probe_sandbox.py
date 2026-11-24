@@ -1,68 +1,168 @@
-"""A Codex writer probe runs where its commit can land; a sandbox refusal is a probe defect."""
+"""A Codex writer probe runs where its commit can land; a sandbox denial is a probe defect, never a leg failure."""
 import asyncio
+import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from plangraph.routing_support.clients import build_command
 from plangraph.routing_support.leg_state import LegStateStore
+from plangraph.spawner import leg_probe
+from plangraph.spawner.runner import SpawnerRunner
+
+# What codex's workspace-write sandbox does to the probe repo: the work tree is writable, `.git` stays
+# read-only unless `--add-dir <repo>/.git` names it. The emulator enforces that on the real directory,
+# so the writer's own `git add` / `git commit` succeed or fail for real.
+CODEX = r'''
+import os, subprocess, sys
+from pathlib import Path
+args = sys.argv[1:]
+cwd = Path.cwd().resolve()
+granted = False
+for i, a in enumerate(args):
+    if a == '--sandbox' and args[i + 1] == 'workspace-write':
+        granted = any(args[j] == '--add-dir' and Path(args[j + 1]).resolve() == cwd / '.git' for j in range(len(args) - 1))
+if not granted:
+    for root, dirs, files in os.walk('.git'):
+        for name in dirs + files:
+            os.chmod(os.path.join(root, name), 0o444 if name in files else 0o555)
+    os.chmod('.git', 0o555)
+(cwd / 'ok.txt').write_text('ok')
+env = dict(os.environ)
+for step in (['git', 'add', 'ok.txt'], ['git', 'commit', '-qm', 'probe']):
+    done = subprocess.run(step, capture_output=True, text=True, env=env)
+    sys.stderr.write(done.stderr.replace('Permission denied', 'Read-only file system'))  # the sandbox answers EROFS
+    if done.returncode:
+        sys.exit(0)
+'''
 
 
 def _leg():
-    return SimpleNamespace(id='cx', model='gpt-6.2-sol-high', harness='codex', roles=('implement',))
+    return SimpleNamespace(id='cx', model='gpt-6.2-sol-medium', harness='codex', roles=('implement',))
 
 
 def test_codex_writer_command_is_workspace_write_with_the_git_dir(monkeypatch):
     monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda *a, **k: ('codex', None))
-    cmd = build_command('p', 'gpt-6.2-sol-high', role='implement', client='codex', writable_dirs=['/r/.git'])
+    cmd = build_command('p', 'gpt-6.2-sol-medium', role='implement', client='codex', writable_dirs=['/r/.git'])
     assert cmd[cmd.index('--sandbox') + 1] == 'workspace-write'
     assert cmd[cmd.index('--add-dir') + 1] == '/r/.git'
     assert cmd[-1] == '-'
-    plain = build_command('p', 'gpt-6.2-sol-high', role='implement', client='codex')
+    plain = build_command('p', 'gpt-6.2-sol-medium', role='implement', client='codex')
     assert '--sandbox' not in plain and '--add-dir' not in plain
 
 
-def _probe(tmp_path, monkeypatch, spawn):
-    from plangraph.spawner import leg_probe
+def _runner(tmp_path, monkeypatch, *, drop_grant=False):
+    """The production launch path (leg_probe -> SpawnerRunner.spawn -> build_command) with a sandboxed codex."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **k: '/bin/codex')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda *a, **k: ('codex', None))
+    seen = []
+
+    async def factory(exe, *args, **kwargs):
+        argv = list(args)
+        if drop_grant:  # the old command: no sandbox flags at all
+            argv = [a for a in argv if a not in ('--sandbox', 'workspace-write', '--add-dir')
+                    and not a.endswith('/.git')]
+        seen.append(argv)
+        return await asyncio.create_subprocess_exec(sys.executable, '-c', CODEX, *argv, **kwargs)
+    return SpawnerRunner(process_factory=factory), seen
+
+
+def _run(tmp_path, runner):
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=30, store=store))
+    return result, store
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
+def test_production_probe_command_lets_the_sandboxed_writer_commit(tmp_path, monkeypatch):
+    runner, seen = _runner(tmp_path, monkeypatch)
+    result, store = _run(tmp_path, runner)
+    assert result['ok'] is True, result
+    assert '--sandbox' in seen[0] and seen[0][seen[0].index('--sandbox') + 1] == 'workspace-write'
+    assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
+def test_without_the_grant_the_commit_fails_and_books_nothing(tmp_path, monkeypatch):
+    runner, seen = _runner(tmp_path, monkeypatch, drop_grant=True)
+    result, store = _run(tmp_path, runner)
+    assert result['ok'] is False and result['infra'] is True, result
+    assert 'sandbox' in result['reason']
+    assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'
+
+
+def _probe_with(tmp_path, monkeypatch, spawn, timeout_s=5):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **k: '/bin/codex')
     store = LegStateStore(tmp_path / 'legs.sqlite')
 
     async def cancel(job_id):
         pass
-    runner = SimpleNamespace(spawn=spawn, cancel=cancel)
-    return asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=5, store=store)), store
+    runner = SimpleNamespace(spawn=spawn, cancel=cancel, jobs={})
+    return asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=timeout_s, store=store)), store
 
 
-def test_writer_probe_of_a_codex_leg_grants_the_probe_git_dir(tmp_path, monkeypatch):
-    seen = {}
+def _job(**kw):
+    return SimpleNamespace(**{'job_id': 'j', 'status': 'completed', 'exit_code': 0, 'stdout': '', 'stderr': '', **kw})
 
+
+def test_sandbox_denial_reported_by_the_writer_is_a_probe_defect(tmp_path, monkeypatch):
     async def spawn(**kw):
-        seen.update(kw)
-        root = Path(kw['cwd'])
-        (root / 'ok.txt').write_text('ok')
-        env = {'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1', 'PATH': '/usr/bin:/bin'}
-        subprocess.run(['git', '-C', str(root), 'add', 'ok.txt'], check=True, env=env)
-        subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'probe'], check=True, env=env)
-        return SimpleNamespace(job_id='j', status='completed', exit_code=0, stdout='', stderr='')
-    result, _ = _probe(tmp_path, monkeypatch, spawn)
-    assert result['ok'], result
-    assert seen['writable_dirs'] == [str(Path(seen['cwd']) / '.git')]
+        return _job(stderr='fatal: Unable to create .git/index.lock: Read-only file system')
+    result, store = _probe_with(tmp_path, monkeypatch, spawn)
+    assert result['ok'] is False and result['infra'] is True and 'sandbox' in result['reason'], result
+    assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'
 
 
-def test_sandbox_refusal_is_a_probe_defect_that_books_nothing(tmp_path, monkeypatch):
+def test_a_sandbox_denial_followed_by_a_timeout_is_still_a_probe_defect(tmp_path, monkeypatch):
+    class Runner:
+        def __init__(self):
+            self._tasks, self.jobs, self.cancelled = {}, {}, []
+
+        async def spawn(self, **kwargs):
+            job = _job(status='running', exit_code=None, stderr='error: read-only file system: .git/index.lock')
+            self.jobs[job.job_id] = job
+            self._tasks[job.job_id] = asyncio.ensure_future(asyncio.sleep(3600))
+            return job
+
+        async def cancel(self, job_id):
+            self.cancelled.append(job_id)
+            self.jobs[job_id].status = 'cancelled'
+            self._tasks[job_id].cancel()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **k: '/bin/codex')
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    runner = Runner()
+    result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=1, store=store))
+    assert runner.cancelled == ['j']
+    assert result['ok'] is False and result['infra'] is True and 'sandbox' in result['reason'], result
+    assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'
+
+
+def test_an_uncommitted_ok_file_alone_is_not_a_sandbox_denial(tmp_path, monkeypatch):
     async def spawn(**kw):
         (Path(kw['cwd']) / 'ok.txt').write_text('ok')
-        return SimpleNamespace(job_id='j', status='completed', exit_code=0, stdout='OK',
-                               stderr='fatal: Unable to create .git/index.lock: Read-only file system')
-    result, store = _probe(tmp_path, monkeypatch, spawn)
-    assert result['ok'] is False and result['infra'] is True, result
-    assert 'sandbox' in result['reason']
-    assert store.leg_status('gpt-6.2-sol-high')['state'] != 'down'
+        return _job(stderr='')
+    result, _ = _probe_with(tmp_path, monkeypatch, spawn)
+    assert result['ok'] is False and not result['infra'] and result['reason'].startswith('no commit')
+
+
+def test_a_quota_reply_after_the_file_write_still_books_the_limit(tmp_path, monkeypatch):
+    async def spawn(**kw):
+        (Path(kw['cwd']) / 'ok.txt').write_text('ok')
+        return _job(exit_code=1, stderr='Error: usage limit reached')
+    result, store = _probe_with(tmp_path, monkeypatch, spawn)
+    assert result['ok'] is False and not result['infra'], result
+    assert result['skipped'] == 'limited' and store.leg_status('gpt-6.2-sol-medium')['state'] == 'limited', result
 
 
 def test_a_real_no_commit_still_books_the_leg_down(tmp_path, monkeypatch):
     async def spawn(**kw):
-        return SimpleNamespace(job_id='j', status='completed', exit_code=0, stdout='done', stderr='')
-    result, _ = _probe(tmp_path, monkeypatch, spawn)
+        return _job(stdout='done')
+    result, _ = _probe_with(tmp_path, monkeypatch, spawn)
     assert result['ok'] is False and not result['infra'] and result['reason'].startswith('no commit')

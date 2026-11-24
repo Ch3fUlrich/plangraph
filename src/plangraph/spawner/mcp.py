@@ -169,7 +169,6 @@ class MCPSpawnerServer:
     def __init__(self, runner: SpawnerRunner | None = None, *, state=None,
                  session_run=None, session_sleep=None, source_identity=None):
         self._source_guard = SourceGuard(source_identity)
-        self._default_runner = runner is None
         self.runner = runner or SpawnerRunner()
         self._session_run = session_run
         self._session_sleep = session_sleep
@@ -179,8 +178,13 @@ class MCPSpawnerServer:
         self._served_head = checkout_head()
         self._reload_error = None
 
-    def _build_service(self, state):
+    def _build_service(self, state, previous=None):
         self.service = spawn_service(self.runner, state=state)
+        if previous is not None:
+            # Run tasks, records and stderr captures belong to the runs already started: share them.
+            self.service.tasks = previous.tasks
+            self.service._running_records = previous._running_records
+            self.service._stderr_captures = previous._stderr_captures
         # An explicitly supplied default-equivalent runner is still a live path.
         from .seat_spawn import live_runner
         self.service.fresh_tree = live_runner(self.runner)
@@ -188,19 +192,19 @@ class MCPSpawnerServer:
     def refresh_route_code(self):
         """Serve the checkout's current planner/routing code when its head moved, without a restart.
 
-        Deferred while a job runs (its runner keeps the code it started with); a failed reload keeps
-        the previous modules and is reported by ``plangraph_agent_health``."""
+        The runner (job history) and the service's run tasks carry over; the reload is deferred while a
+        job or run task is live. A failed reload keeps the previous modules and is reported by
+        ``plangraph_agent_health``."""
         current = self._source_guard.identity()
         if current == self._served_identity:
             return
-        if any(job.status == 'running' for job in self.runner.jobs.values()):
+        if (any(job.status == 'running' for job in self.runner.jobs.values())
+                or any(not task.done() for task in self.service.tasks.values())):
             return
-        state = self.service.state
         try:
+            previous = self.service
             reload_spawn_sources(globals())
-            if self._default_runner:
-                self.runner = SpawnerRunner()
-            self._build_service(state)
+            self._build_service(previous.state, previous)
         except Exception as exc:
             self._reload_error = f'{type(exc).__name__}: {exc}'[:300]
             return
@@ -219,6 +223,8 @@ class MCPSpawnerServer:
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
         self._source_guard.check(name, arguments)
+        if name == 'plangraph_agent_route':
+            self.refresh_route_code()  # before the benchmark options: they come from the module being replaced
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
         if (name == 'plangraph_agent_route' and 'leg' in arguments
@@ -237,7 +243,6 @@ class MCPSpawnerServer:
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
             raise
         if name == 'plangraph_agent_route':
-            self.refresh_route_code()
             return self.service.route(arguments['card'], arguments.get('role', 'implement'),
                 arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
         if name == 'plangraph_agent_ps':

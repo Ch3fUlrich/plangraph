@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -212,15 +213,13 @@ def _missing_harness(harness, seconds_elapsed=0.0):
                 infra=True, seconds=seconds_elapsed)
 
 
-SANDBOX_MARKERS = ('read-only file system', 'read-only sandbox', 'operation not permitted')
+SANDBOX_DENIAL = re.compile(r'read-only (?:file ?system|sandbox|git|\.git)|sandbox (?:denied|blocked|refused)', re.I)
 
 
-def _sandbox_refused(job, root, changed):
-    """True when a Codex probe wrote ok.txt but its sandbox kept it from committing (or said so)."""
-    if changed:
-        return False
-    text = ' '.join(str(getattr(job, name, '') or '') for name in ('stderr', 'stdout')).lower()
-    return any(m in text for m in SANDBOX_MARKERS) or (Path(root) / 'ok.txt').exists()
+def _sandbox_denied(*texts):
+    """True when a Codex writer's own output reports its sandbox denied a write (the probe's defect)."""
+    return any(SANDBOX_DENIAL.search(text.decode('utf-8', 'replace') if isinstance(text, bytes) else text or '')
+               for text in texts)
 
 
 async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_reprobe=False):
@@ -324,9 +323,6 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 else:
                     ok = changed and 'ok.txt' in files
                     reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
-                    if not ok and leg.harness == 'codex' and _sandbox_refused(job, root, changed):
-                        # The leg answered; the probe's own sandbox blocked the commit: never a leg failure.
-                        ok, reason, infra = False, 'probe infra: sandbox refused the commit', True
         # Tripwire (D-3465): the writer must never touch the caller's repo.
         caller_after = await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
@@ -347,7 +343,11 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                                          getattr(diagnostic, 'stdout', '') or '', stderr)
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
-            if not quota:
+            if not quota and not leaked and leg.harness == 'codex' and not review_mode and diagnostic is not None \
+                    and _sandbox_denied(stderr, getattr(diagnostic, 'stdout', '')):
+                # The probe's sandbox blocked the writer (also when it then ran out of time): never a leg failure.
+                ok, reason, infra, excerpt = False, 'probe infra: sandbox denied a write', True, ''
+            elif not quota:
                 serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
         if not infra:
             caller = 'review-probe' if review_mode else 'leg-probe'
