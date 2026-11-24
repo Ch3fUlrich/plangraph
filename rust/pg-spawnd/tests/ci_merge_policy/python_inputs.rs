@@ -10,11 +10,13 @@ const MAKE_ADD: &str = r####"
 import os, pathlib
 def make_add(root, inputs):
     def add(path):
+        # is_file() first: a dangling or cyclic symlink is no file and must not reach resolve().
+        if not path.is_file(): return
         try:
             rel = pathlib.Path(os.path.normpath(path)).relative_to(os.path.normpath(root))
             pathlib.Path(path).resolve().relative_to(pathlib.Path(root).resolve())
-        except ValueError: return
-        if path.is_file(): inputs.add(rel.as_posix())
+        except (ValueError, RuntimeError, OSError): return
+        inputs.add(rel.as_posix())
     return add
 "####;
 
@@ -43,9 +45,12 @@ with tempfile.TemporaryDirectory() as tmp:
     except (OSError, NotImplementedError):
         pass
     else:
-        add(root / 'tools/escape.py')
-        add(root / 'tools/inside.py')
-        assert 'tools/escape.py' not in inputs and 'tools/inside.py' in inputs, inputs
+        os.symlink(root / 'tools/loop_b.py', root / 'tools/loop_a.py')
+        os.symlink(root / 'tools/loop_a.py', root / 'tools/loop_b.py')
+        os.symlink(root / 'tools/gone.py', root / 'tools/dangling.py')
+        for name in ('escape', 'inside', 'loop_a', 'loop_b', 'dangling'):
+            add(root / f'tools/{name}.py')
+        assert inputs == {'tools/in.py', 'tools/inside.py'}, inputs
         inputs.discard('tools/inside.py')
     assert inputs == {'tools/in.py'}, inputs
 "####
