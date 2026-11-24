@@ -1,0 +1,1 @@
+Planning and oversight skills carry rule 3.76 (every decision names its data or is an EXPERIMENT with a measurement plan; plan review seats flag an unlabelled decision), the rule 3.74 objective (items and batches merged per hour, trains reduce CI runs) and the D-6746 replan wording.

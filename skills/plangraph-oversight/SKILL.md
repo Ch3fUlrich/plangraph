@@ -25,12 +25,17 @@ enforced.
 Measure each line from its source, never from memory or an earlier message. Report the
 number with its time.
 
-1. **Landing pace.** Items and commits landed on main today and over seven days, against
-   the milestone in force. Train attempts and how many failed on a part defect.
+1. **Landing pace.** The objective is real work merged per time: items and batches merged
+   on main per hour, today and over seven days, against the milestone in force (rule 3.74).
+   Trains are the method, not the measure: they merge many ready parts at once so that fewer
+   CI runs are needed. Every ready part rides; a part that fails is dropped from the train and
+   fixed outside it. Report train attempts, CI runs per merged item, and how many attempts
+   failed on a part defect. A train's duration is not the measure.
 2. **Fix rounds.** Rounds per open batch by cause (review finding, red CI, rebase, fast
    check). Every fix round counts. After 3 rounds without fewer failures plus HIGH and MED
-   findings, the next round goes to a stronger writer and the batch is replanned;
-   the ceiling is 8. A batch past that is a finding now, not later.
+   findings, the batch is replanned on a stronger model while the writer and the review seat
+   stay as the rule in force names them (rule 3.35); the ceiling is 8. A batch past that is a
+   finding now, not later.
 3. **Merged but not live.** Units, timers and binaries on main that are not installed and
    active on their hosts; env files a unit needs that are missing; items whose done
    criteria name a live run without live evidence. Give the age since merge.
@@ -44,6 +49,18 @@ number with its time.
    ran against the rule.
 7. **Telemetry alive.** The collectors and watchdogs that would catch a broken feeder,
    lander or close timer are installed, running and recent. A silent watchdog is a finding.
+
+## Data for every decision
+
+- Every proposal, priority, cap, threshold and cause you send names its data and reasoning:
+  the source (telemetry query, keeper read, git range, file and line) and the number
+  (rule 3.76).
+- Where the data is missing, mark the proposal `EXPERIMENT` with a measurement plan: what is
+  measured, for how long, and which result keeps it. Never decide on a number or a cause
+  without one of the two.
+- A cause of slow or failed work is claimed only from this system's own numbers. A ruling,
+  plan row or message that carries neither data nor an EXPERIMENT label is a gap: file it
+  against the gate item of rule 3.76.
 
 ## Every gap becomes an item, the same turn
 
