@@ -41,6 +41,13 @@ Use grep for text that is not a symbol.
    changed. Build and test only the crates you touched (`-p <crate>`), into the cargo
    target your environment sets; never set `CARGO_TARGET_DIR` or `--target-dir`
    yourself. Fix until green.
+   A Rust file under `tests/` or with `#[test]` never starts Python bare
+   (`Command::new("python3")`); use `test_python::command()` from
+   `rust/test_support/python.rs`. Cargo does not run the guard
+   (`tests/test_spawner_import_guard.py::test_no_bare_python_subprocesses`), so run
+   `python3 tools/affected_tests.py --base origin/main --head HEAD --local --files-only --run -n 2`
+   (or `plangraph fast-checks`) before you commit a Rust test and read every pytest batch
+   summary line it prints, not only the last.
    For a fails-at-base note, quote the replay command, full base SHA, failing
    pytest node IDs and output from the scrubbed fast-check environment. Add a
    `Fails-at-Base: <base-sha> <pytest-node-id>` trailer for each claimed failure.
