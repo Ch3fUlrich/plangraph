@@ -118,8 +118,9 @@ pub fn pending_path(rec: &Record) -> PathBuf {
     rec.path.with_extension("pending")
 }
 
-/// The phase a sidecar names. No `phase` key is an attempt (a sidecar nobody finished writing);
-/// any other value is `Unknown`: it proves nothing and is never acted on as a stop.
+/// The phase a sidecar names: a closed set. The writer always supplies one of the three, so a
+/// missing key, a wrong type and any other string are all `Unknown`: it proves nothing, is kept
+/// untouched and is never acted on as a stop.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Phase {
     Attempt,
@@ -129,12 +130,11 @@ pub enum Phase {
 }
 
 pub fn phase(snap: &Value) -> Phase {
-    match snap.get("phase") {
-        None => Phase::Attempt,
-        Some(Value::String(s)) if s == ATTEMPT => Phase::Attempt,
-        Some(Value::String(s)) if s == STOPPED => Phase::Stopped,
-        Some(Value::String(s)) if s == LOGGED => Phase::Logged,
-        Some(_) => Phase::Unknown,
+    match snap.get("phase").and_then(Value::as_str) {
+        Some(ATTEMPT) => Phase::Attempt,
+        Some(STOPPED) => Phase::Stopped,
+        Some(LOGGED) => Phase::Logged,
+        _ => Phase::Unknown,
     }
 }
 

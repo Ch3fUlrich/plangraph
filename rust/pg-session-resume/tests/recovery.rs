@@ -236,3 +236,81 @@ fn a_logged_sidecar_never_marks_a_record_that_does_not_hold_the_stop() {
     assert!(record(&r, "writer").get("resume").is_none());
     assert!(!pending(&r).exists());
 }
+
+fn sidecar_without_phase(r: &Rig) -> String {
+    let snap = json!({"agent": "claude", "handle": SID, "reason": "done", "head": HEAD,
+        "worktree": "w1", "status_head": HEAD, "round": 0, "stopped_ts": 4000,
+        "launch_ts": 1000, "launch_run": null});
+    std::fs::write(pending(r), snap.to_string()).unwrap();
+    std::fs::read_to_string(pending(r)).unwrap()
+}
+
+#[test]
+fn a_sidecar_without_a_phase_is_kept_and_blocks_a_fresh_stop() {
+    let r = rig("writer", json!({}));
+    let before = sidecar_without_phase(&r);
+    let mut h = Fake::new(9000);
+    h.activity = Some(1); // idle for hours, the runtime readable and the session running
+    reap_idle(&mut h, &r.cfg);
+    reap_idle(&mut h, &r.cfg);
+    assert_eq!(
+        std::fs::read_to_string(pending(&r)).unwrap(),
+        before,
+        "kept as it was"
+    );
+    assert!(
+        h.runs.is_empty(),
+        "no fresh stop while it is unresolved: {:?}",
+        h.runs
+    );
+    assert!(record(&r, "writer").get("resume").is_none());
+    let said: Vec<_> = h
+        .lines
+        .iter()
+        .filter(|l| l.contains("why=unknown-phase"))
+        .collect();
+    assert_eq!(said.len(), 1, "{:?}", h.lines);
+}
+
+#[test]
+fn an_unknown_phase_is_reported_once_whether_or_not_the_runtime_can_be_read() {
+    for first_readable in [true, false] {
+        let r = rig("writer", json!({}));
+        let snap = json!({"agent": "claude", "handle": SID, "reason": "done", "head": HEAD,
+            "worktree": "w1", "status_head": HEAD, "round": 0, "stopped_ts": 4000,
+            "launch_ts": 1000, "launch_run": null, "phase": "bogus"});
+        std::fs::write(pending(&r), snap.to_string()).unwrap();
+        let mut h = Fake::new(9000);
+        h.activity = Some(1);
+        for readable in [
+            first_readable,
+            !first_readable,
+            first_readable,
+            !first_readable,
+        ] {
+            h.job = if readable { Some(running_job()) } else { None };
+            reap_idle(&mut h, &r.cfg);
+        }
+        let said: Vec<_> = h
+            .lines
+            .iter()
+            .filter(|l| l.contains("event=stop-unconfirmed"))
+            .collect();
+        assert_eq!(
+            said.len(),
+            1,
+            "one line, not one per change of readability: {:?}",
+            h.lines
+        );
+        assert!(said[0].contains("why=unknown-phase"));
+        assert!(h.runs.is_empty());
+        assert!(pending(&r).exists());
+    }
+}
+
+fn running_job() -> pg_session_resume::host::JobState {
+    pg_session_resume::host::JobState {
+        state: "working".into(),
+        tasks: Some(0),
+    }
+}

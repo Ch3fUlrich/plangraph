@@ -1,6 +1,9 @@
 //! The reaper against the real host: a per-session activity file and turn-end marker, a real
 //! process, a real `kill`. Own test binary: it forks.
 
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use pg_session_resume::engine::{reap_idle, Config};
 use pg_session_resume::host::{Host, Process};
 use pg_session_resume::record::Record;
@@ -216,7 +219,7 @@ fn zombie_leader_with_a_live_thread(ignore_term: bool) -> Child {
          threading.Thread(target=time.sleep, args=(30,)).start()\n\
          ctypes.CDLL(None).pthread_exit(None)"
     );
-    let child = Command::new("python3")
+    let child = test_python::command()
         .args(["-c", &script])
         .spawn()
         .unwrap();

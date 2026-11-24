@@ -164,17 +164,20 @@ fn drive(
         match ph {
             Phase::Stopped => {} // the stop command succeeded: the record is next
             Phase::Logged => return drop_pending(host, rec, failures), // it no longer holds the stop
-            // An attempt (or a sidecar whose phase cannot be read) proves nothing by itself:
-            // the runtime decides.
-            Phase::Attempt | Phase::Unknown => match stop_target(host, rec) {
+            // An attempt proves nothing by itself: the runtime decides.
+            Phase::Attempt => match stop_target(host, rec) {
                 Target::AlreadyStopped => snap["unconfirmed"] = json!(true),
                 Target::Keep(why) if why == "no-runtime-state" || why == "no-job-state" => {
                     let line = format!("event=stop-unconfirmed name={} why={why}", rec.label());
                     return refuse_once(host, rec, &line, "stop-unconfirmed");
                 }
-                // still running: an attempt that failed is removed, a sidecar nobody can read
-                // is kept and reported, and the launch stays live either way
-                _ if ph == Phase::Attempt => return drop_pending(host, rec, failures),
+                _ => return drop_pending(host, rec, failures), // it failed: nothing to finish
+            },
+            // A sidecar nobody can read is kept as it is and reported once, whatever the runtime
+            // says now (one marker, so a runtime that comes and goes cannot repeat the line); only
+            // the runtime showing the session stopped makes it a stop.
+            Phase::Unknown => match stop_target(host, rec) {
+                Target::AlreadyStopped => snap["unconfirmed"] = json!(true),
                 _ => {
                     let line = format!(
                         "event=stop-unconfirmed name={} why=unknown-phase",

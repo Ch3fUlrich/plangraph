@@ -195,7 +195,7 @@ fn a_snapshot_left_by_an_attempt_that_never_finished_is_not_published_after_a_la
     // a tick died after writing its snapshot and before the stop command
     let snap = json!({"agent": "claude", "handle": SID, "reason": "done", "head": HEAD,
         "worktree": "w1", "status_head": HEAD, "round": 0, "stopped_ts": 4000,
-        "launch_ts": 1000, "launch_run": null});
+        "launch_ts": 1000, "launch_run": null, "phase": "attempt"});
     std::fs::write(pending(&r), snap.to_string()).unwrap();
     reap_idle(&mut h, &r.cfg); // the session runs (job done, not stopped by anyone)
     assert!(!pending(&r).exists(), "an unfinished attempt is dropped");
