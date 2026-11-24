@@ -115,7 +115,9 @@ fn host_name(env: &BTreeMap<String, String>) -> Result<String, String> {
         })
 }
 
-fn host_code(env: &BTreeMap<String, String>, root: &Path) -> Result<Value, String> {
+/// Refreshes `origin/main` first: a stale ref would under-report the missing commits.
+fn host_code(host: &str, root: &Path) -> Result<Value, String> {
+    git(root, &["fetch", "--quiet", "origin", "main"])?;
     let head = git(root, &["rev-parse", "HEAD"])?;
     let origin = git(root, &["rev-parse", "origin/main"])?;
     let behind: u64 = git(root, &["rev-list", "--count", "HEAD..origin/main"])?
@@ -133,7 +135,7 @@ fn host_code(env: &BTreeMap<String, String>, root: &Path) -> Result<Value, Strin
         None => 0.0,
     };
     Ok(
-        json!([{"host": host_name(env)?, "tmp_used_percent": used_percent("/tmp")?,
+        json!([{"host": host, "tmp_used_percent": used_percent("/tmp")?,
                "root_used_percent": used_percent("/")?, "checkout_head": head,
                "origin_main_head": origin, "behind_commits": behind, "age_hours": age}]),
     )
@@ -150,9 +152,7 @@ fn sha(path: &Path) -> Result<String, String> {
 
 /// Installed units compared with their source in the checkout. Templated sources (`@NAME@`)
 /// differ by construction and are skipped; a unit that is not installed here is not drift.
-fn units(env: &BTreeMap<String, String>, root: &Path) -> Result<Value, String> {
-    let installed = pg_worker_core::unit_refs::systemd_user_dir().map_err(|e| e.to_string())?;
-    let host = host_name(env)?;
+fn units(host: &str, root: &Path, installed: &Path) -> Result<Value, String> {
     let mut rows = Vec::new();
     for dir in ["deploy/systemd", "deploy/watchdog"] {
         for entry in std::fs::read_dir(root.join(dir))
@@ -198,6 +198,36 @@ fn series(dir: &Path) -> Result<Value, String> {
     Ok(Value::Array(rows))
 }
 
+/// The sampler's store: `<state>/fleet/<host>.ndjson` (`fleet_series::append`).
+fn series_dir(env: &BTreeMap<String, String>) -> Result<PathBuf, String> {
+    match env.get("PLANGRAPH_FLEET_SERIES_DIR") {
+        Some(dir) => Ok(dir.into()),
+        None => state_dir(env).map(|state| state.join("fleet")),
+    }
+}
+
+/// Keeper `last_activity` of the claimed and in-review items on the critical path,
+/// the evidence the critical-path stall service reads.
+fn with_activity(client: &Client, items: &mut Value, path: &Value) {
+    let keys: Vec<&str> = path
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    for item in items.as_array_mut().into_iter().flatten() {
+        let on_path = item["key"].as_str().is_some_and(|key| keys.contains(&key));
+        if !on_path || !matches!(item["state"].as_str(), Some("claimed" | "in_review")) {
+            continue;
+        }
+        let key = item["key"].as_str().unwrap_or_default().to_owned();
+        match client.get::<Value>(&format!("v1/show?key={key}&fmt=json")) {
+            Ok(shown) => item["last_activity_at"] = shown["last_activity"]["at"].clone(),
+            Err(error) => eprintln!("flow-snapshot: show {key} failed: {error}"),
+        }
+    }
+}
+
 pub fn collect(env: &BTreeMap<String, String>) -> Value {
     let mut out = Map::new();
     out.insert("now".into(), json!(now()));
@@ -223,17 +253,22 @@ pub fn collect(env: &BTreeMap<String, String>) -> Value {
         root.as_ref().map_err(Clone::clone).and_then(|r| f(r))
     };
     put("usage", at(&usage));
-    put("hosts", at(&|r| host_code(env, r)));
-    put("units", at(&|r| units(env, r)));
+    let host = host_name(env);
+    put(
+        "hosts",
+        host.clone().and_then(|h| at(&|r| host_code(&h, r))),
+    );
+    let installed = pg_worker_core::unit_refs::systemd_user_dir().map_err(|e| e.to_string());
+    put(
+        "units",
+        host.and_then(|h| installed.and_then(|dir| at(&|r| units(&h, r, &dir)))),
+    );
     put("ci", ci());
-    let dir = env
-        .get("PLANGRAPH_FLEET_SERIES_DIR")
-        .map(PathBuf::from)
-        .map_or_else(|| state_dir(env).map(|s| s.join("fleet-series")), Ok);
-    put("series", dir.and_then(|d| series(&d)));
+    put("series", series_dir(env).and_then(|d| series(&d)));
     let keeper = Client::new(env).and_then(|client| {
-        let snapshot: Value = client.get("v1/snapshot")?;
+        let mut snapshot: Value = client.get("v1/snapshot")?;
         let path: Value = client.get("v1/critical_path")?;
+        with_activity(&client, &mut snapshot["items"], &path["keys"]);
         Ok((snapshot, path))
     });
     match keeper {
@@ -250,3 +285,7 @@ pub fn collect(env: &BTreeMap<String, String>) -> Value {
     }
     Value::Object(out)
 }
+
+#[cfg(test)]
+#[path = "live_tests.rs"]
+mod tests;

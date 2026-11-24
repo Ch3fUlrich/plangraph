@@ -94,24 +94,25 @@ pub fn review(r: &Readings) -> Fields {
     ])
 }
 
-/// Zero while a critical item is under a live lease, else hours since the newest touch.
+/// The critical-path stall rule: the longest keeper silence among the claimed and in-review
+/// items on the path. Unstarted open items are waiting, not stalled; a lease is not activity.
 pub fn critical(r: &Readings) -> Fields {
     let path = r
         .critical_path
         .as_ref()
         .ok_or("critical path reading failed")?;
     let items = r.items.as_ref().ok_or("keeper items reading failed")?;
-    let mut newest: Option<f64> = None;
-    for item in items.iter().filter(|i| open(i) && path.contains(&i.key)) {
-        if let Some(lease) = item.lease_until.as_deref() {
-            if item.state == "claimed" && parse_time(lease)? > r.now {
-                return fields(&[("critical_idle_hours", json!(0.0))]);
-            }
-        }
-        let touched = updated(item)?;
-        newest = Some(newest.map_or(touched, |n| n.max(touched)));
+    let mut idle = 0.0f64;
+    for item in items
+        .iter()
+        .filter(|i| matches!(i.state.as_str(), "claimed" | "in_review") && path.contains(&i.key))
+    {
+        let at = item
+            .last_activity_at
+            .as_deref()
+            .ok_or_else(|| format!("{} has no keeper last_activity", item.key))?;
+        idle = idle.max((r.now - parse_time(at)?).max(0.0) / 3600.0);
     }
-    let idle = newest.map_or(0.0, |touched| (r.now - touched).max(0.0) / 3600.0);
     fields(&[("critical_idle_hours", json!(idle))])
 }
 
