@@ -432,7 +432,7 @@ mod tests {
                 "add",
                 "-f",
                 "-m",
-                "ip 10.0.0.1 secret",
+                "this note is not a receipt at all",
                 &head,
             ],
         )
