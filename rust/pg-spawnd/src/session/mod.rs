@@ -319,19 +319,26 @@ fn local(
         )?;
         return Ok(0);
     }
+    // Resolved before the durable "starting" row and the registration: a bad setting must fail the launch cleanly.
+    let target_env = match cargo_env::target_env(
+        std::env::var_os("CARGO_TARGET_DIR").as_deref(),
+        std::env::var_os("PLANGRAPH_CARGO_TARGET_DIR").as_deref(),
+        &paths.home,
+        &std::env::current_dir().unwrap_or_default(),
+    ) {
+        Ok(env) => env,
+        Err(error) => {
+            log("refused", None);
+            eprintln!("fleet-launch: {error}");
+            return Ok(2);
+        }
+    };
     if storage::ledger(admission, true, "starting", Some(&name)).is_err() {
         eprintln!("fleet-launch: fallback ledger unavailable; not starting");
         return Ok(2);
     }
     let mut lifecycle = external_run::register(args, admission, &name, host)?;
     let launched_ms = storage::epoch_millis();
-    let target_env = cargo_env::target_env(
-        std::env::var_os("CARGO_TARGET_DIR").as_deref(),
-        std::env::var_os("PLANGRAPH_CARGO_TARGET_DIR").as_deref(),
-        &paths.home,
-        &std::env::current_dir().unwrap_or_default(),
-    )
-    .map_err(io::Error::other)?;
     let output = Command::new(argv[0])
         .args(&argv[1..])
         .stdin(Stdio::inherit())
