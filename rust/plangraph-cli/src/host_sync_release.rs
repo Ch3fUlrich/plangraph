@@ -1,17 +1,10 @@
 //! Build and publish the host tooling from the synchronized Rust tree.
-use super::{is_executable, Env};
+use super::{is_executable, plan, Env};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
-
-const BINARIES: &[(&str, &str)] = &[
-    ("pg-spawnd", "pg-spawnd"),
-    ("plangraph-cli", "plangraph"),
-    ("pg-worker-core", "pg-disk-hygiene"),
-    ("pg-worker-core", "turn-budget-hook"),
-];
 
 pub(super) fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
     let mut command = Command::new("git");
@@ -50,10 +43,6 @@ pub(super) fn publish(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
-    let mut binaries = BINARIES.to_vec();
-    if keeper {
-        binaries.push(("pg-keeper-backup", "pg-keeper-backup"));
-    }
     let repo = repo.canonicalize()?;
     let bin = home.join(".local/bin");
     let state = env::var_os("XDG_STATE_HOME")
@@ -71,6 +60,11 @@ fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
         "release-built-tree"
     });
     let tree = git(&repo, &["rev-parse", "HEAD:rust"])?;
+    let cargo = super::resolve_on_path("cargo", env::var_os("PATH").as_deref())
+        .unwrap_or_else(|| home.join(".cargo/bin").join(executable("cargo")));
+    let metadata = plan::workspace_metadata(&repo, &cargo)?;
+    let binaries = plan::plan(&metadata, keeper).map_err(io::Error::other)?;
+    plan::check(&metadata, &binaries, keeper).map_err(io::Error::other)?;
     if fs::read_to_string(&stamp).is_ok_and(|saved| saved.trim() == tree)
         && binaries
             .iter()
@@ -86,19 +80,19 @@ fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
         .filter(|value| !value.is_empty())
         .ok_or_else(|| io::Error::other("CARGO_TARGET_DIR must name the shared target"))?;
     let target = repo.join("rust").join(target);
-    let cargo = super::resolve_on_path("cargo", env::var_os("PATH").as_deref())
-        .unwrap_or_else(|| home.join(".cargo/bin").join(executable("cargo")));
     let mut build = Command::new(cargo);
     build
         .current_dir(repo.join("rust"))
         .args(["build", "--release", "--locked"]);
-    let packages: std::collections::BTreeSet<_> =
-        binaries.iter().map(|(package, _)| *package).collect();
+    let packages: std::collections::BTreeSet<_> = binaries
+        .iter()
+        .map(|(package, _)| package.as_str())
+        .collect();
     for package in packages {
         build.args(["-p", package]);
     }
     for (_, name) in &binaries {
-        build.args(["--bin", *name]);
+        build.args(["--bin", name]);
     }
     let status = build.status()?;
     if !status.success() {
@@ -126,7 +120,7 @@ fn install(repo: &Path, home: &Path, keeper: bool) -> io::Result<()> {
         let path = executable(name);
         let out = bin.join(&path);
         publish(&artifacts.join(path), &out)?;
-        println!("INSTALLED {}", out.display());
+        println!("RELEASE INSTALLED {}", out.display());
     }
     let mut staged = tempfile::NamedTempFile::new_in(&state)?;
     writeln!(staged, "{tree}")?;

@@ -13,6 +13,9 @@ path = "tests/support/live_probe_child.rs"
 test = false
 required-features = ["test-support"]
 
+[package.metadata.plangraph]
+host-binaries = ["pg-disk-hygiene", "turn-budget-hook"]
+
 [features]
 test-support = []
 

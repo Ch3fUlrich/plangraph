@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "host_sync_env.rs"]
 mod unit_env;
 
+#[path = "host_sync_plan.rs"]
+mod plan;
+
 #[path = "host_sync_release.rs"]
 mod release;
 
