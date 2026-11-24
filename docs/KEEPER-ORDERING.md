@@ -16,13 +16,14 @@ title+description copy at any length, same project, open items, batch and import
 mapping); the answer is stored in the event. EXPERIMENT (rule 3.76): `reap`-independent day counters `similar_matches_shown`,
 `similar_answered.<answer>` count matches shown and answers (not for a dry run); a later `supersedes` edit by hand is the duplicate found afterwards.
 
-**Premise precision (KEEPER-STALE-PREMISE-PRECISION).** The premise gate ignores a newer decision that is the item's own `source` or whose
-row orders, GOes or defines the item with no scope or condition word (approval, requirement, "but", "also" ...) and nothing else but the item's keys and ordering words ("GO x; use Postgres" is not terse): the
-log has no class column, so a longer row is left to a human and `reconfirm`. The operator's third
-case, "logged within 2 h of the define by the same session", is not applied: the log carries neither date nor session, so a time of day
-would let a row of another day mask a later scope change. `reconfirm KEY D-NNN` records, as an audited `premise_reconfirmed` event, that
-the premise was read against that decision: it clears `newer_decisions` and retired premises up to it, not an explicit `supersedes` link
-(cancel the superseder or drop the link). `alerts` reports `force_stale_claims`, counted from the audited claims of the alert window.
+**Premise precision (KEEPER-STALE-PREMISE-PRECISION).** The premise gate ignores a newer decision that (a) is the item's own `source`, (b) is a
+terse order: after the stamp every token is the item's key or bare id, a D-id or an ordering word (go, order, define, queue ...), and no
+scope or condition word occurs, so "GO x; use Postgres", "GO x; X=0" and "GO x; backend:postgres" are left to a human, or (c) names the
+session that defined the item (`define ... session=ID`, kept in the creation event) and carries a full timestamp (`2026-11-24T08:34Z`)
+within two hours after the define, without a scope word. The log's plain `(HH:MMZ` stamps never reach (c). `reconfirm KEY D-NNN` records, as an
+audited `premise_reconfirmed` event, that the premise was read against that decision: it clears `newer_decisions` and retired premises up
+to it (system leases too); an explicit `supersedes` link is cleared only with `--supersession SUPERSEDER`. `alerts` reports
+`force_stale_claims`, counted from the audited claims of the alert window.
 
 **Effective priority (PRIORITY-INHERIT-FROM-BLOCKED).** `views.effective_priorities` gives every non-terminal item max(own, effective of each
 non-terminal item that depends on it), transitively (a cycle is reported, its back edge ignored); the stored priority never changes and

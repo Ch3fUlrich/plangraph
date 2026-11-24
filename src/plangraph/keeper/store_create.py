@@ -63,7 +63,7 @@ def _blank(value):
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
-     "estimate_h", "estimate_src", "depends_on", "under", "slice_parent", "corrects", "supersedes", "similar", "category", "done_criteria",
+     "estimate_h", "estimate_src", "depends_on", "under", "slice_parent", "corrects", "supersedes", "similar", "category", "session", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note", "design_ref",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
@@ -373,7 +373,7 @@ class CreateMixin:
         for name in SMALL_FIELDS:
             if row[name] is not None:
                 created[name] = row[name]
-        created.update({n: definition[n] for n in ("slice_parent", "supersedes", "similar", "category")
+        created.update({n: definition[n] for n in ("slice_parent", "supersedes", "similar", "category", "session")
                         if definition.get(n)})
         if definition.get("rehomed_from"):
             created["rehomed_from"] = definition["rehomed_from"]

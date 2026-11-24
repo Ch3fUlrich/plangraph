@@ -333,3 +333,36 @@ def test_a_recorded_answer_counts_whichever_of_the_pair_sorts_first(tmp_path):
     late = _item("Z1", title=LONG_TITLE + " today", description=LONG_TITLE)       # no answer of its own
     world.store.import_items(world.p("router"), load_dir(_plan_dir(tmp_path, early, late, goal)))
     assert world.store.show(world.p("router"), "demo:Z1")["state"] == "open"
+
+
+# ------------------------------------------------------------ review round 6
+@pytest.mark.parametrize("first, second", [("A1", "Z1"), ("Z1", "A1")])
+def test_a_forward_answer_applies_its_link_whichever_item_sorts_first(tmp_path, first, second):
+    world = World(tmp_path)
+    old, new = _item(second, title=LONG_TITLE, description=LONG_TITLE), None
+    new = _item(first, title=LONG_TITLE + " today", description=LONG_TITLE,
+                similar={f"demo:{second}": "supersedes"})
+    goal = {"project": "demo", "id": "GOAL", "title": "Goal", "kind": "goal", "owner": "o",
+            "depends_on": [first, second], "evidence_kinds": ["any"]}
+    world.store.import_items(world.p("router"), load_dir(_plan_dir(tmp_path, new, old, goal)))
+    assert world.store.show(world.p("router"), f"demo:{first}")["supersedes"] == [f"demo:{second}"]
+    with pytest.raises(Refused) as exc:
+        world.store.claim(world.p("l1main"), f"demo:{second}")
+    assert f"superseded by demo:{first}" in exc.value.msg
+
+
+def test_an_answer_recorded_by_define_edit_is_exported_and_re_imports(tmp_path):
+    world = World(tmp_path)
+    world.store.create_items(world.p("router"), [
+        defn("ORIG", title=LONG_TITLE, description=LONG_TITLE),
+        defn("OTHER", title="Unrelated work on the web page cache layer"),
+        defn("GOAL", ["ORIG", "OTHER"], kind="goal")])
+    world.store.edit_definition(world.p("router"), "demo:OTHER", {
+        "title": LONG_TITLE + " today", "description": LONG_TITLE, "similar": {"demo:ORIG": "distinct"}})
+    export_yaml(world.store, tmp_path / "out")
+    exported = {it["key"]: it for it in load_dir(tmp_path / "out")}
+    assert exported["demo:OTHER"]["similar"] == {"demo:ORIG": "distinct"}
+    (tmp_path / "again").mkdir()
+    other = World(tmp_path / "again")
+    other.store.import_items(other.p("router"), load_dir(tmp_path / "out"))
+    assert other.store.show(other.p("router"), "demo:OTHER")["state"] == "open"

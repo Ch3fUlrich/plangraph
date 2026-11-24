@@ -254,10 +254,16 @@ class ContextMixin:
         ctx["stale"] = self._stale_reason(item, ctx)
         return ctx
 
-    @staticmethod
-    def _premise_neutral(item, did, inputs):
-        """KEEPER-STALE-PREMISE-PRECISION: a newer decision that only defines or orders the item."""
-        return premise_neutral(inputs["book"]["rows"].get(did, ()), did, item.get("source"), item["key"])
+    def _premise_neutral(self, item, did, inputs):
+        """KEEPER-STALE-PREMISE-PRECISION: a newer decision that only defines or orders the item,
+        or that the session which defined the item logged within two hours of the define."""
+        row = self.conn.execute(
+            "SELECT ts, payload FROM events WHERE key=? AND type='item_created' ORDER BY seq LIMIT 1",
+            (item["key"],)).fetchone()
+        defined = self._parse_iso(row["ts"]) if row else None
+        return premise_neutral(inputs["book"]["rows"].get(did, ()), did, item.get("source"), item["key"],
+                               session=_payload(row["payload"]).get("session") if row else None,
+                               defined_at=defined.timestamp() if defined else None)
 
     def _stale_reason(self, item, ctx):
         why = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []

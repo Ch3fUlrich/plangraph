@@ -32,6 +32,7 @@ import contextlib
 import threading
 import os
 import re
+from datetime import datetime, timezone
 import subprocess
 from pathlib import Path
 
@@ -589,32 +590,54 @@ _TERSE_LEFTOVER = 0
 
 
 def _terse_order(lines, key=""):
-    """Is the row only an order of the item: after the stamp, keys (the item's bare id too) and
-    ordering words nothing else remains?  A row that says more ("GO x; use Postgres") is read
-    by a human."""
+    """Is the row only an order of the item: after the stamp every token is the item's key (or
+    bare id), a decision id or an ordering word?  Any other token, an assignment
+    ("X=0"), a flag or a ``name:value`` pair ("GO x; backend:postgres"), makes it a row a human reads."""
     cells = " ".join(lines).split("|")
     text = re.sub(r"\(\d\d:\d[\dx]Z[^)]*\)", " ", cells[3] if len(cells) > 3 else " ".join(cells))
-    text = re.sub(r"[\w.-]+:[\w.-]+|D-\d+", " ", text)
-    bare = key.split(":", 1)[-1]
-    if bare:
-        text = re.sub(re.escape(bare), " ", text, flags=re.I)
-    left = [w for w in re.findall(r"[A-Za-z]+", text) if w.lower() not in _ORDER_WORDS]
-    return len(left) <= _TERSE_LEFTOVER
+    own = {key.lower(), key.split(":", 1)[-1].lower()} - {""}
+    for token in text.split():
+        word = token.strip(",;:.()[]*`\"'")
+        if (word and word.lower() not in _ORDER_WORDS and word.lower() not in own
+                and not re.fullmatch(r"D-\d+", word)):
+            return False
+    return True
 
 
-def premise_neutral(lines, did, source, key=""):
+_ROW_SESSION = re.compile(r"(?i)\bsession\s*[:=]?\s*([A-Za-z0-9_.-]{4,64})")
+_ROW_TIME = re.compile(r"\b(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)")
+SESSION_WINDOW_S = 2 * 3600
+
+
+def same_session_within_window(lines, session, defined_at):
+    """The operator's third case: the row names the session that defined the item and carries a
+    full timestamp within two hours after the define.  Needs both on the row; a row without
+    them (the log's usual ``(HH:MMZ`` stamp) never qualifies."""
+    if not session or defined_at is None:
+        return False
+    text = " ".join(lines)
+    found, stamp = _ROW_SESSION.search(text), _ROW_TIME.search(text)
+    if not found or not stamp or found.group(1) != session:
+        return False
+    when = datetime.strptime(stamp.group(1) if stamp.group(1).count(":") > 1
+                             else stamp.group(1)[:-1] + ":00Z", "%Y-%m-%dT%H:%M:%SZ"
+                             ).replace(tzinfo=timezone.utc).timestamp()
+    return defined_at - 60 <= when <= defined_at + SESSION_WINDOW_S
+
+
+def premise_neutral(lines, did, source, key="", session=None, defined_at=None):
     """May the decision *did* (its row *lines*) be ignored by the premise gate?
 
-    (a) it is the item's own ``source`` decision, or (b) its row orders, GOes or
-    defines the item and says nothing that changes scope.  The operator's third
-    case, "logged within two hours of the define by the same session", needs the
-    session and the full date, which the log does not carry: a time of day and an
-    id gap would let a row of another day or session mask a later scope change,
-    so that case is not guessed.  The ordering row must also be terse (a keyword
-    list cannot tell an order from an order that changes a backend).
+    (a) it is the item's own ``source`` decision; (b) the row is a terse order of the item
+    (keys and ordering words only, no scope or condition word); or (c) the row names the
+    session that defined the item and carries a full timestamp within two hours after the
+    define (``same_session_within_window``), and changes no scope.  A time of day without
+    session and date proves nothing, so the log's plain stamps never reach (c).
     """
     if did in re.findall(r"D-\d+", source or ""):
         return True
     text = " ".join(lines)
-    return (not _CHANGES_SCOPE.search(text) and bool(_ORDERS_ITEM.search(text))
-            and _terse_order(lines, key))
+    if _CHANGES_SCOPE.search(text):
+        return False
+    return (same_session_within_window(lines, session, defined_at)
+            or (bool(_ORDERS_ITEM.search(text)) and _terse_order(lines, key)))

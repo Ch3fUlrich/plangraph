@@ -208,17 +208,18 @@ def load_dir(path):
 # ------------------------------------------------------------------ export
 
 def _created_answers(conn):
-    """``{key: similar}``: the near-copy answers recorded when each item was created, so an
-    exported plan re-imports without a new refusal."""
+    """``{key: similar}``: the near-copy answers recorded when each item was created or edited,
+    so an exported plan re-imports without a new refusal."""
     out = {}
-    for row in conn.execute("SELECT key, payload FROM events WHERE type='item_created' ORDER BY seq"):
+    for row in conn.execute("SELECT key, payload FROM events WHERE type IN ('item_created','item_defined')"
+                            " ORDER BY seq"):
         raw = row["payload"]
         try:
             data = raw if isinstance(raw, dict) else json.loads(raw or "{}")
         except (ValueError, TypeError):
             continue
         if isinstance(data, dict) and data.get("similar"):
-            out[row["key"]] = data["similar"]
+            out.setdefault(row["key"], {}).update(data["similar"])      # creation, then each edit
     return out
 
 

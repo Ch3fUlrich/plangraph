@@ -276,3 +276,63 @@ def test_a_go_row_with_a_trailing_instruction_is_not_a_terse_order(w, decisions)
     # the bare id of the item (rows often drop the project) is not a remainder
     _decide(decisions, 5891, "(05:0xZ) GO PHASE-LINE-GREEN")
     assert _claims(w, "demo:PHASE-LINE-GREEN")
+
+
+# ------------------------------------------------------------ review round 6
+@pytest.mark.parametrize("row", [
+    "(05:0xZ) GO demo:SPAWNER-DEFAULT; SPAWNER-DEFAULT=0",
+    "(05:0xZ) GO demo:SPAWNER-DEFAULT; backend:postgres",
+    "(05:0xZ) GO demo:SPAWNER-DEFAULT; 3 retries",
+    "(05:0xZ) GO SPAWNER-DEFAULT --max-retry 0",
+])
+def test_an_assignment_or_any_extra_token_after_a_go_is_not_a_terse_order(w, decisions, row):
+    _items(w)
+    _decide(decisions, 5895, row)
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:SPAWNER-DEFAULT")
+    assert "premise outdated: D-5895" in exc.value.msg
+
+
+def _session_world(w, decisions, session):
+    w.store.create_items(w.p("router"), [defn("SESS-ITEM", description="per D-5800", session=session),
+                                         defn("GOAL", ["SESS-ITEM"], kind="goal")])
+
+
+def _stamp(offset_s):
+    import datetime
+    base = datetime.datetime.fromtimestamp(1_700_000_000, datetime.timezone.utc)
+    return (base + datetime.timedelta(seconds=offset_s)).strftime("%Y-%m-%dT%H:%MZ")
+
+
+def test_a_row_of_the_same_session_within_two_hours_is_not_stale_premise(w, decisions):
+    _session_world(w, decisions, "sess-aaaa1111")
+    _decide(decisions, 5900, f"({_stamp(1800)}) session sess-aaaa1111: demo:SESS-ITEM wording clarified")
+    assert _claims(w, "demo:SESS-ITEM")
+
+
+@pytest.mark.parametrize("row", [
+    "session sess-bbbb2222: demo:SESS-ITEM wording clarified",          # another session
+    "demo:SESS-ITEM wording clarified",                                   # no session
+])
+def test_another_or_no_session_stays_subject_to_the_gate(w, decisions, row):
+    _session_world(w, decisions, "sess-aaaa1111")
+    _decide(decisions, 5900, f"({_stamp(1800)}) {row}")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:SESS-ITEM")
+    assert "premise outdated: D-5900" in exc.value.msg
+
+
+def test_the_same_session_outside_the_two_hours_or_before_the_define_stays_stale(w, decisions):
+    _session_world(w, decisions, "sess-aaaa1111")
+    _decide(decisions, 5900, f"({_stamp(3 * 3600)}) session sess-aaaa1111: demo:SESS-ITEM wording clarified")
+    _decide(decisions, 5901, f"({_stamp(-3600)}) session sess-aaaa1111: demo:SESS-ITEM wording clarified")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:SESS-ITEM")
+    assert "D-5900" in exc.value.msg and "D-5901" in exc.value.msg
+
+
+def test_a_same_session_row_that_changes_scope_is_still_stale(w, decisions):
+    _session_world(w, decisions, "sess-aaaa1111")
+    _decide(decisions, 5900, f"({_stamp(600)}) session sess-aaaa1111: demo:SESS-ITEM now also covers the web")
+    with pytest.raises(Refused):
+        w.store.claim(w.p("l1main"), "demo:SESS-ITEM")

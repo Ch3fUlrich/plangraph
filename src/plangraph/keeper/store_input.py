@@ -210,6 +210,9 @@ class InputMixin:
             if not isinstance(slice_parent, str) or not slice_parent.strip():
                 raise Refused("validation", f"{key}: slice_parent must be a non-empty key")
             slice_parent = self._qualify(project, slice_parent)
+        session = raw.get("session")
+        if session is not None and not (isinstance(session, str) and re.fullmatch(r"[A-Za-z0-9_.-]{4,64}", session)):
+            raise Refused("validation", f"{key}: session must be 4-64 characters of [A-Za-z0-9_.-]")
         category = raw.get("category")
         if category is not None and not isinstance(category, str):
             raise Refused("validation", f"{key}: category must be a name or null")
@@ -219,7 +222,7 @@ class InputMixin:
             check_similar_answers(similar, key)
             similar = {self._qualify(project, k): v for k, v in similar.items()}
         return {
-            "supersedes": supersedes, "similar": similar, "category": category,
+            "supersedes": supersedes, "similar": similar, "category": category, "session": session,
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
             "host": raw.get("host"), "wait": wait, "kind": kind,
@@ -351,7 +354,7 @@ class InputMixin:
                           if definition["key"] in (p.get("similar") or {})}, **answers}
             self._refuse_unanswered(key, matches, answers)
             deps, sups = self._apply_answers(principal, key, project, answers,
-                                             {**index, **{d["key"]: d for d in peers}},
+                                             {**index, **{d["key"]: d for d in defs if d is not definition}},
                                              set(definition["depends_on"]), set(definition["supersedes"]))
             definition["depends_on"] = sorted(deps)
             definition["supersedes"] = self._checked_supersedes(
