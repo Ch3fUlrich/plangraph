@@ -89,6 +89,11 @@ def shared_cargo_target(policy=None):
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()
 
 
+def _target_for(policy):
+    """The target under the checkout's own policy, not the daemon's working directory."""
+    return shared_cargo_target(policy) if policy.get('build_drives') else shared_cargo_target()
+
+
 def cargo_child_env(env, *, pin_configured=False, target=None):
     result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(target or shared_cargo_target()))
     if target is not None:
@@ -475,7 +480,7 @@ def local_disk_admission(worktree, service, role='implement', movable=False, *, 
         cap = cargo_target_cap_gb()
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
-        configured_target = shared_cargo_target()
+        configured_target = _target_for(policy)
         target = configured_target.resolve() if native else configured_target
         unsafe_cache_dir(target, worktree)
         building = role not in NO_BUILD_ROLES
@@ -596,7 +601,7 @@ def running_disk_refusal(worktree, role='implement'):
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
-        target = shared_cargo_target()
+        target = _target_for(policy)
         paths = [worktree, target]
         if policy.get('worktree_root'):
             paths.append(policy['worktree_root'])

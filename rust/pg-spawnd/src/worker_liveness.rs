@@ -125,7 +125,8 @@ pub(crate) fn inventory(args: &[String], out: &mut dyn Write) -> Result<(), Stri
     writeln!(
         out,
         "{}",
-        json!({"host":name,"runs":runs,"live":found.live,"dead":found.dead,"terminal":found.terminal})
+        json!({"host":name,"runs":runs,"live":found.live,"queued":found.queued,
+            "unverified":found.unverified,"dead":found.dead,"terminal":found.terminal})
     )
     .map_err(|error| error.to_string())
 }

@@ -176,6 +176,10 @@ def configured_build_target(policy, free_gb):
     best, shortfalls = None, []
     for entry in drives:
         floor = float(entry.get('disk_floor_gb', 5))
+        if not Path(entry['path']).is_dir():
+            # Measuring a missing path would read its parent's filesystem.
+            shortfalls.append(f"{entry['path']}: not mounted")
+            continue
         try:
             free = free_gb(entry['path'])
         except OSError as error:
@@ -209,7 +213,11 @@ def select_drive(drives, cleanup, free_gb, *, check=None):
                 # An unreadable drive is ineligible; the others may still qualify.
                 first_error = first_error or error
                 continue
-            low = (free, floor) if free < floor else check(path) if check else None
+            try:
+                low = (free, floor) if free < floor else check(path) if check else None
+            except OSError as error:
+                first_error = first_error or error
+                continue
             if low is None:
                 if best is None or free > best[0]:
                     best = (free, path)

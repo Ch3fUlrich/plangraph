@@ -31,6 +31,8 @@ struct Ssh<'a> {
 #[derive(Default)]
 struct Inventory {
     live: BTreeSet<String>,
+    queued: BTreeSet<String>,
+    unverified: BTreeSet<String>,
     dead: BTreeSet<String>,
     terminal: BTreeMap<String, Value>,
 }
@@ -38,7 +40,9 @@ struct Inventory {
 impl Ssh<'_> {
     fn run(&self, argv: &[&str], timeout: u64) -> io::Result<std::process::Output> {
         let mut command: Command = remote(self.host).map_err(io::Error::other)?;
-        command.args(argv);
+        // ssh joins the words and the remote side splits them again: keep each word whole.
+        let wsl = self.host.wsl_distro.is_some();
+        command.args(argv.iter().map(|word| quote_word(word, wsl)));
         host_command::capture(&mut command, Duration::from_secs(timeout))
     }
 
@@ -64,6 +68,22 @@ impl Ssh<'_> {
                 Ok((id.clone(), String::from_utf8_lossy(&out).trim().to_owned()))
             })
             .collect()
+    }
+}
+
+/// A word the remote side keeps whole: single quotes for a POSIX shell, double quotes
+/// for the Windows command line that starts `wsl.exe`. Plain words pass unchanged.
+fn quote_word(word: &str, wsl: bool) -> String {
+    let plain = !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_./:=@%+,-".contains(&b));
+    if plain {
+        word.to_owned()
+    } else if wsl {
+        format!("\"{}\"", word.replace('"', "\\\""))
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
 
@@ -114,4 +134,20 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
         .rejoin(&mut host, now())
         .map_err(|error| error.to_string())?;
     writeln!(out, "{record}").map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quote_word;
+
+    #[test]
+    fn words_with_spaces_or_quotes_stay_whole_across_the_remote_shell() {
+        assert_eq!(quote_word("pg-spawnd", false), "pg-spawnd");
+        assert_eq!(
+            quote_word("/tmp/a plan.ndjson", false),
+            "'/tmp/a plan.ndjson'"
+        );
+        assert_eq!(quote_word("it's", false), "'it'\\''s'");
+        assert_eq!(quote_word("D:/a plan", true), "\"D:/a plan\"");
+    }
 }

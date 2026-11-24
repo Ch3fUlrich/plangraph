@@ -25,6 +25,8 @@ impl Ssh<'_> {
             };
             self.inventory = Some(Inventory {
                 live: ids("live"),
+                queued: ids("queued"),
+                unverified: ids("unverified"),
                 dead: ids("dead"),
                 terminal: receipt["terminal"]
                     .as_object()
@@ -42,6 +44,12 @@ impl Ssh<'_> {
         let inventory = self.inventory()?;
         if inventory.live.contains(run) {
             Ok(RunFate::Live)
+        } else if inventory.queued.contains(run) {
+            Ok(RunFate::Queued)
+        } else if inventory.unverified.contains(run) {
+            Err(io::Error::other(format!(
+                "{run} is recorded as running with no process identity; its outcome is uncertain"
+            )))
         } else if inventory.terminal.contains_key(run) {
             Ok(RunFate::Finished)
         } else if inventory.dead.contains(run) {
@@ -53,9 +61,16 @@ impl Ssh<'_> {
         }
     }
 
-    /// Release the Keeper claim of a dead run's item with the epoch-guarded `release`
-    /// verb of the Keeper client named in `PG_KEEPER_CLI`, then read the item back.
-    fn release_claim(&self, item: &str) -> io::Result<()> {
+    /// Release the Keeper claim a dead run held, with the epoch the run recorded
+    /// (`claim_epoch`), then read the item back. A newer claim by another run has a
+    /// newer epoch and is refused by the Keeper; a run with no recorded epoch is
+    /// not released here because its claim cannot be told from a newer one.
+    fn release_claim(&self, item: &str, epoch: Option<u64>) -> io::Result<()> {
+        let epoch = epoch.ok_or_else(|| {
+            io::Error::other(format!(
+                "dead run holds {item} with no recorded claim_epoch; release it by hand"
+            ))
+        })?;
         let cli = std::env::var("PG_KEEPER_CLI").map_err(|_| {
             io::Error::other(format!(
                 "PG_KEEPER_CLI is not set; the claim on {item} is not released"
@@ -63,13 +78,19 @@ impl Ssh<'_> {
         })?;
         let call = |verb: &[&str]| {
             pg_worker_core::host_command::capture(
-                Command::new(&cli).args(verb),
+                Command::new(&cli)
+                    .env("PG_EPOCH", epoch.to_string())
+                    .args(verb),
                 Duration::from_secs(60),
             )
         };
         let released = call(&["release", item])?;
         let shown = call(&["show", item, "--json"])?;
         let state: Value = serde_json::from_slice(&shown.stdout).unwrap_or(Value::Null);
+        // Another run's newer claim is left alone and is not this run's to release.
+        if state["state"] == "claimed" && state["epoch"].as_u64().is_some_and(|now| now > epoch) {
+            return Ok(());
+        }
         if state["state"] == "claimed" || !shown.status.success() {
             return Err(io::Error::other(format!(
                 "the claim on {item} is still held after release ({})",
@@ -87,20 +108,24 @@ impl Ssh<'_> {
             Err(error) => return Err(io::Error::other(error.to_string())),
         };
         let was_unknown = record.get("status").and_then(Value::as_str) == Some("unknown");
-        if was_unknown {
-            record.set("status", json!("running"));
-        }
-        if fate == RunFate::Live {
-            // Re-attach: the record goes back to running and the host's own reconcile
-            // loop keeps following the session.
+        if matches!(fate, RunFate::Live | RunFate::Queued) {
+            // The record is made consistent; the host's reconciler follows the session
+            // (a live run) or the queue (a queued run) from here.
             if was_unknown {
-                let at = now();
+                let (status, event) = match fate {
+                    RunFate::Live => ("running", "REJOIN_REATTACHED"),
+                    _ => ("queued", "REJOIN_QUEUED"),
+                };
+                record.set("status", json!(status));
                 return record
-                    .push_event(json!({"event": "REJOIN_REATTACHED", "at": at}))
+                    .push_event(json!({"event": event, "at": now()}))
                     .and_then(|()| record.save())
                     .map_err(|error| io::Error::other(error.to_string()));
             }
             return Ok(());
+        }
+        if was_unknown {
+            record.set("status", json!("running"));
         }
         if record.status().is_none_or(Status::is_terminal) {
             return Ok(());
@@ -133,6 +158,14 @@ impl Ssh<'_> {
                 .unwrap_or(Status::Failed),
             _ => Status::Failed,
         };
+        // A dead run's claim is released first: if that fails nothing is recorded as settled,
+        // so the next rejoin finds the run unsettled and tries again.
+        if fate == RunFate::Dead {
+            if let Some(item) = record.get("item_key").and_then(Value::as_str) {
+                let epoch = record.get("claim_epoch").and_then(Value::as_u64);
+                self.release_claim(item, epoch)?;
+            }
+        }
         let at = now();
         // The host's own terminal result is kept on the record: when it ended and its exit code.
         record
@@ -152,20 +185,12 @@ impl Ssh<'_> {
                 to.as_str()
             )));
         }
-        let item = record
-            .get("item_key")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
         record
             .push_event(json!({
                 "event": "REJOIN_SETTLED", "fate": fate, "at": at,
                 "status": to.as_str(), "remote_exit_code": remote.get("exit_code"),
             }))
             .and_then(|()| record.save())
-            .map_err(|error| io::Error::other(error.to_string()))?;
-        match (fate, item) {
-            (RunFate::Dead, Some(item)) => self.release_claim(&item),
-            _ => Ok(()),
-        }
+            .map_err(|error| io::Error::other(error.to_string()))
     }
 }

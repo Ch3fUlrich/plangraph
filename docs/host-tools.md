@@ -277,11 +277,15 @@ under its registry id or any alias. The gate runs the host's
 `plangraph-host-sync.service` (or `PG_REJOIN_SYNC_UNIT`) and needs every
 checkout at `origin/main`; it flags an installed binary or hook that differs
 from `PG_MAIN_SHA`, `PG_MAIN_SHA256` and `PG_MAIN_HOOK_SHA256` (host `env`
-`PG_INSTALL_BINARY`, `PG_INSTALL_STAMP`, `PG_INSTALL_HOOKS`). Each unknown run
-is read from the host's own records: a recorded process that still exists is
-live, a vanished one is dead (failed, its Keeper claim released with the
-client in `PG_KEEPER_CLI` and read back), a terminal record keeps the host's
-exit code, and a run in no record blocks. It runs `pg-worktree-sweep --reap`
+`PG_INSTALL_BINARY`, `PG_INSTALL_STAMP`, `PG_INSTALL_HOOKS`; a hook missing on either side is stale). Each unknown run
+is read from the host's own records: a recorded process (pid and start time, in
+the form its runner writes) that still exists is live, a vanished one is dead,
+a queued record stays queued, a running record with no process identity or a run
+in no record blocks, and a terminal record keeps the host's exit code. A dead
+run's Keeper claim is released first, with the client in `PG_KEEPER_CLI` and the
+run's recorded `claim_epoch` (a newer claim is left alone, a missing epoch
+blocks) and read back; a failed release leaves the run unsettled for the next
+rejoin. It runs `pg-worktree-sweep --reap`
 (with `PG_REJOIN_REAP_APPROVAL` and `PG_REJOIN_REAP_PLAN` when routing approved
 rows) and blocks while eligible stale worktrees remain, measures the work-disk
 floors (the state disk without mounts) and the RAM floor (Windows free memory
