@@ -139,8 +139,8 @@ lacks any of them, and a part without a `Plan-Item` has no body.
 conclusion}`, the full `tests.yml` run of each part's lane) and `--previous-train SHA` (the merge commit of the
 last train on main). It refuses before it reads main when a part has no run for its exact head, a run of another
 workflow, a run that did not conclude `success` (the part goes back to its writer with the run's job log), or a run
-whose base does not contain the previous train or is not under the part head. The train run stays the integration
-check.
+whose base does not contain the previous train or is not under the part head. The accepted runs are written to `<out>/<name>.part-ci.json` beside the manifest, so every part's full-CI run id can be
+read. The train run stays the integration check.
 
 `land::go_publish` publishes a computed GO as one row of the protected decisions branch. It never pushes to that
 branch: it reads the fresh tip, runs the staleness check, allocates the next D-id, submits tip text plus one row on a
