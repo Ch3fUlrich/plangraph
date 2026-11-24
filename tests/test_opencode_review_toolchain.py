@@ -35,6 +35,7 @@ def test_review_seat_env_resolves_cargo_and_python_pytest(tmp_path, monkeypatch,
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setenv('PATH', str(bare))
     monkeypatch.delenv('INVOCATION_ID', raising=False)
+    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
     monkeypatch.setattr(sys, 'prefix', str(venv))
     source = tmp_path / 'source.db'
     source_store(source)
