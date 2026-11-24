@@ -517,3 +517,37 @@ fn push_reclaim_leaves_a_receipt_while_a_second_build_runs_or_a_lease_is_held() 
     drop(lease);
     assert!(reclaim_before_push_using(&checkout, &target, 700, || Ok((vec![], false))).is_ok());
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn trim_refusals_name_the_live_holder_pid() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, _) = over_cap_target(parent.path());
+    let lease = crate::cargo_cache::writer_lease(&target).unwrap();
+    let report = post_run_cargo_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap();
+    let note = format!("held by pid {}", std::process::id());
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.contains("cache lease held") && s.contains(&note)),
+        "{:?}",
+        report.skipped
+    );
+    drop(lease);
+    // A pool slot over its cap and leased reports the same holder.
+    let slot = parent.path().join("slot-0");
+    fs::create_dir_all(slot.join("debug")).unwrap();
+    fs::write(slot.join("debug/blob"), [0u8; 64]).unwrap();
+    let _slot_lease = crate::cargo_cache::writer_lease(&slot).unwrap();
+    let mut report = Report::default();
+    crate::cargo_pool::enforce_pool_cap(&[slot], 10, true, &mut report).unwrap();
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.contains("(leased") && s.contains(&note)),
+        "{:?}",
+        report.skipped
+    );
+}

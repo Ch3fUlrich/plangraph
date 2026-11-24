@@ -199,7 +199,7 @@ pub fn reclaim_before_push(checkout: &Path, target: &Path, cap: u64) -> Result<R
 }
 
 #[cfg(target_os = "linux")]
-fn reclaim_before_push_using(
+pub fn reclaim_before_push_using(
     checkout: &Path,
     target: &Path,
     cap: u64,
@@ -335,9 +335,11 @@ fn shared_cache_levels(
     // Hold the sibling lease through every scan, process probe and deletion.
     // See the cross-language contract in spawner-disk-admission.md.
     let Some(_lease) = crate::cargo_cache::try_exclusive_lease(path)? else {
-        report
-            .skipped
-            .push(format!("{}: cache lease held", path.display()));
+        report.skipped.push(format!(
+            "{}: cache lease held{}",
+            path.display(),
+            crate::cargo_cache::describe_holders(path)
+        ));
         return Ok(());
     };
     let (cwds, building) = process_reader()?;

@@ -164,8 +164,15 @@ def check_bare_tests(pos_words, wrapped_in_slice, *, placement_required=True,
 
 
 MAIN_TARGET_MESSAGE = ("bash-guard: DENIED - cargo %s in the checkout %s (main or .claude/worktrees) would write its target "
-                       "here, outside every disk cap; run it in a worktree or set CARGO_TARGET_DIR to "
-                       "the shared target (~/.cache/plangraph/cargo-target)")
+                       "inside it, outside every disk cap; set CARGO_TARGET_DIR (or --target-dir) to the shared target (%s)")
+DEFAULT_SHARED_TARGET = "~/.cache/plangraph/cargo-target"
+
+
+def shared_target():
+    """The host's shared target: PLANGRAPH_CARGO_TARGET_DIR (a data drive on some hosts), else the default."""
+    return os.environ.get("PLANGRAPH_CARGO_TARGET_DIR") or DEFAULT_SHARED_TARGET
+
+
 _TARGET_ENVS = ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR")
 _BUILDING = frozenset(("build", "b", "check", "c", "test", "t", "nextest", "clippy", "run", "r",
                        "bench", "doc", "d", "rustc", "llvm-cov"))
@@ -300,5 +307,5 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
                 continue
             root = _cargo_target_checkout(rest, envs, _cargo_workdir(rest, cwd))
             if root is not None:
-                return MAIN_TARGET_MESSAGE % (sub, root)
+                return MAIN_TARGET_MESSAGE % (sub, root, shared_target())
     return None

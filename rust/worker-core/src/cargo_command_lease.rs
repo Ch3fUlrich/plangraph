@@ -6,7 +6,7 @@
 //! dies, whatever the cause; the Cargo child dies with it, so a cancelled command strands neither.
 //! A nested Cargo command, and the preflight or fast-check commands that already hold the lease,
 //! mark the environment with [`HELD_ENV`] and run without taking it again.
-use crate::cargo_cache::{describe_holders, writer_lease};
+use crate::cargo_cache::writer_lease;
 use std::{
     ffi::{OsStr, OsString},
     io,
@@ -123,8 +123,8 @@ pub fn shim_main(args: impl Iterator<Item = OsString>) -> i32 {
     ) {
         Ok(code) => code,
         Err(error) => {
-            let holders = target.as_deref().map(describe_holders).unwrap_or_default();
-            eprintln!("cargo shim: {error}{holders}");
+            // A refused lease already names its holders (`writer_lease`).
+            eprintln!("cargo shim: {error}");
             1
         }
     }
