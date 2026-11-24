@@ -209,6 +209,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
     repo"; the caller's repo is never auto-reset.
     """
+    from .codex_limit import codex_usage_limit
     from .env_redact import harness_limit_line, redact_env_values, redact_output
     from .exit_outcome import _booking_seconds
 
@@ -317,9 +318,10 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             env = dict(os.environ)
             env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
             excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
-            if review_mode and leg.harness == 'agy' and not leaked and diagnostic is not None:
-                quota = harness_limit_line(getattr(diagnostic, 'exit_code', None),
-                                           getattr(diagnostic, 'stdout', '') or '', stderr)
+            if review_mode and leg.harness in ('agy', 'codex') and not leaked and diagnostic is not None:
+                limit_line = harness_limit_line if leg.harness == 'agy' else codex_usage_limit
+                quota = limit_line(getattr(diagnostic, 'exit_code', None),
+                                   getattr(diagnostic, 'stdout', '') or '', stderr)
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
             if not quota:
