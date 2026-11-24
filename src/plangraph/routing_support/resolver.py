@@ -668,7 +668,8 @@ def rank_candidates(
     # Validate every candidate before entering the ranking loop.  This keeps the
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
-    for c in candidates:
+    from plangraph.planner.benchmarks import consistent_scale   # lazy: the planner imports this module
+    for c in consistent_scale(candidates):
         if not catalog_row_admitted(c):
             continue
         d = dict(c)

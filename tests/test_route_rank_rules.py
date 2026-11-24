@@ -225,3 +225,21 @@ def test_a_new_own_row_needs_a_five_card_canary_for_high_and_critical():
         LEG: "canary_pending"}
     # A normal card may still run on the new row: that run is its canary.
     assert eligible(plan(pool(LEG), {"risk": "normal"}, {BY_ID[LEG].model: fresh(origin="own", n_runs=0)}))
+
+
+def test_a_legs_file_dumped_from_the_defaults_loads_with_vision_null(tmp_path):
+    from dataclasses import asdict
+    path = tmp_path / "legs.json"
+    path.write_text(json.dumps({"legs": [asdict(leg) for leg in DEFAULT_LEGS]}))
+    assert [leg.id for leg in legs_module.load_legs(path)] == [leg.id for leg in DEFAULT_LEGS]
+    path.write_text(json.dumps({"legs": [dict(asdict(DEFAULT_LEGS[0]), vision="yes")]}))
+    with pytest.raises(ValueError, match="vision"):
+        legs_module.load_legs(path)
+
+
+def test_a_coding_index_counts_only_when_every_ranked_row_has_one():
+    with_coding = cand("coding", aa_intelligence=40.0, coding_index=80.0)
+    without = cand("plain", aa_intelligence=60.0)
+    assert [c["model_id"] for c in rank_candidates([with_coding, without])] == ["plain", "coding"]
+    both = [with_coding, cand("other", aa_intelligence=70.0, coding_index=60.0)]
+    assert [c["model_id"] for c in rank_candidates(both)][0] == "coding"
