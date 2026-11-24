@@ -304,10 +304,10 @@ def test_brief_line_format():
 def test_brief_respects_n_and_project():
     items = load("mini_snapshot.json")
     assert views.brief(items, n=2) == (
-        "atlas:R-1 | Router owns plan definitions | est 2h | unblocks 2 | prio 1\n"
-        "borealis:A-10 | Correct snapshot exporter | est 3h | unblocks 1 | prio 1")
+        "atlas:R-1 | Router owns plan definitions | est 2h | unblocks 2 | prio 1->2 via borealis:A-9\n"
+        "borealis:A-3 | Views API | est 3h | unblocks 2 | prio 0->2 via borealis:A-9")
     assert views.brief(items, project="atlas") == (
-        "atlas:R-1 | Router owns plan definitions | est 2h | unblocks 2 | prio 1")
+        "atlas:R-1 | Router owns plan definitions | est 2h | unblocks 2 | prio 1->2 via borealis:A-9")
 
 
 def test_brief_empty_when_nothing_ready():

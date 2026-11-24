@@ -101,6 +101,28 @@ fn whole_tick_dry_run_does_not_touch_claim_or_spawner() {
     assert!(f.calls.is_empty());
 }
 #[test]
+fn feeder_orders_by_effective_priority() {
+    let mut v = ready();
+    // LOW-OLD (priority 1) blocks a p10 item: the keeper sends effective 10
+    v["items"][0]["effective_priority"] = json!(10);
+    v["items"][0]["priority_via"] = json!("plangraph:TOP");
+    v["items"][4]["context"]["newer_decisions"] = json!(["D-123"]);
+    v["items"][3]["context"]["newer_decisions"] = json!(["D-124"]);
+    assert_eq!(
+        pick(&v, &[], &Policy::default()).unwrap().key,
+        "plangraph:LOW-OLD"
+    );
+    // the dependent closed: the keeper sends no effective value and the stored one decides
+    v["items"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("effective_priority");
+    assert_eq!(
+        pick(&v, &[], &Policy::default()).unwrap().key,
+        "plangraph:HIGH-OLD"
+    );
+}
+#[test]
 fn legacy_ready_context_skips_guard_refusals_without_dropping_old_unclaimed_work() {
     let mut v = ready();
     v["items"][4]["context"]["newer_decisions"] = json!(["D-123"]);
