@@ -108,6 +108,23 @@ fn a_batch_whose_failures_fall_keeps_its_writer() {
 }
 
 #[test]
+fn a_check_judged_round_followed_by_a_card_without_failing_checks_is_admitted() {
+    for next in ["review_finding", "red_ci"] {
+        let dir = tempfile::tempdir().unwrap();
+        book(dir.path(), &[red(5)]);
+        let mut args = card(next, 0);
+        args["card"]
+            .as_object_mut()
+            .unwrap()
+            .remove("failing_checks");
+        let admitted = run(dir.path(), &args).ok().unwrap();
+        assert_eq!(admitted.fields["writer_round"], 2);
+        // The unknown check count after the round is 0: green.
+        assert_eq!(admitted.fields["previous_confirmed_blockers"], json!([0]));
+    }
+}
+
+#[test]
 fn every_cause_counts_and_an_unknown_cause_or_check_count_is_refused() {
     for cause in CAUSES {
         let dir = tempfile::tempdir().unwrap();

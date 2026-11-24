@@ -227,8 +227,14 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
                 return Err(refused("round_history_invalid"));
             }
             saved
-        } else if record["round_verdict_file"].is_null() && after(index).is_some() {
-            // A round judged by its failing checks alone (red CI, fast check, rebase).
+        } else if record["round_verdict_file"].is_null()
+            && (after(index).is_some()
+                || record["round_cause"]
+                    .as_str()
+                    .is_some_and(|c| c != crate::round_escalate::CAUSES[0]))
+        {
+            // A round judged by its failing checks alone (red CI, fast check, rebase); an unknown
+            // count after it is green.
             json!({"confirmed_blockers":0, "narrow_fix_eligible":false, "verdict":null})
         } else {
             let source = record["round_verdict_file"]
