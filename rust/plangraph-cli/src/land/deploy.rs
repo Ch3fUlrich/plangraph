@@ -29,6 +29,9 @@ pub struct Target {
     pub family: String,
     pub host: String,
     pub parts: Vec<u64>,
+    /// `Plan-Item` keys of the parts that ship this family: the items that get its deploy row.
+    #[serde(default)]
+    pub items: BTreeSet<String>,
 }
 
 /// A refused target (or a family without a usable host): the item that tracks it.
@@ -229,7 +232,7 @@ pub fn deploy_plan(
     authorized: &BTreeSet<String>,
     probe: &dyn Probe,
 ) -> DeployPlan {
-    let mut ok: BTreeMap<(String, String), Vec<u64>> = BTreeMap::new();
+    let mut ok: BTreeMap<(String, String), (Vec<u64>, BTreeSet<String>)> = BTreeMap::new();
     let mut bad: BTreeMap<BlockerKey, (Vec<u64>, Vec<String>)> = BTreeMap::new();
     let mut refuse = |family: &str, host: Option<&str>, pr: u64, why: String| {
         let e = bad
@@ -259,10 +262,11 @@ pub fn deploy_plan(
             }
             for host in &allowed {
                 match probe.probe(host, family) {
-                    Ok(()) => ok
-                        .entry((family.clone(), host.clone()))
-                        .or_default()
-                        .push(part.pr),
+                    Ok(()) => {
+                        let e = ok.entry((family.clone(), host.clone())).or_default();
+                        e.0.push(part.pr);
+                        e.1.extend(part.items.iter().cloned());
+                    }
                     Err(found) => {
                         let why: Vec<_> = found
                             .iter()
@@ -277,10 +281,11 @@ pub fn deploy_plan(
     DeployPlan {
         targets: ok
             .into_iter()
-            .map(|((family, host), parts)| Target {
+            .map(|((family, host), (parts, items))| Target {
                 family,
                 host,
                 parts,
+                items,
             })
             .collect(),
         blockers: bad
@@ -297,7 +302,7 @@ pub fn deploy_plan(
 }
 
 /// `land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd "CMD ARGS"
-/// [--declared FILE] [--blockers-out FILE]`: the deploy table of a built train. `--declared` is a JSON
+/// [--declared FILE] [--blockers-out FILE] [--plan-out FILE]`: the deploy table of a built train. `--declared` is a JSON
 /// object of item key -> hosts from the items' `Deploy-Hosts:` lines.
 pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
@@ -321,6 +326,10 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
     };
     let parts = derive(Path::new(need("repo")?), &manifest)?;
     let plan = deploy_plan(&parts, &declared, &authorized, &probe);
+    if let Some(out) = flags.get("plan-out") {
+        let text = serde_json::to_vec_pretty(&plan).map_err(|e| e.to_string())?;
+        std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
+    }
     if let Some(out) = flags.get("blockers-out") {
         let text = serde_json::to_vec_pretty(&plan.blocker_items()).map_err(|e| e.to_string())?;
         std::fs::write(out, text).map_err(|e| format!("{out}: {e}"))?;
