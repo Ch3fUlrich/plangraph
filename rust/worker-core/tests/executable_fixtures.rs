@@ -25,7 +25,16 @@ fn executable_fixtures_use_the_shared_writer() {
                 }
                 let source = std::fs::read_to_string(&path).unwrap();
                 for (number, line) in source.lines().enumerate() {
-                    if writes_executable_mode(line) && !mode_is_not_a_fixture_write(&name, line) {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("//") {
+                        continue;
+                    }
+                    let literal =
+                        writes_executable_mode(line) && !mode_is_not_a_fixture_write(&name, line);
+                    let computed =
+                        sets_computed_mode(line) && !computed_mode_is_not_a_fixture(&name, line);
+                    let copied = copies_a_file(line) && !copy_is_not_an_executable(&name);
+                    if literal || computed || copied {
                         offenders.push(format!("{name}:{}", number + 1));
                     }
                 }
@@ -102,6 +111,69 @@ fn mode_is_not_a_fixture_write(path: &str, line: &str) -> bool {
     }
 }
 
+/// A mode setter whose argument is not a literal (`from_mode(mode)`, `.mode(CONST)`): the guard cannot
+/// read its bits, so each such call needs a justified exemption below.
+fn sets_computed_mode(line: &str) -> bool {
+    ["::from_mode", ".set_mode", ".chmod", ".mode"]
+        .iter()
+        .any(|setter| {
+            line.match_indices(setter).any(|(offset, _)| {
+                let rest = line[offset + setter.len()..].trim_start();
+                rest.strip_prefix('(')
+                    .map(str::trim_start)
+                    .is_some_and(|argument| {
+                        !argument.starts_with(')')
+                            && !argument.starts_with(|c: char| c.is_ascii_digit())
+                    })
+            })
+        })
+}
+
+fn computed_mode_is_not_a_fixture(path: &str, line: &str) -> bool {
+    match path {
+        // The shared writer publishes with the mode its caller names.
+        "worker-core/src/executable_test_support.rs" => {
+            line.contains("Permissions::from_mode(mode)")
+        }
+        // Production writer of a remote step's declared file mode.
+        "worker-core/src/remote_steps.rs" => line.contains("spec.mode"),
+        // These tests walk non-executable subjects (a credential file, a socket directory) through modes
+        // to see them refused.
+        "og-memory/src/credentials.rs" => line.contains("Permissions::from_mode(mode)"),
+        "pg-spawnd/src/transport_unix.rs" => {
+            line.contains("set_permissions(&dir, std::fs::Permissions::from_mode(mode))")
+        }
+        "pg-spawnd/tests/serve_cli.rs" => {
+            line.contains("set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode))")
+        }
+        _ => false,
+    }
+}
+
+/// `fs::copy` publishes a second copy of a file, mode included, without the shared writer's atomic rename.
+fn copies_a_file(line: &str) -> bool {
+    !line.trim_start().starts_with("//") && line.contains("fs::copy(")
+}
+
+/// Files whose copies are production code or data that no test executes: a copied executable belongs on
+/// `write_executable(path, fs::read(source))`.
+fn copy_is_not_an_executable(path: &str) -> bool {
+    matches!(
+        path,
+        // Production installers and mirrors.
+        "pg-hook/src/commit_msg.rs"
+            | "pg-ctx/src/mirror_backend.rs"
+            // Data: a .gitignore, a systemd timer unit, a toolchain pin, a run record, a Python module the
+            // hook runs through the interpreter, and a hook file the test only compares byte for byte.
+            | "pg-hook/tests/status_files.rs"
+            | "pg-keeper-backup/tests/units.rs"
+            | "pg-spawnd/tests/toolchain_pin.rs"
+            | "pg-spawnd/src/cli_review_tests.rs"
+            | "pg-hook/tests/commit_message.rs"
+            | "plangraph-cli/tests/landing_hosts.rs"
+    )
+}
+
 fn writes_executable_mode(line: &str) -> bool {
     ["::from_mode", ".set_mode", ".chmod", ".mode"]
         .iter()
@@ -146,5 +218,43 @@ fn recognizes_mode_setters_with_any_execute_bit() {
         "Permissions::from_mode(0o600)",
     ] {
         assert!(!writes_executable_mode(other), "{other}");
+    }
+}
+
+#[test]
+fn recognizes_computed_mode_setters() {
+    for setter in [
+        "std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();",
+        "file.set_permissions(Permissions::from_mode(MODE))",
+        "permissions.set_mode(current | extra)",
+        "OpenOptions::new().mode(spec.mode)",
+        "path.chmod(bits)",
+    ] {
+        assert!(sets_computed_mode(setter), "{setter}");
+    }
+    for other in [
+        "OpenOptions::new().mode(0o644)",
+        "metadata.permissions().mode() & 0o111",
+        "Permissions::from_mode(0o600)",
+        "let mode = configured_mode(role);",
+    ] {
+        assert!(!sets_computed_mode(other), "{other}");
+    }
+}
+
+#[test]
+fn recognizes_file_copies() {
+    for copy in [
+        "fs::copy(env!(\"CARGO_BIN_EXE_tool\"), &tool).unwrap();",
+        "    std::fs::copy(",
+    ] {
+        assert!(copies_a_file(copy), "{copy}");
+    }
+    for other in [
+        "fs::copy_dir(a, b)",
+        "let copy = 1;",
+        "// fs::copy is banned",
+    ] {
+        assert!(!copies_a_file(other), "{other}");
     }
 }
