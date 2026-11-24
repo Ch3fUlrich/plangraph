@@ -7,6 +7,7 @@ pub(crate) mod quota;
 mod runtime;
 mod selection;
 mod sources;
+mod windows_ram;
 mod workflow;
 pub(crate) use adapters::MERGE_INDEX_EXPIRED;
 pub use adapters::{Env, SlowKeeper, Transport};
@@ -51,6 +52,8 @@ pub struct Policy {
     pub quota_facts_max_age_seconds: i64,
     pub ram_per_run_bytes: u64,
     pub ram_floor_bytes: u64,
+    /// On WSL: memory kept free on the Windows side, subtracted from Windows' free memory.
+    pub windows_ram_floor_bytes: u64,
     pub disk_floor_bytes: u64,
     pub quota_floor_percent: f64,
     pub facts_max_age_seconds: i64,
@@ -67,6 +70,7 @@ impl Default for Policy {
             quota_facts_max_age_seconds: 900,
             ram_per_run_bytes: 4_000_000_000,
             ram_floor_bytes: 3_000_000_000,
+            windows_ram_floor_bytes: 6_000_000_000,
             disk_floor_bytes: 10_000_000_000,
             quota_floor_percent: 10.0,
             facts_max_age_seconds: 300,

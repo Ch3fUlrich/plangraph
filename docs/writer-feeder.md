@@ -139,7 +139,17 @@ their files. A lane whose item is no longer ready still holds its slot.
 `--live-facts` is the feeder service's Linux and WSL mode. It samples available
 memory, one-minute load, effective CPU count, and disk space on the run-state
 and existing Cargo target filesystems. It uses the spawner host identity from
-`PLANGRAPH_HOST_NAME` or the host registry. Hosts admit by free RAM (D-5122), not load: the writer limit of a host is
+`PLANGRAPH_HOST_NAME` or the host registry. On WSL (kernel string `microsoft` or `WSL_INTEROP` set) WSL's `MemAvailable` overstates free
+RAM, because Windows and its other processes use the rest. Free RAM is then the lower of
+`MemAvailable` and Windows' free physical memory minus `windows_ram_floor_bytes` (default
+6 GB), read with `powershell.exe -NoProfile Get-CimInstance Win32_OperatingSystem`
+(`FreePhysicalMemory`, 15 s limit). A failed read uses the last value cached in the feeder
+state for up to `facts_max_age_seconds`; with none, the tick fails as
+`windows_ram_unreadable: <why>` and admits nothing. The capacity line shows
+`wsl_free_ram_bytes`, `windows_free_ram_bytes`, `windows_ram_source` (`live` or `cached`)
+and `windows_ram_floor_bytes`.
+
+Hosts admit by free RAM (D-5122), not load: the writer limit of a host is
 the writers it already runs plus (free RAM - `ram_floor_bytes`) / `ram_per_run_bytes`
 (rounded down). Load never refuses; at or above one-minute load of the CPU count
 the host starts one new writer per tick, so running builds get room first. Every

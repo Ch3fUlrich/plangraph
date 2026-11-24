@@ -1,12 +1,28 @@
+use super::windows_ram::{effective_free, is_wsl, read_with_cache, WindowsRam};
 use super::{writer_limit, Env, HostFacts, Policy};
 use pg_worker_core::{disk_runtime, host_probe};
 use std::path::Path;
 
+/// One live capacity sample: the facts, cpu count and load, and the two RAM views admission
+/// reconciled (WSL's `MemAvailable` and, on WSL, Windows' free memory) for the decision line.
+pub(super) struct Measured {
+    pub facts: HostFacts,
+    pub cpus: usize,
+    pub load: f64,
+    pub wsl_free_ram_bytes: u64,
+    pub windows: Option<WindowsRam>,
+}
+
+/// `read_windows` reads Windows' free physical memory; it is called only on a WSL host.
 pub(super) fn sample(
     host: &str,
     disk_root: &Path,
     env: &Env,
-) -> Result<(HostFacts, usize, f64), String> {
+    policy: &Policy,
+    state: &Path,
+    dry: bool,
+    read_windows: impl FnOnce() -> Result<u64, String>,
+) -> Result<Measured, String> {
     let metrics = host_probe::probe(host).map_err(|e| format!("capacity probe: {e}"))?;
     let disk = |path: &Path| {
         disk_runtime::disk_usage(path).map_err(|e| format!("capacity disk probe: {e}"))
@@ -19,9 +35,25 @@ pub(super) fn sample(
     {
         free_disk_bytes = free_disk_bytes.min(disk(target)?);
     }
+    let wsl_free_ram_bytes = metrics.mem_available_mb.saturating_mul(1024 * 1024);
+    let on_wsl = is_wsl(
+        &std::fs::read_to_string("/proc/version").unwrap_or_default(),
+        env.get("WSL_INTEROP").map(String::as_str),
+    );
+    let windows = if on_wsl {
+        Some(read_with_cache(
+            read_windows,
+            state,
+            (metrics.ts_ms / 1000) as i64,
+            policy.facts_max_age_seconds,
+            dry,
+        )?)
+    } else {
+        None
+    };
     let facts = HostFacts {
         host: host.to_owned(),
-        free_ram_bytes: metrics.mem_available_mb.saturating_mul(1024 * 1024),
+        free_ram_bytes: effective_free(wsl_free_ram_bytes, windows, policy.windows_ram_floor_bytes),
         free_disk_bytes,
         quota_remaining_percent: None,
         observed_at: (metrics.ts_ms / 1000) as i64,
@@ -29,11 +61,13 @@ pub(super) fn sample(
         kill_switch: false,
         now: 0,
     };
-    Ok((
+    Ok(Measured {
         facts,
-        metrics.cpus,
-        metrics.load1.ok_or("capacity load unavailable")?,
-    ))
+        cpus: metrics.cpus,
+        load: metrics.load1.ok_or("capacity load unavailable")?,
+        wsl_free_ram_bytes,
+        windows,
+    })
 }
 
 /// The writer budget of one live sample: the slots free RAM allows, the pacing that load adds,
@@ -83,4 +117,45 @@ pub(super) fn apply(
         load_paced,
         limit,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn measure(
+        interop: bool,
+        windows: Result<u64, String>,
+        dir: &Path,
+    ) -> Result<Measured, String> {
+        let mut env = Env::new();
+        if interop {
+            env.insert("WSL_INTEROP".into(), "/run/WSL/1_interop".into());
+        }
+        sample("ws", dir, &env, &Policy::default(), dir, true, || windows)
+    }
+
+    #[test]
+    fn on_wsl_the_windows_free_memory_less_its_floor_caps_the_sample() {
+        let d = tempfile::tempdir().unwrap();
+        let m = measure(true, Ok(19_200_000_000), d.path()).unwrap();
+        let cap = 19_200_000_000 - Policy::default().windows_ram_floor_bytes;
+        assert_eq!(m.facts.free_ram_bytes, m.wsl_free_ram_bytes.min(cap));
+        assert_eq!(m.windows.unwrap().free_bytes, 19_200_000_000);
+    }
+    #[test]
+    fn an_unreadable_windows_side_admits_nothing_and_says_why() {
+        let d = tempfile::tempdir().unwrap();
+        let err = measure(
+            true,
+            Err("powershell.exe timed out after 15s".into()),
+            d.path(),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            err.starts_with("windows_ram_unreadable: powershell.exe timed out"),
+            "{err}"
+        );
+    }
 }

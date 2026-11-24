@@ -1,7 +1,7 @@
 //! Thin I/O adapter. No selection logic belongs here; these calls can become activities.
 use super::adapters::{Adapters, Env, Keeper, Transport};
 use super::*;
-use super::{capacity, sources};
+use super::{capacity, sources, windows_ram};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -71,17 +71,29 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
         .get("PLANGRAPH_HOST_NAME")
         .map(String::as_str)
         .or(local.as_deref());
-    let (sample, load) = if o.live {
+    let (sample, load, ram_views) = if o.live {
         let host = host
             .filter(|host| !host.trim().is_empty())
             .ok_or("live capacity requires a configured host name")?;
         let disk_root = state.ancestors().find(|path| path.is_dir()).unwrap_or(home);
-        let (sample, cpus, load) = capacity::sample(host, disk_root, env)?;
-        (sample, Some((cpus, load)))
+        let m = capacity::sample(
+            host,
+            disk_root,
+            env,
+            &policy,
+            state,
+            o.dry,
+            windows_ram::read_powershell,
+        )?;
+        (
+            m.facts,
+            Some((m.cpus, m.load)),
+            Some((m.wsl_free_ram_bytes, m.windows)),
+        )
     } else {
         let sample = serde_json::from_value(sources::read_json(&o.facts)?)
             .map_err(|_| "invalid host facts")?;
-        (sample, None)
+        (sample, None, None)
     };
     let mut facts = match sources::facts(
         env,
@@ -105,6 +117,10 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
         Some(json!({
             "host":facts.host, "cpus":cpus, "load1":load, "running_writers":facts.running_writers,
             "free_ram_bytes":free_ram_bytes, "ram_floor_bytes":policy.ram_floor_bytes,
+            "wsl_free_ram_bytes":ram_views.map(|v| v.0),
+            "windows_free_ram_bytes":ram_views.and_then(|v| v.1).map(|w| w.free_bytes),
+            "windows_ram_source":ram_views.and_then(|v| v.1).map(|w| w.source),
+            "windows_ram_floor_bytes":ram_views.and_then(|v| v.1).map(|_| policy.windows_ram_floor_bytes),
             "ram_per_writer_bytes":policy.ram_per_run_bytes,
             "slots_by_ram":budget.slots_by_ram, "new_writers_allowed":budget.new_writers_allowed,
             "load_paced":budget.load_paced, "writer_limit":budget.limit,
