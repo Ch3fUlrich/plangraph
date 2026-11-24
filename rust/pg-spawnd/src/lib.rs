@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 pub mod batch_writer_brief;
 pub mod brief_gate_paths;
 #[cfg(target_os = "linux")]
