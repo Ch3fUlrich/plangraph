@@ -17,6 +17,7 @@ def git(cwd, *args):
 def _tmp_is_outside_any_enclosing_repository(tmp_path, monkeypatch):
     """pytest's tmp dir may sit inside the checkout running the tests: git must not climb out of it."""
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    monkeypatch.setenv("CARGO_HOME", str(tmp_path / "cargo-home"))  # not the host's own cargo config
 
 
 @pytest.fixture
@@ -359,3 +360,60 @@ def test_options_after_the_double_dash_belong_to_the_program_not_to_cargo(repos,
     main, _ = repos
     result = hook(command, main / "rust")
     assert result.returncode == 2, (command, result.stderr)
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("CARGO_TARGET_DIR=/var/cache/shared; export CARGO_TARGET_DIR; cargo build", 0),
+    ("CARGO_TARGET_DIR=/var/cache/shared; declare -x CARGO_TARGET_DIR; cargo build", 0),
+    ("CARGO_TARGET_DIR=rust/target; export CARGO_TARGET_DIR; cargo build", 2),
+    ("CARGO_TARGET_DIR=/var/cache/shared; export CARGO_TARGET_DIR; export -n CARGO_TARGET_DIR; cargo build", 2),
+    ("export CARGO_TARGET_DIR=/var/cache/shared; export -n CARGO_TARGET_DIR; export CARGO_TARGET_DIR; cargo build", 0),
+    ("CARGO_TARGET_DIR=/var/cache/shared; unset CARGO_TARGET_DIR; export CARGO_TARGET_DIR; cargo build", 2),
+    ("env -u CARGO_TARGET_DIR CARGO_TARGET_DIR=/var/cache/shared cargo build", 0),
+    ("env CARGO_TARGET_DIR=/var/cache/shared -u CARGO_TARGET_DIR cargo build", 2),
+    ("env -i CARGO_TARGET_DIR=/var/cache/shared -u CARGO_TARGET_DIR cargo build", 2),
+])
+def test_shell_values_export_state_and_env_options_are_read_in_order(repos, command, expected):
+    main, _ = repos
+    assert hook(command, main).returncode == expected, command
+
+
+def _cargo_config(directory, target_dir):
+    (directory / ".cargo").mkdir(parents=True, exist_ok=True)
+    (directory / ".cargo" / "config.toml").write_text(f'[build]\ntarget-dir = "{target_dir}"\n')
+
+
+def test_a_build_target_dir_in_a_cargo_config_decides_the_target(repos, tmp_path, monkeypatch):
+    main, _ = repos
+    out = tmp_path / "elsewhere"
+    out.mkdir()
+    # From an unrelated directory, a config there that aims into the main checkout.
+    _cargo_config(out, f"{main}/rust/target")
+    assert hook("cargo build", out).returncode == 2
+    # A relative path is relative to the directory that holds `.cargo`.
+    _cargo_config(out, "build-out")
+    assert hook("cargo build", out).returncode == 0
+    _cargo_config(main, "target")
+    assert hook("cargo build", main / "rust").returncode == 2
+    # The shared target in the checkout's own config is what the refusal asks for.
+    _cargo_config(main, "/var/cache/shared")
+    assert hook("cargo build", main / "rust").returncode == 0
+    # The environment beats the config file, and a nearer file beats a farther one.
+    _cargo_config(main, f"{main}/rust/target")
+    assert hook("CARGO_TARGET_DIR=/var/cache/shared cargo build", main / "rust").returncode == 0
+    _cargo_config(main / "rust", "/var/cache/shared")
+    assert hook("cargo build", main / "rust").returncode == 0
+    # The user-level config under CARGO_HOME.
+    (tmp_path / "cargo-home").mkdir()
+    (tmp_path / "cargo-home" / "config.toml").write_text(f'[build]\ntarget-dir = "{main}/rust/target"\n')
+    assert hook("cargo build", tmp_path).returncode == 2
+
+
+def test_a_config_option_on_the_command_line_sets_the_target(repos, tmp_path):
+    main, _ = repos
+    out = tmp_path / "elsewhere"
+    out.mkdir()
+    assert hook(f"cargo build --config 'build.target-dir=\"{main}/rust/target\"'", out).returncode == 2
+    assert hook(f"cargo --config 'build.target-dir=\"{main}/rust/target\"' build", out).returncode == 2
+    assert hook("cargo build --config 'build.target-dir=\"/var/cache/shared\"'", main / "rust").returncode == 0
+    assert hook("cargo build --config 'build.jobs=2'", main / "rust").returncode == 2
