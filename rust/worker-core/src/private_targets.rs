@@ -51,7 +51,7 @@ pub fn sweep(
         SystemTime::now(),
         apply,
         report,
-        crate::disk_runtime::processes,
+        crate::disk_runtime::process_references,
     )
 }
 
@@ -155,7 +155,7 @@ pub fn sweep_fast_check_targets(
         SystemTime::now(),
         apply,
         report,
-        crate::disk_runtime::processes,
+        crate::disk_runtime::process_references,
     )
 }
 
