@@ -4,9 +4,14 @@ use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-fn run(root: &Path, guard: &str, script: &Path) -> Output {
+/// A guard that must finish gets a budget no loaded host exceeds while python starts; only
+/// the sleeping guard uses a short one, so "crashed" is never raced against "timed out".
+const FINISH_MS: &str = "20000";
+const TIMEOUT_MS: &str = "250";
+
+fn run(root: &Path, guard: &str, script: &Path, millis: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_guard-hook"))
-        .args([guard, "250"])
+        .args([guard, millis])
         .arg(script)
         .env("FLEET_STATE_DIR", root)
         .stdin(Stdio::null())
@@ -67,16 +72,24 @@ fn effective_settings_block_guard_outages_once_per_incident() {
 fn assert_incident(guard: &str) {
     let state = tempfile::tempdir().unwrap();
     let script = state.path().join("fixture.py");
-    for (body, reason) in [
-        (None, "guard file unavailable"),
-        (Some("raise RuntimeError('private crash')\n"), "crashed"),
-        (Some("import time; time.sleep(10)\n"), "timed out"),
+    for (body, reason, millis) in [
+        (None, "guard file unavailable", FINISH_MS),
+        (
+            Some("raise RuntimeError('private crash')\n"),
+            "crashed",
+            FINISH_MS,
+        ),
+        (
+            Some("import time; time.sleep(10)\n"),
+            "timed out",
+            TIMEOUT_MS,
+        ),
     ] {
         if let Some(body) = body {
             std::fs::write(&script, body).unwrap();
         }
-        let first = run(state.path(), guard, &script);
-        let again = run(state.path(), guard, &script);
+        let first = run(state.path(), guard, &script, millis);
+        let again = run(state.path(), guard, &script, millis);
         assert_eq!(first.status.code(), Some(2));
         assert_eq!(again.status.code(), Some(2));
         assert!(first.stdout.is_empty() && again.stdout.is_empty());
@@ -92,7 +105,7 @@ fn assert_incident(guard: &str) {
         );
         let healthy = r#"print('{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"fixture"}}')"#;
         std::fs::write(&script, healthy).unwrap();
-        let output = run(state.path(), guard, &script);
+        let output = run(state.path(), guard, &script, FINISH_MS);
         assert!(output.status.success());
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
