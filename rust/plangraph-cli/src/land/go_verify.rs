@@ -297,29 +297,34 @@ fn ci(e: &Evidence, pins: &Pins, out: &mut Vec<Refusal>) {
 pub(super) const DEPLOY_EXCEPTIONS: &str = include_str!("../../../../deploy/exceptions.toml");
 
 /// The deploy part of the GO: no manifest entry may be not live for more than 24 h on a reporting host.
-/// Every host of the hosts registry `registry` (its text, `None` when unreadable) must have a fresh ledger.
+/// Every host of the hosts registry `registry` (its text, `None` when unreadable) must have a fresh ledger
+/// computed from `pins`, the manifest and release of the checkout this check runs from (`None` when that
+/// checkout cannot be read: a refusal, not a pass).
 pub(super) fn deploy_refusals(
     ledger_dir: &std::path::Path,
     exceptions: &str,
     registry: Option<&str>,
+    pins: Option<&crate::deploy_manifest::guard::Pins>,
     now: i64,
 ) -> Result<Vec<Refusal>, String> {
     use crate::deploy_manifest::guard;
     let exceptions = guard::parse_exceptions(exceptions)?;
     let (ledgers, mut findings) = guard::read_ledgers(ledger_dir);
-    let expected = match registry.map(guard::expected_hosts) {
-        Some(Ok(hosts)) => hosts,
-        Some(Err(error)) => {
-            findings.push(guard::Finding {
-                code: "deploy_hosts_unknown",
-                detail: error,
-            });
-            Vec::new()
-        }
-        None => Vec::new(),
+    let unknown = |detail: String| guard::Finding {
+        code: "deploy_hosts_unknown",
+        detail,
     };
-    if findings.iter().all(|f| f.code != "deploy_hosts_unknown") {
-        findings.extend(guard::check(&ledgers, &expected, &exceptions, now));
+    match (registry.map(guard::expected_hosts), pins) {
+        (Some(Ok(hosts)), Some(pins)) => {
+            findings.extend(guard::check(&ledgers, &hosts, pins, &exceptions, now));
+        }
+        (Some(Err(error)), _) => findings.push(unknown(error)),
+        (None, _) => findings.push(unknown("the hosts registry is not readable".into())),
+        (_, None) => findings.push(guard::Finding {
+            code: "deploy_pins_unknown",
+            detail: "the checkout's deploy manifest or release stamp cannot be read (--repo)"
+                .into(),
+        }),
     }
     Ok(findings.into_iter().map(|f| no(f.code, f.detail)).collect())
 }
@@ -338,19 +343,20 @@ pub(super) fn deploy_ledger_dir(flags: &BTreeMap<String, String>) -> std::path::
 
 /// The hosts registry the deploy check reads: `--hosts FILE`, else the user's `hosts.json`.
 pub(super) fn deploy_registry_text(flags: &BTreeMap<String, String>) -> Option<String> {
-    let path = flags
-        .get("hosts")
+    crate::deploy_manifest::guard::registry_text(flags.get("hosts").map(std::path::Path::new))
+}
+
+/// The manifest and release of the checkout the check runs from: `--repo PATH`, else `~/code/plangraph`.
+pub(super) fn deploy_pins(
+    flags: &BTreeMap<String, String>,
+) -> Option<crate::deploy_manifest::guard::Pins> {
+    let repo = flags
+        .get("repo")
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            let config = std::env::var_os("XDG_CONFIG_HOME")
-                .filter(|v| !v.is_empty())
-                .map(std::path::PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config"))
-                })?;
-            Some(config.join("plangraph/hosts.json"))
+            std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("code/plangraph"))
         })?;
-    std::fs::read_to_string(path).ok()
+    crate::deploy_manifest::guard::Pins::from_repo(&repo).ok()
 }
 
 pub(super) fn now_secs() -> i64 {
@@ -359,7 +365,7 @@ pub(super) fn now_secs() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// `land-train go-verify --evidence FILE [--deploy-ledgers DIR] [--hosts FILE]`: prints one `GO-VERIFIED` line, or refuses with every reason.
+/// `land-train go-verify --evidence FILE [--deploy-ledgers DIR] [--hosts FILE] [--repo PATH]`: prints one `GO-VERIFIED` line, or refuses with every reason.
 pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let path = flags.get("evidence").ok_or("missing --evidence")?;
     let e: Evidence =
@@ -370,6 +376,7 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
         &deploy_ledger_dir(flags),
         DEPLOY_EXCEPTIONS,
         deploy_registry_text(flags).as_deref(),
+        deploy_pins(flags).as_ref(),
         now_secs(),
     )?);
     if !refusals.is_empty() {
