@@ -577,11 +577,12 @@ class SeatSpawnMixin:
         except asyncio.TimeoutError:
             raise InlineDiffError('review prompt packaging deadline exceeded') from None
 
-    async def _launch_leg(self, record, chosen, *, routed=False, **options):
-        """One normal launch, at most one capped review retry; never recurse or reroute."""
+    async def _launch_leg(self, record, chosen, *, routed=False, counted_card=None, **options):
         from .exit_outcome import stamp_harness
         stamp_harness(record, chosen)
         if record.get('role') == 'review':
+            from plangraph.planner.route_policy import bind_counted_seat
+            await asyncio.to_thread(bind_counted_seat, counted_card, record, chosen.id)
             from plangraph.review.family import FamilyError, writer_headers
             try:
                 options['headers'] = dict(options.get('headers') or {},
@@ -635,7 +636,6 @@ class SeatSpawnMixin:
             if kwargs.get('reasoning_cap') and self._path(record['run_id']).with_name('cancelled').exists():
                 job.status = 'cancelled'
             return job
-
         def protected(job):
             return (job.status not in ('completed', 'failed')
                 or record.get('status') in ('cancelled', 'timeout', 'timed_out', 'stalled')

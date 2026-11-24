@@ -239,6 +239,7 @@ def main(argv=None):
             p.add_argument('--wait', type=float, default=0)
             p.add_argument('--no-fallthrough', action='store_true')
             p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
+            p.add_argument('--counted-policy-revision', help=argparse.SUPPRESS)
     commands.add_parser('ps').add_argument('--all-hosts', action='store_true',
                                            help='no-op alias: plain ps already includes configured SSH hosts')
     p = commands.add_parser('runs', help='read host lifecycle transitions')
@@ -254,6 +255,9 @@ def main(argv=None):
     p.add_argument('--account')
     p.add_argument('--combo')
     commands.add_parser('launch-spec')
+    p = commands.add_parser('review-receipts', help=argparse.SUPPRESS)
+    p.add_argument('since', type=int)
+    p.add_argument('until', type=int)
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
     p.add_argument('--all-writers', action='store_true')
@@ -350,6 +354,12 @@ def main(argv=None):
                     unavailable_reason=skipped.get(leg.id) if leg.id not in served else None)
                     for leg in DEFAULT_LEGS if 'implement' in leg.roles]
         elif args.verb == 'spawn':
+            if args.counted_policy_revision is not None:
+                from plangraph.planner.route_policy import counted_seat
+                selection = counted_seat("select", args.card or {})
+                if (args.role != 'review' or selection is None
+                        or selection['seat']['revision'] != args.counted_policy_revision):
+                    raise SpawnRefused('receiving host differs from the requested counted review policy revision')
             if args.model is not None:
                 from plangraph.planner.routing import validate_model
                 try:
@@ -549,6 +559,9 @@ raise SystemExit(code)
         elif args.verb == 'runs':
             from .remote_ps import changed_runs
             result = changed_runs(service.state, args.changed_since)
+        elif args.verb == 'review-receipts':
+            from .notify import KeeperSink
+            result = KeeperSink().review_receipts(args.since, args.until)
         elif args.verb == 'harness-report':
             from .exit_outcome import harness_report
             result = harness_report(service.ps()['runs'], hours=args.hours)

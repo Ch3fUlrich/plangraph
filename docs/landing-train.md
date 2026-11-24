@@ -126,3 +126,34 @@ subject, head, host, start, end, result. `report --last N` prints, per train, th
 critical path (parallel jobs count once), idle time between stages and the bottleneck stage, then the stage with the most
 critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
 them into a keeper table needs a keeper schema step that is not part of this change.
+
+## Counted review rollout
+
+Routing owns the route policy document selected by `PLANGRAPH_ROUTE_POLICY`.
+Its optional `counted_review` object records `previous` and `candidate`, each with
+a distinct `revision` and exact `leg` ID, a `cohort` of exactly three launcher
+lane IDs, and a `heads` map from exact commit SHA to launcher lane ID. Register
+a head before dispatch. Publish this document atomically to every launch and
+landing host. Keep the revisions, cohort, and head assignments in the document
+across restarts. The launcher's record binds the exact head, run ID, lane,
+revision, writer families, and measured pinned-diff lines. The landing gate
+requires the corresponding witness from the trusted spawner mirror.
+
+Routing records promotion as `decision: {action: "promote", revision, samples}`
+for the candidate revision. Use `review_acceptance.comparison_samples` from a
+complete fleet report covering the canary period. Only exact writer-family sets
+and diff sizes in the same 100-line band are comparable. Each band contributes
+the same number of distinct heads to both samples. The comparison needs at least
+10 matched heads per policy, a candidate acceptance rate of at least 15% and at
+most five percentage points below the previous seat, and a median round count
+at most one higher. Both policies need known rounds for their accepted heads.
+An insufficient or failed comparison keeps the three-lane rollout. A recorded
+`decision: {action: "rollback", revision}` returns all lanes to the previous
+policy. A new exact-head review is needed when an older receipt names a
+revision that no longer applies to the lane.
+
+The merge-batch CLI, Keeper prepare, router GO row, and READY train build use
+this policy when configured. A counted GO row part includes `item_key` and
+its seat includes `run_id`. A READY train receipt includes the mirror's
+`counted_review` binding. Live rollout to the external train scripts depends
+on `TRAIN-SCRIPTS-ACCEPT-DIR-SINGLE-SEAT` applying the same policy.

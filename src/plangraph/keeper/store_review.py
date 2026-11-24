@@ -241,9 +241,9 @@ class ReviewMixin:
                 self._check_coverage(principal, fresh, prior, need=1,
                                      sensitive=False, now=now)
                 self._append(principal, key, "review_verdict",
-                             self._verdict_payload(principal, fresh), now)
+                             self._verdict_payload(principal, fresh, binding), now)
                 reply = self._pass(principal, key, reason, fresh, now, reviews_passed=1)
-                return self._seat_result(binding, reply)
+                return self._seat_result(binding, reply, now, prior)
             if len(prior) >= 2:
                 raise Refused("conflict",
                               f"{key} already has two verdicts this round")
@@ -271,12 +271,12 @@ class ReviewMixin:
                 self._check_coverage(principal, fresh, prior, need=need,
                                      sensitive=True, now=now)
             self._append(principal, key, "review_verdict",
-                         self._verdict_payload(principal, fresh), now)
+                         self._verdict_payload(principal, fresh, binding), now)
             if passed >= need:
                 reply = self._pass(principal, key, reason, fresh, now, reviews_passed=passed)
             else:
                 reply = {"key": key, "state": "in_review", "reviews_passed": passed}
-            return self._seat_result(binding, reply)
+            return self._seat_result(binding, reply, now, prior)
 
     def _check_coverage(self, principal, item, prior, *, need, sensitive, now):
         """Refuse a closing verdict whose writer families are not covered.
@@ -298,11 +298,12 @@ class ReviewMixin:
                           f"writer families not covered: {missing}")
 
     @staticmethod
-    def _verdict_payload(principal, item):
+    def _verdict_payload(principal, item, binding=None):
         """The ``review_verdict`` event body for *principal* on *item*."""
         return {"reviewer": principal.name,
                 "family": auth.norm_family(principal.family),
-                "ok": True, "epoch": item["epoch"], "round": item["round"]}
+                "ok": True, "epoch": item["epoch"], "round": item["round"],
+                **({field: binding[field] for field in ("head", "seat_run")} if binding else {})}
 
     def _pass(self, principal, key, reason, item, now, reviews_passed, release=False, flags=None):
         """Write ``done`` (and lock it) plus ``review_passed``, under the lock.
@@ -386,4 +387,4 @@ class ReviewMixin:
             self._race_guard(cursor, key, "in_review", item["epoch"])
             # Both outcomes hand back new work, even when the claimant stays.
             self._exec_clear(self.conn, key, principal, now)
-            return self._seat_result(binding, {"key": key, "state": state, "reviews_passed": 0})
+            return self._seat_result(binding, {"key": key, "state": state, "reviews_passed": 0}, now)

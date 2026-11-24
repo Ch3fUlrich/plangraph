@@ -10,6 +10,7 @@ fn part(pr: u64, parent: Option<u64>) -> PartIn {
             head: format!("h{q}"),
         }),
         receipt: PartReceipt {
+            counted_review: None,
             run_id: format!("run-{pr}"),
             head: format!("h{pr}"),
         },

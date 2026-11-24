@@ -298,10 +298,10 @@ def list_runs(local, *, transport=query_host):
 _LIFECYCLE_PUBLISHER = 'PLANGRAPH_LIFECYCLE_PUBLISHER'
 
 
-def lifecycle_command(state, *args, **kwargs):
+def lifecycle_command(state, *args, timeout=10, **kwargs):
     from plangraph.fleet_snapshot import _projection_binary
     binary = os.environ.get(_LIFECYCLE_PUBLISHER) or _projection_binary()
-    return subprocess.run([binary, *args], check=True, timeout=10,
+    return subprocess.run([binary, *args], check=True, timeout=timeout,
                           env=dict(os.environ, PLANGRAPH_SPAWN_STATE=str(state)), **kwargs)
 
 def attempt_coverage_inputs(state, day, *, transport=query_host):
@@ -373,6 +373,8 @@ def changed_runs(state, bookmark, *, transport=query_host):
             return {'error': 'host lifecycle query failed'}
 
     hosts = configured_hosts()
+    if len({host['name'] for host in hosts}) != len(hosts):
+        raise ValueError('duplicate lifecycle host names')
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         pages = dict(zip((host['name'] for host in hosts), pool.map(fetch, hosts)))
     next_hosts = dict(host_cursors)

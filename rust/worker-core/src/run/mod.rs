@@ -23,6 +23,7 @@ mod process_tests;
 pub mod record;
 pub mod record_io;
 pub mod review_quota;
+pub mod review_signal;
 pub mod scrub;
 pub mod supervise;
 #[cfg(test)]

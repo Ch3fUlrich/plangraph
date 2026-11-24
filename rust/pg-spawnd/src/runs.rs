@@ -225,6 +225,18 @@ impl Runs {
         if let Some(review) = review {
             review.apply(&mut base);
         }
+        if let Some(binding) = crate::review_rollout::launch(args, leg, run_id, role)? {
+            if base["head_sha"]
+                .as_str()
+                .is_some_and(|head| head != binding.head)
+            {
+                return Err(crate::placement::parameter(
+                    "counted review dispatch head differs from its lane binding",
+                ));
+            }
+            base["head_sha"] = json!(binding.head);
+            base["counted_review"] = json!(binding);
+        }
         let pre_isolate_cwd = launch.cwd.clone();
         let checkout = crate::cli_review::isolate(&mut launch, leg, base["head_sha"].as_str())?;
         if checkout.is_some() {
@@ -614,9 +626,22 @@ pub(crate) fn finish_with_allowlist(
                 .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
             if !dry && status != Status::Cancelled {
                 let answer = crate::review_health::answer(&state, &value);
+                let result = crate::review_health::classify(&value, &answer);
+                record.set("review_result", json!(result));
                 record.set(
-                    "review_result",
-                    json!(crate::review_health::classify(&value, &answer)),
+                    "review_signal_verdict",
+                    json!(if result == "verdict" {
+                        {
+                            let mut snapshot = record.to_value();
+                            snapshot["status"] = json!(status.as_str());
+                            pg_worker_core::run::review_signal::answer_verdict(
+                                &snapshot,
+                                Some(&answer),
+                            )
+                        }
+                    } else {
+                        None
+                    }),
                 );
             }
             let result = crate::review_artifacts::write_review_artifacts_with_allowlist(

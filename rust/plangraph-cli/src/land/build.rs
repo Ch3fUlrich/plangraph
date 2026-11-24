@@ -118,8 +118,26 @@ fn in_base(repo: &Path, base: &str, sha: &str) -> bool {
 
 /// Builds the train on a detached checkout and returns manifest and result. The caller pushes nothing here.
 pub fn build(input: &BuildInput) -> Result<Outcome, String> {
+    let policy = pg_worker_core::counted_seat::Policy::configured()?;
     for part in &input.parts {
         part.check_receipt()?;
+        if let Some(policy) = &policy {
+            let binding = part
+                .receipt
+                .counted_review
+                .as_ref()
+                .ok_or("missing counted review receipt")?;
+            super::counted_receipt::require(
+                policy,
+                binding
+                    .item_key
+                    .as_deref()
+                    .ok_or("missing counted review item")?,
+                &part.head,
+                &part.receipt.run_id,
+                Some(binding),
+            )?;
+        }
     }
     let repo = input.repo;
     let attrs = Attrs::new(&input.attributes)?;

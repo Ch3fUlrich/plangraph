@@ -11,6 +11,7 @@ fn seat(name: &str, n: u8, leg: &str, reviewer: &str) -> Seat {
         leg: leg.into(),
         review_file: format!("review-{name}-{n}.txt"),
         reviewer_family: reviewer.into(),
+        run_id: None,
     }
 }
 /// A part with its two required seats (deepseek and glm legs); the first seat's family is
@@ -21,6 +22,7 @@ fn part(name: &str, head: &str, writer: &str, reviewer: &str) -> Part {
         head: head.into(),
         ci: "green".into(),
         writer_family: writer.into(),
+        item_key: None,
         seats: vec![seat(name, 1, DEEPSEEK, reviewer), seat(name, 2, GLM, "glm")],
     }
 }

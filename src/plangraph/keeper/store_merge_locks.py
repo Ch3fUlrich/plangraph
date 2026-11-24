@@ -62,13 +62,24 @@ def _land_manifest(body):
 
 
 
-def require_train_review(adapter, key, head, run_id):
+def require_train_review(adapter, key, head, run_id, *, policy=None):
     """Require one passing seat bound to this item and exact part head."""
+    from plangraph.planner.route_policy import load_route_policy, verify_counted_seat
+
+    policy = policy or load_route_policy()
+    extra = {"include_counted_review": True} if policy.counted_review else {}
     seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
                                  allow_cli_reported=True, require_diff_head=True,
-                                 require_explicit_accept=True) if adapter is not None else []
+                                 require_explicit_accept=True, **extra) if adapter is not None else []
     if len(seats) != 1 or seats[0]["verdict"] != "pass":
         raise ValueError(f"{run_id}: expected one passing review seat")
+    if policy.counted_review:
+        seat = seats[0]
+        binding = seat["counted_review"]
+        if not isinstance(binding, dict) or binding.get("item_key") != key:
+            raise ValueError("counted review is not bound to the landing item")
+        verify_counted_seat(binding, head, run_id, seat["leg"], policy=policy)
+    return seats[0]
 
 
 def _saved_manifest(row):
@@ -194,8 +205,12 @@ class MergeLocksMixin:
                 parts = _land_manifest(body)
                 previous = self.conn.execute(select, identity).fetchone()
                 previous_data = _landing_data(previous) if previous else None
-                if previous_data is None or previous_data["parts"] != parts:
-                    self._verify_train_reviews(parts)
+                from plangraph.planner.route_policy import load_route_policy
+                policy = load_route_policy()
+                if policy.counted_review or previous_data is None or previous_data["parts"] != parts:
+                    self._verify_train_reviews(parts, policy=policy)
+                    for part in parts:
+                        self._record_train_head_acceptance(part, now)
                 batch = _text("batch_key", body.get("batch_key", f"train-{identity[1]}"), required=True, cap=256)
                 mode = body.get("mode", "train-pr-merge")
                 if mode not in LANDING_MODES:
@@ -282,12 +297,25 @@ class MergeLocksMixin:
                 raise Refused("conflict", "invalid landing journal transition")
             return _landing_data(self.conn.execute(select, identity).fetchone())
 
-    def _verify_train_reviews(self, parts):
+    def _record_train_head_acceptance(self, part, now):
+        runs = sorted(set(part.get("review_runs", {}).values()))
+        if runs and set(part.get("review_runs", {})) == set(part["items"]):
+            identity = "train-head:" + part["head"]
+            if not self.conn.execute("SELECT 1 FROM op_receipts WHERE entry_id=?", (identity,)).fetchone():
+                self._insert_receipt((identity, 0, "train_head_acceptance", None, None),
+                                     dict(head=part["head"], accepted_at=now, seat_runs=runs))
+
+    def _verify_train_reviews(self, parts, *, policy=None):
+        from plangraph.planner.route_policy import load_route_policy
+        policy = policy or load_route_policy()
         adapter = self._adapter("spawner_records")
         for part in parts:
-            for key, run in part.get("review_runs", {}).items():
+            reviews = part.get("review_runs", {})
+            if policy.counted_review and (not reviews or set(reviews) != set(part["items"])):
+                raise Refused("evidence_unverified", f"counted review missing for part #{part['pr']}")
+            for key, run in reviews.items():
                 try:
-                    require_train_review(adapter, key, part["head"], run)
+                    require_train_review(adapter, key, part["head"], run, policy=policy)
                 except (ValueError, OSError):
                     raise Refused("evidence_unverified",
                                   f"{key}: no explicit ACCEPT for part #{part['pr']}") from None

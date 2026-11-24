@@ -29,7 +29,7 @@ __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("route_policy.json")
 _KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families",
-         "review_tools_denied_legs")
+         "review_tools_denied_legs", "counted_review")
 
 
 def review_priority(leg) -> int:
@@ -101,6 +101,7 @@ class RoutePolicy:
     paused_harnesses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     review_allowed_families: tuple[str, ...] = ()
     review_tools_denied_legs: tuple[str, ...] = ()
+    counted_review: bool = False
 
     def allows(self, harness: str, role: str) -> bool:
         """False when ``harness`` is paused and ``role`` is not one it still serves."""
@@ -188,7 +189,7 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
         paused[harness] = tuple(roles)
     if problems:
         raise ValueError("invalid route policy: " + "; ".join(problems))
-    return RoutePolicy(banned, off, paused, review_allowed, tools_denied)
+    return RoutePolicy(banned, off, paused, review_allowed, tools_denied, "counted_review" in doc)
 
 
 def codex_leg_effort(leg, card):
@@ -210,3 +211,61 @@ def codex_leg_effort(leg, card):
                 or not isinstance(decision, str) or not re.fullmatch(r'D-[0-9]+', decision)):
             raise SpawnRefused('effort_needs_decision: elevated GPT effort requires matching card.effort and card.effort_decision D-<n>')
     return replace(leg, effort=effort)
+
+
+def counted_seat(verb, data, *, policy=None):
+    """Use the same exact-head rollout decision as the native launch and GO gate."""
+    if not (policy or load_route_policy()).counted_review:
+        return None
+    import subprocess
+    from plangraph.fleet_snapshot import _projection_binary
+    from plangraph.routing_errors import SpawnRefused
+    try:
+        reply = subprocess.run([_projection_binary(), "counted-seat", verb],
+                               input=json.dumps(data), text=True, capture_output=True,
+                               timeout=15, check=False)
+        if reply.returncode:
+            raise SpawnRefused(reply.stderr.strip() or "counted review admission failed")
+        result = json.loads(reply.stdout)
+        if result is None:
+            raise SpawnRefused("counted review policy changed while checking admission")
+        return result
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise SpawnRefused(f"counted review admission failed: {type(exc).__name__}") from exc
+
+
+def select_counted_seat(card, role, leg=None):
+    if role != "review" or train_delta_document(card, role):
+        return None
+    selected = counted_seat("select", card)
+    if selected is not None:
+        required = selected["seat"]["leg"]
+        if leg is not None and required != leg:
+            from plangraph.routing_errors import SpawnRefused
+            raise SpawnRefused(f"counted review requires leg {required}")
+        return required
+    return None
+
+
+def bind_counted_seat(card, record, leg):
+    if record["role"] != "review" or train_delta_document(card, record["role"]):
+        return
+    from plangraph.routing_errors import SpawnRefused
+    bound = counted_seat("bind", {
+        "card": card, "run_id": record["run_id"], "item_key": record.get("item_key"), "leg": {"id": leg},
+        "writer_families": record.get("given_writer_families") or [],
+    })
+    if bound is None:
+        if record.get("counted_review"):
+            raise SpawnRefused("counted review policy changed between attempts")
+        return
+    if (record.get("head_sha", bound["head"]) != bound["head"]
+            or record.get("counted_review", bound) != bound):
+        raise SpawnRefused("counted review head or policy changed between attempts")
+    record["counted_review"] = bound
+    record["head_sha"] = bound["head"]
+
+
+def verify_counted_seat(binding, head, run_id, leg, *, policy=None):
+    return counted_seat("verify", {"binding": binding, "head": head,
+                                   "run_id": run_id, "leg": leg}, policy=policy)

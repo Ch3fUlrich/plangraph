@@ -401,6 +401,12 @@ def stage_review_diff(diff, directory):
 def remote_spawn(name, host, card, prompt, options):
     """Use private staging, quote every remote argument, never echo SSH stderr."""
     options = list(options)
+    if '--role' in options and options[options.index('--role') + 1:][:1] == ['review']:
+        from plangraph.planner.route_policy import counted_seat, train_delta_document
+        selected = None if train_delta_document(card, 'review') else counted_seat("select", card)
+        if selected is not None:
+            # A receiver without the matching policy must refuse before spawning.
+            options.extend(('--counted-policy-revision', selected['seat']['revision']))
     if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
         raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
     from .remote_ps import invocation

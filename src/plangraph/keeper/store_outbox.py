@@ -216,7 +216,7 @@ class OutboxMixin:
     @staticmethod
     def _seat_binding(binding):
         fields = {"key", "epoch", "round", "head", "seat_run"}
-        if not isinstance(binding, dict) or fields != binding.keys():
+        if not isinstance(binding, dict) or binding.keys() - {"counted_review"} != fields:
             raise Refused("forbidden", "seat verdict requires an admission binding")
         if (not isinstance(binding["key"], str)
                 or type(binding["epoch"]) is not int or type(binding["round"]) is not int
@@ -226,6 +226,17 @@ class OutboxMixin:
                 or not re.fullmatch(r"run-[a-zA-Z0-9]{1,120}", binding["seat_run"])):
             raise Refused("validation", "malformed seat admission binding")
         return binding["seat_run"]
+
+    def _check_counted_seat(self, binding):
+        from plangraph.planner.route_policy import verify_counted_seat
+        value = binding.get("counted_review")
+        try:
+            leg = value["selection"]["seat"]["leg"] if value is not None else None
+            if value is not None and value.get("item_key") != binding["key"]:
+                raise ValueError("counted review is not bound to the Keeper item")
+            verify_counted_seat(value, binding["head"], binding["seat_run"], leg)
+        except (ValueError, OSError, KeyError, TypeError):
+            raise Refused("evidence_unverified", "counted review policy does not match seat admission") from None
 
     def _check_seat_round(self, item, binding):
         if (item["state"] != "in_review" or item["epoch"] != binding["epoch"]
@@ -239,7 +250,8 @@ class OutboxMixin:
     def _seat_row(self, run, phase):
         row = self.conn.execute("SELECT result FROM op_receipts WHERE entry_id=?",
                                 (f"seat:{run}:{phase}",)).fetchone()
-        return json.loads(row["result"]) if row else None
+        result = json.loads(row["result"]) if row else None
+        return result["reply"] if phase == "outcome" and result and "telemetry" in result else result
 
     def _record_seat(self, run, phase, key, value):
         self._insert_receipt((f"seat:{run}:{phase}", 0, f"seat_{phase}", None, key), value)
@@ -259,6 +271,7 @@ class OutboxMixin:
                     if previous != binding:
                         raise Refused("conflict", "seat run already admitted for another review")
                     return previous
+                self._check_counted_seat(binding)
                 self._check_seat_round(item, binding)
                 self._record_seat(run, "admission", key, binding)
             return binding
@@ -315,6 +328,7 @@ class OutboxMixin:
         if outcome is not None:
             raise _StoredReceipt(outcome)
         if item is not None:
+            self._check_counted_seat(binding)
             self._check_seat_round(item, binding)
 
     def read_revoked_seat_verdict(self, principal, body):
@@ -352,10 +366,54 @@ class OutboxMixin:
             results.append({"id": eid, "result": "ok", "reply": reply})
         return {"results": results, "recovery": []}
 
-    def _seat_result(self, binding, result):
+    def _seat_result(self, binding, result, now, prior=()):
         if binding is not None:
-            self._record_seat(binding["seat_run"], "outcome", binding["key"], result)
+            telemetry = {}
+            if result["state"] == "done":
+                contributors = [row["seat_run"] for row in prior
+                                if row.get("head") == binding["head"] and row.get("seat_run")]
+                telemetry["acceptance"] = dict(head=binding["head"], accepted_at=now,
+                                               seat_runs=contributors + [binding["seat_run"]])
+            self._record_seat(binding["seat_run"], "outcome", binding["key"],
+                              {"reply": result, "telemetry": telemetry})
         return result
+
+    def review_receipts(self, principal, since, until):
+        """Read admitted seat outcomes independently of the terminal review run journal."""
+        def read(now):
+            self._require_role(principal, "router", "spawner", "system")
+            if principal.projects:
+                raise Refused("forbidden", "review receipt coverage requires all-project access")
+            if not 0 <= since < until <= 253402300799 or until - since > 31 * 86400:
+                raise Refused("validation", "expected a receipt window of at most 31 days")
+            rows = self.conn.execute(
+                "SELECT a.result AS binding, o.result AS outcome, o.seen_at"
+                " FROM op_receipts AS o JOIN op_receipts AS a"
+                " ON a.entry_id=substr(o.entry_id,1,length(o.entry_id)-8)||':admission'"
+                " WHERE o.verb='seat_outcome' AND o.seen_at>=? AND o.seen_at<?"
+                " ORDER BY o.seen_at,o.entry_id LIMIT 2001",
+                (self._iso(since), self._iso(until))).fetchall()
+            seats, heads = [], []
+            for row in rows[:2000]:
+                binding = json.loads(row["binding"])
+                outcome = json.loads(row["outcome"])
+                reply = outcome.get("reply", outcome)
+                passed = reply.get("reviews_passed", 0)
+                seats.append(dict(binding, **{"pass": passed > 0}))
+                acceptance = outcome.get("telemetry", {}).get("acceptance")
+                if acceptance is not None:
+                    heads.append(acceptance)
+                elif reply["state"] == "done":
+                    # Old receipts identify the closing seat only.
+                    heads.append(dict(head=binding["head"], accepted_at=row["seen_at"],
+                                      seat_runs=[binding["seat_run"]], partial=passed > 1))
+            train = self.conn.execute(
+                "SELECT result FROM op_receipts WHERE verb='train_head_acceptance' AND seen_at>=? AND seen_at<?"
+                " ORDER BY seen_at,entry_id LIMIT 2001", (self._iso(since), self._iso(until))).fetchall()
+            heads.extend(json.loads(row["result"]) for row in train[:2000])
+            return {"keeper_seats": seats, "head_acceptances": heads,
+                    "complete": len(rows) <= 2000 and len(train) <= 2000}
+        return self._run(principal, "review_receipts", None, read)
 
     # ------------------------------------------------------------- outage
     def record_outage(self, principal, gap_s, frm, to):

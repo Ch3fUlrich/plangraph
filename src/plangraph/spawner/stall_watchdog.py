@@ -419,6 +419,23 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run, di
     else:
         raise ValueError('unsupported watchdog host')
 
+def review_acceptance_digest(state):
+    """Read the same timestamped report the replay command serves."""
+    from datetime import UTC, datetime
+    from .remote_ps import lifecycle_command
+
+    now = int(time.time())
+    since = (now // 10800 - 1) * 10800
+    stamp = lambda t: datetime.fromtimestamp(t, UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+    try:
+        result = lifecycle_command(state, 'health', 'report', '--fleet',
+                                   '--since', stamp(since), '--until', stamp(now),
+                                   timeout=35, capture_output=True, text=True)
+        return json.loads(result.stdout.splitlines()[0])['review_acceptance_digest']
+    except (IndexError, KeyError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return ['Review acceptance coverage incomplete (health report unavailable)']
+
+
 def main(argv=None, *, hung_config=None):
     # Host integrations supply structured sampling and leg-scoped actions;
     # old callers remain disabled rather than guessing process ownership.
@@ -512,6 +529,8 @@ def main(argv=None, *, hung_config=None):
         text += ('\n' if text else '') + '! stall watchdog warning ' + warning
     if error:
         text += ('\n' if text else '') + '! stall watchdog error ' + error
+    if os.environ.get('PLANGRAPH_REVIEW_ACCEPTANCE') == '1':
+        text = '\n'.join([text, *review_acceptance_digest(state)])
     from plangraph.spawner.private_io import atomic_write_private
     atomic_write_private(state / 'watchdog/status.txt', text + ('\n' if text else ''))
     print(text)

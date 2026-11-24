@@ -20,6 +20,7 @@ pub struct Seat {
     pub leg: String,
     pub review_file: String,
     pub reviewer_family: String,
+    pub run_id: Option<String>,
 }
 
 /// One part of a batch PR: a writer branch that was merged into the batch branch.
@@ -29,6 +30,7 @@ pub struct Part {
     pub head: String,
     pub ci: String,
     pub writer_family: String,
+    pub item_key: Option<String>,
     /// The two required review seats; both must ACCEPT the part head with FILES READ.
     pub seats: Vec<Seat>,
 }
@@ -138,15 +140,22 @@ pub fn go_row(
             "go-row needs a D-id, a project, a 40-hex batch head and at least one part".into(),
         );
     }
+    let policy = pg_worker_core::counted_seat::Policy::configured()?;
     let mut table = Vec::new();
     for part in &input.parts {
+        let selected = policy.as_ref().map(|p| p.select(&part.head));
         let why = if !token(&part.name) {
             Some("name")
         } else if !sha40(&part.head) {
             Some("head is not 40 hex")
         } else if part.ci != "green" {
             Some("CI is not green")
-        } else if part.seats.len() < REQUIRED_SEATS {
+        } else if selected
+            .as_ref()
+            .is_some_and(|s| !part.seats.iter().any(|seat| seat.leg == s.seat.leg))
+        {
+            Some("lane's counted review seat is missing")
+        } else if selected.is_none() && part.seats.len() < REQUIRED_SEATS {
             Some("needs two required review seats")
         } else if part.seats.iter().any(|seat| !token(&seat.leg)) {
             Some("review leg missing")
@@ -174,10 +183,12 @@ pub fn go_row(
                 .any(|b| a.review_file == b.review_file)
         }) {
             Some("review seats share a review file")
-        } else if REQUIRED_LEGS.iter().any(|(leg, model_family)| {
-            family(model_family) != family(&part.writer_family)
-                && !part.seats.iter().any(|seat| seat.leg == *leg)
-        }) {
+        } else if selected.is_none()
+            && REQUIRED_LEGS.iter().any(|(leg, model_family)| {
+                family(model_family) != family(&part.writer_family)
+                    && !part.seats.iter().any(|seat| seat.leg == *leg)
+            })
+        {
             Some("required review seat missing (opencode-go deepseek and glm)")
         } else {
             None
@@ -191,6 +202,21 @@ pub fn go_row(
                 .map_err(|e| format!("part {}: review file unreadable: {e}", part.name))?;
             if let Some(why) = review_refusal(&review, &part.head) {
                 return Err(format!("part {}: {why}", part.name));
+            }
+            if let (Some(policy), Some(selection)) = (&policy, &selected) {
+                if seat.leg == selection.seat.leg {
+                    crate::land::counted_receipt::require(
+                        policy,
+                        part.item_key
+                            .as_deref()
+                            .ok_or("counted review requires the part item key")?,
+                        &part.head,
+                        seat.run_id
+                            .as_deref()
+                            .ok_or("counted review requires the running seat ID")?,
+                        None,
+                    )?;
+                }
             }
             seats.push(format!(
                 "review {} leg {} reviewer {}",

@@ -151,6 +151,14 @@ pub(crate) fn spawn(
     let args = &admitted;
     let plan: Value = serde_json::from_str(&placement::route(state, args)?)
         .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
+    if let Some(error) = plan["error"]
+        .as_str()
+        .filter(|e| e.starts_with("counted review"))
+    {
+        let error = parameter(error);
+        record_validation_error(state, host, role, &error)?;
+        return Err(error);
+    }
     let leg = &plan["first_leg"];
     if !plan["legs"].is_array()
         || !leg.is_object()

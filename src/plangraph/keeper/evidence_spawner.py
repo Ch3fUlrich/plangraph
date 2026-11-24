@@ -110,7 +110,8 @@ class SpawnerRecordAdapter:
             raise ValueError("record exceeds size limit")
 
     def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False,
-                     require_diff_head=False, require_explicit_accept=False, train_delta=None):
+                     require_diff_head=False, require_explicit_accept=False, train_delta=None,
+                     include_counted_review=False):
         """Read cited review witnesses without inferring a served model."""
         from ..review.family import model_family
         from ..review.verdict import has_files_read
@@ -212,8 +213,13 @@ class SpawnerRecordAdapter:
                     or (_required_seat(record) and not has_files_read(text))
                     or record.get("served_family", family) != family):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")
-            seats.append({"model": model, "verdict": "pass", "run_id": run_id,
-                          "head": completion["head_sha"]})
+            result = {"model": model, "verdict": "pass", "run_id": run_id,
+                      "head": completion["head_sha"]}
+            if include_counted_review:
+                leg = serving.get("leg")
+                result.update(counted_review=record.get("counted_review"),
+                              leg=leg.get("id") if isinstance(leg, dict) else leg)
+            seats.append(result)
         if not seats and not allow_empty:
             raise ValueError("no cited review witnesses")
         return seats

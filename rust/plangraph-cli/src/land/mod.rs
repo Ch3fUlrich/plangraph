@@ -4,6 +4,7 @@ pub mod build;
 mod build_tests;
 mod chain;
 pub mod cli;
+pub(crate) mod counted_receipt;
 pub mod delta;
 pub mod deploy;
 mod deploy_probe;

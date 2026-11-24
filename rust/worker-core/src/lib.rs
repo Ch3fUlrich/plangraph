@@ -14,6 +14,7 @@ pub mod budget;
 pub mod check;
 pub mod config;
 pub mod confine;
+pub mod counted_seat;
 pub mod cpu;
 #[cfg(target_os = "linux")]
 pub mod cpu_linux;

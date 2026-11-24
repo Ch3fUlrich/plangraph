@@ -133,3 +133,125 @@ fn report_prints_one_witness_collapse_alert_without_breaking_json() {
     assert_eq!(report["witness_alerts"].as_array().unwrap().len(), 1);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn review_acceptance_report_uses_serving_leg_and_replays_alarm() {
+    let state = tempfile::tempdir().unwrap();
+    let start = timestamp("2026-11-24T12:00:00Z").unwrap();
+    let save = |id: &str, record: Value| {
+        let dir = state.path().join("runs").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("record.json"), record.to_string()).unwrap();
+    };
+    for (seat, passes) in [("strict", 1), ("control", 8)] {
+        for i in 0..20 {
+            let id = format!("run-{seat}{i}");
+            let head = format!("{:040x}", 2 * i + u64::from(seat == "strict"));
+            let ended = start + 600 + i as i64 * 60;
+            let pass = if seat == "control" {
+                i >= 20 - passes
+            } else {
+                i < passes
+            };
+            save(
+                &id,
+                serde_json::json!({"run_id":id, "role":"review","head_sha":head,
+                    "status":"completed","started":ended - 20,"ended":ended,
+                    "review_result":"verdict", "chosen_leg":{"id":"first"},
+                    "attempts":[{"status":"limited","leg":{"id":"first"}},
+                                {"status":"completed","leg":{"id":seat}},
+                                {"status":"skipped","leg":{"id":"never-served"}}],
+                    "stdout_tail":if pass {"VERDICT: ACCEPT"} else {"VERDICT: REQUEST_CHANGES"}}),
+            );
+            if pass {
+                let writer = format!("run-writer{seat}{i}");
+                save(
+                    &writer,
+                    serde_json::json!({"run_id":writer,"role":"implement","run_kind":"native-codex",
+                        "review_rounds":2,"reviews":[{"run_id":"unjoined","head":"old",
+                            "verdict":"REQUEST_CHANGES"},{"run_id":id,"head":head,"leg":seat,
+                            "verdict":"ACCEPT","accepted_at":ended}]}),
+                );
+            }
+        }
+    }
+    save(
+        "run-legacy",
+        serde_json::json!({
+            "run_id":"run-legacy","role":"review","status":"completed",
+            "started":start,"ended":start+1,"review_result":"verdict","chosen_leg":{"id":"strict"}
+        }),
+    );
+    save(
+        "run-unadmitted",
+        serde_json::json!({
+            "run_id":"run-unadmitted","role":"review","status":"completed","head_sha":"a".repeat(40),
+            "started":start,"ended":start+2,"stdout_tail":"VERDICT: ACCEPT","chosen_leg":{"id":"strict"}
+        }),
+    );
+    save(
+        "run-active",
+        serde_json::json!({
+            "run_id":"run-active","role":"review","status":"running","started":start+3*3600,
+            "attempts":[{"leg":{"id":"strict"},"status":"running"}]
+        }),
+    );
+    save(
+        "run-queued",
+        serde_json::json!({
+            "run_id":"run-queued","role":"review","status":"queued","started":start+6*3600
+        }),
+    );
+    let report = |since, until| {
+        let args = [
+            "report",
+            "--state",
+            state.path().to_str().unwrap(),
+            "--since",
+            since,
+            "--until",
+            until,
+            "--json",
+        ];
+        let mut out = Vec::new();
+        execute(args.map(String::from).to_vec(), &mut out).unwrap();
+        serde_json::from_slice::<Value>(&out).unwrap()["review_acceptance"].clone()
+    };
+    let day = report("2026-11-24T12:00:00Z", "2026-11-24T21:00:00Z");
+    let first = &day["windows_3h"][0]["seats"];
+    assert_eq!(first["strict"]["verdicts"], 20);
+    assert_eq!(first["strict"]["accepts"], 1);
+    assert_eq!(first["strict"]["median_rounds_to_accept"], 2.0);
+    assert_eq!(first["control"]["accepts"], 8);
+    assert_eq!(first["control"]["verdicts"], 20);
+    assert_eq!(day["days"][0]["seats"]["strict"]["verdicts"], 20);
+    let alerts = day["alerts"].as_array().unwrap();
+    assert_eq!(
+        alerts
+            .iter()
+            .filter(|a| a["kind"] == "low_acceptance")
+            .count(),
+        1
+    );
+    assert!(alerts.iter().any(|a| a["kind"] == "low_acceptance"
+        && a["leg"] == "strict"
+        && a["at"].as_f64() == Some((start + 600 + 9 * 60) as f64)));
+    assert!(alerts.iter().any(|a| a["kind"] == "no_head_accepted"));
+    for (until, alarm) in [
+        ("2026-11-24T16:59:59Z", false),
+        ("2026-11-24T17:00:01Z", true),
+    ] {
+        let replay = report("2026-11-24T15:00:00Z", until);
+        assert_eq!(
+            replay["alerts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["kind"] == "no_head_accepted"),
+            alarm
+        );
+    }
+    std::fs::remove_dir_all(state.path().join("runs/run-active")).unwrap();
+    let no_activity = report("2026-11-24T15:00:00Z", "2026-11-24T21:00:00Z");
+    assert!(no_activity["alerts"].as_array().unwrap().is_empty());
+}

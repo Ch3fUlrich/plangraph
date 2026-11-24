@@ -174,6 +174,11 @@ fn projection(record: &Value) -> Value {
             .collect();
         event["attempts"] = json!(attempts);
     }
+    let review = super::review_signal::fields(record);
+    event
+        .as_object_mut()
+        .unwrap()
+        .extend(review.as_object().unwrap().clone());
     event
 }
 
@@ -237,7 +242,7 @@ fn publish_snapshot(
 
 pub fn page(state: &Path, mut cursor: u64) -> io::Result<Value> {
     if !state.join("run-lifecycle").exists() && cursor == 0 {
-        return Ok(json!({"rows": [], "next_cursor": 0, "more": false}));
+        return Ok(json!({"rows": [], "next_cursor": 0, "more": false, "review_projection": 1}));
     }
     let journal = Journal::open(state)?;
     let published = journal.recover()?;
@@ -255,5 +260,7 @@ pub fn page(state: &Path, mut cursor: u64) -> io::Result<Value> {
         row["seq"] = json!(cursor);
         rows.push(row);
     }
-    Ok(json!({"rows": rows, "next_cursor": cursor, "more": cursor < published}))
+    Ok(
+        json!({"rows": rows, "next_cursor": cursor, "more": cursor < published, "review_projection": 1}),
+    )
 }

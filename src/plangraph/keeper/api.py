@@ -397,6 +397,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
             return store.spawn_attempts(principal, self._one(query, "since", "1d"), scope=self._one(query, "scope")), False
         if name == "spawn_attempt_coverage":
             return store.spawn_attempt_coverage(principal, self._one(query, "day")), False
+        if name == "review_receipts":
+            return store.review_receipts(principal, self._int(self._one(query, "since"), "since"),
+                                         self._int(self._one(query, "until"), "until")), False
         if name == "ready":
             n = None if self._one(query, "all") else self._int(self._one(query, "n", 10), "n")
             mine = str(self._one(query, "mine")).lower() in ("1", "true")   # MCP sends "True"

@@ -91,6 +91,7 @@ pub(super) fn part(pr: u64, head: &str, parent: Option<(u64, &str)>) -> PartIn {
             head: head.into(),
         }),
         receipt: PartReceipt {
+            counted_review: None,
             run_id: format!("run-{pr}"),
             head: head.into(),
         },

@@ -336,3 +336,33 @@ def test_reviewer_run_token_cannot_cross_seats_and_replays_exact_receipt(d):
     changed = dict(entry, body=dict(decision, reason="A different decision"))
     assert d.http("seat", "POST", "/v1/replay", {"entries": [changed]})[0] == 409
     assert w.conn.execute("SELECT COUNT(*) FROM events WHERE type='changes_requested'").fetchone()[0] == 1
+
+
+def test_review_receipts_distinguish_seat_pass_from_head_acceptance(d):
+    from evidence_fakes import FakeGit
+
+    w = d.world
+    epoch = to_claimed(w, "demo:A")
+    head = "a" * 40
+    w.store.ctx["git"] = FakeGit(trailers_by_sha={head: {"Writer": "openai/gpt-5 run-writer"}})
+    w.store.conn.execute("UPDATE items SET review_tier='high' WHERE key='demo:A'")
+    w.store.add_evidence(w.p("l1main"), "demo:A", epoch, "commit+ci", {"commit": head})
+    w.store.submit(w.p("l1main"), "demo:A", epoch)
+    query = f"/v1/review_receipts?since={int(w.store.now()) - 1}&until={int(w.store.now()) + 1}"
+    for i, reviewer in enumerate(("reviewer", "reviewer2"), 1):
+        binding = dict(key="demo:A", epoch=epoch, round=1, head=head, seat_run=f"run-seat{i}")
+        assert d.http("router", "POST", "/v1/admit_seat_verdict", binding) == (200, binding)
+        seat = dict(key="demo:A", ok=True, reason="seat witnessed result", binding=binding)
+        assert d.http(reviewer, "POST", "/v1/bind_seat_verdict", seat)[0] == 200
+        assert d.http(reviewer, "POST", "/v1/verdict", seat)[0] == 200
+        status, report = d.http("router", "GET", query)
+        assert status == 200, report
+        assert [(s["seat_run"], s["pass"], s["round"]) for s in report["keeper_seats"]] == [
+            (f"run-seat{j}", True, 1) for j in range(1, i + 1)
+        ]
+        if i == 1:
+            assert report["head_acceptances"] == []
+        else:
+            assert report["head_acceptances"] == [{
+                "head": head, "accepted_at": w.store.now(), "seat_runs": ["run-seat1", "run-seat2"]
+            }]

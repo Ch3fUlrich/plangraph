@@ -176,6 +176,11 @@ class KeeperSink:
     def attempt_coverage(self, day):
         return self._get("spawn_attempt_coverage", {"day": day})
 
+    def review_receipts(self, since, until):
+        if not self.url or not self.token_file:
+            raise ValueError("review receipts require Keeper transport")
+        return self._get("review_receipts", {"since": since, "until": until})
+
     def _get(self, verb, query):
         from urllib.parse import urlencode
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
@@ -200,6 +205,8 @@ class KeeperSink:
         item = self.item(key)
         binding = dict(key=key, epoch=item['epoch'], round=item['round'],
                        head=head, seat_run=record['run_id'])
+        if record.get('counted_review'):
+            binding['counted_review'] = record['counted_review']
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
         message = urllib.request.Request(self.url.rstrip('/') + '/v1/admit_seat_verdict',
             data=json.dumps(binding).encode(), method='POST',

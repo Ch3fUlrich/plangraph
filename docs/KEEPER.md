@@ -25,8 +25,10 @@ Keeper startup warns once when `repos.decisions` is missing; new devstack config
 Backlog consumers can run `merge_batch.py consumed --repo OWNER/NAME --pr N --head SHA`.
 The keeper matches the exact folded head in a verified landed train.
 
-A lane can appear in `pg ready` and be claimed when one open train and its open ancestors contain accepted parts for every unfinished dependency. Each acceptance binds a review run to the item and exact part head. The ready response and claim reply expose the selected train's `base_sha`.
+A lane can appear in `pg ready` and be claimed when one open train and its open ancestors contain accepted parts for every unfinished dependency. Each acceptance binds a review run to the item and exact part head. When configured, train prepare follows the [lane's counted review policy](landing-train.md#counted-review-rollout). The ready response and claim reply expose the selected train's `base_sha`.
 SQLite v25 and PostgreSQL migration 25 index item definition events for claim preflight.
+
+The read-only `review_receipts` endpoint gives all-project routing, spawner and system principals a bounded time window of seat outcome receipts keyed by run and head, and separate head acceptance events with their contributing runs.
 
 SQLite schema v22 and PostgreSQL migration 21 add `landing_claim_bases` to pin the train and supporting parts to the claim epoch. If the train head changes, a supporting part is dropped, or a supporting train closes unmerged, the keeper records a `released` event with the reason, clears lane ownership, and returns the item to `open`. The item appears in `pg ready` again when its dependencies qualify.
 

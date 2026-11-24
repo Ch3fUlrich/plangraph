@@ -1044,7 +1044,7 @@ def spawn_service(*args, **kwargs):
                             env_redact.allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card)
                         if cancelled():
                             return
-                        job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
+                        job = await self._launch_leg(record, chosen, counted_card=card, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                             allow_shas=allow_shas,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10

@@ -218,6 +218,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("agents-view") {
         return crate::agent_view::execute(rest, out);
     }
+    if verb.as_deref() == Some("counted-seat") {
+        return crate::review_rollout::execute(&rest, out);
+    }
     if verb.as_deref() == Some("health") {
         return crate::health_cli::execute(rest, out);
     }

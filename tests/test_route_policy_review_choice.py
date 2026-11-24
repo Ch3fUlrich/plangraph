@@ -203,3 +203,165 @@ def test_native_review_cli_preview_reports_empty_route_with_causes(tmp_path, mon
     reasons = {row["leg"]: row["reason"] for row in plan["skipped"]}
     assert reasons["agy-gemini-4-hydrogen-high"] == "client_missing"
     assert reasons["opencode-go-deepseek-v4-flash"] == "repository_review_tools_unavailable"
+
+
+def test_counted_seat_canary_holds_fourth_lane_until_promotion(tmp_path, monkeypatch, capsys):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+    from keeper_util import World
+    import merge_batch_land
+    from plangraph.keeper.errors import Refused
+    from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
+    from plangraph.planner import legs
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.spawner.cli import main
+    from plangraph.spawner.mcp import MCPSpawnerServer
+
+    monkeypatch.setenv("PLANGRAPH_OWN_HARNESS", "off")
+    monkeypatch.setattr(legs, "client_installed", lambda _name: True)
+    old = "opencode-go-deepseek-v4-flash"
+    new = "opencode-go-glm-5.3-flash"
+    heads = [f"{i:040x}" for i in range(1, 5)]
+    lanes = [f"lane-{i}" for i in range(1, 5)]
+    policy = json.loads(Path("src/plangraph/planner/route_policy.json").read_text())
+    policy["counted_review"] = {
+        "previous": {"revision": "old", "leg": old},
+        "candidate": {"revision": "new", "leg": new},
+        "cohort": lanes[:3],
+        "heads": dict(zip(heads, lanes)),
+    }
+    path = tmp_path / "route.json"
+    path.write_text(json.dumps(policy))
+    monkeypatch.setenv("PLANGRAPH_ROUTE_POLICY", str(path))
+
+    def route(head):
+        card = {"estimate_tokens": 1000, "head_sha": head}
+        result = main(["--state", str(tmp_path), "route", "--role", "review", "--exclude-family",
+                       "gpt", "--json", "--card", json.dumps(card)])
+        captured = capsys.readouterr()
+        assert result == 0, captured.err or captured.out
+        return [leg["id"] for leg in json.loads(captured.out)["legs"]]
+
+    def mcp(head, *, leg=None):
+        state = tmp_path / "mcp"
+        server = MCPSpawnerServer(state=state)
+        args = dict(card={"estimate_tokens": 1000, "head_sha": head}, role="review",
+                    writer_families=["gpt"])
+        if leg:
+            args.update(prompt="fixture", dry_run=True, leg=leg)
+        verb = "spawn" if leg else "route"
+        return asyncio.run(server.call_tool("plangraph_agent_" + verb, args))
+
+    def receipt(head, index, is_candidate, run, *, accepted=True):
+        seat, revision = (new, "new") if is_candidate else (old, "old")
+        return dict(binding=dict(selection=dict(seat=dict(revision=revision, leg=seat), lane=lanes[index]),
+                    head=head, run_id=run, item_key="demo:A", diff_lines=130, writer_families=["openai"]),
+                    accepted=accepted, round=1 if accepted else None)
+
+    def mirror(row):
+        binding = row["binding"]
+        seat = binding["selection"]["seat"]["leg"]
+        model = "zai/glm-5.3-flash" if seat == new else "deepseek/deepseek-v4-flash"
+        run = binding["run_id"]
+        location = tmp_path / "mirror" / "fixture" / run
+        location.mkdir(mode=0o700, parents=True)
+        location.parent.chmod(0o700)
+        location.parent.parent.chmod(0o700)
+        path = location / "record.json"
+        path.write_text(json.dumps({"run_id":run, "host":"fixture", "item_key":"demo:A",
+            "role":"review", "status":"completed", "exit_code":0, "served_model":model,
+            "finish_reason":"stop", "head_sha":binding["head"], "completion":{"head_sha":binding["head"]},
+            "attempts":[{"status":"completed","leg":{"id":seat},"served_model":model}],
+            "stdout_tail":"FILES READ: src/lib.rs\nTEST_GAMING: no\nVERDICT: ACCEPT\n",
+            "counted_review":binding}))
+        path.chmod(0o600)
+        return run
+
+    def part(head, run):
+        return {"pr":1, "head":head, "items":["demo:A"], "review_runs":{"demo:A":run}}
+
+    def check_landing(world, head, run, allowed):
+        row = part(head, run)
+        batch = {"merged":[row], "worktree":tmp_path, "head":head}
+        router = world.p("router")
+        repo = "example/repo"
+        lease = world.store.land(router, dict(repo=repo, action="acquire", owner="fixture"))
+        prepare = dict(lease, repo=repo, pr=10, action="prepare",
+                       base="a" * 40, head="b" * 40, parts=[row])
+        if allowed:
+            assert merge_batch_land.require_part_seats(batch) == {1:[run]}
+            assert world.store.land(router, prepare)["parts"][0]["review_runs"] == {"demo:A":run}
+        else:
+            with pytest.raises(merge_batch_land.MergeBatchError, match="counted review"):
+                merge_batch_land.require_part_seats(batch)
+            with pytest.raises(Refused, match="no explicit ACCEPT"):
+                world.store.land(router, prepare)
+
+    assert [route(head) for head in heads] == [[new], [new], [new], [old]]
+    assert [[row["id"] for row in mcp(head)["legs"]] for head in heads] == [[new], [new], [new], [old]]
+    with pytest.raises(SpawnRefused, match="counted review requires leg " + old):
+        mcp(heads[-1], leg=new)
+    assert route(heads[-1]) == [old]
+
+    from plangraph.keeper import config
+    monkeypatch.setattr(config, "load_config", lambda _path: SimpleNamespace(spawner_records_dir=tmp_path / "mirror"))
+    monkeypatch.setattr(merge_batch_land, "git", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(merge_batch_land, "part_items", lambda _st, rec: set(rec["items"]))
+    (tmp_path / "keeper").mkdir()
+    world = World(tmp_path / "keeper", backend="sqlite")
+    world.store.ctx = {"spawner_records": SpawnerRecordAdapter(tmp_path / "mirror")}
+    try:
+        old_fourth = mirror(receipt(heads[3], 3, False, "run-old4"))
+        new_fourth = mirror(receipt(heads[3], 3, True, "run-new4"))
+        for index, head in enumerate(heads[:3]):
+            run = mirror(receipt(head, index, True, f"run-new{index + 1}"))
+            check_landing(world, head, run, True)
+        check_landing(world, heads[3], old_fourth, True)
+        check_landing(world, heads[3], new_fourth, False)
+
+        counted = policy["counted_review"]
+        samples = []
+        for is_candidate in (False, True):
+            for i in range(10):
+                head = f"{10 + i + 10 * is_candidate:040x}"
+                index = i % 3 if is_candidate else 3
+                counted["heads"][head] = lanes[index]
+                samples.append(receipt(head, index, is_candidate, f"run-sample{is_candidate}{i}",
+                                       accepted=not is_candidate or i == 0))
+        counted["decision"] = {"action":"promote", "revision":"new", "samples":samples}
+        path.write_text(json.dumps(policy))
+        assert route(heads[3]) == [old]
+        check_landing(world, heads[3], new_fourth, False)
+
+        for sample in samples:
+            sample.update(accepted=True, round=1)
+        path.write_text(json.dumps(policy))
+        assert route(heads[3]) == [new]
+        assert [row["id"] for row in mcp(heads[3])["legs"]] == [new]
+        check_landing(world, heads[3], new_fourth, True)
+        check_landing(world, heads[3], old_fourth, False)
+        counted["decision"] = {"action":"rollback", "revision":"new"}
+        path.write_text(json.dumps(policy))
+        assert route(heads[3]) == [old]
+        check_landing(world, heads[3], old_fourth, True)
+        check_landing(world, heads[3], new_fourth, False)
+    finally:
+        world.close()
+
+
+def test_remote_spawn_refuses_a_stale_counted_revision(tmp_path, monkeypatch, capsys):
+    import json
+    from plangraph.spawner.cli import main
+
+    base = json.loads(Path("src/plangraph/planner/route_policy.json").read_text())
+    path = tmp_path / "route.json"
+    path.write_text(json.dumps(base))
+    monkeypatch.setenv("PLANGRAPH_ROUTE_POLICY", str(path))
+    args = ["--state", str(tmp_path / "state"), "spawn", "--role", "review",
+            "--card", '{"estimate_tokens":1000}', "--counted-policy-revision", "candidate",
+            "--dry-run", "--json", "fixture"]
+    assert main(args) != 0
+    assert "receiving host differs" in capsys.readouterr().err

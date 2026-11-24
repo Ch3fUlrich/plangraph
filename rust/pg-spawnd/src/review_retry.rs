@@ -171,6 +171,12 @@ fn prepare(
         .and_then(Path::parent)
         .unwrap();
     let run_id = value["run_id"].as_str().unwrap();
+    let bindings = crate::review_rollout::launch(args, leg, run_id, &json!("review"))?;
+    if json!(bindings) != value["counted_review"] {
+        return Err(crate::placement::parameter(
+            "counted review policy changed between attempts",
+        ));
+    }
     let job_id = new_job_id();
     let cwd = if crate::cli_review::eligible(leg) {
         crate::cli_review::cwd(args, value["cwd"].as_str().unwrap().into())?

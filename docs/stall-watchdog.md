@@ -116,3 +116,24 @@ Repeated ticks preserve the same alert until a new episode or cancellation escal
 Completed runs without an item still deliver to the parent Inbox; their
 `keeper.delivered` marker records `not-applicable: no item` because the item-event
 API has no target. This holds whether keeper transport is configured or absent.
+
+## Review acceptance
+
+Routing owns the fleet review acceptance digest. Set `PLANGRAPH_REVIEW_ACCEPTANCE=1`
+on its reporting watchdog and configure the fleet lifecycle hosts and an all-project
+Keeper token. Legacy producers publish to the journal through
+`PLANGRAPH_LIFECYCLE_PUBLISHER`. The watchdog runs `pg-spawnd health report --fleet --since RFC3339
+--until RFC3339` and includes its recent seat rates and alarms in
+`python -m plangraph.spawner.stall_watchdog status`. The deployed routing-owned
+`routerctl status` consumes that status output.
+
+Use UTC time bounds for historical replay. The report shows three-hour UTC windows
+and UTC days. It attributes a verdict to the completed serving attempt. A Keeper
+pass can contribute to the seat's acceptance rate while the head still needs a
+second pass. Head silence uses the acceptance event from Keeper or the native
+writer and requires overlapping review activity.
+
+Fleet collection resumes from independent host bookmarks. Missing host pages,
+outdated host projections, and unavailable Keeper receipts show incomplete coverage.
+The fleet silence alarm requires complete coverage. Without `--fleet` the report
+uses local records.

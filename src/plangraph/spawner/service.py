@@ -252,7 +252,7 @@ class SpawnService(SeatSpawnMixin):
             raise
     def _route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         from plangraph.routing_support.leg_state_flag import service_plan, SpawnRefused
-        from plangraph.planner.route_policy import train_delta_document
+        from plangraph.planner.route_policy import select_counted_seat, train_delta_document
         families = list(writer_families)
         if review_of:
             record = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
@@ -284,6 +284,12 @@ class SpawnService(SeatSpawnMixin):
         ordered = witness_order(card, role, live(plan.legs), down)
         if delta_document and not plan.error:
             ordered = witness_gate_legs(card, role, ordered)
+        selected = select_counted_seat(card, role)
+        if selected is not None:
+            ordered = tuple(leg for leg in ordered if leg.id == selected)
+            return replace(plan, legs=ordered, review_seats=ordered[:1],
+                           seat_coverage=tuple(row for row in plan.seat_coverage if row['leg'] == selected),
+                           error=plan.error or (None if ordered else f'counted review requires leg {selected}'))
         return replace(plan, legs=ordered, review_seats=live(plan.review_seats))
     def _given_writers(self, card, role, writer_families, review_of):
         """The writer families a run record names: the caller's, the reviewed run's and, for a review, the head's."""
@@ -425,6 +431,8 @@ class SpawnService(SeatSpawnMixin):
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
+            from plangraph.planner.route_policy import select_counted_seat
+            select_counted_seat(card, role, chosen.id)
             from plangraph.planner.legs import refuse_foreign_pin, resolve_harness, service_probe
             installed = service_probe(self)
             refuse_foreign_pin(chosen, override_reason, installed)   # rule 3.53: a foreign-harness pin needs a reason
@@ -537,7 +545,7 @@ class SpawnService(SeatSpawnMixin):
                     if lease is not None:
                         worktree = review_launch
                         writer_env = dict(writer_env, CARGO_TARGET_DIR=record['review_target'])
-                    job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
+                    job = await self._launch_leg(record, chosen, counted_card=card, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                         allow_shas=await asyncio.to_thread(allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card),
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10

@@ -534,7 +534,7 @@ fn writer_attempt(
         record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
         let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"],
             "host":review["host"], "leg":review["leg"], "harness":review["harness"],
-            "review_base":record["review_base"]});
+            "review_base":record["review_base"], "accepted_at":review["accepted_at"]});
         record["review"] = review;
         if record["reviews"].as_array().is_none() {
             record["reviews"] = json!([]);

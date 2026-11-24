@@ -59,10 +59,13 @@ mod reconcile_time;
 #[allow(dead_code)]
 mod reconcile_watch;
 mod records;
+mod review_acceptance;
 mod review_artifacts;
 mod review_citation;
+mod review_fleet;
 mod review_health;
 mod review_retry;
+mod review_rollout;
 mod review_split;
 mod review_test_evidence;
 mod round_progress;

@@ -27,12 +27,17 @@ pub struct PartIn {
 pub struct PartReceipt {
     pub run_id: String,
     pub head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counted_review: Option<pg_worker_core::counted_seat::Binding>,
 }
 
 impl PartIn {
     pub(super) fn check_receipt(&self) -> Result<(), String> {
         if self.receipt.head != self.head
             || !pg_worker_core::run::record::valid_run_id(&self.receipt.run_id)
+            || self.receipt.counted_review.as_ref().is_some_and(|binding| {
+                binding.head != self.head || binding.run_id != self.receipt.run_id
+            })
         {
             return Err(format!(
                 "receipt: part #{} head {} differs from receipt head {} or the run ID is invalid",

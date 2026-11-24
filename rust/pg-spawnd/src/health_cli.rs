@@ -1,7 +1,7 @@
-//! Explicit health CLI bridge; the only write is an owned baseline snapshot.
+//! Health reports and the optional private snapshots for baselines and fleet bookmarks.
 use serde_json::Value;
 use std::{collections::BTreeMap, io::Write};
-const HELP: &str = "health [--state PATH] --json | health report [--state PATH] --since RFC3339 --until RFC3339 [--baseline] [--json]";
+const HELP: &str = "health [--state PATH] --json | health report [--state PATH] --since RFC3339 --until RFC3339 [--baseline] [--fleet] [--json]";
 pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), String> {
     if args.first().is_some_and(|a| a == "--help" || a == "-h")
         || args.first().is_some_and(|a| a == "report")
@@ -18,7 +18,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         }
         let value = match flag.as_str() {
             "--json" => String::new(),
-            "--baseline" if report => String::new(),
+            "--baseline" | "--fleet" if report => String::new(),
             "--state" | "--since" | "--until" if report || flag == "--state" => args
                 .next()
                 .filter(|a| !a.starts_with("--"))
@@ -53,6 +53,16 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let mut result = crate::health_report::build_report(&records, &evidence, since, until)
         .map_err(|e| e.to_string())?;
     result["review_legs"] = crate::review_health::report(&state, &records, since, until);
+    let fleet = if flags.contains_key("--fleet") {
+        crate::review_fleet::collect(&state, since, until)
+    } else {
+        Value::Null
+    };
+    let acceptance = crate::review_acceptance::report(&state, &records, &fleet, since, until);
+    if report && !flags.contains_key("--json") {
+        result["review_acceptance_digest"] = serde_json::json!(digest(&acceptance));
+    }
+    result["review_acceptance"] = acceptance;
     if flags.contains_key("--baseline") {
         baseline(&state, since, until, &result)?;
     }
@@ -64,7 +74,10 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
             result["totals"]["launches"], result["totals"]["unusable_run_hours"]
         )
         .map_err(|e| e.to_string())?;
-        for alert in result["witness_alerts"].as_array().into_iter().flatten() {
+        for alert in ["witness_alerts", "review_acceptance_digest"]
+            .into_iter()
+            .flat_map(|key| result[key].as_array().into_iter().flatten())
+        {
             if let Some(line) = alert.as_str() {
                 writeln!(out, "{line}").map_err(|e| e.to_string())?;
             }
@@ -72,6 +85,50 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     }
     Ok(())
 }
+fn digest(report: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    let stamp = |value: &Value| {
+        chrono::DateTime::from_timestamp(value.as_f64().unwrap_or_default().floor() as i64, 0)
+            .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+            .unwrap_or_else(|| value.to_string())
+    };
+    if report["coverage"]["complete"] == false {
+        lines.push(format!(
+            "Review acceptance coverage incomplete {}",
+            report["coverage"]["incomplete_sources"]
+        ));
+    }
+    if let Some(window) = report["windows_3h"].as_array().and_then(|rows| rows.last()) {
+        if let Some(seats) = window["seats"].as_object() {
+            for (leg, seat) in seats {
+                lines.push(format!(
+                    "Review seat {leg} {}/{} accepts ({:.1}%) in the window starting {}, median rounds {}",
+                    seat["accepts"], seat["verdicts"],
+                    seat["accept_rate"].as_f64().unwrap_or_default() * 100.0,
+                    stamp(&window["since"]), seat["median_rounds_to_accept"]
+                ));
+            }
+        }
+    }
+    for alert in report["alerts"].as_array().into_iter().flatten() {
+        match alert["kind"].as_str() {
+            Some("low_acceptance") => lines.push(format!(
+                "ALERT review seat {} below 15% accepts ({}/{}) at {}",
+                alert["leg"].as_str().unwrap_or_default(),
+                alert["accepts"],
+                alert["verdicts"],
+                stamp(&alert["at"])
+            )),
+            Some("no_head_accepted") => lines.push(format!(
+                "ALERT no head accepted for two hours while reviews ran at {}",
+                stamp(&alert["at"])
+            )),
+            _ => (),
+        }
+    }
+    lines
+}
+
 fn baseline(state: &std::path::Path, since: i64, until: i64, report: &Value) -> Result<(), String> {
     let dir = state.join("reports");
     let path = dir.join(format!("baseline-{since}-{until}.json"));
