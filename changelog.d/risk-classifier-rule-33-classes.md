@@ -1,0 +1,1 @@
+The spawner risk classifier reads one table of rule 3.3 classes (keeper service and API code, gate files, the gateway, deploy config, installers, privileged lanes) before the size shortcut: a trivial S0 change on those paths is rated at least high; docs, tests and unplaced paths keep their result.
