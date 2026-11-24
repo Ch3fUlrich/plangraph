@@ -360,12 +360,27 @@ fn a_literal_scissors_look_alike_does_not_hide_a_class_search_line() {
     );
     assert!(!output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("line 4: malformed Class-Search"));
-    // The real scissors line cuts the tail Git discards, under scissors cleanup.
+    // `-m` keeps a line below a scissors line even under commit.cleanup=scissors, so it is refused too
+    // and no commit is made.
+    let before = git(dir.path(), &["rev-list", "--all", "--count"]);
     let message = "x\n\nWriter: codex\n# ------------------------ >8 ------------------------\nClass-Search: fixture -> 1 hit, 1 changed (prose)\n";
-    // The hook reads commit.cleanup; the --cleanup flag is not visible to it.
     assert!(git(dir.path(), &["config", "commit.cleanup", "scissors"])
         .status
         .success());
     let output = git(dir.path(), &["commit", "--allow-empty", "-m", message]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("line 5: malformed Class-Search"));
+    assert_eq!(
+        git(dir.path(), &["rev-list", "--all", "--count"]).stdout,
+        before.stdout,
+        "a refused commit left a commit"
+    );
+    // A well-formed line commits, and the saved body keeps it.
+    let message = "x\n\nClass-Search: fixture -> 1 hit, 1 changed\n\nWriter: codex";
+    let output = git(dir.path(), &["commit", "--allow-empty", "-m", message]);
     assert!(output.status.success(), "{output:?}");
+    let body = git(dir.path(), &["log", "-1", "--format=%B"]);
+    assert!(
+        String::from_utf8_lossy(&body.stdout).contains("Class-Search: fixture -> 1 hit, 1 changed")
+    );
 }
