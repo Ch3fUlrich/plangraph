@@ -6,3 +6,4 @@ call. On restart, a pre-exec reservation or ticket left by a dead daemon is free
 proof (dead owner, a run record with neither a process nor the `launch_started` marker the monitor writes before the launcher call, no cgroup scope of the run); live, started
 and unverifiable rows stay held.
 Tickets and reservations carry the run's own role; the daemon refuses to start when the bind cannot be set up.
+The queued run record is written before the ticket and the ticket before the monitor starts.

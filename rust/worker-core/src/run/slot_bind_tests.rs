@@ -46,6 +46,8 @@ struct Counting {
     bound_at_call: Mutex<Vec<bool>>,
     /// Whether the run record already carried the launch marker at each call.
     marked_at_call: Mutex<Vec<bool>>,
+    /// The role of the bound row of each launched run, by unit.
+    role_at_call: Mutex<Vec<(String, Role)>>,
     slots_dir: std::path::PathBuf,
 }
 impl Launcher for Counting {
@@ -61,6 +63,16 @@ impl Launcher for Counting {
             s.bound && s.group.as_deref() == Some(unit) && (s.pid, s.start_time) == DAEMON
         });
         self.bound_at_call.lock().unwrap().push(bound);
+        if let Some(row) = table(&self.slots_dir)
+            .active
+            .iter()
+            .find(|s| s.group.as_deref() == Some(unit))
+        {
+            self.role_at_call
+                .lock()
+                .unwrap()
+                .push((unit.into(), row.role));
+        }
         let run_id = unit.strip_prefix("pg-").unwrap();
         let marked = RunRecord::read(&self.slots_dir, run_id)
             .unwrap()
@@ -86,6 +98,7 @@ fn supervisor(dir: &Path, max_runs: usize) -> (Supervisor, Arc<Counting>) {
         calls: AtomicUsize::new(0),
         bound_at_call: Mutex::new(Vec::new()),
         marked_at_call: Mutex::new(Vec::new()),
+        role_at_call: Mutex::new(Vec::new()),
         slots_dir: dir.into(),
     });
     (
@@ -165,12 +178,14 @@ fn a_refused_bind_makes_no_launcher_call() {
     })
     .unwrap();
     let (s, launcher) = supervisor(d.path(), 2);
-    // The refusal comes back from `start` itself: no run, no record, no launcher call.
+    // The refusal comes back from `start` itself, with no launcher call; the queued record
+    // that was created first ends as failed.
     assert!(matches!(
         s.start(spec(d.path(), 3, "true")),
-        Err(SupervisorError::SlotBind(_))
+        Err(SupervisorError::Start(StartError::Admission(_)))
     ));
     assert_eq!(launcher.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(status(d.path(), 3), "failed");
     // The other owner's row is untouched and no ticket of ours is left behind.
     let t = table(d.path());
     assert_eq!(t.active.len(), 1);
@@ -226,10 +241,67 @@ fn an_acknowledged_start_already_has_its_durable_ticket() {
     until(|| status(d.path(), 1) == "completed");
 }
 
+/// The queued record exists before the ticket is written, and the ticket before the monitor.
+struct Order {
+    dir: std::path::PathBuf,
+    record_existed: Mutex<Option<bool>>,
+}
+impl Admission for Order {
+    fn enqueued(
+        &self,
+        run_id: &str,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), BindError> {
+        *self.record_existed.lock().unwrap() = Some(RunRecord::read(&self.dir, run_id).is_ok());
+        Ok(())
+    }
+    fn acquire(&self, _: &str, _: &std::sync::atomic::AtomicBool) -> Admit {
+        // The monitor runs only after `enqueued` returned.
+        assert!(self.record_existed.lock().unwrap().is_some());
+        Admit::Cancelled
+    }
+}
+#[test]
+fn the_queued_record_is_durable_before_the_ticket_and_the_ticket_before_the_monitor() {
+    let d = tempfile::tempdir().unwrap();
+    let order = Arc::new(Order {
+        dir: d.path().into(),
+        record_existed: Mutex::new(None),
+    });
+    let cfg = Config {
+        state_dir: d.path().into(),
+        confinement: Confinement::Plain,
+        ..Default::default()
+    };
+    let rt = Runtime::with(cfg, order.clone(), Arc::new(SystemLauncher));
+    super::supervise::start(&rt, spec(d.path(), 7, "true"))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(*order.record_existed.lock().unwrap(), Some(true));
+}
+
+#[test]
+fn restart_frees_a_ticket_whose_record_was_created_first_and_never_started() {
+    let d = tempfile::tempdir().unwrap();
+    // The window after the ticket write: a queued record, a ticket, a dead daemon.
+    record(d.path(), "run-w", None);
+    let mut review = ticket("run-w");
+    review.role = Role::Review;
+    let mut row = bound("run-r", unit_name("run-r"));
+    row.role = Role::Review;
+    record(d.path(), "run-r", None);
+    seed(d.path(), vec![row], vec![review]);
+    let freed =
+        release_pre_exec(d.path(), &Fake { owner_alive: false }, &Proof(Started::No)).unwrap();
+    assert_eq!(freed, ["run-r", "run-w"]);
+    assert_eq!(table(d.path()), SlotTable::default());
+}
+
 #[test]
 fn the_ticket_and_the_reservation_carry_the_role_of_the_run() {
     let d = tempfile::tempdir().unwrap();
-    let (s, _launcher) = supervisor(d.path(), 1);
+    let (s, launcher) = supervisor(d.path(), 1);
     s.start(spec(d.path(), 0, HOLD)).unwrap();
     until(|| status(d.path(), 0) == "running");
     let mut review = spec(d.path(), 1, "true");
@@ -246,6 +318,14 @@ fn the_ticket_and_the_reservation_carry_the_role_of_the_run() {
     );
     std::fs::write(d.path().join("go"), "").unwrap();
     until(|| status(d.path(), 1) == "completed");
+    // The promoted review run held a bound row under its own role at its launcher call.
+    assert_eq!(
+        *launcher.role_at_call.lock().unwrap(),
+        [
+            ("pg-run-0".to_owned(), Role::Implement),
+            ("pg-run-1".to_owned(), Role::Review)
+        ]
+    );
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use super::*;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -211,6 +211,35 @@ impl<T: Transport> Launch for Adapters<'_, T> {
             .call("release?fmt=json", Some(json!({"key":key,"epoch":epoch})))
             .map(|_| ())
     }
+    /// Create the status file with `create_new`, so no two launches (of any feeder host on this
+    /// filesystem) ever hold the same file; a taken name gets a numeric suffix.
+    fn allocate_status(&mut self, wanted: &str) -> Result<String, String> {
+        let path = Path::new(wanted);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|_| "cannot create review directory")?;
+        }
+        let stem = wanted.strip_suffix(".txt").unwrap_or(wanted);
+        for n in 0..64 {
+            let candidate = if n == 0 {
+                wanted.to_owned()
+            } else {
+                format!("{stem}-{n}.txt")
+            };
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(_) => return Ok(candidate),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(_) => return Err("cannot create status file".into()),
+            }
+        }
+        Err("no free status file name".into())
+    }
+    fn discard_status(&mut self, path: &str) {
+        let _ = fs::remove_file(path);
+    }
     fn rival(
         &mut self,
         key: &str,
@@ -302,6 +331,28 @@ impl<T: Transport> Launch for Adapters<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn status_files_are_reserved_exclusively_and_given_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let wanted = dir.path().join("reviews/status-a-1-e1.txt");
+        let wanted = wanted.to_str().unwrap();
+        let mut a = Adapters {
+            keeper: Fake(RefCell::new(vec![])),
+            env: &Env::new(),
+            repo: dir.path().into(),
+            state: dir.path().into(),
+            host: "h".into(),
+        };
+        let first = a.allocate_status(wanted).unwrap();
+        let second = a.allocate_status(wanted).unwrap();
+        assert_eq!(first, wanted);
+        assert_eq!(second, wanted.replace("-e1.txt", "-e1-1.txt"));
+        assert!(Path::new(&first).is_file() && Path::new(&second).is_file());
+        a.discard_status(&first);
+        assert!(!Path::new(&first).exists());
+        // A freed name can be reserved again.
+        assert_eq!(a.allocate_status(wanted).unwrap(), wanted);
+    }
     use super::*;
     use std::cell::RefCell;
     #[test]

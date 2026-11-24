@@ -252,9 +252,20 @@ pub fn tick(
             continue;
         }
         let items: Vec<Task> = held.iter().map(|(t, _)| t.clone()).collect();
-        let status = status_path(&items, held[0].1, reviews);
+        // The path is reserved for this launch alone before the card is built.
+        let status = match launch.allocate_status(&status_path(&items, held[0].1, reviews)) {
+            Ok(status) => status,
+            Err(e) => {
+                let failures = release_held(&held, launch);
+                let reason = with_failures(format!("status file unavailable: {e}"), &failures);
+                return json!({"decision":"refused","item_key":items[0].key,"reason":reason,"skipped":skipped,"error":true});
+            }
+        };
         let c = batch_card(&items, repo, reviews, &status, policy);
         let started = launch.start(&c, &batch_brief(&items, rules, &status));
+        if started.is_err() {
+            launch.discard_status(&status);
+        }
         match started {
             Ok(run) => {
                 let mut row = decided(run);

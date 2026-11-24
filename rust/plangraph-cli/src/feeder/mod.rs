@@ -231,6 +231,14 @@ pub fn same_host(a: &str, b: &str, p: &Policy) -> bool {
 pub trait Launch {
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError>;
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String>;
+    /// Reserve the status file of one launch exclusively and return its path. `wanted` is the
+    /// preferred path; the result is unique among every launch that shares the review
+    /// directory. The default has no shared directory to arbitrate and keeps `wanted`.
+    fn allocate_status(&mut self, wanted: &str) -> Result<String, String> {
+        Ok(wanted.into())
+    }
+    /// Give back a path from [`Self::allocate_status`] whose launch did not start.
+    fn discard_status(&mut self, _path: &str) {}
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String>;
     /// After `key` is claimed: the key of another claimed item (outside `batch`) whose files
     /// overlap `files`. The claimant yields to any such claim, so two hosts claiming at once

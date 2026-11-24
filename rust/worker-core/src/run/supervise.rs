@@ -1,4 +1,5 @@
 //! One admitted run; deliberately not wired into placement or a watchdog.
+use super::slot_bind::BindError;
 use super::{
     finalize,
     group::*,
@@ -61,6 +62,13 @@ pub trait Admission: Send + Sync {
     fn acquire(&self, run_id: &str, cancelled: &AtomicBool) -> Admit;
     /// The launcher started `identity` for a run this admission granted.
     fn launched(&self, _run_id: &str, _identity: &Identity) {}
+    /// The queued run record exists; persist whatever must be durable before `start` returns
+    /// (the monitor thread is not running yet). `base` holds the caller's run fields.
+    fn enqueued(&self, _run_id: &str, _base: &Map<String, Value>) -> Result<(), BindError> {
+        Ok(())
+    }
+    /// Take back what [`Self::enqueued`] persisted for a run whose monitor never started.
+    fn withdrawn(&self, _run_id: &str) {}
     /// Whether the monitor must persist the launch marker before each launcher call (a
     /// durable record of "the launch began" for restart recovery of bound slots).
     fn marks_launch(&self) -> bool {
@@ -141,6 +149,8 @@ pub enum StartError {
     Record(#[from] RecordError),
     #[error(transparent)]
     Spawn(io::Error),
+    #[error("admission: {0}")]
+    Admission(#[from] BindError),
 }
 const RESERVED: &[&str] = &[
     "status",
@@ -228,9 +238,29 @@ pub fn launch_error(record: &mut RunRecord, error: LaunchError) {
     record.set("reason", json!(format!("spawn failed: {name}")));
 }
 
+/// A run that never got a monitor: the queued record ends as failed with `reason`.
+fn abandon(mut spec: RunSpec, mut record: RunRecord, reason: &str) {
+    record.set("error", json!(reason));
+    record.set("reason", json!(reason));
+    finalize::finish(
+        &mut record,
+        &mut spec.finish,
+        1,
+        false,
+        StopOutcome::Empty,
+        None,
+    );
+}
 pub fn start(rt: &Arc<Runtime>, mut spec: RunSpec) -> Result<RunHandle, StartError> {
+    let fields = spec.base.clone();
     let record = create_record(rt, &mut spec)?;
     let id = spec.run_id.clone();
+    // The queued record is durable before the ticket, and the ticket before the monitor, so a
+    // crash at any point leaves a record that recovery can match to its ticket.
+    if let Err(e) = rt.admission.enqueued(&id, &fields) {
+        abandon(spec, record, "admission refused");
+        return Err(e.into());
+    }
     let cancel = Arc::new(AtomicBool::new(false));
     let (runtime, flag) = (rt.clone(), cancel.clone());
     // Keep ownership available to the caller if the OS refuses the thread.
@@ -243,11 +273,10 @@ pub fn start(rt: &Arc<Runtime>, mut spec: RunSpec) -> Result<RunHandle, StartErr
             super::monitor::monitor(runtime, spec, record, flag);
         })
         .map_err(|e| {
-            if let Some((mut spec, mut r)) = pending.lock().unwrap().take() {
-                r.set("error", json!("monitor thread failed"));
-                r.set("reason", json!("monitor thread failed"));
-                finalize::finish(&mut r, &mut spec.finish, 1, false, StopOutcome::Empty, None);
+            if let Some((spec, r)) = pending.lock().unwrap().take() {
+                abandon(spec, r, "monitor thread failed");
             }
+            rt.admission.withdrawn(&id);
             StartError::Spawn(e)
         })?;
     Ok(RunHandle { id, cancel, thread })

@@ -32,6 +32,8 @@ struct Registry {
     started: Vec<Vec<String>>,
     /// Each started run's card and brief.
     launches: Vec<(Value, String)>,
+    /// Status files reserved so far, as the feeder host's exclusive allocation sees them.
+    statuses: std::collections::BTreeSet<String>,
     released: Vec<String>,
     /// The epoch the keeper issued for each claim, and each release as (key, epoch).
     epochs: BTreeMap<String, u64>,
@@ -48,6 +50,8 @@ struct Host {
     unavailable_at: Option<String>,
     rival_error_at: Option<String>,
     queued: bool,
+    /// The fake writer appends a DONE line per item to its card's status file at launch.
+    writes_status: bool,
     /// Held after the first claim until the other host has claimed as well.
     meet: Option<Arc<Barrier>>,
 }
@@ -70,6 +74,7 @@ impl Host {
             unavailable_at: None,
             rival_error_at: None,
             queued: false,
+            writes_status: false,
             meet: None,
         }
     }
@@ -121,6 +126,22 @@ impl Launch for Host {
             })
             .map(|(other, _)| other.clone()))
     }
+    fn allocate_status(&mut self, wanted: &str) -> Result<String, String> {
+        let mut registry = self.registry.lock().unwrap();
+        let stem = wanted.strip_suffix(".txt").unwrap_or(wanted);
+        let path = (0..)
+            .map(|n| {
+                if n == 0 {
+                    wanted.to_owned()
+                } else {
+                    format!("{stem}-{n}.txt")
+                }
+            })
+            .find(|path| !registry.statuses.contains(path))
+            .unwrap();
+        registry.statuses.insert(path.clone());
+        Ok(path)
+    }
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String> {
         if self.fail_start {
             return Err("spawner denied".into());
@@ -133,6 +154,11 @@ impl Launch for Host {
                     .collect()
             },
         );
+        if self.writes_status {
+            let path = card["writer_status_path"].as_str().unwrap();
+            let lines: String = keys.iter().map(|k| format!("DONE {k} abc\n")).collect();
+            std::fs::write(path, lines).unwrap();
+        }
         let mut registry = self.registry.lock().unwrap();
         registry.started.push(keys);
         registry.launches.push((card.clone(), brief.to_owned()));

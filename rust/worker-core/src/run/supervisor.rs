@@ -1,9 +1,10 @@
 //! Replaceable local FIFO admission and ownership of this daemon's runs.
 use super::{
     group::{Identity, Launcher, SystemLauncher},
-    slot_bind::{SlotBind, SlotBindCfg},
+    slot_bind::{BindError, SlotBind, SlotBindCfg},
     supervise::{self, *},
 };
+use serde_json::{Map, Value};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{
@@ -46,8 +47,6 @@ pub enum SupervisorError {
     DuplicateRun,
     #[error(transparent)]
     Start(#[from] StartError),
-    #[error("slot bind: {0}")]
-    SlotBind(#[from] super::slot_bind::BindError),
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum CancelOutcome {
@@ -133,6 +132,22 @@ impl Admission for Gate {
                 .0;
         }
     }
+    fn enqueued(&self, run_id: &str, base: &Map<String, Value>) -> Result<(), BindError> {
+        match &self.bind {
+            Some(bind) => {
+                let role = base
+                    .get("role")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                bind.pending(run_id, role)
+            }
+            None => Ok(()),
+        }
+    }
+    fn withdrawn(&self, run_id: &str) {
+        if let Some(bind) = &self.bind {
+            bind.withdraw(run_id);
+        }
+    }
     fn marks_launch(&self) -> bool {
         self.bind.is_some()
     }
@@ -194,15 +209,6 @@ impl Supervisor {
         if queue_full(s.held, s.queue.len(), self.gate.max_runs, self.max_queued) {
             return Err(SupervisorError::QueueFull);
         }
-        // The pending entry is durable before the start is acknowledged, so a crash after the
-        // acknowledgement leaves a ticket that restart recovery sees.
-        if let Some(bind) = &self.gate.bind {
-            let role = spec
-                .base
-                .get("role")
-                .and_then(|v| serde_json::from_value(v.clone()).ok());
-            bind.pending(&id, role)?;
-        }
         s.queue.push_back(id.clone());
         match supervise::start(&self.runtime, spec) {
             Ok(handle) => {
@@ -215,8 +221,8 @@ impl Supervisor {
                 if let Some(pos) = s.queue.iter().rposition(|key| key == &id) {
                     s.queue.remove(pos);
                 }
-                if let Some(bind) = &self.gate.bind {
-                    bind.withdraw(&id);
+                if matches!(e, StartError::Admission(_)) {
+                    self.gate.withdrawn(&id);
                 }
                 changed.notify_all();
                 Err(SupervisorError::Start(e))

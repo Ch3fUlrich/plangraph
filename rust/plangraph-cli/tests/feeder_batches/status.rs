@@ -24,8 +24,28 @@ fn launch_paths(registry: &Registry) -> Vec<String> {
         .collect()
 }
 
+/// The review brief of `record`, rendered by the real Python renderer.
+fn rendered_review(record: &Value) -> String {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let out = std::process::Command::new("python3")
+        .env("PYTHONPATH", src)
+        .args([
+            "-c",
+            "import json,sys\nfrom plangraph.review.prompt import render_brief\nprint(render_brief('review', {'writer_run': json.loads(sys.argv[1])}))",
+            &record.to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
 #[test]
-fn overlapping_batch_runs_write_their_own_status_file_and_never_mix_done_lines() {
+fn overlapping_batch_runs_write_their_own_status_file_and_each_review_quotes_only_its_own() {
     let reviews = std::env::temp_dir().join(format!("feeder-s2-{}", std::process::id()));
     std::fs::create_dir_all(&reviews).unwrap();
     let reviews_dir = reviews.to_str().unwrap().to_owned();
@@ -38,11 +58,13 @@ fn overlapping_batch_runs_write_their_own_status_file_and_never_mix_done_lines()
     let registry: Arc<Mutex<Registry>> = Arc::default();
     let meet = Arc::new(Barrier::new(2));
     // Each host sees one family, so each launches a two-item batch; both hold their first
-    // claim until the other has claimed: the runs overlap.
+    // claim until the other has claimed: the runs overlap. Each fake writer writes its DONE
+    // lines to the path the feeder handed it at launch.
     std::thread::scope(|scope| {
         for (name, own) in [("dell", &items[..2]), ("coding", &items[2..])] {
             let mut host = Host::new(&registry, &items);
             host.meet = Some(meet.clone());
+            host.writes_status = true;
             let (doc, dir) = (ready(own.to_vec()), &reviews_dir);
             scope.spawn(move || drive_in(dir, &doc, &mut host, name, 2, false));
         }
@@ -52,31 +74,37 @@ fn overlapping_batch_runs_write_their_own_status_file_and_never_mix_done_lines()
     let paths = launch_paths(&registry);
     assert_ne!(paths[0], paths[1], "two runs must not share a status file");
     for (card, path) in registry.launches.iter().map(|l| &l.0).zip(&paths) {
-        assert_eq!(std::path::Path::new(path).parent().unwrap(), reviews);
-        // Each writer appends only its own items to its own file.
-        let own: Vec<&str> = card["item_keys"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|k| k.as_str().unwrap())
-            .collect();
-        let lines: String = own.iter().map(|k| format!("DONE {k} abc\n")).collect();
-        std::fs::write(path, lines).unwrap();
-    }
-    for (card, path) in registry.launches.iter().map(|l| &l.0).zip(&paths) {
-        let text = std::fs::read_to_string(path).unwrap();
+        // The writer record the native host persists: the card's review dir and status path.
+        let record = json!({"review_dir": reviews_dir, "writer_status_path": path});
+        let review = rendered_review(&record);
         let own = card["item_keys"][0].as_str().unwrap();
         let rival = if own.contains("ALPHA") {
             "BETA"
         } else {
             "ALPHA"
         };
-        assert!(
-            text.contains(own) && !text.contains(rival),
-            "{path}: {text}"
-        );
+        assert!(review.contains(&format!("DONE {own} abc")), "{review}");
+        assert!(!review.contains(rival), "{review}");
     }
     std::fs::remove_dir_all(&reviews).unwrap();
+}
+
+#[test]
+fn a_status_name_that_is_already_taken_is_never_handed_to_a_second_launch() {
+    let items = vec![item("ALPHA-1", 9, &["src/a.rs"])];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let mut host = Host::new(&registry, &items);
+    // The name this launch will want (epoch 100) is already reserved by another launch.
+    let dry = drive(&ready(items.clone()), &mut host, "dell", 1, true);
+    let wanted = dry["card"]["writer_status_path"]
+        .as_str()
+        .unwrap()
+        .replace("-e0.txt", "-e100.txt");
+    registry.lock().unwrap().statuses.insert(wanted.clone());
+    drive(&ready(items), &mut host, "dell", 1, false);
+    let registry = registry.lock().unwrap();
+    let got = launch_paths(&registry)[0].clone();
+    assert_eq!(got, wanted.replace("-e100.txt", "-e100-1.txt"));
 }
 
 #[test]
