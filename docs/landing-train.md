@@ -137,7 +137,7 @@ range with full ids. The gate is the one of the base commit, as CI reads it, and
 `GIT_*` override, no replacement refs); no flag names another gate. The branch is created by one atomic ref update that fails
 when the branch exists, and that update is the success boundary. The picks, the gate and the exact-replay check run in a
 private shared clone (`git::Checkout`), so the repository's own configuration and `info/attributes` cannot reach them; the clone is a
-temporary directory owned by the call and a hold ref only keeps the objects until the branch ref exists. Scratch that cannot be
+temporary directory owned by the call, and a hold ref `refs/plangraph/cut-hold/<pid>-<head>` only keeps the objects until the branch ref exists (the call deletes it only when it took it and it still points at that head; after an interrupted cut, list `git for-each-ref refs/plangraph/cut-hold` and delete the leftovers with `git update-ref -d`; the adoption does not write `FETCH_HEAD`). Scratch that cannot be
 removed afterwards is a warning line, never a failed cut. The `Gate-Edit:` lines of a message are found with the line breaks of the
 gate's Python `splitlines()` (also CR, FF, U+2028 and others), not only LF.
 A merge commit as a source is refused.

@@ -133,10 +133,14 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
     // call and registered nowhere in the repository.
     let checkout = git::Checkout::new(repo, &base)?;
     let wt = checkout.path().to_owned();
-    let hold = format!("refs/plangraph/cut-hold/{}", std::process::id());
+    // One hold ref per call (process id and the head it holds); it is deleted only when this call took it, and
+    // only while it still points at that head.
+    let mut held: Option<(String, String)> = None;
     let picked = pick_all(&sources, &edits, &wt).and_then(|head| {
         check(&wt, &base, &head, c.gate, c.grants, python)?;
+        let hold = format!("refs/plangraph/cut-hold/{}-{head}", std::process::id());
         checkout.adopt(&head, &hold)?;
+        held = Some((hold, head.clone()));
         Ok(head)
     });
     let created = picked.and_then(|head| {
@@ -146,12 +150,15 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
         Ok(head)
     });
     // The hold ref only kept the objects reachable until the branch ref took them over.
-    let released = git::out(repo, &["update-ref", "-d", &hold]);
+    let released = match held.as_ref() {
+        Some((hold, head)) => git::out(repo, &["update-ref", "-d", hold, head])
+            .map(|_| ())
+            .map_err(|e| format!("hold ref {hold} not removed ({e})")),
+        None => Ok(()),
+    };
     let removed = checkout.dir.close().map_err(|e| e.to_string());
     let leftovers: Vec<String> = [
-        released
-            .err()
-            .map(|e| format!("hold ref {hold} not removed ({e})")),
+        released.err(),
         removed
             .err()
             .map(|e| format!("the scratch clone {} not removed ({e})", wt.display())),

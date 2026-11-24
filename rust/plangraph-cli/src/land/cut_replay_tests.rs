@@ -169,3 +169,113 @@ fn a_repository_merge_driver_cannot_make_an_unrelated_commit_a_replay() {
     let err = super::cli::run_inner(fx.p(), &a, &python).unwrap_err();
     assert!(err.contains("not the exact replay of source"), "{err}");
 }
+
+/// `path` as seen from the test's working directory, written relative with the fewest `..` (so it does not
+/// resolve from anywhere else, such as a scratch directory).
+fn relative(path: &std::path::Path) -> String {
+    let cwd = std::env::current_dir().unwrap();
+    let (a, b): (Vec<_>, Vec<_>) = (cwd.components().collect(), path.components().collect());
+    let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let mut parts: Vec<String> = vec!["..".into(); a.len() - common];
+    parts.extend(
+        b[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    parts.join("/")
+}
+
+#[test]
+fn a_relative_repo_path_works_for_cut_and_for_a_granted_cut_check() {
+    let fx = fx_with_base_gate(&std::fs::read_to_string(gate()).unwrap());
+    let rel = relative(fx.p());
+    assert!(!rel.starts_with('/'));
+    // cut-check with a grant reaches the replay clone.
+    let real = fx.source(".github/workflows/w.yml", TRAILERS);
+    let head = hand_cut_with(
+        &fx,
+        ".github/workflows/w.yml",
+        "x\n",
+        "Gate-Edit: D-5",
+        &real,
+    );
+    let grants = write_grants(&fx, "g.json", &[("D-5", ".github/workflows/", &real)]);
+    let a = args(&[
+        "cut-check",
+        "--repo",
+        &rel,
+        "--base",
+        &fx.base,
+        "--head",
+        &head,
+        "--grants",
+        grants.to_str().unwrap(),
+    ]);
+    super::cli::run_inner(fx.p(), &a, &python).unwrap();
+    // cut with a granted gate edit.
+    let a = args(&[
+        "cut",
+        "--repo",
+        &rel,
+        "--base",
+        &fx.base,
+        "--branch",
+        "slice/rel",
+        "--commits",
+        &real,
+        "--gate-edits",
+        &format!("{real}=D-5"),
+        "--grants",
+        grants.to_str().unwrap(),
+    ]);
+    super::cli::run_inner(fx.p(), &a, &python).unwrap();
+    assert!(!g(fx.p(), &["rev-parse", "slice/rel"]).is_empty());
+}
+
+#[test]
+fn a_cut_leaves_fetch_head_and_foreign_hold_refs_alone() {
+    let fx = fx_with_base_gate(&std::fs::read_to_string(gate()).unwrap());
+    let src = fx.source("a.txt", TRAILERS);
+    let fetch_head = fx.p().join(".git/FETCH_HEAD");
+    std::fs::write(&fetch_head, "marker\n").unwrap();
+    // A hold ref of another run that happens to carry this process id's name must survive a failed cut.
+    let foreign = format!("refs/plangraph/cut-hold/{}", std::process::id());
+    g(fx.p(), &["update-ref", &foreign, &fx.base]);
+    let flow = fx.source(".github/workflows/w.yml", TRAILERS);
+    let a = args(&[
+        "cut",
+        "--repo",
+        fx.p().to_str().unwrap(),
+        "--base",
+        &fx.base,
+        "--branch",
+        "slice/bad",
+        "--commits",
+        &flow,
+    ]);
+    super::cli::run_inner(fx.p(), &a, &python).unwrap_err();
+    assert_eq!(g(fx.p(), &["rev-parse", &foreign]), fx.base);
+    // A good cut adopts the head without touching FETCH_HEAD and leaves no hold ref of its own.
+    let a = args(&[
+        "cut",
+        "--repo",
+        fx.p().to_str().unwrap(),
+        "--base",
+        &fx.base,
+        "--branch",
+        "slice/ok",
+        "--commits",
+        &src,
+    ]);
+    super::cli::run_inner(fx.p(), &a, &python).unwrap();
+    assert_eq!(std::fs::read_to_string(&fetch_head).unwrap(), "marker\n");
+    let holds = g(
+        fx.p(),
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/plangraph/cut-hold",
+        ],
+    );
+    assert_eq!(holds, foreign, "{holds}");
+}

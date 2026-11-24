@@ -183,7 +183,11 @@ impl Checkout {
     pub fn new(repo: &Path, commit: &str) -> Result<Checkout, String> {
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let target = dir.path().to_string_lossy().into_owned();
-        let source = repo.to_string_lossy().into_owned();
+        // The clone runs inside the scratch directory: a relative repository path would no longer resolve there.
+        let source = std::path::absolute(repo)
+            .map_err(|e| format!("repository path {}: {e}", repo.display()))?
+            .to_string_lossy()
+            .into_owned();
         out(
             dir.path(),
             &["clone", "-q", "--shared", "--no-checkout", &source, &target],
@@ -202,7 +206,13 @@ impl Checkout {
         let source = self.dir.path().to_string_lossy().into_owned();
         out(
             &self.repo,
-            &["fetch", "-q", &source, &format!("+{commit}:{hold}")],
+            &[
+                "fetch",
+                "-q",
+                "--no-write-fetch-head",
+                &source,
+                &format!("+{commit}:{hold}"),
+            ],
         )
         .map(|_| ())
     }
