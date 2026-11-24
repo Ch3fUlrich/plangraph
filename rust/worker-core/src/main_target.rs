@@ -16,6 +16,18 @@ fn identified(target: &Path) -> bool {
         || crate::private_targets::cargo_target(target)
 }
 
+/// A pin or live path that is the target or lies inside it refuses the sweep. One that names an
+/// ancestor does not: a unit `WorkingDirectory=` at the checkout root pins the whole checkout on
+/// the hosts this sweep exists for, and a process working inside the target is checked separately.
+fn names_target(guards: &Guards, target: &Path) -> bool {
+    Guards::protected_name(target)
+        || guards.pinned.iter().chain(&guards.live).any(|path| {
+            path.canonicalize()
+                .unwrap_or_else(|_| path.clone())
+                .starts_with(target)
+        })
+}
+
 /// A target nothing wrote to for this long belongs to no running build.
 pub const IDLE_AFTER: Duration = Duration::from_secs(3600);
 
@@ -75,7 +87,7 @@ fn sweep_owned(
         return Ok(());
     }
     let canonical = target.canonicalize()?;
-    if canonical != target || guards.protects(&canonical) {
+    if canonical != target || names_target(guards, &canonical) {
         report.skipped.push(format!(
             "{}: main checkout target pinned or live; not touched",
             target.display()
@@ -176,16 +188,20 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_or_live_target_is_kept_even_when_idle() {
+    fn a_pin_naming_the_target_or_inside_it_keeps_it_but_a_checkout_pin_does_not() {
         let (_tmp, repo) = fixture(7200);
         let target = repo.join("rust/target").canonicalize().unwrap();
+        let run_with = |guards: &Guards| {
+            let mut report = Report::default();
+            sweep_main_checkout_target(&repo, guards, SystemTime::now(), true, &mut report, || {
+                Ok((vec![], false))
+            })
+            .unwrap();
+            report
+        };
         for guards in [
             Guards {
                 pinned: vec![target.clone()],
-                live: vec![],
-            },
-            Guards {
-                pinned: vec![repo.canonicalize().unwrap()],
                 live: vec![],
             },
             Guards {
@@ -193,20 +209,21 @@ mod tests {
                 live: vec![target.join("debug")],
             },
         ] {
-            let mut report = Report::default();
-            sweep_main_checkout_target(
-                &repo,
-                &guards,
-                SystemTime::now(),
-                true,
-                &mut report,
-                || Ok((vec![], false)),
-            )
-            .unwrap();
+            let report = run_with(&guards);
             assert_eq!(report.freed_bytes, 0);
             assert!(repo.join("rust/target/debug/blob").exists());
             assert!(report.skipped[0].contains("pinned or live"));
         }
+        // A unit's WorkingDirectory at the checkout root, or any ancestor, pins the whole checkout.
+        let ancestors = Guards {
+            pinned: vec![
+                repo.canonicalize().unwrap(),
+                repo.parent().unwrap().to_path_buf(),
+            ],
+            live: vec![repo.canonicalize().unwrap()],
+        };
+        assert!(run_with(&ancestors).freed_bytes > 0);
+        assert!(!repo.join("rust/target").exists());
     }
 
     #[test]

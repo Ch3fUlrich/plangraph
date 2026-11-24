@@ -176,9 +176,19 @@ pub fn shared_cache(
     shared_cache_capped(path, guards, building, 0, true, apply, report)
 }
 
+/// The target a symlinked configuration points at: the lease file, the size and the markers all
+/// belong to the real directory, and a writer's shim locks the same canonical path.
+fn real_target(target: &Path) -> io::Result<std::path::PathBuf> {
+    match target.canonicalize() {
+        Ok(real) => Ok(real),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(target.to_path_buf()),
+        Err(error) => Err(error),
+    }
+}
+
 /// Best-effort cap enforcement after a train check or writer has released its build lease.
 pub fn post_run_cargo(checkout: &Path) -> io::Result<Report> {
-    let target = crate::cargo_cache::shared_cache_roots()?.remove(0);
+    let target = real_target(&crate::cargo_cache::shared_cache_roots()?.remove(0))?;
     post_run_cargo_using(
         checkout,
         &target,
@@ -206,6 +216,9 @@ pub fn reclaim_before_push_using(
     processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
 ) -> Result<Report, String> {
     let fail = |error: io::Error| format!("shared cargo target {}: {error}", target.display());
+    // An over-cap target reached through a symlink (the incident layout) is measured, identified
+    // and leased at its real path.
+    let target = &real_target(target).map_err(fail)?;
     let size = |path: &Path| match crate::disk_hygiene::scan(path) {
         Ok((bytes, _)) => Ok(bytes),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),

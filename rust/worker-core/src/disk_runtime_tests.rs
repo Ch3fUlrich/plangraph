@@ -551,3 +551,33 @@ fn trim_refusals_name_the_live_holder_pid() {
         report.skipped
     );
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_follows_a_symlinked_target_to_its_real_directory() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, real, units) = over_cap_target(parent.path());
+    let link = parent.path().join("configured-target");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    // Held at the real path (as a writer's shim holds it): the receipt names the holder.
+    let command = crate::cargo_cache::writer_lease(&real).unwrap();
+    let error =
+        reclaim_before_push_using(&checkout, &link, 700, || Ok((vec![], false))).unwrap_err();
+    assert!(
+        error.contains("not_reclaimed") && error.contains("held by pid"),
+        "{error}"
+    );
+    assert!(units.iter().all(|unit| unit.exists()));
+    drop(command);
+    reclaim_before_push_using(&checkout, &link, 700, || Ok((vec![], false))).unwrap();
+    assert!(crate::disk_hygiene::scan(&real).unwrap().0 <= 700);
+    // A target that is not cargo output is refused through the link too, never counted as empty.
+    fs::create_dir(real.join(".git")).unwrap();
+    let (_, other, _) = over_cap_target(&parent.path().join("second"));
+    let other_link = parent.path().join("other-link");
+    std::os::unix::fs::symlink(&other, &other_link).unwrap();
+    fs::create_dir(other.join(".git")).unwrap();
+    let error =
+        reclaim_before_push_using(&checkout, &other_link, 700, || Ok((vec![], false))).unwrap_err();
+    assert!(error.contains("not identified"), "{error}");
+}
