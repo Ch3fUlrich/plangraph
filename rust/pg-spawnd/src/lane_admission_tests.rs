@@ -47,7 +47,7 @@ impl Fixture {
         check(&Request {
             state: &self.state(),
             sessions: &self.sessions(),
-            repo: None,
+            branches: &[],
             context: "test",
             keys: &keys,
             override_reason: reason,
@@ -102,7 +102,7 @@ fn an_exited_claude_session_stops_holding_its_items() {
         check(&Request {
             state: &fx.state(),
             sessions: &fx.sessions(),
-            repo: None,
+            branches: &[],
             context: "test",
             keys: &keys,
             override_reason: None,

@@ -53,6 +53,20 @@ if rc == 0:
 sys.exit(rc)
 "#;
 
+/// The brief a remote host receives: the rendered brief, with a `lane_override` reason the
+/// batch input carried appended as a `Lane-Override:` line, so the receiving host's guard
+/// checks and records the same override.
+pub(super) fn forwarded_prompt(path: &Path) -> io::Result<String> {
+    let mut rendered = read_writer_prompt(path)?;
+    if let Some(reason) = crate::batch_writer_brief::lane_override(&read_text(path)?) {
+        rendered.push_str(&format!(
+            "\n{} {reason}\n",
+            crate::batch_writer_brief::LANE_OVERRIDE_LINE
+        ));
+    }
+    Ok(rendered)
+}
+
 fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String> {
     let args = &request.args;
     let seq = if args.respawn || args.dry {
@@ -83,7 +97,7 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
         }
         restart.prompt.clone()
     } else {
-        read_writer_prompt(prompt).map_err(|e| io_text(&e, prompt))?
+        forwarded_prompt(prompt).map_err(|e| io_text(&e, prompt))?
     };
     let mcp = args
         .option("mcp")

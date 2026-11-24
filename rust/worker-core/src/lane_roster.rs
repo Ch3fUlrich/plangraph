@@ -72,6 +72,42 @@ pub fn valid_key(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
 }
 
+/// The key a run record stores: a doubled project prefix (`p:p:ID`) collapses to `p:ID`.
+pub fn normalize_key(value: &str) -> String {
+    let Some((project, rest)) = value.split_once(':') else {
+        return value.to_owned();
+    };
+    let mut id = rest;
+    while let Some(next) = id.strip_prefix(project).and_then(|r| r.strip_prefix(':')) {
+        if next.is_empty() {
+            break;
+        }
+        id = next;
+    }
+    format!("{project}:{id}")
+}
+
+/// Every item a card or run record names, resolved as the run record resolves it: `item_key`,
+/// else the `item` alias, else `env_item` (`PLANGRAPH_SPAWN_ITEM`), plus every `item_keys` entry.
+pub fn card_keys(card: &Value, env_item: Option<&str>) -> BTreeSet<String> {
+    let text = |value: &Value| value.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+    let primary = text(&card["item_key"])
+        .or_else(|| text(&card["item"]))
+        .or_else(|| env_item.filter(|s| !s.is_empty()).map(str::to_owned));
+    let listed = card["item_keys"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    primary
+        .iter()
+        .map(String::as_str)
+        .chain(listed)
+        .filter(|key| valid_key(key))
+        .map(normalize_key)
+        .collect()
+}
+
 const BATCH_PREFIX: &str = "PLANGRAPH-BATCH-INPUT-V1";
 
 /// The JSON of a versioned batch input, which the launcher renders into a brief later.
@@ -81,6 +117,24 @@ fn batch_payload(text: &str) -> Option<Value> {
         .strip_prefix("\r\n")
         .or_else(|| rest.strip_prefix('\n'))?;
     serde_json::from_str(rest).ok()
+}
+
+/// The items one line of a batch pull request body names: the `GO-KEYS [a,b]` block and the
+/// Plan-Item cell of a table row (`| #12 | a, b | ... |`), as `tools/merge_batch_land.py` renders.
+fn batch_pull_request_keys(line: &str) -> Vec<String> {
+    let listed = if let Some((_, rest)) = line.split_once("GO-KEYS [") {
+        rest.split(']').next().unwrap_or("").to_owned()
+    } else if line.starts_with("| #") {
+        line.split('|').nth(2).unwrap_or("").to_owned()
+    } else {
+        return Vec::new();
+    };
+    listed
+        .split(',')
+        .map(str::trim)
+        .filter(|key| valid_key(key))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The item keys a brief, trailer block or pull request description names.
@@ -99,6 +153,7 @@ pub fn item_keys(text: &str) -> BTreeSet<String> {
     }
     for line in text.lines() {
         let line = line.trim();
+        keys.extend(batch_pull_request_keys(line));
         let heading = line
             .strip_prefix('#')
             .map(|rest| rest.trim_start_matches('#').split('|').next().unwrap_or(""));
@@ -142,6 +197,15 @@ fn entries(dir: &Path) -> Vec<std::path::PathBuf> {
     paths
 }
 
+/// Every item a native run names: its record (`item_key`, `item_keys`), its request card and
+/// the brief it was given, so a record published before its request still holds the whole batch.
+fn run_keys(record: &Value, request: &Value) -> BTreeSet<String> {
+    let mut keys = item_keys(request["prompt"].as_str().unwrap_or(""));
+    keys.extend(card_keys(record, None));
+    keys.extend(card_keys(&request["card"], None));
+    keys
+}
+
 /// Native writer runs whose record still owns its worktree (queued, running or waiting).
 pub fn native_lanes(state: &Path) -> Vec<Lane> {
     let mut lanes = Vec::new();
@@ -156,15 +220,7 @@ pub fn native_lanes(state: &Path) -> Vec<Lane> {
         let run_id = record["run_id"].as_str().unwrap_or("").to_owned();
         let request = read_json(&dir.join("native-request.json")).unwrap_or(Value::Null);
         let prompt = request["prompt"].as_str().unwrap_or("");
-        let mut keys = item_keys(prompt);
-        let card = &request["card"];
-        let listed = card["item_keys"].as_array().into_iter().flatten();
-        for key in [&record["item_key"], &card["item_key"]]
-            .into_iter()
-            .chain(listed)
-        {
-            keys.extend(key.as_str().filter(|key| valid_key(key)).map(str::to_owned));
-        }
+        let keys = run_keys(&record, &request);
         if keys.is_empty() {
             continue;
         }
@@ -179,12 +235,36 @@ pub fn native_lanes(state: &Path) -> Vec<Lane> {
     lanes
 }
 
+/// This host's name, as the fleet launcher records it in a session's `host`.
+pub fn local_host() -> String {
+    #[cfg(unix)]
+    {
+        let mut name = [0u8; 256];
+        // SAFETY: `name` is writable for its full length.
+        if unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) } == 0 {
+            let end = name.iter().position(|b| *b == 0).unwrap_or(name.len());
+            return String::from_utf8_lossy(&name[..end]).into_owned();
+        }
+        String::new()
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::var("COMPUTERNAME").unwrap_or_default()
+    }
+}
+
 /// Claude writer sessions the fleet launcher recorded and has not stopped.
 ///
+/// A session recorded for another host runs where `claude agents` here cannot see it, so it
+/// counts while its record is unstopped; a session of `local_host` also needs `live`.
 /// `live` is the set of session ids `claude agents` lists as not finished: a record joins the
 /// fleet lifecycle by its session id, so an exited session drops out at once and a writer that
 /// runs for days stays. When the lifecycle is unknown (`None`) every unstopped record counts.
-pub fn claude_lanes(sessions: &Path, live: Option<&BTreeSet<String>>) -> Vec<Lane> {
+pub fn claude_lanes(
+    sessions: &Path,
+    live: Option<&BTreeSet<String>>,
+    local_host: &str,
+) -> Vec<Lane> {
     let mut lanes = Vec::new();
     for path in entries(sessions) {
         let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -201,7 +281,10 @@ pub fn claude_lanes(sessions: &Path, live: Option<&BTreeSet<String>>) -> Vec<Lan
         {
             continue;
         }
-        if let Some(live) = live {
+        let remote = record["host"]
+            .as_str()
+            .is_some_and(|host| !host.is_empty() && host != local_host);
+        if let Some(live) = live.filter(|_| !remote) {
             if !record["session_id"]
                 .as_str()
                 .is_some_and(|id| live.contains(id))
@@ -230,7 +313,14 @@ pub fn claude_lanes(sessions: &Path, live: Option<&BTreeSet<String>>) -> Vec<Lan
 }
 
 /// `claude agents` states that mean the session is over (the fleet lifecycle's own list).
-const FINISHED: [&str; 4] = ["finished", "stopped", "done", "failed"];
+const FINISHED: [&str; 6] = [
+    "finished",
+    "stopped",
+    "done",
+    "failed",
+    "cancelled",
+    "crashed",
+];
 
 /// Ids of the Claude sessions `claude agents --json` lists as not finished; `None` when the
 /// lifecycle cannot be read (no `claude`, a failed or slow poll), so callers keep every record.
@@ -343,12 +433,20 @@ pub fn reserved_lanes(state: &Path, now: u64) -> Vec<Lane> {
             let row = read_json(path)?;
             let run_id = row["run_id"].as_str()?;
             let fresh = now.saturating_sub(row["ts"].as_u64()?) < RESERVATION_TTL_S;
-            let published = state.join("runs").join(run_id).join("record.json").exists();
             let keys: BTreeSet<String> = row["keys"]
                 .as_array()?
                 .iter()
                 .filter_map(|k| k.as_str().filter(|k| valid_key(k)).map(str::to_owned))
                 .collect();
+            // The reservation yields to the run record only once the record holds every
+            // reserved item (or has ended): a record published ahead of its batch must not
+            // open a window for a second submit.
+            let dir = state.join("runs").join(run_id);
+            let published = read_json(&dir.join("record.json")).is_some_and(|record| {
+                let request = read_json(&dir.join("native-request.json")).unwrap_or(Value::Null);
+                let ended = record["status"].as_str().is_some_and(releases_ownership);
+                ended || keys.is_subset(&run_keys(&record, &request))
+            });
             (fresh && !published && !keys.is_empty()).then(|| Lane {
                 name: row["name"].as_str().unwrap_or(run_id).to_owned(),
                 kind: LaneKind::Native,
@@ -369,7 +467,7 @@ pub fn local_lanes(
 ) -> Vec<Lane> {
     let mut lanes = native_lanes(state);
     lanes.extend(reserved_lanes(state, now));
-    lanes.extend(claude_lanes(sessions, live_sessions));
+    lanes.extend(claude_lanes(sessions, live_sessions, &local_host()));
     lanes
 }
 

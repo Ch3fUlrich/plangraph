@@ -8,12 +8,11 @@
 use pg_worker_core::lane_guard::{admit, record_override, GuardError};
 pub use pg_worker_core::lane_roster::live_claude_sessions;
 use pg_worker_core::lane_roster::{
-    branch_lanes, item_keys, local_lanes, valid_key, write_reservation,
+    branch_lanes, card_keys, item_keys, local_lanes, valid_key, write_reservation,
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 pub const OVERRIDE_LOG: &str = "lane-overrides.jsonl";
 const LOCK_FILE: &str = "lane-admission.lock";
@@ -36,50 +35,22 @@ pub fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// The items a submission names: its brief lines plus the card's `item_key` and `item_keys`.
+/// The items a submission names: its brief lines plus the card as the run record resolves it
+/// (`item_key`, the `item` alias, `PLANGRAPH_SPAWN_ITEM`, every `item_keys` entry).
 pub fn submission_keys(prompt: &str, card: &Value) -> BTreeSet<String> {
+    let env_item = std::env::var("PLANGRAPH_SPAWN_ITEM").ok();
     let mut keys = item_keys(prompt);
-    let listed = card["item_keys"].as_array().into_iter().flatten();
-    for key in [&card["item_key"]].into_iter().chain(listed) {
-        keys.extend(key.as_str().filter(|k| valid_key(k)).map(str::to_owned));
-    }
+    keys.extend(card_keys(card, env_item.as_deref()));
     keys
-}
-
-/// The keeper's open lanes of `repo`: branches not merged into `origin/main`.
-fn open_branches(repo: &Path) -> Vec<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args([
-            "branch",
-            "-a",
-            "--no-merged",
-            "origin/main",
-            "--format=%(refname:short)",
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output();
-    let Some(out) = out.ok().filter(|o| o.status.success()) else {
-        return Vec::new();
-    };
-    let mut names: Vec<String> = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|l| l.trim().trim_start_matches("origin/").to_owned())
-        .filter(|l| !l.is_empty() && !l.contains("HEAD"))
-        .collect();
-    names.sort();
-    names.dedup();
-    names
 }
 
 /// One admission decision.
 pub struct Request<'a> {
     pub state: &'a Path,
     pub sessions: &'a Path,
-    /// The repository whose unmerged branches are the keeper's open lanes.
-    pub repo: Option<&'a Path>,
+    /// The keeper's open lanes (`work_exists.lanes` of the items; a closed pull request's
+    /// branch is not among them). Only Python callers can read the keeper; others pass none.
+    pub branches: &'a [String],
     pub context: &'a str,
     pub keys: &'a BTreeSet<String>,
     pub override_reason: Option<&'a str>,
@@ -108,9 +79,7 @@ pub fn check(request: &Request) -> Result<(), String> {
         (request.live)().as_ref(),
         now,
     );
-    if let Some(repo) = request.repo {
-        lanes.extend(branch_lanes(open_branches(repo).iter().map(String::as_str)));
-    }
+    lanes.extend(branch_lanes(request.branches.iter().map(String::as_str)));
     let own = request.reserve.map(|(id, _)| id).or(request.own);
     let admission = admit(request.keys, &lanes, own, request.override_reason)
         .map_err(|e: GuardError| e.to_string())?;
@@ -161,6 +130,12 @@ pub fn cli(input: &str) -> Result<(), String> {
     );
     // A reservation takes the brief's lane name, else the run id.
     let lane_name = pg_worker_core::lane_roster::brief_name(text("prompt").unwrap_or(""));
+    let branches: Vec<String> = request["branches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|b| b.as_str().map(str::to_owned))
+        .collect();
     let reserve = request["reserve"]["run_id"].as_str().map(|run_id| {
         let name = request["reserve"]["name"].as_str().or(lane_name.as_deref());
         (run_id, name.unwrap_or(run_id))
@@ -168,7 +143,7 @@ pub fn cli(input: &str) -> Result<(), String> {
     check(&Request {
         state: &state,
         sessions: &sessions,
-        repo: text("repo").map(Path::new),
+        branches: &branches,
         context: text("context").unwrap_or("lane-check"),
         keys: &keys,
         override_reason: request

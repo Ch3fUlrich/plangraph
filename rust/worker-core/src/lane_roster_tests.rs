@@ -84,7 +84,7 @@ fn a_native_batch_holds_every_persisted_item_key() {
 
 fn claude_record(dir: &Path, session: &str, name: &str, sid: &str, brief: &Path) {
     let record = serde_json::json!({"name":name,"session_name":session,"session_id":sid,
-        "prompt_file":brief,"ts":1});
+        "prompt_file":brief,"ts":1,"host":"here"});
     write(&dir.join(format!("{session}.json")), &record.to_string());
 }
 
@@ -100,12 +100,12 @@ fn a_claude_lane_joins_the_fleet_lifecycle_by_session_id() {
     write(&dir.path().join("writer-0001.ready.json"), "{}");
     let live: BTreeSet<String> = ["sid-live".to_owned()].into();
     // The record is a day and more old (ts 1): a running writer stays, an exited one drops.
-    let lanes = claude_lanes(dir.path(), Some(&live));
+    let lanes = claude_lanes(dir.path(), Some(&live), "here");
     assert_eq!(lanes.len(), 1);
     assert_eq!(lanes[0].detail, "writer-0001");
     assert_eq!(lanes[0].keys.len(), 2, "the versioned prompt is decoded");
     // With the lifecycle unknown every unstopped writer record counts; never a non-writer.
-    assert_eq!(claude_lanes(dir.path(), None).len(), 2);
+    assert_eq!(claude_lanes(dir.path(), None, "here").len(), 2);
 }
 
 #[test]
@@ -145,4 +145,87 @@ fn a_reservation_holds_its_items_until_the_record_exists_or_it_ages_out() {
         "the record is the lane now"
     );
     assert!(write_reservation(dir.path(), "bad id", "n", &keys, 1).is_err());
+}
+
+#[test]
+fn a_remote_writer_stays_and_a_crashed_session_does_not_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let brief = dir.path().join("brief.md");
+    write(&brief, "Item key: p:REMOTE\nNAME: far-lane\n");
+    claude_record(dir.path(), "writer-0001", "writer", "sid-far", &brief);
+    let path = dir.path().join("writer-0001.json");
+    let mut record: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    record["host"] = serde_json::json!("elsewhere");
+    fs::write(&path, record.to_string()).unwrap();
+    // `claude agents` here lists no remote session, yet the writer is live on its own host.
+    let live: BTreeSet<String> = BTreeSet::new();
+    assert_eq!(claude_lanes(dir.path(), Some(&live), "here").len(), 1);
+    assert!(claude_lanes(dir.path(), Some(&live), "elsewhere").is_empty());
+    assert!(FINISHED.contains(&"crashed") && FINISHED.contains(&"cancelled"));
+}
+
+#[test]
+fn a_card_item_resolves_like_the_run_record_including_the_alias_and_the_environment() {
+    let by = |card: Value, env: Option<&str>| -> Vec<String> {
+        card_keys(&card, env).into_iter().collect()
+    };
+    assert_eq!(by(serde_json::json!({"item":"p:ALIAS"}), None), ["p:ALIAS"]);
+    assert_eq!(
+        by(serde_json::json!({"item_key":"p:A","item":"p:B"}), None),
+        ["p:A"]
+    );
+    assert_eq!(by(serde_json::json!({}), Some("p:ENV")), ["p:ENV"]);
+    assert_eq!(
+        by(serde_json::json!({"item_key":"p:p:DUP"}), None),
+        ["p:DUP"]
+    );
+    assert_eq!(
+        by(
+            serde_json::json!({"item_key":"p:A","item_keys":["p:B","not a key"]}),
+            Some("p:ENV")
+        ),
+        ["p:A", "p:B"]
+    );
+}
+
+#[test]
+fn a_record_published_before_its_batch_keeps_the_reservation() {
+    let dir = tempfile::tempdir().unwrap();
+    let keys: BTreeSet<String> = ["p:ONE".to_owned(), "p:TWO".to_owned()].into();
+    write_reservation(dir.path(), "run-b", "lane-b", &keys, 1000).unwrap();
+    // The record names only the first item and its request is not written yet.
+    let run = dir.path().join("runs/run-b");
+    let record = serde_json::json!({"run_id":"run-b","run_kind":"native-codex","status":"running",
+        "item_key":"p:ONE"});
+    write(&run.join("record.json"), &record.to_string());
+    assert_eq!(
+        reserved_lanes(dir.path(), 1001).len(),
+        1,
+        "the second item is still reserved"
+    );
+    let both = serde_json::json!({"run_id":"run-b","run_kind":"native-codex","status":"running",
+        "item_key":"p:ONE","item_keys":["p:ONE","p:TWO"]});
+    write(&run.join("record.json"), &both.to_string());
+    assert!(reserved_lanes(dir.path(), 1001).is_empty());
+    let lanes = native_lanes(dir.path());
+    assert!(
+        lanes[0].holds("p:TWO"),
+        "a mirrored record's secondary item is held"
+    );
+}
+
+#[test]
+fn a_generated_batch_pull_request_body_names_every_item() {
+    let body = include_str!("../tests/fixtures/batch-pr-body.md");
+    let lanes = pull_request_lanes(
+        &serde_json::json!([{"number":5,"headRefName":"merge/train-9","title":"Train","body":body}])
+            .to_string(),
+    );
+    for key in ["demo:ITEM-9", "demo:ITEM-10", "demo:KEYS-ONLY"] {
+        assert!(lanes[0].holds(key), "{key}");
+    }
+    assert!(
+        !lanes[0].holds("demo:DEFERRED"),
+        "a deferred key is not delivered by this pull request"
+    );
 }

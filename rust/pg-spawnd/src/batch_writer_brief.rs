@@ -85,15 +85,25 @@ impl RunValues {
     }
 }
 
-/// The `lane_override` reason a versioned batch input carries, if any.
+/// Marks a forwarded brief's override reason: the rendered text has lost the batch input's
+/// `lane_override` field, so the sender appends it as this line for the receiving host.
+pub const LANE_OVERRIDE_LINE: &str = "Lane-Override:";
+
+/// The `lane_override` reason of a brief: the versioned batch input's field, else the
+/// `Lane-Override:` line a forwarding host appended.
 pub fn lane_override(text: &str) -> Option<String> {
     let payload = text.strip_prefix(PREFIX).or_else(|| {
         text.strip_prefix(PREFIX.trim_end_matches('\n'))?
             .strip_prefix("\r\n")
-    })?;
-    serde_json::from_str::<BatchInput>(payload)
-        .ok()?
-        .lane_override
+    });
+    if let Some(payload) = payload {
+        return serde_json::from_str::<BatchInput>(payload)
+            .ok()?
+            .lane_override;
+    }
+    text.lines()
+        .find_map(|line| line.strip_prefix(LANE_OVERRIDE_LINE))
+        .map(|reason| reason.trim().to_owned())
 }
 
 /// Render a versioned batch input in the prompt transport. Plain briefs pass through.

@@ -60,7 +60,7 @@ fn the_roster_decides_what_is_renewed_and_failures_carry_their_keys() {
     let record = json!({"name":"writer","session_name":"writer-0001","prompt_file":brief});
     fs::write(sessions.join("writer-0001.json"), record.to_string()).unwrap();
     let mut lanes = native_lanes(&dir.path().join("state"));
-    lanes.extend(claude_lanes(&sessions, None));
+    lanes.extend(claude_lanes(&sessions, None, "here"));
     lanes.extend(pull_request_lanes(
         r#"[{"number":9,"headRefName":"lane/x","title":"x","body":"Plan-Item: p:PR\nPlan-Item: p:REFUSED"},
             {"number":10,"headRefName":"lane/branchonly","title":"x","body":""}]"#,

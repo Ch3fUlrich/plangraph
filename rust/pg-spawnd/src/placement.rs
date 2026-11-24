@@ -260,11 +260,10 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
 fn guard_lanes(state: &Path, sessions: &Path, args: &Args, prompt: &str) -> Result<(), ToolError> {
     let reason = lane_override(args, prompt);
     let keys = pg_spawnd::lane_admission::submission_keys(prompt, &args["card"]);
-    let repo = args["card"]["repo"].as_str().map(Path::new);
     pg_spawnd::lane_admission::check(&pg_spawnd::lane_admission::Request {
         state,
         sessions,
-        repo,
+        branches: &[],
         context: "native-submit",
         keys: &keys,
         override_reason: reason.as_deref(),

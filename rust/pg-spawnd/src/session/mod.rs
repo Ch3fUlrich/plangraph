@@ -212,7 +212,7 @@ fn local(
         }
     };
     if args.role == "writer" && request.restart.is_none() {
-        if let Err(error) = guard_launch(prompt_path, &args.cwd, args.dry) {
+        if let Err(error) = guard_launch(prompt_path, args.dry) {
             log("refused", None);
             eprintln!("fleet-launch: {error}");
             return Ok(2);
@@ -409,25 +409,24 @@ fn read_writer_prompt(path: &Path) -> io::Result<String> {
 
 /// Refuse a writer launch whose items a live lane already holds. A dry run previews the
 /// refusal but records no override.
-fn guard_launch(prompt: &Path, cwd: &str, dry: bool) -> io::Result<()> {
+fn guard_launch(prompt: &Path, dry: bool) -> io::Result<()> {
     let text = read_text(prompt)?;
     let state = crate::state::resolve_state(None, |key| std::env::var_os(key)).unwrap_or_default();
     guard_text(
         (&state, &crate::lane_admission::claude_sessions_dir()),
         &text,
-        Path::new(cwd),
         !dry,
     )
 }
 
-fn guard_text(dirs: (&Path, &Path), text: &str, repo: &Path, record: bool) -> io::Result<()> {
+fn guard_text(dirs: (&Path, &Path), text: &str, record: bool) -> io::Result<()> {
     use crate::lane_admission::{check, submission_keys, Request};
     let keys = submission_keys(text, &Value::Null);
     let reason = crate::batch_writer_brief::lane_override(text);
     check(&Request {
         state: dirs.0,
         sessions: dirs.1,
-        repo: Some(repo).filter(|repo| repo.is_dir()),
+        branches: &[],
         context: "brief",
         keys: &keys,
         override_reason: reason.as_deref(),
