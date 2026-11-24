@@ -5,6 +5,7 @@ from datetime import datetime
 import re
 
 from .errors import Refused
+from .store_context import _superseded_map
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
 from ..views_progress import progress
 
@@ -14,7 +15,7 @@ FIELDS = tuple((
     "done_criteria design_ref evidence_kinds operator priority review_tier source note epoch "
     "claimed_by worker_run reviewer_run lease_until model review_waiver reviews "
     "evidence updated_at corrected_by fixes fixed_by writer_model seat_models "
-    "run_ids created_at done_at reviewed merged answer incidents"
+    "run_ids created_at done_at reviewed merged answer incidents supersedes superseded_by"
 ).split()) + tuple(MODEL_FIELDS)
 BLOCKS = ("items", "aliases", "activity", "decision_text", "progress")
 PARAMS = ("open", "closed", "since", "fields", "blocks")
@@ -114,6 +115,7 @@ def _full(store, now, values=None):
     from .store_read import _decode_models, _decode_run_ids
     items = store._all_items()
     corrected, fixed = {}, {}
+    superseded = _superseded_map({item["key"]: item for item in items})
     for item in items:
         if item["corrects"]:
             corrected.setdefault(item["corrects"], []).append(item["key"])
@@ -148,6 +150,8 @@ def _full(store, now, values=None):
             "depends_on": item["depends_on"], "corrects": item["corrects"],
             "done_criteria": item["done_criteria"],
             **({"design_ref": item["design_ref"]} if item.get("design_ref") else {}),
+            **({"supersedes": item["supersedes"]} if item.get("supersedes") else {}),
+            **({"superseded_by": sorted(superseded[item["key"]])} if item["key"] in superseded else {}),
             "evidence_kinds": item["evidence_kinds"],
             "operator": item["operator"], "priority": item["priority"],
             "review_tier": item["review_tier"],

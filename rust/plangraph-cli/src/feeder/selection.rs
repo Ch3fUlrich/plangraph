@@ -173,7 +173,22 @@ fn class(item: &Task) -> u8 {
 fn reconcile(item: &Task) -> bool {
     let c = item.fields.get("context").unwrap_or(&Value::Null);
     let nonempty = |v: &Value| v.as_array().is_some_and(|a| !a.is_empty());
+    let filled = |v: &Value| match v {
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(m) => !m.is_empty(),
+        Value::String(s) => !s.trim().is_empty(),
+        _ => false,
+    };
+    // A superseded item, a retired premise or a superseded contract is never
+    // handed out: the older text would overwrite a newer solution.
     nonempty(&c["newer_decisions"])
+        || [
+            "superseded_by",
+            "superseded_premises",
+            "superseded_contract",
+        ]
+        .iter()
+        .any(|k| filled(&c[*k]))
         || (nonempty(&c["work_exists"]["commits"]) && !nonempty(&c["work_exists"]["lanes"]))
         || ["in_merge_batch", "merge_batch"]
             .iter()

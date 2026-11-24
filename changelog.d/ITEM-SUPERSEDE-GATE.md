@@ -1,0 +1,1 @@
+A superseded or near-duplicate item is never handed out: `supersedes` links (schema v28) make the old item unclaimable and drop it from the feeder, claim and ready also refuse retired premises, and every create path refuses a near copy of an open item until it is answered supersedes, depends_on or distinct.

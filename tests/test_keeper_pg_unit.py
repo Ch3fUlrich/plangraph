@@ -169,7 +169,7 @@ def test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers():
         assert name in pg_tables, name
         # These columns were appended in later Postgres migrations.
         floating = {"exec_workflow_id", "exec_run_id", "exec_attempt",
-                    "exec_principal", "exec_retired_runs", "design_ref"} if name == "items" else set()
+                    "exec_principal", "exec_retired_runs", "design_ref", "supersedes"} if name == "items" else set()
         assert [c for c, _ in cols if c not in floating] == [
             c for c, _ in pg_tables[name] if c not in floating], name
         assert dict(cols) == dict(pg_tables[name]), name
