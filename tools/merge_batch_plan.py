@@ -384,7 +384,7 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
 
 # --- entry replay: the tests a part changed run five times on a clean checkout of its head (LE-CI-FLAKE-ENTRY-REPLAY)
 
-_OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (\S+)|test (\S+) \.\.\. (ok|FAILED))", re.M)
+_OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (.+?)(?: - .*)?|test (\S+) \.\.\. (ok|FAILED))$", re.M)
 
 
 def changed_tests(root, base: str, head: str) -> dict:
@@ -434,14 +434,20 @@ def replay(root, changed: dict, out, workers: bool = True, runs: int = 5, head: 
             raise MergeBatchError(f"the replay checkout is not {sha}")
         env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(checkout) / "src"), os.environ.get("PYTHONPATH")])))
         seen, failed, incomplete = {}, [], []   # test -> {passed: first log}
+        ids = []   # every selected Python test id: each needs an outcome on every run, not only one id of its file
+        if changed.get("python"):
+            collected = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *changed["python"]],
+                                       cwd=checkout, env=env, capture_output=True, text=True).stdout
+            ids = [line for line in collected.splitlines() if "::" in line and line.startswith(tuple(changed["python"]))]
         for n, (command, wanted) in enumerate(replay_commands(changed, runs, workers)):
+            wanted = ids if ids and command[0] != "cargo" else wanted
             done = subprocess.run(command, cwd=checkout, env=env, capture_output=True, text=True)
             log = out / f"{'cargo' if command[0] == 'cargo' else 'python'}-run-{n}.log"
             log.write_text(text := done.stdout + done.stderr, encoding="utf-8")
             outcomes = [(m[2] or m[3], m[1] == "PASSED" or m[4] == "ok") for m in _OUTCOME.finditer(text)]
             for test, ok in outcomes:
                 seen.setdefault(test, {}).setdefault(ok, str(log))
-            incomplete += [f"{w} (run {n})" for w in wanted if not any(t.startswith(w) if w.endswith("::") else t.split("::")[-1] == w for t, _ in outcomes)]
+            incomplete += [f"{w} (run {n})" for w in wanted if not any(t.startswith(w) if w.endswith("::") else (t == w or t.split("::")[-1] == w) for t, _ in outcomes)]
             if done.returncode and not outcomes:
                 failed.append(" ".join(command[:6]))
     finally:

@@ -110,6 +110,17 @@ def test_a_failure_that_passes_both_reruns_is_named_flaky_and_stays_red(fx):
     assert "-n" in fx.invocations()[1] and fx.invocations()[1][fx.invocations()[1].index("-n") + 1] == "0"
 
 
+def test_ci_leaves_the_classification_to_its_one_same_sha_retry_and_stays_red(fx):
+    """CI sets CI_CLASSIFY_RETRY: the reruns of this tool would be a second and a third retry of the same failure."""
+    fx.write(FLAKY)
+    fx.commit()
+    fx.env["CI_CLASSIFY_RETRY"] = "1"
+    result = fx.run()
+    assert result.returncode == 1
+    assert "FLAKY" not in result.stdout and len(fx.invocations()) == 1
+    assert "FAILED tests/test_x.py::test_flaky" in result.stdout
+
+
 @needs_xdist
 def test_flaky_is_classified_the_same_under_two_workers(fx):
     fx.write(FLAKY)
