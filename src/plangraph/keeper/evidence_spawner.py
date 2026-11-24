@@ -41,12 +41,13 @@ def _required_seat(record):
 
 
 def _unfenced_lines(text):
-    """The lines of *text* outside code fences and ``>`` quotes, left-stripped of spaces.
+    """The declaration lines of *text*: outside code fences, ``>`` quotes and indented code blocks.
 
-    Uses the one review fence parser (a closing fence carries no text after its marker).
+    Uses the one review fence parser (a closing fence carries no text after its marker). A line
+    indented four columns or more is code, never a declaration.
     """
-    from ..review.verdict import _unquoted_lines
-    return (raw.lstrip(" ") for raw in _unquoted_lines(text))
+    from ..review.verdict import _indent_columns, _unquoted_lines
+    return (raw.lstrip(" ") for raw in _unquoted_lines(text) if _indent_columns(raw) < 4)
 
 
 def _tests_reported(text):
