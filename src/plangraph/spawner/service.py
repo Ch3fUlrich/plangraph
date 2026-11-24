@@ -582,6 +582,11 @@ class SpawnService(SeatSpawnMixin):
                         if not dry_run and record.get('reason') != 'model_refusal':
                             await self._continue_writer(record, job.stdout)
                         break
+                if lease is not None and record['status'] == 'completed':
+                    from .prompt_input import review_checkout_dirt
+                    if dirt := await asyncio.to_thread(review_checkout_dirt, record['review_checkout'], record['head_sha']):
+                        record.update(status='failed', exit_code=1, reason='review_checkout_dirty',
+                                      error='review checkout changed during the run: ' + dirt)
                 if role == 'review' and record['status'] == 'running': record.update(status='failed', exit_code=1)
                 if not launched and record.get('status') not in ('timed_out', 'timeout'):
                     record.update(status='failed', exit_code=1, error='; '.join(

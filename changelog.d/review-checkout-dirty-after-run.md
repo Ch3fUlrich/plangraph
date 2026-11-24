@@ -1,0 +1,1 @@
+A worker review run fails with reason `review_checkout_dirty` when its checkout is no longer the pristine pinned head after the run (moved HEAD, attached branch, modified or untracked file); the disposable checkout is still removed, so no dirty seat is left to reuse.

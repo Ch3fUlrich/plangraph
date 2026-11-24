@@ -194,7 +194,7 @@ def test_review_launch_refuses_placeholder_author(launch_leg_case):
 
 @pytest.mark.parametrize('outcome', [
     'completed', 'sonnet_completed', 'launch_failed', 'cancelled', 'ordinary_review', 'orchestration_only',
-    'disk_low', 'memory_low',
+    'disk_low', 'memory_low', 'dirty_file', 'moved_head',
 ])
 def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkeypatch, outcome):
     import asyncio
@@ -271,6 +271,11 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         (target / 'build-output').touch()
         paths.extend([checkout, target])
         ready.set()
+        if outcome == 'dirty_file':
+            (checkout / 'source').write_text('edited by the review')
+        if outcome == 'moved_head':
+            subprocess.check_call(['git', '-C', str(checkout), '-c', 'user.name=F', '-c', 'user.email=f@example.invalid',
+                                   'commit', '--allow-empty', '-qm', 'review wrote'], env=checkout_env())
         if outcome == 'launch_failed':
             raise OSError('fixture launch failed')
         if outcome == 'cancelled':
@@ -306,9 +311,15 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
             await service.cancel(record['run_id'])
         await asyncio.gather(task, return_exceptions=True)
         final = service.result(record['run_id'])
-        assert final['status'] == {'launch_failed': 'failed', 'sonnet_completed': 'completed'}.get(
+        assert final['status'] == {'launch_failed': 'failed', 'sonnet_completed': 'completed', 'dirty_file': 'failed',
+            'moved_head': 'failed'}.get(
             outcome, outcome), final.get('error')
         assert final['head_sha'] == head
+        if outcome in ('dirty_file', 'moved_head'):
+            assert final['reason'] == 'review_checkout_dirty' and final['exit_code'] == 1
+            assert len(paths) == 2 and all(not path.exists() for path in paths)   # nothing is left to reuse
+            assert git('rev-parse', 'HEAD') == base and not (receiver / 'source').exists()
+            return
         if outcome in ('completed', 'sonnet_completed'):
             assert final['cwd'] == str(paths[0])
         assert final['host'] == 'worker'

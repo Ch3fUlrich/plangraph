@@ -37,6 +37,30 @@ def checkout_review(diff, checkout):
     raise SpawnRefused('review workspace could not check out the exact head')
 
 
+def review_checkout_dirt(checkout, head):
+    """Why a review checkout is no longer the pristine pinned head after its run, else None.
+
+    A review reads; a checkout with another HEAD, an attached branch, or any modified, staged or
+    untracked file means the run wrote to it, so its answer does not count.
+    """
+    def git(*args):
+        return subprocess.run(['git', '-C', str(checkout), *args], env=checkout_env(), capture_output=True,
+                              encoding='utf-8', errors='replace', timeout=30)
+    try:
+        at = git('rev-parse', 'HEAD')
+        branch = git('symbolic-ref', '-q', 'HEAD')
+        status = git('status', '--porcelain=v1', '-z', '--untracked-files=all')
+    except (OSError, subprocess.SubprocessError):
+        return 'checkout unreadable'
+    if at.returncode or at.stdout.strip() != head:
+        return 'HEAD moved off the pinned head'
+    if branch.returncode != 1:
+        return 'HEAD is attached to a branch'
+    if status.returncode or status.stdout:
+        return 'working tree is not clean'
+    return None
+
+
 def resolve_cwd(cwd, card):
     """Validate explicit checkout paths; never reinterpret a relative path."""
     card_cwd = (card or {}).get('cwd')
