@@ -440,6 +440,10 @@ def test_keeper_migration_needs_a_head_bound_go_marker(env):
         f"GO owner/proj PR #100 GO-HEAD {'f' * 40}; MIGRATION 2",
         f"NO GO owner/proj PR #100 GO-HEAD {head}; MIGRATION 2",
         f"GO owner/proj PR #100 GO-HEAD {head}\nMIGRATION 2",
+        # The Rust evidence reader (land/go_statement.rs) refuses the same malformed values.
+        f"GO owner/proj PR #100 GO-HEAD {head}; MIGRATION +2",
+        f"GO owner/proj PR #100 GO-HEAD {head}; MIGRATION 02",
+        f"GO owner/proj PR #100 GO-HEAD {head}; MIGRATION  2",
     ):
         row.write_text(text)
         refused = land(env, approval, "--go-row", str(row), name="g1")

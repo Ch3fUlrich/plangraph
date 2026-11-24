@@ -260,29 +260,47 @@ fn a_part_branched_before_main_raised_the_schema_is_not_a_regression_of_the_trai
     assert_eq!(plan.go_req(), "deploy: none");
 }
 
+/// Run `deploy-plan` itself on a manifest written to disk and return its first output line.
+fn deploy_plan_line(fx: &Fx, manifest: &super::train::Manifest) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("manifest.json");
+    std::fs::write(&file, serde_json::to_vec(manifest).unwrap()).unwrap();
+    let flags = BTreeMap::from([
+        ("repo".to_string(), fx.path().display().to_string()),
+        ("manifest".to_string(), file.display().to_string()),
+        ("authorized-hosts".to_string(), "alpha".to_string()),
+        ("probe-cmd".to_string(), "true".to_string()),
+    ]);
+    run_cli(&flags).unwrap().remove(0)
+}
+
 #[test]
-fn a_train_that_raises_the_schema_puts_migration_and_keeper_restart_in_the_go_req() {
+fn deploy_plan_emits_migration_and_keeper_restart_for_a_train_that_raises_the_schema() {
     let fx = Fx::new();
     let two = commit(&fx, &[(SCHEMA, &registry(2))], "s2");
     move_main(&fx, &two);
     let raise = commit(&fx, &[(SCHEMA, &registry(3))], "raise\n\nPlan-Item: demo:B");
     let docs = commit(&fx, &[("docs/a.md", "a\n")], "docs\n\nPlan-Item: demo:A");
     let manifest = built(&fx, &[&docs, &raise]);
-    let mut plan = deploy_plan(
-        &derive(fx.path(), &manifest).unwrap(),
-        &BTreeMap::new(),
-        &hosts(&[]),
-        &pass(),
-    );
-    assert_eq!(plan.go_req(), "deploy: none");
-    plan.keeper_migration = train_migration(fx.path(), &manifest).unwrap();
-    let line = plan.go_req();
+    let line = deploy_plan_line(&fx, &manifest);
     assert!(line.starts_with("deploy: none; MIGRATION 3; "), "{line}");
     assert!(
         line.contains("plangraph keeper-restart") && line.contains("MIGRATION_DSN_FILE"),
         "{line}"
     );
     assert!(line.contains("never a plain restart"), "{line}");
+}
+
+#[test]
+fn deploy_plan_names_no_migration_for_a_part_branched_before_main_raised_the_schema() {
+    let fx = Fx::new();
+    let one = commit(&fx, &[(SCHEMA, &registry(1))], "s1");
+    move_main(&fx, &one);
+    let docs = commit(&fx, &[("docs/a.md", "a\n")], "docs\n\nPlan-Item: demo:A");
+    let two = commit(&fx, &[(SCHEMA, &registry(2))], "s2");
+    move_main(&fx, &two);
+    let manifest = built(&fx, &[&docs]);
+    assert_eq!(deploy_plan_line(&fx, &manifest), "deploy: none");
 }
 
 #[test]
