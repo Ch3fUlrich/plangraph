@@ -43,7 +43,7 @@ import re
 
 from . import context_sources, timing
 from .errors import Refused
-from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets
+from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets, live_evidence_missing
 from .evidence_repo import repo_key
 from .evidence_types import valid_commit_ref
 
@@ -384,6 +384,7 @@ class CloseMixin:
                     raise Refused("conflict",
                                   "the commit evidence changed under the transaction")
                 self._check_commit_evidence(key, fresh, now, again_tok)
+            self._require_live_evidence(fresh)
             # The cache row goes first, exactly like ``_pass``: the event below
             # is what locks the key, and the triggers refuse a locked insert.
             cursor = self.conn.execute(
@@ -514,6 +515,13 @@ class CloseMixin:
             return set(git.deploy_changes(git.repo_path(project), head, item["_close_head"], item["key"]))
         except Exception:  # noqa: BLE001 - an unreadable diff cannot clear the deploy gate
             raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
+
+    def _require_live_evidence(self, item):
+        """Every close path ends here or in ``_pass``: a ``Live:`` clause needs a verified deploy row."""
+        if live_evidence_missing(item, self._evidence(item["key"])):
+            raise Refused("evidence_unverified",
+                          f"live_evidence_missing: {item['key']} has a Live: clause and no verified "
+                          "deploy evidence row of its current epoch")
 
     def _deploy_pending(self, item, changes, token):
         """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for."""

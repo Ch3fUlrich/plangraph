@@ -42,6 +42,8 @@ __all__ = [
     "deploy_targets",
     "deploy_hosts",
     "deploy_missing",
+    "has_live_clause",
+    "live_evidence_missing",
     "VERIFIERS",
     "default_context",
     "verify",
@@ -635,6 +637,26 @@ def deploy_host_names(values) -> list[str]:
 def deploy_hosts(item: dict) -> list[str]:
     """Hosts named by ``Deploy-Hosts: a, b`` lines of the item description or note."""
     return deploy_host_names(_HOSTS_RE.findall(f"{item.get('description') or ''}\n{item.get('note') or ''}"))
+
+
+_LIVE_CLAUSE_RE = re.compile(r"(?:^|[.!?;]\s+|\n\s*)Live:\s*\S")
+
+
+def has_live_clause(item: dict) -> bool:
+    """True when the done criteria carry a ``Live:`` clause."""
+    return bool(_LIVE_CLAUSE_RE.search(item.get("done_criteria") or ""))
+
+
+def live_evidence_missing(item: dict, rows, since: float | None = None) -> bool:
+    """A ``Live:`` clause is met only by a verified ``deploy`` row of the item's current epoch.
+
+    ``since`` (epoch seconds) is the last merge: the row must be at or after it, so evidence of an older
+    deployment never proves newer work. Items without the clause are never missing.
+    """
+    if not has_live_clause(item):
+        return False
+    return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
+                   and (since is None or (as_epoch(row["at"]) or 0) >= since) for row in rows)
 
 
 def _oneshot_timer(ref: dict) -> str | None:

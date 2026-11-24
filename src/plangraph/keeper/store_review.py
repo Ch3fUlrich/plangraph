@@ -312,6 +312,7 @@ class ReviewMixin:
         peer verdict that slipped in between the pre-read and here loses.
         ``release`` ends the claim with the item (the automatic merge close).
         """
+        self._require_live_evidence(item)
         cursor = self.conn.execute(
             "UPDATE items SET state='done', reviewer=?, updated_at=?"
             + (", claimed_by=NULL, delegate=NULL, lease_until=NULL" if release else "")
