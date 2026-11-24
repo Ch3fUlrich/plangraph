@@ -151,6 +151,17 @@ fn lints(log: &str) -> BTreeSet<String> {
     found
 }
 
+/// True when the log names a failing test: a pytest `FAILED id` line, a Rust `... FAILED` line or a panic.
+fn names_failing_tests(log: &str) -> bool {
+    log.lines().any(|line| {
+        let line = line.trim_start_matches(|c: char| !c.is_ascii_alphabetic());
+        line.starts_with("FAILED ") || line.contains(" FAILED ") || line.contains("... FAILED")
+    }) || {
+        let lower = log.to_ascii_lowercase();
+        lower.contains("panicked at") || lower.contains("test result: failed")
+    }
+}
+
 /// Class of one red job. `known_flake` is true when a failing test of the job maps to a FLAKE item.
 pub fn classify_job(job: &str, log: &str, known_flake: bool) -> RedClass {
     if known_flake {
@@ -159,16 +170,16 @@ pub fn classify_job(job: &str, log: &str, known_flake: bool) -> RedClass {
     let lower = log.to_ascii_lowercase();
     let name = job.to_ascii_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|n| lower.contains(n));
-    // A log that names failing tests is a code failure even when the test prints a network or tool phrase.
-    let names_tests = log.contains(" FAILED ")
-        || log.contains("... FAILED")
-        || lower.contains("panicked at")
-        || lower.contains("test result: failed");
-    if !names_tests && has(INFRASTRUCTURE) {
-        return RedClass::Infrastructure;
-    }
-    if !names_tests && has(CONFIGURATION) {
-        return RedClass::Configuration;
+    // A log that names failing tests and also an infrastructure or configuration phrase is unsettled: mixed.
+    let names_tests = names_failing_tests(log);
+    if has(INFRASTRUCTURE) || has(CONFIGURATION) {
+        return if names_tests {
+            RedClass::Mixed
+        } else if has(INFRASTRUCTURE) {
+            RedClass::Infrastructure
+        } else {
+            RedClass::Configuration
+        };
     }
     let clippy = lints(log);
     if !clippy.is_empty() && lower.contains("could not compile") {

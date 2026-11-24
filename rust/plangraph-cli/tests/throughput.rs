@@ -194,6 +194,32 @@ fn throughput_persists_both_baseline_days_in_landing_database() {
         .unwrap();
     assert_eq!(rows, (48, 1));
     assert!(days[0]["accept_to_main_seconds"].is_null());
+    let train = &report["trains"][0];
+    for field in ["attempts", "ci_reruns", "drops", "fix_tasks"] {
+        assert!(
+            train[field].is_null(),
+            "{field} is unknown without its lander column: {train}"
+        );
+    }
+    assert_eq!(train["minutes_per_merged_batch"], 30.0, "{train}");
+    let hours = report["hours"].as_array().unwrap();
+    assert_eq!(hours.len(), 48);
+    let landed = hours
+        .iter()
+        .find(|h| h["hour"] == "2026-11-20T12:00:00Z")
+        .unwrap();
+    assert_eq!(
+        landed["items_landed"], 1,
+        "the item landed in its hour: {report}"
+    );
+    let noon = hours
+        .iter()
+        .find(|h| h["hour"] == "2026-11-21T12:00:00Z")
+        .unwrap();
+    assert_eq!(
+        noon["batches_merged"], 2,
+        "two parts of the fixture train: {report}"
+    );
 }
 
 #[test]
@@ -277,11 +303,12 @@ fn a_train_of_six_parts_joins_six_part_heads() {
     connection
         .execute_batch(
             "CREATE TABLE landing(repo TEXT,landed_sha TEXT,train TEXT,parts TEXT,
-         build_started_at TEXT,landed_at TEXT,PRIMARY KEY(repo,landed_sha));",
+         build_started_at TEXT,landed_at TEXT,ci_reruns INTEGER,left_out INTEGER,fix_tasks INTEGER,
+         PRIMARY KEY(repo,landed_sha));",
         )
         .unwrap();
     connection.execute(
-        "INSERT INTO landing VALUES('fixture/repo',?1,'t','[1,2,3,4,5,6]','2026-11-21T11:00:00Z','2026-11-21T12:00:00Z')",
+        "INSERT INTO landing VALUES('fixture/repo',?1,'t','[1,2,3,4,5,6]','2026-11-21T11:00:00Z','2026-11-21T12:00:00Z',2,1,3)",
         [&landed],
     ).unwrap();
     let snapshot = repo.join("keeper.json");
@@ -338,6 +365,27 @@ fn a_train_of_six_parts_joins_six_part_heads() {
     let report: Value =
         serde_json::from_str(&cli(&["throughput", "report", "fixture/repo"])).unwrap();
     assert_eq!(report["trains"][0]["accepted_parts"], 6, "{report}");
+    let train = &report["trains"][0];
+    assert_eq!(train["attempts"], 3, "1 + ci_reruns: {report}");
+    assert_eq!(train["ci_reruns"], 2, "{report}");
+    assert_eq!(train["drops"], 1, "{report}");
+    assert_eq!(train["fix_tasks"], 3, "{report}");
+    assert_eq!(train["minutes_per_merged_batch"], 10.0, "{report}");
+    let hours = report["hours"].as_array().unwrap();
+    let noon = hours
+        .iter()
+        .find(|h| h["hour"] == "2026-11-21T12:00:00Z")
+        .unwrap();
+    assert_eq!(noon["batches_merged"], 6, "{report}");
+    assert_eq!(noon["items_landed"], 0, "{report}");
+    assert_eq!(
+        hours
+            .iter()
+            .map(|h| h["batches_merged"].as_u64().unwrap())
+            .sum::<u64>(),
+        6,
+        "a train's parts are merged in one hour"
+    );
     assert_eq!(
         report["models"][0]["tokens_per_landed_commit"], 50.0,
         "{report}"
