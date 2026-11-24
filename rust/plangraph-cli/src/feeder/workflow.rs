@@ -28,37 +28,40 @@ impl fmt::Display for SpawnError {
 }
 /// Claimed members with their epochs, and the items dropped with their reasons.
 type Claimed = (Vec<(Task, u64)>, Vec<Value>);
-/// Claim every member of `batch` in order and keep the claims that hold their files against
-/// every other claimed item. A refused claim or a yielded reservation drops only that item and
-/// releases only its own claim. Infrastructure failures release every claim of this batch.
+/// Claim every member of `batch` in order, then keep the claims that hold their files against
+/// every other claimed item. Only claims this host holds count as its own batch: a member
+/// another host holds is a rival like any other item. A refused claim or a yielded reservation
+/// drops only that item and releases only its own claim. Infrastructure failures release every
+/// claim of this batch.
 fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, SpawnError> {
-    let keys: Vec<String> = batch.iter().map(|t| t.key.clone()).collect();
-    let mut held: Vec<(Task, u64)> = Vec::new();
+    let mut claimed: Vec<(Task, u64)> = Vec::new();
     let mut dropped = Vec::new();
     for item in batch {
-        let epoch = match launch.claim(&item.key) {
-            Ok(epoch) => epoch,
+        match launch.claim(&item.key) {
+            Ok(epoch) => claimed.push((item.clone(), epoch)),
             Err(ClaimError::Refused(reason)) => {
                 dropped.push(json!({"item_key":item.key,"reason":reason}));
-                continue;
             }
             Err(e) => {
-                release_held(&held, launch);
+                release_held(&claimed, launch);
                 return Err(SpawnError::Claim(e));
             }
-        };
-        match launch.rival(&item.key, &item.files, &keys) {
-            Ok(None) => held.push((item.clone(), epoch)),
+        }
+    }
+    let own: Vec<String> = claimed.iter().map(|(t, _)| t.key.clone()).collect();
+    let mut held: Vec<(Task, u64)> = Vec::new();
+    for (item, epoch) in &claimed {
+        match launch.rival(&item.key, &item.files, &own) {
+            Ok(None) => held.push((item.clone(), *epoch)),
             Ok(Some(rival)) => {
-                let reason = match launch.release(&item.key, epoch) {
+                let reason = match launch.release(&item.key, *epoch) {
                     Ok(()) => format!("files_reserved_by:{rival}"),
                     Err(e) => format!("files_reserved_by:{rival}; release failed: {e}"),
                 };
                 dropped.push(json!({"item_key":item.key,"reason":reason}));
             }
             Err(e) => {
-                let _ = launch.release(&item.key, epoch);
-                release_held(&held, launch);
+                release_held(&claimed, launch);
                 return Err(SpawnError::Start(format!("reservation check failed: {e}")));
             }
         }

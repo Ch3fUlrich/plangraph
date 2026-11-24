@@ -63,17 +63,19 @@ impl Host {
 impl Launch for Host {
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError> {
         let mut registry = self.registry.lock().unwrap();
-        if registry.claimed.contains_key(key) {
-            return Err(ClaimError::Refused("conflict".into()));
-        }
-        registry
-            .claimed
-            .insert(key.to_owned(), self.files[key].clone());
+        let result = if registry.claimed.contains_key(key) {
+            Err(ClaimError::Refused("conflict".into()))
+        } else {
+            registry
+                .claimed
+                .insert(key.to_owned(), self.files[key].clone());
+            Ok(1)
+        };
         drop(registry);
         if let Some(barrier) = self.meet.take() {
             barrier.wait();
         }
-        Ok(1)
+        result
     }
     fn rival(
         &mut self,
@@ -300,4 +302,73 @@ fn dry_run_shows_the_batch_without_claiming() {
         .unwrap()
         .starts_with("Batch of 2 plan items"));
     assert!(registry.lock().unwrap().claimed.is_empty());
+}
+
+#[test]
+fn a_member_claimed_by_another_host_is_a_rival_not_a_batch_mate() {
+    // Another host already holds BETA-1; this host plans [ALPHA-1, BETA-1] on one file.
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("BETA-1", 8, &["src/a.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    registry
+        .lock()
+        .unwrap()
+        .claimed
+        .insert("plangraph:BETA-1".into(), vec!["src/a.rs".into()]);
+    let mut host = Host::new(&registry, &items);
+    let row = drive(&ready(items), &mut host, "dell", 2, false);
+    assert_eq!(row["decision"], "idle", "{row}");
+    let registry = registry.lock().unwrap();
+    assert!(registry.started.is_empty(), "{:?}", registry.started);
+    assert_eq!(registry.released, ["plangraph:ALPHA-1"]);
+    assert!(registry.claimed.contains_key("plangraph:BETA-1"));
+}
+
+#[test]
+fn simultaneous_multi_item_batches_never_start_overlapping_files() {
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("BETA-1", 8, &["src/a.rs"]),
+    ];
+    let doc = ready(items.clone());
+    for _ in 0..40 {
+        let registry: Arc<Mutex<Registry>> = Arc::default();
+        let meet = Arc::new(Barrier::new(2));
+        std::thread::scope(|scope| {
+            for name in ["dell", "coding"] {
+                let mut host = Host::new(&registry, &items);
+                host.meet = Some(meet.clone());
+                let doc = &doc;
+                scope.spawn(move || drive(doc, &mut host, name, 2, false));
+            }
+        });
+        let registry = registry.lock().unwrap();
+        // Both items share src/a.rs: at most one run may hold either of them.
+        assert!(registry.started.len() <= 1, "{:?}", registry.started);
+        if let Some(keys) = registry.started.first() {
+            assert!(keys.iter().all(|k| registry.claimed.contains_key(k)));
+        }
+    }
+}
+
+#[test]
+fn an_active_batch_run_excludes_open_items_of_every_family_it_holds() {
+    let items = vec![
+        item("BETA-2", 9, &["src/z.rs"]),
+        item("GAMMA-1", 1, &["src/y.rs"]),
+    ];
+    let run = Run {
+        run_id: "run-batch".into(),
+        started: Some(900.0),
+        item_key: "plangraph:ALPHA-1".into(),
+        item_keys: vec!["plangraph:ALPHA-1".into(), "plangraph:BETA-1".into()],
+        host: "dell".into(),
+        status: "running".into(),
+        role: "implement".into(),
+        files: vec!["src/a.rs".into()],
+    };
+    let picked = pick(&ready(items), &[run], &Policy::default()).unwrap();
+    assert_eq!(picked.key, "plangraph:GAMMA-1");
 }
