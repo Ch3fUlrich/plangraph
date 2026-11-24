@@ -45,6 +45,7 @@ pub mod fleet_series;
 pub mod fleet_stale_pair_alert;
 pub mod fleet_stale_pair_delivery;
 pub mod fleet_window_catalog;
+pub mod flow_collect;
 pub mod git;
 pub mod hash;
 pub mod health;
