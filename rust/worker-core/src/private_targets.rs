@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-fn cargo_target(path: &Path) -> bool {
+pub(crate) fn cargo_target(path: &Path) -> bool {
     path.join(".rustc_info.json").is_file()
         && ["debug", "release"].iter().any(|p| path.join(p).is_dir())
         && !path.join("Cargo.toml").exists()
@@ -15,15 +15,20 @@ fn cargo_target(path: &Path) -> bool {
 pub(crate) fn owned(path: &Path) -> io::Result<bool> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
         // SAFETY: geteuid takes no arguments and has no preconditions.
-        Ok(fs::metadata(path)?.uid() == unsafe { libc::geteuid() })
+        owned_by(path, unsafe { libc::geteuid() })
     }
     #[cfg(not(unix))]
     {
         let _ = path;
         Ok(false)
     }
+}
+
+#[cfg(unix)]
+pub(crate) fn owned_by(path: &Path, uid: u32) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(fs::metadata(path)?.uid() == uid)
 }
 
 /// `Ok(None)` when the entry vanished meanwhile; any other error stays an error.

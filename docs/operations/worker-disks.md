@@ -23,6 +23,18 @@ Record the actual worktree, cargo target, scratch, package caches, archive and
 run record paths. Measure root and temporary filesystem usage before and after
 ten probe runs and include the readiness mount output with the results.
 
+NOTE Dell and workstation host sessions. Put the data-drive target in the host environment
+as `PLANGRAPH_CARGO_TARGET_DIR` (a real directory, never a symlink: the fast-check pool refuses
+a symlinked pool), in the file read by the spawner and the plangraph units and in the
+environment `fleet-launch` runs under. The spawner, `plangraph fast-checks`, preflight and
+`fleet-launch` resolve that one setting; `fleet-launch` hands it to the session as
+`CARGO_TARGET_DIR` unless the caller set one, and no launcher creates
+`~/.cache/plangraph/cargo-target` while it is set. A worktree under `.claude/worktrees` holds no
+`rust/target`: the Bash guard refuses a build whose target resolves inside it. Cargo targets under
+`~/.cache/cargo-target` and `~/.cache/pg-target-warm` untouched for 24 hours are removed by
+`pg-disk-hygiene --apply`, and the disk watch alert at 85% used names the three largest
+directories of the host.
+
 ## Workstation work drives
 
 NOTE Workstation host session. Record root usage and inspect dry-run output from
