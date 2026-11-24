@@ -61,3 +61,50 @@ fn push_gate_fix_turn_stops_with_gate_output_when_the_budget_is_exhausted() {
     assert_eq!(record["final_head"], "final-head-3");
     assert!(record["pushed"].is_null());
 }
+
+#[test]
+fn host_blocked_reclaim_keeps_the_accepted_head_and_retry_only_pushes() {
+    let mut driver = Fake {
+        reclaim_failures: 1,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["status"], "failed", "{record}");
+    assert_eq!(record["exit_code"], 7);
+    let reason = record["reason"].as_str().unwrap();
+    assert!(reason.contains("push_blocked_by_host") && reason.contains("pid 4242"));
+    assert_eq!(record["push_pending"]["head"], "final-head");
+    // The writer is not asked to fix a host cause, and nothing was pushed.
+    assert_eq!(driver.calls, [None]);
+    assert!(driver.pushed.is_empty());
+    assert!(record["push_failures"].is_null());
+    let reviews = driver.reviews.len();
+
+    // The retry runs the same record: no writer turn, no review, one push of the same head.
+    let retried = run(&mut driver, record, "brief");
+    assert_eq!(retried["status"], "completed", "{retried}");
+    assert_eq!(retried["pushed"], "refs/heads/lane/fixture");
+    assert!(retried["push_pending"].is_null());
+    assert_eq!(driver.calls, [None]);
+    assert_eq!(driver.reviews.len(), reviews);
+    assert_eq!(driver.pushed, ["final-head"]);
+}
+
+#[test]
+fn push_only_retry_refuses_a_head_that_moved() {
+    let mut driver = Fake {
+        head_script: vec!["moved-head"],
+        ..fake()
+    };
+    let record = run(
+        &mut driver,
+        json!({"push_pending":{"head":"final-head","receipt":"r"}}),
+        "brief",
+    );
+    assert_eq!(record["status"], "failed");
+    assert!(record["reason"]
+        .as_str()
+        .unwrap()
+        .contains("no longer the accepted head"));
+    assert!(driver.calls.is_empty() && driver.pushed.is_empty());
+}

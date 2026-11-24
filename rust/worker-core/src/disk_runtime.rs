@@ -176,8 +176,22 @@ pub fn shared_cache(
     shared_cache_capped(path, guards, building, 0, true, apply, report)
 }
 
+/// The target a symlinked configuration points at: the lease file, the size and the markers all
+/// belong to the real directory, and a writer's shim locks the same canonical path.
+#[cfg(target_os = "linux")]
+fn real_target(target: &Path) -> io::Result<std::path::PathBuf> {
+    match target.canonicalize() {
+        Ok(real) => Ok(real),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(target.to_path_buf()),
+        Err(error) => Err(error),
+    }
+}
+
 /// Best-effort cap enforcement after a train check or writer has released its build lease.
 pub fn post_run_cargo(checkout: &Path) -> io::Result<Report> {
+    #[cfg(target_os = "linux")]
+    let target = real_target(&crate::cargo_cache::shared_cache_roots()?.remove(0))?;
+    #[cfg(not(target_os = "linux"))]
     let target = crate::cargo_cache::shared_cache_roots()?.remove(0);
     post_run_cargo_using(
         checkout,
@@ -185,6 +199,62 @@ pub fn post_run_cargo(checkout: &Path) -> io::Result<Report> {
         crate::cargo_pool::configured_cap_bytes(),
         process_references,
     )
+}
+
+/// Reclaim the shared target from the host before the protected push, under the exclusive lease.
+///
+/// `Ok` when the target is under `cap` or was brought under it. `Err` carries an actionable
+/// receipt when something blocks the reclaim: a target that holds a real `.git` entry or no cargo
+/// marker, a lease held by live pids, or a running build. The caller keeps the accepted head and
+/// retries only the push after the cause is gone.
+#[cfg(target_os = "linux")]
+pub fn reclaim_before_push(checkout: &Path, target: &Path, cap: u64) -> Result<Report, String> {
+    reclaim_before_push_using(checkout, target, cap, process_references)
+}
+
+#[cfg(target_os = "linux")]
+pub fn reclaim_before_push_using(
+    checkout: &Path,
+    target: &Path,
+    cap: u64,
+    processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
+) -> Result<Report, String> {
+    let fail = |error: io::Error| format!("shared cargo target {}: {error}", target.display());
+    // An over-cap target reached through a symlink (the incident layout) is measured, identified
+    // and leased at its real path.
+    let target = &real_target(target).map_err(fail)?;
+    let size = |path: &Path| match crate::disk_hygiene::scan(path) {
+        Ok((bytes, _)) => Ok(bytes),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(fail(error)),
+    };
+    let before = size(target)?;
+    if before <= cap {
+        return Ok(Report::default());
+    }
+    let over = |bytes: u64| format!("{bytes} bytes against the cap of {cap} bytes");
+    if !crate::shared_target::identified(target) {
+        return Err(format!(
+            "cargo_target_not_reclaimed: {} holds {} but is not identified as a cargo target \
+             (a .git entry or no cargo marker): remove or move what is not cargo output, then retry \
+             the push of the accepted head",
+            target.display(),
+            over(before)
+        ));
+    }
+    let report = post_run_cargo_using(checkout, target, cap, processes).map_err(fail)?;
+    let after = size(target)?;
+    if after > cap {
+        let blockers = crate::cargo_cache::describe_holders(target);
+        return Err(format!(
+            "cargo_target_not_reclaimed: {} still holds {}{blockers}; skipped: [{}]: wait for the \
+             running build or the holder to finish, then retry the push of the accepted head",
+            target.display(),
+            over(after),
+            report.skipped.join("; ")
+        ));
+    }
+    Ok(report)
 }
 
 fn post_run_cargo_using(
