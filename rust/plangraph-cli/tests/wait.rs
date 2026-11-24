@@ -180,6 +180,31 @@ fn a_green_run_with_no_go_request_raises_the_gate_alert_until_one_is_posted() {
 }
 
 #[test]
+fn a_descendant_holding_gh_stdout_open_cannot_hold_the_wait_past_its_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_gh(
+        dir.path(),
+        r#"[{"databaseId":7,"status":"in_progress","conclusion":"","headSha":"abc"}]"#,
+    );
+    // `gh run list` prints its rows, leaves a background child that keeps stdout open, and exits.
+    let runs = dir.path().join("runs.json");
+    let script = fs::read_to_string(bin.join("gh")).unwrap().replace(
+        &format!("cat {} ;;", runs.display()),
+        &format!("cat {} ; (sleep 40 &) ;;", runs.display()),
+    );
+    assert!(script.contains("sleep 40"), "{script}");
+    pg_worker_core::executable_test_support::write_executable(bin.join("gh"), script);
+    let started = std::time::Instant::now();
+    let out = wait(
+        dir.path(),
+        &bin,
+        &["ci", "--pr", "9", "--deadline", "3", "--poll", "60"],
+    );
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+}
+
+#[test]
 fn a_red_run_exits_one_and_usage_errors_exit_two() {
     let dir = tempfile::tempdir().unwrap();
     let bin = fake_gh(

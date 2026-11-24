@@ -66,7 +66,10 @@ pub fn wait_files(
                 }
             };
         }
-        if now() + poll > deadline {
+        // The files are read once more at the deadline itself: a poll longer than the time left
+        // sleeps only the remainder, so a writer finishing inside the deadline is not missed.
+        let remaining = deadline.saturating_sub(now());
+        if remaining.is_zero() {
             return Outcome::Timeout {
                 detail: format!(
                     "deadline {}s: still pending: {}",
@@ -75,7 +78,7 @@ pub fn wait_files(
                 ),
             };
         }
-        sleep(poll);
+        sleep(poll.min(remaining));
     }
 }
 

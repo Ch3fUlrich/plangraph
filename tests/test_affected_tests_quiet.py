@@ -389,3 +389,11 @@ def test_an_empty_selection_still_ends_with_the_result_line(tmp_path, monkeypatc
     assert result.returncode == 0, result.stdout + result.stderr
     assert last_line(result) == "AFFECTED rc=0 batches=0 failed=0", result.stdout
 
+
+def test_a_refused_selection_still_ends_with_the_result_line(tmp_path, monkeypatch):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    pass\n")
+    fixture.commit()
+    result = fixture.run("--within", "no/such/path")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert last_line(result) == "AFFECTED rc=2 batches=0 failed=1", result.stdout

@@ -16,7 +16,8 @@ import time
 import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pgtest import affected_pytest, keeper_postgres_files, postgres_bin, report_batches, run_keeper_postgres, test_environment
+from pgtest import (affected_pytest, build_fleet_spawnd, keeper_postgres_files, postgres_bin, report_batches,
+                    run_keeper_postgres, test_environment, with_result_line)
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
@@ -648,7 +649,7 @@ def pushed_parts_files(root, base, head, union=False, standalone=False):
         return None
 
 
-def main(root=None):
+def _main(root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
@@ -727,18 +728,9 @@ def main(root=None):
         fleet = (args.local and not args.collect_only
                  and 'tests/test_fleet_snapshot.py' in plan['tests'])
         if fleet and not args.fleet_spawnd_prebuilt:
-            # Push preflight runs in a detached checkout, even when the writer
-            # already built pg-spawnd in the worktree that launched the hook.
-            print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
-            try:
-                build = subprocess.run(
-                    ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'pg-spawnd'],
-                    cwd=root, env=env)
-                if build.returncode:
-                    return build.returncode
-            except OSError as error:
-                print(f'CARGO FAIL: could not prepare pg-spawnd ({error})', file=sys.stderr)
-                return 1
+            failed = build_fleet_spawnd(root, env)
+            if failed:
+                return failed
         if args.collect_only:
             env.pop("PYTEST_SHARD", None)
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
@@ -794,6 +786,11 @@ def main(root=None):
                 batches.append(("keeper-postgres", run_keeper_postgres(root, changed, env, runner=run_pytest)))
             return report_batches(batches)
     return 0
+
+
+def main(root=None):
+    """Every `--run` ends with one AFFECTED line, also when the selection is refused before a batch runs."""
+    return with_result_line(lambda: _main(root), "--run" in sys.argv[1:])
 
 
 if __name__ == "__main__":

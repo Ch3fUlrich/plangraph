@@ -156,6 +156,8 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
         "name":format!("feeder-{slug}"), "worktree":"the run worktree (the current directory)",
         "base":"origin/main at launch", "writer_family":"gpt",
         "status_file":format!("{}/status.txt", reviews.trim_end_matches('/')),
+        // The native host pushes the accepted head and its receipt itself: no writer push line.
+        "push":false,
         "review_cmd":"the native worker starts the review of another family on the exact head",
         "review_wait_seconds":1800, "round_cap":8, "trailers":trailers}});
     format!("PLANGRAPH-BATCH-INPUT-V1\n{input}")
