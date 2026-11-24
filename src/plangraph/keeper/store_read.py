@@ -326,7 +326,9 @@ class ReadMixin:
                 if since is not None and now - since.timestamp() > self.review_overdue_s:
                     review_overdue.append(item["key"])
         findings, refusals, history = self._alert_rows(now, scope)
-        return {"lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
+        forced = sum(1 for f in findings if f["code"] == "force_stale_claim")
+        return {"force_stale_claims": forced,
+                "lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
                 "review_overdue": sorted(review_overdue),
                 "findings": findings, "refusals": refusals, "history": history,
                 "stalled": stalled, "warnings": views.warnings(scope)}
