@@ -10,7 +10,9 @@ import re
 from datetime import date
 
 from .. import views
+from .brief import superseded_contract
 from .errors import Refused
+from . import context_sources as src
 
 #: metric and provider names share the budget ``[A-Za-z0-9._:-]{1,64}`` alphabet.
 _NAME_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
@@ -149,7 +151,16 @@ class MetricsMixin:
         return {"logged": True}
 
     def _count_metrics(self, counts):
-        """Add *counts* to today's counters (the near-copy and category experiments)."""
+        """Add *counts* to today's counters (the near-copy and category experiments).
+
+        Inside an ``apply_ops`` batch the counts wait for the batch to end: a
+        refused batch rolls its writes back, and the refusal is what the
+        experiment most needs to count (``_flush_counts`` writes them)."""
+        if self._batch is not None:
+            pending = self.__dict__.setdefault("_deferred_counts", {})
+            for name, n in counts.items():
+                pending[name] = pending.get(name, 0) + n
+            return
         now = self.now()
         with self._write():
             for name, n in counts.items():
@@ -158,6 +169,11 @@ class MetricsMixin:
                     " ON CONFLICT(day,metric) DO UPDATE SET value=metrics.value+excluded.value,"
                     "computed_at=excluded.computed_at",
                     (self._iso(now)[:10], name, float(n), "count", self._iso(now)))
+
+    def _flush_counts(self):
+        pending = self.__dict__.pop("_deferred_counts", None)
+        if pending:
+            self._count_metrics(pending)
 
     # ------------------------------------------------ ITEM-CATEGORY-RANKED
     def _category_table(self):
@@ -276,9 +292,13 @@ class MetricsMixin:
         names = sorted({*self._category_list("*"), *(c for c in cat.values() if c)})
         ready, merged = {n: 0 for n in names}, {n: 0 for n in names}
         recent, waiting = set(), {}
+        inputs = self._inputs({i["key"]: i for i in items})
         for item in views.ready(items):
             name = item.get("category")
-            if not name:
+            # only what a claim would hand out: not superseded, no retired contract or premise
+            if (not name or inputs["superseded"].get(item["key"]) or superseded_contract(item)
+                    or any(d in inputs["book"]["superseded"]
+                           for d in src.decision_ids(*self._texts(item)))):
                 continue
             ready[name] += 1
             since = max([item.get("created_at") or created.get(item["key"]) or stamp]

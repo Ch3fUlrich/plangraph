@@ -177,3 +177,31 @@ def test_telemetry_writes_zeros_counts_verified_merges_and_measures_the_ready_wa
     w.store.reap(w.p("system"))
     assert w.conn.execute("SELECT value FROM metrics WHERE metric='category_ready.security'"
                           " ORDER BY computed_at DESC LIMIT 1").fetchone()[0] == 0.0
+
+
+def test_telemetry_does_not_count_superseded_or_retired_work_as_ready(w):
+    w.store.create_items(w.p("router"), [defn("OLD", category="speed"), defn("KEEP", category="speed"),
+                                         defn("GOAL", ["OLD", "KEEP"], kind="goal")])
+    w.store.create_items(w.p("router"), [defn("NEW", supersedes=["demo:OLD"], category="security",
+                                              under="demo:GOAL")])
+    w.store.reap(w.p("system"))
+    metrics = {r["metric"]: r["value"] for r in w.conn.execute(
+        "SELECT metric, value FROM metrics WHERE metric LIKE 'category_ready.%'")}
+    assert metrics["category_ready.speed"] == 1.0      # KEEP only; OLD is not claimable
+    w.clock.advance(49 * 3600)
+    w.store.reap(w.p("system"))
+    starved = [f["key"] for f in w.store.alerts(w.p("router"))["findings"] if f["code"] == "category_starved"]
+    assert "demo:OLD" not in starved
+
+
+def test_a_saved_project_order_survives_a_reload_and_leaves_other_projects_alone(w):
+    w.store.create_items(w.p("router"), [defn("D1", category="speed"), defn("D2", category="cleanup"),
+                                         defn("DG", ["D1", "D2"], kind="goal"),
+                                         defn("O1", project="other", category="speed"),
+                                         defn("O2", project="other", category="cleanup"),
+                                         defn("OG", ["O1", "O2"], project="other", kind="goal")])
+    w.store.rank_categories(w.p("router"), "demo", ["cleanup", "speed"])
+    reloaded = {i["key"]: i for i in w.store._snapshot(w.clock())["items"]}      # a fresh read of the keeper
+    assert reloaded["demo:D2"]["category_rank"] < reloaded["demo:D1"]["category_rank"]
+    assert reloaded["other:O1"]["category_rank"] < reloaded["other:O2"]["category_rank"]
+    assert w.store._snapshot(w.clock())["category_overrides"]["demo"][:2] == ["cleanup", "speed"]

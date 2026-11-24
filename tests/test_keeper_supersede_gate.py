@@ -357,3 +357,85 @@ def test_a_batch_cannot_hold_two_near_copies(w):
     # slices of one parent are the same job split on purpose
     w.store.create_items(router, [defn("S1", title=OTHER_LONG + " part one", slice_parent="demo:ONE", under=G),
                                   defn("S2", title=OTHER_LONG + " part one", slice_parent="demo:ONE", under=G)])
+
+
+# ------------------------------------------------------------ review round 3
+def test_a_granted_l1_batch_cannot_link_or_answer_outside_its_projects(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("ORIG", project="other", title=LONG, description=LONG),
+                                  defn("OGOAL", ["ORIG"], project="other", kind="goal"),
+                                  defn("MINE"), defn("DGOAL", ["MINE"], kind="goal")])
+    w.store.grant_apply(router, "l1main", "demo")
+    for fields in ({"supersedes": ["other:ORIG"]},):
+        with pytest.raises(Refused) as exc:
+            w.store.apply_ops(w.p("l1main"), [{"op": "edit", "key": "demo:MINE", "fields": fields}])
+        assert exc.value.code == "forbidden" and "other:ORIG" in exc.value.msg
+    with pytest.raises(Refused) as exc:
+        w.store.apply_ops(w.p("l1main"), [{"op": "create", "item": defn(
+            "COPY", title=LONG, description=LONG, under="demo:DGOAL", similar={"other:ORIG": "supersedes"})}])
+    assert exc.value.code == "forbidden"
+    with pytest.raises(Refused) as exc:
+        w.store.apply_ops(w.p("l1main"), [{"op": "create", "item": defn(
+            "COPY2", title=LONG, description=LONG, under="demo:DGOAL", supersedes=["other:ORIG"])}])
+    assert exc.value.code == "forbidden"
+
+
+def test_a_three_item_supersession_cycle_is_refused(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("A"), defn("B"), defn("C"),
+                                  defn("GOAL", ["A", "B", "C"], kind="goal")])
+    w.store.edit_definition(router, "demo:A", {"supersedes": ["demo:B"]})
+    w.store.edit_definition(router, "demo:B", {"supersedes": ["demo:C"]})
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(router, "demo:C", {"supersedes": ["demo:A"]})
+    assert "cycle" in exc.value.msg
+
+
+def test_rehoming_a_superseded_item_keeps_it_retired_under_its_new_key(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("OLD"), defn("GOAL", ["OLD"], kind="goal")])
+    w.store.create_items(router, [defn("NEW", supersedes=["demo:OLD"], under=G)])
+    new_key = w.store.rehome(router, "demo:OLD", "other", None)["new"]
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1other"), new_key)
+    assert "superseded by demo:NEW" in exc.value.msg
+    assert new_key not in [r["key"] for r in w.store._ready_groups(project="other", n=None)["items"]]
+    snap = {i["key"]: i for i in w.store._snapshot(w.clock())["items"]}
+    assert snap[new_key]["superseded_by"] == ["demo:NEW"]
+
+
+def test_exact_duplicates_with_a_short_title_are_matches(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("LOGIN", title="Fix login", description=LONG, note="files: src/a.py"),
+                                  defn("GOAL", ["LOGIN"], kind="goal")])
+    with pytest.raises(Refused) as exc:
+        w.store.create_items(router, [defn("LOGIN2", title="Fix login", description=LONG,
+                                           note="files: src/a.py", under=G)])
+    assert "demo:LOGIN" in exc.value.msg
+    w.store.create_items(router, [defn("OTHERFIX", title="Fix login", description=OTHER_LONG, under=G)])
+
+
+def test_two_identical_siblings_in_one_import_need_an_answer(w):
+    router = w.p("router")
+    first, second = (defn(n, title=LONG, description=LONG) for n in ("S1", "S2"))
+    goal = defn("GOAL", ["S1", "S2"], kind="goal")
+    with pytest.raises(Refused) as exc:
+        w.store.import_items(router, [first, second, goal])
+    assert "demo:S1" in exc.value.msg
+    w.store.import_items(router, [first, {**second, "similar": {"demo:S1": "distinct"}}, goal])
+
+
+def test_answers_of_one_type_are_each_counted_and_survive_a_refused_batch(w):
+    router = w.p("router")
+    w.store.create_items(router, [defn("O1", title=LONG, description=LONG),
+                                  defn("O2", title=LONG, description=LONG + " twice",
+                                       similar={"demo:O1": "distinct"}),
+                                  defn("GOAL", ["O1", "O2"], kind="goal")])
+    before = dict(w.conn.execute("SELECT metric, value FROM metrics WHERE metric LIKE 'similar_%'").fetchall())
+    copy = defn("C1", title=NEAR, description=NEAR, under=G, similar={"demo:O1": "distinct", "demo:O2": "distinct"})
+    bad = defn("BAD", title=LONG, description=LONG, under=G)           # unanswered: the batch is refused
+    with pytest.raises(Refused):
+        w.store.apply_ops(router, [{"op": "create", "item": copy}, {"op": "create", "item": bad}])
+    after = dict(w.conn.execute("SELECT metric, value FROM metrics WHERE metric LIKE 'similar_%'").fetchall())
+    assert after["similar_answered.distinct"] - before.get("similar_answered.distinct", 0) == 2
+    assert after["similar_matches_shown"] > before.get("similar_matches_shown", 0)

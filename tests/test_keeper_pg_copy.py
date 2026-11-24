@@ -330,8 +330,12 @@ def test_apply_copies_the_source_category_rows_over_the_seed(source, cfg_path, c
         assert copy(cfg_path, "--apply", "--src", str(source)) == 0
         conn = kdb.open_db(cfg.db, backend="postgres", dsn=DSN)
         try:
-            assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == len(
-                13)
+            from plangraph.keeper.schema import START_CATEGORIES
+            want = sorted([("*", name, rank) for rank, name in enumerate(START_CATEGORIES)]
+                          + [("demo", "speed", 0)])
+            got = [tuple(r) for r in conn.execute(
+                "SELECT project, name, rank FROM categories ORDER BY project, name")]
+            assert got == want
         finally:
             conn.close()
     finally:

@@ -127,43 +127,7 @@ two events that finish an item (X7b adds the router's decision close beside the 
 `src` is locked, on `evidence`/`events` of a locked key; `BEFORE INSERT` on `events`/`evidence`/`edges` for a locked key, and on
 `items` when the key already exists in a locked state (fires for `INSERT OR REPLACE`). New items MAY depend on locked/DONE items
 and may set `corrects` to a DONE key (validated by the store: target must be `done`). Events table: `BEFORE UPDATE/DELETE` always abort.
-`principals`/`audit_log` are not locked.
-
-**Superseded and duplicate items (ITEM-SUPERSEDE-GATE).** `supersedes` (item keys, editable, column since schema v28) retires the named
-items: every claim role refuses them, again under the claim transaction (`superseded by KEY`, not overridable by `force_stale`; a done
-superseder keeps them retired, a cancelled one frees them), and `ready` lists them under `needs_reconcile`, so the feeder drops them, as it
-does items whose cited decision was retired (`superseded_premises`, `superseded_contract`). A link to another project's item is the router's.
-Every create path (`define`, `define --edit` of a title or description, `apply_ops`/md-sync, plan import) runs one similarity check
-(`item_fields.similar_items`: token overlap of title 60% and description 40%, files when both name them, titles of 3+ words, threshold 0.6, same
-project, open items and batch peers, slices of one parent excepted) and refuses a near copy with the matching keys until each is answered
-`similar={KEY: supersedes|depends_on|distinct}` (md-sync: a `Similar: KEY=answer, ...` token ending the step cell; YAML plans: a `similar`
-mapping); the answer is stored in the event. EXPERIMENT (rule 3.76): `reap`-independent day counters `similar_matches_shown`,
-`similar_answered.<answer>` count matches shown and answers; a later `supersedes` edit by hand is the duplicate found afterwards.
-
-**Premise precision (KEEPER-STALE-PREMISE-PRECISION).** The premise gate ignores a newer decision that is the item's own `source` or whose
-row orders, GOes or defines the item without a scope word (the log has no class column, so rows are read by text). The operator's third
-case, "logged within 2 h of the define by the same session", is not applied: the log carries neither date nor session, so a time of day
-would let a row of another day mask a later scope change. `reconfirm KEY D-NNN` records, as an audited `premise_reconfirmed` event, that
-the premise was read against that decision: it clears `newer_decisions` and retired premises up to it, not an explicit `supersedes` link
-(cancel the superseder or drop the link). `alerts` reports `force_stale_claims`, counted from the audited claims of the alert window.
-
-**Effective priority (PRIORITY-INHERIT-FROM-BLOCKED).** `views.effective_priorities` gives every non-terminal item max(own, effective of each
-non-terminal item that depends on it), transitively (a cycle is reported, its back edge ignored); the stored priority never changes and
-aging/`priority` act on it alone. `ready`, the feeder pick (`effective_priority` on the ready row) and the web table sort by the effective
-value and show `8->10 via KEY`; the snapshot carries `effective_priority`/`priority_via` for raised items only. `reap` upserts the day's
-metrics `priority_inherit_raised` and `priority_inherit_longest_chain`.
-
-**Categories (ITEM-CATEGORY-RANKED, schema v29).** `items.category` (set at define, editable, null = none) names a row of the `categories`
-table: project `*` holds the default ranked list (seed: speed, efficiency-tokens, efficiency-quality, bug-fix, reliability, telemetry, security,
-network, planning, ui-ux, feature, cleanup); `add-category NAME` appends one, `rank-categories PROJECT NAME...` gives a project its own order
-(a category added later is appended to it), `categories [--project]` reads the list and the uncategorised count, `backfill-categories PROJECT
-[--dry-run]` sets OPEN uncategorised items by key/track rules, names skipped and failed items, and returns the unmatched keys for a model pass.
-`ready`, the feeder (`category_rank` on the ready row) and the web table order by category rank, then effective priority, then age (oldest
-first); an item without category sorts last. The snapshot always carries `categories` and `uncategorised` (block `categories`), and
-`category_overrides` for projects with their own order. `reap` records `category_ready.NAME` and `category_merged.NAME` (verified merges,
-explicit zeros) per day and raises `category_starved` on the oldest ready item of a category that has waited over 48 h since its last
-dependency was done, with no verified merge. The web page is read-only: its reorder buttons re-sort the table at once and show the
-`rank-categories` command that stores the order. `copy-to-pg` replaces the target's seed rows with the source's.
+`principals`/`audit_log` are not locked. Which item may be worked on (supersession, near copies, premise gate, effective priority, categories): [KEEPER-ORDERING](KEEPER-ORDERING.md).
 
 ## Verbs (Store) — role rules, state machine, errors
 Every verb: authenticate → authorise → validate → one transaction (event + cache + edges) → audit_log row (ok or refused).

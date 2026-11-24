@@ -84,15 +84,18 @@ def _graph(index):
     return dependents, corrected
 
 
-def _superseded_map(index):
+def _superseded_map(index, cleared=frozenset(), resolve=lambda key: key):
     """``{old key: [superseding keys]}``; only a cancelled superseder retires nothing
-    (a done one keeps the old item retired, so it cannot overwrite its replacement)."""
+    (a done one keeps the old item retired, so it cannot overwrite its replacement).
+    A link follows rehome aliases, and a pair the router re-confirmed is cleared."""
     out = {}
     for other in index.values():
         if other.get("state") == "cancelled":
             continue
         for old in other.get("supersedes") or []:
-            out.setdefault(old, []).append(other["key"])
+            old = resolve(old)
+            if (old, other["key"]) not in cleared:
+                out.setdefault(old, []).append(other["key"])
     return out
 
 
@@ -104,7 +107,7 @@ class ContextMixin:
         """Per-request shared inputs: decision rows, retirements, graph, clock."""
         return {"book": src.decision_book(self._adapter("decisions"), fresh=fresh),
                 "graph": _graph(index), "clock": self._decision_clock(),
-                "superseded": _superseded_map(index)}
+                "superseded": self._superseded(index)}
 
     def _last_activity_map(self):
         out = {}
@@ -470,11 +473,13 @@ class ContextMixin:
                           in_progress=groups["in_progress"], unknown=groups["unknown"],
                           warnings=groups["warnings"])
 
-    def reconfirm(self, principal, key, decision):
+    def reconfirm(self, principal, key, decision, supersession=None):
         """Record that the premise of *key* was read against *decision* (no edit).
 
         Later ``newer_decisions`` and retired premises up to that decision no
-        longer refuse a claim; the event names who and which decision.
+        longer refuse a claim; the event names who and which decision.  An item
+        another item supersedes is re-confirmed only against that superseder,
+        named in *supersession*: the audited event clears exactly that pair.
         """
         def record(now):
             self._require_role(principal, "l1", "router")
@@ -487,15 +492,22 @@ class ContextMixin:
                 self._may_manage(principal, item["project"])
                 if item["state"] in views.TERMINAL:
                     raise Refused("bad_state", f"{key} is {item['state']}")
-                if self._superseders(key):
-                    raise Refused("bad_state", f"{key} is superseded by {', '.join(self._superseders(key))}: "
-                                  "reconfirm clears a premise, not a supersedes link; cancel the "
-                                  "superseding item or drop the link")
+                superseders = self._superseders(key)
+                named = None if supersession is None else self.resolve_key(supersession)
+                if named is not None:
+                    if named not in superseders:
+                        raise Refused("validation", f"{named} does not supersede {key}"
+                                      + (f" (it is superseded by {', '.join(superseders)})" if superseders else ""))
+                elif superseders:
+                    raise Refused("bad_state", f"{key} is superseded by {', '.join(superseders)}: name the "
+                                  "one being re-confirmed (supersession=KEY), or cancel it / drop its link")
                 if not self._adapter("decisions").has(did):
                     raise Refused("not_found", f"no decision {did} in the decisions log")
                 self._append(principal, key, "premise_reconfirmed",
-                             {"decision": did, "who": principal.name}, now)
-            return {"key": key, "reconfirmed": did}
+                             {"decision": did, "who": principal.name,
+                              **({"supersession": named} if named else {})}, now)
+            return {"key": key, "reconfirmed": did,
+                    **({"cleared_supersession": named} if named else {})}
         return self._run(principal, "reconfirm", key, record)
 
     # -------------------------------------------------------------- claim
@@ -510,6 +522,20 @@ class ContextMixin:
             raise Refused("validation",
                           f"force_stale reason is over {FORCE_STALE_MAX} chars")
         return value.strip()
+
+    def _superseded(self, index):
+        if not any(item.get("supersedes") for item in index.values()):
+            return {}                      # no links: no cleared-pair or alias reads
+        return _superseded_map(index, self._cleared_supersessions(), self.resolve_key)
+
+    def _cleared_supersessions(self):
+        """``{(old key, superseder key)}`` the router re-confirmed (audited ``premise_reconfirmed``)."""
+        out = set()
+        for row in self.conn.execute(
+                "SELECT key, payload FROM events WHERE type='premise_reconfirmed'"):
+            if (mark := _payload(row["payload"]).get("supersession")):
+                out.add((row["key"], mark))
+        return out
 
     def _refuse_superseded(self, key):
         """Refuse every claim of an item that a non-cancelled item supersedes; the
@@ -544,6 +570,11 @@ class ContextMixin:
             if work["commits"]:
                 head = work["commits"][0]
                 facts.append(f"already merged: {head.get('source', 'Plan-Item commit')} {head['sha'][:8]}")
+            # A system lease skips the freshness reads, never the retired premise or contract.
+            if contract := superseded_contract(item):
+                facts.append(contract)
+            facts += [f"premise {d} superseded by {book['superseded'][d]}"
+                      for d in src.decision_ids(*self._texts(item)) if d in book["superseded"]]
             override = self._stale_override(item["key"], reason, facts)
             if unknown:
                 raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))

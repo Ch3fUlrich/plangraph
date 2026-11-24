@@ -360,6 +360,12 @@ def _tokens(item, field):
     return set(_WORD.findall((item.get(field) or "").lower()))
 
 
+def _exact(item):
+    """The normalised (title, description) of an item that has a description, else ``None``."""
+    title, text = (" ".join((item.get(f) or "").lower().split()) for f in ("title", "description"))
+    return (title, text) if title and text else None
+
+
 def _files(item):
     found = _FILES.search(item.get("note") or "")
     return {p for p in re.split(r"[\s,\[\]\"']+", found.group(1)) if "/" in p} if found else set()
@@ -369,14 +375,13 @@ def _jaccard(a, b):
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
-def similar_items(definition, items):
+def similar_items(definition, items, exact_only=False):
     """``[(key, score)]``: open items of the same project that are near
     copies of *definition* by title, description and files (the one function
     every creation path shares)."""
     mine = _tokens(definition, "title")
-    if len(mine) < _SIMILAR_MIN_TOKENS:
-        return []
     my_text = _tokens(definition, "description")
+    wordy = len(mine) >= _SIMILAR_MIN_TOKENS
     related = {definition.get("under"), definition.get("corrects"), definition.get("fixes"),
                definition.get("slice_parent"), *(definition.get("depends_on") or []),
                *(definition.get("supersedes") or [])}
@@ -387,6 +392,12 @@ def similar_items(definition, items):
                 or definition["key"] in (other.get("depends_on") or [])
                 or (definition.get("slice_parent")
                     and other.get("slice_parent") == definition["slice_parent"])):
+            continue
+        # An exact duplicate (same title and description) matches however short the title is.
+        if (my_exact := _exact(definition)) and my_exact == _exact(other):
+            out.append((other["key"], 1.0))
+            continue
+        if not wordy or exact_only:
             continue
         # The title carries the weight: boilerplate descriptions alone never match.
         score = _jaccard(mine, _tokens(other, "title"))

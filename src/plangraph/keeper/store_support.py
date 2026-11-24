@@ -434,11 +434,18 @@ class SupportMixin:
         return item
 
     def _superseders(self, key):
-        """Keys of non-cancelled items whose ``supersedes`` names *key*."""
-        return sorted(row["key"] for row in self.conn.execute(
-            "SELECT key, supersedes FROM items WHERE supersedes LIKE ?"
-            " AND state<>'cancelled'", (f'%"{key}"%',))
-            if key in _json_list(row["supersedes"]))
+        """Keys of non-cancelled items whose ``supersedes`` names *key* (or an old key that
+        was rehomed to it), minus the pairs the router re-confirmed."""
+        names = [key, *self.alias_sources(key)]
+        cleared = self._cleared_supersessions()
+        found = set()
+        for name in names:
+            for row in self.conn.execute(
+                    "SELECT key, supersedes FROM items WHERE supersedes LIKE ? AND state<>'cancelled'",
+                    (f'%"{name}"%',)):
+                if name in _json_list(row["supersedes"]) and (key, row["key"]) not in cleared:
+                    found.add(row["key"])
+        return sorted(found - {key})
 
     def _dep_map(self):
         deps = {}

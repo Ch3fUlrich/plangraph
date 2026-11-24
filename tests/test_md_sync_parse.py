@@ -163,3 +163,17 @@ def test_the_similar_token_carries_near_copy_answers_and_leaves_the_description(
     assert entry.similar == {"routing:EXIST": "distinct", "OS-5": "supersedes"}
     assert entry.description == "Do it — here"
     assert mp.parse_questions(text.replace(" Similar: routing:EXIST=distinct, OS-5=supersedes", ""))[0].similar is None
+
+
+def test_the_similar_token_beside_parent_and_options_keeps_all_three():
+    import md_sync_parse as mp
+    head = "| Prio | ID | why | step | where |\n|---|---|---|---|---|\n"
+    for step in ("Do it. Parent: routing:P1 Similar: routing:EXIST=distinct",
+                 "Do it. Similar: routing:EXIST=distinct Parent: routing:P1"):
+        entry = mp.parse_questions(head + f"| P1 | OS-902 | Reduce latency now | {step} | here |\n")[0]
+        assert entry.similar == {"routing:EXIST": "distinct"} and entry.parent == "routing:P1", step
+        assert entry.description == "Do it — here"
+    step = "Pick one. Options: a) x b) y Similar: routing:EXIST=supersedes"
+    entry = mp.parse_questions(head + f"| P1 | OS-903 | Reduce latency now | {step} | here |\n")[0]
+    assert entry.similar == {"routing:EXIST": "supersedes"}
+    assert entry.choices and [c["id"] if isinstance(c, dict) else c for c in entry.choices.get("options", [])][:2]

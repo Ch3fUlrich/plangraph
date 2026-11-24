@@ -158,6 +158,8 @@ def _add_writes(sub):
     reconfirm = _p(sub, "reconfirm", help="record that an item's premise was read against a decision")
     reconfirm.add_argument("key")
     reconfirm.add_argument("decision", metavar="D-NNN")
+    reconfirm.add_argument("--supersession", metavar="KEY",
+                           help="the superseding item whose supersession is re-confirmed")
     categories = _p(sub, "categories", help="the ranked category list and the uncategorised count")
     categories.add_argument("--project")
     add_category = _p(sub, "add-category", help="append a category to the default list")

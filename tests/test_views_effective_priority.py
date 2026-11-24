@@ -66,3 +66,13 @@ def test_equal_rank_and_priority_rows_are_ordered_by_age_before_unblocks():
     blocker = _it("TOP", 1, ["NEW"])          # NEW unblocks more, yet OLD is older
     undated = _it("UNDATED", 5)
     assert [i["key"] for i in views.ready([undated, new, old, blocker])][:3] == ["d:OLD", "d:NEW", "d:UNDATED"]
+
+
+def test_a_ci_fix_and_a_live_pr_sort_before_a_speed_item_as_in_the_feeder():
+    speed = {**_it("SPEED", 1), "category_rank": 0}
+    ci = {**_it("BUILD-CI-FIX", 1), "category_rank": 8}
+    pr = {**_it("CARRIED", 1), "category_rank": 9, "note": "pr: 123"}
+    closed = {**_it("MERGED-PR", 1), "category_rank": 9, "note": "pr: 7\npr_state: merged"}
+    assert [views.work_class(i) for i in (pr, ci, speed, closed)] == [0, 1, 2, 2]
+    got = [i["key"] for i in views.ready([speed, closed, ci, pr])]
+    assert got == ["d:CARRIED", "d:BUILD-CI-FIX", "d:SPEED", "d:MERGED-PR"]

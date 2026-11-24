@@ -546,7 +546,10 @@ def cmd_incident(args, session):
 
 
 def cmd_reconfirm(args, session):
-    return write(session, "reconfirm", {"key": args.key, "decision": args.decision})
+    body = {"key": args.key, "decision": args.decision}
+    if args.supersession:
+        body["supersession"] = args.supersession
+    return write(session, "reconfirm", body)
 
 
 def cmd_evidence(args, session):

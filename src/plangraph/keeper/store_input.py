@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
@@ -257,6 +258,19 @@ class InputMixin:
         return value
 
     @staticmethod
+    def _supersedes_reaches(index, start, goal):
+        """Does following ``supersedes`` links from *start* reach *goal*?"""
+        seen, todo = set(), [start]
+        while todo:
+            node = todo.pop()
+            if node == goal:
+                return True
+            if node not in seen:
+                seen.add(node)
+                todo += (index.get(node) or {}).get("supersedes") or []
+        return False
+
+    @staticmethod
     def _may_link(principal, project, target, what):
         """A link (dependency or supersession) to another project's item is the router's."""
         if principal is not None and principal.role != "router" and not target.startswith(project + ":"):
@@ -271,15 +285,17 @@ class InputMixin:
             self._may_link(principal, project, target, "supersedes")
             if target not in index:
                 raise Refused("validation", f"{key}: supersedes unknown item {target}")
-            if key in (index[target].get("supersedes") or []):
-                raise Refused("validation", f"{key}: {target} already supersedes it (cycle)")
+            if self._supersedes_reaches(index, target, key):
+                raise Refused("validation", f"{key}: {target} already supersedes it, directly or "
+                              "through other items (cycle)")
         return out
 
     def _refuse_unanswered(self, key, matches, answers):
         """Count what the near-copy experiment shows (rule 3.76), then refuse unanswered matches."""
         if matches:
+            given = Counter(answers[m] for m, _ in matches if m in answers)
             self._count_metrics({"similar_matches_shown": len(matches),
-                                 **{f"similar_answered.{answers[m]}": 1 for m, _ in matches if m in answers}})
+                                 **{f"similar_answered.{a}": n for a, n in given.items()}})
         open_ = [(m, s) for m, s in matches if m not in answers]
         if open_:
             raise Refused("conflict", f"{key} looks like open item(s) "
@@ -325,8 +341,10 @@ class InputMixin:
             key, project = definition["key"], definition["project"]
             self._checked_category(key, definition.get("category"), project)
             answers = definition.get("similar") or {}
-            # An import keeps its own sibling items; it still answers for what is already in the keeper.
-            matches = similar_items(definition, before if legacy else before + peers)
+            # An import round-trips plans whose siblings were answered when they were created
+            # (the YAML has no answers): its siblings only collide when they are exact copies.
+            matches = (similar_items(definition, before) + similar_items(definition, peers, exact_only=legacy))
+            matches = sorted(set(matches), key=lambda m: (-m[1], m[0]))
             self._refuse_unanswered(key, matches, answers)
             deps, sups = self._apply_answers(principal, key, project, answers,
                                              {**index, **{d["key"]: d for d in peers}},

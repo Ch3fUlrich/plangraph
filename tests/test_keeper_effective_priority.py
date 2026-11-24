@@ -54,3 +54,12 @@ def test_aging_acts_on_the_own_value_only(w):
     w.clock.advance(8 * 86400)
     w.store.reap(w.p("system"))
     assert w.store.show(w.p("router"), "demo:LOW")["priority"] == 8
+
+
+def test_ready_rows_and_the_snapshot_carry_the_work_class(w):
+    w.store.create_items(w.p("router"), [defn("BUILD-CI-FIX", priority=1, under="demo:GOAL")])
+    rows = {r["key"]: r for r in w.store._ready_items(project="demo", n=None)}
+    assert rows["demo:BUILD-CI-FIX"]["work_class"] == 1 and rows["demo:LOW"]["work_class"] == 2
+    assert [r["key"] for r in w.store._ready_items(project="demo", n=None)][0] == "demo:BUILD-CI-FIX"
+    items = {i["key"]: i for i in w.store._snapshot(w.clock())["items"]}
+    assert items["demo:BUILD-CI-FIX"]["work_class"] == 1 and "work_class" not in items["demo:LOW"]

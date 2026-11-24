@@ -151,10 +151,13 @@
 
   /* A row's place in the keeper's ranked category list (none and unknown sort last). */
   PlanUI.categoryRank = function (r) {
-    var o = PlanUI.categoryOrder;       /* the reorder control's working order, when the user moved a category */
+    var o = (PlanUI.categoryOrders || {})[r.project];   /* the reorder control's working order of that project, when moved */
     if (o) { var i = r.category ? o.indexOf(r.category) : -1; return i < 0 ? 9999 : i; }
     return r.category_rank == null ? 9999 : Number(r.category_rank) || 0;
   };
+  /* The feeder's class (0 live PR, 1 CI fix, 2 other) comes before the category rank. */
+  PlanUI.workClass = function (r) { return r.work_class == null ? 2 : Number(r.work_class) || 0; };
+  PlanUI.classRank = function (r) { return PlanUI.workClass(r) * 100000 + PlanUI.categoryRank(r); };
   /* A copy of *order* with *name* moved by *delta* places (clamped); unknown names change nothing. */
   PlanUI.moveCategory = function (order, name, delta) {
     var out = order.slice(), i = out.indexOf(name), j = Math.max(0, Math.min(out.length - 1, i + delta));
@@ -164,7 +167,7 @@
   };
   /* The shared order: category rank, then effective priority (highest first). */
   PlanUI.rankOrder = function (a, b) {
-    return (PlanUI.categoryRank(a) - PlanUI.categoryRank(b)) || (PlanUI.effectivePriority(b) - PlanUI.effectivePriority(a)) || PlanUI.ageOrder(a, b);
+    return (PlanUI.classRank(a) - PlanUI.classRank(b)) || (PlanUI.effectivePriority(b) - PlanUI.effectivePriority(a)) || PlanUI.ageOrder(a, b);
   };
   /* Oldest first; an undated row after the dated ones. */
   PlanUI.ageOrder = function (a, b) {

@@ -220,6 +220,9 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                     # clearing ``note`` here would be undone by the fallback above
                     # on the very next run (no idempotence).
                     fields["description"] = desc
+                if fields and getattr(entry, "similar", None):    # answers also ride an edit that retitles
+                    fields["similar"] = {k if ":" in k else f"{project}:{k}": v
+                                         for k, v in entry.similar.items()}
                 want = getattr(entry, "wait", None)
                 if want is not None and item.get("wait") != want:
                     # Claimed/in-review items are not editable here at all: this

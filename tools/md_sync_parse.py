@@ -277,17 +277,19 @@ _PARENT_RE = re.compile(r"(?:^|\s)Parent:\s*(?P<key>[A-Za-z0-9_-]+(?::[A-Za-z0-9
 
 #: optional ``Similar: KEY=supersedes|depends_on|distinct, ...`` token at the end of the step cell:
 #: the answers to a near-copy refusal of the keeper (ITEM-SUPERSEDE-GATE); stripped from the description.
-_SIMILAR_RE = re.compile(r"(?:^|\s)Similar:\s*(?P<pairs>[A-Za-z0-9_:.-]+=[a-z_]+(?:\s*,\s*[A-Za-z0-9_:.-]+=[a-z_]+)*)\s*\.?\s*$",
-                         re.IGNORECASE)
+_SIMILAR_RE = re.compile(r"(?:^|\s)Similar:\s*(?P<pairs>[A-Za-z0-9_:.-]+=[a-z_]+(?:\s*,\s*[A-Za-z0-9_:.-]+=[a-z_]+)*)"
+                         r"(?=\s+(?:Parent|Options):|\s*\.?\s*$)", re.IGNORECASE)
 
 
 def parse_similar(step):
-    """``(step without the Similar token, {key: answer} or None)``."""
+    """``(step without the Similar token, {key: answer} or None)``; the token may sit
+    before a ``Parent:`` or ``Options:`` token, so it is read first and cut out whole."""
     match = _SIMILAR_RE.search(step or "")
     if not match:
         return step, None
     pairs = [p.split("=", 1) for p in match.group("pairs").split(",")]
-    return step[:match.start()].rstrip(" .;:"), {k.strip(): v.strip().lower() for k, v in pairs}
+    rest = (step[:match.start()] + step[match.end():]).strip().rstrip(" .;:")
+    return rest, {k.strip(): v.strip().lower() for k, v in pairs}
 
 
 def has_options_block(step):
@@ -364,10 +366,10 @@ def parse_questions(text):
         full_title = (prefix + title)[:TITLE_CAP]
         step, where = step.strip(), where.strip()
         raw_step = step
+        step, similar = parse_similar(step)
         step, choices = parse_options(step, why)
         malformed = has_options_block(raw_step) and choices is None
         step, token_parent = parse_parent(step)
-        step, similar = parse_similar(step)
         parent = (parent_cell.strip() if parent_cell and parent_cell.strip()
                   else token_parent)
         if step and where:

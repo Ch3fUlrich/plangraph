@@ -419,3 +419,15 @@ def test_done_gate_without_alias_fails_closed():
     with pytest.raises(plan.PlanError, match="done"):
         plan.build_plan(q("- Q-N1 **New**\n"), [], [], DEC, [gate, GOAL],
                         aliases={})
+
+
+def test_an_edit_that_retitles_carries_the_similar_answers():
+    ours = live("routing", "OS-910", title="Q: Old title", source="md-sync", description="stale", wait="task")
+    text = ("| Prio | ID | why | step | where |\n|---|---|---|---|---|\n"
+            "| P1 | OS-910 | New wording of the title here | Do it. Similar: routing:OTHER=distinct | here |\n")
+    p = build(mp.parse_questions(text), items=[ours])
+    edit = next(o for o in p.ops if o["op"] == "edit")
+    assert edit["fields"]["similar"] == {"routing:OTHER": "distinct"}
+    quiet = live("routing", "OS-910", title="OP: New wording of the title here", source="md-sync",
+                 description="Do it — here", wait="task")
+    assert build(mp.parse_questions(text), items=[quiet]).ops == []     # no edit, so no answer rides alone

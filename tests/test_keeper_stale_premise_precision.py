@@ -156,7 +156,7 @@ def test_reconfirm_is_not_a_definition_change_and_does_not_clear_a_supersedes_li
     w.store.create_items(w.p("router"), [defn("NEWER", supersedes=["demo:SCOPE-ITEM"], under="demo:GOAL")])
     with pytest.raises(Refused) as exc:
         w.store.reconfirm(w.p("router"), "demo:SCOPE-ITEM", "D-5900")
-    assert "not a supersedes link" in exc.value.msg or "reconfirm clears a premise" in exc.value.msg
+    assert "supersession=KEY" in exc.value.msg
     with pytest.raises(Refused):
         w.store.claim(w.p("l1main"), "demo:SCOPE-ITEM")
 
@@ -171,3 +171,57 @@ def test_force_stale_claims_count_every_audited_claim_even_after_the_item_closes
     assert w.store.alerts(w.p("router"))["force_stale_claims"] == 2
     w.store.cancel(w.p("router"), key, "closed")
     assert w.store.alerts(w.p("router"))["force_stale_claims"] == 2
+
+
+# ------------------------------------------------------------ review round 3
+def test_system_claims_refuse_a_retired_premise_and_a_superseded_contract(w, decisions):
+    w.store.create_items(w.p("router"), [
+        defn("PREM", description="per D-5"),
+        defn("CONT", title="Plan v1 work", description="Plan v2 supersedes the earlier text. Plan v2",
+             done_criteria="Plan v1 done"),
+        defn("GOAL", ["PREM", "CONT"], kind="goal")])
+    _decide(decisions, 9, "supersedes D-5 for demo")
+    for key in ("demo:PREM", "demo:CONT"):
+        found = w.store.show(w.p("router"), key)
+        assert found["stale"], found
+    with pytest.raises(Refused) as exc:
+        w.store.worker_claim_lease(w.p("system"), "demo:PREM")
+    assert "premise D-5 superseded by D-9" in exc.value.msg
+
+
+def test_a_go_row_that_adds_a_second_approval_requirement_is_not_neutral(w, decisions):
+    _items(w)
+    _decide(decisions, 5870, "(05:0xZ) GO demo:SPAWNER-DEFAULT, but it also needs a second approval first")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:SPAWNER-DEFAULT")
+    assert "premise outdated: D-5870" in exc.value.msg
+
+
+def test_reconfirm_clears_an_explicit_supersession_it_names_and_is_audited(w, decisions):
+    _items(w)
+    w.store.create_items(w.p("router"), [defn("NEWER", supersedes=["demo:SCOPE-ITEM"], under="demo:GOAL")])
+    _decide(decisions, 5900, "(05:0xZ) demo:SCOPE-ITEM re-read after NEWER was defined")
+    with pytest.raises(Refused) as exc:                       # the superseder must be named
+        w.store.reconfirm(w.p("router"), "demo:SCOPE-ITEM", "D-5900")
+    assert "demo:NEWER" in exc.value.msg
+    with pytest.raises(Refused):
+        w.store.reconfirm(w.p("router"), "demo:SCOPE-ITEM", "D-5900", supersession="demo:OTHER")
+    got = w.store.reconfirm(w.p("router"), "demo:SCOPE-ITEM", "D-5900", supersession="demo:NEWER")
+    assert got["cleared_supersession"] == "demo:NEWER"
+    assert w.store.claim(w.p("l1main"), "demo:SCOPE-ITEM")["epoch"] == 1
+    marks = [e for e in keeper_events.read_events(w.conn)
+             if e["type"] == "premise_reconfirmed" and e["payload"].get("supersession") == "demo:NEWER"]
+    assert marks and marks[0]["actor"] == "router"
+    # a different superseder defined later is not cleared by the old answer
+    w.store.release(w.p("l1main"), "demo:SCOPE-ITEM", 1)
+    w.store.create_items(w.p("router"), [defn("NEWEST", supersedes=["demo:SCOPE-ITEM"], under="demo:GOAL")])
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:SCOPE-ITEM")
+    assert "demo:NEWEST" in exc.value.msg and "demo:NEWER" not in exc.value.msg
+
+
+def test_the_alerts_text_shows_the_force_stale_count(w, decisions):
+    from plangraph.keeper import fmt
+    assert "force_stale_claims 2" in fmt.alerts_text({"force_stale_claims": 2, "lease_expiring": [],
+                                                      "review_overdue": [], "findings": [], "refusals": [],
+                                                      "stalled": False, "warnings": []})

@@ -432,7 +432,8 @@ def _close_merged_auto(store, principal, body, need):
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "reconfirm": lambda store, principal, body, need:
-                          store.reconfirm(principal, need(body, "key"), body.get("decision")),
+                          store.reconfirm(principal, need(body, "key"), body.get("decision"),
+                                          supersession=body.get("supersession")),
                       "add_category": lambda store, principal, body, need:
                           store.add_category(principal, need(body, "name")),
                       "rank_categories": lambda store, principal, body, need:

@@ -165,6 +165,8 @@ class OpsMixin:
                 self._record_oversight_denied(principal, batch_ref, exc, now)
                 self._oversight_denied_written = True
             raise
+        finally:
+            self._flush_counts()      # after the commit or the rollback, so a refused batch is counted
 
     # ----------------------------------------------------------- planning
     def _plan_ops(self, ops, batch_ref, principal=None):
@@ -657,6 +659,7 @@ class OpsMixin:
                          if isinstance(d, str)]
                 keys += [self._qualify(project, fields[f]) for f in _KEY_FIELDS
                          if isinstance(fields.get(f), str)]
+                keys += self._link_keys(project, fields)
             return keys
         keys = []
         items = op["item"] if isinstance(op["item"], list) else [op["item"]]
@@ -669,7 +672,17 @@ class OpsMixin:
                      if isinstance(d, str)]
             keys += [self._qualify(project, item[f]) for f in _KEY_FIELDS
                      if isinstance(item.get(f), str) and item[f]]
+            keys += self._link_keys(project, item)
         return keys
+
+    def _link_keys(self, project, fields):
+        """The items a ``supersedes`` list and the keys of ``similar`` answers point at:
+        an answer may add a dependency or a supersession, so each is a link a grant covers."""
+        out = [self._qualify(project, k) for k in fields.get("supersedes") or ()
+               if isinstance(k, str) and k]
+        similar = fields.get("similar")
+        return out + [self._qualify(project, k) for k in (similar if isinstance(similar, dict) else ())
+                      if isinstance(k, str) and k]
 
     def _grant_gate(self, principal, ops):
         """Refuse the whole batch at its first key outside the granted projects.

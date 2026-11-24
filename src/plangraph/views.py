@@ -209,6 +209,40 @@ def warnings(items):
     return sorted(out, key=lambda p: (p["code"], p["key"]))
 
 
+_FALSY = ("false", "0", "null", "none", "no", "n/a", "n-a", "nil")
+_PR_FIELDS = ("pr", "pr_url", "pr_number", "pull_request", "open_pr")
+
+
+def _signal(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value > 0
+    return isinstance(value, str) and value.strip().lower() not in ("",) + _FALSY
+
+
+def work_class(item):
+    """The feeder's class order, before category: 0 an item that carries a live PR,
+    1 a CI fix, 2 anything else (mirrors ``class`` in ``feeder/selection.rs``)."""
+    note = {}
+    for line in (item.get("note") or "").splitlines():
+        name, sep, value = line.partition(": ")
+        if sep:
+            note.setdefault(name, value)
+
+    def has(name):
+        return _signal(item[name] if item.get(name) is not None else note.get(name))
+
+    if (str(note.get("pr_state") or item.get("pr_state") or "") not in ("closed", "merged")
+            and any(has(f) for f in _PR_FIELDS)):
+        return 0
+    tokens = item.get("key", "").split(":", 1)[-1].upper().split("-")
+    if has("ci_fix") or item.get("kind") in ("ci-fix", "ci_fix") or any(
+            pair == ["CI", "FIX"] for pair in (tokens[i:i + 2] for i in range(len(tokens)))):
+        return 1
+    return 2
+
+
 def effective_priorities(items):
     """``({key: {"effective", "via", "hops"}}, cycles)`` for every non-terminal item.
 
@@ -271,7 +305,7 @@ def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies
     that principal; *agent* drops what waits on the operator (``operator`` flag
     or an operator kind), so a heartbeat never picks a human step (D-953).
 
-    Sorted by ``(category_rank, -effective priority, created_at (oldest first), -unblocks, estimate_h, key)`` (see :func:`effective_priorities`).  Gates and goals are
+    Sorted by ``(work class: live PR, CI fix, other; category_rank, -effective priority, created_at (oldest first), -unblocks, estimate_h, key)`` (see :func:`effective_priorities`).  Gates and goals are
     included when open and unblocked: closing them is a valid action.
     """
     idx = index(items)
@@ -286,7 +320,7 @@ def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies
            and not (agent and (it.get("operator") or it.get("kind") in OPERATOR_KINDS))
            and dependencies_ready(it)]
     eff = effective_priorities(items)[0]
-    out.sort(key=lambda it: (it.get("category_rank", NO_CATEGORY_RANK), -eff[it["key"]]["effective"],
+    out.sort(key=lambda it: (work_class(it), it.get("category_rank", NO_CATEGORY_RANK), -eff[it["key"]]["effective"],
                            it.get("created_at") or "~", -ub.get(it["key"], 0), _est(it), it["key"]))
     return out
 
@@ -430,7 +464,7 @@ def brief(items, project=None, n=10, ub=None, owner=None, agent=False):
 def with_effective(item, eff):
     """A copy of *item* carrying ``effective_priority`` and, when raised, ``priority_via``."""
     got = eff.get(item["key"]) or {"effective": _prio(item), "via": None}
-    return {**item, "effective_priority": got["effective"],
+    return {**item, "effective_priority": got["effective"], "work_class": work_class(item),
             **({"priority_via": got["via"]} if got["via"] else {})}
 
 

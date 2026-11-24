@@ -23,7 +23,7 @@ if (mode === "rows") {
   var order = ["speed", "efficiency-tokens", "cleanup"];
   var moved = PlanUI.moveCategory(order, "cleanup", -2);
   var ranks = IN.rows.map(function (r) { return PlanUI.categoryRank(r); });
-  PlanUI.categoryOrder = moved;
+  PlanUI.categoryOrders = { demo: moved };
   emit({ moved: moved, clamped: PlanUI.moveCategory(order, "speed", -5), unknown: PlanUI.moveCategory(order, "zzz", 1),
          before: ranks, after: IN.rows.map(function (r) { return PlanUI.categoryRank(r); }) });
 } else if (mode === "defaults") {
@@ -103,10 +103,21 @@ def test_equal_rank_and_priority_rows_sort_oldest_first_in_the_default_order(tmp
 
 @need_node
 def test_the_reorder_control_moves_a_category_and_the_rank_follows_the_working_order(tmp_path):
-    rows = [{"key": "a", "category": "speed", "category_rank": 0},
-            {"key": "b", "category": "cleanup", "category_rank": 2},
-            {"key": "c"}]
+    rows = [{"key": "a", "project": "demo", "category": "speed", "category_rank": 0},
+            {"key": "b", "project": "demo", "category": "cleanup", "category_rank": 2},
+            {"key": "other", "project": "other", "category": "cleanup", "category_rank": 2},
+            {"key": "c", "project": "demo"}]
     got = run_node(tmp_path, RUNNER, "reorder", {"rows": rows})
     assert got["moved"] == ["cleanup", "speed", "efficiency-tokens"]
     assert got["clamped"] == ["speed", "efficiency-tokens", "cleanup"] and got["unknown"] == got["clamped"]
-    assert got["before"] == [0, 2, 9999] and got["after"] == [1, 0, 9999]
+    # only the moved project's rows follow the working order; another project keeps its stored rank
+    assert got["before"] == [0, 2, 2, 9999] and got["after"] == [1, 0, 2, 9999]
+
+
+@need_node
+def test_a_ci_fix_row_sorts_before_a_speed_row_in_the_default_order(tmp_path):
+    rows = [{"key": "speed", "priority": 9, "category": "speed", "category_rank": 0},
+            {"key": "cifix", "priority": 1, "category": "cleanup", "category_rank": 11, "work_class": 1},
+            {"key": "pr", "priority": 1, "work_class": 0}]
+    got = run_node(tmp_path, RUNNER, "defaults", {"rows": rows})
+    assert got["sorted"] == ["pr", "cifix", "speed"]

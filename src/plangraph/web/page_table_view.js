@@ -113,7 +113,7 @@
     { id: "prev", label: "Previous", val: function (r) { return pick(r, "prev").length; }, num: true, group: function (r) { var n = pick(r, "prev").length; return n ? "has previous" : "no previous"; } },
     { id: "next", label: "Next", val: function (r) { return pick(r, "next").length; }, num: true, group: function (r) { var n = pick(r, "next").length; return n ? "has next" : "no next"; } },
     { id: "links", label: "Decisions & questions", val: function (r) { return (r._links || []).length; }, num: true, group: function (r) { var n = (r._links || []).length; return n ? "has decisions/questions" : "none"; } },
-    { id: "category", label: "Category", val: function (r) { return global.PlanUI.categoryRank(r); }, num: true, group: function (r) { return r.category || "(none)"; } },
+    { id: "category", label: "Category", val: function (r) { return global.PlanUI.classRank(r); }, num: true, group: function (r) { return r.category || "(none)"; } },
     { id: "prio", label: "Prio", val: function (r) { return global.PlanUI.effectivePriority(r); }, num: true },
     { id: "kind", label: "Kind", val: function (r) { return r.kind || ""; } },
     { id: "op", label: "Op", val: function (r) { return global.PlanUI.TableCtl && global.PlanUI.TableCtl.operatorNeeded(r) ? 1 : 0; }, num: true }
@@ -306,24 +306,31 @@
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";
     box.appendChild(bar);
     if ((vm.categories || []).length) {
-      /* The page is read-only (no fetch): the buttons reorder the table at once and show the verb that stores the order. */
-      var cats = global.PlanUI.categoryOrder || vm.categories.map(function (c) { return c.name; });
+      /* The page is read-only (no fetch): the buttons re-sort ONE project's rows at once and show the verb
+       * that stores that project's order in the keeper (a reload then shows the stored order). */
+      var projects = (vm.projects || []).map(function (p) { return p.name; });
+      var pick = view.rankProject && projects.indexOf(view.rankProject) >= 0 ? view.rankProject : projects[0] || "";
+      var orders = global.PlanUI.categoryOrders = global.PlanUI.categoryOrders || {};
+      var base = (vm.categoryOverrides || {})[pick] || vm.categories.map(function (c) { return c.name; });
+      var cats = orders[pick] || base;
       var rk = el("div", "tt-rank");
       rk.setAttribute("aria-label", "Category rank order");
-      rk.appendChild(el("span", null, "Default category order:"));
+      var psel = el("select", "tt-sel"); psel.setAttribute("aria-label", "Project whose category order is shown");
+      projects.forEach(function (n) { var o = el("option", null, n); o.value = n; if (n === pick) o.selected = true; psel.appendChild(o); });
+      psel.addEventListener("change", function () { view.rankProject = psel.value; render(); });
+      rk.appendChild(psel);
+      rk.appendChild(el("span", null, " category order:"));
       cats.forEach(function (name) {
         var chip = el("span", "tt-chip", " " + name + " ");
         [["◀", -1, "Move " + name + " up"], ["▶", 1, "Move " + name + " down"]].forEach(function (m) {
           var mb = el("button", "tt-btn", m[0]); mb.type = "button"; mb.setAttribute("aria-label", m[2]);
-          mb.addEventListener("click", function () { global.PlanUI.categoryOrder = global.PlanUI.moveCategory(cats, name, m[1]); render(); });
+          mb.addEventListener("click", function () { orders[pick] = global.PlanUI.moveCategory(cats, name, m[1]); render(); });
           chip.appendChild(mb);
         });
         rk.appendChild(chip);
       });
-      var own = vm.categoryOverrides || {};
-      Object.keys(own).forEach(function (p) { rk.appendChild(el("span", null, "; " + p + ": " + own[p].join(" > "))); });
       if (vm.uncategorised) rk.appendChild(el("span", null, " (" + vm.uncategorised + " without category, last)"));
-      if (global.PlanUI.categoryOrder) rk.appendChild(el("code", null, " pg rank-categories PROJECT " + cats.join(" ")));
+      if (orders[pick]) rk.appendChild(el("code", null, " pg rank-categories " + pick + " " + cats.join(" ")));
       box.appendChild(rk);
     }
     if (global.PlanUI.TableCtl) box.appendChild(global.PlanUI.TableCtl.bar(all, render));

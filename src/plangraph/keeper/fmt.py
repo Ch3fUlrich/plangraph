@@ -266,6 +266,8 @@ def alerts_text(alerts: dict) -> str:
         lines.append(f"refusals {row['key']} x{row['count']}")
     for row in alerts.get("warnings") or []:
         lines.append(f"warning {row['code']} {row['key']}")
+    if alerts.get("force_stale_claims"):
+        lines.append(f"force_stale_claims {alerts['force_stale_claims']}")
     if alerts.get("stalled"):
         lines.append("stalled true")
     hist = alerts.get("history") or {}

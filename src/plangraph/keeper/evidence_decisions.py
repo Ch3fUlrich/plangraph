@@ -573,7 +573,10 @@ def decisions_naming(book, key):
 _ORDERS_ITEM = re.compile(r"(?i:\border\w*|\bdefin\w+|\bqueue\w*|\bcreat\w+|\bprioriti\w+|\bsequenc\w+)|\bGO\b")
 _CHANGES_SCOPE = re.compile(
     r"(?i)\b(?:supersed\w*|replac\w*|withdr\w*|correct\w*|cancel\w*|drop\w*|narrow\w*|widen\w*"
-    r"|rescop\w*|obsolete\w*|revert\w*|no longer|instead of|now also|now covers|scope|premise)")
+    r"|rescop\w*|obsolete\w*|revert\w*|no longer|instead of|now also|now covers|scope|premise"
+    # a GO or order that adds a condition changes what the item must do first
+    r"|requir\w*|approv\w*|need\w*|must|before|unless|only|except|condition\w*|block\w*|hold|wait\w*"
+    r"|not|but|also|second|additional)\b")
 
 
 def premise_neutral(lines, did, source):

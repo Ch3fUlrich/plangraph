@@ -5,7 +5,6 @@ from datetime import datetime
 import re
 
 from .errors import Refused
-from .store_context import _superseded_map
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
 from .. import views
 from ..views_progress import progress
@@ -17,7 +16,7 @@ FIELDS = tuple((
     "claimed_by worker_run reviewer_run lease_until model review_waiver reviews "
     "evidence updated_at corrected_by fixes fixed_by writer_model seat_models "
     "run_ids created_at done_at reviewed merged answer incidents supersedes superseded_by "
-    "effective_priority priority_via category category_rank"
+    "effective_priority priority_via category category_rank work_class"
 ).split()) + tuple(MODEL_FIELDS)
 BLOCKS = ("items", "aliases", "activity", "decision_text", "progress", "categories")
 PARAMS = ("open", "closed", "since", "fields", "blocks")
@@ -128,7 +127,7 @@ def _full(store, now, values=None):
     table = store._category_table()
     items = store._rank_items(store._all_items(), table)
     corrected, fixed = {}, {}
-    superseded = _superseded_map({item["key"]: item for item in items})
+    superseded = store._superseded({item["key"]: item for item in items})
     eff = views.effective_priorities(items)[0]
     for item in items:
         if item["corrects"]:
@@ -167,6 +166,7 @@ def _full(store, now, values=None):
             **({"supersedes": item["supersedes"]} if item.get("supersedes") else {}),
             **({"category": item["category"], "category_rank": item["category_rank"]}
                if item.get("category") else {}),
+            **({"work_class": views.work_class(item)} if views.work_class(item) != 2 else {}),
             **({"effective_priority": eff[item["key"]]["effective"],
                 "priority_via": eff[item["key"]]["via"]}
                if eff.get(item["key"], {}).get("via") else {}),
