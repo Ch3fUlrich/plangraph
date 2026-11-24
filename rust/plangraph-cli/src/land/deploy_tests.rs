@@ -214,8 +214,8 @@ fn dry_run_output_is_parsed_strictly() {
 fn a_part_that_raises_the_keeper_schema_puts_migration_and_keeper_restart_in_the_go_req() {
     use super::keeper_schema::SCHEMA_PATH;
     let fx = Fx::new();
-    let two = "M = (Migration(1, a, X), Migration(2, b, Y))\n";
-    let three = "M = (Migration(1, a, X), Migration(2, b, Y), Migration(3, c, Z))\n";
+    let two = "MIGRATIONS = (Migration(1, a, X), Migration(2, b, Y))\n";
+    let three = "MIGRATIONS = (Migration(1, a, X), Migration(2, b, Y), Migration(3, c, Z))\n";
     let base = commit(&fx, &[(SCHEMA_PATH, two)], "schema\n\nPlan-Item: demo:S");
     g(fx.path(), &["checkout", "-q", "main"]);
     g(fx.path(), &["reset", "-q", "--hard", &base]);
