@@ -324,7 +324,8 @@ def list_runs(local, *, transport=query_host):
         pool = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(hosts)))
         futures = [pool.submit(_fetch, host, transport) for host in hosts]
         # One hung host must not hold the others: past the longest budget it is listed as failed.
-        wait(futures, timeout=max(host_timeout(host) for host in hosts) + 1)
+        waves = -(-len(hosts) // pool._max_workers)
+        wait(futures, timeout=waves * max(host_timeout(host) for host in hosts) + 1)
         rows = [row for host, future in zip(hosts, futures)
                 for row in (future.result() if future.done() else [dict(
                     host=host['name'], status='unknown', reason='host query failed',
@@ -361,7 +362,7 @@ def attempt_coverage_inputs(state, day, *, transport=query_host):
     def fetch(host):
         if host.get('invalid'):
             raise ValueError('invalid attempt coverage host configuration')
-        return decode(transport(dict(host, coverage_day=day), TIMEOUT))
+        return decode(transport(dict(host, coverage_day=day), host_timeout(host)))
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         for remote in pool.map(fetch, configured_hosts()):
@@ -411,7 +412,7 @@ def changed_runs(state, bookmark, *, transport=query_host):
         try:
             if host.get('invalid'):
                 raise ValueError('invalid host')
-            return decode(transport(dict(host, lifecycle_cursor=cursor), TIMEOUT), cursor)
+            return decode(transport(dict(host, lifecycle_cursor=cursor), host_timeout(host)), cursor)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
             return {'error': 'host lifecycle query failed'}
 

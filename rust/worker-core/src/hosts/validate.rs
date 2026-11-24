@@ -17,6 +17,7 @@ pub(super) fn validate_fields(value: &serde_json::Value) -> Result<(), HostsErro
                 "ssh_target",
                 "wsl_distro",
                 "placement_fallback",
+                "remote_placement",
                 "env",
                 "os",
                 "state_dir",
