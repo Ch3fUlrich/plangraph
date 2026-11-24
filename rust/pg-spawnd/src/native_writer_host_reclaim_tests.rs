@@ -146,7 +146,7 @@ fn an_accepted_run_reaches_the_host_reclaim_and_pushes_the_same_head_without_ano
     let (reclaiming, pushing) = (host.clone(), host.clone());
     let reclaim_target = target.clone();
 
-    let (record, turns, reviews) = crate::native_writer::tests::run_with_host_handoff(
+    let (record, turns, reviews) = crate::native_writer::tests::push::run_with_host_handoff(
         &head,
         Box::new(move || {
             reclaiming
