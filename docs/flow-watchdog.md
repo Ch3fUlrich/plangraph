@@ -177,6 +177,9 @@ the queue retains its head and newest 255 events, reporting overflow on stderr.
 
 ## Collectors, freshness and host integration
 
+Collectors, freshness and host integration are deployment prerequisites, not supplied by this checker.
+The collector below is the one this repository ships.
+
 `plangraph flow-snapshot [--json] [--out PATH] [--readings FILE]` writes the snapshot
 atomically (default `~/.local/state/plangraph/flow-snapshot.json`). Run it from the
 checkout just before each tick. Readings and the derivation of each field:
