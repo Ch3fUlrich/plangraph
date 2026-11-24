@@ -1,0 +1,1 @@
+`pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B --base SHA --brief FILE` starts or resumes a batch step list from its saved steps file, with the fix-round limit of the round cap. It exits 0 when the part joined a train, 3 on red CI and 1 otherwise, and prints one JSON line with the outcome.

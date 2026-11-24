@@ -423,7 +423,7 @@ impl Driver for Host {
 }
 #[path = "native_writer_commands.rs"]
 mod commands;
-pub(crate) use commands::{execute, resume, resume_saved};
+pub(crate) use commands::{execute, resume, resume_saved, step_host};
 #[path = "native_writer_base.rs"]
 mod base;
 #[path = "native_writer_context.rs"]
