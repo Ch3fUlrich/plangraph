@@ -49,6 +49,13 @@ pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Val
         }
         None => Value::Null,
     };
+    // The Keeper epoch the item was claimed at, so a later release names that claim.
+    if let Some(epoch) = [&card["claim_epoch"], &card["epoch"]]
+        .into_iter()
+        .find_map(|v| v.as_u64())
+    {
+        base["claim_epoch"] = json!(epoch);
+    }
     let missing = json!({"event":"seat_item_missing","level":"warning"});
     if base["item_key"].is_null()
         && matches!(base["role"].as_str(), Some("review" | "judge"))
@@ -87,6 +94,24 @@ mod tests {
         ] {
             assert!(!valid_item(&key), "{key}");
         }
+    }
+
+    #[test]
+    fn the_claim_epoch_of_the_card_is_kept_beside_the_item_key() {
+        let mut base = json!({"role": "implement"});
+        annotate_item(
+            &mut base,
+            &json!({"item_key": "plangraph:D-1", "claim_epoch": 11}),
+            &mut Vec::new(),
+        );
+        assert_eq!(base["claim_epoch"], 11);
+        let mut bare = json!({"role": "implement"});
+        annotate_item(
+            &mut bare,
+            &json!({"item_key": "plangraph:D-1"}),
+            &mut Vec::new(),
+        );
+        assert!(bare.get("claim_epoch").is_none());
     }
 
     #[test]

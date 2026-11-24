@@ -21,17 +21,22 @@ pub(crate) struct Inventory {
 }
 
 /// The recorded process of the run, in the form its runner writes: an attempt `proc`
-/// or the run's own `proc` (supervised runs), or top-level `pid` and `pid_start`
-/// (native writers).
+/// or the run's own `proc` (supervised runs), top-level `pid` and `pid_start` (native
+/// writers), or `external_child` / `external_owner` with `pid` and `start` (fleet sessions).
 fn identity(row: &Value) -> Option<(u32, u64)> {
     let attempt = row["attempts"].as_array().and_then(|a| a.last());
-    let proc = attempt
-        .map(|attempt| &attempt["proc"])
-        .filter(|proc| proc.is_object())
-        .or_else(|| Some(&row["proc"]).filter(|proc| proc.is_object()));
-    let (pid, start) = match proc {
-        Some(proc) => (&proc["pid"], &proc["start_time"]),
-        None => (&row["pid"], &row["pid_start"]),
+    let object = |value: &Value| Some(value).filter(|v| v.is_object()).cloned();
+    let (pid, start) = if let Some(proc) = attempt
+        .and_then(|attempt| object(&attempt["proc"]))
+        .or_else(|| object(&row["proc"]))
+    {
+        (proc["pid"].clone(), proc["start_time"].clone())
+    } else if let Some(proc) =
+        object(&row["external_child"]).or_else(|| object(&row["external_owner"]))
+    {
+        (proc["pid"].clone(), proc["start"].clone())
+    } else {
+        (row["pid"].clone(), row["pid_start"].clone())
     };
     Some((u32::try_from(pid.as_u64()?).ok()?, start.as_u64()?))
 }
@@ -125,6 +130,12 @@ mod tests {
         write(state, "run-unproven", json!({"status": "running"}));
         write(
             state,
+            "run-fleet",
+            json!({"status": "running", "run_kind": "fleet-session", "fleet_session_name": "w-1",
+                   "external_owner": {"pid": 5, "start": 50}, "external_child": {"pid": 6, "start": 60}}),
+        );
+        write(
+            state,
             "run-native",
             json!({"status": "running", "pid": 9, "pid_start": 90}),
         );
@@ -142,11 +153,13 @@ mod tests {
         let found = scan(
             state,
             |_| true,
-            |pid, start| matches!((pid, start), (7, 70) | (9, 90)),
+            |pid, start| matches!((pid, start), (7, 70) | (9, 90) | (6, 60)),
         );
         assert_eq!(
             found.live,
-            ["run-alive", "run-native"].map(String::from).into()
+            ["run-alive", "run-fleet", "run-native"]
+                .map(String::from)
+                .into()
         );
         assert_eq!(found.queued, ["run-queued"].map(String::from).into());
         assert_eq!(

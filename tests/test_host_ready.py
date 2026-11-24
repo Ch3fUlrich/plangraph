@@ -715,6 +715,27 @@ def test_a_missing_build_mount_is_not_measured_through_its_parent(monkeypatch, t
         h.shared_cargo_target(policy)
 
 
+def test_an_existing_directory_on_an_unmounted_drive_does_not_qualify(monkeypatch, tmp_path):
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    (tmp_path / 'g').mkdir()
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 500.0)
+    entry = {'path': str(tmp_path / 'g'), 'mount': str(tmp_path / 'g'), 'disk_floor_gb': 20}
+    with pytest.raises(OSError, match='not mounted'):
+        h.shared_cargo_target({'build_drives': [entry]})
+    monkeypatch.setattr(os.path, 'ismount', lambda path: True)
+    assert h.shared_cargo_target({'build_drives': [entry]}) == tmp_path / 'g' / 'cargo-target'
+
+
+def test_the_running_guard_keeps_the_target_below_the_admission_floor(monkeypatch, tmp_path):
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    (tmp_path / 'g').mkdir()
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 19.0)
+    policy = {'build_drives': [{'path': str(tmp_path / 'g'), 'disk_floor_gb': 20}]}
+    with pytest.raises(OSError, match='disk_low'):
+        h._target_for(policy)
+    assert h._target_for(policy, floors=False) == tmp_path / 'g' / 'cargo-target'
+
+
 def test_an_extra_check_failure_on_one_drive_does_not_stop_a_healthy_one():
     def check(path):
         if path == '/bad':
@@ -742,5 +763,6 @@ def test_the_workstation_config_puts_the_cargo_target_on_g(monkeypatch):
     monkeypatch.setenv('PLANGRAPH_SETTINGS', 'deploy/workstation/work-drives.json')
     monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100.0)
     monkeypatch.setattr(Path, 'is_dir', lambda self: str(self).startswith('/mnt/work-g'))
+    monkeypatch.setattr(os.path, 'ismount', lambda path: path == '/mnt/work-g')
     policy = _policy_data(Path(__file__).resolve().parents[1])
     assert str(h.shared_cargo_target(policy)) == '/mnt/work-g/plangraph/build/cargo-target'

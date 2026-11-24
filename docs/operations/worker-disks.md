@@ -47,7 +47,9 @@ checkout drives D: and F: as `work_drives` (checkout path and `disk_floor_gb`: 2
 50 GiB to start); admission picks the eligible one with the most free space. G: is
 listed as `build_drives`, reserved for rebuildable caches and build data, never
 for a writer checkout; spawned builds take their Cargo target from the one with the
-most free space above its floor unless `PLANGRAPH_CARGO_TARGET_DIR` is set. Set `PLANGRAPH_SETTINGS` to that path after the write speed
+most free space above its floor unless `PLANGRAPH_CARGO_TARGET_DIR` is set; an entry
+with a `mount` needs that mount present, and a running build is held only to the
+runtime stop floor, not the admission floor. Set `PLANGRAPH_SETTINGS` to that path after the write speed
 of each mount is measured and the checkouts exist; `PLANGRAPH_WORK_DRIVES`
 overrides it. The file changes no mount.
 

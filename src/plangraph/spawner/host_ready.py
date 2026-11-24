@@ -74,7 +74,7 @@ def harness_path(env, *, native_writer=False):
     return os.pathsep.join(path)
 
 
-def shared_cargo_target(policy=None):
+def shared_cargo_target(policy=None, *, floors=True):
     """The env target, else the `build_drives` target of the settings policy, else the cache default."""
     if not os.environ.get('PLANGRAPH_CARGO_TARGET_DIR'):
         if policy is None:
@@ -83,15 +83,17 @@ def shared_cargo_target(policy=None):
                 policy = _policy_data(None) or {}
             except ValueError:
                 policy = {}
-        if (built := configured_build_target(policy, disk_free_gb)) is not None:
+        if (built := configured_build_target(policy, disk_free_gb, floors=floors)) is not None:
             return built
     return Path(os.environ.get('PLANGRAPH_CARGO_TARGET_DIR',
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()
 
 
-def _target_for(policy):
+def _target_for(policy, floors=True):
     """The target under the checkout's own policy, not the daemon's working directory."""
-    return shared_cargo_target(policy) if policy.get('build_drives') else shared_cargo_target()
+    if policy.get('build_drives'):
+        return shared_cargo_target(policy, floors=floors)
+    return shared_cargo_target()
 
 
 def cargo_child_env(env, *, pin_configured=False, target=None):
@@ -601,7 +603,7 @@ def running_disk_refusal(worktree, role='implement'):
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
-        target = _target_for(policy)
+        target = _target_for(policy, floors=False)  # the stop floor below is the runtime limit
         paths = [worktree, target]
         if policy.get('worktree_root'):
             paths.append(policy['worktree_root'])

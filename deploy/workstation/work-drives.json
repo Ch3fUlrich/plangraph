@@ -4,6 +4,6 @@
     {"path": "/mnt/work-f/plangraph/checkout", "disk_floor_gb": 50}
   ],
   "build_drives": [
-    {"path": "/mnt/work-g/plangraph/build", "disk_floor_gb": 20}
+    {"path": "/mnt/work-g/plangraph/build", "mount": "/mnt/work-g", "disk_floor_gb": 20}
   ]
 }
