@@ -62,11 +62,11 @@ does not affect the verdict. Do not pad: **no findings is a valid result.**
 - **NEW-REQ**: a requirement the item and its done criteria do not state (hardening, a rare
   race under a trusted caller, a wish), or a defect main already has and the change does
   not touch or worsen. Own line; never blocks; becomes a follow-up item.
-- **PROCESS**: a defect of the brief or the review setup (a missing context field, a test
-  you cannot run). Own line; the orchestrator's; never counts against the head and never
-  decides the verdict (a REQUEST_CHANGES would send the writer into a round it cannot
-  win). Name what you could not judge under "Unverified"; the orchestrator repairs the
-  setup and has the same head reviewed again.
+- **PROCESS**: a defect of the brief or review setup that did not stop you from judging
+  the done criteria. Own line; the orchestrator's; never counts against the head.
+- Never accept what you could not judge (an ACCEPT lets the driver push the head): report
+  `MED <where> - cannot judge <criterion>: missing <evidence>, to be supplied by
+  <writer|orchestrator>` and request changes.
 
 ## Output
 

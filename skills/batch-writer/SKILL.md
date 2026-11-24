@@ -84,7 +84,8 @@ Use grep for text that is not a symbol.
    leg answered or that the verdict was weak, run it again at once, at most 2 more
    times; then write `BLOCKED review <its last line>` and end.
 10. On REQUEST_CHANGES: fix every confirmed HIGH and MED finding with a test that fails
-    without the fix, or refute it with evidence in the next prompt file; commit; go back
+    without the fix, or refute it with evidence in the next prompt file (nothing to commit:
+    see the section "Fix round"); commit; go back
     to step 7. Stop by the one stop rule of `rust/pg-spawnd/src/round_progress.rs`: when 3
     rounds in a row do not bring the HIGH+MED count below the best count so far, when from
     round 3 on the count is still above half of the round-1 count, or after round 8
@@ -128,10 +129,12 @@ resume message of a native run).
    refute it with a named test that shows it does not hold: an existing test when one already
    shows it, a new committed test only where coverage is missing. When every finding is
    refuted by existing tests and nothing is to commit, write `REFUTED <finding> <test>` per
-   finding and `BLOCKED refutation-only` to STATUS_FILE and end: the orchestrator has the
-   same head reviewed again with that evidence (a native run would end the turn as
-   `no_commit`). A line tagged NEW-REQ or PROCESS is not yours to fix unless the findings
-   say so.
+   finding and `BLOCKED refutation-only` to STATUS_FILE and end. A script-driven lane has
+   the same head reviewed again with that evidence. A native run knows no review of an
+   unchanged head: its driver resumes you, you answer each resume with the same lines and no
+   edit, the run ends as `no_commit`, and the orchestrator starts the review of that head
+   by hand from your status lines. A line tagged NEW-REQ or PROCESS is not yours to fix
+   unless the findings say so.
 3. For every finding search its class once through your whole diff (the same defect in a
    sibling function, a second path, another test) and fix what you find; write one line
    `CLASS <finding> | <class> | searched: <files and symbols> | <n more fixed or none>`.
