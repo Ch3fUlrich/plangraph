@@ -12,7 +12,7 @@ def registry(root):
         {'id': 'dell', 'transport': 'ssh', 'os': 'linux', 'aliases': ['dell-build'],
          'caps': {'mem_floor_mb': 1}, 'repos': {'plangraph': {'root': root}}},
         {'id': 'ws', 'transport': 'ssh', 'os': 'linux', 'wsl_distro': 'Ubuntu',
-         'caps': {'mem_floor_mb': 1}, 'repos': {'plangraph': {'root': '/home/w/pg'}}}]}
+         'caps': {'mem_floor_mb': 1}, 'repos': {'plangraph': {'root': '/srv/guest/pg'}}}]}
 
 
 @pytest.fixture
@@ -31,15 +31,15 @@ def write(config, hosts, root=None):
 
 def test_ps_source_follows_registry_checkout_not_stale_config(config):
     write(config, [dict(name='dell-build', target='dell', src='/old/place/src')],
-          root='/home/u/code/plangraph')
+          root='/srv/checkout')
     (host,) = remote_ps.configured_hosts()
-    assert host['src'] == '/home/u/code/plangraph/src' and host['name'] == 'dell-build'
+    assert host['src'] == '/srv/checkout/src' and host['name'] == 'dell-build'
 
 
 def test_ps_source_registry_alias_and_wsl_hop(config):
     write(config, [dict(name='ws-build', target='ws', src='/stale/src')], root='/x')
     (host,) = remote_ps.configured_hosts()
-    assert (host['src'], host['wsl_distro']) == ('/home/w/pg/src', 'Ubuntu')
+    assert (host['src'], host['wsl_distro']) == ('/srv/guest/pg/src', 'Ubuntu')
 
 
 def test_ps_without_registry_keeps_configured_source(config):
