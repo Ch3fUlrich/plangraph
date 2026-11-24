@@ -3,7 +3,8 @@
 //! `plangraph review` sees every seat outcome, whichever spawner (Python or Rust) ran it, so the
 //! one watcher lives here. Seats are booked in `no_verdict.jsonl` and alerts in `alerts.jsonl`
 //! of the review state directory; two seats with different run ids and the same normalised cause
-//! inside the window raise one alert per cause per window.
+//! inside the window are one incident, and the incidents of a cause do not depend on the order
+//! in which the seats were booked.
 use super::SeatOutcome;
 use pg_worker_core::lockfile::{try_lock, LockGuard};
 use pg_worker_core::review_split::SeatVerdict;
@@ -99,11 +100,11 @@ pub fn note(dir: &Path, run_id: &str, reason: &str, now: i64) -> Option<Value> {
         json!({"ts": now, "run_id": run_id, "reason": cause})
     )
     .ok()?;
-    // The alert decision is a function of the booked seats alone, never of the booking order:
-    // same-cause seats are clustered chronologically, a cluster spans at most one window from
-    // its first seat, and a cluster of REPEAT seats is one incident stamped with its latest
-    // terminal time. An incident is announced once: an alert within one window of that time
-    // suppresses it.
+    // The incidents of one cause are a pure function of the booked seats, never of their booking
+    // order: seats are clustered chronologically, a cluster spans at most one window from its
+    // first seat, and a cluster of REPEAT seats is one incident stamped with its latest terminal
+    // time. `alerts.jsonl` holds the current incidents: the lines of this cause are replaced by
+    // the recomputed set, so every booking order ends in the same file.
     let mut same: Vec<(i64, String)> = Vec::new();
     for row in rows(&seats) {
         let id = row["run_id"].as_str().unwrap_or_default().to_owned();
@@ -114,7 +115,7 @@ pub fn note(dir: &Path, run_id: &str, reason: &str, now: i64) -> Option<Value> {
         }
     }
     same.sort();
-    let mut first_alert = None;
+    let mut incidents: Vec<Value> = Vec::new();
     let mut start = 0;
     while start < same.len() {
         let end = same[start..]
@@ -124,35 +125,41 @@ pub fn note(dir: &Path, run_id: &str, reason: &str, now: i64) -> Option<Value> {
             + start;
         let cluster = &same[start..end];
         start = end;
-        if cluster.len() < REPEAT {
-            continue;
+        if cluster.len() >= REPEAT {
+            let ids: Vec<&String> = cluster.iter().map(|(_, id)| id).collect();
+            incidents.push(json!({
+                "ts": cluster[cluster.len() - 1].0, "first": cluster[0].0,
+                "kind": "no_verdict_repeat", "reason": cause, "seats": ids,
+            }));
         }
-        let latest = cluster[cluster.len() - 1].0;
-        let announced = rows(&alerts).iter().any(|row| {
-            row["reason"] == cause.as_str()
-                && row["ts"]
-                    .as_i64()
-                    .is_some_and(|ts| (latest - ts).abs() <= WINDOW_S)
-        });
-        if announced {
-            continue;
-        }
-        let ids: Vec<&String> = cluster.iter().map(|(_, id)| id).collect();
-        let alert =
-            json!({"ts": latest, "kind": "no_verdict_repeat", "reason": cause, "seats": ids});
-        let mut out = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&alerts)
-            .ok()?;
-        writeln!(out, "{alert}").ok()?;
-        eprintln!(
-            "no_verdict_alert {} review seats ended without a verdict: {cause}",
-            ids.len()
-        );
-        first_alert.get_or_insert(alert);
     }
-    first_alert
+    let before = rows(&alerts);
+    let mut kept: Vec<Value> = before
+        .iter()
+        .filter(|row| row["reason"] != cause.as_str())
+        .cloned()
+        .collect();
+    kept.extend(incidents.iter().cloned());
+    let mut text = String::new();
+    for row in &kept {
+        text.push_str(&row.to_string());
+        text.push('\n');
+    }
+    if kept.is_empty() && !alerts.exists() {
+        return None;
+    }
+    crate::atomic::write(&alerts, text.as_bytes()).ok()?;
+    // Announce an incident the first time it appears (keyed by its first seat).
+    let fresh = incidents.into_iter().find(|incident| {
+        !before
+            .iter()
+            .any(|row| row["reason"] == cause.as_str() && row["first"] == incident["first"])
+    })?;
+    eprintln!(
+        "no_verdict_alert {} review seats ended without a verdict: {cause}",
+        fresh["seats"].as_array().map_or(0, Vec::len)
+    );
+    Some(fresh)
 }
 
 #[cfg(test)]
@@ -188,58 +195,73 @@ mod tests {
         assert!(!dir.path().join("alerts.jsonl").exists());
     }
 
-    #[test]
-    fn one_incident_is_announced_once_in_every_booking_order() {
-        // Seats ended at 1000, 2800 and 2801: the seat at 2801 is not within 30 minutes of the one
-        // at 1000, so there is one incident however the seats arrive. Which pair names it depends
-        // on what had arrived when the first pair qualified; the incident count, the stamp (its
-        // latest terminal time) and the span (at most one window) never do.
-        let seats = [("run-a", 1000), ("run-b", 2800), ("run-c", 2801)];
-        for order in [
-            [0, 1, 2],
-            [1, 0, 2],
-            [2, 1, 0],
-            [1, 2, 0],
-            [0, 2, 1],
-            [2, 0, 1],
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            for index in order {
-                note(dir.path(), seats[index].0, CAUSE, seats[index].1);
+    fn permutations(items: &[usize]) -> Vec<Vec<usize>> {
+        if items.len() <= 1 {
+            return vec![items.to_vec()];
+        }
+        let mut all = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let mut rest = items.to_vec();
+            rest.remove(index);
+            for mut tail in permutations(&rest) {
+                tail.insert(0, *item);
+                all.push(tail);
             }
-            let alerts = fs::read_to_string(dir.path().join("alerts.jsonl")).unwrap();
-            let rows: Vec<Value> = alerts
-                .lines()
-                .map(|l| serde_json::from_str(l).unwrap())
-                .collect();
-            assert_eq!(rows.len(), 1, "order {order:?}: {alerts}");
-            let times: Vec<i64> = rows[0]["seats"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|id| seats.iter().find(|(name, _)| id == name).unwrap().1)
-                .collect();
-            let (first, latest) = (*times.iter().min().unwrap(), *times.iter().max().unwrap());
-            assert_eq!(
-                rows[0]["ts"],
-                json!(latest),
-                "order {order:?}: stamped with its latest seat"
-            );
-            assert!(
-                latest - first <= WINDOW_S && times.len() >= REPEAT,
-                "order {order:?}: {alerts}"
-            );
         }
-        // the chronological arrival names the 1000 and 2800 seats
+        all
+    }
+
+    fn alerts_after(order: &[usize], seats: &[(&str, i64)]) -> Vec<(i64, Vec<String>)> {
         let dir = tempfile::tempdir().unwrap();
-        for (id, ts) in seats {
-            note(dir.path(), id, CAUSE, ts);
+        for index in order {
+            note(dir.path(), seats[*index].0, CAUSE, seats[*index].1);
         }
-        let alerts = fs::read_to_string(dir.path().join("alerts.jsonl")).unwrap();
-        assert!(
-            alerts.contains("\"ts\":2800") && alerts.contains("run-a"),
-            "{alerts}"
-        );
+        let text = fs::read_to_string(dir.path().join("alerts.jsonl")).unwrap_or_default();
+        let mut rows: Vec<(i64, Vec<String>)> = text
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .map(|v| {
+                let ids = v["seats"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|i| i.as_str().unwrap().to_owned());
+                (v["ts"].as_i64().unwrap(), ids.collect())
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    #[test]
+    fn the_alert_file_is_the_same_in_every_booking_order() {
+        // Review case: seats ended at 1000, 1001, 2801 and 2802. 1001 and 2801 are 1800 s apart, but
+        // the incidents are [1000, 1001] and [2801, 2802] whichever order the seats were booked in.
+        let four = [
+            ("run-a", 1000),
+            ("run-b", 1001),
+            ("run-c", 2801),
+            ("run-d", 2802),
+        ];
+        let expected = vec![
+            (1001, vec!["run-a".to_owned(), "run-b".to_owned()]),
+            (2802, vec!["run-c".to_owned(), "run-d".to_owned()]),
+        ];
+        let orders = permutations(&[0, 1, 2, 3]);
+        assert_eq!(orders.len(), 24);
+        for order in orders {
+            assert_eq!(alerts_after(&order, &four), expected, "order {order:?}");
+        }
+        // The earlier three-seat case: one incident [1000, 2800], 2801 starts a new window.
+        let three = [("run-a", 1000), ("run-b", 2800), ("run-c", 2801)];
+        for order in permutations(&[0, 1, 2]) {
+            let rows = alerts_after(&order, &three);
+            assert_eq!(
+                rows,
+                vec![(2800, vec!["run-a".to_owned(), "run-b".to_owned()])],
+                "order {order:?}"
+            );
+        }
     }
 
     #[test]
@@ -274,29 +296,23 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_seats_raise_exactly_one_alert() {
+    fn concurrent_seats_leave_one_incident_with_every_seat() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_owned();
         let handles: Vec<_> = (0..6)
             .map(|n| {
                 let path = path.clone();
                 std::thread::spawn(move || {
-                    note(&path, &format!("run-{n:02x}"), CAUSE, 1000 + n).is_some()
+                    note(&path, &format!("run-{n:02x}"), CAUSE, 1000 + n);
                 })
             })
             .collect();
-        let alerts = handles
-            .into_iter()
-            .map(|h| h.join().unwrap())
-            .filter(|a| *a)
-            .count();
-        assert_eq!(alerts, 1);
-        assert_eq!(
-            fs::read_to_string(path.join("alerts.jsonl"))
-                .unwrap()
-                .lines()
-                .count(),
-            1
-        );
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let text = fs::read_to_string(path.join("alerts.jsonl")).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        let alert: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(alert["seats"].as_array().unwrap().len(), 6, "{text}");
     }
 }
