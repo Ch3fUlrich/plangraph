@@ -4,7 +4,7 @@ mod binary;
 
 use pg_worker_core::worker_host::{Phase, Store};
 use serde_json::{json, Value};
-use std::{fs, process::Command};
+use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
 #[test]
 fn two_misses_emit_one_alert_and_recovery_keeps_the_affected_runs() {
