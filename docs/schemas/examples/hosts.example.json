@@ -11,6 +11,7 @@
       "ssh_target": "linux-worker.example.invalid",
       "wsl_distro": "Ubuntu",
       "placement_fallback": true,
+      "remote_placement": false,
       "env": { "PATH": "/opt/fleet/bin:/usr/bin:/bin" },
       "os": "linux",
       "state_dir": "/srv/fleet/code/state",
