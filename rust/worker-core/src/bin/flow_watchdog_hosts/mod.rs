@@ -104,11 +104,15 @@ pub fn messages(hosts: &[Host]) -> Vec<(String, String)> {
             .chain(host.work_used_percent.iter().copied())
             .any(|percent| percent > DISK_USED_PERCENT)
         {
-            let key = format!(
-                "host-disk: host={}",
-                serde_json::to_string(&host.host).unwrap()
-            );
             let top = consumers(host);
+            // The key changes once when the first measurement arrives, so an alert queued bare
+            // (the snapshot came before hygiene sampled) is followed by one that names the
+            // consumers; moving sizes never change it.
+            let key = format!(
+                "host-disk: host={}{}",
+                serde_json::to_string(&host.host).unwrap(),
+                if top.is_empty() { "" } else { " measured" }
+            );
             let message = if top.is_empty() {
                 key.clone()
             } else {
