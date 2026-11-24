@@ -46,7 +46,7 @@ fn model_args(effort: &str) -> [String; 6] {
     ]
 }
 
-struct Host {
+pub(crate) struct Host {
     repo: PathBuf,
     run_id: String,
     cwd: PathBuf,
@@ -342,6 +342,12 @@ impl Driver for Host {
     fn stamped(&mut self, head: &str) -> bool {
         self.stamp(head).is_ok_and(|stamp| stamp.is_file())
     }
+    fn stamp_path(&mut self, head: &str) -> Option<PathBuf> {
+        self.stamp(head).ok()
+    }
+    fn worktree(&self) -> Option<PathBuf> {
+        Some(self.cwd.clone())
+    }
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
         self.review_run(head, previous)
     }
@@ -423,7 +429,7 @@ impl Driver for Host {
 }
 #[path = "native_writer_commands.rs"]
 mod commands;
-pub(crate) use commands::{execute, resume, resume_saved, step_host};
+pub(crate) use commands::{execute, resume, resume_saved, step_host, StepHost};
 #[path = "native_writer_base.rs"]
 mod base;
 #[path = "native_writer_context.rs"]

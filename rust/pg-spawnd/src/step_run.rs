@@ -4,8 +4,8 @@
 //!
 //! ```text
 //! pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B
-//!     --base SHA --brief FILE [--state DIR] [--branch NAME] [--check "ARGV"]...
-//!     [--keeper-cmd "ARGV"] [--train-cmd "ARGV"] [--no-journal]
+//!     --base SHA --brief FILE --train-cmd "ARGV" --ci-workflow NAME... [--state DIR]
+//!     [--branch NAME] [--keeper-cmd "ARGV"] [--no-journal]
 //! ```
 //!
 //! RUN_ID names the native run record (`record.json` and `native-request.json`) that holds
@@ -13,13 +13,13 @@
 //! an existing one is validated and resumed where it stopped. Exit 0 when the part joined a
 //! train, 3 when CI classified the head red, 1 otherwise; stdout is one JSON line.
 
-use pg_spawnd::step_runner::{Inputs, Limits, Outcome, Runner};
+use pg_spawnd::step_runner::{Inputs, Limits, Outcome, Runner, StepActions};
 use pg_spawnd::step_runner_log::StepLog;
 use pg_worker_core::batch_steps::BatchSteps;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-pub(crate) const USAGE: &str = "usage: pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B --base SHA --brief FILE [--state DIR] [--branch NAME] [--check ARGV]... [--keeper-cmd ARGV] [--train-cmd ARGV] [--no-journal]";
+pub(crate) const USAGE: &str = "usage: pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B --base SHA --brief FILE [--state DIR] --train-cmd ARGV --ci-workflow NAME... [--branch NAME] [--keeper-cmd ARGV] [--no-journal]";
 
 #[derive(Debug)]
 pub(crate) struct Args {
@@ -28,7 +28,7 @@ pub(crate) struct Args {
     pub steps: PathBuf,
     pub inputs: Inputs,
     pub branch: Option<String>,
-    pub checks: Vec<Vec<String>>,
+    pub ci_workflows: Vec<String>,
     pub keeper_cmd: Option<Vec<String>>,
     pub train_cmd: Vec<String>,
     pub journal: bool,
@@ -44,7 +44,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, String> {
     let (mut state, mut steps, mut repo, mut key, mut items, mut base, mut brief) =
         (None, None, None, None, None, None, None);
     let (mut branch, mut keeper_cmd) = (None, None);
-    let (mut checks, mut train_cmd, mut journal) = (Vec::new(), Vec::new(), true);
+    let (mut ci_workflows, mut train_cmd, mut journal) = (Vec::new(), Vec::new(), true);
     while let Some(flag) = args.next() {
         if flag == "--no-journal" {
             journal = false;
@@ -60,8 +60,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, String> {
             "--base" => &mut base,
             "--brief" => &mut brief,
             "--branch" => &mut branch,
-            "--check" => {
-                checks.push(words(&value));
+            "--ci-workflow" => {
+                ci_workflows.push(value);
                 continue;
             }
             "--train-cmd" => {
@@ -92,6 +92,13 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, String> {
         .map_err(|err| format!("brief {brief}: {err}"))?
         .to_string_lossy()
         .into_owned();
+    // Without them the list would run to the end of CI and fail there, after the whole batch.
+    if train_cmd.is_empty() {
+        return Err("--train-cmd is required: the command that joins the part to a train".into());
+    }
+    if ci_workflows.is_empty() {
+        return Err("--ci-workflow is required: the workflows that must pass for green".into());
+    }
     Ok(Args {
         run_id,
         state,
@@ -104,17 +111,19 @@ pub(crate) fn parse(args: &[String]) -> Result<Args, String> {
             brief,
         },
         branch,
-        checks,
+        ci_workflows,
         keeper_cmd,
         train_cmd,
         journal,
     })
 }
 
-/// The limits of a batch: attempts per step from the runner, fix rounds from the round cap.
+/// The limits of a batch: attempts per step from the runner and the round cap of the shared
+/// stop rule: at most `MAX_ROUNDS` reviews, so one fewer fix (the fix action applies the
+/// no-progress and slow-progress stops of the same rule).
 pub(crate) fn limits() -> Limits {
     Limits {
-        fix_rounds: crate::round_progress::MAX_ROUNDS as u32,
+        fix_rounds: (crate::round_progress::MAX_ROUNDS - 1) as u32,
         ..Limits::default()
     }
 }
@@ -183,64 +192,30 @@ pub(crate) fn clock() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-/// `pg-spawnd step-run`: run the list to its end and print the outcome as one JSON line.
-pub(crate) fn execute(args: Vec<String>, out: &mut dyn std::io::Write) -> Result<(), String> {
-    use pg_spawnd::step_runner_shell::{Composite, ShellConfig, ShellSteps, SystemRunner};
-    use pg_spawnd::step_services::{CiWait, ServiceSteps};
-    use pg_spawnd::step_services_cli::{GhCi, KeeperCli, TrainCommand};
+/// Run the list of `args` with `actions` to its end and print the outcome as one JSON line;
+/// the return value is the exit code.
+pub(crate) fn drive(
+    args: &Args,
+    actions: &mut dyn StepActions,
+    out: &mut dyn std::io::Write,
+) -> Result<i32, String> {
+    let mut runner = load(&args.steps, args.inputs.clone())?;
+    let mut sink = log_for(args);
+    let outcome = runner.run(actions, &mut sink, &mut clock);
+    let (code, line) = report(&outcome, &runner);
+    writeln!(out, "{line}").map_err(|err| err.to_string())?;
+    Ok(code)
+}
 
+/// `pg-spawnd step-run`: the real actions over the native run, then `drive`.
+pub(crate) fn execute(args: Vec<String>, out: &mut dyn std::io::Write) -> Result<(), String> {
     let args = parse(&args)?;
     let state = crate::state::resolve_state(args.state.as_deref(), |key| std::env::var_os(key))?;
     let findings = args.steps.with_extension("findings");
     let host =
         crate::native_writer_host::step_host(&state, &args.run_id, &args.inputs.base, findings)?;
-    let inputs = &args.inputs;
-    let shell = ShellSteps {
-        config: ShellConfig {
-            repo_dir: host.repo.clone(),
-            worktree_dir: host.worktree.clone(),
-            branch: args
-                .branch
-                .clone()
-                .unwrap_or_else(|| format!("lane/{}", inputs.batch_key)),
-            checks: args.checks.clone(),
-            pr_title: inputs.batch_key.clone(),
-            pr_body: format!("Items: {}", inputs.items.join(", ")),
-        },
-        runner: SystemRunner,
-    };
-    let services = ServiceSteps {
-        keeper: KeeperCli {
-            runner: SystemRunner,
-            dir: host.repo.clone(),
-            prefix: args
-                .keeper_cmd
-                .clone()
-                .unwrap_or_else(|| vec!["pg".into(), "--json".into()]),
-        },
-        ci: GhCi {
-            runner: SystemRunner,
-            dir: host.repo.clone(),
-            repo: inputs.repo.clone(),
-        },
-        train: TrainCommand {
-            runner: SystemRunner,
-            dir: host.repo.clone(),
-            argv: args.train_cmd.clone(),
-        },
-        wait: CiWait::default(),
-        sleep: Box::new(std::thread::sleep),
-        rest: host.agents,
-    };
-    let mut actions = Composite {
-        shell,
-        rest: services,
-    };
-    let mut runner = load(&args.steps, args.inputs.clone())?;
-    let mut sink = log_for(&args);
-    let outcome = runner.run(&mut actions, &mut sink, &mut clock);
-    let (code, line) = report(&outcome, &runner);
-    writeln!(out, "{line}").map_err(|err| err.to_string())?;
+    let mut actions = crate::step_run_actions::production(&args, host);
+    let code = drive(&args, &mut actions, out)?;
     if code != 0 {
         let _ = out.flush();
         std::process::exit(code);

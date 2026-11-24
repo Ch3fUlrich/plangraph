@@ -10,12 +10,26 @@ use std::path::{Path, PathBuf};
 /// Runs one command in a directory; `Ok` is its stdout, `Err` its failure text.
 pub trait CommandRunner {
     fn run(&mut self, dir: &Path, argv: &[String]) -> Result<String, String>;
+    /// Like `run`, but a command that fails after printing to stdout still returns that
+    /// stdout: the keeper CLI exits non-zero on a refused row and prints every row's result.
+    fn run_lenient(&mut self, dir: &Path, argv: &[String]) -> Result<String, String> {
+        self.run(dir, argv)
+    }
 }
 
 pub struct SystemRunner;
 
 impl CommandRunner for SystemRunner {
     fn run(&mut self, dir: &Path, argv: &[String]) -> Result<String, String> {
+        self.output(dir, argv, false)
+    }
+    fn run_lenient(&mut self, dir: &Path, argv: &[String]) -> Result<String, String> {
+        self.output(dir, argv, true)
+    }
+}
+
+impl SystemRunner {
+    fn output(&mut self, dir: &Path, argv: &[String], keep_stdout: bool) -> Result<String, String> {
         let (program, args) = argv.split_first().ok_or("empty command")?;
         let out = std::process::Command::new(program)
             .args(args)
@@ -23,7 +37,7 @@ impl CommandRunner for SystemRunner {
             .output()
             .map_err(|err| format!("{program}: {err}"))?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-        if out.status.success() {
+        if out.status.success() || (keep_stdout && !stdout.trim().is_empty()) {
             return Ok(stdout);
         }
         let tail: Vec<_> = String::from_utf8_lossy(&out.stderr)
@@ -102,6 +116,10 @@ impl<R: CommandRunner> ShellSteps<R> {
 
     /// Run every check on exactly `head`; the stamp file is written only when all pass.
     pub fn fast_checks(&mut self, head: &str) -> Result<FastChecks, String> {
+        // A stamp that no check stood behind would pass the review gate for nothing.
+        if self.config.checks.is_empty() {
+            return Err("no fast checks configured".into());
+        }
         let dir = self.config.worktree_dir.clone();
         let at = self
             .runner
@@ -135,6 +153,12 @@ impl<R: CommandRunner> ShellSteps<R> {
         if !expected.is_file() || Path::new(stamp) != expected {
             return Err(format!("no fast-checks stamp for {head}"));
         }
+        self.publish(head)
+    }
+
+    /// Push `head` as a fast-forward of the lane branch and return its draft pull request. The
+    /// caller has checked that `head` carries its fast-checks stamp and an accepting review.
+    pub fn publish(&mut self, head: &str) -> Result<Push, String> {
         let dir = self.config.worktree_dir.clone();
         let branch = self.config.branch.clone();
         // No force flag: the remote refuses anything but a fast-forward.

@@ -36,35 +36,52 @@ impl<R: CommandRunner> KeeperCli<R> {
     }
 }
 
+impl<R: CommandRunner> KeeperCli<R> {
+    /// Release one claim of this attempt at the epoch it was granted: the CLI would otherwise
+    /// look up the current epoch, which may belong to a claim another batch holds.
+    fn release(&mut self, key: &str, epoch: u64) -> Result<(), String> {
+        let mut argv = vec!["env".to_owned(), format!("PG_EPOCH={epoch}")];
+        argv.extend(self.argv("release", &[key.to_owned()]));
+        self.runner
+            .run(&self.dir, &argv)
+            .map(drop)
+            .map_err(|err| format!("{key}@{epoch}: {err}"))
+    }
+}
+
 impl<R: CommandRunner> Keeper for KeeperCli<R> {
     fn claim_batch(&mut self, keys: &[String]) -> Result<Vec<(String, u64)>, String> {
         let claim = self.argv("claim-batch", keys);
-        let answer = match self.runner.run(&self.dir, &claim) {
-            Ok(answer) => answer,
-            Err(error) => {
-                // The CLI exits non-zero when one key is refused and the others stay claimed,
-                // and its output is not kept then: release every key so none is left held.
-                // A key this host does not hold is refused its release; that is the point.
-                for key in keys {
-                    let release = self.argv("release", std::slice::from_ref(key));
-                    let _ = self.runner.run(&self.dir, &release);
-                }
-                return Err(format!("claim-batch: {error}"));
-            }
-        };
+        // The CLI exits non-zero when a row is refused but still prints every row.
+        let answer = self
+            .runner
+            .run_lenient(&self.dir, &claim)
+            .map_err(|err| format!("claim-batch: {err}; outcome unknown, keys may be held"))?;
         let rows = json(&answer, "claim-batch")?;
         let rows = rows["results"]
             .as_array()
             .ok_or("claim-batch: no results array")?;
-        rows.iter()
-            .map(|row| {
-                let key = text(row, "key", "claim-batch")?;
-                let epoch = row["epoch"]
-                    .as_u64()
-                    .ok_or_else(|| format!("claim-batch: {key} refused: {row}"))?;
-                Ok((key.to_owned(), epoch))
-            })
-            .collect()
+        let (mut held, mut refused) = (Vec::new(), Vec::new());
+        for row in rows {
+            let key = text(row, "key", "claim-batch")?.to_owned();
+            match row["epoch"].as_u64() {
+                Some(epoch) => held.push((key, epoch)),
+                None => refused.push(format!("{key}: {row}")),
+            }
+        }
+        if refused.is_empty() {
+            return Ok(held);
+        }
+        // Give back what this attempt got, at the epochs it got, and say what could not be.
+        let failures: Vec<String> = held
+            .iter()
+            .filter_map(|(key, epoch)| self.release(key, *epoch).err())
+            .collect();
+        let mut error = format!("claim-batch refused {}", refused.join("; "));
+        if !failures.is_empty() {
+            error.push_str(&format!("; release failed: {}", failures.join("; ")));
+        }
+        Err(error)
     }
 }
 
@@ -77,7 +94,7 @@ pub struct GhCi<R: CommandRunner> {
 }
 
 impl<R: CommandRunner> CiRuns for GhCi<R> {
-    fn runs(&mut self, head: &str) -> Result<Vec<CiRun>, String> {
+    fn runs(&mut self, head: &str, pr: u64) -> Result<Vec<CiRun>, String> {
         let endpoint = format!(
             "repos/{}/actions/runs?head_sha={head}&per_page=100",
             self.repo
@@ -87,9 +104,17 @@ impl<R: CommandRunner> CiRuns for GhCi<R> {
         let runs = answer["workflow_runs"]
             .as_array()
             .ok_or("gh api runs: no workflow_runs array")?;
+        // Another pull request on the same commit has its own runs; only this one's count.
+        let of_pr = |run: &&Value| {
+            run["pull_requests"]
+                .as_array()
+                .is_some_and(|prs| prs.iter().any(|found| found["number"].as_u64() == Some(pr)))
+        };
         runs.iter()
+            .filter(of_pr)
             .map(|run| {
                 Ok(CiRun {
+                    name: text(run, "name", "gh api runs")?.to_owned(),
                     id: run["id"].as_u64().ok_or("gh api runs: run without id")?,
                     attempt: run["run_attempt"]
                         .as_u64()

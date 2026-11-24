@@ -598,3 +598,22 @@ fn journal_rows_are_written_per_item_key() {
     let journal = journal_row("demo/repo", "demo:ITEM", BASE, 3, row).unwrap();
     assert_eq!(journal["batch_key"], "demo:ITEM");
 }
+
+#[test]
+fn an_empty_check_list_leaves_no_stamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = shell(
+        dir.path(),
+        Fake {
+            head: HEAD.into(),
+            ..Fake::default()
+        },
+    );
+    steps.config.checks.clear();
+    let error = steps.fast_checks(HEAD).unwrap_err();
+    assert_eq!(error, "no fast checks configured");
+    assert!(
+        !stamp_of(&steps, HEAD).exists(),
+        "no check stood behind a stamp"
+    );
+}

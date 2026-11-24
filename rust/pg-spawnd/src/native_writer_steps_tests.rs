@@ -1,6 +1,7 @@
 use crate::native_writer::{quota, Driver};
 use crate::native_writer_steps::AgentSteps;
 use pg_spawnd::step_runner::*;
+
 use pg_worker_core::batch_steps::*;
 use serde_json::{json, Value};
 
@@ -23,11 +24,25 @@ struct Fake {
     execute_error: Option<String>,
     /// Writer turns that leave HEAD where it was.
     no_commit: bool,
+    /// Where stamps are written; fast checks of a fake without one leave none.
+    stamp_dir: Option<std::path::PathBuf>,
+    prepared: usize,
+    /// HIGH finding lines per review text.
+    findings: usize,
+    /// The base `prepare` resolves, when not BASE.
+    moved_base: Option<String>,
 }
 
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
-        unreachable!("the worktree step prepares")
+        self.prepared += 1;
+        Ok(self.moved_base.clone().unwrap_or_else(|| BASE.into()))
+    }
+    fn worktree(&self) -> Option<std::path::PathBuf> {
+        Some("/nonexistent/worktree".into())
+    }
+    fn stamp_path(&mut self, head: &str) -> Option<std::path::PathBuf> {
+        self.stamp_dir.as_ref().map(|dir| dir.join(head))
     }
     fn refresh_base(&mut self) -> Result<String, String> {
         unreachable!()
@@ -54,6 +69,9 @@ impl Driver for Fake {
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         self.stamped.push(head.into());
+        if let Some(dir) = &self.stamp_dir {
+            std::fs::write(dir.join(head), "green\n").map_err(|err| err.to_string())?;
+        }
         Ok(())
     }
     fn stamped(&mut self, head: &str) -> bool {
@@ -68,7 +86,7 @@ impl Driver for Fake {
         };
         Ok(
             json!({"verdict":verdict, "head":head, "run_id":format!("run-r{}", self.reviews.len()),
-            "text":format!("HIGH a.rs:1 - finding\nVERDICT: {verdict}\n")}),
+            "text":format!("{}VERDICT: {verdict}\n", "HIGH a.rs:1 - finding\n".repeat(self.findings.max(1)))}),
         )
     }
     fn gates(&mut self) -> Result<(), String> {
@@ -336,4 +354,122 @@ fn the_deterministic_steps_are_not_agent_steps() {
         .unwrap_err()
         .contains("not an agent step"));
     assert!(steps.claim(&[]).is_err());
+}
+
+#[test]
+fn the_worktree_step_prepares_the_native_base_and_checks_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = agents(Fake::default(), dir.path());
+    let made = steps.worktree("claim", BASE).unwrap();
+    assert_eq!(made.worktree, "/nonexistent/worktree");
+    assert_eq!(
+        steps.driver.prepared, 1,
+        "the driver pinned the base the review reads"
+    );
+    let mut moved = agents(
+        Fake {
+            moved_base: Some(sha('7')),
+            ..Fake::default()
+        },
+        dir.path(),
+    );
+    assert!(moved.worktree("claim", BASE).unwrap_err().contains("not"));
+}
+
+#[test]
+fn the_fast_check_stamp_is_the_one_the_driver_wrote_and_the_push_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Fake {
+        stamp_dir: Some(dir.path().to_owned()),
+        ..Fake::default()
+    };
+    let mut steps = agents(fake, dir.path());
+    let head = sha('1');
+    let checked = steps.fast_checks(&head).unwrap();
+    assert_eq!(checked.stamp, dir.path().join(&head).to_string_lossy());
+    steps.verify_stamp(&head, &checked.stamp).unwrap();
+    assert!(
+        steps.verify_stamp(&head, "/elsewhere/stamp").is_err(),
+        "another path is no receipt"
+    );
+    assert!(
+        steps.verify_stamp(&sha('2'), &checked.stamp).is_err(),
+        "another head is no receipt"
+    );
+}
+
+#[test]
+fn a_driver_that_leaves_no_stamp_fails_the_fast_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = agents(Fake::default(), dir.path());
+    let error = steps.fast_checks(&sha('1')).unwrap_err();
+    assert!(error.contains("left no stamp"), "{error}");
+}
+
+/// A review round that asks for changes with `count` HIGH findings.
+fn changes(steps: &mut AgentSteps<Fake>, head: &str, count: usize) -> Review {
+    steps.driver.stamped.push(head.into());
+    steps.driver.verdicts = vec!["REQUEST_CHANGES"];
+    steps.driver.findings = count;
+    steps.review(head, "stamp").unwrap()
+}
+
+#[test]
+fn the_previous_review_survives_a_restart_for_the_delta_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = sha('1');
+    let mut first = agents(Fake::default(), dir.path());
+    changes(&mut first, &head, 1);
+    // A new process: the adapter and the driver are new, the findings directory is the same.
+    let mut second = agents(Fake::default(), dir.path());
+    second.driver.stamped.push(sha('2'));
+    second.review(&sha('2'), "stamp").unwrap();
+    let previous = second.driver.reviews[0].1.as_ref().expect("a delta review");
+    assert_eq!(previous["head"], head.as_str());
+    assert!(previous["text"].as_str().unwrap().contains("HIGH a.rs:1"));
+    // An accepting review clears it: the next head is not a delta of a closed round.
+    second.driver.stamped.push(sha('3'));
+    second.review(&sha('3'), "stamp").unwrap();
+    assert!(second.driver.reviews[1].1.is_none());
+}
+
+#[test]
+fn rounds_that_do_not_improve_stop_the_batch_before_the_fix_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = agents(Fake::default(), dir.path());
+    let mut last = None;
+    for round in 1..=3 {
+        let head = sha(char::from(b'a' + round));
+        let review = changes(&mut steps, &head, 2);
+        last = Some((head, review.review));
+        if round < 3 {
+            let (head, review) = last.as_ref().unwrap();
+            steps.fix(head, "writer-session", review).unwrap();
+        }
+    }
+    let (head, review) = last.unwrap();
+    let turns = steps.driver.turns.len();
+    let error = steps.fix(&head, "writer-session", &review).unwrap_err();
+    assert_eq!(error, "round_stop: no_progress");
+    assert_eq!(steps.driver.turns.len(), turns, "the stop spent no turn");
+}
+
+#[test]
+fn the_eighth_round_is_the_last_even_when_every_round_improves() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = agents(Fake::default(), dir.path());
+    // Counts 128,64,..,1 halve every round, so only the cap ends it, at round 8.
+    let mut review = None;
+    for round in 1..=8u8 {
+        let head = sha(char::from(b'a' + round));
+        review = Some((
+            head.clone(),
+            changes(&mut steps, &head, 1usize << (8 - round)).review,
+        ));
+    }
+    let (head, id) = review.unwrap();
+    assert_eq!(
+        steps.fix(&head, "s", &id).unwrap_err(),
+        "round_stop: round_cap"
+    );
 }

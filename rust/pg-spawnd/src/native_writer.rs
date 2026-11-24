@@ -23,6 +23,15 @@ pub(crate) trait Driver {
     fn fast_checks(&mut self, head: &str) -> Result<(), String>;
     /// Whether the fast-checks stamp for exactly `head` exists.
     fn stamped(&mut self, head: &str) -> bool;
+    /// Where the stamp of `head` is kept, for the step runner's receipts; `None` when the
+    /// driver keeps none.
+    fn stamp_path(&mut self, _head: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+    /// The checkout the writer works in, once prepared.
+    fn worktree(&self) -> Option<std::path::PathBuf> {
+        None
+    }
     /// Start one review run on `head` and return its structured verdict, read from the
     /// review run record: `verdict` (ACCEPT, REQUEST_CHANGES or no_verdict), `head`,
     /// `run_id`, `text`. `previous` is the last REQUEST_CHANGES review, for a delta review.
