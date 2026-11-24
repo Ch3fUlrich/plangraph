@@ -45,6 +45,8 @@ jobs:
       browser: ${{ steps.sel.outputs.browser }}
       full: ${{ steps.sel.outputs.full }}
       tested: ${{ steps.sel.outputs.tested }}
+      evidence: ${{ steps.sel.outputs.evidence }}
+      as-of: ${{ steps.asof.outputs.as-of }}
     permissions:
       contents: read
       statuses: read
@@ -64,8 +66,23 @@ jobs:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           extra=()
+          # A reworded head with the tree of its previous head reuses that head's verified green full run
+          # (tools/ci_select.py reword_evidence); anything unverified leaves the suite to run again.
+          if [ "${{ github.event_name }}" = pull_request ] && [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "$HEAD_SHA" ]; then
+            if gh api "repos/${{ github.repository }}/commits/$BEFORE_SHA/statuses?per_page=100" > "$RUNNER_TEMP/old-statuses.json" 2>/dev/null; then
+              run_id=$(jq -r '[.[] | select(.context == "ci-full")] | sort_by(.id) | last | (.description // "") | capture("run (?<id>[0-9]+) attempt").id // empty' "$RUNNER_TEMP/old-statuses.json" 2>/dev/null || true)
+              old_tree=$(gh api "repos/${{ github.repository }}/git/commits/$BEFORE_SHA" --jq .tree.sha 2>/dev/null || true)
+              if [ -n "$run_id" ] && [ -n "$old_tree" ] && gh api "repos/${{ github.repository }}/actions/runs/$run_id" > "$RUNNER_TEMP/old-run.json" 2>/dev/null \
+                  && gh api "repos/${{ github.repository }}/actions/runs/$run_id/attempts/$(jq -r .run_attempt "$RUNNER_TEMP/old-run.json")/jobs?per_page=100" > "$RUNNER_TEMP/old-jobs.json" 2>/dev/null; then
+                extra=(--statuses "$RUNNER_TEMP/old-statuses.json" --tree "$(git rev-parse "$HEAD_SHA^{tree}")" \
+                  --old-head "$BEFORE_SHA" --new-head "$HEAD_SHA" --old-tree "$old_tree" --old-run "$RUNNER_TEMP/old-run.json" \
+                  --old-jobs "$RUNNER_TEMP/old-jobs.json")
+              fi
+            fi
+          fi
           if [ "${{ github.event_name }}" = push ] && [ -n "$LAND_CREATOR_ID" ]; then
             if gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"; then
               extra=(--statuses "$RUNNER_TEMP/statuses.json" --tree "$(git rev-parse '${{ github.sha }}^{tree}')" \
@@ -75,6 +92,10 @@ jobs:
           python3 tools/ci_select.py select --event "${{ github.event_name }}" \
             --base-ref "$PR_BASE_REF" --head-ref "$PR_HEAD_REF" --labels "$PR_LABELS" \
             --base "$BASE_SHA" --head "$HEAD_SHA" "${extra[@]}"
+      # One UTC timestamp per run attempt: every pytest job and the quarantine runs read the same ledger window.
+      - id: asof
+        name: Run timestamp for the quarantine ledger
+        run: echo "as-of=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" >> "$GITHUB_OUTPUT"
 
   # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
   # the private word list never enters CI; output is path:line:rule only. Runs on every change.
@@ -132,6 +153,56 @@ jobs:
           CHANGELOG_BASE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || github.event_name == 'pull_request' && 'origin/main' || 'HEAD~1' }}
         run: python3 tools/check_changelog_docs.py
 
+  # One pg-spawnd release build per run (with the ci-flake helper), shared by every pytest shard of both suites
+  # through the pg-spawnd-bin artifact. Cargo caches are saved only by a push to the default branch, so a pull
+  # request restores main's build (restore-keys) and never plants one.
+  build-spawnd:
+    name: 'Build pg-spawnd once for the run'
+    needs: select
+    if: needs.select.outputs.pytest == 'true' || needs.select.outputs.pytest-postgres == 'true'
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 3
+      - uses: ./.github/actions/setup-rust
+        timeout-minutes: 3
+      - uses: actions/cache/restore@v4
+        id: rust-cache
+        timeout-minutes: 3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-release-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
+          restore-keys: rust-release-${{ runner.os }}-
+      - name: Build pg-spawnd and ci-flake
+        timeout-minutes: 8
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 465
+          command: cargo build -j "$(nproc)" --release -p pg-spawnd --manifest-path rust/Cargo.toml
+      - name: Save the Cargo build for later runs
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.rust-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-release-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
+      - uses: actions/upload-artifact@v4
+        timeout-minutes: 3
+        with:
+          name: pg-spawnd-bin
+          path: |
+            rust/target/release/pg-spawnd
+            rust/target/release/ci-flake
+          if-no-files-found: error
+          retention-days: 1
+
   pytest:
     name: "Python tests, SQLite keeper (shard ${{ fromJSON('[1,2,3,4]')[matrix.shard] }} of ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 4 || 3 }})"
     strategy:
@@ -140,7 +211,7 @@ jobs:
         shard: ${{ fromJSON(vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '[0,1,2,3]' || '[0,1,2]') }}
     env:
       PYTEST_SHARD: ${{ matrix.shard }}/${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 4 || 3 }}
-    needs: select
+    needs: [select, build-spawnd]
     if: needs.select.outputs.pytest == 'true'
     runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 20
@@ -150,20 +221,9 @@ jobs:
         with: {fetch-depth: 0}
       - uses: ./.github/actions/setup-rust
         timeout-minutes: 3
-      - uses: actions/cache@v4
+      - name: Fetch the fleet projection helper built once for this run
         timeout-minutes: 3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
-      - name: Build fleet projection helper
-        timeout-minutes: 8
-        uses: ./.github/actions/bounded-step
-        with:
-          seconds: 465
-          command: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
+        uses: ./.github/actions/fetch-spawnd
       - name: Set up Python 3.12
         timeout-minutes: 3
         uses: actions/setup-python@v5
@@ -251,19 +311,77 @@ jobs:
               echo '{"tests": ["tests"]}' > "$RUNNER_TEMP/plan.json"
             fi
             python -c 'import json, sys; plan = json.load(open(sys.argv[1])); print(json.dumps(plan), flush=True); sys.exit(0 if plan["tests"] else (print("Empty test selection", file=sys.stderr) or 5))' "$RUNNER_TEMP/plan.json"
+      - name: Quarantine ledger and run timestamp
+        id: quarantine
+        timeout-minutes: 3
+        uses: ./.github/actions/quarantine-ledger
+        with:
+          as-of: ${{ needs.select.outputs.as-of }}
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
       - name: pytest
+        id: pytest
         timeout-minutes: 15
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # The same pinned duration map balances every shard of the run; each green shard writes its own timing file.
+          PYTEST_SHARD_DURATIONS_FILE: .github/pytest-durations-sqlite.json
+          PYTEST_SHARD_DURATIONS_OUT: ${{ runner.temp }}/durations/sqlite-${{ matrix.shard }}.json
         uses: ./.github/actions/bounded-step
         with:
           seconds: 885
           command: |
+            mkdir -p "$RUNNER_TEMP/durations"
+            log="$RUNNER_TEMP/pytest-first.log"
             if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
-              python tools/affected_tests.py --base "$BASE_SHA" --run -n auto --maxfail 10
+              python tools/affected_tests.py --base "$BASE_SHA" --run -n auto --maxfail 10 2>&1 | tee "$log"
             else
-              python -m pytest -q -n auto --dist loadgroup --durations=30 tests
+              python -m pytest -q -n auto --dist loadgroup --durations=30 tests 2>&1 | tee "$log"
             fi
+      # Classification only: the job is already red because the step above failed, whatever this step finds.
+      - name: Retry the failed tests once at the same SHA
+        id: retry
+        if: ${{ failure() && steps.pytest.outcome == 'failure' && !(github.event_name == 'pull_request' && needs.select.outputs.full != 'true') }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: ./.github/actions/pytest-retry
+        with:
+          suite: sqlite
+          first-log: ${{ runner.temp }}/pytest-first.log
+      - name: Upload the same-SHA retry logs and record
+        if: ${{ always() && steps.retry.outcome != 'skipped' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-sqlite-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/flake-sqlite
+          if-no-files-found: ignore
+      - name: Upload shard timings
+        if: ${{ success() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: durations-sqlite-${{ matrix.shard }}
+          path: ${{ runner.temp }}/durations/sqlite-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 14
+      # Reporting only: the active quarantined tests run here with their owner and expiry; they never block.
+      - name: Quarantined tests (reporting, never blocking)
+        if: ${{ always() && matrix.shard == 0 && steps.quarantine.outputs.active != '0' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          PYTEST_QUARANTINE_MODE: quarantine
+          PYTEST_SHARD: ''
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 585
+          command: |
+            log="$RUNNER_TEMP/quarantine-run.log"
+            status=0
+            python -m pytest -q -rA -n auto --dist loadgroup tests > "$log" 2>&1 || status=$?
+            { echo '### Quarantined tests (SQLite suite)'; echo '```'; tail -n 40 "$log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
 
     # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
     # committed local assets, so the job never needs network access to a CDN.
@@ -387,7 +505,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2]
-    needs: select
+    needs: [select, build-spawnd]
     if: needs.select.outputs.pytest-postgres == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -420,20 +538,9 @@ jobs:
         run: echo "PG_CONTRACT_LATENCY_DIR=$(mktemp -d "$RUNNER_TEMP/pg-contract-latency.XXXXXX")" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-rust
         timeout-minutes: 3
-      - uses: actions/cache@v4
+      - name: Fetch the fleet projection helper built once for this run
         timeout-minutes: 3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
-      - name: Build fleet projection helper
-        timeout-minutes: 8
-        uses: ./.github/actions/bounded-step
-        with:
-          seconds: 465
-          command: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
+        uses: ./.github/actions/fetch-spawnd
       - name: Set up Python 3.12
         timeout-minutes: 3
         uses: actions/setup-python@v5
@@ -481,24 +588,82 @@ jobs:
             else
               PYTEST_SHARD= python -m pytest -q --collect-only tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
             fi
+      - name: Quarantine ledger and run timestamp
+        id: quarantine
+        timeout-minutes: 3
+        uses: ./.github/actions/quarantine-ledger
+        with:
+          as-of: ${{ needs.select.outputs.as-of }}
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
       - name: pytest (contract suite + keeper storage tests on Postgres)
+        id: pytest
         timeout-minutes: 30
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PYTEST_SHARD_DURATIONS_FILE: .github/pytest-durations-postgres.json
+          PYTEST_SHARD_DURATIONS_OUT: ${{ runner.temp }}/durations/postgres-${{ matrix.shard }}.json
         uses: ./.github/actions/bounded-step
         with:
           seconds: 1785
           command: |
+            mkdir -p "$RUNNER_TEMP/durations"
+            log="$RUNNER_TEMP/pytest-first.log"
             # keeper modules that never open the SQLite file directly
             FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                     | xargs grep -L sqlite3 | tr '\n' ' ')
             if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
-              python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto --maxfail 10
-              exit $?
+              python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto --maxfail 10 2>&1 | tee "$log"
+              exit "${PIPESTATUS[0]}"
             fi
             # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
             python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
-              tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
+              tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES 2>&1 | tee "$log"
+      - name: Retry the failed tests once at the same SHA
+        id: retry
+        if: ${{ failure() && steps.pytest.outcome == 'failure' && !(github.event_name == 'pull_request' && needs.select.outputs.full != 'true') }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: ./.github/actions/pytest-retry
+        with:
+          suite: postgres
+          first-log: ${{ runner.temp }}/pytest-first.log
+      - name: Upload the same-SHA retry logs and record
+        if: ${{ always() && steps.retry.outcome != 'skipped' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-postgres-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/flake-postgres
+          if-no-files-found: ignore
+      - name: Upload shard timings
+        if: ${{ success() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: durations-postgres-${{ matrix.shard }}
+          path: ${{ runner.temp }}/durations/postgres-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Quarantined tests (reporting, never blocking)
+        if: ${{ always() && matrix.shard == 0 && steps.quarantine.outputs.active != '0' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          PYTEST_QUARANTINE_MODE: quarantine
+          PYTEST_SHARD: ''
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 585
+          command: |
+            log="$RUNNER_TEMP/quarantine-run.log"
+            status=0
+            FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
+                    | xargs grep -L sqlite3 | tr '\n' ' ')
+            python -m pytest -q -rA -n auto --dist loadgroup tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
+              tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES > "$log" 2>&1 || status=$?
+            { echo '### Quarantined tests (Postgres suite)'; echo '```'; tail -n 40 "$log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
 
   rust:
     name: 'Rust workspace on Linux: fmt, clippy, tests'
@@ -545,7 +710,8 @@ jobs:
           # Test threads stay capped: one thread per CPU on a large runner makes the pg-spawnd launch tests flake.
           echo "RUST_TEST_THREADS=8" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$target" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: rust-cache
         if: env.CI_SELF_HOSTED_RUN != '1'
         with:
           path: |
@@ -554,6 +720,7 @@ jobs:
             rust/target
           # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
           key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
+          restore-keys: rust-dev-${{ runner.os }}-
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy
@@ -564,13 +731,96 @@ jobs:
         with: {python-version: "3.12"}
       - name: Build pg-jail helper
         run: cargo build -p pg-jail
+      - name: Build ci-flake
+        run: cargo build -p pg-spawnd --bin ci-flake
+      - name: Quarantine ledger and run timestamp
+        id: quarantine
+        uses: ./.github/actions/quarantine-ledger
+        with:
+          as-of: ${{ needs.select.outputs.as-of }}
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          flake-bin: ${{ env.CARGO_TARGET_DIR || format('{0}/rust/target', github.workspace) }}/debug/ci-flake
       - name: cargo test
+        id: cargo-test
         run: |
-          PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test
+          set -o pipefail
+          target="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}"
+          flake="$target/debug/ci-flake"
+          # Active quarantined Rust tests (cargo:<package>:<test path> in the ledger) leave the blocking run and run in the
+          # reporting step. An exclusion names its package: that package runs on its own with --skip, every other
+          # package in one workspace run, so a same-named test elsewhere is never skipped.
+          declare -A skips=()
+          while read -r package name; do
+            if [ -n "$name" ]; then skips[$package]+=" --skip $name"; fi
+          done < <("$flake" cargo-quarantine --ledger "$PYTEST_QUARANTINE_FILE" --as-of "$PYTEST_QUARANTINE_AS_OF" --mode blocking)
+          excluded=()
+          for package in "${!skips[@]}"; do excluded+=(--exclude "$package"); done
+          {
+            status=0
+            PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test --no-fail-fast --workspace "${excluded[@]}" || status=$?
+            for package in "${!skips[@]}"; do
+              # shellcheck disable=SC2086
+              PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test --no-fail-fast -p "$package" -- --exact ${skips[$package]} || status=$?
+            done
+            exit "$status"
+          } 2>&1 | tee "$RUNNER_TEMP/cargo-first.log"
+      # Classification only: the job is already red because cargo test failed, whatever this step finds.
+      - name: Retry the failed Rust tests once at the same SHA
+        id: cargo-retry
+        if: ${{ failure() && steps.cargo-test.outcome == 'failure' }}
+        continue-on-error: true
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUNNER_ID: ${{ runner.name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -uo pipefail
+          flake="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/ci-flake"
+          out="$RUNNER_TEMP/flake-cargo"
+          mkdir -p "$out"
+          cp "$RUNNER_TEMP/cargo-first.log" "$out/first.log"
+          : > "$out/second.log"
+          mapfile -t ids < <("$flake" failed-ids "$out/first.log")
+          if [ "${#ids[@]}" -gt 0 ] && [ "${#ids[@]}" -le 50 ]; then
+            PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" timeout -k 5s 900 \
+              cargo test --no-fail-fast -- --exact "${ids[@]}" > "$out/second.log" 2>&1
+          fi
+          "$flake" classify --suite cargo --runner "$RUNNER_ID" --run-id "$RUN_ID" --attempt "$RUN_ATTEMPT" --sha "$HEAD_SHA" \
+            --first "$out/first.log" --second "$out/second.log" --out "$out" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload the same-SHA retry logs and record
+        if: ${{ always() && steps.cargo-retry.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-cargo-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/flake-cargo
+          if-no-files-found: ignore
+      # Reporting only: the active quarantined Rust tests run here with their owner and expiry; they never block.
+      - name: Quarantined Rust tests (reporting, never blocking)
+        if: ${{ always() && steps.quarantine.outputs.active != '0' }}
+        continue-on-error: true
+        run: |
+          flake="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/ci-flake"
+          echo '### Quarantined Rust tests' >> "$GITHUB_STEP_SUMMARY"
+          while read -r package name; do
+            if [ -z "$name" ]; then continue; fi
+            echo "- $package $name" >> "$GITHUB_STEP_SUMMARY"
+            PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test -p "$package" -- --exact "$name" 2>&1 | tail -n 20
+          done < <("$flake" cargo-quarantine --ledger "$PYTEST_QUARANTINE_FILE" --as-of "$PYTEST_QUARANTINE_AS_OF" --mode quarantine)
       - uses: actions/setup-python@v5
         with: {python-version: "3.14"}
       - name: Native writer lifecycle (Python 3.14)
         run: cargo test -p pg-spawnd --test native_writer
+      - name: Save the Cargo build for later runs
+        if: ${{ always() && env.CI_SELF_HOSTED_RUN != '1' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
 
   rust-windows:
     name: 'Rust spawner and worker core tests on Windows'
@@ -585,7 +835,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: rust-cache
         with:
           path: |
             ~/.cargo/registry
@@ -593,10 +844,20 @@ jobs:
             rust/target
           # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
           key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
+          restore-keys: rust-dev-${{ runner.os }}-
       - name: cargo test -p pg-spawnd
         run: cargo test -p pg-spawnd
       - name: cargo test -p pg-worker-core
         run: cargo test -p pg-worker-core
+      - name: Save the Cargo build for later runs
+        if: ${{ always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
 
   rust-worker:
     name: 'Rust worker crate: fmt, clippy, tests'
@@ -646,7 +907,8 @@ jobs:
           # Test threads stay capped: one thread per CPU on a large runner makes the pg-spawnd launch tests flake.
           echo "RUST_TEST_THREADS=8" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$target" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: rust-cache
         if: env.CI_SELF_HOSTED_RUN != '1'
         with:
           path: |
@@ -654,6 +916,7 @@ jobs:
             ~/.cargo/git
             rust/worker/target
           key: rust-worker-dev-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker/Cargo.toml', 'rust/worker-core/Cargo.toml', 'rust/pg-spawnd/Cargo.toml', 'rust/Cargo.lock', 'rust/Cargo.toml') }}
+          restore-keys: rust-worker-dev-${{ runner.os }}-
       - uses: ./.github/actions/setup-temporal
       - name: cargo fmt --check
         run: cargo fmt --check
@@ -668,6 +931,15 @@ jobs:
           # Inside the cached target dir: the guard's nested cargo checks stay warm between runs.
           export PG_ADMISSION_GUARD_TARGET_DIR="$CARGO_TARGET_DIR/admission-guard"
           cargo run --manifest-path ../Cargo.toml -p pg-spawnd --bin ci-temporal -- cargo test
+      - name: Save the Cargo build for later runs
+        if: ${{ always() && env.CI_SELF_HOSTED_RUN != '1' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/worker/target
+          key: rust-worker-dev-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker/Cargo.toml', 'rust/worker-core/Cargo.toml', 'rust/pg-spawnd/Cargo.toml', 'rust/Cargo.lock', 'rust/Cargo.toml') }}
 
   rust-spike:
     name: 'Rust replay spike tests'
@@ -711,7 +983,8 @@ jobs:
           # Test threads stay capped: one thread per CPU on a large runner makes the pg-spawnd launch tests flake.
           echo "RUST_TEST_THREADS=8" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$target" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: rust-cache
         if: env.CI_SELF_HOSTED_RUN != '1'
         with:
           path: |
@@ -719,13 +992,23 @@ jobs:
             ~/.cargo/git
             rust/spikes/temporal-spike/target
           key: temporal-spike-${{ hashFiles('rust/spikes/temporal-spike/Cargo.lock') }}
+          restore-keys: temporal-spike-
       - name: cargo test replay
         run: cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay
+      - name: Save the Cargo build for later runs
+        if: ${{ always() && env.CI_SELF_HOSTED_RUN != '1' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/spikes/temporal-spike/target
+          key: temporal-spike-${{ hashFiles('rust/spikes/temporal-spike/Cargo.lock') }}
 
   ci-gate:
     name: ci-gate
     runs-on: ubuntu-24.04
-    needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike, rust-windows, browser]
+    needs: [select, scrub, file-size, new-code-lang, changelog-docs, build-spawnd, pytest, pytest-postgres, rust, rust-worker, rust-spike, rust-windows, browser]
     if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
     permissions:
       contents: read
@@ -787,7 +1070,7 @@ jobs:
       # it is evidence for the lander, never a required check: the step runs after the required checks and
       # cannot fail the gate (a read-only token on a fork pull request just posts nothing).
       - name: Post ci-full evidence
-        if: ${{ success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true' }}
+        if: ${{ success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true' && needs.select.outputs.tested != 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -796,3 +1079,58 @@ jobs:
           text=$(python3 tools/ci_select.py ci-full --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
             --tested-tree "$(git rev-parse 'HEAD^{tree}')" --head-tree "$(git rev-parse "$PR_HEAD^{tree}")") || exit 0
           gh api "repos/${{ github.repository }}/statuses/$PR_HEAD" -f state=success -f context=ci-full -f description="$text"
+      # A reworded head that reused the verified green run of its previous head (tools/ci_select.py reword_evidence)
+      # carries that run's evidence, so landing sees the same run, attempt and tree for the new commit.
+      - name: Carry ci-full evidence to a reworded head
+        if: ${{ success() && github.event_name == 'pull_request' && needs.select.outputs.tested == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          EVIDENCE: ${{ needs.select.outputs.evidence }}
+        run: |
+          text=$(printf '%s' "$EVIDENCE" | sed -nE 's/^(run [0-9]+ attempt [0-9]+ tree [0-9a-f]{40}) reused from .*/\1/p')
+          if [ -z "$text" ]; then exit 0; fi
+          gh api "repos/${{ github.repository }}/statuses/$PR_HEAD" -f state=success -f context=ci-full -f description="$text"
+      # Operator summary: owner and expiry of every active quarantined test, from the run's ledger.
+      - name: Quarantine ledger in the gate summary
+        if: ${{ always() && needs.select.result == 'success' && needs.build-spawnd.result == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/fetch-spawnd
+      - name: Publish the quarantine ledger
+        if: ${{ always() && needs.select.result == 'success' && needs.build-spawnd.result == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/quarantine-ledger
+        with:
+          as-of: ${{ needs.select.outputs.as-of }}
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+      # Full runs only: the shard timings of this run, combined per suite, are the pinned input of the next train.
+      - name: Download shard timings
+        if: ${{ always() && needs.select.outputs.full == 'true' && needs.pytest.result == 'success' && needs.pytest-postgres.result == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: durations-*
+          path: ${{ runner.temp }}/shard-durations
+      - name: Combine shard timings per suite
+        if: ${{ always() && needs.select.outputs.full == 'true' && needs.pytest.result == 'success' && needs.pytest-postgres.result == 'success' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/combined"
+          mkdir -p "$out"
+          for suite in sqlite postgres; do
+            files=("$RUNNER_TEMP"/shard-durations/durations-"$suite"-*/*.json)
+            if [ -e "${files[0]}" ]; then
+              rust/target/release/ci-flake combine-durations --out "$out/shard-durations-$suite.json" "${files[@]}"
+            fi
+          done
+      - name: Upload the combined shard timings
+        if: ${{ always() && needs.select.outputs.full == 'true' && needs.pytest.result == 'success' && needs.pytest-postgres.result == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-durations-combined
+          path: ${{ runner.temp }}/combined
+          if-no-files-found: ignore
+          retention-days: 90
