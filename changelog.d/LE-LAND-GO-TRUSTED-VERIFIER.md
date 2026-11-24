@@ -1,0 +1,1 @@
+Add `land-train go-verify`: check a computed GO against the pinned workflow, job matrix, repository ref, approvals, delta review, replay and main state, bound to one repository, pull request, base, head, tree, manifest, run and attempt.

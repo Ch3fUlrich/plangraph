@@ -105,6 +105,7 @@ def run_gate(principal, name):
 
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
+          "merge_index_expired": 409, "merge_index_running": 409,
           "epoch_stale": 409, "round_stale": 409, "lease_held": 409, "same_principal": 409,
           "same_family": 409, "unavailable": 503, "exec_stale": 409,
           "bad_transition": 409, "exec_stale_state": 409,
@@ -373,10 +374,10 @@ class MergeRefresh:
 
     def consume(self):
         if self.state == "running":
-            raise Refused("conflict", "merge index refresh is running")
+            raise Refused("merge_index_running", "merge index refresh is running")
         if self.state == "ready":
             if monotonic() >= self.expires_at:
-                raise Refused("conflict", "merge index expired; start a refresh")
+                raise Refused("merge_index_expired", "merge index expired; start a refresh")
             self.used = True
 
     def _build(self):

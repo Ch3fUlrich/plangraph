@@ -399,6 +399,8 @@ def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_close
         assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
         assert started.wait(2)
         assert doors.http("system", "POST", path, {"refresh": "status"}) == (200, {"scan": "running"})
+        assert doors.http("system", "POST", path, {}) == (
+            409, {"error": "merge_index_running", "msg": "merge index refresh is running"})
         worker = next(thread for thread in threading.enumerate() if thread.name == "keeper-merge-index")
         unblock.set()
         worker.join(5)
@@ -412,7 +414,7 @@ def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_close
         assert status == 200 and body["next_after"] is None
         tick[0] += 300
         assert doors.http("system", "POST", path, {}) == (
-            409, {"error": "conflict", "msg": "merge index expired; start a refresh"})
+            409, {"error": "merge_index_expired", "msg": "merge index expired; start a refresh"})
         started.clear()
         unblock.clear()
         assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})

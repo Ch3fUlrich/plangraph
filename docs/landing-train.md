@@ -54,6 +54,26 @@ Git objects with replacement refs disabled. A mechanical merge can have an empty
 requires a passing gateway-witnessed review in the keeper mirror. The serving attempt must be from
 outside the delta's writer families, and the run must match the exact train head and artifact prompt.
 
+## Deploy table and computed GO
+
+`plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD
+[--declared FILE] [--blockers-out FILE]` derives what each part ships from the part's own commits and
+diff: a unit added or changed under `deploy/systemd`, or an added host binary, is a family of that part
+alone, so a unitless part never waits on another part's unit. Hosts come from the `Deploy-Hosts:` of the
+part's items (`--declared`, item key to hosts), else the `Deploy:` trailers of its commits, and each must be
+authorized. `CMD HOST FAMILY` is the host install dry run: exit 0 with no output passes, and it prints one
+`MISSING binary|file|env|path NAME` line per absent thing. The command prints `deploy: unit@host, ...` for
+the GO-REQ (only passing targets) and one `blocker` line per refused target; `--blockers-out` writes a
+`pg define` file with a blocker item for each.
+
+`plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
+(repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this
+binary's `tests.yml` digest and job matrix, binds repository, pull request, base, head, tree, manifest,
+run and attempt, and lists every refusal: `moved_head`, `stale_base`, `replay_mismatch`, `job_missing`,
+`job_not_green`, `mixed_attempt`, `stale_attempt`, `workflow_unpinned`, `ci_unbound`, `approval_missing`,
+`delta_missing`, `operator_path_unauthorized` (a gate path without a `Gate-Edit` grant for this head) and
+`main_not_green`.
+
 ## Push a built train
 
 The builder defaults to `land/train-NAME` and saves the ordered part heads in

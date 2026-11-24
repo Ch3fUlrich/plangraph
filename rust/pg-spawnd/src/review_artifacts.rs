@@ -172,7 +172,13 @@ pub(crate) fn write_review_artifacts_with_allowlist(
         .rev()
         .find(|line| line.to_ascii_lowercase().contains("verdict"))
         == Some("VERDICT: PASS");
-    if !passing || !accepts || !pg_worker_core::review_split::has_files_read(review) {
+    let tests_missing =
+        crate::review_test_evidence::required(&record["chosen_leg"]) && evidence["tested"] != true;
+    if !passing
+        || !accepts
+        || tests_missing
+        || !pg_worker_core::review_split::has_files_read(review)
+    {
         evidence["verdict"] = json!("HALT");
     }
     for (name, bytes) in [

@@ -290,7 +290,7 @@ consumers rather than matching Python source text or spawning Python from Rust.
 One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `main`.
 The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
-The spawner pins the item, epoch, review round, head, and run at seat admission. `tools/seat_verdict.py` persists the decision before delivery. Repost and backfill reuse that decision and recover its keeper receipt if the first reply was lost.
+The spawner pins the item, epoch, review round, head, and run at seat admission. `tools/seat_verdict.py` requires a standalone `TESTS:` report for a Sonnet 5.5 pass and refuses reports of denied or unrun tests. It persists the decision before delivery. Repost and backfill reuse that decision and recover its keeper receipt if the first reply was lost.
 Record-derived verdicts and backfill allow an operator-ordered override only when
 `override_reason` starts with `D-<n> operator` and that exact id appears once in
 `router/decisions-index.tsv` in the data repository named by `PG_DATA_DIR`.

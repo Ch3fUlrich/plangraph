@@ -373,7 +373,8 @@ class SpawnerRunner:
             if cmd[0] == 'claude' and (prepare_launch or not dry_run):
                 from plangraph.routing_support.claude_seat import configure_review_tests
                 tools_event = configure_review_tests(
-                    cmd, child_env, leg, role, self._ocdata_dirs, job_id, review_target=review_target)
+                    cmd, child_env, leg, role, self._ocdata_dirs, job_id,
+                    worktree=work_dir, review_target=review_target)
             if render_reason is None:
                 self._child_envs[job_id] = child_env
 
@@ -1026,9 +1027,10 @@ def spawn_service(*args, **kwargs):
                             if no_fallthrough:
                                 break
                             continue
-                        from .inline_diff import InlineDiffError
+                        from .inline_diff import InlineDiffError, review_sonnet_diff_prompt
                         try:
                             leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=watchdog.get('deadline'))
+                            leg_prompt = await review_sonnet_diff_prompt(leg_prompt, card, role, chosen, deadline=watchdog.get('deadline'))
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))

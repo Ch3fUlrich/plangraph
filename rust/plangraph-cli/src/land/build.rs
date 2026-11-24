@@ -57,7 +57,7 @@ fn base_date(repo: &Path, base: &str) -> Result<String, String> {
     git::out(repo, &["show", "-s", "--format=%cI", base])
 }
 
-fn part_base<'a>(repo: &Path, base: &'a str, parent: Option<&'a Parent>) -> &'a str {
+pub(super) fn part_base<'a>(repo: &Path, base: &'a str, parent: Option<&'a Parent>) -> &'a str {
     // An already-landed stack parent is covered by the current train base.
     match parent {
         Some(parent) if !in_base(repo, base, &parent.head) => &parent.head,

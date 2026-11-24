@@ -211,8 +211,8 @@ if 'client marker' in marker and '----- previous review -----' in prompt:
 if 'reject marker' in marker or 'client marker' in marker:
     text = 'HIGH writer.txt:1 - fixture finding\nHEAD: ' + head + '\nVERDICT: REQUEST_CHANGES\n'
 else:
-    fixed = subprocess.run(['git', 'cat-file', '-e', head + ':fix.txt'], capture_output=True).returncode == 0
-    tests = 'TESTS: cargo test -p fixture — 1 passed\n' if fixed else ''
+    # A counted Sonnet review must report a test result to count as ACCEPT.
+    tests = 'TESTS: cargo test -p fixture — 1 passed\n'
     text = 'FILES READ: writer.txt\n' + tests + 'HEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type':'result','is_error':False,'result':text}) + '\n')
 (run / 'verdict.json').write_text(json.dumps(dict(status='skipped', reason='no Keeper access')))
@@ -317,10 +317,10 @@ async def check():
     assert record['session_id'] == 'fixture-session' and record['resumes'] == 0, record
     assert record['review']['verdict'] == 'ACCEPT' and record['review']['head'] == record['final_head'], record
     assert record['review']['host'] == 'fixture-worker' and record['review']['item_key'] == 'demo:FIXTURE', record
-    assert record['review_test_status'] == 'untested', record
+    assert record['review_test_status'] == 'reported', record
     review_text = pathlib.Path(record['review']['path']).read_text()
     assert [line for line in review_text.splitlines() if line.startswith('TESTS:')] == [
-        'TESTS: none: reviewer supplied no test result'], review_text
+        'TESTS: cargo test -p fixture — 1 passed'], review_text
     assert record['review']['leg'] == 'claude-sonnet-5-5-high' and record['review']['harness'] == 'claude' and record['status_line'] == 'DONE', record
     assert record['fast_checks'] == {'head': record['final_head'], 'status': 'passed'}, record
     assert pathlib.Path(record['cwd']).is_dir(), record
@@ -419,7 +419,7 @@ async def check():
             run = json.loads(run_file.read_text())
             run.update(status='completed', host='fixture-worker', head_sha=head, overflow_remote=True,
                        chosen_leg={'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'},
-                       stdout_tail='FILES READ: writer.txt\nVERDICT: ACCEPT\n')
+                       stdout_tail='FILES READ: writer.txt\nTESTS: cargo test -p fixture — 1 passed\nVERDICT: ACCEPT\n')
             updated = run_file.with_suffix('.tmp')
             updated.write_text(json.dumps(run))
             updated.replace(run_file)
@@ -428,8 +428,8 @@ async def check():
                 if artifact.is_file(): break
                 await asyncio.sleep(.05)
             assert artifact.read_text() == (
-                f'HEAD: {head}\nTESTS: none: reviewer supplied no test result\n'
-                'FILES READ: writer.txt\nVERDICT: ACCEPT\n')
+                f'HEAD: {head}\nFILES READ: writer.txt\n'
+                'TESTS: cargo test -p fixture — 1 passed\nVERDICT: ACCEPT\n')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         holding = await admitted_spawn(service, dict(card=card, prompt='brief marker hold marker'))
         holding = service.result(holding['run_id'])
