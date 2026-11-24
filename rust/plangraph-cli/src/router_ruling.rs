@@ -9,8 +9,11 @@
 //! date or date range, a decision id, a pull request or a run id); and a metric word stands
 //! directly before a signed number with an optional attached unit (`median 250ms`,
 //! `delta -6.5 jobs/hour`, `trains=63`). A time of day, an id or an HTTP status is not a value.
-//! The field must be a completed measurement of ours: not a failed or pending query, and not
-//! another company's system.
+//! The field must be a completed measurement of ours. A phrase that says the query did not finish
+//! (aborted, failed, never ran, ...) or names another party's system is refused wherever it
+//! stands, except right after a number, where it describes what was counted (`counted 12 aborted
+//! launches`). A repository named in the field (`owner/name`) must be one of ours: the origin of
+//! the working checkout or one of the comma-separated `PLANGRAPH_OWN_REPOS`.
 
 const LABELS: [&str; 3] = ["cause", "size", "time"];
 const MEASURED: &str = "measured:";
@@ -25,15 +28,20 @@ const OWN_SOURCES: [&str; 7] = [
     "sqlite",
 ];
 
-/// Phrases of a measurement that found nothing, did not finish or failed (a pending queue of
-/// trains is a measured quantity; a pending or aborted query is not).
-const EMPTY: [&str; 20] = [
+/// Phrases of a measurement that found nothing, or a configured value that was never measured.
+const EMPTY: [&str; 7] = [
     "no result",
     "no data",
     "n/a",
     "not yet",
     "nothing found",
     "none found",
+    "configured",
+];
+
+/// Phrases that say the query did not finish: refused unless right after a number, where they
+/// describe what was counted (a pending queue of trains, 12 aborted launches).
+const UNFINISHED: [&str; 17] = [
     "query failed",
     "request failed",
     "timed out",
@@ -48,10 +56,13 @@ const EMPTY: [&str; 20] = [
     "interrupted",
     "incomplete",
     "partial result",
+    "never ran",
+    "did not run",
+    "not run",
 ];
 
-/// Another party's system named in the field. Ownership comes from what the field names as its
-/// source, not from topic words: our own merge queue is a fair subject, GitHub's is not.
+/// Another party's system named in the field (refused unless right after a number). Ownership
+/// comes from what the field names, not from topic words: our own merge queue is a fair subject.
 const EXTERNAL: [&str; 15] = [
     "github's",
     "gitlab",
@@ -129,20 +140,53 @@ fn metric(token: &str) -> bool {
         && !OWN_SOURCES.contains(&token)
 }
 
+/// Whether the phrase occurrences in `cell` are all right after a number (or there are none).
+fn only_after_numbers(cell: &str, phrases: &[&str]) -> bool {
+    phrases.iter().all(|phrase| {
+        cell.match_indices(phrase).all(|(at, _)| {
+            cell[..at]
+                .split_whitespace()
+                .next_back()
+                .is_some_and(|before| value(before.trim_matches(|c: char| c == ',' || c == '(')))
+        })
+    })
+}
+
+/// The `owner/name` a token attributes a result to, if it names a repository. A unit after a number
+/// (`jobs/hour`) and `and/or` are not repositories.
+fn repository(token: &str, previous: Option<&str>) -> Option<String> {
+    if previous.is_some_and(value) || token == "and/or" {
+        return None;
+    }
+    let path = token
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("github.com/");
+    let mut parts = path.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    let plain = |part: &str| {
+        !part.is_empty()
+            && part.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && part
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+    };
+    (plain(owner) && plain(name)).then(|| format!("{owner}/{}", name.trim_end_matches(".git")))
+}
+
 /// Whether the text of one `Measured:` field is evidence: a completed measurement that starts with
-/// one of our sources, holds an anchor and a metric with its value, and names no other company's
-/// system.
-fn measured_field(cell: &str) -> bool {
-    if EMPTY
-        .iter()
-        .chain(&EXTERNAL)
-        .any(|phrase| cell.contains(phrase))
+/// one of our sources, holds an anchor and a metric with its value, and names no other party's
+/// system or repository.
+fn measured_field(cell: &str, own_repos: &[String]) -> bool {
+    if EMPTY.iter().any(|phrase| cell.contains(phrase))
+        || !only_after_numbers(cell, &UNFINISHED)
+        || !only_after_numbers(cell, &EXTERNAL)
     {
         return false;
     }
     let tokens: Vec<String> = cell
         .split(|c: char| c.is_whitespace() || ",;()".contains(c))
-        .map(|t| t.trim_matches(|c: char| !(c.is_alphanumeric() || "#-+<>~%.".contains(c))))
+        .map(|t| t.trim_matches(|c: char| !(c.is_alphanumeric() || "#-+<>~%./".contains(c))))
         // A sentence-ending period is not a decimal point: `counted 14.` is 14.
         .map(|t| t.trim_end_matches('.'))
         // `metric=value` is two tokens: the metric and its value.
@@ -150,6 +194,13 @@ fn measured_field(cell: &str) -> bool {
         .filter(|t| !t.is_empty())
         .map(str::to_owned)
         .collect();
+    let foreign = tokens.iter().enumerate().any(|(i, token)| {
+        let previous = i.checked_sub(1).map(|j| tokens[j].as_str());
+        repository(token, previous).is_some_and(|repo| !own_repos.contains(&repo))
+    });
+    if foreign {
+        return false;
+    }
     let first = tokens.iter().find(|t| !matches!(t.as_str(), "our" | "the"));
     let source = first.is_some_and(|t| OWN_SOURCES.contains(&t.as_str()));
     let anchored = tokens.iter().any(|t| anchor(t));
@@ -157,6 +208,30 @@ fn measured_field(cell: &str) -> bool {
         .windows(2)
         .any(|pair| metric(&pair[0]) && !anchor(&pair[1]) && value(&pair[1]));
     source && anchored && measured
+}
+
+/// Our repositories: the origin of the working checkout and the comma-separated
+/// `PLANGRAPH_OWN_REPOS`, as lowercase `owner/name`.
+fn own_repos() -> Vec<String> {
+    let origin = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned());
+    let listed = std::env::var("PLANGRAPH_OWN_REPOS").unwrap_or_default();
+    origin
+        .iter()
+        .map(|url| {
+            let path = url.trim_end_matches('/').trim_end_matches(".git");
+            let mut tail = path.rsplit(['/', ':']);
+            let name = tail.next().unwrap_or("");
+            format!("{}/{name}", tail.next().unwrap_or(""))
+        })
+        .chain(listed.split(',').map(|repo| repo.trim().to_owned()))
+        .map(|repo| repo.to_lowercase())
+        .filter(|repo| repo.contains('/'))
+        .collect()
 }
 
 /// Positions of `label:` as a whole word (so `runtime:` and `timeout:` do not count).
@@ -183,6 +258,11 @@ fn labelled(lower: &str, label: &str) -> bool {
 /// The reason `text` is refused, or `None` when it states no cause, size or time, or when it
 /// carries a `Measured:` line with numbers.
 pub fn ruling_refusal(text: &str) -> Option<&'static str> {
+    refusal_with(text, &own_repos())
+}
+
+/// `ruling_refusal` with the repositories that count as ours given.
+fn refusal_with(text: &str, own_repos: &[String]) -> Option<&'static str> {
     let lower = text.to_lowercase();
     if !LABELS.iter().any(|label| labelled(&lower, label)) {
         return None;
@@ -195,7 +275,7 @@ pub fn ruling_refusal(text: &str) -> Option<&'static str> {
             .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-');
         let rest = &lower[at + MEASURED.len()..];
         let cell = rest.split(['\n', '|']).next().unwrap_or("");
-        own_field && measured_field(cell)
+        own_field && measured_field(cell, own_repos)
     });
     (!evidence).then_some(
         "ruling_no_measured: a cause, size or time needs a 'Measured:' line with our own numbers and their source",
@@ -283,6 +363,48 @@ mod tests {
             "cause: slow CI\nMeasured: keeper 2026-11-24 run-12 d-6744",
         ] {
             assert!(ruling_refusal(row).is_some(), "{row}");
+        }
+    }
+
+    fn mine() -> Vec<String> {
+        vec!["acme/plangraph".to_owned()]
+    }
+
+    #[test]
+    fn a_result_attributed_to_another_repository_or_that_never_ran_is_refused() {
+        for row in [
+            "cause: slow CI\nMeasured: ci-runs rails/rails 2026-11-24 trains=42",
+            "cause: slow CI\nMeasured: ci-runs for https://github.com/rails/rails/actions 2026-11-24 trains=42",
+            "cause: slow CI\nMeasured: ci-runs repo=Rails/Rails 2026-11-24 trains=42",
+            "cause: slow CI\nMeasured: keeper query that never ran, configured limit 5 on 2026-11-24",
+            "cause: slow CI\nMeasured: keeper 2026-11-24 query never ran, limit 5",
+        ] {
+            assert!(refusal_with(row, &mine()).is_some(), "{row}");
+        }
+        for row in [
+            "cause: slow CI\nMeasured: ci-runs acme/plangraph 2026-11-24 trains=42",
+            "cause: slow CI\nMeasured: ci-runs https://github.com/Acme/Plangraph.git 2026-11-24 trains=42",
+            "cause: slow CI\nMeasured: telemetry 2026-11-24 throughput delta -6.5 jobs/hour and/or 3 retries",
+        ] {
+            assert_eq!(refusal_with(row, &mine()), None, "{row}");
+        }
+    }
+
+    #[test]
+    fn state_and_party_words_describe_what_was_counted_right_after_a_number() {
+        for row in [
+            "cause: queue\nMeasured: keeper query 2026-11-24 counted 12 aborted launches",
+            "cause: queue\nMeasured: keeper query 2026-11-24 counted 12 third-party API timeouts in our launches",
+            "cause: queue\nMeasured: ledger 2026-11-24 counted 3 interrupted runs and 5 cancelled jobs",
+        ] {
+            assert_eq!(refusal_with(row, &mine()), None, "{row}");
+        }
+        for row in [
+            "cause: queue\nMeasured: keeper query aborted 2026-11-24 counted 12 launches",
+            "cause: queue\nMeasured: keeper 2026-11-24 query was aborted, counted 12 launches",
+            "cause: queue\nMeasured: keeper 2026-11-24 third-party queue counted 12 launches",
+        ] {
+            assert!(refusal_with(row, &mine()).is_some(), "{row}");
         }
     }
 
