@@ -12,3 +12,7 @@ pub mod step_runner_log;
 pub mod step_runner_shell;
 #[cfg(test)]
 mod step_runner_tests;
+pub mod step_services;
+pub mod step_services_cli;
+#[cfg(test)]
+mod step_services_tests;
