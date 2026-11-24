@@ -83,7 +83,7 @@ These are performance goals, not assertions to weaken when a host is overloaded.
 ## Rust doctests
 
 Local preflight and `plangraph fast-checks` use nextest with the configured
-test deadlines when it is available. Nextest skips doctests. Run them
+test deadlines when it is available (details: [test hang detection](contributing/TEST-HANG-DETECTION-CI-AND-PUSH-GATE.md)). Nextest skips doctests. Run them
 explicitly from `rust/` with `cargo test --workspace --doc`, or use
 `cargo test --manifest-path <manifest> --doc` for a standalone crate.
 
