@@ -141,6 +141,22 @@ pub fn keeper_families(
         .map_err(|e| format!("refused: keeper family table unreadable: {e}"))
 }
 
+/// The known family of each name through `plangraph.review.family.writer_key`, the one shared writer
+/// check (aliases, registered leg and model ids, `codex`); an empty, misspelt or ambiguous name maps to
+/// `None`, so a caller that must exclude a writer family fails closed.
+pub fn writer_keys(
+    names: &[String],
+    python: &dyn Fn() -> Command,
+) -> Result<HashMap<String, Option<String>>, String> {
+    let code = "import json, sys\nfrom plangraph.review.family import FamilyError, writer_key\n\
+                def key(n):\n    try:\n        return writer_key(n)\n    except (FamilyError, TypeError, ValueError):\n        return None\n\
+                print(json.dumps({n: key(n) for n in json.load(sys.stdin)}))";
+    let payload = serde_json::to_vec(names).map_err(|e| format!("refused: {e}"))?;
+    let out = run_python(python, code, payload, "writer family table")?;
+    serde_json::from_slice(&out)
+        .map_err(|e| format!("refused: writer family table unreadable: {e}"))
+}
+
 /// Every writer family of `base..head`: the canonical families of the `Writer` and `Hand-Edit`
 /// trailers of each commit, else of its other attribution lines and author. `leg_models` are
 /// models that wrote without a trailer (a native writer's served model); their families join

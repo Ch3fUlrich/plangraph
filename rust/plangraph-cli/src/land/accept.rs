@@ -3,6 +3,7 @@
 //! The ACCEPT files are the reviewer's answers in one directory. A writer status file never counts:
 //! it has no `FILES READ:` line, and its `VERDICT:` line reports the writer, not a review.
 use super::train::PartIn;
+use pg_worker_core::writer_families::{python_command, writer_keys};
 use std::path::{Path, PathBuf};
 
 const MAX_FILE: u64 = 1 << 20;
@@ -14,6 +15,9 @@ pub struct Accept {
     /// The review leg named by the `[served by LEG via spawner run RUN, ...]` header, lowercased.
     pub leg: String,
     pub run_id: String,
+    /// Whether the answer accepts: `FILES READ:` and `VERDICT: ACCEPT` as its last line. A completed
+    /// answer with another verdict still owns its run id.
+    pub accepted: bool,
 }
 
 /// The two OpenCode seats every head needs when no single-seat leg accepted it (rule 3.66 (f)): the
@@ -23,8 +27,9 @@ const REQUIRED_PAIR: [&str; 2] = ["opencode-go-deepseek-v4-flash", "opencode-go-
 /// D-6804): Hydrogen (`REVIEW_HYDROGEN`), and the gpt high-effort leg under the conditions of `GPT_ALONE`.
 pub const DEFAULT_SINGLE_SEAT: &str = "agy-gemini-4-hydrogen-high,cx-gpt-6.2-sol-high";
 /// A single-seat leg that counts alone only when the launcher's metadata for its run says effort high,
-/// decision D-6804 and a writer family other than the reviewer's own.
-const GPT_ALONE: (&str, [&str; 3]) = ("cx-gpt-6.2-sol-high", ["gpt", "openai", "codex"]);
+/// decision D-6804 and every writer family of the head is known to the shared writer-family resolver and
+/// differs from the reviewer leg's own family.
+const GPT_ALONE_LEG: &str = "cx-gpt-6.2-sol-high";
 const GPT_EFFORT_DECISION: &str = "D-6804";
 
 /// What the orchestrator that launched a review run recorded about its card; never read from the answer.
@@ -45,6 +50,8 @@ pub struct AcceptGate {
     pub dir: PathBuf,
     pub single_seat: Vec<String>,
     pub meta: std::collections::BTreeMap<String, SeatMeta>,
+    /// A checkout holding `src/plangraph`, for the Python writer-family resolver.
+    pub src_root: Option<PathBuf>,
 }
 
 impl AcceptGate {
@@ -57,23 +64,35 @@ impl AcceptGate {
 
     /// Whether a single-seat answer meets the extra conditions of its leg.
     fn alone_conditions_met(&self, accept: &Accept) -> bool {
-        if accept.leg != GPT_ALONE.0 {
+        if accept.leg != GPT_ALONE_LEG {
             return true;
         }
-        self.meta.get(&accept.run_id).is_some_and(|meta| {
-            meta.effort
-                .as_deref()
-                .map(str::to_ascii_lowercase)
-                .as_deref()
-                == Some("high")
-                && meta.effort_decision.as_deref() == Some(GPT_EFFORT_DECISION)
-                && !meta.writer_families.is_empty()
-                && !meta.writer_families.iter().any(|family| {
-                    GPT_ALONE
-                        .1
-                        .contains(&family.trim().to_ascii_lowercase().as_str())
-                })
-        })
+        let Some(meta) = self.meta.get(&accept.run_id) else {
+            return false;
+        };
+        let high = meta.effort.as_deref().map(str::to_ascii_lowercase);
+        if high.as_deref() != Some("high")
+            || meta.effort_decision.as_deref() != Some(GPT_EFFORT_DECISION)
+            || meta.writer_families.is_empty()
+        {
+            return false;
+        }
+        // The shared resolver names the reviewer's family and each writer family; a blank, unknown or
+        // ambiguous entry resolves to nothing and refuses, as does the reviewer's own family.
+        let mut names = vec![accept.leg.clone()];
+        names.extend(meta.writer_families.iter().cloned());
+        let python = || python_command(self.src_root.as_deref());
+        let Ok(keys) = writer_keys(&names, &python) else {
+            return false;
+        };
+        let reviewer = keys.get(&accept.leg).cloned().flatten();
+        reviewer.is_some()
+            && meta.writer_families.iter().all(|family| {
+                keys.get(family)
+                    .cloned()
+                    .flatten()
+                    .is_some_and(|key| Some(&key) != reviewer.as_ref())
+            })
     }
 }
 
@@ -95,13 +114,12 @@ fn served_by(text: &str) -> Option<(String, String)> {
     })
 }
 
-/// `Some` only for a review answer that accepts: a completed `served by` header with its run id, a
-/// `FILES READ:` line, a full `HEAD:` sha, and the last non-empty line `VERDICT: ACCEPT`.
+/// `Some` for a completed review answer: a `served by` header with its run id and a full `HEAD:` sha.
+/// `accepted` is set only with a `FILES READ:` line and `VERDICT: ACCEPT` as the last non-empty line.
 pub fn parse(text: &str) -> Option<Accept> {
     let last = text.lines().rev().find(|l| !l.trim().is_empty())?;
-    if last.trim() != "VERDICT: ACCEPT" || !text.lines().any(|l| l.starts_with("FILES READ:")) {
-        return None;
-    }
+    let accepted =
+        last.trim() == "VERDICT: ACCEPT" && text.lines().any(|l| l.starts_with("FILES READ:"));
     let (leg, run_id) = served_by(text)?;
     let head = text
         .lines()
@@ -113,6 +131,7 @@ pub fn parse(text: &str) -> Option<Accept> {
         head: head.to_ascii_lowercase(),
         leg,
         run_id,
+        accepted,
     })
 }
 
@@ -158,18 +177,18 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
         let run_of = |leg: &str| {
             at_head
                 .iter()
-                .filter(|(_, a)| a.leg == leg)
+                .filter(|(_, a)| a.accepted && a.leg == leg)
                 .map(|(_, a)| a.run_id.as_str())
                 .collect::<Vec<_>>()
         };
         let pair: Vec<_> = REQUIRED_PAIR.iter().map(|leg| run_of(leg)).collect();
-        // Each pair run belongs to exactly one answer at the head, so a run claimed by a second answer
-        // (of any leg) never counts.
+        // Each pair run belongs to exactly one completed answer at the head, whatever its verdict or leg,
+        // so a run that a REQUEST_CHANGES or another leg's answer also claims never counts.
         let unique = |run: &str| at_head.iter().filter(|(_, a)| a.run_id == run).count() == 1;
         let paired =
             pair.iter().all(|runs| runs.len() == 1 && unique(runs[0])) && pair[0][0] != pair[1][0];
         let counted = match bound.as_slice() {
-            [one] => {
+            [one] if one.1.accepted => {
                 single_seat.contains(&one.1.leg) && gate.alone_conditions_met(&one.1)
                     || (paired && pair.iter().any(|runs| runs[0] == one.1.run_id))
             }
@@ -198,8 +217,9 @@ pub fn require(gate: &AcceptGate, parts: &[PartIn]) -> Result<Vec<String>, Strin
                     .collect();
                 let why = match bound.len() {
                     0 => "no ACCEPT at this head carries the receipt run",
+                    1 if !bound[0].1.accepted => "the answer of the receipt run does not accept",
                     1 => "neither a single-seat leg meeting its conditions nor both required legs on two runs accepted it",
-                    _ => "the receipt run appears in more than one ACCEPT at this head",
+                    _ => "the receipt run appears in more than one answer at this head",
                 };
                 return Err(format!(
                     "accept: part #{} head {} is not counted: {why} (receipt run {}, dir {}, ACCEPT files found: {})",

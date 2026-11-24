@@ -24,11 +24,20 @@ fn part(pr: u64, head: &str, run: &str) -> PartIn {
     part
 }
 
+/// The checkout holding `src/plangraph`, for the Python writer-family resolver.
+fn src_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap()
+}
+
 fn gate(dir: &tempfile::TempDir, single: &[&str]) -> AcceptGate {
     AcceptGate {
         dir: dir.path().to_owned(),
         single_seat: single.iter().map(|leg| (*leg).to_owned()).collect(),
         meta: Default::default(),
+        src_root: Some(src_root()),
     }
 }
 
@@ -93,7 +102,7 @@ fn the_pair_on_one_run_or_with_a_duplicate_run_never_counts() {
         ("h2.txt", answer(HYDROGEN, RUN, NEW, "ACCEPT")),
     ]);
     let error = require(&gate(&twice, &[HYDROGEN]), &[part(7, NEW, RUN)]).unwrap_err();
-    assert!(error.contains("more than one ACCEPT"), "{error}");
+    assert!(error.contains("more than one answer"), "{error}");
 }
 
 #[test]
@@ -194,6 +203,7 @@ fn default_gate(dir: &tempfile::TempDir) -> AcceptGate {
         dir: dir.path().to_owned(),
         single_seat: DEFAULT_SINGLE_SEAT.split(',').map(str::to_owned).collect(),
         meta: Default::default(),
+        src_root: Some(src_root()),
     }
 }
 
@@ -238,6 +248,48 @@ fn conditions_written_only_in_the_answer_body_never_qualify() {
         .meta
         .insert(OTHER_RUN.into(), meta("high", "D-6804", &["claude"]));
     assert!(require(&other, &[part(7, NEW, RUN)]).is_err());
+}
+
+#[test]
+fn blank_unknown_and_gpt_model_writer_entries_are_refused_by_the_shared_resolver() {
+    let dir = dir_with(&[("g.txt", gpt_answer(""))]);
+    for families in [
+        vec![""],
+        vec!["claude", " "],
+        vec!["no-such-family-zzz"],
+        vec!["gpt-6.2-sol"],
+        vec!["claude", "gpt-6.2-sol-high"],
+    ] {
+        let gate = with_meta(&dir, meta("high", "D-6804", &families));
+        assert!(
+            require(&gate, &[part(7, NEW, RUN)]).is_err(),
+            "{families:?}"
+        );
+    }
+    // A known, different family still counts.
+    let gate = with_meta(&dir, meta("high", "D-6804", &["claude"]));
+    assert!(require(&gate, &[part(7, NEW, RUN)]).is_ok());
+}
+
+#[test]
+fn a_completed_request_changes_on_a_pair_run_conflicts_with_its_accept() {
+    // The glm run has an ACCEPT and a REQUEST_CHANGES at the same head: it owns two answers.
+    let dir = dir_with(&[
+        ("d.txt", answer(DEEPSEEK, RUN, NEW, "ACCEPT")),
+        ("g.txt", answer(GLM, OTHER_RUN, NEW, "ACCEPT")),
+        ("g2.txt", answer(GLM, OTHER_RUN, NEW, "REQUEST_CHANGES")),
+    ]);
+    assert!(require(&gate(&dir, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_err());
+    // The same for the receipt run itself, and the receipt answer must accept.
+    let receipt = dir_with(&[
+        ("d.txt", answer(DEEPSEEK, RUN, NEW, "ACCEPT")),
+        ("d2.txt", answer(DEEPSEEK, RUN, NEW, "REQUEST_CHANGES")),
+        ("g.txt", answer(GLM, OTHER_RUN, NEW, "ACCEPT")),
+    ]);
+    assert!(require(&gate(&receipt, &[HYDROGEN]), &[part(7, NEW, RUN)]).is_err());
+    let rejected = dir_with(&[("h.txt", answer(HYDROGEN, RUN, NEW, "REQUEST_CHANGES"))]);
+    let error = require(&gate(&rejected, &[HYDROGEN]), &[part(7, NEW, RUN)]).unwrap_err();
+    assert!(error.contains("does not accept"), "{error}");
 }
 
 #[test]

@@ -169,3 +169,25 @@ fn keeper_families_fold_spellings_into_the_keeper_table() {
     assert_ne!(table["claude"], table["gpt"]);
     assert_eq!(table["deepseek"], "deepseek");
 }
+
+#[test]
+fn writer_keys_resolve_known_names_and_leave_blank_unknown_and_ambiguous_ones_unresolved() {
+    let names: Vec<String> = [
+        "claude",
+        "gpt-6.2-sol",
+        "codex",
+        "",
+        " ",
+        "no-such-family-zzz",
+    ]
+    .iter()
+    .map(|n| (*n).to_owned())
+    .collect();
+    let keys = writer_keys(&names, &python).unwrap();
+    assert_eq!(keys["claude"].as_deref(), Some("anthropic"));
+    assert_eq!(keys["gpt-6.2-sol"].as_deref(), Some("openai"));
+    assert_eq!(keys["codex"].as_deref(), Some("openai"));
+    for blank in ["", " ", "no-such-family-zzz"] {
+        assert_eq!(keys[blank], None, "{blank:?}");
+    }
+}

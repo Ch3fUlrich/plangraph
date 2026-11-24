@@ -232,6 +232,7 @@ pub(super) fn run_inner(
                     .map(|leg| leg.trim().to_ascii_lowercase())
                     .filter(|leg| !leg.is_empty())
                     .collect(),
+                src_root: Some(repo_dir.clone()),
                 meta: match flags.get("seat-meta") {
                     Some(path) => super::accept::AcceptGate::read_meta(Path::new(path))?,
                     None => Default::default(),
