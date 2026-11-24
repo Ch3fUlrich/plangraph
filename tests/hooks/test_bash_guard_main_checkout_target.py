@@ -292,3 +292,70 @@ def test_an_assignment_shaped_argument_after_cargo_is_not_an_environment_setting
 def test_assignments_before_the_command_still_set_the_target(repos, command):
     main, _ = repos
     assert hook(command, main / "rust").returncode == 0, command
+
+
+@pytest.mark.parametrize("command", [
+    "CARGO_TARGET_DIR=rust/target; cargo build",
+    "declare CARGO_TARGET_DIR=rust/target; cargo build",
+    "export CARGO_TARGET_DIR=/var/cache/shared; CARGO_TARGET_DIR=rust/target; cargo build",
+    "CARGO_TARGET_DIR+=/x; CARGO_TARGET_DIR=rust/target; cargo build",
+])
+def test_reassigning_an_exported_target_to_the_checkout_leaves_the_build_refused(repos, monkeypatch, command):
+    main, _ = repos
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/var/cache/shared")
+    result = hook(command, main)
+    assert result.returncode == 2, (command, result.stderr)
+
+
+@pytest.mark.parametrize("command, exported, expected", [
+    ("CARGO_TARGET_DIR=/var/cache/other; cargo build", "/var/cache/shared", 0),
+    ("RUSTFLAGS=-Dwarnings; cargo build", "/var/cache/shared", 0),
+    ("export CARGO_TARGET_DIR=rust/target; CARGO_TARGET_DIR=/var/cache/shared; cargo build", None, 0),
+    # Not exported: cargo never sees a shell variable.
+    ("CARGO_TARGET_DIR=/var/cache/shared; cargo build", None, 2),
+    ("unset CARGO_TARGET_DIR; CARGO_TARGET_DIR=/var/cache/shared; cargo build", "/var/cache/shared", 2),
+])
+def test_a_shell_assignment_changes_only_a_variable_that_is_exported(repos, monkeypatch, command, exported, expected):
+    main, _ = repos
+    if exported:
+        monkeypatch.setenv("CARGO_TARGET_DIR", exported)
+    assert hook(command, main).returncode == expected, command
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("env -u CARGO_TARGET_DIR bash -c 'cargo build'", 2),
+    ("env -i bash -c 'cargo build'", 2),
+    ("env -u CARGO_TARGET_DIR sh -c 'cargo test'", 2),
+    ("env -i CARGO_TARGET_DIR=/var/cache/shared bash -c 'cargo build'", 0),
+    ("env -u RUSTFLAGS bash -c 'cargo build'", 0),
+])
+def test_wrapper_environment_changes_reach_the_nested_shell(repos, monkeypatch, command, expected):
+    main, _ = repos
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/var/cache/shared")
+    assert hook(command, main / "rust").returncode == expected, command
+
+
+@pytest.mark.parametrize("template, cwd, expected", [
+    ("CARGO_TARGET_DIR=target cargo build --manifest-path {out}/Cargo.toml", "{main}/rust", 2),
+    ("cargo build --target-dir target --manifest-path {out}/Cargo.toml", "{main}/rust", 2),
+    ("CARGO_TARGET_DIR=target cargo build --manifest-path {main}/rust/Cargo.toml", "{out}", 0),
+    ("cargo build --manifest-path {out}/Cargo.toml", "{main}/rust", 0),
+    ("cargo build --manifest-path {main}/rust/Cargo.toml", "{out}", 2),
+])
+def test_relative_target_settings_resolve_against_cargos_cwd_not_the_manifest(repos, tmp_path, template, cwd, expected):
+    main, _ = repos
+    out = tmp_path / "elsewhere"
+    out.mkdir()
+    command = template.format(main=main, out=out)
+    assert hook(command, cwd.format(main=main, out=out)).returncode == expected, command
+
+
+@pytest.mark.parametrize("command", [
+    "cargo test -- --target-dir /var/cache/shared",
+    "cargo test -- --target-dir=/var/cache/shared",
+    "cargo build -- -C /tmp --manifest-path /tmp/Cargo.toml",
+])
+def test_options_after_the_double_dash_belong_to_the_program_not_to_cargo(repos, command):
+    main, _ = repos
+    result = hook(command, main / "rust")
+    assert result.returncode == 2, (command, result.stderr)
