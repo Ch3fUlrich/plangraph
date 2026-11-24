@@ -177,6 +177,7 @@ pub fn deploy_plan(
     probe: &dyn Probe,
 ) -> DeployPlan {
     let mut ok: BTreeMap<(String, String), Vec<u64>> = BTreeMap::new();
+    let mut wanted: BTreeMap<(String, String), Vec<u64>> = BTreeMap::new();
     let mut bad: BTreeMap<BlockerKey, (Vec<u64>, Vec<String>)> = BTreeMap::new();
     let mut refuse = |family: &str, host: Option<&str>, pr: u64, why: Vec<String>| {
         let e = bad
@@ -211,15 +212,23 @@ pub fn deploy_plan(
                 );
             }
             for host in &allowed {
-                match probe.probe(host, family) {
-                    Ok(()) => ok
-                        .entry((family.clone(), host.clone()))
-                        .or_default()
-                        .push(part.pr),
-                    Err(found) => {
-                        let why = found.iter().map(finding_reason).collect();
-                        refuse(family, Some(host), part.pr, why);
-                    }
+                let prs = wanted.entry((family.clone(), host.clone())).or_default();
+                if !prs.contains(&part.pr) {
+                    prs.push(part.pr);
+                }
+            }
+        }
+    }
+    // One probe per target, whatever the number of parts that ship it: its answer is the answer of them all.
+    for ((family, host), prs) in wanted {
+        match probe.probe(&host, &family) {
+            Ok(()) => {
+                ok.insert((family, host), prs);
+            }
+            Err(found) => {
+                for pr in prs {
+                    let why = found.iter().map(finding_reason).collect();
+                    refuse(&family, Some(&host), pr, why);
                 }
             }
         }

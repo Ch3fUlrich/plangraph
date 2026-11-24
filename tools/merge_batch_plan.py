@@ -399,8 +399,8 @@ def keeper_cli(*args):
 def declared_hosts(active):
     """``{item key: [hosts]}`` from the ``Deploy-Hosts:`` lines of the keeper items the active parts carry.
 
-    Without a keeper, or for an item it does not know, nothing is declared and the commits' ``Deploy:`` trailers
-    name the hosts."""
+    Without a keeper nothing is declared and the commits' ``Deploy:`` trailers name the hosts; an item the keeper
+    cannot show refuses, because its declaration may name other hosts."""
     if not keeper_landing_configured():
         return {}
     from plangraph.keeper.evidence import deploy_hosts
@@ -408,12 +408,14 @@ def declared_hosts(active):
     declared = {}
     for key in sorted({key for rec in active["merged"] for key in rec.get("items", [])}):
         proc = keeper_cli("show", key, "--json")
-        if proc.returncode:
-            continue
         try:
+            if proc.returncode:
+                raise ValueError((proc.stderr.strip().splitlines() or ["refused"])[-1])
             hosts = deploy_hosts(json.loads(proc.stdout))
-        except ValueError:
-            continue
+        except ValueError as exc:
+            # A lookup that failed is not an absent declaration: a commit trailer must not stand in for it.
+            raise MergeBatchError(f"deploy-plan failed: the Deploy-Hosts of {key} could not be read from the "
+                                  f"keeper ({exc})") from None
         if hosts:
             declared[key] = hosts
     return declared
