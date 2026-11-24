@@ -318,9 +318,10 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
         words = [w.text for w in pos]
         i = lead(pos)
         envs = dict(state)
-        envs.update(w.split("=", 1) for w in words[i:] if _ENV_ASSIGN_RE.match(w))
+        start = i
         while i < len(words) and _ENV_ASSIGN_RE.match(words[i]):
             i += 1
+        envs.update(w.split("=", 1) for w in words[start:i])  # only the assignments before the command word
         if i >= len(words):
             continue
         if _basename(words[i]) == "unset":
@@ -343,8 +344,9 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
                 evaled, nested = True, [" ".join(words[j + 1:])]
             else:
                 nested = []
+            given = dict(w.split("=", 1) for w in words[i:j] if _ENV_ASSIGN_RE.match(w))  # `env NAME=VAL` before this word
             for string in nested:
-                reason = main_checkout_cargo(string, cwd, depth + 1, envs)
+                reason = main_checkout_cargo(string, cwd, depth + 1, {**envs, **given})
                 if reason:
                     return reason
             if name != "cargo":
@@ -355,9 +357,9 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
                 continue
             unset, cleared = _env_options(words[i:j])
             if cleared:  # `env -i`: only the assignments given to env itself survive
-                run_env = dict(w.split("=", 1) for w in words[i:j] if _ENV_ASSIGN_RE.match(w))
+                run_env = dict(given)
             else:
-                run_env = dict(envs)
+                run_env = {**envs, **given}
             run_env.update({name: None for name in unset})
             root = _cargo_target_checkout(rest, run_env, _cargo_workdir(rest, cwd), {} if cleared else None)
             if root is not None:
