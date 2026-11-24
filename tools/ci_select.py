@@ -50,13 +50,7 @@ RUST_INPUTS: tuple[str, ...] = (
     ".claude/settings.json",  # pg-hook runs the SendMessage hook commands it registers.
     "deploy/feeder/**",
     "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
-    "deploy/manifest.toml",  # the plangraph-cli deploy_manifest test checks every unit and binary against it.
-    "deploy/*.service",  # the same test scans every unit file under deploy/ (fnmatch: * crosses directories).
-    "deploy/*.timer",
-    "deploy/*.socket",
-    "deploy/*.target",
-    "deploy/*.mount",
-    "deploy/*.path",
+    "deploy/manifest.toml",  # the plangraph-cli deploy_manifest tests read it; unit files under deploy/ are not KNOWN, so they run the full suite.
     "deploy/systemd/disk-hygiene.env.example",
     "deploy/systemd/keeper-backup.env.example",
     "deploy/systemd/pg-ci-watch.service",  # a ci_watch test pins its flags.

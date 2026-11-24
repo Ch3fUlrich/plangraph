@@ -6,9 +6,10 @@
 # env_family names the `host-sync --install-env` family that creates the env files from documented defaults;
 # without it a missing env file is reported by name for the operator (secrets are never created).
 # dir names the directory under deploy/ that holds the unit files when it is not deploy/systemd.
-# install_paths on a binary lists every path a consumer runs it from besides the user bin directory,
-# each with the roles it applies to; a binary used from two places lists both.
-# env_files are file names under ~/.config/plangraph (or /etc/plangraph for system units), never values.
+# install_paths on a binary lists every path a consumer runs it from, each with the roles it applies to;
+# no list means only ~/.local/bin/<bin>, and a binary used from two places lists both.
+# env_files are file names under ~/.config/plangraph (or /etc/plangraph for system units), never values;
+# %i stands for the instance of a template unit.
 # first_run is what an operator checks after the first start.
 # To leave a unit or binary out, give it an entry with not_deployed = "<reason>"; the coverage test
 # (rust/plangraph-cli/tests/deploy_manifest.rs) fails for anything this file does not name.
@@ -36,12 +37,14 @@ first_run = "the keeper appends an anchor record through /run/pganchor/anchor.so
 name = "flow-watchdog"
 dir = "watchdog"
 files = ["flow-watchdog.service", "flow-watchdog.timer"]
+env_files = ["flow-watchdog.env"]
 not_deployed = "needs a host collector that refreshes ~/.local/state/plangraph/flow-snapshot.json (docs/flow-watchdog.md); none is deployed yet, the binary is installed on every host"
 
 [[unit]]
 name = "stall-watchdog"
 dir = "watchdog"
 files = ["watchdog.service", "watchdog.timer"]
+env_files = ["watchdog.env"]
 not_deployed = "carries @ROOT@ and @PYTHON@ placeholders: `python -m plangraph.spawner.stall_watchdog install` renders and installs it (deploy/bootstrap.sh), so a verbatim copy would be wrong"
 
 [[unit]]
@@ -202,14 +205,14 @@ name = "pg-host-ssh-link"
 files = ["pg-host-ssh-link@.service", "pg-host-ssh-link@.timer"]
 enable = "pg-host-ssh-link@.timer"
 hosts = ["keeper"]
-env_files = ["host-links/INSTANCE.env"]
+env_files = ["host-links/%i.env"]
 first_run = "enable one instance per configured worker; its service exits 0 and writes outage evidence"
 
 [[unit]]
 name = "plangraph-state-shadow"
 files = ["plangraph-state-shadow@.service"]
 hosts = ["keeper"]
-env_files = ["plangraph.env", "state-shadow/ROLE.env"]
+env_files = ["plangraph.env", "state-shadow/%i.env"]
 first_run = "enable one instance per role; `plangraph state wait --role ROLE` journals its first wake"
 
 [[unit]]
@@ -230,6 +233,10 @@ not_deployed = "no fleet host is assigned the per-user Claude daemon yet; assign
 [[binary]]
 package = "pg-spawnd"
 bin = "pg-spawnd"
+install_paths = [
+  { path = "~/.local/bin/pg-spawnd", hosts = ["all"] },
+  { path = "/usr/local/bin/pg-spawnd", hosts = ["wsl"] },
+]
 hosts = ["all"]
 first_run = "pg-spawnd --version prints and `pg-spawnd host` answers"
 

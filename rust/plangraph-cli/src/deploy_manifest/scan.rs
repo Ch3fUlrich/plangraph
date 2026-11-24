@@ -1,8 +1,9 @@
-//! What the tree ships: the unit files under `deploy/systemd` and the binary targets of the workspace
+//! What the tree ships: the tracked unit files under `deploy/` and the binary targets of the workspace
 //! crates, found the way Cargo finds them, so the coverage test needs no build and no `cargo metadata`.
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 /// Every systemd unit type; a file of any of them under `deploy/` must be placed or excluded.
 const UNIT_EXTENSIONS: [&str; 11] = [
@@ -19,34 +20,190 @@ const UNIT_EXTENSIONS: [&str; 11] = [
     ".device",
 ];
 
-/// Unit files the tree ships, as coverage names them: a plain name for a file directly in `deploy/systemd`,
-/// `<path under deploy/>` for any other (a unit that ships beside its tooling, at any depth; templates
-/// included; `*.example` files and drop-in `.conf` files are not unit files).
+/// Unit files the tree ships, as coverage names them: the path under `deploy/` (`systemd/foo.service`,
+/// `pganchor/pganchor.socket`; any depth, templates included; `*.example` files and drop-in `.conf`
+/// files are not unit files). Only files Git tracks count: an untracked file is not shipped, so it
+/// neither fails the gate nor satisfies an entry. A tracked file missing from the working tree is an error.
 pub fn unit_files(repo: &Path) -> Result<BTreeSet<String>, String> {
-    let deploy = repo.join("deploy");
     let mut out = BTreeSet::new();
-    walk(&deploy, "", &mut out)?;
+    for path in tracked(repo, "deploy")? {
+        let Some(rel) = path.strip_prefix("deploy/") else {
+            continue;
+        };
+        if !UNIT_EXTENSIONS.iter().any(|ext| rel.ends_with(ext)) {
+            continue;
+        }
+        if !repo.join(&path).is_file() {
+            return Err(format!(
+                "{path} is tracked but missing from the working tree"
+            ));
+        }
+        out.insert(rel.to_owned());
+    }
     Ok(out)
 }
 
-fn walk(dir: &Path, rel: &str, out: &mut BTreeSet<String>) -> Result<(), String> {
-    for entry in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let here = if rel.is_empty() {
-            name.clone()
-        } else {
-            format!("{rel}/{name}")
-        };
-        // A symlinked directory is not followed: it could loop or leave the tree.
-        let kind = entry.file_type().map_err(|e| e.to_string())?;
-        if kind.is_dir() {
-            walk(&entry.path(), &here, out)?;
-        } else if entry.path().is_file() && UNIT_EXTENSIONS.iter().any(|ext| name.ends_with(ext)) {
-            out.insert(here.strip_prefix("systemd/").unwrap_or(&here).to_owned());
+/// The paths Git tracks under `sub` of `repo`, relative to `repo`.
+fn tracked(repo: &Path, sub: &str) -> Result<Vec<String>, String> {
+    // A hook or test runner may export GIT_DIR or GIT_INDEX_FILE; they would point at another repository.
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-files", "-z", "--", sub])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .map_err(|e| format!("git ls-files: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git ls-files in {}: {}",
+            repo.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| String::from_utf8_lossy(p).into_owned())
+        .collect())
+}
+
+/// Where the tracked unit files run a binary from: `(bin, path)` of the program of every `ExecStart` and
+/// `ExecStartPre` line under `/usr/local/bin` or `%h/.local/bin` (`%h` is written `~`). Reads the
+/// files only; nothing here asks systemd.
+pub fn consumer_paths(
+    repo: &Path,
+    unit_files: &BTreeSet<String>,
+) -> Result<BTreeSet<(String, String)>, String> {
+    let mut out = BTreeSet::new();
+    for unit in unit_files {
+        let path = repo.join("deploy").join(unit);
+        let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if key.trim() != "ExecStart" && key.trim() != "ExecStartPre" {
+                continue;
+            }
+            let program = value
+                .trim_start_matches(|c| matches!(c, '-' | '+' | '!' | '@' | ' '))
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            let program = program.replacen("%h", "~", 1);
+            for dir in ["/usr/local/bin/", "~/.local/bin/"] {
+                if let Some(bin) = program.strip_prefix(dir) {
+                    if !bin.is_empty() && !bin.contains('/') {
+                        out.insert((bin.to_owned(), program.clone()));
+                    }
+                }
+            }
         }
     }
-    Ok(())
+    Ok(out)
+}
+
+/// The env files the tracked unit files read: `(unit key, file name)` of every `EnvironmentFile=` line
+/// under `%h/.config/plangraph/` or `/etc/plangraph/`, the file name relative to that directory with the
+/// leading `-` (optional file) dropped and `%i` kept as written.
+pub fn unit_env_files(
+    repo: &Path,
+    unit_files: &BTreeSet<String>,
+) -> Result<BTreeSet<(String, String)>, String> {
+    let mut out = BTreeSet::new();
+    for unit in unit_files {
+        let path = repo.join("deploy").join(unit);
+        let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        for line in text.lines() {
+            let Some(("EnvironmentFile", value)) =
+                line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
+            else {
+                continue;
+            };
+            let value = value.trim_start_matches('-');
+            for dir in ["%h/.config/plangraph/", "/etc/plangraph/"] {
+                if let Some(name) = value.strip_prefix(dir) {
+                    out.insert((unit.clone(), name.to_owned()));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The workspace member directories under `rust/`: Cargo's `members` with `*` and `?` expanded per path
+/// component, minus `exclude`. A pattern that matches nothing is an error, as it is for Cargo.
+fn members(rust: &Path, workspace: &toml::Table) -> Result<Vec<String>, String> {
+    let list = |key: &str| -> Vec<String> {
+        workspace["workspace"]
+            .get(key)
+            .and_then(|m| m.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let excluded: BTreeSet<String> = list("exclude").into_iter().collect();
+    let mut out = BTreeSet::new();
+    for pattern in list("members") {
+        let mut found = vec![String::new()];
+        for part in pattern.split('/').filter(|p| !p.is_empty() && *p != ".") {
+            let mut next = Vec::new();
+            for base in &found {
+                if part.contains(['*', '?', '[']) {
+                    let dir = rust.join(base);
+                    for entry in
+                        fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?
+                    {
+                        let entry = entry.map_err(|e| e.to_string())?;
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        if entry.path().is_dir() && wildcard(part, &name) {
+                            next.push(join(base, &name));
+                        }
+                    }
+                } else {
+                    next.push(join(base, part));
+                }
+            }
+            found = next;
+        }
+        found.retain(|m| rust.join(m).join("Cargo.toml").is_file());
+        if found.is_empty() {
+            return Err(format!("workspace member {pattern:?} matches no crate"));
+        }
+        out.extend(found);
+    }
+    Ok(out.into_iter().filter(|m| !excluded.contains(m)).collect())
+}
+
+fn join(base: &str, name: &str) -> String {
+    if base.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{base}/{name}")
+    }
+}
+
+/// Shell-style match of one path component: `*` any run, `?` one character; `[` is not supported.
+fn wildcard(pattern: &str, name: &str) -> bool {
+    fn go(p: &[char], n: &[char]) -> bool {
+        match (p.first(), n.first()) {
+            (None, None) => true,
+            (Some('*'), _) => go(&p[1..], n) || (!n.is_empty() && go(p, &n[1..])),
+            (Some('?'), Some(_)) => go(&p[1..], &n[1..]),
+            (Some(a), Some(b)) if a == b => go(&p[1..], &n[1..]),
+            _ => false,
+        }
+    }
+    go(
+        &pattern.chars().collect::<Vec<_>>(),
+        &name.chars().collect::<Vec<_>>(),
+    )
 }
 
 fn read_toml(path: &Path) -> Result<toml::Table, String> {
@@ -58,12 +215,9 @@ fn read_toml(path: &Path) -> Result<toml::Table, String> {
 pub fn bin_targets(repo: &Path) -> Result<BTreeSet<(String, String)>, String> {
     let rust = repo.join("rust");
     let workspace = read_toml(&rust.join("Cargo.toml"))?;
-    let members = workspace["workspace"]["members"]
-        .as_array()
-        .ok_or("rust/Cargo.toml has no workspace members")?;
     let mut out = BTreeSet::new();
-    for member in members {
-        let dir = rust.join(member.as_str().ok_or("workspace member is not a path")?);
+    for member in members(&rust, &workspace)? {
+        let dir = rust.join(member);
         let manifest = read_toml(&dir.join("Cargo.toml"))?;
         let package = manifest["package"]["name"]
             .as_str()

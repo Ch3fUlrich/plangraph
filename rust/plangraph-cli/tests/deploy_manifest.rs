@@ -11,7 +11,7 @@ fn repo() -> PathBuf {
 }
 
 #[test]
-fn every_unit_file_and_binary_target_is_in_the_manifest() {
+fn deploy_manifest_names_every_unit_file_and_binary_target() {
     let repo = repo();
     let manifest = Manifest::load_from_repo(&repo).unwrap();
     let problems = manifest.coverage(
@@ -22,11 +22,24 @@ fn every_unit_file_and_binary_target_is_in_the_manifest() {
 }
 
 #[test]
-fn the_scan_sees_the_known_targets() {
+fn deploy_manifest_declares_every_path_a_unit_runs_a_binary_from_and_every_env_file() {
+    let repo = repo();
+    let manifest = Manifest::load_from_repo(&repo).unwrap();
+    let units = scan::unit_files(&repo).unwrap();
+    let mut problems = manifest.consumer_problems(&scan::consumer_paths(&repo, &units).unwrap());
+    problems.extend(manifest.env_problems(&scan::unit_env_files(&repo, &units).unwrap()));
+    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
+}
+
+#[test]
+fn deploy_manifest_scan_sees_the_known_targets() {
     let repo = repo();
     let units = scan::unit_files(&repo).unwrap();
-    assert!(units.contains("pg-feeder.timer") && units.contains("pg-host-ssh-link@.service"));
-    assert!(units.contains("pganchor/pganchor.socket"));
+    assert!(
+        units.contains("systemd/pg-feeder.timer")
+            && units.contains("systemd/pg-host-ssh-link@.service")
+            && units.contains("pganchor/pganchor.socket")
+    );
     assert!(!units.iter().any(|u| u.ends_with(".example")));
     let bins = scan::bin_targets(&repo).unwrap();
     for (package, bin) in [
