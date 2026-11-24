@@ -201,7 +201,6 @@ run.mkdir(parents=True)
 assert card['review_workspace'] and '--cwd' not in argv
 assert card['item_key'] == 'demo:FIXTURE' and card['native_writer_run'].startswith('run-'), card
 assert __import__('os').environ['PLANGRAPH_HOST_NAME'] == 'fixture', card
-assert 'PLANGRAPH_PLACED_HOST' not in __import__('os').environ, 'review pinned to the writer host'
 marker = subprocess.check_output(['git', 'show', head + ':writer.txt'], text=True)
 if 'late marker' in marker:
     receipt = dict(run_id=run_id, status='running', started=time.time())
@@ -288,7 +287,7 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
         .env("NATIVE_BINARY", spawnd)
         .env("PLANGRAPH_NATIVE_REVIEW_CLI", serde_json::json!(["python3", review_cli]).to_string())
-        .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base).env("PLANGRAPH_HOST_NAME", "fixture").env("PLANGRAPH_PLACED_HOST", "fixture")
+        .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base).env("PLANGRAPH_HOST_NAME", "fixture")
         .args(["-c", r#"
 import asyncio, json, os, pathlib, time
 from unittest.mock import patch
@@ -306,7 +305,7 @@ assert pathlib.Path.home() == pathlib.Path(os.environ['FIXTURE_HOME']), pathlib.
 for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR'):
     assert os.path.realpath(os.environ[name]).startswith(os.path.realpath(root) + os.sep), (name, os.environ[name])
 # Keys the fixture sets itself (isolation paths and, in the hostile-policy variant, host policy).
-FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'PLANGRAPH_DISK_FLOOR_GB', 'PLANGRAPH_HOST_NAME', 'PLANGRAPH_PLACED_HOST', 'PLANGRAPH_OVERFLOW_HOSTS', 'PLANGRAPH_NATIVE_REVIEW_CLI'}
+FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'PLANGRAPH_DISK_FLOOR_GB', 'PLANGRAPH_HOST_NAME', 'PLANGRAPH_OVERFLOW_HOSTS', 'PLANGRAPH_NATIVE_REVIEW_CLI'}
 assert not [k for k in os.environ if k.startswith(('AUTOOS_', 'PLANGRAPH_', 'XDG_', 'GIT_CONFIG')) and k not in FIXTURE_KEYS], sorted(os.environ)
 async def check():
     service = SpawnService(state=root/'state')
