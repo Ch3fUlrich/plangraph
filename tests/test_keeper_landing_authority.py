@@ -283,3 +283,35 @@ def test_a_go_row_naming_the_items_own_project_binds_a_merge_repo_landing(env, t
     landing = evidence(env, "demo:A")["landing"]
     assert landing["go_rows"] == [{"decision_id": "D-9002", "pr": 31}]
     assert "go_row_missing" not in landing["flags"]
+
+
+class _Unreadable(DecisionsAdapter):
+    """Only the document read fails: ``has`` and ``text`` never run for an unreadable book."""
+
+    def _rows(self, *a, **k):
+        raise OSError("document unreadable")
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+def test_an_unreadable_decisions_file_is_unverified_not_missing_without_a_standing_decision(env, tmp_path, frozen):
+    ci, path = forge(env, tmp_path)
+    env.store.ctx["decisions"] = _Unreadable(path)
+    assert env.store.merge_close_decision is None
+    land_merge(env, ci, "A", 31, "a")
+    if frozen:
+        env.store.warm_merge_scan(env.store.merge_candidates())
+    result = env.store.close_merged_auto(env.p("system"), frozen=frozen)
+    assert [c["key"] for c in result["closed"]] == ["demo:A"], result["listed"]
+    landing = evidence(env, "demo:A")["landing"]
+    assert landing["flags"]["go_rows_unverified"] is True
+    assert "go_row_missing" not in landing["flags"]
+    assert landing["flags"]["standing_authority_missing"] is True
+
+
+def test_an_absent_decisions_adapter_is_unverified_not_missing(env, tmp_path):
+    ci, _ = forge(env, tmp_path)
+    env.store.ctx["decisions"] = None
+    land_merge(env, ci, "A", 31, "a")
+    env.store.close_merged_auto(env.p("system"))
+    flags = evidence(env, "demo:A")["landing"]["flags"]
+    assert flags["go_rows_unverified"] is True and "go_row_missing" not in flags

@@ -548,7 +548,10 @@ class ContextMixin:
         """
         decisions = self._adapter("decisions")
         try:
-            book = decision_book(decisions)
+            # Strict read: the plain book turns an unreadable source into an empty one.
+            book = decision_book(decisions, fresh=True) if decisions is not None else None
+            if book is None:
+                return None
             texts = {did: decisions.text(did) for key in keys for did in decisions_naming(book, key)}
             standing = bool(decisions.has(self.merge_close_decision)) if self.merge_close_decision else None
         except Exception:  # noqa: BLE001 - an unreadable document proves and names nothing
