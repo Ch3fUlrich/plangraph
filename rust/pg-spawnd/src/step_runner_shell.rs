@@ -132,7 +132,9 @@ impl<R: CommandRunner> ShellSteps<R> {
     /// Push the accepted head as a fast-forward and return the draft pull request of the branch.
     pub fn push(&mut self, head: &str, stamp: &str) -> Result<Push, String> {
         let expected = self.stamp_path(head)?;
-        if !expected.is_file() || Path::new(stamp) != expected {
+        let green = std::fs::read_to_string(&expected)
+            .is_ok_and(|text| pg_worker_core::fast_check_stamp::text_is_green(&text, head));
+        if !green || Path::new(stamp) != expected {
             return Err(format!("no fast-checks stamp for {head}"));
         }
         let dir = self.config.worktree_dir.clone();

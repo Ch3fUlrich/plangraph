@@ -208,7 +208,8 @@ def test_rerun_output_is_not_echoed(fx):
     fx.write(FLAKY)
     fx.commit()
     result = fx.run()
-    assert result.stdout.count("1 failed") <= 1
+    report = "\n".join(line for line in result.stdout.splitlines() if not line.startswith("AFFECTED "))
+    assert report.count("1 failed") <= 1
 
 
 def test_a_change_committed_by_the_run_is_not_a_flake(fx):

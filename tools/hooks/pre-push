@@ -4,7 +4,10 @@
 Runs scrub rules over committed blobs in the pushed range, including preflight;
 new branches scrub from origin/main and select affected test files from their nearest remote base.
 Missing preflight refuses main pushes; topic and tag pushes retain the other gates.
-Lane and train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
+A push to refs/heads/lane/* runs the public scrub, the commit gate and the fast-checks stamp
+gate only (seconds, no worktree is created, no test, no network call): a lane head needs a green
+`plangraph fast-checks` receipt, or PG_LANE_PUSH_UNSTAMPED=1 for an intermediate item commit.
+Train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
 cargo fmt) and no test; the affected tests run once, in CI. A push to refs/heads/land/train-* is a
 train: its first-parent chain must carry the merges listed in the manifest in order, with
 attributed resolution or drop commits allowed between merges. PLANGRAPH_TRAIN_MANIFEST
@@ -166,6 +169,37 @@ TRAIN_REF_PREFIX = "refs/heads/land/train-"
 
 def is_train_ref(remote_ref):
     return remote_ref.startswith(TRAIN_REF_PREFIX) and len(remote_ref) > len(TRAIN_REF_PREFIX)
+
+
+LANE_REF_PREFIX = "refs/heads/lane/"
+
+
+def is_lane_ref(remote_ref):
+    """A writer's lane branch: only scrub, commit gate and stamp run for it."""
+    return remote_ref.startswith(LANE_REF_PREFIX) and len(remote_ref) > len(LANE_REF_PREFIX)
+
+
+def stamp_gate(head):
+    """A lane head needs a green fast-checks receipt; the same reader serves review launch and push."""
+    if os.environ.get("PG_LANE_PUSH_UNSTAMPED") == "1":
+        print(f"pre-push: PG_LANE_PUSH_UNSTAMPED=1: {head[:12]} pushed without a fast-checks stamp",
+              file=sys.stderr)
+        return 0
+    try:
+        result = subprocess.run(["plangraph", "fast-checks", "--stamp-green", head],
+                                capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        print("pre-push: plangraph binary not found on PATH (required for the stamp gate): push refused",
+              file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"pre-push: stamp gate failed ({type(exc).__name__}): push refused", file=sys.stderr)
+        return 1
+    if result.returncode:
+        print(f"pre-push: no green fast-checks stamp for {head[:12]}: run `plangraph fast-checks "
+              "--owned-worktree` on this head, then push again: push refused", file=sys.stderr)
+        return 1
+    return 0
 
 
 def lane_or_train_ref(remote_ref):
@@ -489,8 +523,11 @@ def push_main():
             print(f"pre-push: train path for {remote_ref}: manifest ok, no affected tests", file=sys.stderr)
         # The first train push is backed by the manifest alone. Updates also
         # check the existing PR plan and distinguish its parts from foreign PRs.
-        open_prs = not train or not is_zero(remote_sha)
+        # A lane has no pull request yet: the open-PR parent check needs the network and is for trains.
+        open_prs = (not train or not is_zero(remote_sha)) and not is_lane_ref(remote_ref)
         if commit_gate(local_sha, remote_ref, remote_sha, open_prs=open_prs) or file_size_gate(local_sha):
+            return 1
+        if is_lane_ref(remote_ref) and stamp_gate(local_sha):
             return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
@@ -567,6 +604,10 @@ def push_main():
               "(rule ids above; matched values are never shown)", file=sys.stderr)
         return 1
     # Prune deleted heads too: stale tracking refs cannot vouch for parts.
+    # Lane refs stop here: scrub and commit gate passed; their tests run on the train.
+    refs = [rec for rec in refs if not is_lane_ref(rec[2])]
+    if not refs:
+        return 0
     fetched = refresh_origin()
     for _, local_sha, remote_ref, remote_sha in refs:
         if skip_tests and remote_ref.startswith("refs/heads/land/"):
