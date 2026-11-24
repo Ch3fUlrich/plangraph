@@ -768,3 +768,31 @@ def test_a_direct_push_with_a_plan_item_trailer_does_not_auto_close(env):
     assert result["closed"] == []
     assert any(row["key"] == "demo:A" and "merged_pr_missing" in row["reason"]
                for row in result["listed"])
+
+
+def test_one_repository_registered_under_two_names_is_one_candidate(env):
+    """LE-MERGE-CLOSE-SAME-REPO-REGISTERED-TWICE: two names for one path never read as ambiguous."""
+    set_states(env)
+    alias = env.repo.root.parent / "alias"
+    alias.symlink_to(env.repo.root)
+    env.store.ctx["git"] = GitAdapter({"demo": str(env.repo.root), "alias": str(alias)})
+    env.repo.land("w1", "Plan-Item: demo:C", 400)
+    env.store.require_seats = False
+    result = auto(env)
+    assert [c["key"] for c in result["closed"]] == ["demo:C"] and result["listed"] == []
+    # the item's own project name wins over an earlier-sorted alias
+    item = env.store._item("demo:C")
+    assert env.store._scan_projects(item) == ["demo"]
+    assert env.store._scan_projects(dict(item, project="alias")) == ["alias"]
+
+
+def test_one_repository_under_two_names_is_one_candidate_for_a_named_close(env):
+    set_states(env)
+    alias = env.repo.root.parent / "alias"
+    alias.symlink_to(env.repo.root)
+    env.store.ctx["git"] = GitAdapter({"demo": str(env.repo.root), "alias": str(alias)})
+    env.repo.land("w1", "Plan-Item: demo:C", 400)
+    item = env.store._item("demo:C")
+    item = dict(item, project="other")
+    tagged = env.store._with_merge_repo(dict(item, project="other"))
+    assert tagged["_merge_project"] == "alias"  # first sorted name; one candidate, no refusal
