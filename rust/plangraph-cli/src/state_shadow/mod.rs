@@ -186,27 +186,44 @@ fn load_config(path: &std::path::Path, role: &str) -> Result<Config> {
     Ok(config)
 }
 
-/// The authorized configuration with the session and transcript the launcher wrote since the last
-/// scan. Everything else stays as authorized at start; a transcript that is not at the written
-/// path is looked up under any Claude project directory. `None` when nothing changed or the new
-/// file is invalid, so a bad rewrite never stops the collector.
+/// The authorized configuration with the live session. The role's committed launch record wins
+/// (the launcher writes it and the watchdog updates it when it adopts a replacement later, which
+/// the launcher cannot see); else the session the role file names. Everything else stays as
+/// authorized at start. A transcript that is not at the written path is looked up under any
+/// Claude project directory. `None` when nothing changed or the new file is invalid, so a bad
+/// rewrite never stops the collector.
 fn follow_session(
     config: &Config,
     path: &std::path::Path,
     home: &std::path::Path,
+    state_dir: &std::path::Path,
 ) -> Option<Config> {
     let fresh = load_config(path, &config.role).ok()?;
-    let transcript = if fresh.transcript.is_file() {
-        fresh.transcript
-    } else {
-        pg_worker_core::shadow_follow::find_transcript(home, &fresh.session_id)
-            .unwrap_or(fresh.transcript)
-    };
-    (fresh.session_id != config.session_id || transcript != config.transcript).then(|| Config {
-        session_id: fresh.session_id,
+    let (session_id, transcript) =
+        match pg_worker_core::shadow_follow::launch_session(state_dir, &config.role) {
+            Some((session, cwd)) => {
+                let transcript =
+                    pg_worker_core::shadow_follow::transcript_for(home, &session, &cwd);
+                (session, transcript)
+            }
+            None if fresh.transcript.is_file() => (fresh.session_id, fresh.transcript),
+            None => {
+                let found = pg_worker_core::shadow_follow::find_transcript(home, &fresh.session_id);
+                (fresh.session_id, found.unwrap_or(fresh.transcript))
+            }
+        };
+    (session_id != config.session_id || transcript != config.transcript).then(|| Config {
+        session_id,
         transcript,
         ..config.clone()
     })
+}
+
+/// The directory of the launcher's records: `ROUTING_STATE_DIR`, else `~/.local/state/routing`.
+fn launch_state_dir(env: &Env, home: &std::path::Path) -> PathBuf {
+    env.get("ROUTING_STATE_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| home.join(".local/state/routing"), PathBuf::from)
 }
 
 /// Rewrite the quota file from the live snapshots; a failure leaves the file to go stale, which
@@ -216,7 +233,8 @@ fn refresh_quota(config: &Config, env: &Env, home: &std::path::Path) {
         .get("PLANGRAPH_REPO")
         .map_or_else(|| home.join("code/plangraph"), PathBuf::from);
     let now = chrono::Utc::now().timestamp();
-    if let Err(error) = quota_file::refresh(&config.quota, env, &repo, now) {
+    let leg_state = quota_file::leg_state_path(env, home);
+    if let Err(error) = quota_file::refresh(&config.quota, env, &repo, &leg_state, now) {
         eprintln!("state: quota refresh: {error}");
     }
 }
@@ -253,7 +271,9 @@ pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
     let mut pending = SourceReads::new();
     loop {
         let started = Instant::now();
-        if let Some(followed) = follow_session(&config, &config_path, home) {
+        if let Some(followed) =
+            follow_session(&config, &config_path, home, &launch_state_dir(env, home))
+        {
             config = Arc::new(followed);
         }
         refresh_quota(&config, env, home);
@@ -299,13 +319,14 @@ mod tests {
             doc["principal"] = json!("other-principal-after-start");
             std::fs::write(&path, doc.to_string()).unwrap();
         };
+        let state = dir.path().join("state");
         write("session", &dir.path().join("session.jsonl"));
-        assert!(follow_session(&old, &path, dir.path()).is_none());
+        assert!(follow_session(&old, &path, dir.path(), &state).is_none());
         let moved = dir.path().join(".claude/projects/-elsewhere");
         std::fs::create_dir_all(&moved).unwrap();
         std::fs::write(moved.join("next-2.jsonl"), "").unwrap();
         write("next-2", &dir.path().join("gone/next-2.jsonl"));
-        let followed = follow_session(&old, &path, dir.path()).unwrap();
+        let followed = follow_session(&old, &path, dir.path(), &state).unwrap();
         assert_eq!(followed.session_id, "next-2");
         assert_eq!(followed.transcript, moved.join("next-2.jsonl"));
         assert_eq!(
@@ -313,6 +334,36 @@ mod tests {
             "authorization is not re-read"
         );
         write("../bad", &dir.path().join("x/../bad.jsonl"));
-        assert!(follow_session(&old, &path, dir.path()).is_none());
+        assert!(follow_session(&old, &path, dir.path(), &state).is_none());
+    }
+
+    #[test]
+    fn a_replacement_adopted_later_reaches_the_collector_through_the_launch_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = fixture(dir.path());
+        let path = dir.path().join("routing.json");
+        // The role file still names the old session: the launcher could not resolve the new one.
+        let mut doc = json!({
+            "role":"routing", "principal":"routing-reader", "directory":dir.path(),
+            "inbox":dir.path().join("inbox"), "transcript":dir.path().join("session.jsonl"),
+            "session_id":"session", "data_repo":dir.path(), "decision_base":"a".repeat(40),
+            "github_repo":"example/demo", "github_since":"2026-01-01T00:00:00Z",
+            "quota":dir.path().join("quota.json")
+        });
+        doc["item_keys"] = json!(["demo:A"]);
+        std::fs::write(&path, doc.to_string()).unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir_all(state.join("launch")).unwrap();
+        let record = state.join("launch/routing.json");
+        std::fs::write(&record, r#"{"session_id":null,"cwd":"/work/b"}"#).unwrap();
+        assert!(follow_session(&old, &path, dir.path(), &state).is_none());
+        // The watchdog adopts the replacement and commits it to the launch record.
+        std::fs::write(&record, r#"{"session_id":"adopted-3","cwd":"/work/b"}"#).unwrap();
+        let followed = follow_session(&old, &path, dir.path(), &state).unwrap();
+        assert_eq!(followed.session_id, "adopted-3");
+        assert_eq!(
+            followed.transcript,
+            dir.path().join(".claude/projects/-work-b/adopted-3.jsonl")
+        );
     }
 }

@@ -226,8 +226,13 @@ impl Sandbox {
     }
 
     pub fn launch(&self, role: &str) -> Command {
+        self.launch_at(role, "work")
+    }
+
+    /// Launch in another working directory below the sandbox root.
+    pub fn launch_at(&self, role: &str, cwd: &str) -> Command {
         let mut cmd = self.command();
-        self.launch_args(&mut cmd, role);
+        self.launch_args(&mut cmd, role, cwd);
         cmd
     }
 
@@ -240,13 +245,13 @@ impl Sandbox {
             Command::new(&self.launcher)
         };
         self.isolate(&mut cmd);
-        self.launch_args(&mut cmd, role);
+        self.launch_args(&mut cmd, role, "work");
         cmd
     }
 
-    fn launch_args(&self, cmd: &mut Command, role: &str) {
+    fn launch_args(&self, cmd: &mut Command, role: &str, cwd: &str) {
         cmd.arg(role)
-            .arg(self.path("work"))
+            .arg(self.path(cwd))
             .args(["sonnet", "high"])
             .arg(self.path("prompt"))
             .args([

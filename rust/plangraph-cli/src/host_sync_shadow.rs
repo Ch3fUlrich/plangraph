@@ -1,26 +1,16 @@
-//! Prepare the role environments and the Claude measurement hooks together.
-use pg_worker_core::shadow_follow::register_measure_hook;
+//! Prepare the role environments. The measure-only hook is not registered here: the launcher
+//! writes it into each role's own settings file (a profile shared with other roles would leak it).
 use serde_json::{json, Value};
 use std::{fs, io, path::Path};
 
 const ROLES: [&str; 2] = ["plan-order", "routing"];
-
-fn prepare(bytes: &[u8]) -> io::Result<Option<Vec<u8>>> {
-    let mut document: Value = serde_json::from_slice(bytes).map_err(io::Error::other)?;
-    if !register_measure_hook(&mut document)? {
-        return Ok(None);
-    }
-    let mut output = serde_json::to_vec_pretty(&document).map_err(io::Error::other)?;
-    output.push(b'\n');
-    Ok(Some(output))
-}
 
 /// Build `ROLE.json` from the operator's seed (`ROLE.seed.json`: principal, inbox, data_repo,
 /// decision_base, github_repo, github_since and the optional lists) and the role's launch record
 /// (live session id and working directory). An existing file is never replaced: the launcher
 /// keeps its session and transcript current.
 fn generate_config(home: &Path, config: &Path, role: &str) -> io::Result<()> {
-    let target = config.join(format!("{role}.json"));
+    let target = pg_worker_core::shadow_follow::config_path(home, role);
     if super::exists(&target)? {
         println!("SAME {}", target.display());
         return Ok(());
@@ -76,7 +66,7 @@ fn generate_config(home: &Path, config: &Path, role: &str) -> io::Result<()> {
     super::create(&target, &bytes)
 }
 
-pub(super) fn install(home: &Path, config: &Path, profiles: [&Path; 2]) -> io::Result<()> {
+pub(super) fn install(home: &Path, config: &Path) -> io::Result<()> {
     let hook = home.join(".local/bin/turn-budget-hook");
     if !super::super::is_executable(&hook) {
         return Err(io::Error::other(format!(
@@ -88,18 +78,6 @@ pub(super) fn install(home: &Path, config: &Path, profiles: [&Path; 2]) -> io::R
     let _lock = pg_worker_core::lockfile::try_lock(&config.join("install.lock"))
         .map_err(io::Error::other)?
         .ok_or_else(|| io::Error::other("another shadow install is running"))?;
-    let mut changes = Vec::new();
-    for profile in profiles {
-        let profile = profile
-            .canonicalize()
-            .map_err(|err| io::Error::other(format!("{}: {err}", profile.display())))?;
-        if let Some(bytes) = prepare(&fs::read(&profile)?)
-            .map_err(|err| io::Error::other(format!("{}: {err}", profile.display())))?
-        {
-            changes.push((profile, bytes));
-        }
-    }
-
     for role in ROLES {
         let token = super::assignment("PG_TOKEN_FILE", &config.join(format!("{role}.token")))?;
         let source = super::assignment(
@@ -111,10 +89,6 @@ pub(super) fn install(home: &Path, config: &Path, profiles: [&Path; 2]) -> io::R
             format!("{token}{source}").as_bytes(),
         )?;
         generate_config(home, config, role)?;
-    }
-    for (profile, bytes) in changes {
-        pg_worker_core::run::record_io::atomic_write_private(&profile, &bytes)?;
-        println!("REGISTERED {}", profile.display());
     }
     Ok(())
 }

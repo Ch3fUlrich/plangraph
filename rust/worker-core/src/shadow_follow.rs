@@ -86,6 +86,40 @@ pub fn transcript_for(home: &Path, session_id: &str, cwd: &Path) -> PathBuf {
     })
 }
 
+/// The role's collector configuration: the `PLANGRAPH_STATE_CONFIG` its `ROLE.env` sets, else the
+/// default `ROLE.json` beside it. The launcher and the collector must act on the same file.
+pub fn config_path(home: &Path, role: &str) -> PathBuf {
+    let dir = home.join(".config/plangraph/state-shadow");
+    fs::read_to_string(dir.join(format!("{role}.env")))
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let value = line.strip_prefix("PLANGRAPH_STATE_CONFIG=")?;
+                let quoted = value.trim().strip_prefix('"')?.strip_suffix('"')?;
+                let mut out = String::new();
+                let mut chars = quoted.chars();
+                while let Some(ch) = chars.next() {
+                    out.push(if ch == '\\' { chars.next()? } else { ch });
+                }
+                Some(PathBuf::from(out))
+            })
+        })
+        .unwrap_or_else(|| dir.join(format!("{role}.json")))
+}
+
+/// The session the role's committed launch record names (the launcher writes it, and the watchdog
+/// updates it when it adopts a replacement later) with its working directory.
+pub fn launch_session(state_dir: &Path, role: &str) -> Option<(String, PathBuf)> {
+    let record: Value = serde_json::from_slice(
+        &fs::read(state_dir.join("launch").join(format!("{role}.json"))).ok()?,
+    )
+    .ok()?;
+    let session = record["session_id"]
+        .as_str()
+        .filter(|id| crate::turn_budget::safe_name(id))?;
+    Some((session.to_owned(), PathBuf::from(record["cwd"].as_str()?)))
+}
+
 /// Point the role configuration at the live session. Returns false when the
 /// role has no configuration or it already names this session.
 pub fn follow_session(
@@ -147,6 +181,41 @@ mod tests {
         assert_eq!(
             transcript_for(home.path(), "zzz-2", Path::new("/a/.b/c_d")),
             home.path().join(".claude/projects/-a--b-c-d/zzz-2.jsonl")
+        );
+    }
+
+    #[test]
+    fn config_path_follows_the_env_file_assignment() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".config/plangraph/state-shadow");
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            config_path(home.path(), "routing"),
+            dir.join("routing.json")
+        );
+        fs::write(
+            dir.join("routing.env"),
+            "PG_TOKEN_FILE=\"/t\"\nPLANGRAPH_STATE_CONFIG=\"/x/my \\\"cfg\\\".json\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config_path(home.path(), "routing"),
+            PathBuf::from("/x/my \"cfg\".json")
+        );
+    }
+
+    #[test]
+    fn launch_session_reads_the_committed_record() {
+        let state = tempfile::tempdir().unwrap();
+        assert!(launch_session(state.path(), "routing").is_none());
+        fs::create_dir_all(state.path().join("launch")).unwrap();
+        let record = state.path().join("launch/routing.json");
+        fs::write(&record, r#"{"session_id":null,"cwd":"/w"}"#).unwrap();
+        assert!(launch_session(state.path(), "routing").is_none());
+        fs::write(&record, r#"{"session_id":"sid-2","cwd":"/w2"}"#).unwrap();
+        assert_eq!(
+            launch_session(state.path(), "routing"),
+            Some(("sid-2".into(), PathBuf::from("/w2")))
         );
     }
 

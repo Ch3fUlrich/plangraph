@@ -137,33 +137,40 @@ fn quota_alarms_uses_gateway_mount_before_a_cli_store() {
 }
 
 #[test]
-fn state_shadow_stages_both_instances_and_registers_measurement_once() {
+fn state_shadow_stages_both_instances_and_leaves_shared_profiles_alone() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
-    let settings = [home.join("plan-order.json"), home.join("routing.json")];
+    let shared = home.join("fleet-settings.json");
     let unit = include_str!("../../../deploy/systemd/plangraph-state-shadow@.service");
     let bin = home.join(".local/bin");
     fs::create_dir_all(&bin).unwrap();
     std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_plangraph"), bin.join("plangraph")).unwrap();
     std::os::unix::fs::symlink("/bin/true", bin.join("turn-budget-hook")).unwrap();
-    for path in &settings {
-        fs::write(path, r#"{"permissions":{"defaultMode":"default"},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"existing"}]}]}}"#).unwrap();
-    }
-    let run = || {
+    fs::write(
+        &shared,
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"existing"}]}]}}"#,
+    )
+    .unwrap();
+    let run = |extra: &[&Path]| {
         Command::new(env!("CARGO_BIN_EXE_host-sync"))
             .env_clear()
             .env("HOME", home)
             .args(["--install-env", "state-shadow"])
-            .args(&settings)
+            .args(extra)
             .output()
             .unwrap()
     };
     for _ in 0..2 {
-        let output = run();
+        let output = run(&[]);
         assert!(output.status.success(), "{output:?}");
     }
+    // The old form named the profiles to edit; a shared profile must never receive the hook.
+    assert!(!run(&[shared.as_path()]).status.success());
+    assert!(!fs::read_to_string(&shared)
+        .unwrap()
+        .contains("measure-only"));
     let config = home.join(".config/plangraph/state-shadow");
-    for (role, settings) in ["plan-order", "routing"].into_iter().zip(settings) {
+    for role in ["plan-order", "routing"] {
         let content = fs::read_to_string(config.join(format!("{role}.env"))).unwrap();
         for (key, suffix) in [
             ("PG_TOKEN_FILE", "token"),
@@ -175,27 +182,6 @@ fn state_shadow_stages_both_instances_and_registers_measurement_once() {
             )));
         }
         run_shadow_once(home, role, unit, &content);
-        let props: serde_json::Value =
-            serde_json::from_slice(&fs::read(settings).unwrap()).unwrap();
-        assert_eq!(props["permissions"]["defaultMode"], "default");
-        assert_eq!(props["hooks"]["Stop"][0]["hooks"][0]["command"], "existing");
-        for event in [
-            "UserPromptSubmit",
-            "Notification",
-            "PreToolUse",
-            "PostToolUse",
-            "Stop",
-        ] {
-            let groups = props["hooks"][event].as_array().unwrap();
-            let matching: Vec<_> = groups
-                .iter()
-                .flat_map(|group| group["hooks"].as_array().unwrap())
-                .filter(|hook| {
-                    hook["command"] == "\"$HOME/.local/bin/turn-budget-hook\" --measure-only"
-                })
-                .collect();
-            assert_eq!(matching.len(), 1, "{event}: {groups:?}");
-        }
         if Path::new("/usr/bin/systemd-analyze").is_file() {
             let service = temp
                 .path()
@@ -308,10 +294,6 @@ fn state_shadow_generates_role_config_from_seed_and_launch_record_once() {
     let bin = home.join(".local/bin");
     fs::create_dir_all(&bin).unwrap();
     std::os::unix::fs::symlink("/bin/true", bin.join("turn-budget-hook")).unwrap();
-    let settings = [home.join("plan-order.json"), home.join("routing.json")];
-    for path in &settings {
-        fs::write(path, "{}").unwrap();
-    }
     let config = home.join(".config/plangraph/state-shadow");
     fs::create_dir_all(&config).unwrap();
     let run = || {
@@ -319,7 +301,6 @@ fn state_shadow_generates_role_config_from_seed_and_launch_record_once() {
             .env_clear()
             .env("HOME", home)
             .args(["--install-env", "state-shadow"])
-            .args(&settings)
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");

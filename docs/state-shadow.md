@@ -23,7 +23,7 @@ the collector owner.
 | `github_since` | Initial lower bound for main runs, as an RFC 3339 instant |
 | `pull_requests` | Optional list of authorized held or train PR numbers |
 | `item_keys` | Optional role-authorized keys for decision rows |
-| `quota` | JSON file the collector refreshes each scan with remaining percent per provider; older than 10 minutes fails the source |
+| `quota` | JSON file the collector refreshes each scan with the router's booked leg limits (`limited_until`) and the remaining percent per provider; older than 10 minutes fails the source |
 | `lease_margin_seconds` | Optional lead time for lease warnings, default 600 |
 
 The service reads GitHub via `gh` and spawner host history via
@@ -47,11 +47,11 @@ next read. Three consecutive failed scans of a source add an urgent event.
 The shadow collector runs on the orchestration host for the `plan-order` and
 `routing` roles. Use the host release install to provision `plangraph` and
 `turn-budget-hook`. Run
-`host-sync --install-env state-shadow PLAN_ORDER_SETTINGS ROUTING_SETTINGS`,
-where the two arguments are the existing Claude settings files for the roles.
-This creates `~/.config/plangraph/state-shadow/ROLE.env` when absent and
-registers `turn-budget-hook --measure-only` in each settings file. Existing
-hooks and env files are preserved.
+`host-sync --install-env state-shadow` (it takes no settings files).
+This creates `~/.config/plangraph/state-shadow/ROLE.env` when absent and keeps
+existing env files. It registers no hook: a profile shared with other roles
+would leak `--measure-only` to them, so the launcher writes the hook into each
+role's own settings file.
 
 The `plangraph-state-shadow@.service` template reads the common keeper URL
 from `~/.config/plangraph/plangraph.env` and the role-specific configuration
@@ -65,18 +65,24 @@ The role's session changes at every handoff and its worktree, hence its
 transcript project directory, can move. Three parts keep the collector on the
 live session:
 
-- Every `fleet-launch` of a role with `state-shadow/ROLE.env` rewrites
-  `state-shadow/ROLE.json` with the new `session_id` and the transcript found
+- Every `fleet-launch` of a role with `state-shadow/ROLE.env` rewrites the role
+  configuration (the `PLANGRAPH_STATE_CONFIG` of that env file, else
+  `state-shadow/ROLE.json`) with the new `session_id` and the transcript found
   under any `~/.claude/projects/*` directory (else the one derived from the
   launch directory). Other fields stay as the operator set them.
 - The same launch writes the role's own settings file
   `launch-settings/role-ROLE.json`: the lean profile, the caps and the
   measure-only hook. Roles with equal caps never share it, and the hook is
   present again after every relaunch.
-- The collector re-reads `session_id` and `transcript` at each scan (a missing
-  transcript is looked up by session id; authorization fields are read once)
-  and refreshes the `quota` file from the live quota snapshots, so the source
-  stays live.
+- The collector takes `session_id` and `transcript` at each scan from the
+  role's committed launch record (`launch/ROLE.json` in the routing state
+  directory), so a replacement the watchdog adopts later is followed too; else
+  from the configuration file, looking a missing transcript up by session id.
+  Authorization fields are read once.
+- Each scan it also refreshes the `quota` file from the router's own states:
+  the provider limits booked in `plangraph/leg-state.sqlite` (AGY and Codex
+  legs, `limited_until` per leg) and the quota snapshots' remaining percent. A
+  booked limit or its expiry is a quota event.
 
 `host-sync --install-env state-shadow` also creates a missing `ROLE.json` from
 `state-shadow/ROLE.seed.json` (principal, inbox, data_repo, decision_base,

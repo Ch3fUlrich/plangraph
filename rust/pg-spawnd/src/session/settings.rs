@@ -119,17 +119,16 @@ pub(super) fn prepare(
 }
 
 fn collector_config(paths: &Paths, role: &str) -> PathBuf {
-    paths
-        .home
-        .join(".config/plangraph/state-shadow")
-        .join(format!("{role}.json"))
+    pg_worker_core::shadow_follow::config_path(&paths.home, role)
 }
 
 /// A role has a state-shadow collector once `host-sync --install-env state-shadow` wrote its env file.
 fn has_collector(paths: &Paths, role: &str) -> bool {
     pg_worker_core::turn_budget::safe_name(role)
-        && collector_config(paths, role)
-            .with_extension("env")
+        && paths
+            .home
+            .join(".config/plangraph/state-shadow")
+            .join(format!("{role}.env"))
             .is_file()
 }
 

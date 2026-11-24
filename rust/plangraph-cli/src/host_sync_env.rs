@@ -79,13 +79,9 @@ fn install(family: &str, home: &Path, args: &[OsString]) -> io::Result<()> {
     // The unit EnvironmentFile= directives use %h/.config.
     let config = home.join(".config/plangraph");
     match (family, args) {
-        ("state-shadow", [plan_order, routing]) => shadow::install(
-            home,
-            &config.join("state-shadow"),
-            [Path::new(plan_order), Path::new(routing)],
-        ),
+        ("state-shadow", []) => shadow::install(home, &config.join("state-shadow")),
         ("state-shadow", _) => Err(io::Error::other(
-            "state-shadow requires PLAN_ORDER_SETTINGS ROUTING_SETTINGS",
+            "state-shadow takes no settings files: the launcher registers the hook in each role's own settings",
         )),
         ("disk-hygiene", []) => {
             let env_file = config.join("disk-hygiene-service.env");
