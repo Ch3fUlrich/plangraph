@@ -63,6 +63,9 @@ pub(super) fn finish(args: &[String]) -> Result<(), String> {
             });
             if record["run_id"] == id.as_str() && terminal {
                 let seat = evaluate_seat_record(1, 1, head, &[], &record, Some(&dir));
+                // The same booking path as the foreground review: a seat that was pending and
+                // ends without a verdict counts toward the repeat alert at its terminal time.
+                super::no_verdict::book(state, &seat, seat.ended.unwrap_or(now() as i64));
                 let verdict = match (seat.status.as_str(), seat.exit_code, seat.verdict) {
                     ("completed", 0, Some(SeatVerdict::Pass)) if seat.passed => "PASS",
                     ("completed", 0, Some(SeatVerdict::RequestChanges)) => "REQUEST_CHANGES",

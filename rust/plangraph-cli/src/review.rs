@@ -54,6 +54,8 @@ pub struct SeatOutcome {
     pub passed: bool,
     /// Why a seat ended without a pass, from the spawner record (refusal, error, skip or seat coverage).
     pub reason: Option<String>,
+    /// Terminal time of the run (unix seconds) when its record has one.
+    pub ended: Option<i64>,
 }
 
 pub fn usage() -> &'static str {
@@ -343,11 +345,32 @@ fn spawn_one_seat(
     let out = cmd
         .output()
         .map_err(|e| format!("failed to run spawner spawn: {e}"))?;
-    let raw: Value = serde_json::from_slice(&out.stdout).map_err(|e| {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        format!("spawner spawn returned non-JSON ({e}): stderr={stderr} stdout={stdout}")
-    })?;
+    let raw: Value = match serde_json::from_slice(&out.stdout) {
+        Ok(raw) => raw,
+        Err(e) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            // A refusal before any run exists (a missing harness, a prompt too large) prints no
+            // record: its first line becomes the seat's reason, so the REVIEW line still names it.
+            let cause = stderr
+                .lines()
+                .chain(stdout.lines())
+                .find(|l| !l.trim().is_empty());
+            match cause {
+                Some(cause) if !out.status.success() => json!({
+                    "run_id": format!("spawn-refused-{slot}-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+                    "status": "failed",
+                    "exit_code": out.status.code().unwrap_or(1),
+                    "reason": cause,
+                }),
+                _ => {
+                    return Err(format!(
+                        "spawner spawn returned non-JSON ({e}): stderr={stderr} stdout={stdout}"
+                    ))
+                }
+            }
+        }
+    };
     let records = extract_records(&raw)?;
     records
         .into_iter()
@@ -618,14 +641,9 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
 
     // Seats that ended without a verdict feed the repeat-cause alert (2 seats, one cause, 30 min).
     if let Some(state) = state_dir.as_deref() {
-        let now = chrono::Utc::now().timestamp();
-        for seat in outcomes
-            .iter()
-            .filter(|s| !s.passed && s.verdict != Some(SeatVerdict::Pending))
-        {
-            if let Some(reason) = seat.reason.as_deref() {
-                no_verdict::note(state, &seat.run_id, reason, now);
-            }
+        for seat in &outcomes {
+            let ended = seat.ended.unwrap_or_else(|| chrono::Utc::now().timestamp());
+            no_verdict::book(state, seat, ended);
         }
     }
 
