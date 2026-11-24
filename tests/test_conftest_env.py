@@ -372,6 +372,10 @@ def _run_without_pthread_kill(tmp_path, body, deadline_signal):
 @pytest.mark.parametrize('phase', ['call', 'teardown'])
 def test_pytest_deadline_interrupts_main_thread_without_pthread_kill(tmp_path, phase, deadline_signal):
     """Windows has no pthread_kill (and carries the deadline on SIGINT): the hung test still fails."""
+    import signal
+
+    if getattr(signal, deadline_signal, None) is None:
+        pytest.skip(f'{deadline_signal} does not exist on this platform')
     result, output = _run_without_pthread_kill(
         tmp_path,
         'import time, pytest\n\n'
@@ -395,7 +399,7 @@ def test_pytest_deadline_sigint_fallback_keeps_a_real_ctrl_c(tmp_path):
         tmp_path,
         'import os, signal, time\n\n'
         'def test_ctrl_c():\n'
-        '    os.kill(os.getpid(), signal.SIGINT)\n'
+        '    signal.raise_signal(signal.SIGINT)\n'
         '    time.sleep(10)\n\n'
         'def test_not_reached():\n    pass\n',
         'SIGINT',
