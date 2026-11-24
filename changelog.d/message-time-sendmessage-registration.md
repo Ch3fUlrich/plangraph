@@ -1,0 +1,1 @@
+Document how to register the message-time and message-route hooks on SendMessage, add regression tests for a guessed future stamp (05:4xZ against a 05:27Z clock, a stamp ten minutes ahead) and say to read git times with iso-strict or TZ=UTC.

@@ -127,4 +127,21 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn a_guessed_future_stamp_is_refused_and_the_real_clock_passes() {
+        // 2026-11-24: messages said 05:4xZ and 05:5xZ while the clock read 05:27:25Z.
+        let now = "2026-11-24T05:27:25Z".parse().unwrap();
+        for fail in ["05:4xZ", "about 05:4xZ", "05:5xZ", "05:37:26Z"] {
+            assert!(invalid_time(fail, now).is_some(), "{fail}");
+        }
+        for pass in [
+            "about 05:2xZ",
+            "05:27Z",
+            "05:28:25Z",
+            "2026-11-24T04:47:51+01:00",
+            "03:47Z",
+        ] {
+            assert_eq!(invalid_time(pass, now), None, "{pass}");
+        }
+    }
 }
