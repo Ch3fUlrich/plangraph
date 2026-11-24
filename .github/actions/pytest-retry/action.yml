@@ -1,0 +1,45 @@
+name: Same-SHA retry for classification
+description: >-
+  After a red pytest step, run the failed tests once more on the same SHA and classify the two logs (ci-flake classify).
+  This step only describes the failure (fail-pass or fail-fail, with both logs, runner, run, attempt and SHA); the job stays red
+  because the pytest step failed, and a fail-pass makes no run green.
+inputs:
+  suite:
+    description: Suite name for the record (sqlite or postgres)
+    required: true
+  first-log:
+    description: Log of the failed pytest step
+    required: true
+outputs:
+  dir:
+    description: Directory with first.log, second.log, flake-record.json and flake-items.json
+    value: ${{ steps.retry.outputs.dir }}
+runs:
+  using: composite
+  steps:
+    - id: retry
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        SUITE: ${{ inputs.suite }}
+        FIRST_LOG: ${{ inputs.first-log }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+        RUNNER_ID: ${{ runner.name }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -uo pipefail
+        flake=rust/target/release/ci-flake
+        out="$RUNNER_TEMP/flake-$SUITE"
+        mkdir -p "$out"
+        cp "$FIRST_LOG" "$out/first.log"
+        : > "$out/second.log"
+        mapfile -t ids < <("$flake" failed-ids "$out/first.log")
+        # More than 50 failures is a broken change, not a flake: no retry, the classification says so.
+        if [ "${#ids[@]}" -gt 0 ] && [ "${#ids[@]}" -le 50 ]; then
+          PYTEST_SHARD= PYTEST_SHARD_DURATIONS_FILE= PYTEST_SHARD_DURATIONS_OUT= timeout -k 5s 420 \
+            python -m pytest -q -rA -p no:cacheprovider -n 0 "${ids[@]}" > "$out/second.log" 2>&1
+        fi
+        "$flake" classify --suite "$SUITE" --runner "$RUNNER_ID" --run-id "$RUN_ID" --attempt "$RUN_ATTEMPT" \
+          --sha "$HEAD_SHA" --first "$out/first.log" --second "$out/second.log" --out "$out" | tee -a "$GITHUB_STEP_SUMMARY"
+        echo "dir=$out" >> "$GITHUB_OUTPUT"
