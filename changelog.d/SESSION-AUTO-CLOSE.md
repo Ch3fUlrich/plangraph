@@ -1,0 +1,1 @@
+- **SESSION-AUTO-CLOSE:** New `pg-session-resume`: stops a writer session at DONE with its resume handle recorded, resumes the same session from a `<lane>.fix-round-N.txt` findings file (the file text is the prompt), reaps sessions idle for 30 minutes outside an allowlist, and logs every stop and resume. The lane file format is documented in docs/SESSION-LIFECYCLE.md.
