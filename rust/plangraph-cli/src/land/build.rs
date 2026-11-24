@@ -380,6 +380,8 @@ pub fn verify_manifest_with(
     let mut replayed = Vec::with_capacity(m.parts.len());
     let mut resolutions = Vec::new();
     let mut remerges = Vec::new();
+    // Only a remerge the replay recomputed below moves it past the base.
+    let mut main_in = m.base.clone();
     for step in chain {
         let (commit, prev) = match step {
             Step::Merge { commit, parent } => (commit, parent),
@@ -392,6 +394,7 @@ pub fn verify_manifest_with(
                 let actual = git::out(repo, &["rev-parse", &format!("{commit}^{{tree}}")])?;
                 expected.extend(git::commits(repo, &format!("{parent}..{main}"))?);
                 expected.insert(commit);
+                main_in = main.clone();
                 remerges.push(DeltaMerge::new(
                     [parent, main],
                     actual.clone(),
@@ -495,6 +498,7 @@ pub fn verify_manifest_with(
     Ok(Delta {
         base: m.base.clone(),
         train_sha: m.train_sha.clone(),
+        main_in,
         policy: m.policy.clone(),
         merges: replayed,
         remerges,

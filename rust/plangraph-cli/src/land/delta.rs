@@ -8,6 +8,8 @@ use std::{collections::BTreeSet, path::Path};
 pub struct Delta {
     pub base: String,
     pub train_sha: String,
+    /// The newest main the replay proved the train contains: the newest remerged main, else `base`.
+    pub main_in: String,
     pub policy: Policy,
     pub merges: Vec<DeltaMerge>,
     /// Each merge of the new main into the train, in chain order, for the remerge-diff review.

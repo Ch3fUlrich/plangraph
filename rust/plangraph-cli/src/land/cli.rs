@@ -290,10 +290,13 @@ pub(super) fn run_inner(
             let delta =
                 build::verify_manifest_with(&repo, &manifest, &parts, &adopted, &protected)?;
             build::verify_result(&repo, &manifest.base, &result, Some(&manifest))?;
-            let mut lines = vec![format!(
-                "train {} matches its manifest, result and freeze",
-                manifest.build
-            )];
+            let mut lines = vec![
+                format!(
+                    "train {} matches its manifest, result and freeze",
+                    manifest.build
+                ),
+                format!("main_in {}", delta.main_in),
+            ];
             if flags.contains_key("delta-out") || cmd != "verify" {
                 let packet = super::delta::ReviewPacket::new(&delta, &repo, &manifest, python)?;
                 if cmd == "admit" {

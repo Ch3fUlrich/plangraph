@@ -130,6 +130,10 @@ fn replay_records_the_remerge_for_the_diff_review_and_refuses_an_edited_one() {
     let landed = land_other(&fx);
     m.train_sha = remerge(fx.path(), &m.train_sha, &landed);
     let delta = verify_manifest_with(fx.path(), &m, &parts, &[], &[]).unwrap();
+    assert_eq!(
+        delta.main_in, landed,
+        "the replay names the main the train contains"
+    );
     let json = serde_json::to_value(&delta).unwrap();
     assert_eq!(json["remerges"].as_array().unwrap().len(), 1);
     assert_eq!(json["remerges"][0]["parents"][1], landed);
