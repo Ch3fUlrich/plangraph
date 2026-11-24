@@ -78,6 +78,7 @@ impl Host {
             request["prompt"].as_str().ok_or("prompt missing")?,
         )?
         .into_owned();
+        pg_worker_core::credential_isolation::refuse_card_sandbox(&request["card"])?;
         self.effort = writer_effort(&request["card"])?;
         self.review_override = super::review_route::review_override(&request["card"])?;
         Ok(())

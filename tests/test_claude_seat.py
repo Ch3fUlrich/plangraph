@@ -209,3 +209,17 @@ def test_review_pytest_paths_are_judged_by_text_not_platform_path_text(
 
     monkeypatch.setattr(claude_seat, "Path", BackslashPath)
     assert claude_seat._review_command(command, tmp_path) is allowed
+
+
+def test_review_sandbox_denies_the_shared_secret_list(tmp_path, monkeypatch):
+    from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
+    from plangraph.routing_support import claude_seat
+
+    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
+    leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
+    argv = claude_access_args("review")
+    claude_seat.configure_review_tests(argv, {}, leg, "review", {}, "fixture",
+                                       review_target=str(tmp_path / "target"))
+    deny = json.loads(argv[argv.index("--settings") + 1])["sandbox"]["filesystem"]["denyRead"]
+    assert {"~/.ssh", "~/.config/plangraph", "~/.netrc"} <= set(deny)
+    assert set(claude_seat.secret_paths()) <= set(deny)

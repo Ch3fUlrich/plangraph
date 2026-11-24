@@ -81,8 +81,9 @@ pub fn writer_git_dirs(cwd: &Path, path: Option<&str>) -> io::Result<Vec<PathBuf
     Ok(dirs)
 }
 
-/// The workspace-write overrides used by the native writer and its readiness probe.
-pub fn writer_sandbox_args(roots: &[PathBuf]) -> io::Result<Vec<String>> {
+/// The workspace-write overrides used by the native writer and its readiness probe, with the
+/// credential-isolation profile that denies reads of `deny`.
+pub fn writer_sandbox_args(roots: &[PathBuf], deny: &[PathBuf]) -> io::Result<Vec<String>> {
     let list = roots
         .iter()
         .map(|root| {
@@ -93,14 +94,16 @@ pub fn writer_sandbox_args(roots: &[PathBuf]) -> io::Result<Vec<String>> {
         })
         .collect::<io::Result<Vec<_>>>()?
         .join(",");
-    Ok([
+    let mut args: Vec<String> = [
         format!("sandbox_mode=\"{WRITER_SANDBOX}\""),
         "sandbox_workspace_write.network_access=true".to_owned(),
         format!("sandbox_workspace_write.writable_roots=[{list}]"),
     ]
     .into_iter()
     .flat_map(|value| ["-c".to_owned(), value])
-    .collect())
+    .collect();
+    args.extend(crate::credential_isolation::profile_args(roots, deny)?);
+    Ok(args)
 }
 
 fn record_path(state: &Path, host: &str, sandbox: &str) -> io::Result<PathBuf> {
@@ -311,7 +314,10 @@ fn configure_sandbox(
 ) -> io::Result<()> {
     command.current_dir(cwd).arg("sandbox");
     if sandbox == WRITER_SANDBOX {
-        command.args(writer_sandbox_args(roots)?);
+        command.args(writer_sandbox_args(
+            roots,
+            &crate::credential_isolation::host_deny_read_paths()?,
+        )?);
     } else {
         command.args(["-c", &format!("sandbox_mode=\"{sandbox}\"")]);
     }
