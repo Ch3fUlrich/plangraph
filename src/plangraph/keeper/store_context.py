@@ -84,6 +84,17 @@ def _graph(index):
     return dependents, corrected
 
 
+def _superseded_map(index):
+    """``{old key: [live superseding keys]}``; a terminal superseder retires nothing."""
+    out = {}
+    for other in index.values():
+        if other.get("state") in views.TERMINAL:
+            continue
+        for old in other.get("supersedes") or []:
+            out.setdefault(old, []).append(other["key"])
+    return out
+
+
 class ContextMixin:
     """Task-context reads and the stale-claim guard."""
 
@@ -91,7 +102,8 @@ class ContextMixin:
     def _inputs(self, index, *, fresh=False):
         """Per-request shared inputs: decision rows, retirements, graph, clock."""
         return {"book": src.decision_book(self._adapter("decisions"), fresh=fresh),
-                "graph": _graph(index), "clock": self._decision_clock()}
+                "graph": _graph(index), "clock": self._decision_clock(),
+                "superseded": _superseded_map(index)}
 
     def _last_activity_map(self):
         out = {}
@@ -214,6 +226,7 @@ class ContextMixin:
             "corrected_by": sorted(corrected.get(key, [])),
             "linked_decisions": sorted(set(cited) | set(naming), key=_num),
             "superseded_premises": {d: superseded[d] for d in cited if d in superseded},
+            "superseded_by": sorted((inputs.get("superseded") or {}).get(key, [])),
             "newer_decisions": newer,
             "last_activity": (activity.get(key) if activity is not None
                               else self._last_activity(key)),
@@ -495,8 +508,14 @@ class ContextMixin:
             timing.check_io_deadline("decision book")
             path = getattr(self._adapter("decisions"), "_path", None)
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
+        superseded = {item["key"]: self._superseders(item["key"])}
+        if superseded[item["key"]]:
+            raise Refused("bad_state", f"{item['key']} superseded by "
+                          + ", ".join(superseded[item["key"]])
+                          + " (cancel the superseding item or drop its supersedes link)")
         ctx = self._task_context(item, index, inputs={
-            "graph": _graph(index), "book": shared["book"], "clock": shared["clock"]}, git=False)
+            "graph": _graph(index), "book": shared["book"], "clock": shared["clock"],
+            "superseded": superseded}, git=False)
         timing.check_io_deadline("task context")
         work_index = indexes[project]
         ctx["work_exists"] = self._indexed_delivery(indexes, item["key"], project, shared["book"])
@@ -638,6 +657,10 @@ class ContextMixin:
     def _claim_staleness(ctx):
         """Shared refusal facts for claim and ready; informational age is separate."""
         facts = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
+        if ctx.get("superseded_by"):
+            facts.append("superseded by " + ",".join(ctx["superseded_by"]))
+        facts += [f"premise {old} superseded by {new}"
+                  for old, new in sorted((ctx.get("superseded_premises") or {}).items())]
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
         if commits and (not lanes or commits[0].get("source")):

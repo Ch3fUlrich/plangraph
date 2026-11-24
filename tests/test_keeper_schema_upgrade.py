@@ -108,7 +108,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
 
 
 def test_schema_version_is_sixteen():
-    assert schema.SCHEMA_VERSION == 27
+    assert schema.SCHEMA_VERSION == 28
 
 
 def test_v24_sqlite_upgrade_installs_claim_definition_index(tmp_path):
@@ -163,7 +163,7 @@ def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 27
+    assert schema.SCHEMA_VERSION == 28
     assert "message_nonces" in tables(conn)
     assert "message_envelopes" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
@@ -203,7 +203,7 @@ def test_v14_db_upgrades_to_v15_creates_messages_and_keeps_chain(tmp_path):
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 27
+    assert schema.SCHEMA_VERSION == 28
     assert "messages" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert {"trg_messages_no_update", "trg_messages_no_delete"} <= triggers
@@ -239,7 +239,7 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     conn = kdb.open_db(path, backend="sqlite")
     # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
     # production upgrades detect missing columns without reading/writing the pragma.
-    assert schema.SCHEMA_VERSION == 27
+    assert schema.SCHEMA_VERSION == 28
     row = dict(Store(conn, clock=Clock())._item("demo:A"))
     for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
         assert column in row and row.pop(column) is None
@@ -403,7 +403,7 @@ OVERSIGHT_TABLES = {"oversight_tokens", "oversight_ops"}
 
 def test_fresh_sqlite_db_is_v16_with_oversight_and_bus_tables(tmp_path):
     conn = kdb.open_db(tmp_path / "fresh.db", create=True, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 27
+    assert schema.SCHEMA_VERSION == 28
     assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
     conn.close()
 
@@ -697,7 +697,7 @@ def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypat
                 store = Store(conn, clock=Clock())
                 with monkeypatch.context() as old:
                     old.setattr(store_create, "_ITEM_COLUMNS", tuple(
-                        column for column in store_create._ITEM_COLUMNS if column != "design_ref"))
+                        column for column in store_create._ITEM_COLUMNS if column not in ("design_ref", "supersedes")))
                     store.create_items(owner, [defn("A"), defn("GOAL", ["A"], kind="goal")])
                 history = keeper_events.read_events(conn)
                 assert conn.execute("SELECT to_regclass('idx_events_incidents')").fetchone()[0] is None

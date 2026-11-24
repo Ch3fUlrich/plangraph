@@ -42,7 +42,7 @@ _ACTIVE_EDITABLE = _TIER_FIELDS | frozenset(("done_criteria", "depends_on"))
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
              "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "estimate_src",
              "done_criteria", "design_ref", "evidence_kinds",
-             "depends_on", "track", "owner", "note", "review_tier")
+             "depends_on", "track", "owner", "note", "review_tier", "supersedes")
 _MAX_BATCH = 500
 #: KEEPER-PRIORITY-LEVELS-AND-AGING: a lesson that happened once starts here;
 #: each repeat INCIDENT LOG line raises it one level (10 at most).
@@ -63,7 +63,7 @@ def _blank(value):
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
-     "estimate_h", "estimate_src", "depends_on", "under", "slice_parent", "corrects", "done_criteria",
+     "estimate_h", "estimate_src", "depends_on", "under", "slice_parent", "corrects", "supersedes", "similar", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note", "design_ref",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
@@ -71,7 +71,7 @@ _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait",
                  "owner_family",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
                  "operator", "priority", "review_tier", "source", "note",
-                 "corrects", "state",
+                 "corrects", "supersedes", "state",
                  "epoch", "claimed_by", "delegate", "lease_until", "reviewer",
                  "model", "created_at", "updated_at", "design_ref")
 
@@ -217,6 +217,7 @@ class CreateMixin:
             if gate is not None:
                 attach.append((definition, gate))
         before = self._all_items()
+        warnings = self._answer_similar(defs, before, legacy)
         # A standing ``depends_on_cancelled`` edge on the gate is not this define's
         # doing (``_validate_change`` only refuses what a change newly introduces),
         # so the define goes through and says so; repair the edge with the
@@ -277,8 +278,9 @@ class CreateMixin:
         if standing and defs:
             result["warnings"] = list(standing)
         if any(not definition.get("description") for definition in defs):
-            result.setdefault("warnings", []).append(
-                "description missing: brief will be empty")
+            warnings.append("description missing: brief will be empty")
+        if warnings:
+            result.setdefault("warnings", []).extend(warnings)
         conflicts = sum(decision_tier_conflict(d["review_tier"], d["evidence_kinds"]) for d in defs)
         if legacy and conflicts:
             result.setdefault("warnings", []).append(
@@ -350,6 +352,7 @@ class CreateMixin:
             "review_tier": definition["review_tier"],
             "source": definition.get("source"), "note": definition.get("note"),
             "corrects": definition.get("corrects"), "state": state, "epoch": epoch,
+            "supersedes": self._stored("supersedes", definition.get("supersedes")),
             "claimed_by": (definition.get("owner")
                            if state in ("claimed", "in_review") else None),
             "delegate": None, "lease_until": None,
@@ -369,8 +372,8 @@ class CreateMixin:
         for name in SMALL_FIELDS:
             if row[name] is not None:
                 created[name] = row[name]
-        if parent := definition.get("slice_parent"):
-            created["slice_parent"] = parent
+        created.update({n: definition[n] for n in ("slice_parent", "supersedes", "similar")
+                        if definition.get(n)})
         if definition.get("rehomed_from"):
             created["rehomed_from"] = definition["rehomed_from"]
         self._append(principal, definition["key"], "item_created", created, now)
@@ -528,6 +531,9 @@ class CreateMixin:
             elif field == "choices":
                 value = edit_fields["choices"] = me["choices"] = check_choices(
                     value, item["kind"], key)
+            elif field == "supersedes":
+                value = edit_fields[field] = me[field] = self._checked_supersedes(
+                    key, value, by_key, item["project"])
             elif field == "fixes" and value is not None:
                 if not isinstance(value, str) or not value:
                     raise Refused("validation", "fixes must be a key string or null")

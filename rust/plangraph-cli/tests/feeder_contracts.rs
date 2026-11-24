@@ -101,6 +101,31 @@ fn whole_tick_dry_run_does_not_touch_claim_or_spawner() {
     assert!(f.calls.is_empty());
 }
 #[test]
+fn feeder_drops_superseded_items_premises_and_contracts() {
+    let base = || {
+        let mut v = ready();
+        v["items"][4]["context"]["newer_decisions"] = json!(["D-123"]);
+        v["items"][3]["context"]["newer_decisions"] = json!(["D-124"]);
+        v
+    };
+    let top = |v: &Value| pick(v, &[], &Policy::default()).unwrap().key;
+    assert_eq!(top(&base()), "plangraph:HIGH-OLD");
+    for (field, value) in [
+        ("superseded_by", json!(["plangraph:NEWER"])),
+        ("superseded_premises", json!({"D-5": "D-9"})),
+        ("superseded_contract", json!("old contract")),
+    ] {
+        let mut v = base();
+        v["items"][2]["context"][field] = value;
+        assert_eq!(top(&v), "plangraph:HIGH-NEW", "{field}");
+    }
+    // empty values drop nothing
+    let mut v = base();
+    v["items"][2]["context"]["superseded_by"] = json!([]);
+    v["items"][2]["context"]["superseded_premises"] = json!({});
+    assert_eq!(top(&v), "plangraph:HIGH-OLD");
+}
+#[test]
 fn legacy_ready_context_skips_guard_refusals_without_dropping_old_unclaimed_work() {
     let mut v = ready();
     v["items"][4]["context"]["newer_decisions"] = json!(["D-123"]);

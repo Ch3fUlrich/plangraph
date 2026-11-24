@@ -15,7 +15,7 @@ from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
 from .item_fields import (MODEL_FIELDS, SMALL_FIELDS, check_choices, check_design_ref, check_host, check_kg_refs, check_kind, check_model_fields,
-                          check_wait, kind_defaults)
+                          check_similar_answers, check_wait, kind_defaults, similar_items)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
@@ -50,7 +50,7 @@ def _defined_payload(fields):
         payload["criteria_ledger"] = True
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
-    for name in SMALL_FIELDS:
+    for name in SMALL_FIELDS + ("supersedes",):
         if name in fields:
             payload[name] = fields[name]
     for name in ("estimate_h", "estimate_src"):
@@ -209,7 +209,13 @@ class InputMixin:
             if not isinstance(slice_parent, str) or not slice_parent.strip():
                 raise Refused("validation", f"{key}: slice_parent must be a non-empty key")
             slice_parent = self._qualify(project, slice_parent)
+        supersedes = [self._qualify(project, k) for k in self._key_list(raw.get("supersedes"), key)]
+        similar = raw.get("similar")
+        if similar is not None:
+            check_similar_answers(similar, key)
+            similar = {self._qualify(project, k): v for k, v in similar.items()}
         return {
+            "supersedes": supersedes, "similar": similar,
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
             "host": raw.get("host"), "wait": wait, "kind": kind,
@@ -228,6 +234,54 @@ class InputMixin:
             "kg_refs": check_kg_refs(raw.get("kg_refs"), key),
             "state": raw.get("state", "open"),
         }
+
+    @staticmethod
+    def _key_list(value, key):
+        if value in (None, ""):
+            return []
+        if not isinstance(value, (list, tuple)) or any(not isinstance(k, str) or not k for k in value):
+            raise Refused("validation", f"{key}: supersedes must be a list of item keys")
+        return list(value)
+
+    def _checked_supersedes(self, key, value, index, project):
+        """Qualified, existing, acyclic ``supersedes`` list (edit and create)."""
+        out = sorted({self._qualify(project, k) for k in self._key_list(value, key)})
+        for target in out:
+            if target == key:
+                raise Refused("validation", f"{key}: an item cannot supersede itself")
+            if target not in index:
+                raise Refused("validation", f"{key}: supersedes unknown item {target}")
+            if key in (index[target].get("supersedes") or []):
+                raise Refused("validation", f"{key}: {target} already supersedes it (cycle)")
+        return out
+
+    def _answer_similar(self, defs, before, legacy):
+        """One check for every creation path: refuse a near copy of an open item
+        until each match is answered; apply the answers; return warnings."""
+        index = {item["key"]: item for item in before}
+        warnings = []
+        for definition in defs:
+            key, answers = definition["key"], definition.get("similar") or {}
+            matches = similar_items(definition, before)
+            if legacy:   # existing data must stay loadable: say, never refuse
+                warnings += [f"{key} looks like open item {m} ({s:.2f})" for m, s in matches]
+                continue
+            open_ = [m for m, _ in matches if m not in answers]
+            if open_:
+                shown = ", ".join(f"{m} ({s:.2f})" for m, s in matches if m in open_)
+                raise Refused("conflict", f"{key} looks like open item(s) {shown}; answer each as "
+                              "similar={key: supersedes|depends_on|distinct} (supersedes, depends_on or distinct) and retry")
+            deps, sups = set(definition["depends_on"]), set(definition["supersedes"])
+            for target, answer in answers.items():
+                if answer == "depends_on" and target in index:
+                    deps.add(target)
+                if answer == "supersedes" and target in index:
+                    sups.add(target)
+            definition["depends_on"] = sorted(deps)
+            definition["supersedes"] = self._checked_supersedes(
+                key, sorted(sups), {**index, **{d["key"]: d for d in defs if d is not definition}},
+                definition["project"])
+        return warnings
 
     def _check_definition_dependency_caps(self, definitions, attachments):
         if not attachments and not any(item["depends_on"] for item in definitions):

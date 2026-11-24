@@ -334,3 +334,61 @@ def parse_kg_refs(text):
     except (TypeError, ValueError):
         return []
     return value if isinstance(value, list) else []
+
+
+# ----------------------------------------------------------- near copies
+#: How a caller answers a near-copy match (ITEM-SUPERSEDE-GATE).
+SIMILAR_ANSWERS = ("supersedes", "depends_on", "distinct")
+_WORD = re.compile(r"[a-z0-9][a-z0-9_-]{3,}")
+_FILES = re.compile(r"(?m)^files:[ \t]*(.*)$")
+_SIMILAR_MIN_TOKENS = 5
+#: EXPERIMENT (rule 3.76): token overlap; replace by embeddings if 7 days of
+#: matches shown / answered supersedes / duplicates found by hand say so.
+SIMILAR_THRESHOLD = 0.6
+_TERMINAL = ("done", "cancelled")
+
+
+def check_similar_answers(value, key=None):
+    where = f"{key}: " if key else ""
+    if not isinstance(value, dict) or any(a not in SIMILAR_ANSWERS for a in value.values()):
+        raise Refused("validation", f"{where}similar must map item keys to supersedes, depends_on or distinct")
+    return value
+
+
+def _tokens(item):
+    return set(_WORD.findall(f"{item.get('title') or ''} {item.get('description') or ''}".lower()))
+
+
+def _files(item):
+    found = _FILES.search(item.get("note") or "")
+    return {p for p in re.split(r"[\s,\[\]\"']+", found.group(1)) if "/" in p} if found else set()
+
+
+def _jaccard(a, b):
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+def similar_items(definition, items):
+    """``[(key, score)]``: open items of the same project and kind that are near
+    copies of *definition* by title, description and files (the one function
+    every creation path shares)."""
+    mine = _tokens(definition)
+    if len(mine) < _SIMILAR_MIN_TOKENS:
+        return []
+    related = {definition.get("under"), definition.get("corrects"), definition.get("fixes"),
+               definition.get("slice_parent"), *(definition.get("depends_on") or []),
+               *(definition.get("supersedes") or [])}
+    my_files, out = _files(definition), []
+    for other in items:
+        if (other["key"] == definition["key"] or other["key"] in related
+                or other.get("state") in _TERMINAL or other["project"] != definition["project"]
+                or other.get("kind") != definition.get("kind")
+                or definition["key"] in (other.get("depends_on") or [])):
+            continue
+        score = _jaccard(mine, _tokens(other))
+        their_files = _files(other)
+        if my_files and their_files:
+            score = 0.6 * score + 0.4 * _jaccard(my_files, their_files)
+        if score >= SIMILAR_THRESHOLD:
+            out.append((other["key"], round(score, 2)))
+    return sorted(out, key=lambda m: (-m[1], m[0]))
