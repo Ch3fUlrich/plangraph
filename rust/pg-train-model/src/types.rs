@@ -106,6 +106,10 @@ pub(crate) struct Train {
     /// The tree the latest CI run started on.
     pub tested: Option<u8>,
     pub red_rounds: u8,
+    /// The CI run in flight or last started; a result names the run it belongs to.
+    pub run: u8,
+    /// `VerifyComplete` accepted this exact membership, reasons and tree.
+    pub checked: bool,
     /// Landed, closed by a red CI, or discarded.
     pub closed: bool,
     pub landed: bool,
@@ -182,18 +186,22 @@ pub enum Event {
     StartCi {
         train: TrainId,
     },
+    /// A result of CI run `run`; a result of an older run is refused.
     CiResult {
         train: TrainId,
+        run: u8,
         green: bool,
     },
     /// The CI log names the failing part: it and its descendants drop, the rest are retried as one group.
     CiRed {
         train: TrainId,
+        run: u8,
         culprit: PartId,
     },
     /// A red round the builder will fix in place; refused from the second red round on.
     CiRedFix {
         train: TrainId,
+        run: u8,
     },
     /// The fix of a red train is pushed: a new tree that needs a fresh bind and a full CI run.
     FixInPlace {
@@ -263,7 +271,8 @@ pub enum Event {
         train: TrainId,
         part: PartId,
     },
-    /// The verifier checks that every part that was ready has its place or its reason.
+    /// The verifier checks every recorded reason and that every part that was ready has its place or
+    /// its reason; CI and settlement need this result for the train as it stands.
     VerifyComplete {
         train: TrainId,
     },
@@ -303,6 +312,10 @@ pub enum Denied {
     TreeChanged,
     /// A speculative candidate is not landing evidence in this mode.
     Mode,
+    /// A CI result of an older run.
+    StaleRun,
+    /// The train's membership, reasons and tree were not verified complete.
+    Unverified,
 }
 
 impl Train {
@@ -323,6 +336,8 @@ impl Train {
             tree: 0,
             tested: None,
             red_rounds: 0,
+            run: 0,
+            checked: false,
             closed: false,
             landed: false,
         }
@@ -335,6 +350,8 @@ impl Train {
         self.frozen = self.parts.clone();
         self.ci = Ci::Running;
         self.tested = Some(self.tree);
+        self.run = 1;
+        self.checked = true;
         self
     }
 }

@@ -13,6 +13,8 @@ pub mod evidence;
 mod evidence_cli;
 mod evidence_git;
 #[cfg(test)]
+mod evidence_git_tests;
+#[cfg(test)]
 mod evidence_tests;
 pub mod git;
 pub mod go_verify;

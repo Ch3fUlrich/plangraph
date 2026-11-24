@@ -93,6 +93,7 @@ pub(super) fn part(pr: u64, head: &str, parent: Option<(u64, &str)>) -> PartIn {
         receipt: PartReceipt {
             run_id: format!("run-{pr}"),
             head: head.into(),
+            carried: None,
         },
     }
 }

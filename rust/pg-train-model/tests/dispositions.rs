@@ -89,13 +89,7 @@ fn a_settled_legacy_train_has_no_included_list_and_the_child_waits_for_the_verif
     ok(&mut m, Event::Tick);
     ok(&mut m, Event::Select);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::SettleLegacy { train: 0 });
     assert_eq!(m.status(0), Status::Landed);
     register_all(&mut m, [1, 2]);
@@ -121,17 +115,16 @@ fn a_settled_legacy_train_has_no_included_list_and_the_child_waits_for_the_verif
         denied(&mut m, Event::VerifyOutcome { train: 1 }),
         Denied::Phase
     );
-    start(&mut m, 1);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 1,
-            green: true,
-        },
+    // The recorded reason is stale now: the train must be verified again, and the child may join.
+    assert_eq!(
+        denied(&mut m, Event::VerifyComplete { train: 1 }),
+        Denied::Disposition
     );
+    ok(&mut m, Event::Join { part: 1, train: 1 });
+    start(&mut m, 1);
+    ci(&mut m, 1, true);
     ok(&mut m, Event::Settle { train: 1 });
-    ok(&mut m, Event::Select);
-    assert_eq!(m.train_parts(2), [1]);
+    assert_eq!(m.status(1), Status::Landed);
 }
 
 #[test]
@@ -141,13 +134,7 @@ fn a_train_with_an_included_list_verifies_at_settlement() {
     register_all(&mut m, [0, 1]);
     ok(&mut m, Event::Select);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Settle { train: 0 });
     ok(&mut m, Event::Select);
     assert_eq!(m.train_parts(1), [1]);
@@ -197,6 +184,8 @@ fn a_drop_from_an_open_train_leaves_a_reason_the_verifier_accepts() {
     // Refused: a drop recorded for a part that is still ready.
     record(&mut m, 1, Disposition::Dropped);
     assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
+    // The right reason again, and the train verifies as a whole.
+    record(&mut m, 1, Disposition::Descendant { of: 0 });
     assert_eq!(
         ok(&mut m, Event::VerifyComplete { train: 0 }),
         Outcome::Accepted

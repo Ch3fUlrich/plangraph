@@ -15,23 +15,14 @@ fn started(parts: u8) -> Model {
 #[test]
 fn after_two_red_rounds_the_builder_stops_fixing_in_place_and_drops_or_splits() {
     let mut m = started(4);
-    ok(&mut m, Event::CiRedFix { train: 0 });
+    fix_red(&mut m, 0);
     assert_eq!((m.train_ci(0), m.red_rounds(0)), (Ci::Red, 1));
     ok(&mut m, Event::FixInPlace { train: 0 });
     start(&mut m, 0);
     // The second red round: no fix in place, and the refusal changes nothing.
+    assert_eq!(denied_fix_red(&mut m, 0), Denied::TwoRounds);
     assert_eq!(
-        denied(&mut m, Event::CiRedFix { train: 0 }),
-        Denied::TwoRounds
-    );
-    assert_eq!(
-        ok(
-            &mut m,
-            Event::CiRed {
-                train: 0,
-                culprit: 2
-            }
-        ),
+        red(&mut m, 0, 2),
         Outcome::Red {
             groups: 1,
             escalated: true
@@ -41,17 +32,11 @@ fn after_two_red_rounds_the_builder_stops_fixing_in_place_and_drops_or_splits() 
     assert_eq!(m.pending_groups(), [vec![0, 1, 3]]);
     // With nobody attributable it is split by stacks instead.
     let mut m = started(4);
-    ok(&mut m, Event::CiRedFix { train: 0 });
+    fix_red(&mut m, 0);
     ok(&mut m, Event::FixInPlace { train: 0 });
     start(&mut m, 0);
     assert_eq!(
-        ok(
-            &mut m,
-            Event::CiResult {
-                train: 0,
-                green: false
-            }
-        ),
+        ci(&mut m, 0, false),
         Outcome::Red {
             groups: 2,
             escalated: true
@@ -63,15 +48,9 @@ fn after_two_red_rounds_the_builder_stops_fixing_in_place_and_drops_or_splits() 
 #[test]
 fn an_open_red_train_can_be_split_or_dropped_from_without_a_second_run() {
     let mut m = started(3);
-    ok(&mut m, Event::CiRedFix { train: 0 });
+    fix_red(&mut m, 0);
     assert_eq!(
-        ok(
-            &mut m,
-            Event::CiRed {
-                train: 0,
-                culprit: 1
-            }
-        ),
+        red(&mut m, 0, 1),
         Outcome::Red {
             groups: 1,
             escalated: false
@@ -83,28 +62,19 @@ fn an_open_red_train_can_be_split_or_dropped_from_without_a_second_run() {
 #[test]
 fn a_restart_keeps_the_red_round_count_and_the_running_ci() {
     let mut m = started(3);
-    ok(&mut m, Event::CiRedFix { train: 0 });
+    fix_red(&mut m, 0);
     ok(&mut m, Event::FixInPlace { train: 0 });
     start(&mut m, 0);
     ok(&mut m, Event::Restart);
     assert_eq!(m.red_rounds(0), 1);
     assert_eq!((m.train_ci(0), m.is_bound(0)), (Ci::Running, true));
-    assert_eq!(
-        denied(&mut m, Event::CiRedFix { train: 0 }),
-        Denied::TwoRounds
-    );
+    assert_eq!(denied_fix_red(&mut m, 0), Denied::TwoRounds);
 }
 
 #[test]
 fn a_landing_whose_tree_differs_from_the_tested_tree_is_refused_until_ci_runs_again() {
     let mut m = started(2);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Amend { train: 0 });
     assert_eq!(
         denied(&mut m, Event::Settle { train: 0 }),
@@ -115,13 +85,7 @@ fn a_landing_whose_tree_differs_from_the_tested_tree_is_refused_until_ci_runs_ag
     assert_eq!(m.train_ci(0), Ci::NotStarted);
     assert_eq!(denied(&mut m, Event::Settle { train: 0 }), Denied::NotGreen);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Settle { train: 0 });
     assert_eq!(m.landed(), 2);
 }
@@ -129,7 +93,7 @@ fn a_landing_whose_tree_differs_from_the_tested_tree_is_refused_until_ci_runs_ag
 #[test]
 fn a_fix_in_place_needs_a_fresh_bind_and_a_full_run_on_its_exact_tree() {
     let mut m = started(2);
-    ok(&mut m, Event::CiRedFix { train: 0 });
+    fix_red(&mut m, 0);
     ok(&mut m, Event::FixInPlace { train: 0 });
     assert_eq!(m.train_ci(0), Ci::NotStarted);
     assert_eq!(denied(&mut m, Event::StartCi { train: 0 }), Denied::Unbound);
@@ -137,13 +101,7 @@ fn a_fix_in_place_needs_a_fresh_bind_and_a_full_run_on_its_exact_tree() {
     assert_eq!(m.train_ci(0), Ci::Running);
     // A replacement candidate (the retry group of the rest) starts its own full run.
     let mut m = started(3);
-    ok(
-        &mut m,
-        Event::CiRed {
-            train: 0,
-            culprit: 0,
-        },
-    );
+    red(&mut m, 0, 0);
     assert_eq!(ok(&mut m, Event::StartRetry), Outcome::Train(1));
     assert_eq!(m.train_ci(1), Ci::Running);
 }
@@ -160,25 +118,13 @@ fn the_blocked_descendants_of_a_dropped_part_leave_with_it_and_return_only_under
     register_all(&mut m, 0..3);
     ok(&mut m, Event::Select);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiRed {
-            train: 0,
-            culprit: 0,
-        },
-    );
+    red(&mut m, 0, 0);
     assert_eq!(
         (m.status(0), m.status(1)),
         (Status::Dropped, Status::Dropped)
     );
     ok(&mut m, Event::StartRetry);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 1,
-            green: true,
-        },
-    );
+    ci(&mut m, 1, true);
     ok(&mut m, Event::Settle { train: 1 });
     // The child is readmitted but waits: its parent has no verified landing.
     ok(&mut m, Event::Readmit { part: 1 });
@@ -256,4 +202,101 @@ fn an_adopted_resolution_leaves_out_a_descendant_whose_parent_was_dropped() {
     // Part 2 waited on the dropped part 1: it stays out.
     assert_eq!(m.train_parts(0), [3, 0]);
     assert_eq!(m.status(2), Status::Ready);
+}
+
+#[test]
+fn a_delayed_ci_callback_of_an_older_run_cannot_settle_a_rebuilt_train() {
+    let mut m = started(2);
+    assert_eq!(m.run(0), 1);
+    ci(&mut m, 0, true);
+    ok(&mut m, Event::Rebuild { train: 0 });
+    start(&mut m, 0);
+    assert_eq!(m.run(0), 2);
+    // The green result of run 1 arrives late: refused, and the train is still waiting for run 2.
+    let late = Event::CiResult {
+        train: 0,
+        run: 1,
+        green: true,
+    };
+    assert_eq!(denied(&mut m, late), Denied::StaleRun);
+    assert_eq!(
+        denied(
+            &mut m,
+            Event::CiRed {
+                train: 0,
+                run: 1,
+                culprit: 0
+            }
+        ),
+        Denied::StaleRun
+    );
+    assert_eq!(
+        denied(&mut m, Event::CiRedFix { train: 0, run: 1 }),
+        Denied::StaleRun
+    );
+    assert_eq!(
+        (m.train_ci(0), denied(&mut m, Event::Settle { train: 0 })),
+        (Ci::Running, Denied::NotGreen)
+    );
+    ci(&mut m, 0, true);
+    ok(&mut m, Event::Settle { train: 0 });
+}
+
+#[test]
+fn ci_and_settlement_need_the_train_verified_complete_as_it_stands() {
+    let mut m = Model::new(policy(1, 3, 0, Order::Oldest), disjoint(3));
+    register_all(&mut m, 0..3);
+    ok(&mut m, Event::Select);
+    let base = m.main();
+    ok(
+        &mut m,
+        Event::Bind {
+            train: 0,
+            build: 0,
+            base,
+            policy: POLICY,
+        },
+    );
+    assert_eq!(
+        denied(&mut m, Event::StartCi { train: 0 }),
+        Denied::Unverified
+    );
+    // A reason the verifier rejects stops VerifyComplete too, and with it the CI.
+    ok(
+        &mut m,
+        Event::RecordLeftOut {
+            train: 0,
+            part: 1,
+            disposition: Disposition::Cap,
+        },
+    );
+    assert_eq!(
+        denied(&mut m, Event::VerifyComplete { train: 0 }),
+        Denied::Disposition
+    );
+    assert_eq!(
+        denied(&mut m, Event::StartCi { train: 0 }),
+        Denied::Unverified
+    );
+    ok(
+        &mut m,
+        Event::RecordLeftOut {
+            train: 0,
+            part: 1,
+            disposition: Disposition::Target,
+        },
+    );
+    ok(&mut m, Event::VerifyComplete { train: 0 });
+    ok(&mut m, Event::StartCi { train: 0 });
+    ci(&mut m, 0, true);
+    // A reason lost after the CI started unverifies the train: it cannot settle on that result.
+    ok(&mut m, Event::OmitLeftOut { train: 0, part: 2 });
+    assert_eq!(
+        denied(&mut m, Event::Settle { train: 0 }),
+        Denied::Unverified
+    );
+    assert_eq!(
+        denied(&mut m, Event::VerifyComplete { train: 0 }),
+        Denied::Disposition
+    );
 }

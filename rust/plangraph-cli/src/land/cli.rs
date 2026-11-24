@@ -8,13 +8,13 @@ use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest,
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE [--carries FILE] --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
-  plangraph land-train evidence-assess --repo DIR --evidence FILE --main SHA --head SHA --trains-now N [--records-out FILE --day D]\n\
+  plangraph land-train evidence-assess --repo DIR --evidence FILE --main SHA --head SHA --trains-now N [--records-out FILE --day D --batch B] [--carry-out FILE]\n\
   plangraph land-train evidence-report --records FILE\n\
-  plangraph land-train evidence-record --records-out FILE --day D --kind fix-round-after-rebase\n\
+  plangraph land-train evidence-record --records-out FILE --day D --batch B --head H --kind fix-round-after-rebase|landed\n\
   plangraph land-train evidence-red --red FILE --ci-green true|false --main-state FILE\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
@@ -217,7 +217,11 @@ pub(super) fn run_inner(
         )?;
         return Ok(Vec::new());
     }
-    let parts: Vec<PartIn> = read(&need("parts")?)?;
+    let mut parts: Vec<PartIn> = read(&need("parts")?)?;
+    if let Some(path) = flags.get("carries") {
+        let carries: Vec<super::train::Carry> = read(path)?;
+        super::evidence_cli::attach_carries(&mut parts, &carries);
+    }
     let protected: Vec<String> = flags
         .get("protected")
         .map(|p| p.split(',').map(str::to_owned).collect())

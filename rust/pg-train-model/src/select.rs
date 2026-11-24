@@ -6,7 +6,7 @@ pub(crate) fn overlap(a: &PartSpec, b: &PartSpec) -> bool {
     a.paths & b.paths != 0
 }
 
-struct ModelPool<'a>(&'a Model);
+pub(crate) struct ModelPool<'a>(pub(crate) &'a Model);
 
 impl Pool for ModelPool<'_> {
     fn waited(&self, p: usize) -> u32 {
@@ -56,6 +56,17 @@ impl Model {
             .collect()
     }
 
+    pub(crate) fn rule(&self) -> Rule {
+        let p = &self.policy;
+        Rule {
+            target: p.target as usize,
+            cap: p.cap as usize,
+            bound: p.bound as u32,
+            due_after: p.due_after as u32,
+            order: p.order,
+        }
+    }
+
     fn due(&self, ready: &[PartId]) -> bool {
         ready.len() >= self.policy.target as usize
             || ready
@@ -69,14 +80,7 @@ impl Model {
         if !self.due(&ready) {
             return Err(Denied::NotDue);
         }
-        let p = &self.policy;
-        let rule = Rule {
-            target: p.target as usize,
-            cap: p.cap as usize,
-            bound: p.bound as u32,
-            due_after: p.due_after as u32,
-            order: p.order,
-        };
+        let rule = self.rule();
         let ids: Vec<usize> = ready.iter().map(|&p| p as usize).collect();
         let (riding, left) = choose(&ModelPool(self), &ids, rule);
         if riding.is_empty() {

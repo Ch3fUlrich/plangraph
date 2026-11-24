@@ -51,9 +51,13 @@ impl Model {
         }
     }
 
-    /// Every part that was ready when the train was cut rides, has a reason, or has moved on.
-    pub(crate) fn verify_complete(&self, train: TrainId) -> Result<Outcome, Denied> {
+    /// Every recorded reason holds, and every part that was ready when the train was cut rides, has a
+    /// reason, or has moved on.
+    pub(crate) fn verify_train(&self, train: TrainId) -> Result<Outcome, Denied> {
         let t = self.trains.get(train as usize).ok_or(Denied::Phase)?;
+        for &(part, _) in &t.left_out {
+            self.verify_left_out(train, part)?;
+        }
         let unaccounted = t.ready_at_cut.iter().any(|&p| {
             self.parts[p as usize].status == Status::Ready
                 && !t.parts.contains(&p)
@@ -64,5 +68,11 @@ impl Model {
         } else {
             Ok(Outcome::Accepted)
         }
+    }
+
+    pub(crate) fn verify_complete(&mut self, train: TrainId) -> Result<Outcome, Denied> {
+        let out = self.verify_train(train)?;
+        self.trains[train as usize].checked = true;
+        Ok(out)
     }
 }

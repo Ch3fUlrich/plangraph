@@ -18,13 +18,7 @@ fn no_part_joins_a_train_whose_ci_has_started() {
         Denied::CiStarted
     );
     // The late part waits for the next train; the sealed one lands unchanged.
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Settle { train: 0 });
     assert_eq!(m.status(3), Status::Ready);
     assert_eq!(m.status(2), Status::Landed);
@@ -84,26 +78,14 @@ fn a_train_built_on_a_moved_main_cannot_bind_or_settle_until_rebuilt() {
     ok(&mut m, Event::Tick);
     ok(&mut m, Event::Select);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::MainMove);
     assert_eq!(denied(&mut m, Event::Settle { train: 0 }), Denied::Stale);
     ok(&mut m, Event::Rebuild { train: 0 });
     assert_eq!(m.train_ci(0), Ci::NotStarted);
     assert_eq!(denied(&mut m, Event::Settle { train: 0 }), Denied::NotGreen);
     start(&mut m, 0);
-    ok(
-        &mut m,
-        Event::CiResult {
-            train: 0,
-            green: true,
-        },
-    );
+    ci(&mut m, 0, true);
     ok(&mut m, Event::Settle { train: 0 });
     assert_eq!(m.main(), 2);
 }

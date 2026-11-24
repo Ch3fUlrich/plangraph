@@ -1,3 +1,5 @@
+use super::rules::place;
+use super::select::ModelPool;
 use super::*;
 
 impl Model {
@@ -40,6 +42,9 @@ impl Model {
         if t.tested != Some(t.tree) {
             return Err(Denied::TreeChanged);
         }
+        if !t.checked {
+            return Err(Denied::Unverified);
+        }
         self.land(train, verified);
         Ok(Outcome::Applied)
     }
@@ -48,10 +53,15 @@ impl Model {
     fn ci_result(
         &mut self,
         train: TrainId,
+        run: u8,
         green: bool,
         culprit: Option<PartId>,
     ) -> Result<Outcome, Denied> {
         let t = self.train_mut(train)?;
+        // A result of an older run (a delayed callback) belongs to a tree that is no longer tested.
+        if run != t.run {
+            return Err(Denied::StaleRun);
+        }
         let open_red = t.ci == Ci::Red && culprit.is_some();
         if t.ci != Ci::Running && !open_red {
             return Err(Denied::Phase);
@@ -73,6 +83,7 @@ impl Model {
     /// The tree of a train changed: a candidate built on it no longer is on its exact commit.
     fn retree(&mut self, train: TrainId) {
         self.trains[train as usize].tree += 1;
+        self.trains[train as usize].checked = false;
         self.discard_specs(Some(train));
     }
 
@@ -88,7 +99,6 @@ impl Model {
             }
             Event::Select => self.select_ordinary(),
             Event::Join { part, train } => {
-                let (target, cap) = (self.policy.target as usize, self.policy.cap as usize);
                 let riding = self.trains.get(train as usize).map(|t| t.parts.clone());
                 let riding = riding.ok_or(Denied::Phase)?;
                 self.parent_ok(part, &riding)
@@ -97,17 +107,27 @@ impl Model {
                     .parts
                     .get(part as usize)
                     .is_some_and(|p| p.status == Status::Ready);
+                let (rule, ids) = (
+                    self.rule(),
+                    riding.iter().map(|&p| p as usize).collect::<Vec<_>>(),
+                );
+                let blocked = place(&ModelPool(self), &ids, rule, part as usize).is_some();
                 let t = self.train_mut(train)?;
                 if t.sealed {
                     return Err(Denied::CiStarted);
                 }
-                let full = t.parts.len() >= target.min(cap);
-                if t.kind != Kind::Ordinary || !ready || full {
+                // The same rule as selection: a part deferred for overlap joins only once it is due.
+                if t.kind != Kind::Ordinary || !ready || blocked {
                     return Err(Denied::Phase);
                 }
                 t.parts.push(part);
                 t.included = Some(t.parts.clone());
+                t.left_out.retain(|l| l.0 != part);
+                if !t.ready_at_cut.contains(&part) {
+                    t.ready_at_cut.push(part);
+                }
                 t.bound = false;
+                t.checked = false;
                 self.parts[part as usize].status = Status::InTrain(train);
                 Ok(Outcome::Applied)
             }
@@ -136,16 +156,27 @@ impl Model {
                 if t.ci != Ci::NotStarted {
                     return Err(Denied::Phase);
                 }
+                if !t.checked {
+                    return Err(Denied::Unverified);
+                }
+                t.run += 1;
                 t.sealed = true;
                 t.frozen = t.parts.clone();
                 t.ci = Ci::Running;
                 t.tested = Some(t.tree);
                 Ok(Outcome::Applied)
             }
-            Event::CiResult { train, green } => self.ci_result(train, green, None),
-            Event::CiRed { train, culprit } => self.ci_result(train, false, Some(culprit)),
-            Event::CiRedFix { train } => {
+            Event::CiResult { train, run, green } => self.ci_result(train, run, green, None),
+            Event::CiRed {
+                train,
+                run,
+                culprit,
+            } => self.ci_result(train, run, false, Some(culprit)),
+            Event::CiRedFix { train, run } => {
                 let t = self.train_mut(train)?;
+                if run != t.run {
+                    return Err(Denied::StaleRun);
+                }
                 if t.ci != Ci::Running || matches!(t.kind, Kind::Speculative { .. }) {
                     return Err(Denied::Phase);
                 }
@@ -245,6 +276,7 @@ impl Model {
                 }
                 t.left_out.retain(|l| l.0 != part);
                 t.left_out.push((part, disposition));
+                t.checked = false;
                 Ok(Outcome::Applied)
             }
             Event::OmitLeftOut { train, part } => {
@@ -253,6 +285,7 @@ impl Model {
                     return Err(Denied::Phase);
                 }
                 t.left_out.retain(|l| l.0 != part);
+                t.checked = false;
                 Ok(Outcome::Applied)
             }
             Event::VerifyLeftOut { train, part } => self.verify_left_out(train, part),
