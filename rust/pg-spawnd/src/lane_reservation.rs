@@ -4,10 +4,12 @@
 //!
 //! Each owner has its own file per key (`<key digest>/<owner digest>.json`), so a second
 //! launch that deliberately repeats a key never replaces the first launch's claim. A launch
-//! releases its own files when it ends or when its run record takes over. A launch that was
-//! cut off (the dispatcher died) is not forgotten: the Python supervisor it started can still
-//! register the run, so its claim holds until `MAX_AGE_SECS` has passed, whether or not the
-//! dispatcher process is still alive.
+//! releases its own files when it ends or when its run record takes over, under the state's
+//! lock, so an admission that scanned the runs before the registration also sees the claim.
+//! A claim has two phases. Admitted (`PENDING_SECS`): no supervisor exists yet, so a dispatcher
+//! that died holds the key only briefly. Started (`STARTED_SECS`): the Python supervisor was
+//! started and can still register the run after the dispatcher is gone, so the claim holds
+//! longer, whether or not the dispatcher process is alive.
 
 use crate::lane_guard::Lane;
 use serde_json::{json, Value};
@@ -18,10 +20,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-/// How long a claim holds that nobody released: longer than any launch can take to register its
-/// run record (the adapter call of the dispatcher gives up after 200 s), so it only ever frees
-/// the key of a launch that died.
-pub const MAX_AGE_SECS: u64 = 600;
+/// How long an admitted claim holds before its launch starts a supervisor.
+pub const PENDING_SECS: u64 = 120;
+
+/// How long a started claim holds that nobody released: longer than any launch can take to
+/// register its run record (the adapter call of the dispatcher gives up after 200 s), so it only
+/// ever frees the key of a launch that died.
+pub const STARTED_SECS: u64 = 600;
+
+const STARTED: &str = "started";
 
 fn dir(state: &Path) -> PathBuf {
     state.join("lane-reservations")
@@ -71,7 +78,12 @@ pub fn lanes(state: &Path, keys: &[String], owner: &str, at: u64) -> Vec<Lane> {
             ) else {
                 continue;
             };
-            if record["key"] == *key && ts + MAX_AGE_SECS > at {
+            let hold = if record["phase"] == STARTED {
+                STARTED_SECS
+            } else {
+                PENDING_SECS
+            };
+            if record["key"] == *key && ts + hold > at {
                 lanes.push(Lane {
                     name: format!("reservation {held}"),
                     keys: vec![key.clone()],
@@ -103,8 +115,26 @@ pub fn reserve(state: &Path, keys: &[String], owner: &str) -> std::io::Result<()
     Ok(())
 }
 
-/// Remove the claims of `owner` on `keys`; the claims of other owners stay. Each owner has its
-/// own files, so this is safe without the lock.
+/// Mark the claims of `owner` on `keys` as started: the launch is about to start its supervisor,
+/// which can register the run after the dispatcher is gone.
+pub fn start(state: &Path, keys: &[String], owner: &str) -> std::io::Result<()> {
+    for key in keys {
+        let target = path(state, key, owner);
+        let tmp = target.with_extension(format!("{}.tmp", std::process::id()));
+        let record = json!({"key":key,"owner":owner,"ts":now(),"phase":STARTED});
+        let published =
+            fs::write(&tmp, record.to_string()).and_then(|()| fs::rename(&tmp, &target));
+        if published.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        published?;
+    }
+    Ok(())
+}
+
+/// Remove the claims of `owner` on `keys`; the claims of other owners stay. The caller holds the
+/// state's lock (`lock`), so an admission never reads the runs before a registration and the
+/// claims after its release.
 pub fn release(state: &Path, keys: &[String], owner: &str) {
     for key in keys {
         let _ = fs::remove_file(path(state, key, owner));
@@ -159,10 +189,11 @@ pub fn claim_files(state: &Path) -> usize {
 mod tests {
     use super::*;
 
-    fn write_claim(state: &Path, key: &str, owner: &str, ts: u64) {
+    fn write_claim(state: &Path, key: &str, owner: &str, ts: u64, phase: &str) {
         let target = path(state, key, owner);
         fs::create_dir_all(target.parent().unwrap()).unwrap();
-        fs::write(target, json!({"key":key,"owner":owner,"ts":ts}).to_string()).unwrap();
+        let record = json!({"key":key,"owner":owner,"ts":ts,"phase":phase});
+        fs::write(target, record.to_string()).unwrap();
     }
 
     #[test]
@@ -175,20 +206,44 @@ mod tests {
         let held = lanes(dir.path(), &keys, "launch-b", at);
         assert_eq!(held[0].name, "reservation launch-a");
         assert_eq!(held[0].source, "reservation");
-        assert!(lanes(dir.path(), &keys, "launch-b", at + MAX_AGE_SECS + 1).is_empty());
+        assert!(lanes(dir.path(), &keys, "launch-b", at + STARTED_SECS + 1).is_empty());
         assert!(lanes(dir.path(), &["demo:OTHER".to_owned()], "launch-b", at).is_empty());
     }
 
     #[test]
-    fn a_claim_survives_the_exit_of_the_dispatcher_that_wrote_it() {
-        // The dispatcher died during admission, but the supervisor it started can still register
-        // the run: a restarted dispatcher meets the claim until it is old enough to be abandoned.
+    fn a_started_claim_survives_the_exit_of_the_dispatcher_and_an_admitted_one_does_not() {
+        // The dispatcher died. If its supervisor was started it can still register the run: a
+        // restarted dispatcher meets the claim until it is old enough to be abandoned. Before
+        // the supervisor starts nothing can register, so the claim is a short crash backstop.
         let dir = tempfile::tempdir().unwrap();
         let keys = ["demo:K".to_owned()];
         let at = now();
-        write_claim(dir.path(), "demo:K", "launch-from-a-dead-process", at - 300);
-        assert_eq!(lanes(dir.path(), &keys, "launch-b", at).len(), 1);
+        write_claim(dir.path(), "demo:K", "launch-started", at - 300, "started");
+        write_claim(
+            dir.path(),
+            "demo:K",
+            "launch-admitted",
+            at - 300,
+            "admitted",
+        );
+        let names: Vec<_> = lanes(dir.path(), &keys, "launch-b", at)
+            .into_iter()
+            .map(|lane| lane.name)
+            .collect();
+        assert_eq!(names, ["reservation launch-started"]);
         assert!(lanes(dir.path(), &keys, "launch-b", at + 301).is_empty());
+        let fresh = ["demo:F".to_owned()];
+        reserve(dir.path(), &fresh, "launch-a").unwrap();
+        assert_eq!(
+            lanes(dir.path(), &fresh, "launch-b", now() + PENDING_SECS - 1).len(),
+            1
+        );
+        assert!(lanes(dir.path(), &fresh, "launch-b", now() + PENDING_SECS + 1).is_empty());
+        start(dir.path(), &fresh, "launch-a").unwrap();
+        assert_eq!(
+            lanes(dir.path(), &fresh, "launch-b", now() + PENDING_SECS + 1).len(),
+            1
+        );
     }
 
     #[test]

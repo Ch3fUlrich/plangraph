@@ -3,6 +3,7 @@ pub mod batch_writer_brief;
 pub mod external_run;
 pub mod landing_journal;
 pub mod lane_guard;
+pub mod lane_launch;
 pub mod lane_reservation;
 pub mod pyjson;
 pub mod role_header;

@@ -243,12 +243,17 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
         // The adapter only waits for base admission; callers poll the durable record.
     }
     // Every launch option is valid before the first key is reserved. The reservation lives in
-    // `_launched` until this call ends: the spawner has registered its run record by then, and a
+    // `launched` until this call ends: the spawner has registered its run record by then, and a
     // refused or failed launch leaves no claim behind.
-    let (args, _launched) = admit_lane(state, args)?;
+    let (args, launched) = admit_lane(state, args)?;
     let mut argv = route_argv(&args)?;
     argv[0] = "spawn".into();
     argv.extend(["--".into(), prompt.into()]);
+    // The adapter starts the supervisor that registers the run, and it can do so after this
+    // call is gone: from here the claim outlives the dispatcher.
+    launched
+        .mark_started()
+        .map_err(|e| ToolError::Internal(format!("lane reservation: {e}")))?;
     native_call(state, &argv, Duration::from_secs(200))
 }
 /// Refuse a native writer for an item key another live lane holds, naming the lane. A

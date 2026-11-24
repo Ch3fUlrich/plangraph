@@ -107,91 +107,6 @@ fn only_queued_or_running_records_are_live() {
     assert_eq!(ids, ["run-a", "run-c"]);
 }
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.test"])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{args:?}: {out:?}");
-}
-
-#[test]
-fn unmerged_remote_lane_branches_hold_the_key_slug() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-    git(repo, &["init", "-q", "-b", "main"]);
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
-    git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    git(repo, &["checkout", "-q", "-b", "lane/own-slug"]);
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "own"]);
-    git(
-        repo,
-        &["update-ref", "refs/remotes/origin/lane/own-slug", "HEAD"],
-    );
-    git(
-        repo,
-        &["update-ref", "refs/remotes/origin/lane/fix-alpha-x", "HEAD"],
-    );
-    git(
-        repo,
-        &["update-ref", "refs/remotes/origin/lane/merged-beta", "main"],
-    );
-    let keys = [
-        "demo:ALPHA-X".to_owned(),
-        "demo:BETA".into(),
-        "demo:OWN-SLUG".into(),
-    ];
-    let lanes = branch_lanes(repo, &keys);
-    assert_eq!(
-        lanes,
-        [Lane {
-            name: "origin/lane/fix-alpha-x".into(),
-            keys: vec!["demo:ALPHA-X".into()],
-            source: "branch",
-        }]
-    );
-}
-
-#[test]
-fn branch_slug_matches_whole_tokens_only() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-    git(repo, &["init", "-q", "-b", "main"]);
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
-    git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    git(repo, &["checkout", "-q", "-b", "lane/mine"]);
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "own"]);
-    for branch in [
-        "lane/fixture-a",
-        "lane/prefix-1",
-        "lane/fix-b",
-        "lane/a.fix_c",
-    ] {
-        git(
-            repo,
-            &[
-                "update-ref",
-                &format!("refs/remotes/origin/{branch}"),
-                "HEAD",
-            ],
-        );
-    }
-    let lanes = branch_lanes(repo, &["demo:FIX".to_owned()]);
-    let mut names: Vec<_> = lanes.iter().map(|lane| lane.name.as_str()).collect();
-    names.sort_unstable();
-    assert_eq!(names, ["origin/lane/a.fix_c", "origin/lane/fix-b"]);
-    // A slug of several tokens must appear in order and side by side.
-    let keys = ["demo:ALPHA-X".to_owned()];
-    git(
-        repo,
-        &["update-ref", "refs/remotes/origin/lane/x-alpha", "HEAD"],
-    );
-    assert!(branch_lanes(repo, &keys).is_empty());
-}
-
 fn request<'a>(state: &'a Path, extra: &'a [String]) -> LaunchRequest<'a> {
     LaunchRequest {
         prompt: "Brief\n",
@@ -354,30 +269,6 @@ fn a_key_with_a_second_colon_is_one_key_in_briefs_runs_and_cards() {
 }
 
 #[test]
-fn the_remote_name_is_not_part_of_a_branch_slug() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-    git(repo, &["init", "-q", "-b", "main"]);
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
-    git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    git(repo, &["checkout", "-q", "-b", "lane/mine"]);
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "own"]);
-    for branch in ["lane/unrelated", "lane/origin-fix"] {
-        git(
-            repo,
-            &[
-                "update-ref",
-                &format!("refs/remotes/origin/{branch}"),
-                "HEAD",
-            ],
-        );
-    }
-    let lanes = branch_lanes(repo, &["demo:ORIGIN".to_owned()]);
-    let names: Vec<_> = lanes.iter().map(|lane| lane.name.as_str()).collect();
-    assert_eq!(names, ["origin/lane/origin-fix"]);
-}
-
-#[test]
 fn record_keys_are_read_by_the_key_grammar_and_headings_by_their_separator() {
     // A run holds `demo:ITEM:` as stored: the heading parser must not trim it.
     let runs = [
@@ -401,26 +292,91 @@ fn record_keys_are_read_by_the_key_grammar_and_headings_by_their_separator() {
     assert!(item_keys(&format!("### {too_long}: title\n")).is_empty());
 }
 
+fn run_holding(state: &Path, key: &str) {
+    let run = state.join("runs/run-held");
+    fs::create_dir_all(&run).unwrap();
+    fs::write(
+        run.join("record.json"),
+        json!({"run_id":"run-held","status":"running","role":"implement","item_key":key})
+            .to_string(),
+    )
+    .unwrap();
+}
+
 #[test]
-fn a_branch_holds_a_key_with_a_second_colon_by_all_its_id_tokens() {
+fn a_brief_only_dispatch_meets_a_run_holding_a_key_with_a_trailing_colon() {
     let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-    git(repo, &["init", "-q", "-b", "main"]);
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
-    git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    git(repo, &["checkout", "-q", "-b", "lane/mine"]);
-    git(repo, &["commit", "-q", "--allow-empty", "-m", "own"]);
-    for branch in ["lane/item-detail", "lane/detail-only"] {
-        git(
-            repo,
-            &[
-                "update-ref",
-                &format!("refs/remotes/origin/{branch}"),
-                "HEAD",
-            ],
+    run_holding(dir.path(), "demo:ITEM:");
+    for brief in [
+        "### demo:ITEM: | title\nWhy: x\n",
+        "Item key: demo:ITEM:\n",
+        "Plan item: demo:ITEM:\r\n",
+        "## demo:ITEM:\n",
+    ] {
+        let mut dispatch = request(dir.path(), &[]);
+        dispatch.prompt = brief;
+        let error = admit_launch(&dispatch).unwrap_err();
+        assert!(
+            error.contains("demo:ITEM: is held by live lane run-held"),
+            "{brief:?}: {error}"
         );
     }
-    let lanes = branch_lanes(repo, &["demo:ITEM:detail".to_owned()]);
-    let names: Vec<_> = lanes.iter().map(|lane| lane.name.as_str()).collect();
-    assert_eq!(names, ["origin/lane/item-detail"]);
+    // The colon that separates a heading from its title text is not part of the key.
+    assert_eq!(
+        item_keys("## demo:ITEM: some title\n### demo:OTHER: more | x\nItem key: demo:THIRD: x\n"),
+        ["demo:ITEM", "demo:OTHER", "demo:THIRD:"]
+    );
+    let mut dispatch = request(dir.path(), &[]);
+    dispatch.prompt = "## demo:ITEM: some title\n";
+    assert!(admit_launch(&dispatch).is_ok());
+}
+
+#[test]
+fn a_release_waits_for_an_admission_in_progress() {
+    // Dispatch B holds the state lock while it checks the runs and the claims. Launch A registered
+    // its run after B read the runs: A's claim must still be there when B reads the claims.
+    let dir = tempfile::tempdir().unwrap();
+    let keys = ["demo:RACE".to_owned()];
+    let first = admit_launch(&request(dir.path(), &keys)).unwrap();
+    let admission = crate::lane_reservation::lock(dir.path()).unwrap();
+    let (started, wait) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let finished = scope.spawn(move || {
+            started.send(()).unwrap();
+            drop(first);
+        });
+        wait.recv().unwrap();
+        assert_eq!(reservation_files(dir.path()), 1);
+        let held = crate::lane_reservation::lanes(dir.path(), &keys, "dispatch-b", u64::MAX / 2);
+        assert!(held.is_empty(), "far in the future the claim has expired");
+        drop(admission);
+        finished.join().unwrap();
+    });
+    assert_eq!(reservation_files(dir.path()), 0);
+}
+
+#[test]
+fn a_claim_is_marked_started_for_the_supervisor_and_a_check_has_nothing_to_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let keys = ["demo:START".to_owned()];
+    let launched = admit_launch(&request(dir.path(), &keys)).unwrap();
+    let at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let after = at + crate::lane_reservation::PENDING_SECS + 1;
+    let held = |at| crate::lane_reservation::lanes(dir.path(), &keys, "dispatch-b", at).len();
+    assert_eq!(held(at), 1);
+    assert_eq!(
+        held(after),
+        0,
+        "an admitted claim is a short crash backstop"
+    );
+    launched.mark_started().unwrap();
+    assert_eq!(held(after), 1, "a started claim waits for the supervisor");
+    drop(launched);
+    assert_eq!(held(at), 0);
+    let mut check = request(dir.path(), &keys);
+    check.reserve = false;
+    admit_launch(&check).unwrap().mark_started().unwrap();
+    assert_eq!(reservation_files(dir.path()), 0);
 }

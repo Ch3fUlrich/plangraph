@@ -191,7 +191,7 @@ fn native_mcp_spawn_failing_in_the_adapter_releases_its_reservation_for_the_retr
     let state = fixture.state.path().to_owned();
     // The adapter records the claim it can see while it runs, then refuses.
     let script = format!(
-        "#!/bin/sh\nif [ \"$3\" = spawn ]; then\n  ls '{0}'/lane-reservations/*/*.json >> '{0}/seen' 2>/dev/null\n  echo call >> '{0}/spawns'\n  echo 'fixture refused' >&2\n  exit 2\nfi\n",
+        "#!/bin/sh\nif [ \"$3\" = spawn ]; then\n  for f in '{0}'/lane-reservations/*/*.json; do cat \"$f\"; echo; done >> '{0}/seen'\n  echo call >> '{0}/spawns'\n  echo 'fixture refused' >&2\n  exit 2\nfi\n",
         state.display()
     );
     fs::write(state.join("adapter"), script).unwrap();
@@ -202,12 +202,13 @@ fn native_mcp_spawn_failing_in_the_adapter_releases_its_reservation_for_the_retr
     }
     // Both attempts reached the adapter with the key reserved; the first did not block the retry.
     assert_eq!(spawns(&state), 2);
-    assert_eq!(
-        fs::read_to_string(state.join("seen"))
-            .unwrap()
-            .lines()
-            .count(),
-        2
+    // The claim the adapter saw was already marked started: its supervisor outlives the dispatcher.
+    let seen = fs::read_to_string(state.join("seen")).unwrap();
+    assert_eq!(seen.lines().count(), 2, "{seen}");
+    assert!(
+        seen.lines()
+            .all(|claim| claim.contains(r#""phase":"started""#)),
+        "{seen}"
     );
 }
 
