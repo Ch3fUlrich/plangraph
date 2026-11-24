@@ -314,3 +314,9 @@ evidence_unverified|bad_state`.
 Router. `{key, kind:"question"|"operator_task"}` for an `open` `lane`; sets
 `operator` true and the kind's default `wait`. `200 {key, kind, was:"lane"}`
 [SetKind]. `400 validation|bad_state`.
+
+### `POST /v1/lift_operator_gate`
+Router. `{key, decision_id:"D-<n>"}`: the decision row must be an OPERATOR row
+that names the key. Clears `operator`; `200 {key, operator:false,
+waits_on_operator:false, decision_id}` [LiftOperatorGate]. `400 validation|
+evidence_unverified|bad_state`, `403 forbidden`.

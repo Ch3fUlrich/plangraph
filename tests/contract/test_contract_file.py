@@ -38,7 +38,7 @@ def test_contract_file_is_self_consistent():
         for field in ("request", "response"):
             if field in route:
                 assert route[field] in defs, (route["path"], field)
-    assert len(seen) == 44
+    assert len(seen) == 45
 
 
 def test_markdown_documents_every_route():

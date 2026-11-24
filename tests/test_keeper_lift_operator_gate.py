@@ -1,12 +1,18 @@
 """LE-KEEPER-OPERATOR-FLAGS-NOT-CLEARABLE: the router lifts an operator gate on a named D-id."""
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from door_util import Doors
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.events import read_events, verify_integrity
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from apply_batch import BatchError, build_request, validate_op  # noqa: E402
 
 KEY = "demo:GATE"
 HEADER = "| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n"
@@ -107,3 +113,50 @@ def test_the_fold_replays_the_lift(w):
     w.conn.execute("UPDATE items SET operator=1 WHERE key=?", (KEY,))
     w.conn.commit()
     assert any(p.get("field") == "operator" for p in verify_integrity(w.conn))
+
+
+@pytest.fixture
+def doors(w, tmp_path):
+    d = Doors(w, tmp_path)
+    yield d
+    d.close()
+
+
+def test_http_door(w, doors):
+    body = {"key": KEY, "decision_id": "D-10"}
+    status, _ = doors.http("l1main", "POST", "/v1/lift_operator_gate", body)
+    assert status == 403 and _flags(w) == (True, True)
+    status, _ = doors.http("router", "POST", "/v1/lift_operator_gate", {"key": KEY})
+    assert status == 400 and _flags(w) == (True, True)       # decision_id is required
+    status, _ = doors.http("router", "POST", "/v1/lift_operator_gate", dict(body, extra=1))
+    assert status == 400 and _flags(w) == (True, True)       # parity with apply_ops/batch
+    status, _ = doors.http("l1main", "POST", "/v1/lift_operator_gate", dict(body, extra=1))
+    assert status == 403
+    status, _ = doors.http("router", "POST", "/v1/lift_operator_gate", dict(body, decision_id="D-11"))
+    assert status == 400 and _flags(w) == (True, True)       # a ROUTER row is no operator answer
+    status, out = doors.http("router", "POST", "/v1/lift_operator_gate", body)
+    assert status == 200 and out["decision_id"] == "D-10" and out["operator"] is False
+    assert _flags(w) == (False, False) and len(_lifted(w)) == 1
+
+
+def test_cli_door(w, doors):
+    code, _, _ = doors.pg("l1main", "lift-operator-gate", KEY, "D-10")
+    assert code != 0 and _flags(w) == (True, True)
+    code, _, _ = doors.pg("router", "lift-operator-gate", KEY, "D-11")
+    assert code != 0 and _flags(w) == (True, True)
+    code, out, err = doors.pg("router", "lift-operator-gate", KEY, "D-10")
+    assert code == 0, err
+    assert out.strip() == f"{KEY} operator gate lifted by D-10"
+    assert _flags(w) == (False, False)
+
+
+def test_the_batch_file_op_is_validated_and_sent_to_the_single_route():
+    op = {"op": "lift_operator_gate", "key": KEY, "decision_id": "D-10"}
+    validate_op(op)
+    assert build_request(op, "b.yaml", "0" * 64) == (
+        "lift_operator_gate", {"key": KEY, "decision_id": "D-10"})
+    for bad in ({"op": "lift_operator_gate", "key": KEY},
+                {"op": "lift_operator_gate", "key": KEY, "decision_id": 10},
+                dict(op, extra=1)):
+        with pytest.raises(BatchError):
+            validate_op(bad)

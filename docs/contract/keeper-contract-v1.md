@@ -343,6 +343,7 @@ ops:                          # applied in order
   - {op: cancel, key: "demo:A", reason: "..."}
   - {op: rehome, key: "demo:A", new_project: other, host: box1}
   - {op: set_kind, key: "demo:A", kind: question}                           # or operator_task
+  - {op: lift_operator_gate, key: "demo:A", decision_id: D-1}               # OPERATOR row D-1 names demo:A
   - {op: add_dep, key: "demo:A", dep: "demo:B"}                             # one dependency (bare id = own project)
   - {op: remove_dep, key: "demo:A", dep: "demo:B"}
 ```
@@ -353,7 +354,7 @@ ops:                          # applied in order
 * Op to verb: `create`->`create_items`, `edit`->`edit_definition`,
   `legacy_state`->`set_legacy_state`, `add_evidence`->`add_evidence_router`,
   `close_on_decision`, `cancel`, `priority`->`set_priority`, `rehome`,
-  `set_kind`. `add_dep`/`remove_dep` run `edit_definition`'s inner edit on one
+  `set_kind`, `lift_operator_gate`. `add_dep`/`remove_dep` run `edit_definition`'s inner edit on one
   dependency and have no single route: `--per-op` posts each of them as its own
   one-op `apply_ops` call. Router only.
 * `add_dep` (link one `dep`) and `remove_dep` (unlink it) honour the edit's

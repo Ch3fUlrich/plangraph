@@ -28,6 +28,7 @@ OP_SPECS = {
     "priority": (["key", "priority"], {"priority": int}),
     "rehome": (["key", "new_project"], {"new_project": str}),
     "set_kind": (["key", "kind"], {"kind": str}),
+    "lift_operator_gate": (["key", "decision_id"], {"decision_id": str}),
     "add_dep": (["key", "dep"], {"dep": str}),
     "remove_dep": (["key", "dep"], {"dep": str}),
 }
@@ -41,6 +42,7 @@ OP_ALLOWED = {
     "priority": {"op", "key", "priority"},
     "rehome": {"op", "key", "new_project", "host"},
     "set_kind": {"op", "key", "kind"},
+    "lift_operator_gate": {"op", "key", "decision_id"},
     "add_dep": {"op", "key", "dep"},
     "remove_dep": {"op", "key", "dep"},
 }
@@ -199,6 +201,8 @@ def build_request(op, source, digest):
         return "set_priority", {"key": op["key"], "n": op["priority"]}
     if name == "set_kind":
         return "set_kind", {"key": op["key"], "kind": op["kind"]}
+    if name == "lift_operator_gate":
+        return "lift_operator_gate", {"key": op["key"], "decision_id": op["decision_id"]}
     if name == "rehome":
         return "rehome", {"key": op["key"], "new_project": op["new_project"],
                           "host": op.get("host")}

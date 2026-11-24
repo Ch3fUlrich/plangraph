@@ -144,6 +144,17 @@ def test_set_kind_turns_an_open_lane_into_an_operator_item(kp):
     err(kp.post("set_kind", "router", {"key": second, "kind": "question"}), 400, "bad_state")
 
 
+def test_lift_operator_gate_is_router_only_and_needs_an_operator_decision(kp):
+    plan = make_plan(kp, 1)
+    body = {"key": plan.lanes[0], "decision_id": "D-1"}
+    for who in ("lead", "worker1", "reader"):
+        err(kp.post("lift_operator_gate", who, body), 403, "forbidden")
+    err(kp.post("lift_operator_gate", "router", {"key": plan.lanes[0]}), 400, "validation")
+    err(kp.post("lift_operator_gate", "router", dict(body, decision_id="x")), 400, "validation")
+    err(kp.post("lift_operator_gate", "router", dict(body, extra=1)), 400, "validation")
+    err(kp.post("lift_operator_gate", "router", body), 400, "evidence_unverified")
+
+
 def test_rehome_moves_an_open_item_and_leaves_an_alias(kp):
     plan = make_plan(kp, 1)
     old = plan.key
