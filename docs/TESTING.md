@@ -34,9 +34,27 @@ an explicit pass on both reruns and equal hashes; `FAILED-IN-PARALLEL` is a pass
 failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. The exit
 status stays that of the first run, so a flake is named, never hidden.
 
-`SKIPPED plangraph:FLAKE-RETRY-QUARANTINE` — the part-entry runner is outside
-this batch's scope, and a nonblocking CI quarantine job requires an operator
-`Gate-Edit` decision ID.
+Pytest CI environment (read by `tests/conftest.py`, implemented in `tests/_split_ci_environment.py`):
+
+- `PYTEST_SHARD=INDEX/COUNT` keeps one shard; an `xdist_group` stays whole in one shard.
+- `PYTEST_SHARD_DURATIONS_FILE`: JSON object of canonical test ID to nonnegative seconds;
+  shards are then balanced by recorded duration (unknown tests weigh 1 s) instead of by hash.
+- `PYTEST_SHARD_DURATIONS_OUT`: path where a fully green run writes the same JSON, summing
+  setup, call and teardown per canonical test ID (xdist `@group` suffix removed).
+- `PYTEST_QUARANTINE_FILE`: JSON ledger mapping a canonical test ID to
+  `{"owner": "plangraph:<ITEM-KEY>", "starts": <ISO UTC>, "expires": <ISO UTC>}`. Both
+  timestamps must carry a UTC offset and `0 < expires - starts <= 48 h`; the owner must be a
+  `plangraph:` item key. Any other entry is a usage error, never a silent quarantine.
+- `PYTEST_QUARANTINE_AS_OF`: the shared UTC run timestamp (ISO, with offset) that decides
+  which windows are active (`starts <= as_of < expires`); a window that has not begun or has
+  expired blocks as normal.
+- `PYTEST_QUARANTINE_MODE`: `blocking` (default) deselects active quarantined tests;
+  `quarantine` runs only them, and an empty selection is not a failure.
+
+Pytest supports expiry-bound quarantine selection. The part-entry replay is
+tracked by `LE-CI-FLAKE-ENTRY-REPLAY`. The nonblocking job, retry ledger and
+Keeper reporting are tracked by `LE-CI-FLAKE-RETRY-QUARANTINE-WIRING` and
+require a workflow `Gate-Edit` decision.
 
 Selection follows transitive AST imports in src/ and tests/, plus test references
 to filenames for subprocess consumers. Changed tests select themselves.

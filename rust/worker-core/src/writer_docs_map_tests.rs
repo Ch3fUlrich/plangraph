@@ -153,3 +153,92 @@ fn writer_docs_map_uses_committed_head_and_merge_base_with_date_boundary() {
     }
     assert!(docs_map::check(&f.tree, "missing-ref", &head).is_err());
 }
+
+#[test]
+fn finalize_docs_map_accepts_a_new_item_fragment() {
+    for (source, reference, area) in [
+        ("tools/helper.rs", "CONTRIBUTING.md", "contributing"),
+        ("src/keeper.rs", "docs/KEEPER.md", "keeper"),
+        ("src/spawner.rs", "docs/SPAWNER.md", "spawner"),
+    ] {
+        let f = Fixture::new();
+        let mapping = format!("{source} -> {reference}\n");
+        let fragment = format!("docs/{area}/DOCS-FRAGMENT.md");
+        record(
+            &f,
+            &[
+                (".docs-map", &mapping),
+                (source, "code"),
+                (&fragment, "doc"),
+            ],
+        );
+        assert!(check_result(&f.repo, &f.tree, &f.ws).is_ok());
+    }
+}
+
+#[test]
+fn finalize_docs_map_rejects_fragments_that_do_not_cover_the_rule() {
+    for (name, mapping, source, fragment) in [
+        (
+            "wrong area",
+            "src/keeper.rs -> docs/KEEPER.md\n",
+            "src/keeper.rs",
+            "docs/spawner/DOCS-FRAGMENT.md",
+        ),
+        (
+            "nested path",
+            "src/keeper.rs -> docs/KEEPER.md\n",
+            "src/keeper.rs",
+            "docs/keeper/nested/DOCS-FRAGMENT.md",
+        ),
+        (
+            "lowercase name",
+            "src/keeper.rs -> docs/KEEPER.md\n",
+            "src/keeper.rs",
+            "docs/keeper/fragment.md",
+        ),
+        (
+            "unknown area",
+            "src/keeper.rs -> docs/KEEPER.md\n",
+            "src/keeper.rs",
+            "docs/other/DOCS-FRAGMENT.md",
+        ),
+    ] {
+        let f = Fixture::new();
+        record(
+            &f,
+            &[(".docs-map", mapping), (source, "code"), (fragment, "doc")],
+        );
+        let error = check_result(&f.repo, &f.tree, &f.ws)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("src/keeper.rs -> docs/KEEPER.md"),
+            "{name}: {error}"
+        );
+    }
+}
+
+#[test]
+fn finalize_docs_map_rejects_a_modified_existing_fragment() {
+    let f = Fixture::new();
+    record(
+        &f,
+        &[
+            (".docs-map", "src/keeper.rs -> docs/KEEPER.md\n"),
+            ("docs/keeper/DOCS-FRAGMENT.md", "first"),
+        ],
+    );
+    let base = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
+    record(
+        &f,
+        &[
+            ("src/keeper.rs", "code"),
+            ("docs/keeper/DOCS-FRAGMENT.md", "edited, not added"),
+        ],
+    );
+    let head = git(&f.tree, &["rev-parse", "HEAD"]).unwrap();
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 24).unwrap();
+    let error = docs_map::check_on(&f.tree, base.trim(), head.trim(), today).unwrap_err();
+    assert!(error.contains("src/keeper.rs -> docs/KEEPER.md"), "{error}");
+}

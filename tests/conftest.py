@@ -22,7 +22,7 @@ from contextlib import contextmanager
 import pytest
 from pathlib import Path
 from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
-    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
+    pytest_sessionstart, pytest_terminal_summary, detached_git_environment, isolated_git_session, config_guard)
 from _stray_git_guard import no_git_outside_tmp_path, settings_root_ceiling, SharedTempCheck  # noqa: F401
 
 # Initial nested conftests load before sessionstart and may invoke Git at import.
@@ -403,14 +403,30 @@ def pytest_collection_modifyitems(config, items):
             reason = skip_reason(item.nodeid, sys.platform, item.fixturenames)
             if reason:
                 item.add_marker(pytest.mark.skip(reason=reason))
-    if not _PG:
-        return
-    kept, dropped = [], []
-    for item in items:
-        (dropped if item.nodeid.split("@", 1)[0] in _READS_SQLITE_FILE else kept).append(item)
-    if dropped:
-        config.hook.pytest_deselected(items=dropped)
-        items[:] = kept
+    if _PG:
+        kept, dropped = [], []
+        for item in items:
+            (dropped if item.nodeid.split("@", 1)[0] in _READS_SQLITE_FILE else kept).append(item)
+        if dropped:
+            config.hook.pytest_deselected(items=dropped)
+            items[:] = kept
+    if ledger := os.environ.get('PYTEST_QUARANTINE_FILE'):
+        from datetime import datetime
+        from _split_ci_environment import quarantine_items
+
+        try:
+            now = datetime.fromisoformat(os.environ['PYTEST_QUARANTINE_AS_OF'])
+        except (KeyError, ValueError) as exc:
+            raise pytest.UsageError('PYTEST_QUARANTINE_AS_OF must be the shared UTC run timestamp') from exc
+        mode = os.environ.get('PYTEST_QUARANTINE_MODE', 'blocking')
+        selected, active = quarantine_items(items, Path(ledger), mode, now)
+        identities = {id(item) for item in selected}
+        config.hook.pytest_deselected(items=[item for item in items if id(item) not in identities])
+        items[:] = selected
+        import warnings
+        for nodeid, owner in sorted(active.items()):
+            warnings.warn(pytest.PytestWarning(f'QUARANTINED {nodeid} owner={owner} mode={mode}'))
+
 @pytest.fixture
 def fake_ownership(monkeypatch):
     """r3 V3: stub pids are "ours" (fixed token) and invisible in /proc, so no test depends on which
@@ -423,8 +439,10 @@ def fake_ownership(monkeypatch):
     monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
     monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
 def pytest_sessionfinish(session, exitstatus):
-    # An affected selection can legitimately assign no items to this shard.
-    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and os.environ.get('PYTEST_SHARD'):
+    # A shard or an explicit quarantine-only run can legitimately be empty.
+    quarantine_only = (os.environ.get('PYTEST_QUARANTINE_FILE') and
+                       os.environ.get('PYTEST_QUARANTINE_MODE') == 'quarantine')
+    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and (os.environ.get('PYTEST_SHARD') or quarantine_only):
         session.exitstatus = pytest.ExitCode.OK
 @pytest.fixture(autouse=True)
 def isolated_build_cache(tmp_path, monkeypatch):
