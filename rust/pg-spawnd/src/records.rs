@@ -24,11 +24,25 @@ pub(crate) fn valid_item(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
 }
 
+/// Every valid key of `card.item_keys` (the items of one part), each once, in card order.
+pub(crate) fn part_keys(card: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for key in card["item_keys"].as_array().into_iter().flatten() {
+        match key.as_str() {
+            Some(key) if valid_item(key) && !keys.iter().any(|k| k == key) => keys.push(key.into()),
+            _ => {}
+        }
+    }
+    keys
+}
+
 pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Value>) {
+    let keys = part_keys(card);
     let item = [&card["item_key"], &card["item"]]
         .into_iter()
         .find(|v| !v.is_null() && v.as_str() != Some(""))
         .cloned()
+        .or_else(|| keys.first().map(|k| Value::String(k.clone())))
         .or_else(|| {
             std::env::var("PLANGRAPH_SPAWN_ITEM")
                 .ok()
@@ -49,6 +63,15 @@ pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Val
         }
         None => Value::Null,
     };
+    if let Some(first) = base["item_key"]
+        .as_str()
+        .map(str::to_owned)
+        .filter(|_| !keys.is_empty())
+    {
+        let mut all = vec![first.clone()];
+        all.extend(keys.into_iter().filter(|k| *k != first));
+        base["item_keys"] = json!(all);
+    }
     let missing = json!({"event":"seat_item_missing","level":"warning"});
     if base["item_key"].is_null()
         && matches!(base["role"].as_str(), Some("review" | "judge"))
@@ -61,6 +84,28 @@ pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Val
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_two_key_part_records_every_key_with_the_first_as_item_key() {
+        let card = json!({"item_keys":["p:A", "bad", "p:B", "p:A", 7]});
+        let mut base = json!({"role":"review"});
+        annotate_item(&mut base, &card, &mut vec![]);
+        assert_eq!(base["item_key"], "p:A");
+        assert_eq!(base["item_keys"], json!(["p:A", "p:B"]));
+        let mut named = json!({"role":"review"});
+        annotate_item(
+            &mut named,
+            &json!({"item_key":"p:B", "item_keys":["p:A", "p:B"]}),
+            &mut vec![],
+        );
+        assert_eq!(
+            (&named["item_key"], &named["item_keys"]),
+            (&json!("p:B"), &json!(["p:B", "p:A"]))
+        );
+        let mut single = json!({"role":"review"});
+        annotate_item(&mut single, &json!({"item_key":"p:A"}), &mut vec![]);
+        assert!(single.get("item_keys").is_none());
+    }
 
     #[test]
     fn record_item_key_shape() {

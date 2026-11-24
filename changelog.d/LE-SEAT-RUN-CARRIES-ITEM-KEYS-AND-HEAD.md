@@ -1,0 +1,1 @@
+- **LE-SEAT-RUN-CARRIES-ITEM-KEYS-AND-HEAD:** a card with `item_keys` (one part, several items) gives its seat run record `item_keys` (first key = `item_key`) and the part head in `request.review_head`; the keeper's seat reader and `tools/seat_verdict.py` accept any key of the part, so a merged close finds each landed item's counted seat.

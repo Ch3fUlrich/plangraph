@@ -33,6 +33,12 @@ def _passing_review(text, *, require_explicit_accept=False):
                         for line in lines[verdicts[-1][0] + 1:]))
 
 
+def _record_keys(record):
+    """Item keys a seat record covers: its ``item_key`` plus every ``item_keys`` entry of a multi-key part."""
+    keys = record.get("item_keys")
+    return {record.get("item_key"), *(keys if isinstance(keys, list) else ())}
+
+
 def _required_seat(record):
     """D-6652 (rule 3.66 (f)): a record of one of the two required OpenCode seats must name files it read."""
     from ..planner.legs import REVIEW_REQUIRED
@@ -135,7 +141,7 @@ class SpawnerRecordAdapter:
                 raise ValueError(f"{run_id}: missing or ambiguous record")
             host, record = records[0]
             if (record.get("run_id") != run_id or record.get("host") != host
-                    or record.get("item_key") != item["key"]):
+                    or item["key"] not in _record_keys(record)):
                 raise ValueError(f"{run_id}: record identity mismatch")
             if require_diff_head and record.get("head_sha") != head:
                 raise ValueError(f"{run_id}: review diff head mismatch")
