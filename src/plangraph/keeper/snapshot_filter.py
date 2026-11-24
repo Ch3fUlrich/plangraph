@@ -17,7 +17,7 @@ FIELDS = tuple((
     "claimed_by worker_run reviewer_run lease_until model review_waiver reviews "
     "evidence updated_at corrected_by fixes fixed_by writer_model seat_models "
     "run_ids created_at done_at reviewed merged answer incidents supersedes superseded_by "
-    "effective_priority priority_via"
+    "effective_priority priority_via category category_rank"
 ).split()) + tuple(MODEL_FIELDS)
 BLOCKS = ("items", "aliases", "activity", "decision_text", "progress")
 PARAMS = ("open", "closed", "since", "fields", "blocks")
@@ -113,9 +113,18 @@ def _selected(item, done_at, values):
     return not values["since"] or bool(stamps) and max(map(_instant, stamps)) >= _instant(values["since"])
 
 
+def _category_block(store, items):
+    """The ranked list and the uncategorised count, once any item has a category."""
+    if not any(item.get("category") for item in items):
+        return {}
+    live = [i for i in items if i["state"] not in ("done", "cancelled")]
+    return {"categories": [{"name": n, "rank": r} for r, n in enumerate(store._category_list("*"))],
+            "uncategorised": sum(1 for i in live if not i.get("category"))}
+
+
 def _full(store, now, values=None):
     from .store_read import _decode_models, _decode_run_ids
-    items = store._all_items()
+    items = store._rank_items(store._all_items())
     corrected, fixed = {}, {}
     superseded = _superseded_map({item["key"]: item for item in items})
     eff = views.effective_priorities(items)[0]
@@ -154,6 +163,8 @@ def _full(store, now, values=None):
             "done_criteria": item["done_criteria"],
             **({"design_ref": item["design_ref"]} if item.get("design_ref") else {}),
             **({"supersedes": item["supersedes"]} if item.get("supersedes") else {}),
+            **({"category": item["category"], "category_rank": item["category_rank"]}
+               if item.get("category") else {}),
             **({"effective_priority": eff[item["key"]]["effective"],
                 "priority_via": eff[item["key"]]["via"]}
                if eff.get(item["key"], {}).get("via") else {}),
@@ -194,4 +205,5 @@ def _full(store, now, values=None):
             "aliases": {a["old"]: a["new"] for a in store._aliases()},
             "activity": store._activity(now),
             "decision_text": store._decision_text(selected, now, evidence),
-            "progress": progress(progress_items)}   # PROGRESS-PANEL: the page's static panel
+            "progress": progress(progress_items),
+            **_category_block(store, items)}   # PROGRESS-PANEL: the page's static panel

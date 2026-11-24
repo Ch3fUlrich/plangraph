@@ -40,6 +40,10 @@ HANDLERS = {
     "evidence": cli_verbs.cmd_evidence,
     "incident": cli_verbs.cmd_incident,
     "reconfirm": cli_verbs.cmd_reconfirm,
+    "categories": cli_output_verbs.cmd_categories,
+    "add-category": cli_output_verbs.cmd_add_category,
+    "rank-categories": cli_output_verbs.cmd_rank_categories,
+    "backfill-categories": cli_output_verbs.cmd_backfill_categories,
     "submit": cli_verbs.cmd_submit,
     "verdict": cli_verbs.cmd_verdict,
     "cancel": cli_verbs.cmd_cancel,
@@ -154,6 +158,16 @@ def _add_writes(sub):
     reconfirm = _p(sub, "reconfirm", help="record that an item's premise was read against a decision")
     reconfirm.add_argument("key")
     reconfirm.add_argument("decision", metavar="D-NNN")
+    categories = _p(sub, "categories", help="the ranked category list and the uncategorised count")
+    categories.add_argument("--project")
+    add_category = _p(sub, "add-category", help="append a category to the default list")
+    add_category.add_argument("name")
+    rank_categories = _p(sub, "rank-categories", help="set a project's category order")
+    rank_categories.add_argument("project")
+    rank_categories.add_argument("order", nargs="+")
+    backfill = _p(sub, "backfill-categories", help="categorise live items by key and track rules")
+    backfill.add_argument("project")
+    backfill.add_argument("--dry-run", action="store_true")
     evidence = _p(sub, "evidence", help="attach evidence")
     evidence.add_argument("key")
     evidence.add_argument("--kind", required=True)

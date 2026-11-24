@@ -32,10 +32,10 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: messages, v16 message nonces/envelopes, v17 placement rules, v18 write receipts,
 #: v19 landing stages, v20 landing settlement, v21 Actions job timings, v22 train claims, v23 item incident index,
 #: v24 card effort decisions and spawn attempt outcomes, v25 claim definition event index.
-#: v26 criteria amendment ledger, v27 definition design references, v28 supersedes links.
+#: v26 criteria amendment ledger, v27 definition design references, v28 supersedes links, v29 item categories.
 #: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
 #: this number at runtime.
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 LANDING_STAGES_DDL = files(__package__).joinpath("landing_stages.sql").read_text(encoding="utf-8")
 LANDING_TRAINS_DDL = files(__package__).joinpath("landing_trains.sql").read_text(encoding="utf-8")
@@ -374,7 +374,8 @@ CREATE TABLE items (
     created_at     TEXT,
     updated_at     TEXT,
     design_ref     TEXT,
-    supersedes     TEXT
+    supersedes     TEXT,
+    category       TEXT
 );
 
 CREATE TABLE edges (
@@ -472,8 +473,25 @@ BEFORE DELETE ON criteria_amendments
 BEGIN SELECT RAISE(ABORT, 'criteria amendments are append-only'); END;
 """
 
+#: ITEM-CATEGORY-RANKED: the ranked category list as data.  Project ``*`` is the
+#: default list; a project that ranks its own gets its own rows.  A category
+#: is added by one verb, so the start list below is only the seed.
+START_CATEGORIES = ("speed", "efficiency-tokens", "efficiency-quality", "reliability",
+                    "security", "network", "ui-ux", "feature", "cleanup")
+CATEGORIES_TABLE = """
+CREATE TABLE IF NOT EXISTS categories (
+    project TEXT NOT NULL,
+    name    TEXT NOT NULL,
+    rank    INTEGER NOT NULL,
+    PRIMARY KEY (project, name)
+);
+"""
+CATEGORIES_DDL = CATEGORIES_TABLE + "".join(
+    f"INSERT OR IGNORE INTO categories(project,name,rank) VALUES('*','{n}',{i});\n"
+    for i, n in enumerate(START_CATEGORIES))
+
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + RECEIPTS_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
           + GRANTS_DDL + ALERTS_DDL + LANDING_STAGES_DDL + LANDING_TRAINS_DDL + LANDING_JOBS_DDL
           + LANDING_CLAIMS_DDL + EVENT_AUDIENCE_DDL + INCIDENTS_DDL + CLAIM_DEFINITION_INDEX_DDL
-          + CRITERIA_AMENDMENTS_DDL)
+          + CRITERIA_AMENDMENTS_DDL + CATEGORIES_DDL)

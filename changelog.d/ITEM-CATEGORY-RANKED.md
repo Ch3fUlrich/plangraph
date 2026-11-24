@@ -1,0 +1,1 @@
+Items carry a category (schema v29, data in a keeper table, new categories by one verb); a per-project ranked list orders `ready`, the feeder and the web table before priority, the table gains a category column, sort and filter, and `reap` records per-category ready/merged counts with a starvation finding.

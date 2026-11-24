@@ -296,6 +296,7 @@
         owner: it.owner, operator: !!it.operator, priority: num(it.priority),
         effective_priority: num(it.effective_priority != null ? it.effective_priority : it.priority),
         priority_via: it.priority_via || null,
+        category: it.category || null, category_rank: it.category_rank == null ? null : num(it.category_rank),
         estimate_h: G.estimate(it), deps: depsOf(it), unblocks: waiters[it.key] || [],
         critical: !!critSet[it.key],
         slack: G.isTerminal(it) ? 0 : (slack[it.key] || 0),
@@ -368,7 +369,8 @@
     return { items: items, projects: projects, questions: questions,
              decisions: decisions, decisionById: decisionById, needsYou: needsYou,
              answers: questions.filter(function (q) { return q.status === "answered"; }),
-             critical: cp.keys, humanize: humanize };
+             critical: cp.keys, humanize: humanize,
+             categories: snap.categories || [], uncategorised: snap.uncategorised || 0 };
   }
 
   function minWave(wave, list) {

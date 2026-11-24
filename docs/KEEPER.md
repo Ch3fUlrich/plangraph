@@ -149,6 +149,15 @@ aging/`priority` act on it alone. `ready`, the feeder pick (`effective_priority`
 value and show `8->10 via KEY`; the snapshot carries `effective_priority`/`priority_via` for raised items only. `reap` upserts the day's
 metrics `priority_inherit_raised` and `priority_inherit_longest_chain`.
 
+**Categories (ITEM-CATEGORY-RANKED, schema v29).** `items.category` (set at define, editable, null = none) names a row of the `categories`
+table: project `*` holds the default ranked list (seed: speed, efficiency-tokens, efficiency-quality, reliability, security, network, ui-ux,
+feature, cleanup); `add-category NAME` appends one, `rank-categories PROJECT NAME...` gives a project its own order, `categories [--project]`
+reads the list and the uncategorised count, `backfill-categories PROJECT [--dry-run]` sets live items by key/track rules and returns the
+unmatched keys for a model pass. `ready`, the feeder (`category_rank` on the ready row) and the web table order by category rank, then
+effective priority, then age; an item without category sorts last. `reap` records `category_ready.NAME` and `category_merged.NAME` per day
+and raises `category_starved` on the oldest ready item of a category that waited over 48 h with nothing done (rule 3.76 experiment). The web
+page is read-only, so the rank is changed by the verb, not by dragging.
+
 ## Verbs (Store) — role rules, state machine, errors
 Every verb: authenticate → authorise → validate → one transaction (event + cache + edges) → audit_log row (ok or refused).
 Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, bad_transition, locked, epoch_stale, lease_held, cycle, validation,
