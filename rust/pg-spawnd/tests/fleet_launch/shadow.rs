@@ -56,7 +56,7 @@ pub fn check(launcher: &Launcher) {
     let s = Sandbox::new(launcher);
     let dir = s.path("home/.config/plangraph/state-shadow");
     fs::create_dir_all(&dir).unwrap();
-    let custom = s.path("custom/routing-collector.json");
+    let custom = s.path("custom dir/routing-collector.json");
     let location = |role: &str| {
         if role == "routing" {
             custom.clone()
@@ -68,7 +68,10 @@ pub fn check(launcher: &Launcher) {
         for role in ["routing", "plan-order"] {
             // The routing collector's env file moves its configuration away from the default.
             let env = if role == "routing" {
-                format!("PLANGRAPH_STATE_CONFIG=\"{}\"\n", custom.display())
+                format!(
+                    "PLANGRAPH_STATE_CONFIG = {}\n",
+                    custom.display().to_string().replace(' ', "\\ ")
+                )
             } else {
                 String::new()
             };

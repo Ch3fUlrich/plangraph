@@ -86,23 +86,36 @@ pub fn transcript_for(home: &Path, session_id: &str, cwd: &Path) -> PathBuf {
     })
 }
 
-/// The value of an environment-file assignment in systemd syntax: double-quoted with backslash
-/// escapes, single-quoted literally, or unquoted up to the end of the line.
+/// The value of an environment-file assignment in systemd syntax: double-quoted or unquoted with
+/// backslash escapes (`\ ` is a space), single-quoted literally. Trailing whitespace is not part of
+/// the value.
 fn env_value(raw: &str) -> Option<String> {
     let raw = raw.trim();
-    if let Some(inner) = raw.strip_prefix('"') {
-        let inner = inner.strip_suffix('"')?;
+    let unescape = |text: &str| {
         let mut out = String::new();
-        let mut chars = inner.chars();
+        let mut chars = text.chars();
         while let Some(ch) = chars.next() {
             out.push(if ch == '\\' { chars.next()? } else { ch });
         }
-        return Some(out);
+        Some(out)
+    };
+    if let Some(inner) = raw.strip_prefix('"') {
+        return unescape(inner.strip_suffix('"')?);
     }
     if let Some(inner) = raw.strip_prefix('\'') {
         return inner.strip_suffix('\'').map(str::to_owned);
     }
-    (!raw.is_empty()).then(|| raw.to_owned())
+    if raw.is_empty() {
+        return None;
+    }
+    unescape(raw)
+}
+
+/// The value of the `name` assignment on one environment-file line; whitespace around the name
+/// and the `=` is allowed, as for the service.
+fn assignment<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let (key, value) = line.split_once('=')?;
+    (key.trim() == name).then_some(value)
 }
 
 /// The role's collector configuration: the `PLANGRAPH_STATE_CONFIG` its `ROLE.env` sets (the last
@@ -114,7 +127,7 @@ pub fn config_path(home: &Path, role: &str) -> PathBuf {
         .ok()
         .and_then(|text| {
             text.lines()
-                .filter_map(|line| line.trim_start().strip_prefix("PLANGRAPH_STATE_CONFIG="))
+                .filter_map(|line| assignment(line, "PLANGRAPH_STATE_CONFIG"))
                 .filter_map(env_value)
                 .next_back()
         })
@@ -230,6 +243,15 @@ mod tests {
                 "PLANGRAPH_STATE_CONFIG=/p/with space.json  \n",
                 "/p/with space.json",
             ),
+            (
+                "PLANGRAPH_STATE_CONFIG=/p/with\\ space.json\n",
+                "/p/with space.json",
+            ),
+            (
+                "PLANGRAPH_STATE_CONFIG = /p/spaced.json\n",
+                "/p/spaced.json",
+            ),
+            ("  PLANGRAPH_STATE_CONFIG =\"/p/q.json\"  \n", "/p/q.json"),
             (
                 "PLANGRAPH_STATE_CONFIG='/p/lit$eral.json'\n",
                 "/p/lit$eral.json",

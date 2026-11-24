@@ -125,6 +125,8 @@ mod tests {
                 dir.path().join("none.sqlite").display().to_string(),
             ),
         ]);
+        // The store exists once routing has recorded anything; an empty healthy state follows.
+        record(&env, "s.record_probe_pass('codex-gpt', 'fixture')");
         let now = || chrono::Utc::now().timestamp();
         let read = |cursor: Value| {
             refresh(&config.quota, &env, &repo(), now()).unwrap();
@@ -148,5 +150,56 @@ mod tests {
         let (_, recovered, _) = read(cursor);
         assert_eq!(recovered.len(), 1, "recovery is a quota event");
         assert_eq!(recovered[0].data["limited_until"], json!({}));
+    }
+
+    #[test]
+    fn a_missing_store_and_unreadable_snapshots_leave_the_existing_file_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = fixture(dir.path());
+        std::fs::write(&config.quota, "{\"previous\":true}").unwrap();
+        let env: Env = BTreeMap::from([
+            (
+                "XDG_STATE_HOME".into(),
+                dir.path().join("xdg").display().to_string(),
+            ),
+            (
+                "QUOTA_SNAPSHOT_DB".into(),
+                dir.path().join("none.sqlite").display().to_string(),
+            ),
+        ]);
+        let error = refresh(&config.quota, &env, &repo(), 1000).unwrap_err();
+        assert!(error.contains("unavailable"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&config.quota).unwrap(),
+            "{\"previous\":true}"
+        );
+        // A zero-byte store is as unknown as a missing one.
+        let store = dir.path().join("xdg/plangraph");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("leg-state.sqlite"), "").unwrap();
+        assert!(refresh(&config.quota, &env, &repo(), 1000).is_err());
+    }
+
+    #[test]
+    fn a_busy_refusal_is_down_in_routing_and_stays_out_of_the_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = fixture(dir.path());
+        let env: Env = BTreeMap::from([
+            (
+                "XDG_STATE_HOME".into(),
+                dir.path().join("xdg").display().to_string(),
+            ),
+            (
+                "QUOTA_SNAPSHOT_DB".into(),
+                dir.path().join("none.sqlite").display().to_string(),
+            ),
+        ]);
+        record(
+            &env,
+            "s.record_harness_limit('codex-gpt', 'HTTP 503: provider busy', 'spawner:harness', down_s=600)",
+        );
+        refresh(&config.quota, &env, &repo(), 1000).unwrap();
+        let (_, events, _) = local::quota(&config, Value::Null).unwrap();
+        assert_eq!(events[0].data["limited_until"], json!({}));
     }
 }

@@ -33,24 +33,26 @@ pub(super) fn quota_snapshots(env: &Env, repo: &Path) -> Result<Value, String> {
     output(cmd)
 }
 /// Provider limits routing itself treats as active, by leg and scope, as the epoch second each
-/// ends, as of now. Routing's own `LegStateStore.leg_status` decides (scopes, probe recovery), never a copy.
+/// ends, as of now. Routing's own `leg_status` and `routing_status` decide (scopes, probe recovery, busy refusals), never a
+/// copy; a missing or empty store is an error, not an empty map.
 pub(super) fn leg_limits(env: &Env, repo: &Path) -> Result<Value, String> {
     let mut cmd = python(env, repo);
     cmd.args(["-c", LEG_LIMITS]);
     output(cmd)
 }
 const LEG_LIMITS: &str = r#"
-import json, sqlite3, time
-from plangraph.routing_support.leg_state import REPROBE_MINUTES, _default_store
+import json, sqlite3, sys, time
+from plangraph.routing_support.leg_state import REPROBE_MINUTES, _default_store, routing_status
 now = time.time()  # routing's own clock, with sub-second precision
 store = _default_store()
-scopes = []
-if store.path.exists() and store.path.stat().st_size:
-    with sqlite3.connect(store.path.as_uri() + "?mode=ro", uri=True) as db:
-        scopes = db.execute("SELECT DISTINCT leg_key, account, combo FROM leg_events WHERE status<>200 AND ts<=?", (now,)).fetchall()
+if not store.path.exists() or not store.path.stat().st_size:
+    sys.exit("leg state unavailable: no store")  # unknown, not an empty healthy state
+with sqlite3.connect(store.path.as_uri() + "?mode=ro", uri=True) as db:
+    scopes = db.execute("SELECT DISTINCT leg_key, account, combo FROM leg_events WHERE status<>200 AND ts<=?", (now,)).fetchall()
 out = {}
 for key, account, combo in scopes:
-    status = store.leg_status(key, now=now, account=account, combo=combo)
+    # routing_status keeps outages and busy refusals (down) apart from quota limits
+    status = routing_status(store.leg_status(key, now=now, account=account, combo=combo))
     if status["state"] == "limited":
         ev = status["evidence"]
         name = key if account is None and combo is None else f"{key}@{account or ''}/{combo or ''}"

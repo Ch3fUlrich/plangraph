@@ -66,7 +66,7 @@ transcript project directory, can move. Three parts keep the collector on the
 live session:
 
 - Every `fleet-launch` of a role with `state-shadow/ROLE.env` rewrites the role
-  configuration (the last `PLANGRAPH_STATE_CONFIG` of that env file, quoted or not, else
+  configuration (the last `PLANGRAPH_STATE_CONFIG` of that env file, in the service's syntax: quoted or not, `\ ` escapes, spaces around `=`; else
   `state-shadow/ROLE.json`) with the new `session_id` and the transcript found
   under any `~/.claude/projects/*` directory (else the one derived from the
   launch directory). Other fields stay as the operator set them.
@@ -82,9 +82,9 @@ live session:
 - Each scan it also refreshes the `quota` file from the router's own states:
   the provider limits routing treats as active (read through routing's scoped
   `LegStateStore.leg_status`, so a successful probe clears a limit here as it
-  does there; AGY and Codex legs, `limited_until` per leg and scope) and the
+  does there and a busy refusal stays out; AGY and Codex legs, `limited_until` per leg and scope) and the
   quota snapshots' remaining percent. A booked limit or its recovery is a quota
-  event. A source that cannot be read is `null`; when neither can be read the
+  event. A source that cannot be read (a missing or empty leg-state store, unreadable snapshots) is `null`; when neither can be read the
   file is not rewritten, so it goes stale and the source reports it.
 - When the launch record names a session the role file does not (the watchdog
   adopted a replacement later), the collector writes both `session_id` and
