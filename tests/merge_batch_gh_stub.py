@@ -144,7 +144,7 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
                      "File size limit (400 lines)", "New code is Rust", "Changelog fragment and docs",
                      "UI tests in headless Chromium", "Rust workspace on Linux: fmt, clippy, tests",
                      "Rust spawner and worker core tests on Windows", "Rust worker crate: fmt, clippy, tests",
-                     "Rust replay spike tests", "ci-gate"]
+                     "Rust replay spike tests", "Build pg-spawnd once for the run", "ci-gate"]
             names += [f"Python tests, SQLite keeper (shard {i} of 3)" for i in (1, 2, 3)]
             names += [f"Python tests, Postgres keeper: contract and storage (shard {i} of 3)" for i in (1, 2, 3)]
             jobs = [{"name": n, "status": "completed", "conclusion": "success"} for n in names]

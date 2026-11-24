@@ -34,6 +34,7 @@ JOB_DISPLAY = {
     "new-code-lang": "New code is Rust",
     "changelog-docs": "Changelog fragment and docs",
     "browser": "UI tests in headless Chromium",
+    "build-spawnd": "Build pg-spawnd once for the run",
     "rust": "Rust workspace on Linux: fmt, clippy, tests",
     "rust-windows": "Rust spawner and worker core tests on Windows",
     "rust-worker": "Rust worker crate: fmt, clippy, tests",
