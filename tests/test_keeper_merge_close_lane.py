@@ -111,3 +111,41 @@ def test_a_named_close_from_open_refuses_a_lane_merge_the_row_does_not_name(env)
     with pytest.raises(Refused, match="lane_merge_unproven"):
         env.store.close_merged(env.p("router"), "demo:A", "D-123", from_open=True, apply=True,
                                require_seats=False)
+
+
+def frozen_close(env):
+    """What the API does: warm the scan outside the lock, then close frozen."""
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    return env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+
+
+def test_a_frozen_close_reads_the_lane_merge_row_from_the_warm_snapshot(env, monkeypatch):
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    lane_merge(env, [("D-123", "Merged demo:C at {sha}")])
+    env.store.warm_merge_scan(env.store.merge_candidates())
+
+    def forbidden(self, *args, **kwargs):
+        pytest.fail("a frozen close never reads the decisions document")
+    monkeypatch.setattr(DecisionsAdapter, "_read_document", forbidden)
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert [c["key"] for c in result["closed"]] == ["demo:C"]
+
+
+def test_a_frozen_close_without_a_captured_row_fails_closed(env):
+    lane_merge(env, [("D-123", "Merged demo:C at {sha}")])
+    env.store.ctx["decisions"]._path.write_text("", encoding="utf-8")  # unreadable or empty at warm time
+    result = frozen_close(env)
+    assert result["closed"] == [] and "lane_merge_unproven" in result["listed"][0]["reason"]
+    assert state(env, "demo:C")["state"] == "in_review"
+
+
+def test_a_non_frozen_close_reads_the_decisions_document_once_per_proof(env, monkeypatch):
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    lane_merge(env, [("D-123", "Merged demo:C at {sha}")])
+    reads = []
+    real = DecisionsAdapter._read_document
+    monkeypatch.setattr(DecisionsAdapter, "_read_document",
+                        lambda self, **kw: reads.append(1) or real(self, **kw))
+    env.store._lane_merge_decision(state(env, "demo:C"), {
+        "sha": git(env.repo.root, "rev-parse", "HEAD"), "subject": "Merge lane/x into main (D-123 fixture lane)"}, 0)
+    assert len(reads) == 1

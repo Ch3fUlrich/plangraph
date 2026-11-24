@@ -63,8 +63,9 @@ def _recorded_harness_seat(record, completion, text, head):
     """
     from ..review.family import model_family
     from ..review.verdict import has_files_read
-    leg, harness = record.get("chosen_leg"), record.get("harness")
+    leg = record.get("chosen_leg")
     model = leg.get("model") if isinstance(leg, dict) else None
+    harness = record.get("harness") or (leg.get("harness") if isinstance(leg, dict) else None)
     if (not isinstance(harness, str) or harness in ("", "unknown") or not isinstance(model, str)
             or leg.get("harness") not in (None, harness) or not leg.get("family") or not model_family(model)
             or not isinstance(text, str) or not has_files_read(text)
