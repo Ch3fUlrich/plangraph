@@ -27,8 +27,7 @@ import re
 from . import auth, context_sources, timing
 from .coverage import writer_families
 from .errors import Refused
-from .evidence import has_live_clause, live_evidence_missing
-from .evidence_types import Result, as_epoch, valid_commit_ref
+from .evidence_types import Result, as_epoch, has_live_clause, live_evidence_missing, valid_commit_ref
 from .store_runs import go_key_scope
 from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family

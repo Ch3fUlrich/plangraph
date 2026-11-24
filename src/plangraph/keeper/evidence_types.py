@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-__all__ = ["Result", "Context", "as_epoch", "valid_commit_ref", "DEFAULT_SKEW_S"]
+__all__ = ["Result", "Context", "as_epoch", "valid_commit_ref", "DEFAULT_SKEW_S",
+           "has_live_clause", "live_evidence_missing"]
 
 # A commit reference is a full lowercase hex sha: 40 for sha1, 64 for sha256.
 # Abbreviations, refs ("main") and anything option-like are rejected so a sha
@@ -99,3 +100,23 @@ def as_epoch(value: Any) -> float | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.timestamp()
+
+
+_LIVE_CLAUSE_RE = re.compile(r"(?:^|[.!?;]\s+|\n\s*)Live:\s*\S")
+
+
+def has_live_clause(item: dict) -> bool:
+    """True when the done criteria carry a ``Live:`` clause."""
+    return bool(_LIVE_CLAUSE_RE.search(item.get("done_criteria") or ""))
+
+
+def live_evidence_missing(item: dict, rows, since: float | None = None) -> bool:
+    """A ``Live:`` clause is met only by a verified ``deploy`` row of the item's current epoch.
+
+    ``since`` (epoch seconds) is the last merge: the row must be at or after it, so evidence of an older
+    deployment never proves newer work. Items without the clause are never missing.
+    """
+    if not has_live_clause(item):
+        return False
+    return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
+                   and (since is None or (as_epoch(row["at"]) or 0) >= since) for row in rows)
