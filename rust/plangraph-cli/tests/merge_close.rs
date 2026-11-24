@@ -1,7 +1,7 @@
 //! The merge-close job against a fake keeper: no network, no keeper mutation.
 use plangraph_cli::feeder::{Env, Transport};
 use plangraph_cli::merge_close::{
-    repos_with, require_seats, run_scheduled_with, run_with, ScheduleTiming,
+    deployment_rows_with, repos_with, require_seats, run_scheduled_with, run_with, ScheduleTiming,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -575,4 +575,27 @@ fn hourly_reconcile_unit_invokes_only_the_dry_run() {
     assert!(service.contains(" reconcile-merged --dry-run --state "));
     assert!(timer.contains("OnCalendar=hourly"));
     assert!(timer.contains("Unit=pg-reconcile-merged.service"));
+}
+
+#[test]
+fn deployment_rows_cover_completed_items_in_the_same_refresh() {
+    let open = json!({"closed":[],"merged_not_done":0,
+        "deployment_pending":[{"key":"demo:A","state":"open","missing":["h:a.service"],"age_hours":3}]});
+    let done = json!({"closed":[],"merged_not_done":0,
+        "deployment_pending":[{"key":"demo:Z","state":"done","missing":["live_evidence_missing"],"age_hours":40}]});
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"ready"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (json!({"apply":false,"project":"demo"}), open),
+        (
+            json!({"apply":false,"project":"demo","inventory":true}),
+            done,
+        ),
+    ]);
+    let timing = ScheduleTiming::new(Duration::from_secs(95), Duration::from_secs(400));
+    let rows = deployment_rows_with(&keeper, &keeper, Some("demo"), true, timing).unwrap();
+    let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, ["demo:A", "demo:Z"]);
+    assert_eq!(rows[1]["state"], "done");
+    keeper.assert_finished();
 }

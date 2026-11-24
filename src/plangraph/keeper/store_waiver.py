@@ -626,8 +626,10 @@ class WaiverMixin:
         return dict(self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats),
                                release=release, flags=flags), closed=True)
 
-    def _auto_close_one(self, principal, item, require_seats, apply, now):
+    def _auto_close_one(self, principal, item, require_seats, apply, now, inventory=False):
         key = item["key"]
+        if inventory:
+            return self._deploy_inventory_row(item, now)
         tier = item.get("review_tier")
         if tier not in ("standard", "high", "none"):
             raise Refused("bad_state", "merge close requires review_tier=standard, high or none")
@@ -639,17 +641,8 @@ class WaiverMixin:
         pinned = dict(item, _close_head=token[0])
         proofs = self._merged_auto_proofs(pinned)
         pending = self._deploy_pending(pinned, changes, token)
-        missing = list(pending)
-        if self._live_evidence_missing(item, proofs):
-            missing.append("live_evidence_missing")
-        result = {}
-        if missing:
-            landed = [(stamp, proof["merged_at"]) for proof in proofs
-                      if (stamp := as_epoch(proof["merged_at"])) is not None]
-            earliest = min(landed, default=None)
-            result["deployment_pending"] = {
-                "missing": missing, "merged_at": earliest[1] if earliest else None,
-                "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}
+        missing = self._deploy_missing(item, proofs, pending)
+        result = {"deployment_pending": self._deployment_row(missing, proofs, now)} if missing else {}
         if pending:
             if apply:
                 self._deploy_pending_result(item, pending, now)
