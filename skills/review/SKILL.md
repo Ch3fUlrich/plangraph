@@ -51,11 +51,23 @@ does not affect the verdict. Do not pad: **no findings is a valid result.**
 
 ## Severity
 
-- **HIGH**: wrong behavior, data loss, security or public-leak problem, a test that
-  cannot fail for the main change, or a false claim of verification. Blocks acceptance.
-- **MED**: a real defect or gap with a limited blast radius (missed edge case, missing
-  test for a secondary path, duplication of a shared fact). Blocks acceptance.
+- **HIGH**: wrong in normal use: a path production takes with a trusted caller gives a
+  wrong result, loses data or leaks something public or secret; a test that cannot fail
+  for the main change; a false claim of verification. Blocks acceptance.
+- **MED**: a real defect or gap of the item with a limited blast radius (missed edge case,
+  missing test for a secondary path, duplication of a shared fact). Blocks acceptance; the
+  orchestrator may land a head with open MED findings as follow-up items where its rule
+  allows it, so state each MED so that it stands alone.
 - **LOW**: style, naming, wording, small cleanups. Never blocks acceptance.
+- **NEW-REQ**: a requirement the item text and its done criteria do not state (hardening, a
+  rare race under a trusted caller, a wider refactor, a wish). Report it on its own line;
+  it never blocks and becomes a follow-up item.
+- **PROCESS**: a defect of the brief or of the review setup (a missing context field, a
+  sandbox that cannot run a test). Report it on its own line; it is the orchestrator's and
+  never counts against the head.
+
+Rate the defect, not the effort to fix it. Compare with the base: a defect that main
+already has and the change does not touch or worsen is NEW-REQ.
 
 ## Output
 
@@ -71,6 +83,8 @@ Then one line per finding:
 ```
 SEVERITY file:line - problem - fix
 ```
+
+SEVERITY is HIGH, MED, LOW, NEW-REQ or PROCESS. Only HIGH and MED decide the verdict.
 
 Example: `MED src/x/y.py:42 - empty list returns None, caller indexes it - return [] and add a test`.
 
@@ -104,7 +118,12 @@ Round 1 reviews the whole range BASE..HEAD. A later round (your session is resum
 the prompt lists the earlier findings with the writer's answers) reviews only what
 changed since the head you reviewed before, and whether each earlier HIGH or MED
 finding is fixed or validly refuted. Do not reopen a refuted finding without new
-evidence; raise no new finding on code unchanged since round 1.
+evidence; raise no new finding on code unchanged since round 1. A new HIGH or MED in a
+later round cites a hunk changed since the previously reviewed head; on unchanged code
+only a HIGH with a reproduction you ran stands, anything else there is NEW-REQ. When the
+head is unchanged (the writer refuted instead of changing code), judge each earlier
+finding again against the code and the writer's evidence: keep it with the reason the
+refutation fails, or drop it.
 
 ## Inline seats
 

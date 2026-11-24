@@ -76,21 +76,35 @@ to an L3 writer. Such a fix still gets **2 seats plus the judge** like any other
 lane record names `Writer: L2` (commit trailer `Writer: L2`). Every L1 and L2 brief carries this
 clause (`references/task-contract.md`, "Orchestrator briefs").
 
-## 3. Task-size contract (decided 2026-10-08)
+## 3. Task contract: a complete spec, no size cap
 
-A task is **valid** only if all of these hold; the phase agent splits or merges until they do:
+A task is **valid** only if all of these hold; the phase agent completes the spec, splits or
+merges until they do:
 
 | Check | Rule |
 |---|---|
-| Scope | at most ~3 files (plus their tests), named in the brief |
+| Scope | every file the task edits is named in the brief: code, tests and the callers that must change; no limit on their number |
 | Objective | one sentence, one outcome |
 | Acceptance | one command (or short fixed list) whose pass/fail is mechanical |
-| Discovery | the implementer needs no architecture decisions; the contract names interfaces |
-| Size | roughly 10-40 minutes of agent work, fits a fresh context with room to spare |
+| Discovery | the implementer needs no architecture decisions; the spec fields below carry them |
+| Size | no cap on files, lines or minutes: a task is as large as its spec is complete |
 | Independence | no hidden ordering; real dependencies are edges in the graph |
 
+The spec is the plan. It lives in the item text and travels into the brief whole; a pointer to
+a plan file or a chat is not a spec. Every task item states these fields, each as facts the
+planner checked in the repository (`path` or `path::Symbol`, never pasted code):
+
+| Spec field | Content |
+|---|---|
+| Decision sources | for every decision the code takes (authority, status, identity, ownership): the structured field or row it reads; never free prose matched by a pattern |
+| State and ownership | every state, lock, lease or reservation the task adds or changes: who owns it, where each refused, failed and dry-run path releases it, what a crash leaves for the next run |
+| Call paths | every entry point that must enforce the rule: the CLI door and the API door, forward, respawn, retry, import |
+| Reuse | the existing helpers, resolvers and rules the writer must call instead of writing a second one |
+| Tests | each test by name with the entry point it drives; each fails on the base and passes on the change |
+| Non-goals | what the task must not add or change |
+
 Too small (a one-line change, a rename): fold into a neighbouring task with the same scope.
-Too big (touches many modules, "and then also..."): split on module, interface or test boundary.
+Split only where each part can land on main on its own: on a module, interface or test boundary.
 See `references/task-contract.md` for the brief template.
 
 ## 4. Cards
@@ -103,7 +117,7 @@ values and bad paths are refused, all problems at once), so write them exactly:
 |---|---|---|
 | `outcome` | one sentence, one outcome (required) | the objective travels with the card |
 | `read_set` | files read, kept minimal | feeds the context pack; smaller is cheaper |
-| `write_set` | files edited, <=3 plus their tests | disjoint across tasks = one agent, one task |
+| `write_set` | every file edited, with its tests | disjoint across tasks = one agent, one task |
 | `exports` | signatures/names the task must honour | interfaces are copied, not discovered |
 | `forbid_paths` | paths nobody may touch | scope stays mechanical |
 | `smoke_checks` | quick commands run before the check | cheap early signal |
@@ -115,7 +129,7 @@ values and bad paths are refused, all problems at once), so write them exactly:
 
 Card rules: **relative paths only**, no `..`, no absolute or drive paths; no secrets, hosts, home
 paths or token-like strings anywhere in a card. The section 3 contract maps onto card fields:
-Scope -> at most 3 entries in `write_set`, Acceptance -> one `check_cmd`.
+Scope -> `write_set` names every edited file, Acceptance -> one `check_cmd`.
 
 ### Batch example (loads with `plangraph.planner.service.import_batch` / `card.load_cards_yaml`)
 
@@ -185,10 +199,18 @@ ops:
 **Work phase (Layer 2).** Effort is medium unless the operator asks otherwise.
 1. Optional: detail researchers for facts the plan lacks, using the research rules above.
 2. Refine task contracts against section 3; keep each card in sync with its contract.
-3. Spawn implementers by card via plangraph-spawn (`python3 tools/plangraph-spawn.py spawn --card @card.json --role implement ...`): independent tasks in parallel, dependent ones in order.
-4. Spawn reviewers per task or batch by card via plangraph-spawn (`--role review --review-of RUN_ID`),
+3. Design review before every writer launch: the review seat of the route table (a family other
+   than the writer's) reads the spec read-only against the repository and answers
+   `VERDICT: DESIGN-OK` or `VERDICT: DESIGN-CHANGE`, then one line per point with a tag: SOURCE
+   (a decision without a structured source), STATE (an open lifecycle), PATH (an entry point not
+   named), REUSE (an existing helper not named), TEST (a test the done check needs), SCOPE (not
+   doable inside the named files). Each point names file or symbol, the defect of the spec and
+   the change to the spec. The points go into the item spec; no implementer starts on a spec
+   without a design verdict.
+4. Spawn implementers by card via plangraph-spawn (`python3 tools/plangraph-spawn.py spawn --card @card.json --role implement ...`): independent tasks in parallel, dependent ones in order.
+5. Spawn reviewers per task or batch by card via plangraph-spawn (`--role review --review-of RUN_ID`),
    using the route table; include a non-Claude family different from the writer.
-5. Any failure creates a fix-task (section 8). The phase ends when every task is done and
+6. Any failure creates a fix-task (section 8). The phase ends when every task is done and
    reviewed; the phase agent sends a digest upward (section 9).
 
 **Project (Layer 1, medium effort).** Holds the intent, decides *when* a planning phase is needed
@@ -337,7 +359,8 @@ research and review. If only Claude is available, record that coverage in the re
 - [ ] Large plan (section 5a): two families per topic, reports as files, baselines measured, review rounds in one resumed session until no HIGH and no MED, checkpoint card written
 - [ ] Every decision, priority, cap and cause names its source and number, or is marked EXPERIMENT with a measurement plan (rule 3.76)
 - [ ] For a plan that aims at throughput, speed, cost or quality: baselines recorded as evidence before the work; each change it lands written up as an evidence article
-- [ ] Every task passes the section 3 contract; file scopes disjoint; toolchain in each brief
+- [ ] Every task passes the section 3 contract with all spec fields; file scopes disjoint; toolchain in each brief
+- [ ] Design review verdict on every spec before its writer starts; its points are in the item
 - [ ] Every task item has a card in the same batch; cards relative-pathed, risk tags explicit
 - [ ] One agent per task; implementers parallel only when independent
 - [ ] L1/L2 briefs carry the D-1272 small-fix clause; an L2 self-fix is <= ~10 lines, never auth/access/secrets, `Writer: L2`, 2 seats + judge
