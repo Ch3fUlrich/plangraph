@@ -394,6 +394,8 @@ def native_receipt(record):
 
 
 # Verbs whose text travels on standard input to `pg-spawnd <verb>-local` on the owning host.
+# The owning host waits up to 30 s for a resume to reopen the run before it answers.
+RESUME_TIMEOUT = 45
 STDIN_VERBS = ('steer', 'resume')
 _RECEIPT_FLAG = dict(steer='steered', resume='resumed')
 
@@ -431,7 +433,8 @@ def native_result(record, *, verb='result', message=None):
         if body is None and verb in STDIN_VERBS:
             body = message.encode()
         reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
-                                '--', host['ssh'], command], capture_output=True, timeout=10,
+                                '--', host['ssh'], command], capture_output=True,
+                               timeout=RESUME_TIMEOUT if verb == 'resume' else 10,
                                **(dict(text=True, encoding='utf-8', errors='replace') if body is None
                                   else dict(input=body)))
         if body is not None:
@@ -509,8 +512,22 @@ def _route_native(service, run_id, message, host, verb):
             return refused(f'{verb} host is ambiguous' if hosts else 'unknown run id')
         host = hosts.pop()
     receipt = native_result(dict(run_id=run_id, host=host), verb=verb, message=message)
+    if verb == 'resume' and not receipt.get('ok') and record and record.get('overflow_remote'):
+        receipt = _reconcile_resume(record, receipt)
     if verb == 'resume' and receipt.get('resumed') and record and record.get('overflow_remote'):
         _track_resume(service, record, receipt)
+    return receipt
+
+
+def _reconcile_resume(record, receipt):
+    """A lost acknowledgement: the detached resume may still have reopened the run on the target."""
+    if receipt.get('error') != 'resume host route failed':
+        return receipt
+    seen = native_result(dict(record), verb='result')
+    number, known = seen.get('resume_number'), record.get('resume_number') or 0
+    if not seen.get('remote_query_error') and type(number) is int and number > known:
+        return dict(run_id=record['run_id'], ok=True, resumed=True, queued=True,
+                    resume_number=number, reconciled=True)
     return receipt
 
 

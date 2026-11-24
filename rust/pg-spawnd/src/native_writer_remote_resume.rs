@@ -55,7 +55,7 @@ pub(crate) fn route(
 }
 
 /// How long the owning host waits for the detached resume to reopen the run before it refuses.
-const REOPEN_WAIT: Duration = Duration::from_secs(60);
+const REOPEN_WAIT: Duration = Duration::from_secs(30);
 
 /// Reserve the next resume round of the run, start it detached and acknowledge only once the
 /// resume has reopened the run (it holds the supervisor lock and has bumped `resume_number`).
@@ -127,20 +127,30 @@ fn failure(directory: &Path, round: u64) -> String {
         .unwrap_or_else(|| "resume could not reopen the run".into())
 }
 
-#[cfg(unix)]
+/// Create the round's prompt file exclusively and write it; a failed write leaves no file, so the
+/// same round can be requested again.
 fn store_prompt(file: &Path, prompt: &str) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut out = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(file)?;
-    out.write_all(prompt.as_bytes())
+    store_with(file, |out| out.write_all(prompt.as_bytes()))
 }
 
-#[cfg(not(unix))]
-fn store_prompt(file: &Path, prompt: &str) -> std::io::Result<()> {
-    std::fs::write(file, prompt)
+fn store_with(
+    file: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut out = options.open(file)?;
+    let written = write(&mut out);
+    drop(out);
+    if written.is_err() {
+        let _ = std::fs::remove_file(file);
+    }
+    written
 }
 
 #[cfg(unix)]
@@ -209,4 +219,27 @@ pub(crate) fn local_cli(
         })
         .unwrap_or_else(|reason| refusal(id, &reason));
     writeln!(output, "{reply}").map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_prompt_write_releases_the_round_for_a_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("resume-prompt-1.md");
+        let failed = store_with(&file, |out| {
+            out.write_all(b"x")?;
+            Err(std::io::Error::other("disk full"))
+        });
+        assert!(failed.is_err());
+        assert!(!file.exists());
+        store_prompt(&file, "second try").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "second try");
+        // A stored round is never overwritten.
+        let again = store_prompt(&file, "third").unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "second try");
+    }
 }

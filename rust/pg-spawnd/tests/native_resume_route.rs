@@ -282,3 +282,62 @@ with patch('plangraph.spawner.overflow.registry_caps', return_value={}), \
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// The acknowledgement of a routed fix round is lost (transport timeout) although the target
+/// reopened the run: the origin reconciles the requested round from the target's record.
+#[test]
+fn lost_resume_acknowledgement_is_reconciled_from_the_target() {
+    let state = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let output = test_python::command()
+        .env("PYTHONPATH", source)
+        .arg("-c")
+        .arg(
+            r#"
+import contextlib, io, json, pathlib, re, subprocess, sys
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.spawner import cli, remote_ps
+from plangraph.spawner.service import SpawnService
+
+state = pathlib.Path(sys.argv[1])
+run_id = 'run-fixture2'
+base = dict(run_id=run_id, run_kind='native-codex', role='implement', host='posix')
+origin = dict(base, status='completed', ended=10.0, started=1.0, overflow_remote=True,
+              origin_receipt=True, final_head='old-head', resume_number=0)
+(state / 'runs' / run_id).mkdir(parents=True)
+(state / 'runs' / run_id / 'record.json').write_text(json.dumps(origin))
+host = dict(repo=str(state), ssh='fixture', spawner_src=str(state), state_dir=str(state))
+routes = {'hosts': {'posix': host}}
+reopened = dict(base, status='running', started=15.0, resume_number=1)
+timeouts = []
+def ssh(argv, *, timeout, **kwargs):
+    timeouts.append(timeout)
+    begin, end = re.findall(r'PLANGRAPH_RECEIPT_[a-f0-9]+_(?:BEGIN|END)', argv[-1])
+    if 'resume-local' in argv[-1]:
+        raise subprocess.TimeoutExpired(argv, timeout)
+    return SimpleNamespace(stdout=f'{begin}\n{json.dumps(reopened)}\n{end}\n')
+service = SpawnService(state=state)
+with patch('plangraph.spawner.overflow.registry_caps', return_value={}), \
+     patch('plangraph.spawner.overflow.placement_config', return_value=routes), \
+     patch.object(remote_ps.subprocess, 'run', side_effect=ssh):
+    out = io.StringIO()
+    with patch('sys.stdin', io.StringIO('fix round')), contextlib.redirect_stdout(out):
+        cli.main(['--state', str(state), 'resume', run_id, '--host', 'posix'])
+    reply = json.loads(out.getvalue())
+    assert reply['ok'] and reply['resume_number'] == 1 and reply['reconciled'], reply
+    # The resume waits longer than the owner's reopen wait (30 s); `result` keeps the short bound.
+    assert timeouts[0] == remote_ps.RESUME_TIMEOUT > 30 and timeouts[1] == 10, timeouts
+    saved = service.result(run_id)
+    assert saved['status'] == 'running' and saved['resume_requested'] == 1, saved
+"#,
+        )
+        .arg(state.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

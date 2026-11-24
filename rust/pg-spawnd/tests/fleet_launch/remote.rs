@@ -454,15 +454,21 @@ fn check_target_only_respawn(s: &Sandbox, encoded: &str, payload: &Value) {
 }
 
 fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {
-    let mut child = s
-        .python_command()
+    deliver_with(s, encoded, payload, &[])
+}
+
+fn deliver_with(s: &Sandbox, encoded: &str, payload: &Value, env: &[(&str, String)]) -> Output {
+    let mut command = s.python_command();
+    command
+        .env("HOME", s.path("target"))
+        .env("ROUTING_STATE_DIR", s.path("target/.local/state/routing"))
+        .envs(env.iter().map(|(k, v)| (*k, v.as_str())));
+    let mut child = command
         .args([
             "-c",
             "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
             encoded,
         ])
-        .env("HOME", s.path("target"))
-        .env("ROUTING_STATE_DIR", s.path("target/.local/state/routing"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

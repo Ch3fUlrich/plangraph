@@ -144,6 +144,14 @@ impl Sandbox {
             )
             .unwrap();
         }
+        if rust {
+            // The forwarded-launch receiver starts the destination's `pg-spawnd session`.
+            symlink(
+                env!("CARGO_BIN_EXE_pg-spawnd"),
+                fixture.path("bin/pg-spawnd"),
+            )
+            .unwrap();
+        }
         fs::write(fixture.path("prompt"), PROMPT).unwrap();
         fs::write(fixture.path("mcp.json"), "{}\n").unwrap();
         fixture.hosts(json!([{"name": LOCAL, "memory_floor_gib": 0}]));

@@ -24,9 +24,19 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(180);
 // The installed peer still speaks the legacy protocol, including the login shell
 // and the single-line bootstrap required by the Windows SSH hop.
 const RECEIVER_HEADER: &str = "import json,os,pathlib,subprocess,sys\np=json.load(sys.stdin)\n";
-const RECEIVER_BODY: &str = r#"state=pathlib.Path.home()/".local/state/routing/launch"
+const RECEIVER_BODY: &str = r#"state=pathlib.Path(os.environ.get("ROUTING_STATE_DIR") or pathlib.Path.home()/".local/state/routing")/"launch"
 a=p["argv"]
 env=dict(os.environ,FLEET_LOCAL_HOST=p["host"],FLEET_FORWARDED="1")
+import shutil
+exe=shutil.which("pg-spawnd")
+if exe:
+ launcher=[exe,"session"]
+ env.setdefault("PLANGRAPH_FLEET_OPS",str(root/"ops"))
+elif "--respawn" in a:
+ print("fleet-launch: refused host "+p["host"]+": pg-spawnd is not installed there; a respawn cannot resume its saved session",file=sys.stderr)
+ sys.exit(2)
+else:
+ launcher=[str(root/"bin/fleet-launch")]
 role=a[0].rsplit("-",1)
 role=role[0] if len(role)==2 and role[1].isdigit() and len(role[1])>=4 else a[0]
 saved=state/"sessions"/((a[a.index("--session")+1] if "--session" in a else a[0])+".json")
@@ -49,8 +59,7 @@ mcp.write_text(p["mcp"])
 a[4]=str(prompt)
 a += ["--mcp",str(mcp)]
 if dry:
- rc=subprocess.call([str(root/"bin/fleet-launch")]+a,env=env)
- import shutil
+ rc=subprocess.call(launcher+a,env=env)
  shutil.rmtree(work,ignore_errors=True)
  sys.exit(rc)
 if p["spec"]:
@@ -61,7 +70,7 @@ if p["spec"]:
  for target in targets:
   if not target.exists():
    target.write_text(json.dumps(p["spec"]))
-rc=subprocess.call([str(root/"bin/fleet-launch")]+a,env=env)
+rc=subprocess.call(launcher+a,env=env)
 if rc == 0:
  print("FLEET_REMOTE_SPEC="+(state/(role+".json")).read_text().replace(chr(10), ""))
 sys.exit(rc)
