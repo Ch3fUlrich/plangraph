@@ -84,24 +84,26 @@ def test_429_without_summary_is_a_refusal():
 
 
 def test_resetless_api_refresh_does_not_extend_hold_forever(monkeypatch):
+    """No stated reset: the first-seen exhausted observation holds until recovery is seen or the source is blind."""
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     clock = [1000.0]
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: clock[0])
+    stale = quota_snapshots.SOURCE_STALE_S
     data = [dict(provider='codex:a1', remainingPct=0)]
     fetch = lambda *a: (200, json.dumps({'data': data}).encode())
     gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: clock[0])
-    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 2800
-    clock[0] = 2000
-    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 2800
-    clock[0] = 2900
-    assert gate.apply(SOL, OK) == OK
-    data[0]['remainingPct'] = 100
+    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 1000 + stale
+    clock[0] = 2900   # the old 30-minute clock hold is gone: nothing recorded recovery
+    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 1000 + stale   # a refresh never moves first-seen
+    data[0]['remainingPct'] = 100   # a fresher row showing recovery clears it
     clock[0] = 3000
     assert gate.apply(SOL, OK) == OK
     data[0]['remainingPct'] = 0
     clock[0] = 3100
-    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 4900
+    assert gate.apply(SOL, OK)['evidence']['reset_at'] == 3100 + stale
+    clock[0] = 3100 + stale + 1   # a blind source (no fresher row for SOURCE_STALE_S) never blocks
+    assert gate.apply(SOL, OK) == OK
 
 
 def test_db_returns_latest_row_of_each_window_in_id_order(tmp_path):
@@ -175,7 +177,7 @@ def test_api_reset_and_resetless_observation_holds(monkeypatch):
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: 1000.0)
-    for extra, until in [('', 2800.0), (', "next_reset_at": "1970-01-01T02:00:00Z"', 7200.0)]:
+    for extra, until in [('', 1000.0 + quota_snapshots.SOURCE_STALE_S), (', "next_reset_at": "1970-01-01T02:00:00Z"', 7200.0)]:
         def fetch(*args):
             return 200, ('{"data":[{"provider":"codex:a1","remainingPct":0' + extra + '}]}').encode()
         gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: 1000.0)
@@ -485,3 +487,26 @@ def test_production_reader_clears_the_snapshot_limit_of_a_sibling_after_a_quota_
         assert store.last_probe_ts(sibling) is None
     finally:
         flag.default_reader.cache_clear()
+
+
+def test_an_exhausted_snapshot_does_not_clear_by_the_clock_at_its_stored_reset():
+    """The replay of the review: limited just before the stored reset, still limited at it, until recovery is recorded."""
+    now = 1_800_000_000.0
+    reset = now + 1000
+    iso = lambda t: time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(t))
+    seen = iso(now - 60)
+    row = dict(_row(0, iso(reset)), created_at=seen)
+    gate = QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0)
+    assert gate.apply(SOL, OK, reset - 1)['state'] == 'limited'
+    at_reset = gate.apply(SOL, OK, reset)
+    assert at_reset['state'] == 'limited' and at_reset['evidence']['reset_at'] > reset   # waits for recovery evidence
+    # (1) a fresher row of the window showing recovery clears it
+    fresh = dict(_row(100, iso(reset + 3600)), created_at=iso(reset + 1))
+    assert QuotaGate(lambda: [row, fresh], clock=lambda: now, ttl_s=0).apply(SOL, OK, reset + 5) == OK
+    # (2) a successful probe newer than the snapshot clears it
+    probed = QuotaGate(lambda: [row], clock=lambda: now, ttl_s=0, probe_ts=lambda model: reset + 2)
+    assert probed.apply(SOL, OK, reset + 5) == OK
+    # (3) a blind source (no fresher row for SOURCE_STALE_S) never blocks
+    stale_at = now - 60 + quota_snapshots.SOURCE_STALE_S
+    assert gate.apply(SOL, OK, stale_at - 1)['state'] == 'limited'
+    assert gate.apply(SOL, OK, stale_at + 1) == OK
