@@ -55,6 +55,11 @@ pub fn check(launcher: &Launcher) {
             .output()
             .unwrap();
         s.expect(&out, 0, &expected, &stderr);
+        // A fleet launch never widens a sandbox: no danger-full-access, no skipped permissions.
+        let text = String::from_utf8_lossy(&out.stdout);
+        for wider in ["danger-full-access", "--dangerously-skip-permissions"] {
+            assert!(!text.contains(wider), "{} launches with {wider}", case.name);
+        }
         s.no_launch();
     }
     if matches!(launcher, Launcher::Pinned(_) | Launcher::Rust(_)) {

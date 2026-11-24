@@ -93,7 +93,7 @@ fn run_bounded(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn()?;
+    let mut child = crate::stall::spawn_retrying(command)?;
     let start = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait()? {

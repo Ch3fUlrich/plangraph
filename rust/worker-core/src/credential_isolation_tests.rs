@@ -80,6 +80,35 @@ fn a_card_that_asks_for_danger_full_access_is_refused_with_a_named_reason() {
     }
 }
 
+#[test]
+fn harness_api_keys_are_excluded_from_the_commands_the_agent_runs() {
+    let args = env_policy_args().join(" ");
+    assert!(
+        args.contains("shell_environment_policy.exclude=[\"OPENAI_*\"]"),
+        "{args}"
+    );
+    assert!(args.contains("ignore_default_excludes=false"), "{args}");
+    let writer = crate::host_readiness::writer_sandbox_args(&[], &fixture_deny())
+        .unwrap()
+        .join(" ");
+    assert!(
+        writer.contains("shell_environment_policy.exclude="),
+        "{writer}"
+    );
+}
+
+#[test]
+fn the_plangraph_config_directories_follow_the_config_home() {
+    let dirs = plangraph_config_dirs(Path::new("/fixture/user"), Some(Path::new("/fixture/xdg")));
+    assert_eq!(
+        dirs,
+        [
+            PathBuf::from("/fixture/user/.config/plangraph"),
+            PathBuf::from("/fixture/xdg/plangraph")
+        ]
+    );
+}
+
 /// Real Codex sandbox with fixture files only: the fixture secret under a fixture config
 /// directory cannot be read, a file next to it in the workspace can.
 #[cfg(target_os = "linux")]
@@ -97,7 +126,7 @@ fn a_sandboxed_fixture_run_cannot_read_a_fixture_secret_under_the_config_directo
     let deny = deny_read_paths(&home, None);
     let out = std::process::Command::new("codex")
         .arg("sandbox")
-        .args(profile_args(&[], &deny).unwrap())
+        .args(crate::host_readiness::writer_sandbox_args(&[], &deny).unwrap())
         .args([
             "--",
             "sh",

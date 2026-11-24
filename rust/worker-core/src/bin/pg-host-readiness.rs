@@ -34,6 +34,7 @@ fn run() -> io::Result<bool> {
             &env::current_exe()?,
             scratch.path(),
             &credential_isolation::host_deny_read_paths()?,
+            &credential_isolation::host_plangraph_config_dirs()?,
         )?;
         lines.iter().for_each(|line| println!("{line}"));
         println!("{}", if ok { "ISOLATED" } else { "NOT ISOLATED" });

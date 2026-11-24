@@ -29,11 +29,33 @@ _FAST_CHECKS = "plangraph fast-checks --base"
 _SANDBOX_CACHE_SECONDS = 600
 
 
-def secret_paths():
-    """Home-relative secret paths of the one deny list the Rust sandbox also reads."""
+def secret_paths(env=None):
+    """Secret paths of the one deny list the Rust sandbox also reads, resolved against the
+    effective config home: the default ``~/.config`` and a relocated ``XDG_CONFIG_HOME``."""
     data = json.loads(files("plangraph").joinpath("config/secret_paths.json").read_text())
-    return ([f"~/{rel}" for rel in data["home_relative"]]
-            + [f"~/.config/{rel}" for rel in data["config_home_relative"]])
+    paths = [f"~/{rel}" for rel in data["home_relative"]]
+    paths += [f"~/.config/{rel}" for rel in data["config_home_relative"]]
+    xdg = (env or {}).get("XDG_CONFIG_HOME") or os.environ.get("XDG_CONFIG_HOME")
+    if xdg and os.path.isabs(xdg):
+        paths += [str(Path(xdg) / rel) for rel in data["config_home_relative"]]
+    return paths
+
+
+def _credential_paths(env):
+    paths = [*secret_paths(env), "~/.config", "~/.claude"]
+    if config := (env or {}).get("CLAUDE_CONFIG_DIR"):
+        paths.append(str(Path(config).resolve()))
+    return paths
+
+
+def read_deny_rules(paths):
+    """Permission rules that stop the built-in Read, Grep and Glob tools on ``paths``; they
+    hold whether or not the Bash sandbox starts. An absolute path needs the ``//`` prefix."""
+    rules = []
+    for path in paths:
+        rule = "/" + path if path.startswith("/") else path
+        rules += [f"Read({rule})", f"Read({rule}/**)"]
+    return rules
 
 
 def _review_command(command, worktree):
@@ -173,7 +195,10 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
             ("--tools", READ_TOOLS),
         ]:
             argv[argv.index(flag) + 1] = value
-        argv.extend(["--restricted", "--append-system-prompt",
+        # Read, Grep and Glob stay, so the secret paths are denied by permission rule.
+        settings = {"permissions": {"deny": read_deny_rules(_credential_paths(env))}}
+        argv.extend(["--settings", json.dumps(settings),
+                     "--restricted", "--append-system-prompt",
                      "Review with Read, Grep and Glob. Skip requests to run commands or tests. "
                      f"Write this exact standalone line: TESTS: none: sandbox unavailable on {host}"])
         return {"event": "sandbox_unavailable", "host": host, "python_job_id": job_id}
@@ -196,9 +221,7 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     checkout = Path(worktree or Path.cwd()).resolve()
     hook = shlex.join([sys.executable, "-I", str(Path(__file__).resolve()),
                        "--review-bash", str(checkout)])
-    credentials = [*secret_paths(), "~/.config", "~/.claude"]
-    if config := env.get("CLAUDE_CONFIG_DIR"):
-        credentials.append(str(Path(config).resolve()))
+    credentials = _credential_paths(env)
     writable = [str(scratch)]
     if review_target:
         # The service's private build directory also holds the fast-checks pool lease.
@@ -210,7 +233,7 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
             "allow": READ_TOOLS.split(",") + [
                 f"Bash({prefix} *)" for prefix in (*_PYTEST, *_CARGO_TEST, _FAST_CHECKS)
             ],
-            "deny": ["Write", "Edit"],
+            "deny": ["Write", "Edit", *read_deny_rules(credentials)],
         },
         "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
             {"type": "command", "command": hook, "onFailure": "block"},

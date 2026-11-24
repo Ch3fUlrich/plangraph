@@ -385,7 +385,9 @@ with patch('plangraph.routing_support.claude_seat.sandbox_available', return_val
 with patch('plangraph.routing_support.claude_seat.sandbox_available', return_value=True, create=True):
     spec = build(request)
 fallback_argv = fallback['argv']
-assert '--settings' not in fallback_argv, fallback_argv
+fallback_settings = json.loads(fallback_argv[fallback_argv.index('--settings')+1])
+assert set(fallback_settings) == {'permissions'} and set(fallback_settings['permissions']) == {'deny'}, fallback_settings
+assert 'Read(~/.config/plangraph/**)' in fallback_settings['permissions']['deny'], fallback_settings
 assert fallback_argv[fallback_argv.index('--tools')+1] == 'Read,Grep,Glob', fallback_argv
 assert fallback_argv[fallback_argv.index('--allowedTools')+1] == 'Read,Grep,Glob', fallback_argv
 event = next(e for e in fallback['events'] if e['event'] == 'sandbox_unavailable')

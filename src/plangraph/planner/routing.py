@@ -205,9 +205,11 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
-    from .route_policy import implement_family_excluded
+    from .route_policy import implement_family_excluded, refuse_card_sandbox
     from .legs import LOW_RISK_ONLY_LEGS
     check_route_targets(card, legs)
+    if isinstance(card, Mapping):
+        refuse_card_sandbox(card)
     effective_role = role if role is not None else card.get("role")
     research = effective_role == "research"
     exclude_fams = set(exclude_families)
@@ -406,6 +408,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required" + (": missing estimate_tokens" if isinstance(card, Mapping) and card else ""))
+    from .route_policy import refuse_card_sandbox
+    refuse_card_sandbox(card)
     for field in ('paths', 'write_set', 'risk_tags'):
         if field in card and (not isinstance(card[field], (list, tuple)) or
                               not all(isinstance(v, str) for v in card[field])):

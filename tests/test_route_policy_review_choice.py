@@ -216,3 +216,14 @@ def test_card_that_asks_for_danger_full_access_is_refused_with_a_named_reason():
         refuse_card_sandbox({"sandbox": "read-only"})
     for fine in ({}, {"sandbox": None}, {"sandbox": "workspace-write"}):
         refuse_card_sandbox(fine)
+
+
+def test_the_normal_route_and_plan_refuse_a_card_that_asks_for_danger_full_access():
+    import pytest
+    from plangraph.routing_errors import SpawnRefused
+
+    card = {"estimate_tokens": 1000, "sandbox": "danger-full-access"}
+    with pytest.raises(SpawnRefused, match="^sandbox_refused: danger-full-access"):
+        route_card(card, role="implement")
+    with pytest.raises(SpawnRefused, match="^sandbox_refused: danger-full-access"):
+        plan_spawn(card, role="implement")
