@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import re
 
+from .credential_guard import guard
 from .errors import Refused
+from .note_fold import premise_note
 
 _HOW = re.compile(r"^[ \t]*How:[ \t]*(.*?)(?=^[ \t]*(?:Why|Done when|Checked against):|\Z)",
                   re.M | re.S)
@@ -108,6 +110,45 @@ SMALL_FIELDS = ("description", "host", "wait", "layer", "role", "agent_id",
 #: read these and nothing else.  Definition events carry the ones that cite a decision
 #: (``store_input.citing_premise``), so the decision clock is rebuilt from events alone.
 PREMISE_FIELDS = ("title", "description", "done_criteria", "note", "source")
+_CANONICAL_DECISION = re.compile(r"\s*[Dd]-0*\d{1,6}\s*")
+
+
+def premise_text(name, value):
+    """The text of premise field *name* a decision may be cited in, or ``None``.
+
+    ``note`` without its folded metadata lines; ``source`` only as one whole canonical
+    decision reference (a free-text source is not provenance of a decision).
+    """
+    if not isinstance(value, str):
+        return None
+    if name == "note":
+        return premise_note(value)
+    if name == "source":
+        return value if _CANONICAL_DECISION.fullmatch(value) else None
+    return value
+
+
+def premise_texts(values):
+    """Every premise text of the mapping *values* (an item row or a definition payload)."""
+    return [text for name in PREMISE_FIELDS
+            if (text := premise_text(name, values.get(name))) is not None]
+
+
+SESSION_CAP = 200
+
+
+def check_session(value, key):
+    """``session`` is item_created metadata: one credential-free line, never premise text."""
+    if value is None:
+        return None
+    if (not isinstance(value, str) or not value.strip() or len(value) > SESSION_CAP
+            or len(value.splitlines()) != 1):
+        raise Refused("validation", f"{key}: session must be a one-line string "
+                      f"of at most {SESSION_CAP} characters")
+    guard("session", value, key)
+    return value
+
+
 #: The MODEL-KINDS subset of ``SMALL_FIELDS``.
 MODEL_FIELDS = ("layer", "role", "agent_id", "phase_kind")
 
