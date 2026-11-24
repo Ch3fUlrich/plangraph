@@ -78,10 +78,11 @@ def run_review(tmp_path, monkeypatch, stdout, tamper=None):
         real = opencode_isolation.apply_review_permissions
 
         def apply(env, denied, *, repository_tools):
-            real(env, denied, repository_tools=repository_tools)
+            assert real(env, denied, repository_tools=repository_tools) is None
             cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
             tamper(cfg)
             env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg)
+            return review_policy_refusal(env['OPENCODE_CONFIG_CONTENT'], denied, repository_tools=repository_tools)
         monkeypatch.setattr(opencode_isolation, 'apply_review_permissions', apply)
     seen = []
 

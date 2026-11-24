@@ -270,6 +270,9 @@ _READ_TOOLS = ('read', 'glob', 'grep', 'list')
 def apply_review_permissions(env, denied_tools, *, repository_tools):
     """Set the isolated review permissions while preserving provider config.
 
+    Returns why the written config still grants more than the policy (`review_policy_refusal`), else
+    None; a non-None result refuses the launch.
+
     Session sharing is always disabled: a review child cannot tell whether the repository it
     reads is public, and an unknown visibility stays private.
     """
@@ -285,6 +288,7 @@ def apply_review_permissions(env, denied_tools, *, repository_tools):
         permission['bash'] = {'*': 'deny', **dict.fromkeys(_CHECKOUT_COMMANDS, 'allow')}
     config.update(permission=permission, mcp={}, plugin=[], share='disabled')
     env['OPENCODE_CONFIG_CONTENT'] = json.dumps(config)
+    return review_policy_refusal(env['OPENCODE_CONFIG_CONTENT'], denied_tools, repository_tools=repository_tools)
 
 
 def review_policy_refusal(config_json, denied_tools, *, repository_tools):
@@ -332,6 +336,13 @@ def permission_denied_count(stdout_text):
                 and 'denied' in str(state.get('error') or '').lower()):
             count += 1
     return count
+
+
+def record_permission_denied(job, stdout_text):
+    """Record the count of permission-refused tool calls of an OpenCode review run as an event."""
+    if job.command and job.command[0] == 'opencode' and job.role == 'review':
+        if count := permission_denied_count(stdout_text):
+            job.events.append({'event': 'permission_denied', 'count': count})
 
 
 def _opencode_managed_dir(env: Mapping) -> Path:

@@ -43,11 +43,7 @@ from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notif
 from .git_guard import prepare_worktree, writer_launch
 from .base_fresh import admit_base
 from . import opencode_isolation as _opencode_isolation
-from .opencode_isolation import (
-    _DENIED_TOOLS,
-    _REVIEW_OPENCODE_ENV_ALLOW,
-    _opencode_managed_dir,
-)
+from .opencode_isolation import _DENIED_TOOLS, _REVIEW_OPENCODE_ENV_ALLOW, _opencode_managed_dir, fail_unchanged_writer, record_permission_denied
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
 from . import proc_kill, env_redact
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
@@ -347,15 +343,11 @@ class SpawnerRunner:
                              if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
                     del child_env[name]
-                repository_tools = chosen is not None and opencode_repository_review(leg)
-                apply_review_permissions(child_env, _DENIED_TOOLS, repository_tools=repository_tools)
+                render_reason = render_reason or apply_review_permissions(
+                    child_env, _DENIED_TOOLS, repository_tools=chosen is not None and opencode_repository_review(leg))
             if render_reason is None:
                 from .opencode_answer import configure_launch_output
                 render_reason = configure_launch_output(child_env, model_or_combo, role, reasoning_cap)
-            if role == 'review' and render_reason is None:
-                from .opencode_isolation import review_policy_refusal
-                render_reason = review_policy_refusal(child_env.get('OPENCODE_CONFIG_CONTENT') or '',
-                                                      _DENIED_TOOLS, repository_tools=repository_tools)
             if role == 'review':
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
@@ -701,10 +693,10 @@ class SpawnerRunner:
                     job.events.append({'event': 'terminated_after_answer'})
             if job.status == 'failed' and is_opencode(job):
                 job.events.append(dict(event='harness_failed', error=failure_reason(job)))
-            from .opencode_isolation import fail_unchanged_writer
             from .question_bridge import question_exit
             if not question_exit(job, {}):
                 await asyncio.to_thread(fail_unchanged_writer, job, job.cwd)   # D-3236: no change = failed
+            record_permission_denied(job, stdout_text)   # refused tool calls of a review
 
             # D-2905: the child-writable store is request-side only, for an
             # exit-0 review's own store with all tools denied.
@@ -723,10 +715,6 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
-            if job.command and job.command[0] == 'opencode' and job.role == 'review':
-                from .opencode_isolation import permission_denied_count
-                if denied_calls := permission_denied_count(stdout_text):
-                    job.events.append({'event': 'permission_denied', 'count': denied_calls})
             # The trusted response-side log is independent of child tool permissions.
             if is_opencode(job):
                 from .gateway_witness import witness
