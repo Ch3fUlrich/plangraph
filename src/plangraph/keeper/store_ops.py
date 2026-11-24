@@ -87,6 +87,7 @@ class OpBatch:
         self.allow_new = set()   # codes an op is expected to introduce
         self.strict = set()      # keys of ops that may introduce NO new code
         self.pre = {}            # (key, kind, ref json) -> (result, state, epoch)
+        self.lifts = {}          # (key, decision id) -> the pre-lock read of a gate release
 
     def note(self, affected, allow_new):
         self.touched.setdefault(self.current, set()).update(affected or ())
@@ -238,6 +239,10 @@ class OpsMixin:
                     self._read_batch(batch_ref)
                 elif name == "add_evidence" and op["key"] not in moved:
                     self._prelock_evidence(op, batch, now)
+                elif (name == "lift_operator_gate" and op["key"] not in moved
+                      and self._item(op["key"]) is not None):
+                    batch.lifts[(op["key"], op["decision_id"])] = self._lift_proof(
+                        op["key"], op["decision_id"], now)
             except Refused as exc:
                 raise _fail(index, op, exc) from None
             if name in _MOVES:
@@ -332,7 +337,9 @@ class OpsMixin:
         if name == "set_kind":
             return self._set_kind(principal, key, op["kind"], now)
         if name == "lift_operator_gate":
-            return self._lift_operator_gate(principal, key, op["decision_id"], now)
+            return self._lift_operator_gate(
+                principal, key, op["decision_id"], now,
+                proof=self._batch.lifts.get((key, op["decision_id"])))
         if name == "rehome":
             return self._rehome(principal, key, op.get("new_project"),
                                 op.get("host"), now)

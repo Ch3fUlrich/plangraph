@@ -14,9 +14,12 @@ re-labelled, and the kind cannot flip back and forth).
 """
 from __future__ import annotations
 
+import contextlib
 import re
 
+from . import timing
 from .errors import Refused
+from .evidence_decisions import decision_book
 from .item_fields import KIND_DEFAULTS
 
 __all__ = ["KindMixin", "SETTABLE_KINDS"]
@@ -26,12 +29,21 @@ SETTABLE_KINDS = ("question", "operator_task")
 
 
 def _lifted_keys(decision):
-    """The keys of every ``Lifts-Gate: k1 k2`` list of a decision cell (to the next field)."""
+    """The keys of a ``Lifts-Gate: k1 k2`` field: one ``;``-separated field of the decision cell.
+
+    The field must open with the name, so prose such as "do not add Lifts-Gate: k" is no release.
+    """
     keys = set()
-    for scope in re.findall(r"(?:^|;|\s)Lifts-Gate: +([^;\n]+)", decision):
-        scope = re.split(r" +[A-Za-z][A-Za-z-]*: +", scope, maxsplit=1)[0]
-        keys.update(token for token in re.split(r"[ ,]+", scope.strip()) if token)
+    for field in decision.split(";"):
+        name, sep, rest = field.strip().partition(":")
+        if sep and name == "Lifts-Gate":
+            keys.update(token for token in re.split(r"[ ,]+", rest.strip()) if token)
     return keys
+
+
+@contextlib.contextmanager
+def _no_snapshot():
+    yield
 
 
 class KindMixin:
@@ -69,31 +81,22 @@ class KindMixin:
         return self._run(principal, "lift_operator_gate", key,
                          lambda now: self._lift_operator_gate(principal, key, decision_id, now))
 
-    def _lift_operator_gate(self, principal, key, decision_id, now):
+    def _lift_operator_gate(self, principal, key, decision_id, now, proof=None):
         """Clear ``operator`` (and so ``waits_on_operator``) once the operator lifted the step.
 
         No edit, ``set_kind`` or owner change can clear the flag.  The router names the
-        decision that lifted the gate: its row must be an OPERATOR row with an
-        affirmative ``Lifts-Gate: <key> ...`` release; a row that only names the key may
-        keep the gate closed and does not count.
-        One ``operator_gate_lifted`` event records the D-id and the actor.
-        A row that merely names the key does not count: it may keep the gate closed,
-        so the row must carry ``Lifts-Gate: <key> ...``.
+        decision that lifted the gate: an OPERATOR row, not superseded by a later row,
+        with a ``Lifts-Gate: <key> ...`` field; a row that only names the key may keep
+        the gate closed and does not count.  The decision is read once, before either
+        lock (``proof`` is that read when a batch made it already); the item and the
+        principal are re-checked under the write.  One ``operator_gate_lifted`` event
+        records the D-id and the actor.
         """
-        from .store_runs import _operator_authority
-
         self._require_role(principal, "router")
-        if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
-            raise Refused("validation", "lift_operator_gate needs the operator decision id (D-n)")
-        item = self._get_or_refuse(key)
-        self._assert_unlocked(item)
-        row = self._operator_gate_row(item, decision_id, now)
-        if not _operator_authority(row):
-            raise Refused("evidence_unverified", f"{decision_id} is not an OPERATOR decision")
-        if item["key"] not in _lifted_keys(row.get("decision", "")):
-            raise Refused("evidence_unverified",
-                          f"{decision_id} has no 'Lifts-Gate: {key}' release")
+        if proof is None:
+            proof = self._lift_proof(key, decision_id, now)
         with self._write():
+            self._check_principal(principal)
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
             if not fresh["operator"]:
@@ -107,14 +110,34 @@ class KindMixin:
         return {"key": key, "operator": False, "waits_on_operator": False,
                 "decision_id": decision_id}
 
-    def _operator_gate_row(self, item, decision_id, now):
+    def _lift_proof(self, key, decision_id, now):
+        """Check the release decision; the one slow read of the decisions file, outside every lock."""
+        from .store_runs import _operator_authority
+
+        if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
+            raise Refused("validation", "lift_operator_gate needs the operator decision id (D-n)")
+        item = self._get_or_refuse(key)
+        self._assert_unlocked(item)
         decisions = self._ctx(item, now).decisions
         fields = getattr(decisions, "fields", None)
+        snapshot = getattr(decisions, "snapshot", None)
         try:
-            row = fields(decision_id) if callable(fields) else None
+            with timing.outside_request_lock():
+                with snapshot() if callable(snapshot) else _no_snapshot():
+                    row = fields(decision_id) if callable(fields) else None
+                    superseded = decision_book(decisions, fresh=True)["superseded"] if row else {}
         except Exception:  # noqa: BLE001 - an unreadable file fails closed
-            row = None
+            row, superseded = None, {}
         if not row:
             raise Refused("evidence_unverified",
                           f"decision {decision_id} is missing, ambiguous or unreadable")
-        return row
+        if not _operator_authority(row):
+            raise Refused("evidence_unverified", f"{decision_id} is not an OPERATOR decision")
+        canonical = f"D-{int(decision_id[2:])}"
+        if canonical in superseded:
+            raise Refused("evidence_unverified",
+                          f"{decision_id} is superseded by {superseded[canonical]}")
+        if item["key"] not in _lifted_keys(row.get("decision", "")):
+            raise Refused("evidence_unverified",
+                          f"{decision_id} has no 'Lifts-Gate: {key}' release")
+        return {"key": key, "decision_id": decision_id}

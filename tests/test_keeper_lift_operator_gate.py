@@ -22,14 +22,18 @@ ROWS = (
     "| D-12 | demo | Gate lifted; Lifts-Gate: demo:OTHER; apply now | OPERATOR | 2026-11-24 |\n"
     "| D-13 | demo | Gate lifted; Lifts-Gate: demo:GATEWAY; apply now | OPERATOR | 2026-11-24 |\n"
     "| D-14 | demo | Keep demo:GATE blocked until the review is done | OPERATOR | 2026-11-24 |\n"
-    "| D-15 | demo | Lifts-Gate: demo:OTHER demo:GATE; Note: both | OPERATOR | 2026-11-24 |\n")
+    "| D-15 | demo | Lifts-Gate: demo:OTHER demo:GATE; Note: both | OPERATOR | 2026-11-24 |\n"
+    "| D-16 | demo | Do not add Lifts-Gate: demo:GATE yet | OPERATOR | 2026-11-24 |\n"
+    "| D-17 | demo | Lifts-Gate: demo:GATE; apply now | OPERATOR | 2026-11-24 |\n"
+    "| D-18 | demo | Supersedes D-17; keep demo:GATE blocked | OPERATOR | 2026-11-25 |\n")
 
 
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
     world.store.create_items(world.p("router"), [
-        defn("GATE", operator=True), defn("FREE"), defn("G", ["GATE", "FREE"], kind="goal")])
+        defn("GATE", operator=True), defn("GATE2", operator=True), defn("FREE"),
+        defn("G", ["GATE", "GATE2", "FREE"], kind="goal")])
     path = tmp_path / "DECISIONS.md"
     path.write_text(HEADER + ROWS, encoding="utf-8")
     world.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(path))
@@ -62,6 +66,8 @@ def test_the_router_clears_the_flags_with_an_operator_decision_and_logs_it(w):
     ("D-11", "evidence_unverified"),      # a router row is no operator answer
     ("D-12", "evidence_unverified"),      # an operator row that names another item
     ("D-13", "evidence_unverified"),      # a longer key is not this key
+    ("D-16", "evidence_unverified"),      # prose that mentions the token is no release field
+    ("D-17", "evidence_unverified"),      # a release a later row supersedes
     ("D-14", "evidence_unverified"),      # an OPERATOR row that names the key but keeps it blocked
     ("D-99", "evidence_unverified"),      # absent from the decisions file
     ("10", "validation"), (None, "validation"), ("", "validation")])
@@ -168,3 +174,39 @@ def test_the_batch_file_op_is_validated_and_sent_to_the_single_route():
                 dict(op, extra=1)):
         with pytest.raises(BatchError):
             validate_op(bad)
+
+
+def test_the_decision_is_read_before_any_lock_once_per_lift_single_and_batch(w, monkeypatch):
+    path = w.store.ctx.decisions._path
+    path.write_text(path.read_text(encoding="utf-8")
+                    + "| D-19 | demo | Lifts-Gate: demo:GATE2 | OPERATOR | 2026-11-24 |\n", encoding="utf-8")
+    seen = []
+    real = w.store._lift_proof
+
+    def watch(*args, **kwargs):
+        seen.append(w.conn.in_transaction)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(w.store, "_lift_proof", watch)
+    w.store.lift_operator_gate(w.p("router"), KEY, "D-10")
+    assert seen == [False]
+    w.store.apply_ops(w.p("router"), [
+        {"op": "lift_operator_gate", "key": "demo:GATE2", "decision_id": "D-19"},
+        {"op": "set_kind", "key": "demo:FREE", "kind": "question"}])
+    assert seen == [False, False]                  # one pre-lock read for the batch's lift, none in the lock
+    assert _flags(w, "demo:GATE2") == (False, False)
+
+
+def test_a_principal_revoked_before_the_write_lifts_nothing(w, monkeypatch):
+    from plangraph.keeper import auth
+    real = w.store._lift_proof
+
+    def proof_then_revoke(*args, **kwargs):
+        out = real(*args, **kwargs)
+        auth.revoke(w.conn, "router")
+        return out
+
+    monkeypatch.setattr(w.store, "_lift_proof", proof_then_revoke)
+    with pytest.raises(Refused) as exc:
+        w.store.lift_operator_gate(w.p("router"), KEY, "D-10")
+    assert exc.value.code == "forbidden" and _flags(w) == (True, True) and _lifted(w) == []
