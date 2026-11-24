@@ -7,6 +7,13 @@ import subprocess
 from types import SimpleNamespace
 import pytest
 
+# The autouse spawnd fixture runs `cargo build -p pg-spawnd` (tests/_spawnd.py build_spawnd,
+# bounded at 1500 s) in the setup of the first test of a shard on a cold target.
+pytestmark = pytest.mark.long_test_deadline(
+    600, reason="A cold runner builds pg-spawnd in the autouse spawnd fixture, which exceeds "
+    "the 120 s default in the setup of the first test of the module on a shard.",
+)
+
 def put(root, path, value):
     target = root / path
     target.parent.mkdir(parents=True, exist_ok=True)
