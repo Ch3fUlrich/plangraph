@@ -1,9 +1,19 @@
-//! The verifier of recorded dispositions: each of Overlap, ParentNotLanded and Target is accepted
-//! only when the facts it names hold.
+//! The verifier of recorded dispositions: each is accepted only when the facts it names hold, and a
+//! part that was ready with no place and no reason is refused.
 use super::select::overlap;
 use super::*;
 
 impl Model {
+    fn descends_from(&self, mut part: PartId, of: PartId) -> bool {
+        while let Some(q) = self.parts[part as usize].spec.parent {
+            if q == of {
+                return true;
+            }
+            part = q;
+        }
+        false
+    }
+
     pub(crate) fn verify_left_out(&self, train: TrainId, part: PartId) -> Result<Outcome, Denied> {
         let t = self.trains.get(train as usize).ok_or(Denied::Phase)?;
         let d = t
@@ -27,11 +37,31 @@ impl Model {
                         && !self.parts[parent as usize].verified
                 }
                 Disposition::Target => t.parts.len() >= self.policy.target as usize,
+                Disposition::Cap => t.parts.len() >= self.policy.cap as usize,
+                Disposition::Conflict => t.conflicted.contains(&part),
+                Disposition::Descendant { of } => {
+                    of != part && !t.parts.contains(&of) && self.descends_from(part, of)
+                }
             };
         if ok {
             Ok(Outcome::Accepted)
         } else {
             Err(Denied::Disposition)
+        }
+    }
+
+    /// Every part that was ready when the train was cut rides, has a reason, or has moved on.
+    pub(crate) fn verify_complete(&self, train: TrainId) -> Result<Outcome, Denied> {
+        let t = self.trains.get(train as usize).ok_or(Denied::Phase)?;
+        let unaccounted = t.ready_at_cut.iter().any(|&p| {
+            self.parts[p as usize].status == Status::Ready
+                && !t.parts.contains(&p)
+                && !t.left_out.iter().any(|l| l.0 == p)
+        });
+        if unaccounted {
+            Err(Denied::Disposition)
+        } else {
+            Ok(Outcome::Accepted)
         }
     }
 }
