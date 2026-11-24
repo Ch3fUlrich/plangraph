@@ -247,7 +247,9 @@ def reset_epoch(text, now):
             hour, minute, meridiem = found.groups()
             at = datetime.fromtimestamp(now).replace(hour=_hour(int(hour), meridiem), minute=int(minute),
                                                      second=0, microsecond=0)
-            return (at if at.timestamp() > now else at + timedelta(days=1)).timestamp()
+            # The message names the minute: a time up to two minutes back has just elapsed, a
+            # later one is tomorrow's.
+            return (at if at.timestamp() > now - 120 else at + timedelta(days=1)).timestamp()
     except (KeyError, ValueError, OverflowError, OSError):
         pass
     return None
