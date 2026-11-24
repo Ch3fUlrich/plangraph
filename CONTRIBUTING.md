@@ -224,9 +224,9 @@ output for paths in `RUST_INPUTS`, including documentation under `docs/schemas/`
 The Claude writer launcher embeds `skills/batch-writer/SKILL.md`, so edits to that
 skill also select Rust CI. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
-inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
-and environment template they read. The merge-close test reads both the
-`pg-reconcile-merged.service` and `pg-reconcile-merged.timer` units.
+inputs belong in `RUST_INPUTS`. `deploy/manifest.toml`, `deploy/exceptions.toml` and
+every `deploy/systemd/*.service` and `*.timer` are entries (the deploy-manifest test
+reads them all); register each environment template a test reads.
 Add an explicit test case in
 `tests/test_ci_select_rust_inputs.py` for inputs the scan misses, such as unit
 filenames joined to a deployment directory by a helper. `rust/pg-spawnd/` and
