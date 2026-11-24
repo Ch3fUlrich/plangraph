@@ -12,6 +12,23 @@ from test_keeper_merge_close_auto import auto, env, git  # noqa: F401 - env is a
 from test_keeper_close_merged import unseated_w, w  # noqa: F401 - the manual-close world fixtures
 
 
+@pytest.fixture(autouse=True)
+def _live_evidence_rule_on(request):
+    """The keeper test worlds switch the D-6790 close rule off; this file is where it is tested.
+
+    Every item the worlds seed gets the 'no deploy needed' line, so a test that wants an item to be
+    held says so by replacing its note."""
+    for name in ("env", "w"):
+        if name in request.fixturenames:
+            world = request.getfixturevalue(name)
+            world.store.require_live_evidence = True
+            world.conn.execute(
+                "UPDATE items SET note = CASE WHEN note IS NULL OR note = '' THEN ? ELSE ? || char(10) || note END"
+                " WHERE state NOT IN ('done','cancelled')",
+                ("no deploy needed: test fixture",) * 2)
+            world.conn.commit()
+
+
 def _land_with_unit(root, name="feat", pr=41, tagged=True):
     """A PR whose tagged commit edits a note and whose untagged follow-up adds a unit."""
     git(root, "checkout", "-q", "-b", name, "main")
@@ -59,7 +76,7 @@ def test_the_manual_close_counts_the_merge_a_merge_repo_note_names(w, monkeypatc
     head = _git(repo, "rev-parse", "main^2")
     w.decision_path.write_text(
         HEADER + f"| D-5504 | demo | GO #166 demo:A; GO-HEAD {head} | ROUTER | 2026-11-05 |\n")
-    w.store.edit_definition(w.p("router"), "demo:A", {"note": f"Merge-Repo: other {landed}"})
+    w.store.edit_definition(w.p("router"), "demo:A", {"note": f"no deploy needed: test fixture\nMerge-Repo: other {landed}"})
     out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
     assert out["closed"] is False and out["reason"] == "deploy_pending"
     assert w.store._item("demo:A")["state"] == "in_review"
@@ -194,7 +211,7 @@ def test_a_squash_merged_hosted_pr_is_scanned_at_its_landed_commit_not_its_topic
 
     monkeypatch.setattr(subprocess, "run", hosted)
     router = w.p("router")
-    w.store.edit_definition(router, "demo:A", {"note": "Merge-Repo: other #166"})
+    w.store.edit_definition(router, "demo:A", {"note": "no deploy needed: test fixture\nMerge-Repo: other #166"})
     out = w.store.close_merged(router, "demo:A", "D-5504", ["google"])
     assert out["closed"] is False and out["reason"] == "deploy_pending"
     assert out["missing"] == ["(hosts unnamed)"]
@@ -541,7 +558,7 @@ def test_direct_pr_deploy_gate_ignores_main_sync_and_other_keys(
         empty = tmp_path / "primary"
         merged_repo(empty, [])
         env.store.ctx["git"] = GitAdapter({"demo": str(empty), "other": str(root)})
-        env.store.edit_definition(env.p("router"), "demo:A", {"note": "Merge-Repo: other"})
+        env.store.edit_definition(env.p("router"), "demo:A", {"note": "no deploy needed: test fixture\nMerge-Repo: other"})
 
     preview = env.store.close_merged(env.p("router"), "demo:A", "D-5504", ["google"],
                                      from_open=True, require_seats=False)
@@ -607,7 +624,7 @@ def test_train_part_merge_commit_own_unit_counts_for_the_part_key(env):  # noqa:
 def test_merge_close_reports_the_age_of_unproven_unit_and_live_work(env):
     from plangraph.keeper.evidence_types import as_epoch
 
-    env.store.edit_definition(env.p("router"), "demo:A", {"note": "Deploy-Hosts: fixture"})
+    env.store.edit_definition(env.p("router"), "demo:A", {"note": "no deploy needed: test fixture\nDeploy-Hosts: fixture"})
     env.store.edit_definition(env.p("router"), "demo:B", {
         "done_criteria": "Live: merge-close finishes under 120 seconds.",
         "criteria_reason": "Require live timing evidence",
@@ -713,3 +730,60 @@ def test_a_passing_review_cannot_close_an_item_with_a_live_clause_and_no_live_ev
     assert env.store._item(key)["state"] == "in_review"
     assert env.store.add_evidence_router(env.p("router"), key, "deploy", LIVE_PROOF)["verified"]
     assert env.store.verdict(env.p("reviewer"), key, True, "passed")["state"] == "done"
+
+
+def _edit_text(env, key, **fields):
+    env.store.edit_definition(env.p("router"), key, fields)
+
+
+def _verdict_refusal(env, key):
+    from plangraph.keeper.store import Refused
+
+    with pytest.raises(Refused) as refused:
+        env.store.verdict(env.p("reviewer"), key, True, "passed")
+    assert refused.value.code == "evidence_unverified"
+    assert env.store._item(key)["state"] == "in_review"
+    return refused.value.msg
+
+
+def test_any_item_needs_live_evidence_or_a_no_deploy_reason_to_close(env):  # noqa: F811
+    """D-6790: the done condition includes 'went into production', for every item."""
+    from keeper_util import to_in_review
+    from plangraph.keeper.evidence import VERIFIERS
+
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    for key, note in (("demo:B", "plain note"), ("demo:C", "no deploy needed:"), ("demo:P", "no deploy needed:   ")):
+        _edit_text(env, key, note=note)
+        to_in_review(env, key)
+    assert "live_evidence_missing" in _verdict_refusal(env, "demo:B")
+    assert "no_deploy_reason_empty" in _verdict_refusal(env, "demo:C")
+    assert "no_deploy_reason_empty" in _verdict_refusal(env, "demo:P")
+    assert env.store.add_evidence_router(env.p("router"), "demo:B", "deploy", LIVE_PROOF)["verified"]
+    assert env.store.verdict(env.p("reviewer"), "demo:B", True, "passed")["state"] == "done"
+
+
+def test_a_recorded_no_deploy_reason_lets_an_item_close(env):  # noqa: F811
+    from keeper_util import to_in_review
+
+    key = "demo:B"
+    _edit_text(env, key, note="Reviewed.\nNo deploy needed: docs only")
+    to_in_review(env, key)
+    assert env.store.verdict(env.p("reviewer"), key, True, "passed")["state"] == "done"
+
+
+def test_a_no_deploy_reason_does_not_excuse_an_explicit_live_clause(env):  # noqa: F811
+    from keeper_util import to_in_review
+
+    key = "demo:B"
+    _edit_text(env, key, **LIVE_CLAUSE, note="no deploy needed: docs only")
+    to_in_review(env, key)
+    assert "live_evidence_missing" in _verdict_refusal(env, key)
+
+
+def test_the_automatic_close_holds_a_merge_with_neither_and_closes_one_with_a_reason(env):  # noqa: F811
+    _edit_text(env, "demo:A", note="plain note")
+    env.repo.land("docs", "Plan-Item: demo:A", 42)
+    held = auto(env, require_seats=False)
+    assert held["closed"] == [] and "live_evidence_missing" in held["listed"][0]["reason"]
+    _edit_text(env, "demo:A", note="no deploy needed: docs only")
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]

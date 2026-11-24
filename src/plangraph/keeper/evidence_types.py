@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 __all__ = ["Result", "Context", "as_epoch", "valid_commit_ref", "DEFAULT_SKEW_S",
-           "has_live_clause", "live_evidence_missing"]
+           "has_live_clause", "live_evidence_missing",
+           "live_evidence_status", "no_deploy_declaration"]
 
 # A commit reference is a full lowercase hex sha: 40 for sha1, 64 for sha256.
 # Abbreviations, refs ("main") and anything option-like are rejected so a sha
@@ -110,13 +111,35 @@ def has_live_clause(item: dict) -> bool:
     return bool(_LIVE_CLAUSE_RE.search(item.get("done_criteria") or ""))
 
 
-def live_evidence_missing(item: dict, rows, since: float | None = None) -> bool:
-    """A ``Live:`` clause is met only by a verified ``deploy`` row of the item's current epoch.
+_NO_DEPLOY_RE = re.compile(r"(?im)^[ \t]*no deploy needed:[ \t]*(.*?)[ \t]*$")
 
-    ``since`` (epoch seconds) is the last merge: the row must be at or after it, so evidence of an older
-    deployment never proves newer work. Items without the clause are never missing.
+
+def no_deploy_declaration(item: dict) -> str | None:
+    """The reason of a ``no deploy needed: <reason>`` line in the description or note; ``""`` when the
+    line is there with an empty reason; ``None`` when the item has no such line."""
+    text = f"{item.get('description') or ''}\n{item.get('note') or ''}"
+    reasons = [m.group(1) for m in _NO_DEPLOY_RE.finditer(text)]
+    return next((r for r in reasons if r), "" if reasons else None)
+
+
+def live_evidence_status(item: dict, rows, since: float | None = None) -> str | None:
+    """Why an item may not close yet, or ``None``: every item needs a verified ``deploy`` row of its current
+    epoch (probe, deploy record: the item went into production) or a ``no deploy needed: <reason>`` line.
+
+    An explicit ``Live:`` clause is met by the row only; the declaration does not excuse it. ``since``
+    (epoch seconds) is the last merge: the row must be at or after it, so evidence of an older deployment
+    never proves newer work. Codes: ``live_evidence_missing``, ``no_deploy_reason_empty``.
     """
-    if not has_live_clause(item):
-        return False
-    return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
-                   and (since is None or (as_epoch(row["at"]) or 0) >= since) for row in rows)
+    if any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
+           and (since is None or (as_epoch(row["at"]) or 0) >= since) for row in rows):
+        return None
+    if has_live_clause(item):
+        return "live_evidence_missing"
+    declared = no_deploy_declaration(item)
+    if declared:
+        return None
+    return "no_deploy_reason_empty" if declared == "" else "live_evidence_missing"
+
+
+def live_evidence_missing(item: dict, rows, since: float | None = None) -> bool:
+    return live_evidence_status(item, rows, since) is not None

@@ -15,3 +15,5 @@ router GO close hold it as `deploy_pending: live_evidence_missing`, and a passin
 is refused with `evidence_unverified: live_evidence_missing`.
 `plangraph resume-digest` ends with a `deploy-not-live N oldest ...` line from the deploy-status ledgers and
 `plangraph deploy-status --summary` prints it alone for the operator's daily line.
+Every item, not only one with a `Live:` clause, now needs a verified deploy evidence row or a
+`no deploy needed: <reason>` line to close (D-6790); an empty reason is refused as `no_deploy_reason_empty`.

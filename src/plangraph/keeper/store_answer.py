@@ -75,6 +75,7 @@ class AnswerMixin:
             if int(fresh["epoch"]) != int(item["epoch"]):
                 raise Refused("conflict", f"{key} changed epoch under the transaction")
             self._check_answer_decision(key, decision_id, fresh, now)
+            self._require_live_evidence(fresh)
             # The cache row goes first, exactly like ``close_on_decision``: the
             # event below is what locks the key.
             cursor = self.conn.execute(

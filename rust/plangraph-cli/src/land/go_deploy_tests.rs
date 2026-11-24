@@ -5,7 +5,6 @@ use super::go_verify::deploy_refusals;
 use super::go_verify_tests::green;
 use crate::deploy_manifest::ledger::{self, Ledger};
 use std::path::Path;
-use std::process::Command;
 
 fn now() -> i64 {
     std::time::SystemTime::now()
@@ -40,7 +39,7 @@ fn go_verify(dir: &Path) -> Result<Vec<String>, String> {
     ]
     .map(String::from)
     .to_vec();
-    run_inner(dir, &args, &|| Command::new("python3"))
+    run_inner(dir, &args, &|| crate::base_fresh::python_command(None))
 }
 
 #[test]

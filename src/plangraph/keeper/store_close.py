@@ -45,7 +45,7 @@ from . import context_sources, timing
 from .errors import Refused
 from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
-from .evidence_types import live_evidence_missing, valid_commit_ref
+from .evidence_types import live_evidence_status, valid_commit_ref
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
@@ -516,12 +516,19 @@ class CloseMixin:
         except Exception:  # noqa: BLE001 - an unreadable diff cannot clear the deploy gate
             raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
 
+    def _live_status(self, item, since=None):
+        """The code that holds ``item`` from closing (``live_evidence_status``), or ``None``."""
+        if not self.require_live_evidence:
+            return None
+        return live_evidence_status(item, self._evidence(item["key"]), since)
+
     def _require_live_evidence(self, item):
-        """Every close path ends here or in ``_pass``: a ``Live:`` clause needs a verified deploy row."""
-        if live_evidence_missing(item, self._evidence(item["key"])):
+        """Every close path ends here (or in ``_pass``): the item went into production or says why it need not."""
+        code = self._live_status(item)
+        if code:
             raise Refused("evidence_unverified",
-                          f"live_evidence_missing: {item['key']} has a Live: clause and no verified "
-                          "deploy evidence row of its current epoch")
+                          f"{code}: {item['key']} needs a verified deploy evidence row of its current epoch"
+                          " or a 'no deploy needed: <reason>' line (D-6790)")
 
     def _deploy_pending(self, item, changes, token):
         """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for."""

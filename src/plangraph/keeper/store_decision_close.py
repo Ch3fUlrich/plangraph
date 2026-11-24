@@ -104,6 +104,7 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
             raise Refused("bad_state", "item kind/tier cannot close on a decision; "
                           "decision-only items must declare evidence_kinds: [decision] "
                           "with review_tier='none'")
+        store._require_live_evidence(fresh)
         cursor = store.conn.execute(
             "UPDATE items SET state='done', reviewer=?, updated_at=? WHERE key=? AND epoch=?",
             (principal.name, store._iso(now), key, fresh["epoch"]))

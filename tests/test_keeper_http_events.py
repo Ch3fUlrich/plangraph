@@ -66,7 +66,7 @@ def write(kp, verb, who, body):
 def make_plan(kp, n=1):
     tag = uuid.uuid4().hex[:7].upper()
     lanes = [{"project": "demo", "id": f"L{i}-{tag}", "kind": "lane", "title": f"lane {i} {tag}",
-              "description": "a lane", "done_criteria": "criteria",
+              "description": "a lane", "done_criteria": "criteria", "note": "no deploy needed: fixture",
               "evidence_kinds": ["any"], "depends_on": []} for i in range(n)]
     goal = {"project": "demo", "id": f"G-{tag}", "kind": "goal", "title": f"goal {tag}",
             "description": "a goal", "depends_on": [i["id"] for i in lanes]}
