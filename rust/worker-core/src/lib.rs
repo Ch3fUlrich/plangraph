@@ -100,6 +100,7 @@ pub mod sandbox_env;
 mod sandbox_push;
 pub mod scope;
 pub mod seat_pool;
+pub mod shadow_follow;
 pub mod slots;
 pub mod stall;
 pub mod turn_budget;

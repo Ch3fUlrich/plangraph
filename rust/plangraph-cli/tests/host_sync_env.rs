@@ -300,3 +300,66 @@ fn run_shadow_once(home: &Path, role: &str, unit: &str, environment: &str) {
     assert!(output.status.success(), "{output:?}");
     assert!(state.join(role).join("digest-1.txt").is_file());
 }
+
+#[test]
+fn state_shadow_generates_role_config_from_seed_and_launch_record_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let bin = home.join(".local/bin");
+    fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink("/bin/true", bin.join("turn-budget-hook")).unwrap();
+    let settings = [home.join("plan-order.json"), home.join("routing.json")];
+    for path in &settings {
+        fs::write(path, "{}").unwrap();
+    }
+    let config = home.join(".config/plangraph/state-shadow");
+    fs::create_dir_all(&config).unwrap();
+    let run = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_host-sync"))
+            .env_clear()
+            .env("HOME", home)
+            .args(["--install-env", "state-shadow"])
+            .args(&settings)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    // Without a seed and a launch record nothing is invented.
+    assert!(run().contains("NEEDS"));
+    assert!(!config.join("routing.json").exists());
+    let projects = home.join(".claude/projects/-moved");
+    fs::create_dir_all(&projects).unwrap();
+    fs::write(projects.join("sid-7.jsonl"), "").unwrap();
+    let launch = home.join(".local/state/routing/launch");
+    fs::create_dir_all(&launch).unwrap();
+    fs::write(
+        launch.join("routing.json"),
+        r#"{"session_id":"sid-7","cwd":"/work/tree"}"#,
+    )
+    .unwrap();
+    fs::write(
+        config.join("routing.seed.json"),
+        r#"{"principal":"routing-reader","inbox":"/in","data_repo":"/d","decision_base":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","github_repo":"example/demo","github_since":"2026-01-01T00:00:00Z"}"#,
+    )
+    .unwrap();
+    run();
+    let made: serde_json::Value =
+        serde_json::from_slice(&fs::read(config.join("routing.json")).unwrap()).unwrap();
+    assert_eq!(made["role"], "routing");
+    assert_eq!(made["principal"], "routing-reader");
+    assert_eq!(made["session_id"], "sid-7");
+    assert_eq!(
+        made["transcript"],
+        projects.join("sid-7.jsonl").to_str().unwrap()
+    );
+    assert_eq!(made["quota"], config.join("quota.json").to_str().unwrap());
+    assert!(!config.join("plan-order.json").exists());
+    // A second install keeps the file the launcher maintains.
+    fs::write(config.join("routing.json"), "{\"kept\":true}").unwrap();
+    assert!(run().contains("SAME"));
+    assert_eq!(
+        fs::read_to_string(config.join("routing.json")).unwrap(),
+        "{\"kept\":true}"
+    );
+}

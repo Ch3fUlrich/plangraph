@@ -15,15 +15,15 @@ the collector owner.
 | `principal` | Keeper principal name authenticated by `PG_TOKEN_FILE` |
 | `directory` | Private parent directory for role event files and digests |
 | `inbox` | The role's own newline-terminated, append-only inbox |
-| `transcript` | Path to the role's active Claude JSONL transcript |
-| `session_id` | Session UUID, matching the transcript filename stem |
+| `transcript` | Path to the role's active Claude JSONL transcript (written by the launcher) |
+| `session_id` | Session UUID, matching the transcript filename stem (written by the launcher) |
 | `data_repo` | Local data checkout with a refreshed `origin/main` |
 | `decision_base` | Initial full commit ID on the history of data `origin/main` |
 | `github_repo` | Authorized repository in owner/repo format |
 | `github_since` | Initial lower bound for main runs, as an RFC 3339 instant |
 | `pull_requests` | Optional list of authorized held or train PR numbers |
 | `item_keys` | Optional role-authorized keys for decision rows |
-| `quota` | Role-visible JSON file with live quota levels |
+| `quota` | JSON file the collector refreshes each scan with remaining percent per provider; older than 10 minutes fails the source |
 | `lease_margin_seconds` | Optional lead time for lease warnings, default 600 |
 
 The service reads GitHub via `gh` and spawner host history via
@@ -31,8 +31,7 @@ The service reads GitHub via `gh` and spawner host history via
 legacy spawner and watchdog environments before starting shadow observation.
 Set `PLANGRAPH_LIFECYCLE_PUBLISHER` to the installed `pg-spawnd` binary. The initial decision and GitHub
 positions should cover the shadow observation window. The source checkout
-synchronizer refreshes `origin/main`. Configure the next transcript path on
-session replacement. Decision rows are included when they address the role or
+synchronizer refreshes `origin/main`. Decision rows are included when they address the role or
 reference one of its explicitly scoped item keys. Run transitions are included
 when the run's role matches the collector or its item belongs to a project
 authorized by the current keeper identity. A router identity covers every run.
@@ -59,3 +58,27 @@ from `~/.config/plangraph/plangraph.env` and the role-specific configuration
 from `state-shadow/ROLE.env`. The role defaults use `state-shadow/ROLE.json`
 and `state-shadow/ROLE.token`. Supply the authorized sources and token file
 for each role before starting the instances.
+
+## Following session recycles
+
+The role's session changes at every handoff and its worktree, hence its
+transcript project directory, can move. Three parts keep the collector on the
+live session:
+
+- Every `fleet-launch` of a role with `state-shadow/ROLE.env` rewrites
+  `state-shadow/ROLE.json` with the new `session_id` and the transcript found
+  under any `~/.claude/projects/*` directory (else the one derived from the
+  launch directory). Other fields stay as the operator set them.
+- The same launch writes the role's own settings file
+  `launch-settings/role-ROLE.json`: the lean profile, the caps and the
+  measure-only hook. Roles with equal caps never share it, and the hook is
+  present again after every relaunch.
+- The collector re-reads `session_id` and `transcript` at each scan (a missing
+  transcript is looked up by session id; authorization fields are read once)
+  and refreshes the `quota` file from the live quota snapshots, so the source
+  stays live.
+
+`host-sync --install-env state-shadow` also creates a missing `ROLE.json` from
+`state-shadow/ROLE.seed.json` (principal, inbox, data_repo, decision_base,
+github_repo, github_since and the optional lists) and the role's launch record;
+without both it prints `NEEDS ...` and writes nothing.

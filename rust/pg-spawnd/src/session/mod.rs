@@ -379,6 +379,7 @@ fn local(
     )?;
     if let Some(sid) = sid {
         storage::setup(paths, &spec, admission.caps.caps, &sid, &name)?;
+        settings::follow_collector(paths, &args.role, &sid, &args.cwd);
         writeln!(out, "fleet-launch: started {sid}")?;
     } else {
         if spec["oom_protect"] == true || spec["ctx_guard"].is_object() {

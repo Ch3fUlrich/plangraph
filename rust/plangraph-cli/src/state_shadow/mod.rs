@@ -2,6 +2,7 @@
 mod github;
 mod journal;
 mod local;
+mod quota_file;
 mod sources;
 
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,7 @@ const SOURCES: &[&str] = &[
     "quota",
 ];
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
     role: String,
@@ -165,6 +166,61 @@ fn scan(
     Ok(())
 }
 
+fn load_config(path: &std::path::Path, role: &str) -> Result<Config> {
+    let config: Config = serde_json::from_slice(
+        &std::fs::read(path).map_err(|_| "shadow configuration unavailable")?,
+    )
+    .map_err(|_| "invalid shadow configuration")?;
+    if config.role != role
+        || config.principal.is_empty()
+        || !pg_worker_core::turn_budget::safe_name(&config.session_id)
+        || config.transcript.file_stem().and_then(|stem| stem.to_str()) != Some(&config.session_id)
+        || config.lease_margin_seconds <= 0
+        || config.lease_margin_seconds > 86400
+        || !github::valid_repo(&config.github_repo)
+        || chrono::DateTime::parse_from_rfc3339(&config.github_since).is_err()
+        || !local::sha(&config.decision_base)
+    {
+        return Err("shadow role or source configuration invalid".into());
+    }
+    Ok(config)
+}
+
+/// The authorized configuration with the session and transcript the launcher wrote since the last
+/// scan. Everything else stays as authorized at start; a transcript that is not at the written
+/// path is looked up under any Claude project directory. `None` when nothing changed or the new
+/// file is invalid, so a bad rewrite never stops the collector.
+fn follow_session(
+    config: &Config,
+    path: &std::path::Path,
+    home: &std::path::Path,
+) -> Option<Config> {
+    let fresh = load_config(path, &config.role).ok()?;
+    let transcript = if fresh.transcript.is_file() {
+        fresh.transcript
+    } else {
+        pg_worker_core::shadow_follow::find_transcript(home, &fresh.session_id)
+            .unwrap_or(fresh.transcript)
+    };
+    (fresh.session_id != config.session_id || transcript != config.transcript).then(|| Config {
+        session_id: fresh.session_id,
+        transcript,
+        ..config.clone()
+    })
+}
+
+/// Rewrite the quota file from the live snapshots; a failure leaves the file to go stale, which
+/// the quota source reports.
+fn refresh_quota(config: &Config, env: &Env, home: &std::path::Path) {
+    let repo = env
+        .get("PLANGRAPH_REPO")
+        .map_or_else(|| home.join("code/plangraph"), PathBuf::from);
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = quota_file::refresh(&config.quota, env, &repo, now) {
+        eprintln!("state: quota refresh: {error}");
+    }
+}
+
 pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
     let [wait, role_flag, role, rest @ ..] = args else {
         return Err("usage: plangraph state wait --role ROLE [--once]".into());
@@ -183,22 +239,7 @@ pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
             home.join(".config/plangraph/state-shadow")
                 .join(format!("{role}.json"))
         });
-    let config: Config = serde_json::from_slice(
-        &std::fs::read(&config_path).map_err(|_| "shadow configuration unavailable")?,
-    )
-    .map_err(|_| "invalid shadow configuration")?;
-    if config.role != *role
-        || config.principal.is_empty()
-        || !pg_worker_core::turn_budget::safe_name(&config.session_id)
-        || config.transcript.file_stem().and_then(|stem| stem.to_str()) != Some(&config.session_id)
-        || config.lease_margin_seconds <= 0
-        || config.lease_margin_seconds > 86400
-        || !github::valid_repo(&config.github_repo)
-        || chrono::DateTime::parse_from_rfc3339(&config.github_since).is_err()
-        || !local::sha(&config.decision_base)
-    {
-        return Err("shadow role or source configuration invalid".into());
-    }
+    let config = load_config(&config_path, role)?;
     let keeper = Arc::new(crate::keeper_events::Client::new(env)?);
     sources::authorize(&config, &keeper)?;
     let directory = config.directory.join(role);
@@ -208,10 +249,14 @@ pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
         .map_err(|_| "shadow collector already active or directory unavailable")?;
     let mut state =
         journal::load(&directory).map_err(|error| format!("shadow journal: {error}"))?;
-    let config = Arc::new(config);
+    let mut config = Arc::new(config);
     let mut pending = SourceReads::new();
     loop {
         let started = Instant::now();
+        if let Some(followed) = follow_session(&config, &config_path, home) {
+            config = Arc::new(followed);
+        }
+        refresh_quota(&config, env, home);
         scan(&config, &keeper, &mut state, &directory, &mut pending)?;
         if rest == ["--once"] {
             return Ok(());
@@ -231,4 +276,43 @@ fn fixture(root: &std::path::Path) -> Config {
         "lease_margin_seconds":600
     }))
     .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rewritten_role_config_moves_the_collector_to_the_new_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = fixture(dir.path());
+        let path = dir.path().join("routing.json");
+        let write = |session: &str, transcript: &std::path::Path| {
+            let mut doc = json!({
+                "role":"routing", "principal":"routing-reader", "directory":dir.path(),
+                "inbox":dir.path().join("inbox"), "transcript":transcript, "session_id":session,
+                "data_repo":dir.path(), "decision_base":"a".repeat(40),
+                "github_repo":"example/demo", "github_since":"2026-01-01T00:00:00Z",
+                "quota":dir.path().join("quota.json"), "item_keys":["demo:A"],
+                "lease_margin_seconds":600
+            });
+            doc["principal"] = json!("other-principal-after-start");
+            std::fs::write(&path, doc.to_string()).unwrap();
+        };
+        write("session", &dir.path().join("session.jsonl"));
+        assert!(follow_session(&old, &path, dir.path()).is_none());
+        let moved = dir.path().join(".claude/projects/-elsewhere");
+        std::fs::create_dir_all(&moved).unwrap();
+        std::fs::write(moved.join("next-2.jsonl"), "").unwrap();
+        write("next-2", &dir.path().join("gone/next-2.jsonl"));
+        let followed = follow_session(&old, &path, dir.path()).unwrap();
+        assert_eq!(followed.session_id, "next-2");
+        assert_eq!(followed.transcript, moved.join("next-2.jsonl"));
+        assert_eq!(
+            followed.principal, "routing-reader",
+            "authorization is not re-read"
+        );
+        write("../bad", &dir.path().join("x/../bad.jsonl"));
+        assert!(follow_session(&old, &path, dir.path()).is_none());
+    }
 }

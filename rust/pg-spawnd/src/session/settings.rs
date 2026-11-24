@@ -51,6 +51,7 @@ pub(super) fn prepare(
     let doc = load(&lean);
     let handoff = cap.handoff.to_string();
     let hard = cap.hard.to_string();
+    let shadow = has_collector(paths, role);
     let pinned = doc.as_ref().map_or(true, |doc| {
         let env = &doc["env"];
         env[HANDOFF] == handoff
@@ -58,7 +59,7 @@ pub(super) fn prepare(
             && env[WINDOW] == compact
             && env[IDLE] == compact
     });
-    if needed <= base && pinned {
+    if needed <= base && pinned && !shadow {
         return Ok(Settings {
             path: lean,
             compact,
@@ -70,10 +71,14 @@ pub(super) fn prepare(
     } else {
         compact
     };
-    let path = paths
-        .state
-        .join("launch-settings")
-        .join(format!("caps-{handoff}-{hard}.json"));
+    // A role with a collector gets its own file, rewritten at every launch, so
+    // its hook neither leaks to roles with the same caps nor is lost on recycle.
+    let name = if shadow {
+        format!("role-{role}.json")
+    } else {
+        format!("caps-{handoff}-{hard}.json")
+    };
+    let path = paths.state.join("launch-settings").join(name);
     if write {
         let mut doc = doc?;
         if !doc.is_object() {
@@ -98,6 +103,10 @@ pub(super) fn prepare(
         ] {
             env.insert(key.into(), json!(value));
         }
+        if shadow {
+            pg_worker_core::shadow_follow::register_measure_hook(&mut doc)
+                .map_err(|e| e.to_string())?;
+        }
         let parent = path.parent().unwrap();
         fs::create_dir_all(parent).map_err(|e| io_text(&e, parent))?;
         atomic_json(&path, &doc, &format!(".{role}-")).map_err(|e| io_text(&e, &path))?;
@@ -107,6 +116,37 @@ pub(super) fn prepare(
         compact,
         generated: true,
     })
+}
+
+fn collector_config(paths: &Paths, role: &str) -> PathBuf {
+    paths
+        .home
+        .join(".config/plangraph/state-shadow")
+        .join(format!("{role}.json"))
+}
+
+/// A role has a state-shadow collector once `host-sync --install-env state-shadow` wrote its env file.
+fn has_collector(paths: &Paths, role: &str) -> bool {
+    pg_worker_core::turn_budget::safe_name(role)
+        && collector_config(paths, role)
+            .with_extension("env")
+            .is_file()
+}
+
+/// Point the role's collector at the session just launched, so it reads the new transcript.
+pub(super) fn follow_collector(paths: &Paths, role: &str, sid: &str, cwd: &str) {
+    if !has_collector(paths, role) {
+        return;
+    }
+    let config = collector_config(paths, role);
+    if let Err(error) =
+        pg_worker_core::shadow_follow::follow_session(&config, &paths.home, sid, Path::new(cwd))
+    {
+        eprintln!(
+            "fleet-launch: warning: shadow config {} not updated: {error}",
+            config.display()
+        );
+    }
 }
 
 fn load(path: &Path) -> Result<Value, String> {

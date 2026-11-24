@@ -103,6 +103,28 @@ pub(crate) fn remaining_for(rows: &Value, target: &str, now: i64, max_age: i64) 
         .reduce(f64::max)
 }
 
+/// Remaining percent of every provider in the snapshot rows (freshest account of each).
+pub(crate) fn remaining_by_provider(rows: &Value, now: i64, max_age: i64) -> BTreeMap<String, f64> {
+    let names: BTreeSet<&str> = rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row["provider"].as_str())
+        .map(|name| name.split(':').next().unwrap_or(name))
+        .collect();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            remaining_for(rows, name, now, max_age).map(|left| (name.to_owned(), left))
+        })
+        .collect()
+}
+
+/// The live snapshot rows of the quota store, read through the repository's adapter.
+pub(crate) fn live_snapshots(env: &Env, repo: &std::path::Path) -> Result<Value, String> {
+    quota_snapshots(env, repo)
+}
+
 /// Print the most recent available observation for each provider, account and window.
 pub fn run_status(env: &Env, args: &[String]) -> i32 {
     let mut effective = env.clone();

@@ -168,8 +168,17 @@ pub(super) fn decisions(config: &Config, cursor: Value, deadline: Instant) -> Re
 
 pub(super) fn quota(config: &Config, cursor: Value) -> Result<Observation> {
     let mut bytes = Vec::new();
-    open_regular(&config.quota)?
-        .take(CAP + 1)
+    let file = open_regular(&config.quota)?;
+    // A placeholder or a stopped writer must fail the source, not report old levels as live.
+    let age = file
+        .metadata()
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok());
+    if age.is_none_or(|age| age.as_secs() > super::quota_file::MAX_AGE_SECONDS) {
+        return Err("quota status is stale".into());
+    }
+    file.take(CAP + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "cannot read quota status")?;
     if bytes.len() as u64 > CAP {
@@ -182,6 +191,25 @@ pub(super) fn quota(config: &Config, cursor: Value) -> Result<Observation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stale_quota_file_fails_the_source_and_a_fresh_one_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = super::super::fixture(dir.path());
+        fs::write(&config.quota, "{}").unwrap();
+        assert!(quota(&config, Value::Null).is_ok());
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        File::options()
+            .write(true)
+            .open(&config.quota)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(
+            quota(&config, Value::Null).err().as_deref(),
+            Some("quota status is stale")
+        );
+    }
 
     #[test]
     fn observes_scoped_go_from_data_commits_without_a_message() {

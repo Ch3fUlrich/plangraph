@@ -28,6 +28,9 @@ mod restart;
 #[path = "fleet_launch/sandbox.rs"]
 mod sandbox;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/shadow.rs"]
+mod shadow;
+#[cfg(target_os = "linux")]
 mod spawn_attempt_delivery;
 #[cfg(target_os = "linux")]
 #[path = "fleet_launch/watchdog.rs"]
@@ -88,6 +91,7 @@ fn check(launcher: &sandbox::Launcher) {
         restart::check(launcher);
         records::check_router_prompt(launcher);
         records::check_batch_prompt(launcher);
+        shadow::check(launcher);
     }
 }
 
