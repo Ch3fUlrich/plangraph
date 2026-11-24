@@ -353,3 +353,33 @@ fn status_writes_the_ledger_file_the_go_check_reads() {
             && !saved.not_live_since.contains_key("binary:p/tool")
     );
 }
+
+#[test]
+fn the_digest_line_counts_not_live_entries_across_hosts_and_names_the_oldest() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = 100 * 3600;
+    assert!(
+        report::digest_line(dir.path(), now).contains("unknown"),
+        "no ledger is not zero"
+    );
+    let mut a = Ledger {
+        written_at: now,
+        ..Ledger::default()
+    };
+    a.not_live_since
+        .insert("unit:pg-feeder".into(), now - 30 * 3600);
+    a.not_live_since
+        .insert("unit:pg-throughput".into(), now - 2 * 3600);
+    ledger::save(&dir.path().join("host-a.json"), &a).unwrap();
+    let mut b = Ledger {
+        written_at: now,
+        ..Ledger::default()
+    };
+    b.not_live_since
+        .insert("binary:p/tool".into(), now - 50 * 3600);
+    ledger::save(&dir.path().join("host-b.json"), &b).unwrap();
+    assert_eq!(
+        report::digest_line(dir.path(), now),
+        "deploy-not-live 3 oldest host-b:binary:p/tool 50h (2 hosts reporting)"
+    );
+}

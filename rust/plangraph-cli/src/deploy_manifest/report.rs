@@ -122,6 +122,60 @@ pub fn status(
     Ok(lines(&entries, &next, now))
 }
 
+fn xdg(home: &Path, key: &str, rel: &str) -> PathBuf {
+    std::env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| home.join(rel), PathBuf::from)
+}
+
+/// `$XDG_STATE_HOME/plangraph`, where the release stamps and the ledgers live.
+pub fn state_dir(home: &Path) -> PathBuf {
+    xdg(home, "XDG_STATE_HOME", ".local/state").join("plangraph")
+}
+
+/// One line for a digest: how many entries are not live on the hosts that reported, and the oldest.
+/// Read from the ledgers only (no systemd), so a digest never blocks on a host.
+pub fn digest_line(ledger_dir: &Path, now: i64) -> String {
+    let (ledgers, broken) = super::guard::read_ledgers(ledger_dir);
+    if ledgers.is_empty() {
+        return "deploy-not-live unknown: no host has written a deploy-status ledger".into();
+    }
+    let mut count = 0;
+    let mut oldest: Option<(i64, String)> = None;
+    for (host, ledger) in &ledgers {
+        for (key, since) in &ledger.not_live_since {
+            count += 1;
+            if oldest.as_ref().is_none_or(|(first, _)| since < first) {
+                oldest = Some((*since, format!("{host}:{key}")));
+            }
+        }
+    }
+    let mut line = format!("deploy-not-live {count}");
+    if let Some((since, what)) = oldest {
+        line.push_str(&format!(
+            " oldest {what} {}h",
+            ledger::age_hours(since, now)
+        ));
+    }
+    line.push_str(&format!(" ({} hosts reporting", ledgers.len()));
+    if !broken.is_empty() {
+        line.push_str(&format!(", {} unreadable", broken.len()));
+    }
+    line.push(')');
+    line
+}
+
+/// [`digest_line`] for this host's ledger directory.
+pub fn digest_line_local() -> String {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    digest_line(&ledger_dir(&state_dir(&home)), now)
+}
+
 /// The directory of ledgers, one file per host, under the state directory.
 pub fn ledger_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("deploy-live")
@@ -153,11 +207,10 @@ pub fn run_local(home: &Path, args: &[String]) -> Result<(Vec<String>, usize), S
         match arg.as_str() {
             "--repo" => repo = it.next().ok_or("--repo needs a path")?.into(),
             "--no-ledger" => write_ledger = false,
-            other => {
-                return Err(format!(
-                    "usage: plangraph deploy-status [--repo PATH] [--no-ledger] ({other})"
-                ))
-            }
+            "--summary" => return Ok((vec![digest_line_local()], 0)),
+            other => return Err(format!(
+                "usage: plangraph deploy-status [--repo PATH] [--no-ledger | --summary] ({other})"
+            )),
         }
     }
     let xdg = |key: &str, rel: &str| {

@@ -13,3 +13,5 @@ age, writes the ledger the GO check reads, and `merge-close --deploy-status` pri
 An item with a `Live:` clause can no longer close without a verified deploy evidence row: automatic close and
 router GO close hold it as `deploy_pending: live_evidence_missing`, and a passing review or a close on decision
 is refused with `evidence_unverified: live_evidence_missing`.
+`plangraph resume-digest` ends with a `deploy-not-live N oldest ...` line from the deploy-status ledgers and
+`plangraph deploy-status --summary` prints it alone for the operator's daily line.
