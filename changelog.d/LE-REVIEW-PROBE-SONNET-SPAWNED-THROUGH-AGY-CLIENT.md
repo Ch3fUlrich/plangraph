@@ -1,0 +1,1 @@
+A spawn that pins a client now resolves a model served by two legs (claude-sonnet-5-5-high on claude and on agy) to the leg of that harness, so the scheduled review probe spawns the Sonnet seat through Claude Code instead of ending in `SpawnRefused: client disagrees with leg harness` (plangraph:LE-REVIEW-PROBE-SONNET-SPAWNED-THROUGH-AGY-CLIENT).
