@@ -194,3 +194,15 @@ def test_a_database_without_the_new_column_upgrades_and_loads(tmp_path):
         assert conn.execute("SELECT supersedes FROM items WHERE key='demo:A'").fetchone()[0] is None
     finally:
         conn.close()
+
+
+def test_boilerplate_descriptions_and_short_titles_never_match(w):
+    router = w.p("router")
+    text = "Why: test bounds\nHow: validate priority and range of the stored value"
+    w.store.create_items(router, [defn("A", title="A", description=text),
+                                  defn("B", title="Gate", description=text),
+                                  defn("GOAL", ["A", "B"], kind="goal")])
+    # same boilerplate, different long titles: the title decides
+    w.store.create_items(router, [
+        defn("C", title="Rotate the web token cache nightly", description=text, under=G),
+        defn("D", title="Split the oversize review prompt builder", description=text, under=G)])
