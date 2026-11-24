@@ -281,6 +281,17 @@ The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_ri
 The Rust route reports legs with more than three missing verdicts in their last
 ten completed reviews under `review_health_alerts` and puts them after healthier candidates.
 
+## Utility eligibility and score rules (ROUTE-RANK-RULES)
+
+- Card needs: `card.needs` (`tools`, `shell`, `long_context`, `vision`) and `card.tool_mode` (the weakest tool mode accepted) filter every candidate leg, fallback legs included; the skip reason is `needs_<need>`.
+- Effort: a requested `card.effort` the row's `effort_channel` cannot pass (`none`; `fixed` at another effort; `parameter` when the model would clamp it lower) skips the leg as `effort_channel`; the effort is never lowered.
+- Score: quality is the own `p_hat` (`score`) at n >= 20 runs, else `coding_index`, else the AA index. An imputed row ranks at its mean minus one standard deviation (`score_se`, default 3.0) and always behind a measured row inside a utility band.
+- Eligibility for `high` and `critical` cards: a row older than 45 days, or measured under another `index_version`, price or served model, skips as `stale_row` (the evidence names which); a new own row below 5 runs skips as `canary_pending`.
+
+## Codex usage limit
+
+A Codex "usage limit ... try again at <date>" reply from a run, probe or review is booked on every Codex leg with its reset time; the route lists them as `limited_until <reset>` and admits the Claude writers until then.
+
 ## Research routing
 
 Use `--role research` on the CLI or `role: "research"` in MCP to route or
