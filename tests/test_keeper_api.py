@@ -514,7 +514,7 @@ def _claim_checkouts(tmp_path, names):
 
 
 @pytest.mark.parametrize("failure", ["refusal", "timeout"])
-def test_parallel_refresh_refuses_if_any_requested_work_index_fails(
+def test_parallel_claim_refuses_if_any_work_index_fails(
         w, tmp_path, monkeypatch, failure):
     """A refresh of several repositories at once fails whole if one repository fails.
 
