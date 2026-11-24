@@ -19,7 +19,7 @@ MAX_REPLY_BYTES = 8 * 1024 * 1024
 PS_ENDED_LIMIT = 20
 PS_FIELDS = (
     'run_id', 'status', 'role', 'host', 'pid', 'started', 'ended',
-    'last_activity_ts', 'exit_code', 'item_key', 'parent_session',
+    'last_activity_ts', 'exit_code', 'item_key', 'item_keys', 'parent_session',
     'served_model', 'cwd',
 )
 

@@ -395,3 +395,25 @@ def test_listing_identity(tmp_path, item, expected):
     path.write_text(text)
     assert read_runs(tmp_path)[0]['item_key'] == expected
     assert path.read_text() == text
+
+
+def test_batch_item_keys_survive_persistence_and_malformed_ones_do_not(tmp_path):
+    from plangraph.spawner.service import SpawnService
+    keys = ['plangraph:ALPHA-1', 'plangraph:BETA-1']
+    service = spawn_service(_Runner(), state=tmp_path)
+    for stored, expected in ((keys, keys), (['plangraph:ALPHA-1', 'not a key'], None), ('plangraph:A', None)):
+        record = dict(run_id='run-batch', role='implement', status='running',
+                      item_key=keys[0], item_keys=stored)
+        service._save(record)
+        saved = json.loads(service._path('run-batch').read_text())
+        assert saved['item_key'] == keys[0]
+        assert saved.get('item_keys') == expected, saved
+
+
+def test_batch_key_limit_matches_the_feeder_policy_limit():
+    import re
+    from pathlib import Path
+    from plangraph.spawner.item_key import MAX_BATCH_KEYS
+    source = (Path(__file__).resolve().parents[1] / 'rust/plangraph-cli/src/feeder/mod.rs').read_text()
+    limit = re.search(r'pub const MAX_BATCH_ITEMS: usize = (\d+);', source)
+    assert limit and int(limit.group(1)) == MAX_BATCH_KEYS
