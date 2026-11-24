@@ -28,6 +28,9 @@
   file, a REQUEST_CHANGES answer, an answer for another run, a run id seen in two answers or an ACCEPT on an older head never counts;
   the refusal names the part, head, receipt run and the files found, and the output carries one `accept #PR head SHA run RUN file NAME`
   line per part for the PR body table.
+- **Orchestrator slices** (outside this repository, plan items under `LESSONS-ENFORCE`): the train script must call `land-train build`
+  with `--accept-dir` and put the `accept #PR head SHA run RUN file NAME` lines into the PR body; a relane after a fix round must seat
+  the new head. Until it does, the script's direct merges are not covered by this gate.
 - **Verification** (`verify_manifest`, `verify_result`): the registered head and parent of every part, the whole first-parent
   chain (one merge per part with exactly the two expected parents), a clean replay of every merge under the recorded inputs, and
   the exact set of introduced commits. A build result must account for every part of its snapshot; a `conflict` is repeated at
