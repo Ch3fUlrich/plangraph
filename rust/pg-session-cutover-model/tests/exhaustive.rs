@@ -3,7 +3,7 @@
 //! Bounds (also in docs/session-cutover-model.md): one role; Stop-hook cap 2 (1 in the
 //! two-recycle search, 9 in a named scenario); times are the production ones (scan 60 s, takeover 70 s, supervisor 20 s,
 //! bound 90 s, tick 10 s).
-//!   wake:     1 session, 3 events (2 urgent on 2 sources, 1 ordinary), no messages, 12 events deep.
+//!   wake:     1 session, 3 events (2 urgent on 2 sources, 1 ordinary), no messages, 12 events deep (no heal, tool use or ready marker).
 //!   recycle:  2 sessions (one recycle), 1 urgent event, 2 direct messages, 11 events deep.
 //!   recycles: 3 sessions (two recycles), 1 direct message, crashes, 16 events deep.
 //!   gates:    all gate and mode events with 1 urgent event and 2 sessions, 15 events deep.
@@ -36,6 +36,7 @@ fn wake_orderings_keep_every_invariant() {
     let mut p = params(vec![URGENT(0), URGENT(1), ORDINARY(0)], 0);
     p.sessions = 1;
     p.stop_cap = 2;
+    p.digest_cap = 1;
     let mut m = model(p);
     activate(&mut m);
     let alpha = alphabet_without(&m, |e| {
@@ -43,6 +44,7 @@ fn wake_orderings_keep_every_invariant() {
             || is_recycle(e)
             || is_message(e)
             || skip_cron_and_window(e)
+            || matches!(e, Event::Heal(_) | Event::ToolUse(_) | Event::MarkReady(_))
     });
     let mut seen = [false; 8];
     search(m, alpha, 12, |a, e, r, b| {
@@ -86,7 +88,9 @@ fn recycle_orderings_keep_every_invariant() {
             && (0..2).any(|i| a.home(i) == Home::Session(0) && b.home(i) == Home::Session(1));
         seen[3] |= ok && matches!(e, Event::HandleMsg { .. });
         seen[4] |= *r == Err(Denied::Active) && e == Event::BeginRecycle;
-        seen[5] |= ok && e == Event::FencedWaiterExit(0);
+        // Adoption revokes the predecessor's armed wait.
+        seen[5] |=
+            ok && e == Event::Adopt && a.waiter(0) == Waiter::Armed && b.waiter(0) == Waiter::Dead;
     });
     assert_eq!(seen, [true; 6]);
 }
@@ -160,7 +164,6 @@ fn finds(
         matches!(
             e,
             Event::WaiterFire(_)
-                | Event::FencedWaiterExit(_)
                 | Event::BeginTurn(_)
                 | Event::Scan(_)
                 | Event::Escalate(_)
@@ -201,11 +204,18 @@ fn is_cycle(e: &Event) -> bool {
 #[test]
 fn each_defect_is_caught_by_its_invariant() {
     let wake = |e: &Event| {
-        is_turn(e)
-            || matches!(
-                e,
-                Event::Tick | Event::Occur(_) | Event::Hang(_) | Event::Scan(_)
-            )
+        matches!(
+            e,
+            Event::Tick
+                | Event::Occur(_)
+                | Event::Hang(_)
+                | Event::Scan(_)
+                | Event::Receive(_)
+                | Event::Nudge
+                | Event::BeginTurn(_)
+                | Event::Arm(_)
+                | Event::EndTurn(_)
+        )
     };
     assert!(finds(
         Defect::NoTakeover,
@@ -215,6 +225,23 @@ fn each_defect_is_caught_by_its_invariant() {
         19
     )
     .contains(&Invariant::UrgentBound));
+    assert!(finds(
+        Defect::FallbackNotAwaited,
+        params(vec![URGENT(0)], 0),
+        true,
+        wake,
+        20
+    )
+    .contains(&Invariant::UrgentBound));
+    let scans = |e: &Event| matches!(e, Event::Occur(_) | Event::Scan(_));
+    assert!(finds(
+        Defect::ScanIsReceipt,
+        params(vec![URGENT(0)], 0),
+        true,
+        scans,
+        3
+    )
+    .contains(&Invariant::ReceivedUnread));
     let cycle = |e: &Event| is_turn(e) || is_cycle(e);
     let recycle = || params(vec![], 0);
     assert!(

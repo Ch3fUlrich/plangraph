@@ -64,6 +64,40 @@ pub fn arm_first(m: &mut Model) {
     );
 }
 
+/// Activated role; session 0 has armed its own wait, written handoff and card, and is idle.
+pub fn armed_ready(p: Params) -> Model {
+    let mut m = model(p);
+    activate(&mut m);
+    run(
+        &mut m,
+        &[
+            Event::Nudge,
+            Event::BeginTurn(0),
+            Event::Arm(0),
+            Event::MarkReady(0),
+            Event::EndTurn(0),
+        ],
+    );
+    assert_eq!((m.life(0), m.waiter(0)), (Life::Idle, Waiter::Armed));
+    m
+}
+
+pub fn scan_all(m: &mut Model) {
+    run(m, &[Event::Scan(0), Event::Scan(1)]);
+}
+
+/// The supervised recycle up to adoption: ready marker and card, launch, confirm, adopt.
+pub fn recycle_to_adoption(m: &mut Model) {
+    run(m, &[Event::BeginRecycle, Event::Confirm, Event::Adopt]);
+}
+
+/// The same steps without the invariant check, for a model with a defect.
+pub fn recycle_to_adoption_unchecked(m: &mut Model) {
+    for e in [Event::BeginRecycle, Event::Confirm, Event::Adopt] {
+        m.apply(e).expect("allowed");
+    }
+}
+
 pub struct Report {
     pub states: usize,
     pub transitions: usize,
@@ -180,7 +214,6 @@ pub fn is_recycle(e: &Event) -> bool {
             | Event::Adopt
             | Event::StopOk
             | Event::StopFail
-            | Event::FencedWaiterExit(_)
     )
 }
 

@@ -11,6 +11,6 @@ every review finding to its scenario test are in
 [launch recovery](../pg-launch-recovery-model/README.md) and
 [session admission](../pg-session-admission-model/README.md).
 
-`tests/scenarios.rs` holds one named scenario per finding. `tests/exhaustive.rs` explores every
+`tests/scenarios_*.rs` hold one named scenario per finding. `tests/exhaustive.rs` explores every
 ordering of a stated alphabet to a stated depth and shows, for each `Defect` (a guard that a
 finding named missing), that the invariant list catches the unsafe variant.
