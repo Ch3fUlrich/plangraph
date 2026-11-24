@@ -3,6 +3,8 @@ pub mod build;
 #[cfg(test)]
 mod build_tests;
 mod chain;
+#[cfg(test)]
+mod chain_tests;
 pub mod cli;
 pub mod delta;
 pub mod deploy;

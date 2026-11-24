@@ -86,6 +86,14 @@ second parents must still match the manifest, including merges later reverted
 by a drop. Use `Dropped-Part: <key>` and the canonical revert body to record
 a dropped part.
 
+Parallel trains: after one train lands, another open train may merge the new
+`origin/main` into itself. The validator accepts exactly that: a two-parent commit whose second
+parent is a first-parent commit of main that the train does not contain yet. Any other second
+parent, and any extra commit without resolver attribution, is still refused. The push gate reads the
+train base from the first-parent chain (`rev-list --first-parent TIP --not origin/main`), since the merge-base with
+main is main itself after a remerge. Replay recomputes the remerge, refuses a conflict or an edit
+hidden in it, and lists it as `remerges` in the review artifact for the remerge-diff review.
+
 Run a hand-started train resolver from its worktree with
 `pg-spawnd hand-run -- PROGRAM [ARGS ...]`. Export `CARGO_TARGET_DIR` with the
 host's configured shared target before launching it. The launcher validates
