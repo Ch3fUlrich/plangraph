@@ -1,7 +1,6 @@
 //! Pins a native run's base: the pushed ref when `origin` has it, else the host repository's own.
 use super::{output, Host};
 use crate::native_writer::ReviewBase;
-use std::collections::HashSet;
 use std::io::Write;
 use std::process::Stdio;
 
@@ -225,11 +224,12 @@ impl Host {
 
     /// Replay the commits of HEAD that `onto` does not hold on `onto`. `onto` is also the upstream,
     /// so a patch `onto` already holds is found by its patch id and dropped before any replay
-    /// (a replay of it next to a later edit on `onto` would otherwise conflict). Git's patch id
-    /// ignores whitespace, so a drop is allowed only where the patch also matches a commit of
-    /// `onto` byte for byte; any other match is refused before the rebase starts.
+    /// (a replay of it next to a later edit on `onto` would otherwise conflict). A patch id
+    /// ignores whitespace and the place of the change, so a drop is allowed only where a commit
+    /// of `onto` makes the same change at the same place; any other skip is refused before the
+    /// rebase starts.
     pub(super) fn rebase(&self, onto: &str) -> Result<Integrated, String> {
-        self.refuse_whitespace_only_matches(onto)?;
+        self.refuse_unproven_drops(onto)?;
         let result = self.git(&[
             "-c",
             "rerere.enabled=false",
@@ -244,7 +244,7 @@ impl Host {
         self.finish_integration(result, "rebase-merge", &["rebase", "--abort"])
     }
 
-    fn refuse_whitespace_only_matches(&self, onto: &str) -> Result<(), String> {
+    fn refuse_unproven_drops(&self, onto: &str) -> Result<(), String> {
         let lines = |args: &[&str]| -> Result<Vec<String>, String> {
             Ok(self.git(args)?.lines().map(str::to_owned).collect())
         };
@@ -262,32 +262,73 @@ impl Host {
         if dropped.is_empty() {
             return Ok(());
         }
-        let upstream: HashSet<String> = self
-            .verbatim_patch_ids(&format!("HEAD..{onto}"))?
-            .into_iter()
-            .map(|(patch, _)| patch)
-            .collect();
-        let own_ids = self.verbatim_patch_ids(&own)?;
+        let upstream = self.patch_ids(&format!("HEAD..{onto}"))?;
+        let own_ids = self.patch_ids(&own)?;
         for commit in dropped {
-            // A commit with no diff has no patch id: dropping it loses nothing.
-            let mut ids = own_ids.iter().filter(|(_, id)| id == commit).peekable();
-            if ids.peek().is_some() && !ids.any(|(patch, _)| upstream.contains(patch)) {
+            if self.changes_nothing(commit)? {
+                continue;
+            }
+            let proven = own_ids
+                .iter()
+                .filter(|(_, id)| id == commit)
+                .any(|(patch, _)| {
+                    upstream
+                        .iter()
+                        .filter(|(held, _)| held == patch)
+                        .any(|(_, held)| self.same_change(commit, held))
+                });
+            if !proven {
                 return Err(format!(
-                    "part commit {commit} matches a commit of main only up to whitespace; it is not dropped"
+                    "git would skip part commit {commit} as already on main, but no main commit makes the same change at the same place; it is not dropped"
                 ));
             }
         }
         Ok(())
     }
 
-    /// `(patch id, commit)` of the non-merge commits of `range`, the patch id taken with the
-    /// whitespace kept (`git patch-id --verbatim`).
-    fn verbatim_patch_ids(&self, range: &str) -> Result<Vec<(String, String)>, String> {
+    /// Whether `commit` leaves the tree of its parent (the empty tree for a root) as it was.
+    fn changes_nothing(&self, commit: &str) -> Result<bool, String> {
+        let before = self
+            .git(&[
+                "rev-parse",
+                "--verify",
+                "-q",
+                &format!("{commit}^^{{tree}}"),
+            ])
+            .or_else(|_| self.git(&["hash-object", "-t", "tree", "/dev/null"]))?;
+        Ok(self.git(&["rev-parse", "--verify", &format!("{commit}^{{tree}}")])? == before)
+    }
+
+    /// Whether `commit` applied on the parent of `held` gives exactly the tree of `held`: the same
+    /// change at the same place, which equal patch ids alone do not show.
+    fn same_change(&self, commit: &str, held: &str) -> bool {
+        let rev = |name: String| self.git(&["rev-parse", "--verify", &name]);
+        let (Ok(before), Ok(parent), Ok(expected)) = (
+            rev(format!("{commit}^")),
+            rev(format!("{held}^")),
+            rev(format!("{held}^{{tree}}")),
+        ) else {
+            return false;
+        };
+        self.git(&[
+            "merge-tree",
+            "--write-tree",
+            &format!("--merge-base={before}"),
+            &parent,
+            commit,
+        ])
+        .is_ok_and(|merged| merged.lines().next() == Some(expected.as_str()))
+    }
+
+    /// `(patch id, commit)` of the non-merge commits of `range`. The log format is pinned: the
+    /// user's `format.pretty` must not change what `git patch-id` reads.
+    fn patch_ids(&self, range: &str) -> Result<Vec<(String, String)>, String> {
         let mut log = self
             .command("git")
             .arg("-C")
             .arg(&self.cwd)
-            .args(["log", "-p", "--no-merges", "--no-renames", "--no-ext-diff"])
+            .args(["log", "-p", "--pretty=medium", "--no-show-signature"])
+            .args(["--no-merges", "--no-renames", "--no-ext-diff"])
             .args(["--no-textconv", "--no-color", range])
             .stdout(Stdio::piped())
             .spawn()
@@ -297,7 +338,7 @@ impl Host {
             self.command("git")
                 .arg("-C")
                 .arg(&self.cwd)
-                .args(["patch-id", "--verbatim"])
+                .arg("patch-id")
                 .stdin(Stdio::from(stream)),
         );
         if !log.wait().map_err(|e| e.to_string())?.success() {

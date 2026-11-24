@@ -183,6 +183,8 @@ fn a_patch_main_holds_only_up_to_whitespace_is_not_dropped() {
     let dir = tempfile::tempdir().unwrap();
     let mut host = local_base_fixture(dir.path());
     host.cwd = host.repo.clone();
+    // A user's log format must not hide the patch ids.
+    git_in(&host.cwd, &["config", "format.pretty", "%s"]);
     git_in(&host.cwd, &["checkout", "-q", "main"]);
     commit_file(&host, "g.txt", "x\n", "file");
     git_in(&host.cwd, &["checkout", "-q", "-b", "part"]);
@@ -192,7 +194,7 @@ fn a_patch_main_holds_only_up_to_whitespace_is_not_dropped() {
     let main = commit_file(&host, "g.txt", "x\ns = \"ab\"\n", "main");
     git_in(&host.cwd, &["checkout", "-q", "part"]);
     let error = host.rebase(&main).unwrap_err();
-    assert!(error.contains("only up to whitespace"), "{error}");
+    assert!(error.contains("same change at the same place"), "{error}");
     assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD"]), head);
     assert!(git_in(&host.cwd, &["status", "--porcelain"]).is_empty());
 }
@@ -228,4 +230,37 @@ fn lossless_path_never_gives_one_text_for_two_paths() {
     assert_eq!(lossless_path(b"x\xe2\x82"), "x\\xe2\\x82");
     assert_eq!(lossless_path(b"x\\xfe"), "x\\\\xfe");
     assert_ne!(lossless_path(b"x\xfe"), lossless_path(b"x\\xfe"));
+}
+
+/// Seven lines repeated three times: an edit of the fourth line has the same patch id in each block.
+const BLOCKS: &str = "a\nb\nc\nd\ne\nf\ng\n--\na\nb\nc\nd\ne\nf\ng\n--\na\nb\nc\nd\ne\nf\ng\n";
+
+#[test]
+fn the_same_edit_in_another_repeated_block_is_not_an_upstream_patch() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.cwd = host.repo.clone();
+    git_in(&host.cwd, &["checkout", "-q", "main"]);
+    commit_file(&host, "r.txt", BLOCKS, "blocks");
+    git_in(&host.cwd, &["checkout", "-q", "-b", "part"]);
+    let first_block = BLOCKS.replacen("d\n", "D\n", 1);
+    commit_file(&host, "r.txt", &first_block, "part edits block one");
+    let head = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    git_in(&host.cwd, &["checkout", "-q", "main"]);
+    let (one, rest) = BLOCKS.split_at(BLOCKS.find("--\n").unwrap() + 3);
+    let second_block = format!("{one}{}", rest.replacen("d\n", "D\n", 1));
+    let main = commit_file(&host, "r.txt", &second_block, "main edits block two");
+    git_in(&host.cwd, &["checkout", "-q", "part"]);
+    let error = host.rebase(&main).unwrap_err();
+    assert!(error.contains("same change at the same place"), "{error}");
+    assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+fn an_upstream_patch_is_still_dropped_under_a_user_log_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let (host, _, new_main) = part_with_upstream_first_patch(dir.path());
+    git_in(&host.cwd, &["config", "format.pretty", "%s"]);
+    assert_eq!(host.rebase(&new_main).unwrap(), Integrated::Done);
+    assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD^"]), new_main);
 }
