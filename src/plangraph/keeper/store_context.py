@@ -40,7 +40,7 @@ from .brief import ensure_cap, superseded_contract
 from .errors import Refused
 from .evidence_decisions import decision_book, decisions_naming
 from .evidence_pr import landing_record
-from .evidence_types import valid_commit_ref
+from .evidence_types import as_epoch, valid_commit_ref
 from .store_runs import merged_decision_delivery
 from .schema import DEFINITION_EVENTS
 
@@ -667,3 +667,60 @@ class ContextMixin:
                 bits.append(f"dep {dep}={state}"
                             + (f" ({ctx_reasons[dep]})" if dep in ctx_reasons else ""))
         return "; ".join(bits)
+
+    # --- deployment inventory of merged work, open and completed items (docs/deploy-evidence.md) ---
+    # Keeper setting ``deploy_inventory_done``: completed items join the merge-index warm-up.
+    include_done_in_scan = False
+
+    def _deploy_inventory_row(self, item, now):
+        """``{"deployment_pending": row}`` for merged work without deploy proof, else ``{}``; never closes."""
+        token, changes = self._auto_deploy_scan(item)
+        pinned = dict(item, _close_head=token[0])
+        proofs = self._merged_auto_proofs(pinned)
+        missing = self._deploy_missing(item, proofs, self._deploy_pending(pinned, changes, token))
+        return {"deployment_pending": self._deployment_row(missing, proofs, now)} if missing else {}
+
+    def _deploy_missing(self, item, proofs, pending):
+        """The unproven ``host:unit`` pairs, plus ``live_evidence_missing`` for an unproven ``Live:`` clause."""
+        missing = list(pending)
+        if self._live_evidence_missing(item, proofs):
+            missing.append("live_evidence_missing")
+        return missing
+
+    @staticmethod
+    def _deployment_row(missing, proofs, now):
+        landed = [(stamp, proof["merged_at"]) for proof in proofs
+                  if (stamp := as_epoch(proof["merged_at"])) is not None]
+        earliest = min(landed, default=None)
+        return {"missing": missing, "merged_at": earliest[1] if earliest else None,
+                "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}
+
+    def _auto_merge_candidates(self, project, after, limit, inventory=False):
+        states = ("done",) if inventory else self.AUTO_STATES
+        if limit is None:
+            return [item for item in self._all_items()
+                    if item["state"] in states and item["kind"] not in ("goal", "operator_task")
+                    and (project is None or item["project"] == project)
+                    and (after is None or item["key"] > after)]
+        marks = ",".join("?" for _ in states)
+        sql = (f"SELECT * FROM items WHERE state IN ({marks})"
+               " AND kind NOT IN ('goal','operator_task')")
+        args = list(states)
+        if project is not None:
+            sql += " AND project=?"
+            args.append(project)
+        if after is not None:
+            sql += " AND key>?"
+            args.append(after)
+        sql += " ORDER BY key LIMIT ?"
+        args.append(limit + 1)
+        rows = self.conn.execute(sql, args).fetchall()
+        if not rows:
+            return []
+        keys = [row["key"] for row in rows]
+        predicates = ",".join("?" for _ in keys)
+        deps = {key: [] for key in keys}
+        for edge in self.conn.execute(
+                f"SELECT src,dst FROM edges WHERE src IN ({predicates}) ORDER BY dst", keys):
+            deps[edge["src"]].append(edge["dst"])
+        return [dict(self._hydrate(dict(row)), depends_on=deps[row["key"]]) for row in rows]

@@ -1,0 +1,12 @@
+[
+  {"key": "demo:A", "state": "done", "merged_at": "2026-11-20T10:00:00Z", "age_hours": 30,
+   "missing": ["host-a:new.service"]},
+  {"key": "demo:B", "state": "done", "merged_at": "2026-11-19T10:00:00Z", "age_hours": 50,
+   "missing": ["live_evidence_missing"]},
+  {"key": "demo:C", "state": "open", "merged_at": "2026-11-21T10:00:00Z", "age_hours": 5,
+   "missing": ["host-a:bin:tool"]},
+  {"key": "demo:D", "state": "done", "merged_at": "2026-11-18T10:00:00Z", "age_hours": 40,
+   "missing": ["host-a:running.service"]},
+  {"key": "demo:E", "state": "done", "merged_at": null, "age_hours": null,
+   "missing": ["host-b:new.service"]}
+]
