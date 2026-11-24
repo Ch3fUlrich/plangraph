@@ -625,16 +625,59 @@ def test_route_skips_mimo_flash_whose_options_endpoint_has_no_listener(tmp_path,
     assert {s['leg']: s['reason'] for s in plan.skipped}.get('mimo-v2.6-flash') == 'gateway_unreachable'
 
 
-def test_route_serves_both_gateway_models_from_upstream_keyed_provider_data(tmp_path, launch_env):
+def omniroute_state(*pools, inactive=()):
+    """The production /api/providers reader fed JSON through its injected transport."""
+    import json
+    from datetime import datetime, timezone
+    from plangraph.routing_support.quota_snapshots import OmniRouteState
+    rows = [dict(provider=name, isActive=name not in inactive) for name in pools]
+    return OmniRouteState('injected-endpoint', key='synthetic', ttl_s=10, clock=lambda: 0,
+                          wall_clock=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+                          fetch=lambda *args: (200, json.dumps({'connections': rows})))
+
+
+def json_reader(tmp_path, listed, *pools, inactive=(), **kw):
+    store = leg_state.LegStateStore(tmp_path / 'state')
+    return leg_state.LegAdapter(store, omniroute_state(*pools, inactive=inactive), lambda: listed,
+                                enabled=True, clock=lambda: 0, **kw)
+
+
+def review_plan(tmp_path, reader, writers=('claude',)):
     from plangraph.planner.routing import plan_spawn
-    upstream = UPSTREAM_MIMO
+    return plan_spawn(route_card(tmp_path), role='review', writer_families=writers, leg_reader=reader.leg_status)
+
+
+def test_claude_writer_route_serves_both_gateway_models_from_provider_json(tmp_path, launch_env):
     listed = ('omniroute/deepseek-v4.1-flash', 'omniroute/mimo-v2.6-flash')
-    reader = gateway(tmp_path, listed, upstream)
-    plan = plan_spawn(route_card(tmp_path), role='review', writer_families=('gpt',), leg_reader=reader.leg_status)
+    plan = review_plan(tmp_path, json_reader(tmp_path, listed, 'deepseek', 'opencode-go', 'xiaomi-mimo'))
     ids = [leg.id for leg in plan.legs]
     assert 'omniroute-deepseek-flash' in ids and 'mimo-v2.6-flash' in ids
     # Only the gateway's opencode-go pool answering admits neither DeepSeek nor MiMo.
-    only_go = gateway(tmp_path, listed, {'opencode-go': UPSTREAM['opencode-go']})
-    plan = plan_spawn(route_card(tmp_path), role='review', writer_families=('gpt',), leg_reader=only_go.leg_status)
+    plan = review_plan(tmp_path, json_reader(tmp_path, listed, 'opencode-go'))
     reasons = {s['leg']: s['reason'] for s in plan.skipped}
     assert reasons.get('omniroute-deepseek-flash') == 'unreachable' and reasons.get('mimo-v2.6-flash') == 'unreachable'
+
+
+def test_gateway_leg_resolves_the_pool_the_deployed_combo_declares(tmp_path):
+    spark = 'omniroute/spark-1.3-contributor'   # deploy/omniroute/live/server-combos.json: meta-api
+    assert json_reader(tmp_path, (spark,), 'meta-api')(spark)['state'] == 'ok'
+    assert json_reader(tmp_path, (spark,), 'meta-api', inactive=('meta-api',))(spark)['reason'] == 'provider_inactive'
+    assert json_reader(tmp_path, (spark,), 'opencode-go')(spark)['reason'] == 'unreachable'
+    direct = 'omniroute/deepseek-direct-flash'   # providers.json modelID deepseek/deepseek-flash
+    assert json_reader(tmp_path, (direct,), 'deepseek')(direct)['state'] == 'ok'
+
+
+@pytest.mark.parametrize('model', ['omniroute/deepseek-v4.1-flash', 'omniroute/deepseek-direct-flash'])
+def test_the_models_own_pool_outranks_the_generic_gateway_row(tmp_path, model):
+    reader = json_reader(tmp_path, (model,), 'omniroute', 'deepseek', inactive=('deepseek',))
+    assert reader(model)['reason'] == 'provider_inactive'
+    assert json_reader(tmp_path, (model,), 'omniroute', 'opencode-go')(model)['state'] == 'ok'   # no own pool: the gateway row
+
+
+@pytest.mark.parametrize('text', ['{"providers": {"mimo": 5}}', '{"providers": {"mimo": []}}'])
+def test_route_survives_a_non_object_mimo_provider_with_a_gateway_override(tmp_path, launch_env, text):
+    use_providers(launch_env, tmp_path, text)
+    launch_env.setenv('PLANGRAPH_GATEWAY_URL', 'http://host-a.example:9000')
+    plan = review_plan(tmp_path, json_reader(tmp_path, ('omniroute/mimo-v2.6-pro',), 'xiaomi-mimo',
+                                             gateway_probe=lambda url: True), writers=('gpt',))
+    assert plan.legs

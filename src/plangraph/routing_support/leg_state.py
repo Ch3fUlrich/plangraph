@@ -5,6 +5,7 @@ provided. Probe passes must be called only after an actual provider success.
 """
 from __future__ import annotations
 
+import functools
 import math
 import os
 from pathlib import Path
@@ -510,6 +511,8 @@ def gateway_url(leg):
             block = json.loads(review_child_env(leg)['OPENCODE_CONFIG_CONTENT'])['providers'][prefix]
         except Exception:   # no endpoint: a refused render, a missing key or unreadable config
             return None
+        if not isinstance(block, dict):   # a non-object provider survives rendering under an override
+            return None
         # The renderer writes the endpoint to settings and to an existing options section.
         url = next((section['baseURL'] for name in ('settings', 'options')
                     if isinstance(section := block.get(name), dict)
@@ -538,20 +541,44 @@ def tcp_gateway_probe(url, timeout=1.0):
     return True
 
 
+@functools.lru_cache(maxsize=512)
+def _upstream_pools(name, providers_file):
+    """Upstream pools a gateway model name is deployed on, from the deployed combo snapshot
+    (``deploy/omniroute/live/server-combos.json``) and the root provider config's ``modelID``."""
+    import json
+    from .opencode_overlay import load_root_providers
+    root = Path(__file__).resolve().parents[3]
+    pools = []
+    try:
+        combos = json.loads((root / 'deploy/omniroute/live/server-combos.json').read_text(encoding='utf-8'))['combos']
+        pools += [u.split('/')[0] for u in combos.get(name, ()) if isinstance(u, str) and '/' in u]
+    except (OSError, ValueError, KeyError, AttributeError, TypeError):
+        pass
+    providers = load_root_providers()
+    models = ((providers.get('omniroute') or {}).get('models') or {}) if isinstance(providers, dict) else {}
+    model_id = (models.get(name) or {}).get('modelID') if isinstance(models, dict) and isinstance(models.get(name), dict) else None
+    if isinstance(model_id, str) and '/' in model_id:
+        pools.append(model_id.split('/')[0])
+    return tuple(dict.fromkeys(pools))
+
+
 def _gateway_pool(states, leg):
     """State of the upstream pool serving a gateway-routed model.
 
-    The snapshot is keyed by upstream provider, not by the gateway prefix: take the pool
-    whose name starts the model name, else the gateway's own ``omniroute`` row. No other
-    pool stands in for a model it does not serve; an available row wins over an unavailable one.
+    The snapshot is keyed by upstream provider, not by the gateway prefix. Resolve the model's
+    own pool first (alias pools, then the deployed upstreams, then a pool whose name starts the
+    model name); only a model with no pool in the snapshot falls back to the gateway's own
+    ``omniroute`` row. No other pool stands in for a model it does not serve, and an available
+    row wins over an unavailable one among the model's own pools.
     """
     from .quota_snapshots import pool_of
     if (pool := pool_of(identity_model(leg))) is not None:
         return states.get(pool)   # a known alias pool never borrows another pool's state
     name = identity_model(leg).split('/', 1)[-1]
-    named = [row for key, row in states.items()
-             if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-'))]
-    rows = named or ([states['omniroute']] if 'omniroute' in states else [])
+    wanted = [*_upstream_pools(name, os.environ.get('PLANGRAPH_PROVIDERS_FILE')),
+              *(key for key in states if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-')))]
+    rows = [states[key] for key in dict.fromkeys(wanted) if key in states]
+    rows = rows or ([states['omniroute']] if 'omniroute' in states else [])
     return next((row for row in rows if row.available and not row.stale), rows[0] if rows else None)
 
 
@@ -658,9 +685,9 @@ class LegAdapter:
                 self._gateway[url] = bool(self.gateway_probe(url))
             if not self._gateway[url]:
                 return dict(state='down', reason='gateway_unreachable', evidence=None)
-        provider = self._states.get(leg.split('/')[0])
-        if provider is None and identity.startswith('omniroute/'):
-            provider = _gateway_pool(self._states, leg)
+        # A gateway model resolves its own pool before the generic gateway row.
+        provider = (_gateway_pool(self._states, leg) if identity.startswith('omniroute/')
+                    else self._states.get(leg.split('/')[0]))
         if provider is None:
             return dict(state='down', reason='unreachable', evidence=None)
         if provider.stale:
