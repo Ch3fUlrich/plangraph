@@ -13,7 +13,7 @@ impl Manifest {
     }
 
     /// Every problem between the binaries and the places units run them from. A program whose file name
-    /// is a binary of this manifest (python, logger, claude are not) must be run from a path its entry
+    /// is a binary of this manifest (logger and claude are not) must be run from a path its entry
     /// declares (`~/.local/bin/<bin>` when it declares none), and on every role the unit is deployed to
     /// the binary must be installed there: the entry's hosts and the path's hosts both cover the unit's.
     pub fn consumer_problems(&self, consumers: &BTreeSet<Consumer>) -> Vec<String> {
