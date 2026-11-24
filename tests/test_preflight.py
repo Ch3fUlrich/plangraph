@@ -753,3 +753,24 @@ def test_cargo_lease_holders_name_live_pids_and_notes_the_refusal(tmp_path, monk
     finally:
         lease.close()
     assert h.cargo_lease_holders(target) == []
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc/locks")
+def test_running_disk_refusal_cap_message_names_holding_pid(repo, monkeypatch):
+    """A cap refusal names the pid holding the shared cargo lease (LE-RUN-SUPERVISOR-HOLDS-CARGO-LEASE-BLOCKS-TRIM)."""
+    from plangraph.spawner import host_ready as h
+    target = repo / "shared-cap"
+    (target / "debug").mkdir(parents=True)
+    (target / "debug" / "blob").write_bytes(b"x" * 65536)
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "0.000001")
+    monkeypatch.setattr(h, "disk_free_gb", lambda path: 100.0)
+    lease = h.cargo_lease()
+    try:
+        refusal = h.running_disk_refusal(repo)
+    finally:
+        lease.close()
+    assert refusal is not None and refusal.startswith("cargo_target_cap:"), refusal
+    assert f"(held by pid {os.getpid()})" in refusal, refusal
+    after = h.running_disk_refusal(repo)
+    assert after is not None and "held by pid" not in after, after
