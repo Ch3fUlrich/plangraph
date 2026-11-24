@@ -1,1 +1,1 @@
-A conflict of the native writer's part rebase now records the unmerged paths (`review_base.conflict_files`), and a rebase failure with no unmerged path stays an error. Deploy: the pg-spawnd binary through plangraph-host-sync on all three hosts.
+A conflict of the native writer's part rebase now records the unmerged paths (`review_base.conflict_files`), read NUL-delimited so a quoted or non-ASCII name is exact, and a rebase failure with no unmerged path stays an error. Deploy: the pg-spawnd binary through plangraph-host-sync on all three hosts.

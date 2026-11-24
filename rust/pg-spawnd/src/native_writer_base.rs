@@ -33,13 +33,10 @@ impl Host {
     }
     /// Git's own output with no trimming: a ref name may end in whitespace.
     fn repo_listing(&self, args: &[&str]) -> Result<String, String> {
-        let result = self
-            .command("git")
-            .arg("-C")
-            .arg(&self.repo)
-            .args(args)
-            .output()
-            .map_err(|e| e.to_string())?;
+        Self::listing_in(self.command("git").arg("-C").arg(&self.repo).args(args))
+    }
+    fn listing_in(command: &mut std::process::Command) -> Result<String, String> {
+        let result = command.output().map_err(|e| e.to_string())?;
         if !result.status.success() {
             return Err(format!(
                 "command failed: {}",
@@ -177,7 +174,7 @@ impl Host {
             self.git(&["switch", "--detach", &current.head])?;
         }
         if self.git(&["merge-base", &base, &current.head])? != base {
-            if let Integrated::Conflict(files) = self.rebase(&base, &current.base)? {
+            if let Integrated::Conflict(files) = self.rebase(&base)? {
                 return Ok(Rebased::Conflict(files));
             }
         }
@@ -198,7 +195,10 @@ impl Host {
         }))
     }
 
-    pub(super) fn rebase(&self, onto: &str, upstream: &str) -> Result<Integrated, String> {
+    /// Replay the commits of HEAD that `onto` does not hold on `onto`. `onto` is also the upstream,
+    /// so a patch `onto` already holds is found by its patch id and dropped before any replay
+    /// (a replay of it next to a later edit on `onto` would otherwise conflict).
+    pub(super) fn rebase(&self, onto: &str) -> Result<Integrated, String> {
         let result = self.git(&[
             "-c",
             "rerere.enabled=false",
@@ -208,14 +208,12 @@ impl Host {
             "--no-fork-point",
             "--rebase-merges",
             "--empty=drop",
-            "--onto",
             onto,
-            upstream,
         ]);
         self.finish_integration(result, "rebase-merge", &["rebase", "--abort"])
     }
 
-    fn finish_integration(
+    pub(super) fn finish_integration(
         &self,
         result: Result<String, String>,
         state: &str,
@@ -229,9 +227,19 @@ impl Host {
             return Err(error);
         }
         // The unmerged paths are read before the abort clears them; a failure without one is no conflict.
-        let unmerged = self.git(&["diff", "--name-only", "--diff-filter=U"]);
+        // NUL-delimited and untrimmed, so a path git would quote or end in whitespace is exact.
+        let unmerged = Self::listing_in(self.command("git").arg("-C").arg(&self.cwd).args([
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=U",
+        ]));
         self.git(abort)?;
-        let files: Vec<String> = unmerged?.lines().map(str::to_owned).collect();
+        let files: Vec<String> = unmerged?
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned)
+            .collect();
         if files.is_empty() {
             return Err(error);
         }
