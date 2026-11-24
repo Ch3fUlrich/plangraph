@@ -56,6 +56,8 @@ pub struct Policy {
     pub windows_ram_floor_bytes: u64,
     pub disk_floor_bytes: u64,
     pub quota_floor_percent: f64,
+    /// A host refuses new writers while its CPU pressure (`some avg300`, percent) is above this.
+    pub cpu_pressure_max_percent: f64,
     pub facts_max_age_seconds: i64,
     pub estimate_tokens: u64,
     /// Related ready items one writer batch may hold; 1 keeps one item per run.
@@ -73,6 +75,7 @@ impl Default for Policy {
             windows_ram_floor_bytes: 6_000_000_000,
             disk_floor_bytes: 10_000_000_000,
             quota_floor_percent: 10.0,
+            cpu_pressure_max_percent: 50.0,
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
             batch_max_items: 1,
@@ -134,6 +137,9 @@ pub struct HostFacts {
     pub free_ram_bytes: u64,
     pub free_disk_bytes: u64,
     pub quota_remaining_percent: Option<f64>,
+    /// `some avg300` of `/proc/pressure/cpu` in percent; `None` where the host has no PSI file.
+    #[serde(default)]
+    pub cpu_pressure_avg300: Option<f64>,
     /// Unix seconds; admission compares with the caller's clock, not an internal clock.
     pub observed_at: i64,
     #[serde(default)]
@@ -160,6 +166,8 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         || p.facts_max_age_seconds < 0
         || p.quota_max_age_seconds < 0
         || p.quota_facts_max_age_seconds < 0
+        || !p.cpu_pressure_max_percent.is_finite()
+        || !(0.0..=100.0).contains(&p.cpu_pressure_max_percent)
         || p.ram_per_run_bytes == 0
         || p.disk_floor_bytes == 0
         || p.estimate_tokens == 0
@@ -177,6 +185,14 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         Some("ram".to_string())
     } else if f.free_disk_bytes < p.disk_floor_bytes {
         Some("disk".to_string())
+    } else if let Some(pressure) = f
+        .cpu_pressure_avg300
+        .filter(|v| !v.is_finite() || *v > p.cpu_pressure_max_percent)
+    {
+        Some(format!(
+            "cpu_pressure avg300={pressure} > {}",
+            p.cpu_pressure_max_percent
+        ))
     } else if !f
         .quota_remaining_percent
         .is_some_and(|q| q.is_finite() && q > p.quota_floor_percent && q <= 100.0)

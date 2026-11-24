@@ -151,8 +151,13 @@ and `windows_ram_floor_bytes`.
 
 Hosts admit by free RAM (D-5122), not load: the writer limit of a host is
 the writers it already runs plus (free RAM - `ram_floor_bytes`) / `ram_per_run_bytes`
-(rounded down). Load never refuses; at or above one-minute load of the CPU count
-the host starts one new writer per tick, so running builds get room first. Every
+(rounded down). CPU pressure refuses: while `some avg300` of `/proc/pressure/cpu` is above
+`cpu_pressure_max_percent` (default 50) the tick refuses as
+`cpu_pressure avg300=<n> > <limit>`. A host supplying facts (`--facts`) carries the value as
+`cpu_pressure_avg300`, beside its RAM. Only where the host has no PSI file does load act:
+at or above one-minute load of the CPU count the host starts one new writer per tick, so
+running builds get room first, and the capacity line says `cpu_pressure_source` is
+`load_fallback`. Every
 decision with an available sample, including an idle tick, records the numbers in its
 `capacity` object: `free_ram_bytes`, `ram_floor_bytes`, `ram_per_writer_bytes`,
 `slots_by_ram`, `new_writers_allowed`, `load_paced`, `writer_limit`, `cpus`, `load1`

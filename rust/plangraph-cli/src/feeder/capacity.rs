@@ -13,6 +13,17 @@ pub(super) struct Measured {
     pub windows: Option<WindowsRam>,
 }
 
+/// `some avg300` (percent of the last five minutes some task waited for a CPU) from the text of
+/// `/proc/pressure/cpu`.
+pub(super) fn parse_cpu_pressure(text: &str) -> Option<f64> {
+    text.lines()
+        .find_map(|l| l.strip_prefix("some "))?
+        .split_whitespace()
+        .find_map(|f| f.strip_prefix("avg300="))?
+        .parse()
+        .ok()
+}
+
 /// `read_windows` reads Windows' free physical memory; it is called only on a WSL host.
 pub(super) fn sample(
     host: &str,
@@ -51,8 +62,12 @@ pub(super) fn sample(
     } else {
         None
     };
+    let cpu_pressure_avg300 = std::fs::read_to_string("/proc/pressure/cpu")
+        .ok()
+        .and_then(|t| parse_cpu_pressure(&t));
     let facts = HostFacts {
         host: host.to_owned(),
+        cpu_pressure_avg300,
         free_ram_bytes: effective_free(wsl_free_ram_bytes, windows, policy.windows_ram_floor_bytes),
         free_disk_bytes,
         quota_remaining_percent: None,
@@ -78,11 +93,13 @@ pub(super) struct Budget {
     pub new_writers_allowed: usize,
     pub load_paced: bool,
     pub limit: usize,
+    /// `psi` when CPU pressure rules admission, `load_fallback` where the host has no PSI file.
+    pub pressure_source: &'static str,
 }
 
 /// Hosts admit by free RAM (D-5122): new writer slots = (free RAM - floor) / RAM per writer.
-/// Load never refuses; a host whose load1 is at or above its cpu count only starts one new
-/// writer per tick, so builds already running get room before the next one starts.
+/// CPU pressure (`admit`) refuses; only where the host has no PSI file does a load1 at or above
+/// the cpu count pace the host to one new writer per tick, so running builds get room first.
 pub(super) fn apply(
     facts: &mut HostFacts,
     policy: &mut Policy,
@@ -100,7 +117,8 @@ pub(super) fn apply(
             .unwrap_or(0),
     )
     .unwrap_or(usize::MAX);
-    let load_paced = load >= cpus as f64;
+    let psi = facts.cpu_pressure_avg300.is_some();
+    let load_paced = !psi && load >= cpus as f64;
     let new_writers_allowed = if load_paced {
         slots_by_ram.min(1)
     } else {
@@ -116,6 +134,7 @@ pub(super) fn apply(
         new_writers_allowed,
         load_paced,
         limit,
+        pressure_source: if psi { "psi" } else { "load_fallback" },
     })
 }
 

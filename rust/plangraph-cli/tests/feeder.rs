@@ -99,6 +99,7 @@ fn facts() -> HostFacts {
         free_ram_bytes: 8_000_000_000,
         free_disk_bytes: 20_000_000_000,
         quota_remaining_percent: Some(80.0),
+        cpu_pressure_avg300: None,
         observed_at: 1000,
         now: 1001,
         running_writers: 2,
@@ -432,6 +433,24 @@ fn shipped_policy_preserves_host_caps_and_admission_floors() {
     assert_eq!(p.disk_floor_bytes, 10_000_000_000);
     assert_eq!(p.ram_per_run_bytes, 4_000_000_000);
     assert_eq!(p.quota_floor_percent, 10.0);
+    assert_eq!(p.cpu_pressure_max_percent, 50.0);
+    for (pressure, admitted) in [(49.0, true), (50.0, true), (51.0, false)] {
+        let f = HostFacts {
+            cpu_pressure_avg300: Some(pressure),
+            ..facts()
+        };
+        assert_eq!(admit(&f, &p) == Admission::Admit, admitted, "{pressure}");
+    }
+    assert_eq!(
+        admit(
+            &HostFacts {
+                cpu_pressure_avg300: Some(71.0),
+                ..facts()
+            },
+            &p
+        ),
+        Admission::Refuse("cpu_pressure avg300=71 > 50".into())
+    );
     assert_eq!(
         admit(
             &HostFacts {

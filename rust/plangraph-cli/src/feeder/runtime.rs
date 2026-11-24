@@ -124,6 +124,9 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
             "ram_per_writer_bytes":policy.ram_per_run_bytes,
             "slots_by_ram":budget.slots_by_ram, "new_writers_allowed":budget.new_writers_allowed,
             "load_paced":budget.load_paced, "writer_limit":budget.limit,
+            "cpu_pressure_avg300":facts.cpu_pressure_avg300,
+            "cpu_pressure_max_percent":policy.cpu_pressure_max_percent,
+            "cpu_pressure_source":budget.pressure_source,
             "free_disk_bytes":facts.free_disk_bytes,
             "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
         }))
@@ -264,19 +267,59 @@ mod tests {
         assert_eq!(admit(&facts, &policy), Admission::Admit);
     }
     #[test]
-    fn a_loaded_host_with_free_ram_admits_by_ram_and_paces_to_one_new_writer() {
+    fn without_a_psi_file_load_falls_back_to_one_new_writer_per_tick_and_says_so() {
         // The workstation of 2026-11-24: 32 cpus, load1 ~100, 86 GB free, no writer.
         let mut policy = Policy::default();
         let mut facts = live_facts(0, 86_000_000_000);
         let b = super::super::capacity::apply(&mut facts, &mut policy, 32, 100.0).unwrap();
         assert_eq!(b.slots_by_ram, 20);
         assert_eq!((b.new_writers_allowed, b.load_paced, b.limit), (1, true, 1));
+        assert_eq!(b.pressure_source, "load_fallback");
         assert_eq!(admit(&facts, &policy), Admission::Admit);
         facts.running_writers = 1;
         assert_eq!(
             admit(&facts, &policy),
             Admission::Refuse("max_writers".into())
         );
+    }
+    #[test]
+    fn cpu_pressure_refuses_above_the_limit_and_admits_at_or_below_with_ram_above_the_floor() {
+        let mut policy = Policy::default();
+        let case = |pressure: f64, policy: &mut Policy| {
+            let mut facts = live_facts(0, 86_000_000_000);
+            facts.cpu_pressure_avg300 = Some(pressure);
+            let b = super::super::capacity::apply(&mut facts, policy, 32, 151.0).unwrap();
+            (admit(&facts, policy), b)
+        };
+        let (decision, b) = case(51.0, &mut policy);
+        assert_eq!(
+            decision,
+            Admission::Refuse("cpu_pressure avg300=51 > 50".into())
+        );
+        // With PSI present load no longer paces: the slots stay the free-RAM slots.
+        assert_eq!(
+            (b.pressure_source, b.load_paced, b.limit),
+            ("psi", false, 20)
+        );
+        assert_eq!(case(49.0, &mut policy).0, Admission::Admit);
+        assert_eq!(case(50.0, &mut policy).0, Admission::Admit);
+        assert_eq!(
+            case(70.15, &mut policy).0,
+            Admission::Refuse("cpu_pressure avg300=70.15 > 50".into())
+        );
+        policy.cpu_pressure_max_percent = 80.0;
+        assert_eq!(case(70.15, &mut policy).0, Admission::Admit);
+    }
+    #[test]
+    fn psi_text_gives_some_avg300_and_other_text_gives_none() {
+        let text = "some avg10=63.12 avg60=65.26 avg300=70.15 total=21880727490\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n";
+        assert_eq!(
+            super::super::capacity::parse_cpu_pressure(text),
+            Some(70.15)
+        );
+        for bad in ["", "full avg300=3.0", "some avg10=1.0", "some avg300=x"] {
+            assert_eq!(super::super::capacity::parse_cpu_pressure(bad), None);
+        }
     }
     #[test]
     fn a_host_the_policy_does_not_list_refuses_by_name_even_with_free_ram() {
