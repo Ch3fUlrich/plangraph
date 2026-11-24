@@ -1,0 +1,1 @@
+- The keeper takes deploy evidence on an open item whose Plan-Item commit is already on the default branch, from an l1 or worker scoped to the project, and audits the commit in the `evidence_added` event; no `claim --force-stale` is needed to close such an item.
