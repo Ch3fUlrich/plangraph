@@ -102,7 +102,15 @@ pub(super) fn evaluate_seat_record(
         format!("{}..+{}files", paths[0], paths.len() - 1)
     };
 
-    let reason = if passed { None } else { refusal_reason(record) };
+    // A run that finished cleanly but gave no verdict has no recorded cause: name it.
+    let reason = if passed {
+        None
+    } else {
+        refusal_reason(record).or_else(|| {
+            (status == "completed" && verdict.is_none()).then(|| "no_verdict_line".to_owned())
+        })
+    };
+    let ended = record["ended"].as_f64().map(|t| t as i64);
     SeatOutcome {
         index,
         total,
@@ -118,6 +126,7 @@ pub(super) fn evaluate_seat_record(
         paths_summary,
         passed,
         reason,
+        ended,
     }
 }
 

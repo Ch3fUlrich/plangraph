@@ -4,6 +4,9 @@
 //! one watcher lives here. Seats are booked in `no_verdict.jsonl` and alerts in `alerts.jsonl`
 //! of the review state directory; two seats with different run ids and the same normalised cause
 //! inside the window raise one alert per cause per window.
+use super::SeatOutcome;
+use pg_worker_core::lockfile::{try_lock, LockGuard};
+use pg_worker_core::review_split::SeatVerdict;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
@@ -35,51 +38,54 @@ fn rows(path: &Path) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Holds `<dir>/no_verdict.lock` (created exclusively) so the count and the alert write are one step.
-struct Lock(std::path::PathBuf);
-
-impl Lock {
-    fn take(dir: &Path) -> Option<Lock> {
-        let path = dir.join("no_verdict.lock");
-        let began = Instant::now();
-        loop {
-            if OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .is_ok()
-            {
-                return Some(Lock(path));
-            }
-            // A lock left by a killed process must not silence the alert for good.
-            let stale = fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.elapsed().ok())
-                .is_some_and(|age| age > Duration::from_secs(30));
-            if stale {
-                let _ = fs::remove_file(&path);
-            } else if began.elapsed() > Duration::from_secs(3) {
-                return None;
-            } else {
-                std::thread::sleep(Duration::from_millis(20));
-            }
+/// Takes the worker-core advisory lock on `<dir>/no_verdict.lock`; the OS releases it with the
+/// process, so a killed holder never silences the alert and the lock file is never unlinked.
+fn take_lock(dir: &Path) -> Option<LockGuard> {
+    let path = dir.join("no_verdict.lock");
+    let began = Instant::now();
+    loop {
+        if let Ok(Some(guard)) = try_lock(&path) {
+            return Some(guard);
         }
+        if began.elapsed() > Duration::from_secs(3) {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
+/// Whether this outcome is a seat that ended without a verdict: it neither passed nor is
+/// still pending, and either the run did not complete cleanly or its answer had no verdict.
+pub fn is_no_verdict(seat: &SeatOutcome) -> bool {
+    !seat.passed
+        && seat.verdict != Some(SeatVerdict::Pending)
+        && (seat.status != "completed" || seat.exit_code != 0 || seat.verdict.is_none())
 }
 
-/// Book one seat that ended without a verdict; returns the alert when this seat completes a repeat.
+/// The one booking path of a terminal seat, used by the foreground review and by the deferred
+/// finisher of a seat that was pending: books a no-verdict outcome at its terminal time.
+pub fn book(state: &Path, seat: &SeatOutcome, ended_at: i64) -> Option<Value> {
+    if !is_no_verdict(seat) {
+        return None;
+    }
+    note(
+        state,
+        &seat.run_id,
+        seat.reason.as_deref().unwrap_or("no_verdict_line"),
+        ended_at,
+    )
+}
+
+/// Book one run that ended without a verdict at `now` (its terminal time); returns the alert when it completes a repeat.
 pub fn note(dir: &Path, run_id: &str, reason: &str, now: i64) -> Option<Value> {
     let cause = normalise(reason);
     fs::create_dir_all(dir).ok()?;
-    let _lock = Lock::take(dir)?;
+    let _lock = take_lock(dir)?;
     let (seats, alerts) = (dir.join("no_verdict.jsonl"), dir.join("alerts.jsonl"));
+    // Booking a run is idempotent: a retry never moves its terminal time or counts it twice.
+    if rows(&seats).iter().any(|row| row["run_id"] == run_id) {
+        return None;
+    }
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
@@ -140,10 +146,15 @@ mod tests {
     }
 
     #[test]
-    fn a_retried_save_of_one_run_is_not_a_second_seat() {
+    fn a_retried_booking_keeps_the_first_terminal_time_and_never_counts_twice() {
         let dir = tempfile::tempdir().unwrap();
         assert!(note(dir.path(), "run-aa", CAUSE, 1000).is_none());
         assert!(note(dir.path(), "run-aa", CAUSE, 1010).is_none());
+        assert!(!dir.path().join("alerts.jsonl").exists());
+        // run-aa ended at 1000: a seat booked at 3000 is outside its 30-minute window, even if
+        // run-aa is rebooked just before it.
+        assert!(note(dir.path(), "run-aa", CAUSE, 2999).is_none());
+        assert!(note(dir.path(), "run-bb", CAUSE, 3000).is_none());
         assert!(!dir.path().join("alerts.jsonl").exists());
     }
 
