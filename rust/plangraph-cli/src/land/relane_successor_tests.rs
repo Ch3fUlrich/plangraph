@@ -201,3 +201,98 @@ fn at_the_scan_limit_the_last_free_name_is_pushed_and_then_adopted_on_retry() {
     }
     assert!(g(&fx.origin, &["branch", "--list", "lane/full-r22"]).is_empty());
 }
+
+#[test]
+fn a_successor_with_the_same_final_tree_but_other_steps_is_not_adopted() {
+    let fx = Fx::new();
+    let head = fx.lane(
+        "lane/steps-r1",
+        "w-s",
+        &[("a.txt", "s\n2\n3\n"), ("b.txt", "1\ns\n3\n")],
+    );
+    let onto = fx.advance("c.txt", "1\n2\nmain\n");
+    let p = fx.scratch("steps-rival");
+    g(
+        &p,
+        &["checkout", "-q", "-b", "lane/steps-r2", "origin/main"],
+    );
+    // The same two edits, in the other order: the tip tree and the commit count are the fresh result's.
+    for (f, c) in [("b.txt", "1\ns\n3\n"), ("a.txt", "s\n2\n3\n")] {
+        std::fs::write(p.join(f), c).unwrap();
+        g(&p, &["add", "-A"]);
+        g(
+            &p,
+            &["commit", "-q", "-m", &format!("edit {f}\n\nWriter: w-s")],
+        );
+    }
+    g(&p, &["push", "-q", "origin", "lane/steps-r2"]);
+    let fresh = g(&fx.origin, &["rev-parse", "lane/steps-r2^{tree}"]);
+    let err = relane_cli::relane_all(
+        &fx.work,
+        "origin",
+        &onto,
+        true,
+        &[spec("lane/steps-r1", head, "w-s")],
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("lane/steps-r2 is not this lane's result"),
+        "{err}"
+    );
+    assert!(!fresh.is_empty());
+}
+
+#[test]
+fn the_record_file_gets_a_line_per_lane_also_when_a_retry_adopts_the_successor() {
+    let fx = Fx::new();
+    let head = fx.lane(
+        "lane/rec-r1",
+        "w-r",
+        &[("a.txt", "dup\n2\n3\n"), ("b.txt", "1\nrest\n3\n")],
+    );
+    // The first edit is already on main: dropped by the rebase, so the patch ids differ.
+    let onto = fx.advance("a.txt", "dup\n2\n3\n");
+    let record = fx._dir.path().join("relane.jsonl");
+    let l = [spec("lane/rec-r1", head.clone(), "w-r")];
+    for _ in 0..2 {
+        relane_cli::relane_all_with(&fx.work, "origin", &onto, true, &l, Some(&record)).unwrap();
+    }
+    let lines: Vec<serde_json::Value> = std::fs::read_to_string(&record)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    let pushed = g(&fx.origin, &["rev-parse", "lane/rec-r2"]);
+    for (line, kind) in lines.iter().zip(["REBASED", "CURRENT"]) {
+        assert_eq!(line["kind"], kind);
+        assert_eq!(line["old_head"], head.as_str());
+        assert_eq!(line["new_head"], pushed.as_str());
+        assert_eq!(line["pushed"], "lane/rec-r2");
+        assert_eq!(line["onto"], onto.as_str());
+        // One patch was dropped: the adopted head reports its own inequality, not the fresh result's.
+        assert_eq!(line["patch_ids_equal"], false);
+        assert_eq!(
+            (line["own_before"].as_u64(), line["own_after"].as_u64()),
+            (Some(2), Some(1))
+        );
+    }
+}
+
+#[test]
+fn a_second_writer_phrase_later_in_the_note_is_not_the_lane() {
+    let note = "x\\n\\nWriter: claude-sonnet-5-5 s (high writer victim-lane, Claude Code, dell, D-1, previous writer replacement)";
+    let json = format!(
+        r#"[
+      {{"headRefName":"lane/replacement-r1","headRefOid":"r1","baseRefName":"main","commits":[{{"messageBody":"{note}"}}]}},
+      {{"headRefName":"lane/victim-lane-r1","headRefOid":"v1","baseRefName":"main","commits":[{{"messageBody":"{note}"}}]}}
+    ]"#
+    );
+    let specs = relane_cli::specs_from_prs(&json).unwrap();
+    let by: std::collections::BTreeMap<_, _> = specs
+        .iter()
+        .map(|s| (s.branch.as_str(), s.writer.as_str()))
+        .collect();
+    assert_eq!(by["lane/replacement-r1"], "");
+    assert!(by["lane/victim-lane-r1"].contains("previous writer replacement"));
+}

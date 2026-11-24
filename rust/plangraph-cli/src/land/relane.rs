@@ -262,14 +262,15 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
         let exact = theirs.len() == after.len()
             && foreign(repo, &theirs, l.writer)?.is_none()
             && git::out(repo, &["rev-list", "--merges", &format!("{onto}..{tip}")])?.is_empty()
-            && git::out(repo, &["rev-parse", &format!("{tip}^{{tree}}")])?
-                == git::out(repo, &["rev-parse", &format!("{new}^{{tree}}")])?;
+            && same_trees(repo, &theirs, &after)?;
         if !exact {
             return refuse(
                 l.branch,
                 format!("{target} is not this lane's result on the new main"),
             );
         }
+        // The equality reported is the adopted head's own, not the fresh result's.
+        let equal = patch_ids(repo, &own_range)? == patch_ids(repo, &format!("{onto}..{tip}"))?;
         let r = report(l, &old, &tip, equal, &before, &theirs, Some(target));
         return Ok(Outcome::Current(r));
     }
@@ -293,6 +294,17 @@ pub fn relane(l: &Lane) -> Result<Outcome, String> {
     Ok(Outcome::Rebased(report(
         l, &old, &new, equal, &before, &after, pushed,
     )))
+}
+
+/// The commits have the same tree one by one, in order: an equal tip tree can hide different steps.
+fn same_trees(repo: &Path, a: &[String], b: &[String]) -> Result<bool, String> {
+    for (x, y) in a.iter().zip(b) {
+        let tree = |c: &str| git::out(repo, &["rev-parse", &format!("{c}^{{tree}}")]);
+        if tree(x)? != tree(y)? {
+            return Ok(false);
+        }
+    }
+    Ok(a.len() == b.len())
 }
 
 fn report(

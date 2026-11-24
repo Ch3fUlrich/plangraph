@@ -137,6 +137,9 @@ with TemporaryDirectory() as tmp:
     assert part_views.call_count == 2
     label.assert_called_once_with(identity['repo'], 6, 'needs-update')
     telemetry.assert_called_once_with(st, 'train-pr-merge', 'd'*40, ['rerun'], 'go-row')
+    relane = calls[2]
+    assert relane[-2] == '--record' and relane[-1].endswith('relane-' + 'd'*40 + '.jsonl'), relane
+    calls[2] = relane[:-2]
     assert calls == [['plangraph', 'merge-close'], ['plangraph', 'landing', 'verify-hosts', 'example/repo', 'd'*40],
                      ['plangraph', 'land-train', 'relane-open', '--repo', '.', '--github', 'example/repo',
                       '--remote', 'origin', '--merge', 'd'*40, '--push', 'true'],

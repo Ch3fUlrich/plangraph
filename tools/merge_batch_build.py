@@ -613,7 +613,7 @@ def seats_acknowledged():
 
 def relane_open(repo, merge):  # rc 3: a lane was refused (final); any other failure raises, so the step stays open
     r = run(["plangraph", "land-train", "relane-open", "--repo", ".", "--github", repo, "--remote", REMOTE,
-             "--merge", merge, "--push", "true"], ok=(0, 3), timeout=1800)
+             "--merge", merge, "--push", "true", "--record", str(state_dir() / f"relane-{merge}.jsonl")], ok=(0, 3), timeout=1800)
     sys.stderr.write(r.stdout + r.stderr)
 
 

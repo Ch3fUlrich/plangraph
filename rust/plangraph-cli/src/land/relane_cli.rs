@@ -32,10 +32,46 @@ pub fn relane_all(
     push: bool,
     specs: &[Spec],
 ) -> Result<Vec<String>, String> {
+    relane_all_with(repo, remote, onto, push, specs, None)
+}
+
+/// Appends one JSON line per relaned lane to `record`: the hand-off the seat evidence rule and the probe
+/// move read (old head, new head, patch-id equality, counts, successor branch, the main it was relaned onto).
+fn append_record(
+    record: &std::path::Path,
+    kind: &str,
+    onto: &str,
+    r: &super::relane::Report,
+) -> Result<(), String> {
+    use std::io::Write;
+    let mut line = serde_json::to_value(r).map_err(|e| e.to_string())?;
+    line["kind"] = kind.into();
+    line["onto"] = onto.into();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(record)
+        .map_err(|e| format!("retry: relane record {}: {e}", record.display()))?;
+    writeln!(file, "{line}").map_err(|e| format!("retry: relane record: {e}"))
+}
+
+pub fn relane_all_with(
+    repo: &std::path::Path,
+    remote: &str,
+    onto: &str,
+    push: bool,
+    specs: &[Spec],
+    record: Option<&std::path::Path>,
+) -> Result<Vec<String>, String> {
     let mut lines = Vec::new();
     let (mut failed, mut retry) = (false, false);
     let mut heads: BTreeMap<&str, String> = BTreeMap::new();
     for s in specs {
+        let lane_onto = s
+            .parent
+            .as_ref()
+            .and_then(|p| heads.get(p.branch.as_str()).cloned())
+            .unwrap_or_else(|| onto.to_owned());
         let outcome = match &s.parent {
             None => run_one(repo, remote, onto, push, s, None),
             Some(p) => match heads.get(p.branch.as_str()) {
@@ -49,6 +85,14 @@ pub fn relane_all(
         match &outcome {
             Outcome::Current(r) | Outcome::Rebased(r) => {
                 heads.insert(&s.branch, r.new_head.clone());
+                if let Some(path) = record {
+                    let kind = if matches!(outcome, Outcome::Current(_)) {
+                        "CURRENT"
+                    } else {
+                        "REBASED"
+                    };
+                    append_record(path, kind, &lane_onto, r)?;
+                }
             }
             Outcome::Retry { .. } => retry = true,
             _ => failed = true,
@@ -103,12 +147,13 @@ pub fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> 
     let text =
         std::fs::read_to_string(need(flags, "spec")?).map_err(|e| format!("relane spec: {e}"))?;
     let specs: Vec<Spec> = serde_json::from_str(&text).map_err(|e| format!("relane spec: {e}"))?;
-    relane_all(
+    relane_all_with(
         &PathBuf::from(need(flags, "repo")?),
         &need(flags, "remote")?,
         &need(flags, "onto")?,
         flags.get("push").is_some_and(|v| v == "true"),
         &specs,
+        flags.get("record").map(std::path::Path::new),
     )
 }
 
@@ -139,11 +184,18 @@ fn lane_stem(branch: &str) -> &str {
     }
 }
 
-/// The lane name in a `Writer` value such as `claude-x uuid (high writer NAME, Claude Code, host, D-1)`: the
-/// field after `writer`, not any word of the value (a host or a family can equal another lane's name).
+/// The lane name in a `Writer` value `claude-x id (EFFORT writer NAME, harness, host, D-1)`: the field the
+/// parenthetical note opens with. A later `writer` phrase in the note, or a host that equals another lane, is
+/// not the lane.
 fn writer_lane(writer: &str) -> Option<&str> {
-    let (_, rest) = writer.rsplit_once(" writer ")?;
-    Some(rest.split([',', ')']).next()?.trim())
+    let (_, note) = writer.split_once(" (")?;
+    let (_effort, rest) = note.split_once(' ')?;
+    let name = rest
+        .strip_prefix("writer ")?
+        .split([',', ')'])
+        .next()?
+        .trim();
+    (!name.is_empty()).then_some(name)
 }
 
 /// The `Writer` trailer value of the lane's newest commit that has one (a merge of main has none), when it
@@ -201,7 +253,7 @@ pub fn specs_from_prs(json: &str) -> Result<Vec<Spec>, String> {
         .collect())
 }
 
-/// `relane-open --repo DIR --github OWNER/NAME --remote NAME --merge SHA [--push true]`: relanes every open
+/// `relane-open --repo DIR --github OWNER/NAME --remote NAME --merge SHA [--push true] [--record FILE]`: relanes every open
 /// `lane/` pull request onto the current tip of main, which must hold the train merge; the settlement step
 /// `relane` calls it. Exit 4 (`retry:`) is a failure to run again, 3 a lane that cannot be relaned.
 pub fn run_open_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
@@ -241,11 +293,12 @@ pub fn run_open_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, Str
         )));
     }
     let specs = specs_from_prs(&String::from_utf8_lossy(&out.stdout))?;
-    relane_all(
+    relane_all_with(
         &repo,
         &remote,
         &tip,
         flags.get("push").is_some_and(|v| v == "true"),
         &specs,
+        flags.get("record").map(std::path::Path::new),
     )
 }

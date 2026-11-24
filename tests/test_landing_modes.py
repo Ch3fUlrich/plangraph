@@ -243,7 +243,8 @@ def test_settlement_relanes_the_open_lanes_onto_the_merge_and_never_fails_on_it(
     assert resumed.returncode == 0, resumed.stderr
     (call,) = (env.tmp / "sweep.relane").read_text().splitlines()
     assert call.startswith("land-train relane-open --repo ")
-    assert f"--merge {main_tip(env)} --push true" in call and "--github" in call
+    assert f"--merge {main_tip(env)} --push true --record " in call and "--github" in call
+    assert call.endswith(f"relane-{main_tip(env)}.jsonl")  # the hand-off file of the seat evidence rule
     assert "REBASED lane/x-r1" in resumed.stderr
     assert journal()["train"]["open_steps"] == []
     env.run("settle")  # a settled train is not relaned a second time
