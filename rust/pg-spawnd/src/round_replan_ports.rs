@@ -98,8 +98,17 @@ impl CommandPorts<'_> {
 /// `<SEVERITY> <text>`. The rounds are the admission's own history (voided and refused attempts
 /// left out); a round whose verdict is missing or invalid is skipped for the one before it.
 fn last_round_findings(state: &Path, item: &str, pr: &str) -> Result<Vec<String>, ToolError> {
+    last_round_findings_of(state, item, &json!(pr))
+}
+
+/// The same for a round loop that has no PR (`pr` null).
+pub(crate) fn last_round_findings_of(
+    state: &Path,
+    item: &str,
+    pr: &Value,
+) -> Result<Vec<String>, ToolError> {
     let history = crate::round_progress::round_history(state, item)?;
-    for record in history.iter().rev().filter(|r| r["round_pr"] == pr) {
+    for record in history.iter().rev().filter(|r| r["round_pr"] == *pr) {
         let run = record["run_id"].as_str().unwrap_or("");
         let Ok(dir) = pg_worker_core::run::record::run_dir(state, run) else {
             continue;
@@ -113,8 +122,7 @@ fn last_round_findings(state: &Path, item: &str, pr: &str) -> Result<Vec<String>
             ))
         };
         let Ok(verdict) = verdict else { continue };
-        let pr_value = json!(pr);
-        if crate::round_progress::summarize(&verdict, run, item, &pr_value).is_err() {
+        if crate::round_progress::summarize(&verdict, run, item, pr).is_err() {
             continue;
         }
         return Ok(verdict["findings"]

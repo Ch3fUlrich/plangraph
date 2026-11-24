@@ -11,13 +11,13 @@ const PR: &str = "https://forge/p/1";
 /// One earlier writer round: why it ran and the failing checks seen when it started.
 struct Round {
     cause: &'static str,
-    checks: u64,
+    checks: Option<u64>,
     escalation: u64,
 }
 fn red(checks: u64) -> Round {
     Round {
         cause: "red_ci",
-        checks,
+        checks: Some(checks),
         escalation: 0,
     }
 }
@@ -163,6 +163,23 @@ fn a_check_judged_round_followed_by_a_card_without_failing_checks_is_admitted() 
 }
 
 #[test]
+fn consecutive_cards_without_a_check_count_carry_the_last_observed_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let unknown = || Round {
+        checks: None,
+        ..red(0)
+    };
+    book(dir.path(), &[red(5), unknown(), unknown()]);
+    let mut args = card("review_finding", 0);
+    args["card"]
+        .as_object_mut()
+        .unwrap()
+        .remove("failing_checks");
+    // 5, then two omissions: the known red count stays, the stall is not reset to zero.
+    assert!(message(run(dir.path(), &args)).starts_with("round_replan_pending"));
+}
+
+#[test]
 fn a_review_card_without_a_check_count_cannot_reset_a_stall() {
     let dir = tempfile::tempdir().unwrap();
     book(dir.path(), &[red(5), red(5), red(5)]);
@@ -284,6 +301,26 @@ fn the_report_ignores_dry_run_and_voided_attempts() {
     );
     assert_eq!(report["items"], json!({}));
     assert_eq!(report["escalations_per_day"], json!({}));
+}
+
+#[test]
+fn returns_are_not_replans_and_a_job_of_the_earlier_schema_is_still_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::round_replan::enqueue_return(dir.path(), "p:Back", "round_cap", &[])
+        .ok()
+        .unwrap();
+    // An older job file without queued_at is dated by the file.
+    std::fs::write(
+        dir.path().join("replans/replan-old.json"),
+        json!({"item":"p:Old", "pr":PR, "reason":"no_progress", "plan":null,
+        "defined":[], "closed":false, "report":"pending", "error":null})
+        .to_string(),
+    )
+    .unwrap();
+    let report = report(dir.path(), &[], 0.0, f64::MAX);
+    assert_eq!(report["items"]["p:Back"]["returns"], 1);
+    assert_eq!(report["items"]["p:Back"]["replans"], 0);
+    assert_eq!(report["items"]["p:Old"]["replans"], 1);
 }
 
 #[test]

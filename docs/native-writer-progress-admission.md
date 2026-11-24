@@ -59,13 +59,16 @@ slices and reported (`round_replan.rs`, the PR stays open, nothing is defined or
 round is admitted on the same writer (`round_escalation` +1, `round_replan: done`) and 3 more
 misses queue the next job. The admitted writer's prompt carries the job's slices and open
 findings. A card that omits `failing_checks` keeps the round's own start count (no progress
-credit). A stall without a PR refuses `no_progress` or `slow_progress` and queues a return job
-(one routing line, nothing planned): the batch goes back. A check-triggered round must carry `card.failing_checks`
+credit), and the last observed count is carried over any number of omissions. A stall without
+a PR refuses `no_progress` or `slow_progress` and queues a return job (one routing line with the
+open findings, nothing planned): the batch goes back. The replan keeps the findings at plan
+level, so a diff with no counted file still hands them to the writer. A check-triggered round must carry `card.failing_checks`
 (`round_failing_checks_missing`), an accepted review still allows a counted red-check or
 moved-main fix, and a dry run queues no job. Writer 9 always
 refuses with `round_cap`. `health report` carries `fix_rounds`: rounds by cause per item, escalations and replans
-counted from the replan jobs by their queue time (a waiting batch shows), escalations per
-day, items over the ceiling. At a stall only,
+counted from the replan jobs by their queue time (a waiting batch shows; a job of the
+earlier schema is dated by its file), returns apart from replans, escalations per day, items
+over the ceiling. At a stall only,
 `card.narrow_fix: true` permits one additional narrow round if the latest
 verdict has exactly 1–2 confirmed MED, every one has `clear_fix: true`, and
 there are no confirmed HIGH. No further writer is admitted after that round.

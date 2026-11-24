@@ -256,15 +256,17 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         };
         summaries.push(summary);
     }
+    // A card that omits the check count carries the last observed count forward: unknown
+    // evidence never credits progress, however many cards in a row omit it.
+    let mut observed = 0;
     let counts: Vec<_> = summaries
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            // A card that omits the check count keeps the round's own start count: unknown
-            // evidence never credits progress.
-            let checks_after = after(i)
-                .unwrap_or_else(|| history[i]["round_failing_checks"].as_u64().unwrap_or(0));
-            s["confirmed_blockers"].as_u64().unwrap() + checks_after
+            observed = after(i)
+                .or_else(|| history[i]["round_failing_checks"].as_u64())
+                .unwrap_or(observed);
+            s["confirmed_blockers"].as_u64().unwrap() + observed
         })
         .collect();
     if next > MAX_ROUNDS {
@@ -346,7 +348,10 @@ pub(crate) fn record_refusal(
     {
         // No PR to replan: the batch still goes back, by one delivered routing line.
         if ["no_progress", "slow_progress", "round_cap"].contains(&reason) {
-            match crate::round_replan::enqueue_return(state, item, reason) {
+            let findings =
+                crate::round_replan_ports::last_round_findings_of(state, item, &Value::Null)
+                    .unwrap_or_default();
+            match crate::round_replan::enqueue_return(state, item, reason, &findings) {
                 Ok(true) => base["replan"] = json!("returned"),
                 Ok(false) => {}
                 Err(e) => base["replan_error"] = json!(e.into_error_data().message),

@@ -21,6 +21,7 @@ struct Fixture {
     calls: RefCell<Vec<String>>,
     fail_define_at: RefCell<Option<String>>,
     fail_send: RefCell<bool>,
+    lock_only: RefCell<bool>,
     keys: RefCell<Vec<String>>,
     sent_keys: RefCell<Vec<String>>,
 }
@@ -43,6 +44,9 @@ impl Ports for Fixture {
         ])
     }
     fn pr_files(&self, _pr: &str) -> Result<Vec<FileChange>, ToolError> {
+        if *self.lock_only.borrow() {
+            return Ok(vec![change("Cargo.lock", 5000)]);
+        }
         Ok(vec![
             change("a/one.rs", 900),
             change("a/two.rs", 800),
@@ -429,12 +433,22 @@ fn an_escalation_replan_plans_on_the_strongest_leg_and_leaves_the_pr_open() {
 #[test]
 fn a_batch_sent_back_without_a_pr_still_gets_one_delivered_routing_line() {
     let dir = tempfile::tempdir().unwrap();
-    assert!(enqueue_return(dir.path(), "p:I", "no_progress")
-        .ok()
-        .unwrap());
-    assert!(!enqueue_return(dir.path(), "p:I", "no_progress")
-        .ok()
-        .unwrap());
+    assert!(enqueue_return(
+        dir.path(),
+        "p:I",
+        "no_progress",
+        &["HIGH a/one.rs:3 keep\nit".into()]
+    )
+    .ok()
+    .unwrap());
+    assert!(!enqueue_return(
+        dir.path(),
+        "p:I",
+        "no_progress",
+        &["HIGH a/one.rs:3 keep\nit".into()]
+    )
+    .ok()
+    .unwrap());
     let ports = Fixture::default();
     let done = run_pending(dir.path(), &ports);
     assert_eq!(done[0].1, "done");
@@ -443,7 +457,7 @@ fn a_batch_sent_back_without_a_pr_still_gets_one_delivered_routing_line() {
     assert_eq!(ports.count("define"), 0);
     assert_eq!(
         ports.calls.borrow().last().unwrap(),
-        "route REPLAN p:I no_progress | no PR, batch returned to the keeper"
+        "route REPLAN p:I no_progress | no PR, batch returned to the keeper | findings HIGH a/one.rs:3 keep it"
     );
     // The refusal path queues it for a PR-less card, once, and never on a dry run.
     let dir = tempfile::tempdir().unwrap();
@@ -462,4 +476,20 @@ fn a_batch_sent_back_without_a_pr_still_gets_one_delivered_routing_line() {
         .unwrap();
     assert!(dry.get("replan").is_none());
     assert!(!dry_dir.path().join("replans").exists());
+}
+
+#[test]
+fn a_replan_of_a_lockfile_only_diff_still_hands_the_open_findings_to_the_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        enqueue_escalation(dir.path(), "p:I", "https://forge/p/1", 1)
+            .ok()
+            .unwrap()
+    );
+    let ports = Fixture::default();
+    *ports.lock_only.borrow_mut() = true;
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    let brief = escalation_brief(dir.path(), "p:I", "https://forge/p/1", 1).unwrap();
+    assert!(brief.contains("Open finding: HIGH a/one.rs:3 keep\nverbatim"));
+    assert!(brief.contains("MED b/three.rs: two"));
 }

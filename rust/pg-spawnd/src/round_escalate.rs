@@ -66,6 +66,7 @@ pub(crate) fn report(state: &std::path::Path, records: &[Value], since: f64, unt
         causes: BTreeMap<String, u64>,
         escalations: u64,
         replans: u64,
+        returns: u64,
     }
     let (mut items, mut days) = (
         BTreeMap::<String, Item>::new(),
@@ -110,6 +111,11 @@ pub(crate) fn report(state: &std::path::Path, records: &[Value], since: f64, unt
             continue;
         }
         let entry = items.entry(item.to_string()).or_default();
+        if job["kind"] == "return" {
+            // A batch sent back without a PR: a return, not a replan.
+            entry.returns += 1;
+            continue;
+        }
         entry.replans += 1;
         if job["reason"] == crate::round_replan::ESCALATED {
             entry.escalations += 1;
@@ -129,7 +135,7 @@ pub(crate) fn report(state: &std::path::Path, records: &[Value], since: f64, unt
         .into_iter()
         .map(|(k, i)| {
             let row = json!({"rounds":i.rounds, "by_cause":i.causes,
-                "escalations":i.escalations, "replans":i.replans});
+                "escalations":i.escalations, "replans":i.replans, "returns":i.returns});
             (k, row)
         })
         .collect();

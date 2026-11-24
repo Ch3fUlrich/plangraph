@@ -198,7 +198,9 @@ pub(crate) fn escalation_brief(state: &Path, item: &str, pr: &str, level: u64) -
             files.join(", ")
         );
     }
-    let findings = job["plan"]["slices"][0]["findings"].as_array();
+    let findings = job["plan"]["findings"]
+        .as_array()
+        .or_else(|| job["plan"]["slices"][0]["findings"].as_array());
     for finding in findings.into_iter().flatten().filter_map(Value::as_str) {
         text += &format!("Open finding: {finding}\n");
     }
@@ -207,7 +209,12 @@ pub(crate) fn escalation_brief(state: &Path, item: &str, pr: &str, level: u64) -
 
 /// Queue the job that reports a batch the rounds sent back when there is no PR to replan:
 /// nothing is planned, defined or closed, only the routing line is delivered.
-pub(crate) fn enqueue_return(state: &Path, item: &str, reason: &str) -> Result<bool, ToolError> {
+pub(crate) fn enqueue_return(
+    state: &Path,
+    item: &str,
+    reason: &str,
+    findings: &[String],
+) -> Result<bool, ToolError> {
     std::fs::create_dir_all(job_dir(state))
         .map_err(|_| parameter("replan_state_unavailable: job directory missing"))?;
     let id = Sha256::digest(format!("{item}\nreturn\n{reason}").as_bytes());
@@ -216,8 +223,8 @@ pub(crate) fn enqueue_return(state: &Path, item: &str, reason: &str) -> Result<b
         return Ok(false);
     }
     let job = json!({"item":item, "pr":"", "reason":reason, "kind":"return", "queued_at":now(),
-        "plan":{"leg":null, "slices":[]}, "defined":[], "closed":false, "report":"pending",
-        "error":null});
+        "plan":{"leg":null, "slices":[], "findings":findings}, "defined":[], "closed":false,
+        "report":"pending", "error":null});
     save(&path, &job)?;
     Ok(true)
 }
@@ -236,7 +243,19 @@ pub(crate) fn jobs(state: &Path) -> Vec<Value> {
         .flatten()
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .filter_map(|p| load(&p).ok())
+        .filter_map(|p| {
+            let mut job = load(&p).ok()?;
+            if job["queued_at"].as_f64().is_none() {
+                // A job of the earlier schema: date it by its file.
+                let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok()?;
+                let secs = mtime
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs_f64();
+                job["queued_at"] = json!(secs);
+            }
+            Some(job)
+        })
         .collect()
 }
 
@@ -311,7 +330,7 @@ fn plan_step(job: &mut Value, ports: &dyn Ports) -> Result<(), ToolError> {
                 "lines":group.iter().map(lines).sum::<u64>(), "findings":findings})
         })
         .collect();
-    job["plan"] = json!({"leg":leg.name, "slices":slices});
+    job["plan"] = json!({"leg":leg.name, "slices":slices, "findings":findings});
     Ok(())
 }
 
@@ -386,10 +405,22 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
             "closed unmerged"
         };
         let line = if returned {
+            let findings: Vec<String> = job["plan"]["findings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|f| f.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect();
             format!(
-                "REPLAN {} {} | no PR, batch returned to the keeper",
+                "REPLAN {} {} | no PR, batch returned to the keeper | findings {}",
                 job["item"].as_str().unwrap_or(""),
-                job["reason"].as_str().unwrap_or("")
+                job["reason"].as_str().unwrap_or(""),
+                if findings.is_empty() {
+                    "none".to_string()
+                } else {
+                    findings.join(" ; ")
+                }
             )
         } else {
             format!(
