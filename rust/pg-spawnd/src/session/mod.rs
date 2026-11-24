@@ -1,6 +1,7 @@
 //! Caller-process launch for the fleet's session command.
 
 mod arguments;
+mod cargo_env;
 mod external_run;
 mod identity;
 mod paths;
@@ -318,6 +319,20 @@ fn local(
         )?;
         return Ok(0);
     }
+    // Resolved before the durable "starting" row and the registration: a bad setting must fail the launch cleanly.
+    let target_env = match cargo_env::target_env(
+        std::env::var_os("CARGO_TARGET_DIR").as_deref(),
+        std::env::var_os("PLANGRAPH_CARGO_TARGET_DIR").as_deref(),
+        &paths.home,
+        &std::env::current_dir().unwrap_or_default(),
+    ) {
+        Ok(env) => env,
+        Err(error) => {
+            log("refused", None);
+            eprintln!("fleet-launch: {error}");
+            return Ok(2);
+        }
+    };
     if storage::ledger(admission, true, "starting", Some(&name)).is_err() {
         eprintln!("fleet-launch: fallback ledger unavailable; not starting");
         return Ok(2);
@@ -328,6 +343,7 @@ fn local(
         .args(&argv[1..])
         .stdin(Stdio::inherit())
         .current_dir(&args.cwd)
+        .envs(target_env)
         .env("CLAUDE_CODE_AUTO_COMPACT_WINDOW", compact)
         .env("FLEET_SESSION_NAME", &args.role)
         .env("PATH", settings::tool_path(&paths.home))
