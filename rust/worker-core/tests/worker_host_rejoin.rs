@@ -13,6 +13,7 @@ struct Fake {
     disk_ok: bool,
     working_legs: Vec<String>,
     fates: Vec<(String, RunFate)>,
+    unchecked: Vec<String>,
 }
 
 impl Fake {
@@ -60,9 +61,9 @@ impl RejoinHost for Fake {
         self.calls.push(format!("settle {run} {fate:?}"));
         Ok(())
     }
-    fn reap_worktrees(&mut self) -> io::Result<u64> {
-        self.calls.push("reap".into());
-        Ok(3)
+    fn sweep_worktrees(&mut self) -> io::Result<()> {
+        self.calls.push("sweep".into());
+        Ok(())
     }
     fn check_floors(&mut self) -> io::Result<FloorReport> {
         self.calls.push("floors".into());
@@ -70,6 +71,7 @@ impl RejoinHost for Fake {
             disk_ok: self.disk_ok,
             ram_ok: true,
             detail: "work disks under their floor".into(),
+            unchecked: self.unchecked.clone(),
         })
     }
     fn probe_legs(&mut self) -> io::Result<LegReport> {
@@ -111,6 +113,7 @@ fn rejoin_runs_every_step_settles_unknown_runs_and_sets_ready() {
     assert!(store.refusal().unwrap().is_some());
     let mut host = Fake::healthy();
     host.stale_binary = true;
+    host.unchecked = vec!["ram: no Windows free-memory source".into()];
     let record = store.rejoin(&mut host, 1000).unwrap();
     assert_eq!(
         host.calls,
@@ -120,7 +123,7 @@ fn rejoin_runs_every_step_settles_unknown_runs_and_sets_ready() {
             "settle run-dead Dead",
             "settle run-finished Finished",
             "settle run-live Live",
-            "reap",
+            "sweep",
             "floors",
             "legs"
         ]
@@ -128,6 +131,10 @@ fn rejoin_runs_every_step_settles_unknown_runs_and_sets_ready() {
     assert_eq!(store.phase().unwrap(), Phase::Ready);
     assert_eq!(store.refusal().unwrap(), None);
     assert!(record["flags"][0].as_str().unwrap().starts_with("binary:"));
+    assert_eq!(
+        record["flags"][1],
+        "floor unchecked: ram: no Windows free-memory source"
+    );
     assert_eq!(record["runs"].as_array().unwrap().len(), 3);
     let files: Vec<_> = fs::read_dir(state.path().join("rejoin"))
         .unwrap()
