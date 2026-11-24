@@ -182,3 +182,13 @@ def sync_seat_group(records, save):
             held.add(seat_family(record['chosen_leg']['family']))
         if chosen != record.get('chosen_leg'):
             save(record)
+
+
+def save_seat_group(state, envelope):
+    """Persist the seat set next to the run records (``<state>/seat-groups/<id>.json``)."""
+    import json
+    from .private_io import atomic_write_private
+    atomic_write_private(state / 'seat-groups' / (envelope['seat_group'] + '.json'),
+                         json.dumps({'seat_group': envelope['seat_group'],
+                                     'runs': [r.get('run_id') for r in envelope['seats']],
+                                     'seat_coverage': envelope['seat_coverage']}, sort_keys=True))

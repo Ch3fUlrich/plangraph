@@ -16,8 +16,8 @@ from pathlib import Path
 
 from plangraph.routing_errors import SpawnRefused
 
-from .seat_artifact import (lone_smart_seat, reserve_seat_families, seat_reasons, sync_seat, sync_seat_group,
-                            weak_pair)
+from .seat_artifact import reserve_seat_families, save_seat_group, seat_reasons, sync_seat, sync_seat_group
+from .seat_pair import weak_pair_after_smart
 
 def live_runner(runner):
     """Default-equivalent runners use fresh code; injected transports stay local."""
@@ -756,7 +756,7 @@ class SeatSpawnMixin:
             refused = SpawnRefused(plan.error)
             refused.reason, refused.skipped = plan.error, [dict(row) for row in plan.skipped]
             raise refused
-        from plangraph.planner.seats import seat_family, with_head_writers, writer_parts
+        from plangraph.planner.seats import seat_family, with_head_writers
         writers = with_head_writers(card, role, writer_families)
         if review_of:
             source = self.result(review_of)
@@ -780,44 +780,18 @@ class SeatSpawnMixin:
         runs = [self.save_refusal(r, role, card=card, seat_leg=seat.id, plan={'seat_coverage': [own[i]]})
                 if isinstance(r, Exception) else r
                 for i, (seat, r) in enumerate(zip(plan.review_seats, runs))]
-        seat_slots = list(plan.review_seats)
-        if lone_smart_seat(plan) and self._ended_without_verdict(runs[0]) and (
-                pair := weak_pair(plan, writer_parts(writers))):
-            # The smart seat ended without a verdict after every smart fallback: both weak seats launch
-            # and both are required (rule 3.66 f10 clause 6).
-            more = [dict(coverage.get(leg.id, {'leg': leg.id}), seat_group=group, family=leg.family,
-                         keeper_family=seat_family(leg.family), eligible_families=[seat_family(leg.family)])
-                    for leg in pair]
-            extra = await asyncio.gather(*(
-                self._spawn(card=card, prompt=prompt, role=role, writer_families=writer_families,
-                            review_of=review_of, _plan=replace(
-                                plan, legs=(leg,), review_seats=(leg,), seat_coverage=(more[i],)),
-                            **options)
-                for i, leg in enumerate(pair)), return_exceptions=True)
-            extra = [self.save_refusal(r, role, card=card, seat_leg=leg.id, plan={'seat_coverage': [more[i]]})
-                     if isinstance(r, Exception) else r for i, (leg, r) in enumerate(zip(pair, extra))]
-            runs, own, seat_slots = [*runs, *extra], [*own, *more], [*seat_slots, *pair]
+        extra, more = await weak_pair_after_smart(self, plan, runs, writers, coverage, group, card=card, prompt=prompt,
+                                                  role=role, writer_families=writer_families, review_of=review_of,
+                                                  options=options)
+        runs, own = [*runs, *extra], [*own, *more]
         records = [r for r in runs if not isinstance(r, BaseException)]
         sync_seat_group(records, self._save)
         resolved = [r['plan']['seat_coverage'][0] for r in records]
         families = [c.get('family') for c in resolved]
         reasons = self._seat_reasons(families, [c['reason'] for c in resolved if c.get('reason')])
         envelope = {'seat_group': group, 'seats': records, 'seat_coverage': resolved, 'reasons': list(reasons)}
-        self._save_seat_group(envelope)   # before any re-raise: launched seats keep their group
+        save_seat_group(self.state, envelope)   # before any re-raise: launched seats keep their group
         for r in runs:
             if isinstance(r, BaseException):
                 raise r
         return envelope
-
-    @staticmethod
-    def _ended_without_verdict(run):
-        """A smart seat run that raised, failed or ended with no resolved leg gave no verdict."""
-        return isinstance(run, BaseException) or run.get('status') != 'completed' or not run.get('chosen_leg')
-
-    def _save_seat_group(self, envelope):
-        """Persist the seat set next to the run records (``<state>/seat-groups/<id>.json``)."""
-        from .private_io import atomic_write_private
-        atomic_write_private(self.state / 'seat-groups' / (envelope['seat_group'] + '.json'),
-                             json.dumps({'seat_group': envelope['seat_group'],
-                                         'runs': [r.get('run_id') for r in envelope['seats']],
-                                         'seat_coverage': envelope['seat_coverage']}, sort_keys=True))
