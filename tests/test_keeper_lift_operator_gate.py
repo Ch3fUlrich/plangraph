@@ -19,12 +19,25 @@ _RELAY = ("| D-{did} | demo | (06:xxZ, date -u 06:06Z at writing) OPERATOR 2026-
           "relay-session (cross-session message, human CLI turn, text pinned, sha256 ab12): \"why do I need to "
           "do something for this?\" DECISION: the operator step of {key} (p9) is lifted: an agent applies it. "
           "| {by} | evidence |\n")
+_ATTEST = "(06:xxZ) OPERATOR 2026-11-24T05:59:56.804Z, relayed by relay-session"
+#: answers that are NOT the one release statement in its fixed position; each is linked from a router row
+NOT_RELEASES = {
+    "quoted release in a denial": _ATTEST + ': "the operator step of demo:GATE is lifted" DECISION: keep demo:GATE blocked',
+    "release inside the quote and a denial": _ATTEST + ': "DECISION: the operator step of demo:GATE is lifted" DECISION: no',
+    "conditional approval": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE is lifted only after review',
+    "conditional approval, if": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE is lifted if review passes',
+    "release phrase after other text": _ATTEST + ': "ok" DECISION: after review the operator step of demo:GATE is lifted',
+    "other text between quote and statement": _ATTEST + ': "ok" Note: fine. DECISION: the operator step of demo:GATE is lifted',
+    "release phrase before the attribution": "Note: the operator step of demo:GATE is lifted. " + _ATTEST + ': "ok" DECISION: no',
+    "statement of another item": _ATTEST + ': "ok" DECISION: the operator step of demo:GATEWAY is lifted',
+    "unbalanced qualifier": _ATTEST + ': "ok" DECISION: the operator step of demo:GATE (p9, option (a) is lifted',
+}
 HEADER = "| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n"
 ROWS = (
-    "| D-10 | demo | Gate lifted; Lifts-Gate: demo:GATE; apply now | OPERATOR | 2026-11-24 |\n"
-    "| D-11 | demo | Gate lifted; Lifts-Gate: demo:GATE; apply now | ROUTER | 2026-11-24 |\n"
-    "| D-12 | demo | Gate lifted; Lifts-Gate: demo:OTHER; apply now | OPERATOR | 2026-11-24 |\n"
-    "| D-13 | demo | Gate lifted; Lifts-Gate: demo:GATEWAY; apply now | OPERATOR | 2026-11-24 |\n"
+    "| D-10 | demo | Lifts-Gate: demo:GATE; apply now | OPERATOR | 2026-11-24 |\n"
+    "| D-11 | demo | Lifts-Gate: demo:GATE; apply now | ROUTER | 2026-11-24 |\n"
+    "| D-12 | demo | Lifts-Gate: demo:OTHER; apply now | OPERATOR | 2026-11-24 |\n"
+    "| D-13 | demo | Lifts-Gate: demo:GATEWAY; apply now | OPERATOR | 2026-11-24 |\n"
     "| D-14 | demo | Keep demo:GATE blocked until the review is done | OPERATOR | 2026-11-24 |\n"
     "| D-15 | demo | Lifts-Gate: demo:OTHER demo:GATE; Note: both | OPERATOR | 2026-11-24 |\n"
     "| D-16 | demo | Do not add Lifts-Gate: demo:GATE yet | OPERATOR | 2026-11-24 |\n"
@@ -48,7 +61,10 @@ ROWS = (
     "| D-42 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-14 | router (sonnet 5.5) | e |\n"
     "| D-43 | demo | Lifts-Gate: demo:GATE; apply now | OPERATOR | 2026-11-24 |\n"
     "| D-44 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-43 | router (sonnet 5.5) | e |\n"
-    "| D-37 | demo | Lifts-Gate: demo:GATE demo:NEW; apply now | OPERATOR | 2026-11-24 |\n")
+    + "".join(f"| D-{200 + n} | demo | {text} | router (sonnet 5.5) | e |\n"
+              f"| D-{300 + n} | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-{200 + n} | router (sonnet 5.5) | e |\n"
+              for n, text in enumerate(NOT_RELEASES.values()))
+    + "| D-37 | demo | Lifts-Gate: demo:GATE demo:NEW; apply now | OPERATOR | 2026-11-24 |\n")
 
 
 @pytest.fixture
@@ -122,6 +138,22 @@ def test_the_recorded_relay_format_lifts_through_a_structured_router_row(w):
     assert out["decision_id"] == "D-30" and _flags(w) == (False, False)
     (event,) = _lifted(w)
     assert event["payload"] == {"decision_id": "D-30", "operator": False}
+
+
+@pytest.mark.parametrize("n", range(len(NOT_RELEASES)), ids=list(NOT_RELEASES))
+def test_only_the_one_release_statement_in_its_fixed_position_lifts(w, n):
+    with pytest.raises(Refused) as exc:
+        w.store.lift_operator_gate(w.p("router"), KEY, f"D-{300 + n}")
+    assert exc.value.code == "evidence_unverified"
+    assert _flags(w) == (True, True) and _lifted(w) == []
+
+
+def test_the_statement_the_row_opens_with_lifts_with_a_nested_qualifier(w):
+    path = w.store.ctx.decisions._path
+    row = f"| D-400 | demo | {_ATTEST}: \"ok\" DECISION: the operator step of demo:GATE (p9, D-4743 option (a)) is lifted: an agent applies it. | router (sonnet 5.5) | e |\n"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(row + "| D-401 | demo | Lifts-Gate: demo:GATE; Operator-Answer: D-400 | router (sonnet 5.5) | e |\n")
+    assert w.store.lift_operator_gate(w.p("router"), KEY, "D-401")["decision_id"] == "D-401"
 
 
 def test_an_operator_row_with_a_release_field_is_a_valid_answer_behind_the_link(w):
@@ -275,3 +307,26 @@ def test_a_principal_revoked_before_the_write_lifts_nothing(w, monkeypatch):
     with pytest.raises(Refused) as exc:
         w.store.lift_operator_gate(w.p("router"), KEY, "D-10")
     assert exc.value.code == "forbidden" and _flags(w) == (True, True) and _lifted(w) == []
+
+
+def test_the_recorded_d6753_row_verbatim_lifts_through_a_router_attestation(tmp_path):
+    """The row as the router wrote it (nested qualifier, long attribution, BY router), not a simplified copy."""
+    recorded = (Path(__file__).parent / "fixtures/decisions/d6753-operator-relay-row.md").read_text(encoding="utf-8")
+    assert recorded.startswith("| D-6753 | plangraph | (06:xxZ") and "(p9, D-4743 option (a)) is lifted:" in recorded
+    key = "plangraph:OG-MEM-SCHEMA-APPLY"
+    world = World(tmp_path)
+    try:
+        world.store.create_items(world.p("router"), [
+            defn("OG-MEM-SCHEMA-APPLY", project="plangraph", operator=True),
+            defn("G", ["OG-MEM-SCHEMA-APPLY"], project="plangraph", kind="goal")])
+        log = tmp_path / "decisions-log.md"
+        log.write_text("| id | project | decision | by | why / evidence |\n|---|---|---|---|---|\n" + recorded
+                       + f"| D-9000 | plangraph | Lifts-Gate: {key}; Operator-Answer: D-6753 | router (sonnet 5.5) | e |\n",
+                       encoding="utf-8")
+        world.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(log))
+        with pytest.raises(Refused):    # the recorded row alone carries no Lifts-Gate field
+            world.store.lift_operator_gate(world.p("router"), key, "D-6753")
+        assert world.store.lift_operator_gate(world.p("router"), key, "D-9000")["operator"] is False
+        assert world.store._item(key)["operator"] == 0
+    finally:
+        world.close()

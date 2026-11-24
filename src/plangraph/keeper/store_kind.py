@@ -28,18 +28,74 @@ __all__ = ["KindMixin", "SETTABLE_KINDS"]
 SETTABLE_KINDS = ("question", "operator_task")
 
 
-_KEY = re.compile(r"[^:@/\s,;]+:[^:@/\s,;]+")
+_KEY = re.compile(r"[^:@/\s,;()]+:[^:@/\s,;()]+")
 _DID = re.compile(r"D-[0-9]+")
-#: the router's standing attribution of a relayed operator answer, at the head of the DECISION cell
-_RELAY = re.compile(r"(?:\([^)]*\)\s*)?OPERATOR \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z, relayed by \S")
+_ISO_UTC = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"
 
 
-def _releases(decision, key):
-    """True when the cell affirmatively releases *key*: a ``Lifts-Gate`` list naming it, or the
-    recorded statement ``DECISION: the operator step of <key> (...) is lifted``.  A cell that
-    merely names the key ("keep <key> blocked") releases nothing."""
-    statement = re.compile(rf"DECISION: the operator step of {re.escape(key)}(?: \([^)]*\))? is lifted(?!\w)")
-    return key in _lifted_keys(decision) or statement.search(decision) is not None
+def _group_end(text, start):
+    """Index just after the ``)`` that closes the ``(`` at ``text[start]``, nesting counted; ``None`` if open."""
+    depth = 0
+    for pos in range(start, len(text)):
+        depth += {"(": 1, ")": -1}.get(text[pos], 0)
+        if depth == 0:
+            return pos + 1
+    return None
+
+
+def _skip_group(text, pos, lead=" "):
+    """``pos`` past an optional ``lead`` + balanced ``( ... )`` group; ``None`` when the group never closes."""
+    if text.startswith(lead + "(", pos):
+        return _group_end(text, pos + len(lead))
+    return pos
+
+
+def _first_field_keys(cell):
+    """The keys of the ``Lifts-Gate: k1 k2`` field a cell OPENS with; every token of the value must be an item key."""
+    name, sep, rest = cell.strip().split(";")[0].partition(":")
+    tokens = [t for t in re.split(r"[ ,]+", rest.strip()) if t]
+    return set(tokens) if sep and name == "Lifts-Gate" and tokens and all(map(_KEY.fullmatch, tokens)) else set()
+
+
+def _statement_keys(text):
+    """``{key}`` when *text* is exactly the release statement ``the operator step of <key> [(...)] is lifted``
+    followed by the end of the text or ``:``/``;``/``.``; anything else (a condition, a denial) is no release."""
+    found = re.match(r"the operator step of (\S+)", text)
+    if not found or not _KEY.fullmatch(found[1]):
+        return set()
+    pos = _skip_group(text, found.end())
+    tail = re.compile(r" is lifted(?=$|[:;.])").match(text, pos) if pos is not None else None
+    return {found[1]} if tail else set()
+
+
+def _relay_release_keys(cell):
+    """The released key of a relayed operator answer, read at fixed positions as a whole:
+
+    ``[(stamp)] OPERATOR <UTC time>, relayed by <who> [(source)]: "<operator words>" DECISION: <statement>``.
+    The quoted words are skipped as one unit, so a release phrase inside them, before ``DECISION:`` or
+    in any other place is not the decision statement.
+    """
+    text = cell.strip()
+    pos = _skip_group(text, 0, lead="")
+    head = re.compile(rf"\s*OPERATOR {_ISO_UTC}, relayed by [\w.@-]+").match(text, pos) if pos is not None else None
+    pos = _skip_group(text, head.end()) if head else None
+    opening = re.compile(r':\s+"').match(text, pos) if pos is not None else None
+    if not opening:
+        return set()
+    pos = opening.end()
+    while pos < len(text) and text[pos] != '"':
+        pos += 2 if text[pos] == "\\" else 1
+    decision = re.compile(r'"\s+DECISION: ').match(text, pos)
+    return _statement_keys(text[decision.end():]) if decision else set()
+
+
+def _answer_releases(row, key):
+    """Does the answer row behind ``Operator-Answer`` release *key*: a relayed operator answer, or a
+    BY OPERATOR row that opens with the ``Lifts-Gate`` field."""
+    from .store_runs import _operator_authority
+
+    cell = row.get("decision", "")
+    return key in _relay_release_keys(cell) or (_operator_authority(row) and key in _first_field_keys(cell))
 
 
 def _field_values(decision, name):
@@ -48,17 +104,6 @@ def _field_values(decision, name):
         head, sep, rest = field.strip().partition(":")
         if sep and head == name:
             yield rest.strip()
-
-
-def _lifted_keys(decision):
-    """The keys of a ``Lifts-Gate: k1 k2`` field.  The whole value must be a list of item keys:
-    prose inside the field ("Do not lift k until reviewed") makes the field no release."""
-    keys = set()
-    for value in _field_values(decision, "Lifts-Gate"):
-        tokens = [t for t in re.split(r"[ ,]+", value) if t]
-        if tokens and all(_KEY.fullmatch(t) for t in tokens):
-            keys.update(tokens)
-    return keys
 
 
 def _operator_answer_ref(decision):
@@ -111,15 +156,18 @@ class KindMixin:
         """Clear ``operator`` (and so ``waits_on_operator``) once the operator lifted the step.
 
         No edit, ``set_kind`` or owner change can clear the flag.  The router names the
-        decision row that lifted the gate: a ``Lifts-Gate: <key> ...`` field whose whole
-        value is a list of item keys, not superseded, from an OPERATOR row or with an
-        ``Operator-Answer: D-n`` field naming a relayed operator answer (``_RELAY``
-        attribution or BY OPERATOR) that is not superseded either and itself releases the
-        key (a ``Lifts-Gate`` list or ``DECISION: the operator step of <key> ... is lifted``).  A row that only names
-        the key may keep the gate closed and does not count.  The decisions are read once,
-        before any lock (a batch reads them for all its lifts before its transaction;
-        ``snapshot`` is that read); the check under the write is pure, and the item and
-        the principal are re-checked there.  One ``operator_gate_lifted`` event records the
+        decision row that lifted the gate; its cell OPENS with ``Lifts-Gate: <key> ...`` (the
+        whole value a list of item keys) and the row is not superseded.  The row is BY OPERATOR,
+        or a following ``Operator-Answer: D-n`` field links a relayed operator answer whose one
+        decision statement releases the key:
+        ``[(stamp)] OPERATOR <UTC time>, relayed by <who> [(source)]: "<words>" DECISION: the
+        operator step of <key> [(qualifier)] is lifted`` + end, ``:``, ``;`` or ``.``.  The
+        statement is read at those fixed positions as a whole (qualifiers by a balanced scan),
+        so a quoted phrase, a denial, a condition or a phrase after other text is no release.
+        The decisions are read once, before any lock (a batch reads them for all its lifts
+        before its transaction; ``snapshot`` is that read); the check under the write is pure,
+        and the item and the principal are re-checked there.  One ``operator_gate_lifted`` event
+        records the
         D-id and the actor.
         """
         self._require_role(principal, "router")
@@ -183,16 +231,16 @@ class KindMixin:
                 raise Refused("evidence_unverified", f"{did} is superseded by {superseded[canonical]}")
 
         live(decision_id)
-        if key not in _lifted_keys(row.get("decision", "")):
+        cell = row.get("decision", "")
+        if key not in _first_field_keys(cell):
             raise Refused("evidence_unverified",
-                          f"{decision_id} has no 'Lifts-Gate: {key}' release")
+                          f"{decision_id} does not open with 'Lifts-Gate: {key}'")
         if _operator_authority(row):
             return
-        ref_id = _operator_answer_ref(row.get("decision", ""))
+        ref_id = _operator_answer_ref(cell)
         ref = read["ref"]
-        if ref is None or not (_operator_authority(ref) or _RELAY.match(ref.get("decision", ""))):
+        if ref is None or not _answer_releases(ref, key):
             raise Refused("evidence_unverified",
-                          f"{decision_id} is not an OPERATOR decision and names no relayed operator answer")
+                          f"{decision_id} is not an OPERATOR decision and its Operator-Answer"
+                          f" {ref_id} is not a relayed operator answer that lifts {key}")
         live(ref_id)
-        if not _releases(ref.get("decision", ""), key):
-            raise Refused("evidence_unverified", f"{ref_id} does not release {key}")
