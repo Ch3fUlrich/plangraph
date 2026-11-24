@@ -38,6 +38,8 @@ pub struct Task {
     pub fields: BTreeMap<String, Value>,
 }
 
+/// Most items one batch run holds: the run record keeps at most this many `item_keys`.
+pub const MAX_BATCH_ITEMS: usize = 50;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
@@ -157,7 +159,7 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         || p.ram_per_run_bytes == 0
         || p.disk_floor_bytes == 0
         || p.estimate_tokens == 0
-        || p.batch_max_items == 0
+        || !(1..=MAX_BATCH_ITEMS).contains(&p.batch_max_items)
     {
         Some("invalid_policy")
     } else if f.observed_at > f.now || f.now.saturating_sub(f.observed_at) > p.facts_max_age_seconds
