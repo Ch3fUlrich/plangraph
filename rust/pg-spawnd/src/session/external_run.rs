@@ -25,7 +25,7 @@ pub(super) fn register(
             "run_kind":"fleet-session", "fleet_session_name":name, "host":host, "role":role,
             "harness":"claude", "requested_model":args.model, "effort":args.effort,
             "item_key":admission.fields["card"],
-            "brief_items":brief.items, "lane_override":brief.lane_override,
+            "item_keys":brief.items, "lane_override":brief.lane_override,
             // `pg-spawnd head-gate --base <admitted_base> --brief <brief_path>` gates the completed head.
             "admitted_base":brief.base, "brief_path":args.prompt,
         }),

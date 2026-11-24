@@ -53,7 +53,7 @@ fn native_dispatch_ignores_review_runs_and_free_keys() {
     let admitted = crate::placement::admit_lane(empty.path(), &lane_args(json!({})))
         .ok()
         .unwrap();
-    assert_eq!(admitted["card"]["brief_items"], json!(["demo:HELD"]));
+    assert_eq!(admitted["card"]["item_keys"], json!(["demo:HELD"]));
     assert!(admitted["card"].get("lane_override").is_none());
 }
 

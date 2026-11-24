@@ -370,7 +370,7 @@ fn check_batch_lane_record(s: &Sandbox) {
     let spec = s.json("state/launch/sessions/writer-0001.json");
     let id = spec["run_id"].as_str().expect("fleet run ID");
     let record = s.json(&format!("xdg/plangraph/runs/{id}/record.json"));
-    assert_eq!(record["brief_items"], json!(["demo:FIXTURE"]));
+    assert_eq!(record["item_keys"], json!(["demo:FIXTURE"]));
     assert_eq!(
         record["admitted_base"],
         "1111111111111111111111111111111111111111"
