@@ -328,3 +328,16 @@ fn the_areas_match_the_docs_map_check_when_it_knows_fragments() {
         );
     }
 }
+
+#[test]
+fn fold_docs_refuses_to_run_without_the_line_caps() {
+    let dir = tree();
+    write(dir.path(), "docs/spawner/ITEM.md", "Body.\n");
+    let flags = BTreeMap::from([(
+        "repo-dir".to_owned(),
+        dir.path().to_string_lossy().into_owned(),
+    )]);
+    let err = run(&flags).unwrap_err();
+    assert!(err.contains("no line cap"), "{err}");
+    assert!(dir.path().join("docs/spawner/ITEM.md").exists());
+}

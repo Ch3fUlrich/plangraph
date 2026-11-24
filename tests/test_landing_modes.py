@@ -91,6 +91,8 @@ elif args[:2] == ['landing', 'verify-hosts']:
     head = args[-1]
     print(json.dumps(dict(verified=[dict(host=str(n), head=head, checkout=head,
         hooks=head, build=head, synced=False) for n in range(3)])))
+elif args == ['merge-close'] and os.environ.get('MERGE_CLOSE_LISTED'):
+    print('listed\\t' + os.environ['MERGE_CLOSE_LISTED'] + '\\topen\\tseats missing')
 else:
     assert args[:2] == ['landing', 'ci-import'] or args == ['merge-close'], args
 """)
@@ -554,3 +556,21 @@ def test_tested_ff_reads_exactly_one_land_base_trailer(env, tools_importable, mo
             merge_batch_land.require_tested_ff_evidence(state)
     else:
         merge_batch_land.require_tested_ff_evidence(state)
+
+
+def test_a_listed_item_holds_settlement_at_close_parts(env, journal):
+    """The keeper listing a part's item (refused or flagged) does not let the cursor pass close_parts."""
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    env.env["INTERRUPT_LANDING"] = "1"
+    assert "interrupted before saving" in land(env, approval).stderr
+    del env.env["INTERRUPT_LANDING"]
+    env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"] = "off"
+    key = journal()["train"]["parts"][0]["items"][0]
+    env.env["MERGE_CLOSE_LISTED"] = key
+    held = env.run("settle")
+    assert held.returncode == 1 and "kept open" in held.stderr and key in held.stderr, held.stderr
+    assert journal()["train"]["open_steps"] == ["close_parts", "host_sync", "cleanup"]
+    del env.env["MERGE_CLOSE_LISTED"]
+    assert env.run("settle").returncode == 0
+    assert journal()["train"]["open_steps"] == []

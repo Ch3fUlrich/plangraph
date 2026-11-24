@@ -169,3 +169,26 @@ fn a_train_with_a_missing_stage_is_reported_incomplete() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn a_train_with_only_the_stages_production_writes_is_complete() {
+    // Producers today: push, the CI importer (jobs), the delta review, GO, merge, host sync.
+    let row = |stage: &str, start: i64, end: i64| {
+        json!({"stage": stage, "head": "h", "attempt": 1,
+               "started_at_ms": start * 1000, "ended_at_ms": end * 1000})
+    };
+    let reply = json!({
+        "stages": [
+            row("push", 0, 600),
+            row("delta_review", 700, 1500),
+            row("go", 1500, 1800),
+            row("merge", 1800, 1830),
+            row("host_sync", 1830, 1900),
+        ],
+        "jobs": [{"name": "Rust workspace", "head": "h", "conclusion": "success",
+                  "started_at_ms": 650_000, "ended_at_ms": 1_450_000}],
+    });
+    let stages = from_keeper("train-7", &reply);
+    assert!(missing(&stages).is_empty(), "{:?}", missing(&stages));
+    assert!(!render(&report(&stages, 1))[0].contains("incomplete"));
+}

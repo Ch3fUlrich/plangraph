@@ -23,16 +23,10 @@ impl Stage {
     }
 }
 
-/// The stages every landed train has a row for, in keeper stage names.
-pub const REQUIRED: [&str; 7] = [
-    "fast_checks",
-    "push",
-    "ci",
-    "review",
-    "go",
-    "merge",
-    "host_sync",
-];
+/// The stages a producer writes for every landed train, in keeper stage names: the push gate, CI (from
+/// the importer), GO, merge and host sync. `fast_checks`, `review` and `writing` have no producer yet, so
+/// they are shown when present and never required.
+pub const REQUIRED: [&str; 5] = ["push", "ci", "go", "merge", "host_sync"];
 
 /// The stages of one batch or train from the keeper's `timeline` reply: its `landing_stages` rows (every
 /// attempt is a stage run) and one `ci:<job>` stage per `landing_ci_jobs` row. A `ci` row is dropped for a head

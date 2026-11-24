@@ -108,7 +108,7 @@ fn a_listed_item_of_the_part_is_kept_open_and_other_lines_are_not_its_business()
     assert_eq!(parse_close_report(report, &items(&["k:A"])), Applied::Done);
     assert_eq!(
         parse_close_report(report, &items(&["k:A", "k:B"])),
-        Applied::Kept("k:B open seats missing".into())
+        Applied::Kept("k:B listed open seats missing".into())
     );
     assert_eq!(parse_close_report("", &items(&["k:A"])), Applied::Done);
 }
@@ -128,4 +128,47 @@ fn a_writer_stop_that_kept_the_writer_is_kept_whatever_the_exit_code() {
     assert!(parse_stop_report("[]").is_err());
     assert!(parse_stop_report(r#"[{"reason":"x"}]"#).is_err());
     assert!(parse_stop_report("nope").is_err());
+}
+
+#[test]
+fn deployment_previews_and_scan_errors_keep_the_items_open() {
+    let items = vec!["k:A".to_owned()];
+    for report in [
+        "deployment-pending\tk:A\t3h\tdell:unit\n",
+        "would-close\tk:A\tabc\n",
+        "scan-error\texample/repo\tcannot read main\n",
+    ] {
+        assert!(
+            matches!(parse_close_report(report, &items), Applied::Kept(_)),
+            "{report}"
+        );
+    }
+    assert_eq!(
+        parse_close_report("deployment-pending\tk:Z\t3h\tx\n", &items),
+        Applied::Done
+    );
+}
+
+#[test]
+fn init_needs_a_writer_head_and_record_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("s.json");
+    let state = state.to_string_lossy().into_owned();
+    let long = "c".repeat(40);
+    for part in [
+        format!(r#"{{"pr":1,"head":"{long}","items":[],"folded":true,"writer_head":"{long}"}}"#),
+        format!(r#"{{"pr":1,"head":"{long}","items":[],"folded":true,"writer_record":"/runs/1"}}"#),
+    ] {
+        let init = init_file(dir.path(), &long, &format!("[{part}]"));
+        let err = run(&flags(&[
+            ("state", &state),
+            ("init", &init),
+            ("repo-dir", "."),
+        ]))
+        .unwrap_err();
+        assert!(err.contains("both writer_head and writer_record"), "{err}");
+    }
+    assert!(Settlement::load(std::path::Path::new(&state))
+        .unwrap()
+        .is_none());
 }

@@ -383,6 +383,12 @@ impl Settlement {
             return Ok(());
         }
         let Some(writer) = &part.writer_head else {
+            if part.writer_record.is_some() {
+                return Err(format!(
+                    "part #{} has a writer record but no writer head",
+                    part.pr
+                ));
+            }
             self.parts[i].stop_writer = Step::Done("no writer".into());
             return Ok(());
         };

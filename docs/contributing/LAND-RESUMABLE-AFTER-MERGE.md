@@ -1,0 +1,1 @@
+`tools/merge_batch_land.py settle` stays at the `close_parts` step while `plangraph merge-close` prints a `listed` row for an item of the landed parts, and imports the jobs of a red Actions run into the landing timeline before it refuses the run. The Rust `plangraph land-train settle` (docs/landing-train.md) holds the same refusals per part.
