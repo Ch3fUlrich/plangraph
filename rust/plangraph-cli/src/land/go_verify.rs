@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 /// The workflow whose jobs are the CI evidence; its text is part of this binary.
 pub const WORKFLOW_PATH: &str = ".github/workflows/tests.yml";
-const WORKFLOW: &str = include_str!("../../../../.github/workflows/tests.yml");
+pub(super) const WORKFLOW_TEXT: &str = include_str!("../../../../.github/workflows/tests.yml");
 /// The event of the run whose jobs count: the full run of the pull request.
 pub const EVENT: &str = "pull_request";
 /// Paths only an operator-granted `Gate-Edit` may change (a prefix, or a file name at any depth for `*/`).
@@ -35,7 +35,7 @@ impl Pins {
     /// The pins of this binary; a changed workflow or matrix changes the pins only by a rebuild.
     pub fn protected() -> Result<Pins, String> {
         Ok(Pins {
-            workflow_sha256: format!("{:x}", Sha256::digest(WORKFLOW.as_bytes())),
+            workflow_sha256: format!("{:x}", Sha256::digest(WORKFLOW_TEXT.as_bytes())),
             matrix: matrix_from_toml(MATRIX)?,
         })
     }
@@ -159,7 +159,7 @@ fn granted(e: &Evidence, path: &str) -> bool {
     })
 }
 
-fn valid_d_id(id: &str) -> bool {
+pub(super) fn valid_d_id(id: &str) -> bool {
     id.strip_prefix("D-")
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
