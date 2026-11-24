@@ -1,6 +1,7 @@
 pub mod batch_writer_brief;
 #[cfg(target_os = "linux")]
 pub mod external_run;
+pub mod lane_guard;
 pub mod pyjson;
 pub mod role_header;
 #[cfg(target_os = "linux")]

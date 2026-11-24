@@ -648,3 +648,16 @@ def test_wsl_query_delivers_a_plan_larger_than_a_pipe_buffer(monkeypatch, tmp_pa
     monkeypatch.setattr(subprocess, 'Popen', run)
     assert remote_ps.query_host(host, 10) == '{"runs": []}'
     assert received.read_bytes() == body
+
+
+def test_native_run_record_keeps_the_admitted_lane_items_and_override():
+    from plangraph.spawner.notify import annotate_native
+    card = {'run_kind': 'native-codex', 'brief_items': ['demo:A', 7],
+            'lane_override': ' second lane '}
+    record = {}
+    annotate_native(record, card)
+    assert record['brief_items'] == ['demo:A']
+    assert record['lane_override'] == 'second lane'
+    plain = {}
+    annotate_native(plain, {'run_kind': 'native-codex', 'lane_override': '  '})
+    assert 'lane_override' not in plain
