@@ -86,12 +86,16 @@ pub fn transcript_for(home: &Path, session_id: &str, cwd: &Path) -> PathBuf {
     })
 }
 
-/// The logical lines of an environment file: a line ending in an odd number of backslashes is
-/// continued by the next line, the backslash and the line break dropped (as systemd reads it).
+/// The logical lines of an environment file: a comment line (`#` or `;`) ends at its line break
+/// whatever it ends with; any other line ending in an odd number of backslashes is continued by
+/// the next line, the backslash and the line break dropped (as systemd reads it).
 fn logical_lines(text: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current: Option<String> = None;
     for line in text.lines() {
+        if current.is_none() && line.trim_start().starts_with(['#', ';']) {
+            continue;
+        }
         let mut joined = current.take().unwrap_or_default();
         joined.push_str(line);
         let slashes = joined.bytes().rev().take_while(|c| *c == b'\\').count();
@@ -106,35 +110,40 @@ fn logical_lines(text: &str) -> Vec<String> {
     lines
 }
 
-/// The value of an environment-file assignment in systemd syntax: double-quoted or unquoted with
-/// backslash escapes (`\ ` is a space that stays, also at the end), single-quoted literally. Only
-/// unescaped whitespace around the value is dropped.
-fn env_value(raw: &str) -> Option<String> {
-    let raw = raw.trim_start();
-    let unescape = |text: &str| {
-        let mut out: Vec<(char, bool)> = Vec::new();
-        let mut chars = text.chars();
-        while let Some(ch) = chars.next() {
-            match ch {
-                '\\' => out.push((chars.next()?, true)),
-                other => out.push((other, false)),
-            }
+/// Resolve backslash escapes. With `trim`, whitespace left unescaped at the end is dropped (an
+/// unquoted value); a quoted value keeps every space inside its quotes.
+fn unescape(text: &str, trim: bool) -> Option<String> {
+    let mut out: Vec<(char, bool)> = Vec::new();
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => out.push((chars.next()?, true)),
+            other => out.push((other, false)),
         }
-        while out
+    }
+    while trim
+        && out
             .last()
             .is_some_and(|(c, escaped)| !escaped && c.is_whitespace())
-        {
-            out.pop();
-        }
-        Some(out.into_iter().map(|(c, _)| c).collect::<String>())
-    };
+    {
+        out.pop();
+    }
+    Some(out.into_iter().map(|(c, _)| c).collect())
+}
+
+/// The value of an environment-file assignment in systemd syntax: double-quoted (every character
+/// inside the quotes is kept, escapes resolved), single-quoted literally, or unquoted with
+/// backslash escapes (`\ ` is a space that stays, also at the end). Only unescaped whitespace
+/// around the value is dropped.
+fn env_value(raw: &str) -> Option<String> {
+    let raw = raw.trim_start();
     if let Some(inner) = raw.strip_prefix('"') {
-        return unescape(inner.trim_end().strip_suffix('"')?);
+        return unescape(inner.trim_end().strip_suffix('"')?, false);
     }
     if let Some(inner) = raw.strip_prefix('\'') {
         return inner.trim_end().strip_suffix('\'').map(str::to_owned);
     }
-    unescape(raw).filter(|value| !value.is_empty())
+    unescape(raw, true).filter(|value| !value.is_empty())
 }
 
 /// The value of the `name` assignment on one environment-file line; whitespace around the name
@@ -289,6 +298,18 @@ mod tests {
             (
                 "PLANGRAPH_STATE_CONFIG=/p/two\\\\\nPLANGRAPH_STATE_CONFIG=/p/last.json\n",
                 "/p/last.json",
+            ),
+            (
+                "# a note ending in a backslash \\\nPLANGRAPH_STATE_CONFIG=/p/after-comment.json\n",
+                "/p/after-comment.json",
+            ),
+            (
+                "PLANGRAPH_STATE_CONFIG=\"/p/quoted-space.json \"\n",
+                "/p/quoted-space.json ",
+            ),
+            (
+                "; comment \\\n  # another\nPLANGRAPH_STATE_CONFIG=/p/c.json\n",
+                "/p/c.json",
             ),
             (
                 "PLANGRAPH_STATE_CONFIG='/p/lit$eral.json'\n",

@@ -56,26 +56,31 @@ pub fn check(launcher: &Launcher) {
     let s = Sandbox::new(launcher);
     let dir = s.path("home/.config/plangraph/state-shadow");
     fs::create_dir_all(&dir).unwrap();
-    // The routing path has a space inside and one at its end; the plan-order path is continued
-    // across two lines. The service reads both as the configured path.
+    // The service reads each form as the configured path: routing escapes a space inside and at
+    // the end of the path, after a comment that ends in a backslash; plan-order continues the line;
+    // writer quotes a path that ends in a space.
     let custom = s.path("custom dir/routing collector.json ");
     let continued = s.path("po-cfg/plan-order-collector.json");
+    let quoted = s.path("quoted cfg/writer collector.json ");
     let location = |role: &str| match role {
         "routing" => custom.clone(),
-        _ => continued.clone(),
+        "plan-order" => continued.clone(),
+        _ => quoted.clone(),
     };
     let stale = || {
-        for role in ["routing", "plan-order"] {
-            // The routing collector's env file moves its configuration away from the default.
-            let env = if role == "routing" {
-                format!(
-                    "PLANGRAPH_STATE_CONFIG = {}\n",
+        for role in ["routing", "plan-order", "writer"] {
+            // Each collector's env file moves its configuration away from the default.
+            let env = match role {
+                "routing" => format!(
+                    "# a note that ends in a backslash \\\nPLANGRAPH_STATE_CONFIG = {}\n",
                     custom.display().to_string().replace(' ', "\\ ")
-                )
-            } else {
-                let path = continued.display().to_string();
-                let (head, tail) = path.split_at(path.len() - "collector.json".len());
-                format!("PLANGRAPH_STATE_CONFIG={head}\\\n{tail}\n")
+                ),
+                "plan-order" => {
+                    let path = continued.display().to_string();
+                    let (head, tail) = path.split_at(path.len() - "collector.json".len());
+                    format!("PLANGRAPH_STATE_CONFIG={head}\\\n{tail}\n")
+                }
+                _ => format!("PLANGRAPH_STATE_CONFIG=\"{}\"\n", quoted.display()),
             };
             fs::write(dir.join(format!("{role}.env")), env).unwrap();
             fs::create_dir_all(location(role).parent().unwrap()).unwrap();
@@ -90,14 +95,15 @@ pub fn check(launcher: &Launcher) {
     stale();
     let routing = settings_path(&launch(&s, "routing"));
     let plan_order = settings_path(&launch(&s, "plan-order"));
+    let writer = settings_path(&launch(&s, "writer"));
     let review = settings_path(&launch(&s, "review"));
     assert_ne!(routing, plan_order, "equal caps must not share a file");
-    assert!(hooked(&routing) && hooked(&plan_order));
+    assert!(hooked(&routing) && hooked(&plan_order) && hooked(&writer));
     assert!(
         !hooked(&review),
         "the hook leaked to a role without a collector"
     );
-    for role in ["routing", "plan-order"] {
+    for role in ["routing", "plan-order", "writer"] {
         let config: Value =
             serde_json::from_str(&fs::read_to_string(location(role)).unwrap()).unwrap();
         assert_eq!(config["session_id"], SID, "{role}");
@@ -107,7 +113,7 @@ pub fn check(launcher: &Launcher) {
             .unwrap()
             .ends_with(&format!("/{SID}.jsonl")));
     }
-    for role in ["routing", "plan-order"] {
+    for role in ["routing", "plan-order", "writer"] {
         assert!(
             !dir.join(format!("{role}.json")).exists(),
             "the default file of {role} was written beside the configured one"

@@ -57,10 +57,13 @@ pub(super) fn refresh(path: &Path, env: &Env, repo: &Path, now: i64) -> Result<(
 }
 
 #[cfg(test)]
+#[path = "../../../test_support/python.rs"]
+mod test_python;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::state_shadow::{fixture, local};
-    use std::process::Command;
 
     fn repo() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -68,7 +71,7 @@ mod tests {
 
     /// Run routing's own recorder against the fixture state, as the router and probes do.
     fn record(env: &Env, code: &str) {
-        let output = Command::new("python3")
+        let output = super::test_python::command()
             .current_dir(repo())
             .envs(env)
             .env("PYTHONPATH", repo().join("src"))
