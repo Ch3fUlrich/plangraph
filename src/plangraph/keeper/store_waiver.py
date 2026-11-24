@@ -467,6 +467,7 @@ class WaiverMixin:
             if not claude or json.loads(item.get("run_ids") or "[]") or re.search(r"\brun-", text):
                 witnessed.extend(self._adapter("spawner_records").review_seats(
                     item, heads, text, allow_cli_reported=not self._card_requires_non_anthropic_seats(item),
+                    allow_unwitnessed=not self._card_requires_non_anthropic_seats(item),
                     **({"allow_empty": True} if claude else {})))
             for bound in heads:
                 group = [s for s in witnessed if s["head"] == bound]
