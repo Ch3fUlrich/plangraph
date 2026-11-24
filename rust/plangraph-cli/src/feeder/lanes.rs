@@ -50,10 +50,22 @@ fn live_state(state: &str) -> bool {
     !matches!(state, "done" | "stopped" | "failed" | "")
 }
 
+/// A whole token that is a plan item key (`plangraph:` and the spawner's id characters), never a
+/// prefix of other text.
+fn is_item_key(token: &str) -> bool {
+    token.strip_prefix("plangraph:").is_some_and(|id| {
+        !id.is_empty()
+            && id.len() <= 180
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+    })
+}
+
 /// The plan item keys a lane card names (the card may be a lane name, a key or both).
 pub(super) fn item_keys(card: &str) -> Vec<&str> {
     card.split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|t| t.starts_with("plangraph:"))
+        .filter(|t| is_item_key(t))
         .collect()
 }
 
@@ -438,6 +450,15 @@ mod tests {
         assert_eq!(ids(&rows), ["lane:writer-1"]);
         assert_eq!(rows[0]["item_key"], "plangraph:PIDLANE");
         assert!(pid_alive(u64::from(std::process::id())));
+    }
+
+    #[test]
+    fn only_whole_tokens_that_are_item_keys_are_read_from_a_card() {
+        assert_eq!(
+            item_keys("lane plangraph:A, plangraph:B-2 plangraph: xplangraph:C plangraph:D;rm"),
+            ["plangraph:A", "plangraph:B-2"]
+        );
+        assert!(item_keys("").is_empty());
     }
 
     #[test]
