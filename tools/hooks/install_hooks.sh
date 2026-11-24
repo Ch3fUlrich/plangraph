@@ -48,7 +48,10 @@
 # the Stop event with:
 #   sh -c 'test -x "$1" || exit 1; exec "$1" lesson-stop' _ DEST/pg-hook
 # See docs/rust-hooks.md for the ledger contract. Register PreToolUse
-# for SendMessage and Bash (or exec_command) with:
+# for SendMessage with message-route alone (it runs the message-time check and
+# the routine-line diversion on one clock reading; never register message-time
+# there too) and for Bash (or exec_command) with message-time:
+#   sh -c 'test -x "$1" || exit 1; exec "$1" message-route' _ DEST/pg-hook
 #   sh -c 'test -x "$1" || exit 1; exec "$1" message-time' _ DEST/pg-hook
 #
 # Usage:
