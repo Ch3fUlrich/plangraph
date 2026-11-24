@@ -267,5 +267,5 @@ the window key; unknown windows are left out); the collector adds the rest. Each
 `pool-use-check SAMPLE.json [ROWS.jsonl]` is the same check for digest and scheduler callers.
 A stored usage limit also ends at a successful probe: the quota-snapshot gate stops limiting a
 leg when its last probe passed after the pool's newest snapshot (read once per decision), and the
-scheduled review sweep re-probes a leg with a booked Codex 429 every ten minutes (agy: one hour).
+scheduled review sweep (timer: every 15 minutes) re-probes a leg with a booked Codex 429 on every sweep that is at least ten minutes after the last attempt (agy: one hour), so in the deployed schedule a lifted Codex limit ends within 15 minutes.
 `plangraph quota pool` averages and resets over the accounts still inside their window only.
