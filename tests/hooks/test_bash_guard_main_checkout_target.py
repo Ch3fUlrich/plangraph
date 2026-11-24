@@ -194,3 +194,15 @@ def test_a_repository_at_the_home_directory_does_not_make_the_shared_target_a_ma
     git(project, "init", "-q")
     assert hook(f"CARGO_TARGET_DIR={shared} cargo build", project / "rust").returncode == 0
     assert hook("cargo build", project / "rust").returncode == 2
+
+
+def test_the_refusal_names_the_configured_data_drive_target_not_the_home_cache(repos, monkeypatch):
+    main, work = repos
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", "/mnt/data/pg-cache")
+    for cwd in (main / "rust", work / "rust"):
+        result = hook("cargo build", cwd)
+        assert result.returncode == 2
+        assert b"/mnt/data/pg-cache" in result.stderr and b".cache/plangraph" not in result.stderr
+        assert b"run it in a worktree" not in result.stderr
+    monkeypatch.delenv("PLANGRAPH_CARGO_TARGET_DIR")
+    assert b"~/.cache/plangraph/cargo-target" in hook("cargo build", main / "rust").stderr

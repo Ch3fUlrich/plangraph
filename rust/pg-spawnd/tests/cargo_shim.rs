@@ -87,10 +87,8 @@ fn the_shim_reports_the_blocking_pid_when_the_target_is_being_reclaimed() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(&format!("held by pid {}", std::process::id())),
-        "{stderr}"
-    );
+    let note = format!("held by pid {}", std::process::id());
+    assert_eq!(stderr.matches(&note).count(), 1, "{stderr}");
 }
 
 #[test]

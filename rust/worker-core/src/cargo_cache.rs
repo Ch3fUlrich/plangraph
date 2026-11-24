@@ -220,6 +220,12 @@ fn holders_in(table: &str, major: u32, minor: u32, inode: u64) -> Vec<u32> {
     pids
 }
 
+/// Holders are unnamed where the kernel offers no lock table.
+#[cfg(not(target_os = "linux"))]
+pub fn describe_holders(_: &Path) -> String {
+    String::new()
+}
+
 /// ` (held by pid 12, 34)` for refusals, or an empty string when no holder can be named.
 #[cfg(target_os = "linux")]
 pub fn describe_holders(target: &Path) -> String {
