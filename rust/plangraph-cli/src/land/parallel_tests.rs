@@ -8,7 +8,7 @@ use super::remerge::remerge;
 use super::split::{Action, Session};
 use super::train::{Manifest, PartIn};
 
-fn state(name: &str, main_in: &str, ci: Ci) -> TrainState {
+pub(super) fn state(name: &str, main_in: &str, ci: Ci) -> TrainState {
     TrainState {
         name: name.into(),
         main_in: main_in.into(),
@@ -23,13 +23,13 @@ fn red(hints: &[u64]) -> Ci {
     }
 }
 
-struct Built {
-    manifest: Manifest,
-    parts: Vec<PartIn>,
+pub(super) struct Built {
+    pub(super) manifest: Manifest,
+    pub(super) parts: Vec<PartIn>,
 }
 
 /// A train of one file-disjoint part per file, built on `base`.
-fn train(fx: &Fx, name: &str, base: &str, first_pr: u64, files: &[&str]) -> Built {
+pub(super) fn train(fx: &Fx, name: &str, base: &str, first_pr: u64, files: &[&str]) -> Built {
     let parts: Vec<PartIn> = files
         .iter()
         .zip(first_pr..)
@@ -39,12 +39,12 @@ fn train(fx: &Fx, name: &str, base: &str, first_pr: u64, files: &[&str]) -> Buil
     input.build = name.into();
     input.base = base.into();
     let manifest = build(&input).unwrap().manifest.unwrap();
-    publish(fx.path(), &format!("land/build/{name}"), &manifest).unwrap();
+    publish(fx.path(), &format!("land/train-{name}"), &manifest).unwrap();
     Built { manifest, parts }
 }
 
 /// Lands a train on main as a merge commit and points origin/main at it.
-fn land(fx: &Fx, tip: &str, sha: &str) -> String {
+pub(super) fn land(fx: &Fx, tip: &str, sha: &str) -> String {
     g(fx.path(), &["checkout", "-q", "--detach", tip]);
     g(
         fx.path(),

@@ -20,6 +20,8 @@ fn row(
         end,
         result: result.into(),
         items,
+        run: None,
+        lineage: vec![],
     }
 }
 
@@ -129,4 +131,49 @@ fn the_experiment_command_reads_the_ledger_and_the_items_flag_is_recorded() {
     .collect();
     assert_eq!(super::timeline::run(home.path(), &record), 0);
     assert_eq!(super::timeline::load(&ledger).unwrap()[1].items, Some(5));
+}
+
+fn ci(subject: &str, head: &str, run: &str, end: i64) -> Stage {
+    Stage {
+        run: Some(run.into()),
+        ..row(subject, head, "ci:rust", end, "success", None)
+    }
+}
+
+#[test]
+fn a_retry_of_the_same_head_and_the_runs_of_combined_predecessors_are_test_runs() {
+    let now = 10 * DAY;
+    let mut ledger = vec![
+        // The first run of the head was red and rerun: two runs, one head.
+        Stage {
+            result: "failure".into(),
+            ..ci("big", "h1", "100/1", now - 900)
+        },
+        ci("big", "h1", "100/2", now - 800),
+        row("big", "tip", "merge", now - 100, "success", Some(3)),
+    ];
+    // Two trains that were combined into `big`; each ran its own CI, one needed a rerun too.
+    ledger.extend([
+        ci("t1", "a", "1/1", now - 5000),
+        ci("t2", "b", "2/1", now - 4000),
+        ci("t2", "b", "2/2", now - 3900),
+    ]);
+    ledger[2].lineage = vec!["t1".into(), "t2".into()];
+    let n = measure(&ledger, now - 3 * DAY, now);
+    assert_eq!(n.landed, 1);
+    assert_eq!(
+        n.test_runs_per_batch, 5.0,
+        "two of big, one of t1, two of t2"
+    );
+    // A predecessor of a predecessor counts too, and a train outside the lineage does not.
+    ledger.push(ci("t0", "z", "0/1", now - 6000));
+    ledger.push(Stage {
+        lineage: vec!["t0".into()],
+        ..row("t1", "a", "merge-less", now - 4900, "success", None)
+    });
+    ledger.push(ci("other", "o", "9/1", now - 3000));
+    assert_eq!(
+        measure(&ledger, now - 3 * DAY, now).test_runs_per_batch,
+        6.0
+    );
 }

@@ -3,3 +3,6 @@ tip of main (land the first green train, remerge every other green or running tr
 attributable part of a red one) and `land-train remerge` merges the new main into an open train,
 verifies it and moves its branch without any new part review. The GO verifier still expects the
 manifest base to equal main's tip; that gate-path change is a separate item.
+`land-train drive` runs the steps through the production builder; the push gate replays a remerge
+and refuses one that dropped a landed change; the branch moves by compare-and-swap with its manifest
+staged first; remerge takes the resolution log and protected paths of `verify`.

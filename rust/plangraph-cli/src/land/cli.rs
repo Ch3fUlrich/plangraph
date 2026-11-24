@@ -10,7 +10,7 @@ use std::process::Command;
 
 const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
-  plangraph land-train plan --main SHA --trains FILE | combine --manifests A,B,... --out FILE | remerge --repo DIR --manifest FILE --main SHA --parts FILE --out FILE [--branch NAME]\n\
+  plangraph land-train drive --repo DIR --trains FILE --out DIR --grant-digest D --snapshot-position N [--protected PREFIXES]\n  plangraph land-train plan --main SHA --trains FILE | combine --manifests A,B,... --out FILE | remerge --repo DIR --manifest FILE --main SHA --parts FILE --out FILE [--branch NAME] [--resolution-log FILE] [--protected PREFIXES]\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
@@ -133,6 +133,18 @@ pub fn adopted_from_log(path: &str, build: &str) -> Result<Vec<Adopted>, String>
     Ok(ledger.adopted(build))
 }
 
+/// The state and tip of main for the repository this checkout belongs to.
+pub(super) fn main_answer(
+    home: &Path,
+    repo_dir: &Path,
+) -> Result<super::main_state::Answer, String> {
+    let origin = super::git::out(repo_dir, &["remote", "get-url", "origin"])?;
+    let slug = crate::ci_watch::github::repository(&origin)?;
+    let (repo, ledger) = main_gh::repo_and_ledger(home, Some(&slug), "main")?;
+    let matrix = main_gh::matrix_from_toml(main_gh::MATRIX)?;
+    Ok(main_gh::answer_for(repo, "main", ledger, &matrix))
+}
+
 pub(super) fn write(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     std::fs::write(
         path,
@@ -202,8 +214,8 @@ pub(super) fn run_inner(
         )?;
         return Ok(Vec::new());
     }
-    if let "plan" | "combine" | "remerge" = cmd.as_str() {
-        return super::driver_cli::run(cmd, &flags);
+    if let "plan" | "combine" | "remerge" | "drive" = cmd.as_str() {
+        return super::driver_cli::run(home, cmd, &flags);
     }
     let parts: Vec<PartIn> = read(&need("parts")?)?;
     let protected: Vec<String> = flags
@@ -213,12 +225,7 @@ pub(super) fn run_inner(
     match cmd.as_str() {
         "build" => {
             let repo_dir = PathBuf::from(need("repo")?);
-            // Main is read for the repository this checkout belongs to.
-            let origin = super::git::out(&repo_dir, &["remote", "get-url", "origin"])?;
-            let slug = crate::ci_watch::github::repository(&origin)?;
-            let (repo, ledger) = main_gh::repo_and_ledger(home, Some(&slug), "main")?;
-            let matrix = main_gh::matrix_from_toml(main_gh::MATRIX)?;
-            let answer = main_gh::answer_for(repo, "main", ledger, &matrix);
+            let answer = main_answer(home, &repo_dir)?;
             let name = need("name")?;
             let base = need("base")?;
             let adopted = match flags.get("resolution-log") {

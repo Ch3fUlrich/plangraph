@@ -21,6 +21,12 @@ pub struct Stage {
     /// Plan items the batch carried; recorded on the `merge` row for the throughput experiment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub items: Option<u32>,
+    /// `<workflow run id>/<attempt>` of a CI row: a retry of the same head is another test run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// Subjects (trains) whose parts this subject was combined from; their CI runs count for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lineage: Vec<String>,
 }
 
 impl Stage {
@@ -74,6 +80,11 @@ pub fn ci_stages(subject: &str, head: &str, jobs: &[Value]) -> Vec<Stage> {
                 end: epoch(j, "completed_at")?,
                 result: j["conclusion"].as_str().unwrap_or("unknown").into(),
                 items: None,
+                run: match (j["run_id"].as_u64(), j["run_attempt"].as_u64()) {
+                    (Some(run), Some(attempt)) => Some(format!("{run}/{attempt}")),
+                    _ => None,
+                },
+                lineage: vec![],
             })
         })
         .collect()
@@ -180,7 +191,7 @@ pub fn render(r: &Report) -> Vec<String> {
     out
 }
 
-const USAGE: &str = "usage:\n  plangraph land-timeline record --subject S --head H --stage NAME --host HOST --start EPOCH --end EPOCH --result R\n  plangraph land-timeline report [--last N]\n  plangraph land-timeline experiment [--days N] [--now EPOCH]\nrecord takes --items N on the merge row of a batch";
+const USAGE: &str = "usage:\n  plangraph land-timeline record --subject S --head H --stage NAME --host HOST --start EPOCH --end EPOCH --result R\n  plangraph land-timeline report [--last N]\n  plangraph land-timeline experiment [--days N] [--now EPOCH]\nrecord takes --items N on the merge row of a batch, --run RUN/ATTEMPT on a CI row and --lineage A,B on the row of a combined train";
 
 pub fn run(home: &Path, args: &[String]) -> i32 {
     let ledger = home.join(".local/state/plangraph/land-timeline.jsonl");
@@ -228,6 +239,11 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
                         .get("items")
                         .map(|v| v.parse().map_err(|_| "--items must be a number".to_owned()))
                         .transpose()?,
+                    run: flags.get("run").map(|v| v.to_string()),
+                    lineage: flags
+                        .get("lineage")
+                        .map(|v| v.split(',').map(str::to_owned).collect())
+                        .unwrap_or_default(),
                 },
             )
         })()

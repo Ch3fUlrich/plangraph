@@ -11,6 +11,8 @@ fn st(subject: &str, stage: &str, start: i64, end: i64) -> Stage {
         end,
         result: "success".into(),
         items: None,
+        run: None,
+        lineage: vec![],
     }
 }
 

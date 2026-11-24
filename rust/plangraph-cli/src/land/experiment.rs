@@ -38,6 +38,30 @@ fn red(stage: &Stage) -> bool {
     stage.stage.starts_with("ci:") && matches!(stage.result.as_str(), "failure" | "timed_out")
 }
 
+/// The full CI runs behind the landed subjects: a run is its workflow run and attempt (a retry of the same
+/// head is another run; without a recorded run the head stands for it), and the runs of every train a landed
+/// train was combined from count for it, transitively.
+fn test_runs<'a>(stages: &'a [Stage], landed: &BTreeSet<&'a str>) -> BTreeSet<(&'a str, &'a str)> {
+    let mut subjects = landed.clone();
+    loop {
+        let before = subjects.len();
+        let more: Vec<&str> = stages
+            .iter()
+            .filter(|s| subjects.contains(s.subject.as_str()))
+            .flat_map(|s| s.lineage.iter().map(String::as_str))
+            .collect();
+        subjects.extend(more);
+        if subjects.len() == before {
+            break;
+        }
+    }
+    stages
+        .iter()
+        .filter(|s| s.stage.starts_with("ci:") && subjects.contains(s.subject.as_str()))
+        .map(|s| (s.subject.as_str(), s.run.as_deref().unwrap_or(&s.head)))
+        .collect()
+}
+
 /// The numbers for merges and red runs that ended in `[from, to)`.
 pub fn measure(stages: &[Stage], from: i64, to: i64) -> Numbers {
     let inside = |s: &&Stage| (from..to).contains(&s.end);
@@ -47,11 +71,7 @@ pub fn measure(stages: &[Stage], from: i64, to: i64) -> Numbers {
         .filter(inside)
         .collect();
     let subjects: BTreeSet<&str> = landed.iter().map(|s| s.subject.as_str()).collect();
-    let runs: BTreeSet<(&str, &str)> = stages
-        .iter()
-        .filter(|s| s.stage.starts_with("ci:") && subjects.contains(s.subject.as_str()))
-        .map(|s| (s.subject.as_str(), s.head.as_str()))
-        .collect();
+    let runs = test_runs(stages, &subjects);
     let red_heads: BTreeSet<(&str, &str)> = stages
         .iter()
         .filter(|s| red(s))

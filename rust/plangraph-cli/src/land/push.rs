@@ -27,15 +27,63 @@ fn manifest_path(repo: &Path, branch: &str) -> Result<PathBuf, String> {
         .join(format!("{branch}.heads")))
 }
 
-pub(super) fn write_manifest(repo: &Path, branch: &str, manifest: &Manifest) -> Result<(), String> {
-    let path = manifest_path(repo, branch)?;
+/// The heads file and the attributes file beside it; the push gate replays remerges with the attributes.
+fn manifest_files(repo: &Path, branch: &str) -> Result<[PathBuf; 2], String> {
+    let heads = manifest_path(repo, branch)?;
+    let attrs = heads.with_extension("attrs");
+    Ok([heads, attrs])
+}
+
+fn pending(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".next");
+    PathBuf::from(name)
+}
+
+fn write_files(
+    repo: &Path,
+    branch: &str,
+    manifest: &Manifest,
+    pending_only: bool,
+) -> Result<(), String> {
     let mut heads = String::new();
     for part in &manifest.parts {
         heads.push_str(&part.head);
         heads.push('\n');
     }
-    atomic_write_private(&path, heads.as_bytes())
-        .map_err(|e| format!("cannot save push manifest for {branch}: {e}"))
+    let [heads_path, attrs_path] = manifest_files(repo, branch)?;
+    for (path, text) in [
+        (heads_path, heads),
+        (attrs_path, manifest.policy.attributes.clone()),
+    ] {
+        let path = if pending_only { pending(&path) } else { path };
+        atomic_write_private(&path, text.as_bytes())
+            .map_err(|e| format!("cannot save push manifest for {branch}: {e}"))?;
+    }
+    Ok(())
+}
+
+pub(super) fn write_manifest(repo: &Path, branch: &str, manifest: &Manifest) -> Result<(), String> {
+    write_files(repo, branch, manifest, false)
+}
+
+/// Saves the push manifest beside the live one without replacing it; `promote_manifest` makes it live after
+/// the branch moved, so a failed write leaves the old branch and the old manifest together.
+pub(super) fn stage_manifest(repo: &Path, branch: &str, manifest: &Manifest) -> Result<(), String> {
+    write_files(repo, branch, manifest, true)
+}
+
+pub(super) fn promote_manifest(repo: &Path, branch: &str) -> Result<(), String> {
+    for path in manifest_files(repo, branch)? {
+        std::fs::rename(pending(&path), &path).map_err(|e| {
+            format!(
+                "cannot promote the push manifest of {branch}: {e}; move {} over {} by hand",
+                pending(&path).display(),
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 pub(super) fn run(repo: &Path, branch: &str) -> Result<(), String> {

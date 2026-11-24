@@ -97,7 +97,7 @@ pub(super) fn part(pr: u64, head: &str, parent: Option<(u64, &str)>) -> PartIn {
     }
 }
 
-fn lines(n: &[&str]) -> String {
+pub(super) fn lines(n: &[&str]) -> String {
     n.iter().map(|l| format!("{l}\n")).collect()
 }
 
@@ -535,7 +535,7 @@ fn verify_checks_the_result_and_the_freeze_against_the_recomputed_selection() {
 }
 
 /// A conflicting pair: x and p edit the same line. Returns (x, p, prefix commit M1 of the first build).
-fn conflicting(fx: &Fx) -> (String, String, String) {
+pub(super) fn conflicting(fx: &Fx) -> (String, String, String) {
     let x = fx.commit(
         &fx.base(),
         "shared.txt",
@@ -556,7 +556,7 @@ fn conflicting(fx: &Fx) -> (String, String, String) {
 }
 
 /// The writer's candidate: the merge of p onto m1 with the conflict resolved by `text` in `file`.
-fn resolve(fx: &Fx, m1: &str, p: &str, file: &str, text: &str) -> String {
+pub(super) fn resolve(fx: &Fx, m1: &str, p: &str, file: &str, text: &str) -> String {
     let d = fx.path();
     g(d, &["checkout", "-q", "--detach", m1]);
     let _ = Command::new("git")
@@ -576,7 +576,7 @@ fn resolve(fx: &Fx, m1: &str, p: &str, file: &str, text: &str) -> String {
     r
 }
 
-fn adopted(m1: &str, p: &str, commit: &str) -> super::resolve::Adopted {
+pub(super) fn adopted(m1: &str, p: &str, commit: &str) -> super::resolve::Adopted {
     super::resolve::Adopted {
         request: "r1".into(),
         build: "b1".into(),

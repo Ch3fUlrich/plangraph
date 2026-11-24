@@ -22,6 +22,30 @@ pub(super) enum Step {
     },
 }
 
+/// The tree the merge of `main` onto `parent` gives under the recorded attributes. A remerge is clean by
+/// construction: a conflict has no attributed resolver and a different tree drops or adds an edit, so
+/// both refuse. One implementation for the push gate and for replay.
+pub(super) fn replay_remerge(
+    repo: &Path,
+    parent: &str,
+    main: &str,
+    actual_tree: &str,
+    attributes: Option<&Path>,
+) -> Result<String, String> {
+    let short = &main[..12.min(main.len())];
+    let date = git::out(repo, &["show", "-s", "--format=%cI", main])?;
+    let check = git::Checkout::new(repo, parent)?;
+    match git::merge(check.path(), attributes, main, "replay", &date)? {
+        git::Merged::Clean { tree, .. } if tree == actual_tree => Ok(tree),
+        git::Merged::Clean { .. } => Err(format!(
+            "replay: remerge of main {short} has an extra or missing edit"
+        )),
+        git::Merged::Conflict { .. } => Err(format!(
+            "replay: remerge of main {short} conflicts; rebuild the train"
+        )),
+    }
+}
+
 /// The ref the push gate and replay read as main.
 pub(super) const MAIN_REF: &str = "refs/remotes/origin/main";
 
@@ -108,7 +132,7 @@ pub(super) fn validate(
     base: &str,
     tip: &str,
     heads: &[&str],
-    main: Option<&str>,
+    main: Option<(&str, Option<&Path>)>,
 ) -> Result<Vec<Step>, String> {
     if heads.is_empty()
         || ![base, tip]
@@ -138,7 +162,7 @@ pub(super) fn validate(
             [commit, parent, landed] if *parent == previous && !heads.contains(landed) => {
                 // Only the remerge of main's own history is allowed; any other second parent could
                 // bring in a commit that is neither a part nor landed.
-                let Some(main) = main else {
+                let Some((main, attributes)) = main else {
                     return Err(format!(
                         "chain: train parent {} is outside its manifest",
                         &landed[..12]
@@ -156,6 +180,8 @@ pub(super) fn validate(
                         &landed[..12]
                     ));
                 }
+                let tree = git::out(repo, &["rev-parse", &format!("{commit}^{{tree}}")])?;
+                replay_remerge(repo, previous, landed, &tree, attributes)?;
                 Step::Remerge {
                     commit: (*commit).into(),
                     parent: (*parent).into(),
@@ -223,8 +249,8 @@ fn train_base(repo: &Path, tip: &str) -> Result<String, String> {
     git::out(repo, &["rev-parse", &format!("{last}^")]).map_err(unavailable)
 }
 
-pub(super) fn check_push(repo: &Path, tip: &str, manifest: &Path) -> Result<(), String> {
-    let manifest = std::fs::read_to_string(manifest)
+pub(super) fn check_push(repo: &Path, tip: &str, heads_file: &Path) -> Result<(), String> {
+    let manifest = std::fs::read_to_string(heads_file)
         .map_err(|err| format!("train manifest unavailable: {err}"))?;
     let heads: Vec<&str> = manifest
         .lines()
@@ -235,5 +261,8 @@ pub(super) fn check_push(repo: &Path, tip: &str, manifest: &Path) -> Result<(), 
         return Err("train head must be a full lowercase SHA".into());
     }
     let base = train_base(repo, tip)?;
-    validate(repo, &base, tip, &heads, Some(MAIN_REF)).map(|_| ())
+    // The recorded attributes sit beside the heads file; without them the replay merges with none.
+    let attrs = heads_file.with_extension("attrs");
+    let attrs = attrs.is_file().then_some(attrs);
+    validate(repo, &base, tip, &heads, Some((MAIN_REF, attrs.as_deref()))).map(|_| ())
 }

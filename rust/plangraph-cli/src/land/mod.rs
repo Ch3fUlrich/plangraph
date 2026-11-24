@@ -12,7 +12,10 @@ pub mod deploy;
 mod deploy_probe;
 #[cfg(test)]
 mod deploy_tests;
+pub mod driver;
 mod driver_cli;
+#[cfg(test)]
+mod driver_tests;
 pub mod experiment;
 #[cfg(test)]
 mod experiment_tests;

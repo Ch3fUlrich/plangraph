@@ -91,8 +91,9 @@ Parallel trains: after one train lands, another open train may merge the new
 parent is a first-parent commit of main that the train does not contain yet. Any other second
 parent, and any extra commit without resolver attribution, is still refused. The push gate reads the
 train base from the first-parent chain (`rev-list --first-parent TIP --not origin/main`), since the merge-base with
-main is main itself after a remerge. Replay recomputes the remerge, refuses a conflict or an edit
-hidden in it, and lists it as `remerges` in the review artifact for the remerge-diff review.
+main is main itself after a remerge. The push gate and replay both recompute the remerge (the recorded attributes sit
+in `<branch>.attrs` beside the heads file), refuse a conflict, a dropped landed change or a hidden edit, and replay lists it
+as `remerges` in the review artifact for the remerge-diff review.
 
 The driver steps (`parallel.rs`, `remerge.rs`, `combine.rs`; commands in `driver_cli.rs`), run between CI results:
 
@@ -101,14 +102,20 @@ The driver steps (`parallel.rs`, `remerge.rs`, `combine.rs`; commands in `driver
   (alone, since main moves), else `remerge` the one stale green or running train, or `combine` several stale ones, and
   `drop_part` for a red train (the existing red-train session of `split.rs` leaves the hinted part out). Ask again after each step.
 - `land-train remerge --repo DIR --manifest FILE --main SHA --parts FILE --out FILE` merges the new main into the train,
-  replays it and moves the branch; parts, receipts and merges stay, so no part is reviewed again. A conflict is refused:
-  combine the train instead.
+  replays it (with `--resolution-log` and `--protected` as `verify` takes them) and moves the branch by compare-and-swap from
+  the head the manifest names; the push manifest and `--out` are written beside the live files first. Parts, receipts and
+  merges stay, so no part is reviewed again. A conflict is refused: combine the train instead.
+- `land-train drive --repo DIR --trains FILE --out DIR --grant-digest D --snapshot-position N` runs the next steps: it remerges,
+  combines (one build on live main) and rebuilds a red train without its hinted part through the production builder, and
+  hands the first green train to the GO gate (`land`; it merges nothing). The GO verifier binds CI and the delta review to
+  the exact head, so every changed head needs its own full CI and delta review, never a part review.
 - `land-train combine --manifests A,B,... --out FILE` writes the union of the parts (each pull request once, receipts kept)
   as `--parts` input for one `build` on the new main.
 - The GO verifier still wants the manifest base to be main's tip, so a remerged train cannot be admitted until
   `go_verify.rs` accepts a train whose tested head contains main's tip (gate path, separate item).
 - `land-timeline experiment [--days N]` compares batches and items per hour, test runs per landed batch and red trains
-  per day over the last N days with the N days before (D-6774); `record --items N` on the `merge` row feeds the items.
+  per day over the last N days with the N days before (D-6774); `record --items N` on the `merge` row feeds the items; a test run is a workflow run and attempt (`record --run RUN/ATTEMPT`), and
+  `--lineage A,B` on a combined train's row counts its predecessors' runs.
 
 Run a hand-started train resolver from its worktree with
 `pg-spawnd hand-run -- PROGRAM [ARGS ...]`. Export `CARGO_TARGET_DIR` with the
