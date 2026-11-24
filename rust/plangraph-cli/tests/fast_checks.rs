@@ -322,12 +322,13 @@ fn fast_checks_plan_for_a_spawner_python_change_tests_pg_spawnd() {
 fn registry(dir: &Path, mem_floor_mb: u64) -> std::path::PathBuf {
     let doc = serde_json::json!({"version": 1, "self": "worker-a", "hosts": [{
         "id": "worker-a", "class": "worker", "aliases": [],
-        "transport": "keeper", "os": "linux", "state_dir": "/fixture/state",
+        "transport": "keeper", "os": if cfg!(windows) { "windows" } else { "linux" },
+        "state_dir": dir.to_str().unwrap(),
         "caps": {"max_runs": 4, "max_writers": 2, "max_seats": 2,
                  "max_sessions": 5, "mem_floor_mb": mem_floor_mb},
         "warmup": {"warmup_s": 1, "ramp_mb": {}},
         "session_mb": 1, "roles": [], "repos": {"plangraph": {
-            "root": dir.to_str().unwrap(), "worktrees_root": "/fixture/trees",
+            "root": dir.to_str().unwrap(), "worktrees_root": dir.join("trees").to_str().unwrap(),
             "remote": "example", "import_roots": [], "cache_env": {}}}
     }]});
     let path = dir.join("hosts.json");

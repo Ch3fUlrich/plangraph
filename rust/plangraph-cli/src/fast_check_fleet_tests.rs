@@ -129,8 +129,8 @@ fn wsl_values_with_spaces_are_double_quoted_for_the_windows_shell() {
 #[test]
 fn wsl_values_with_shell_metacharacters_are_refused() {
     for bad in [
-        "a&b", "a|b", "a;b", "a\"b", "a'b", "a$b", "a`b", "a%b", "a^b", "a<b", "a>b", "a(b)",
-        "a\nb", "",
+        "a,b", "a&b", "a|b", "a;b", "a\"b", "a'b", "a$b", "a`b", "a%b", "a^b", "a<b", "a>b",
+        "a(b)", "a\nb", "",
     ] {
         let mut place = host(Some("worker-a"), Some("Ubuntu"));
         place.cwd = "/srv".into();
@@ -158,4 +158,50 @@ fn wsl_values_may_hold_non_ascii_letters_but_not_non_ascii_syntax() {
             "{bad:?}"
         );
     }
+}
+
+#[test]
+fn log_attempts_appends_one_row_per_attempt_and_report_reads_the_file_back() {
+    use crate::fast_check_dispatch::{Attempt, Done};
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("dispatch.log");
+    let attempt = |host: &str, verdict| Attempt {
+        host: host.into(),
+        verdict,
+    };
+    let busy_then_pass = Done {
+        verdict: Verdict::Pass,
+        code: 0,
+        output: String::new(),
+        attempts: vec![
+            attempt("worker-a", Verdict::HostBusy),
+            attempt("worker-b", Verdict::Pass),
+        ],
+    };
+    let failed = Done {
+        verdict: Verdict::TestFailure,
+        code: 1,
+        output: String::new(),
+        attempts: vec![attempt("worker-a", Verdict::TestFailure)],
+    };
+    log_attempts(&log, &busy_then_pass).unwrap();
+    log_attempts(&log, &failed).unwrap();
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(text.lines().count(), 3, "{text}");
+    assert!(
+        text.lines().nth(1).unwrap().contains(r#""attempt":2"#),
+        "{text}"
+    );
+    let counts = summarize(&text);
+    assert_eq!(
+        (
+            counts.passed,
+            counts.host_busy,
+            counts.test_failure,
+            counts.ignored
+        ),
+        (1, 1, 1, 0)
+    );
+    assert!(run(&["--report".into(), log.to_str().unwrap().into()]).is_ok());
+    assert!(log_attempts(&dir.path().join("missing/dispatch.log"), &failed).is_err());
 }
