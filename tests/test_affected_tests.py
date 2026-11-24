@@ -711,3 +711,28 @@ def test_workflow_only_changes_select_ci_regressions(tmp_path, local):
     plan = selector().select_tests(tmp_path, [".github/workflows/tests.yml"],
                                    local=local, files_only=local)
     assert plan["tests"] == sorted(f"tests/{name}" for name in regressions)
+
+
+def test_new_uncommitted_rust_test_selects_the_bare_python_guard_only_without_head(tmp_path):
+    # The writer's pre-commit command must see a new Rust test file; --head HEAD hides it.
+    import subprocess
+
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True)
+
+    guard = "tests/test_spawner_import_guard.py"
+    (tmp_path / guard).parent.mkdir()
+    (tmp_path / guard).touch()
+    git("init", "-q")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Test")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    new = "rust/crate/tests/new_probe.rs"
+    (tmp_path / new).parent.mkdir(parents=True)
+    (tmp_path / new).write_text('Command::new("python3");\n')
+    module = selector()
+    pre_commit = module.changed_files(tmp_path, "HEAD")
+    assert new in pre_commit
+    assert guard in module.select_tests(tmp_path, pre_commit)["tests"]
+    assert module.changed_files(tmp_path, "HEAD", "HEAD") == []
