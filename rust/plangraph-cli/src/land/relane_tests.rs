@@ -286,3 +286,30 @@ fn pushes_of_one_clone_never_overlap() {
     assert_eq!(ran, 2, "both pushes went through the hook");
     assert!(!marks.join("overlap").exists(), "two pushes ran at once");
 }
+
+#[test]
+fn a_merge_of_main_inside_the_lane_is_not_an_own_commit() {
+    let fx = Fx::new();
+    let p = fx.scratch("withmerge");
+    g(
+        &p,
+        &["checkout", "-q", "-b", "lane/merged-r1", "origin/main"],
+    );
+    std::fs::write(p.join("a.txt"), "lane\n2\n3\n").unwrap();
+    g(&p, &["add", "-A"]);
+    g(
+        &p,
+        &["commit", "-q", "-m", "edit a.txt\n\nWriter: w-merged"],
+    );
+    // main moves, and the lane merges it (the merge commit has no Writer trailer).
+    fx.advance("c.txt", "1\n2\nfirst\n");
+    g(&p, &["fetch", "-q", "origin"]);
+    g(&p, &["merge", "-q", "--no-edit", "origin/main"]);
+    g(&p, &["push", "-q", "origin", "lane/merged-r1"]);
+    let onto = fx.advance("b.txt", "1\n2\nsecond\n");
+    let mut l = fx.input("lane/merged-r1", &onto);
+    l.writer = Some("w-merged");
+    let r = rebased(relane(&l).unwrap());
+    assert_eq!((r.own_before, r.own_after), (1, 1));
+    assert_eq!(fx.log("lane/merged-r2", &onto), ["edit a.txt"]);
+}
