@@ -169,7 +169,7 @@ A successful reader returning no valid fresh codex account refuses; an unavailab
 the explicitly supplied facts quota. Missing, invalid, or exhausted quota refuses.
 The fallback quota has the same freshness bound as the other supplied facts.
 
-Policy `batch_max_items` (default 1) lets one writer run hold related ready items: the
+Policy `batch_max_items` (default 1, range 1..=50; any other value refuses every tick as `invalid_policy`) lets one writer run hold related ready items: the
 first eligible item in launch order plus later eligible items of its family or sharing its
 files, in launch order. Every item is claimed on its own, then checked against the claimed
 items of every host (the keeper snapshot, queued runs included): a claim whose files overlap
