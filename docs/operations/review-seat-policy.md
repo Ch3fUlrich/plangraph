@@ -1,0 +1,3 @@
+# Review seat policy and checkout
+
+`apply_review_permissions` disables session sharing for every OpenCode review seat and returns a reason when the written config still grants more than the read-only policy (an extra allow, a bash command outside the checkout list, sharing not disabled); the launch is then refused with `render_refused`. After an OpenCode review run the stream's permission-refused tool calls are recorded as a `permission_denied` event with a count. A worker review whose disposable checkout is no longer the pristine pinned head after a completed run (moved HEAD, attached branch, modified or untracked file) fails with reason `review_checkout_dirty`; the checkout is removed either way.
