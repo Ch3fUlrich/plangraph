@@ -41,14 +41,14 @@ pub fn binding(statement: &str, repo: &str) -> Option<(u64, String)> {
 }
 
 /// The version of the one `MIGRATION <version>` field after the first `;` of `statement`; `None` when there
-/// is no such field. A second field, or a value that is not the plain decimal of a positive number
+/// is no such field (a field of another name, `MIGRATION-NOTE staged`, is ignored). A second field, or a value that is not the plain decimal of a positive number
 /// (`+3`, `03`, two spaces), is an error.
 pub fn migration_field(statement: &str) -> Result<Option<u32>, String> {
     let fields: Vec<&str> = statement
         .split(';')
         .skip(1)
         .map(str::trim)
-        .filter(|f| f.starts_with("MIGRATION"))
+        .filter(|f| f.starts_with("MIGRATION "))
         .collect();
     match fields.as_slice() {
         [] => Ok(None),

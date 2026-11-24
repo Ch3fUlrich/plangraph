@@ -7,13 +7,19 @@ fn the_field_grammar_is_the_plain_decimal_the_python_gate_requires() {
     assert_eq!(migration_field("GO #9; MIGRATION 3; PLAN x"), Ok(Some(3)));
     assert_eq!(migration_field("GO #9"), Ok(None));
     assert_eq!(migration_field("MIGRATION 3 GO #9"), Ok(None));
+    // Fields of another name, or a bare marker, are not the migration field (the Python gate reads the same).
+    assert_eq!(
+        migration_field("GO #9; MIGRATION-NOTE staged; MIGRATION 3"),
+        Ok(Some(3))
+    );
+    assert_eq!(migration_field("GO #9; MIGRATION-NOTE staged"), Ok(None));
+    assert_eq!(migration_field("GO #9; MIGRATION"), Ok(None));
     for bad in [
         "GO #9; MIGRATION +3",
         "GO #9; MIGRATION 03",
         "GO #9; MIGRATION  3",
         "GO #9; MIGRATION 0",
         "GO #9; MIGRATION three",
-        "GO #9; MIGRATION",
         "GO #9; MIGRATION 3; MIGRATION 3",
     ] {
         assert!(migration_field(bad).is_err(), "{bad}");
