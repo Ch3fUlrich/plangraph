@@ -128,12 +128,22 @@ exit 2
     }
 }
 
-fn spawn_key(fixture: &mut Fixture, key: &str) -> Value {
-    let prompt = format!("Brief\n### {key} | t\nWhy: x\n");
+fn spawn(fixture: &mut Fixture, prompt: &str, card_extra: Value) -> Value {
+    let mut card = json!({"run_kind":"native-codex","repo":"/repo"});
+    card.as_object_mut()
+        .unwrap()
+        .extend(card_extra.as_object().unwrap().clone());
     fixture.client.request(
         "tools/call",
-        json!({"name":"plangraph_agent_spawn","arguments":{
-            "card":{"run_kind":"native-codex","repo":"/repo"},"prompt":prompt}}),
+        json!({"name":"plangraph_agent_spawn","arguments":{"card":card,"prompt":prompt}}),
+    )
+}
+
+fn spawn_key(fixture: &mut Fixture, key: &str) -> Value {
+    spawn(
+        fixture,
+        &format!("Brief\n### {key} | t\nWhy: x\n"),
+        json!({}),
     )
 }
 
@@ -146,6 +156,33 @@ fn error_text(reply: &Value) -> String {
 
 fn claim_files(state: &std::path::Path) -> usize {
     pg_spawnd::lane_reservation::claim_files(state)
+}
+
+/// An adapter whose `spawn` registers a run record for the first key of the card it receives
+/// (`item_keys`), the way the Python spawner stores the admitted keys, and keeps that card.
+fn registering_adapter(state: &std::path::Path) {
+    let script = r#"#!/bin/sh
+if [ "$3" = spawn ]; then
+  echo call >> 'STATE/spawns'
+  printf '%s' "$5" > 'STATE/card-seen'
+  key=$(printf '%s' "$5" | sed -n 's/.*"item_keys":\["\([^"]*\)".*/\1/p')
+  mkdir -p 'STATE/runs/run-new'
+  printf '{"run_id":"run-new","status":"running","role":"implement","item_key":"%s"}' "$key" > 'STATE/runs/run-new/record.json'
+  printf '%s' '{"run_id":"run-new","run_kind":"native-codex","status":"running"}'
+fi
+"#;
+    fs::write(
+        state.join("adapter"),
+        script.replace("STATE", &state.display().to_string()),
+    )
+    .unwrap();
+}
+
+fn spawns(state: &std::path::Path) -> usize {
+    fs::read_to_string(state.join("spawns"))
+        .unwrap_or_default()
+        .lines()
+        .count()
 }
 
 #[test]
@@ -164,13 +201,7 @@ fn native_mcp_spawn_failing_in_the_adapter_releases_its_reservation_for_the_retr
         assert_eq!(claim_files(&state), 0);
     }
     // Both attempts reached the adapter with the key reserved; the first did not block the retry.
-    assert_eq!(
-        fs::read_to_string(state.join("spawns"))
-            .unwrap()
-            .lines()
-            .count(),
-        2
-    );
+    assert_eq!(spawns(&state), 2);
     assert_eq!(
         fs::read_to_string(state.join("seen"))
             .unwrap()
@@ -181,28 +212,55 @@ fn native_mcp_spawn_failing_in_the_adapter_releases_its_reservation_for_the_retr
 }
 
 #[test]
-fn native_mcp_spawn_registers_a_key_with_a_second_colon_and_the_run_then_holds_it() {
+fn native_mcp_spawn_hands_the_admitted_keys_to_the_adapter_and_the_registered_run_holds_them() {
     let mut fixture = Fixture::new(false, "running");
     let state = fixture.state.path().to_owned();
-    let script = format!(
-        "#!/bin/sh\nif [ \"$3\" = spawn ]; then\n  echo call >> '{0}/spawns'\n  mkdir -p '{0}/runs/run-new'\n  printf '%s' '{{\"run_id\":\"run-new\",\"status\":\"running\",\"role\":\"implement\",\"item_key\":\"demo:ITEM:detail\"}}' > '{0}/runs/run-new/record.json'\n  printf '%s' '{{\"run_id\":\"run-new\",\"run_kind\":\"native-codex\",\"status\":\"running\"}}'\nfi\n",
-        state.display()
-    );
-    fs::write(state.join("adapter"), script).unwrap();
+    registering_adapter(&state);
     assert!(spawn_key(&mut fixture, "demo:ITEM:detail")["error"].is_null());
     assert_eq!(claim_files(&state), 0);
-    // The registered record holds the full key, not its prefix before the second colon.
+    // The record the adapter built from the received card holds the full key.
     let error = error_text(&spawn_key(&mut fixture, "demo:ITEM:detail"));
     assert!(
         error.contains("demo:ITEM:detail is held by live lane run-new"),
         "{error}"
     );
     assert!(spawn_key(&mut fixture, "demo:ITEM")["error"].is_null());
-    assert_eq!(
-        fs::read_to_string(state.join("spawns"))
-            .unwrap()
-            .lines()
-            .count(),
-        2
+    assert_eq!(spawns(&state), 2);
+}
+
+#[test]
+fn native_mcp_card_key_with_a_trailing_colon_survives_the_card_to_record_handoff() {
+    let mut fixture = Fixture::new(false, "running");
+    let state = fixture.state.path().to_owned();
+    registering_adapter(&state);
+    let card = || json!({"item_key":"demo:ITEM:"});
+    assert!(spawn(&mut fixture, "Brief\n", card())["error"].is_null());
+    let error = error_text(&spawn(&mut fixture, "Brief\n", card()));
+    assert!(
+        error.contains("demo:ITEM: is held by live lane run-new"),
+        "{error}"
     );
+    assert_eq!(spawns(&state), 1);
+}
+
+#[test]
+fn native_mcp_spawn_sends_a_near_limit_card_with_the_derived_keys_to_the_adapter() {
+    let mut fixture = Fixture::new(false, "running");
+    let state = fixture.state.path().to_owned();
+    registering_adapter(&state);
+    // Within the 24,000-byte limit as sent; the admitted keys take it past the limit.
+    let base = json!({"run_kind":"native-codex","repo":"/repo","note":""})
+        .to_string()
+        .len();
+    let note = "x".repeat(24000 - base - 4);
+    let reply = spawn(
+        &mut fixture,
+        "Brief\n### demo:BIG | t\nWhy: x\n",
+        json!({"note":note}),
+    );
+    assert!(reply["error"].is_null(), "{reply}");
+    let seen: Value =
+        serde_json::from_str(&fs::read_to_string(state.join("card-seen")).unwrap()).unwrap();
+    assert_eq!(seen["item_keys"], json!(["demo:BIG"]));
+    assert!(seen.to_string().len() > 24000);
 }

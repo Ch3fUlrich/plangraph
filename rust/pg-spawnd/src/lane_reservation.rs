@@ -4,9 +4,10 @@
 //!
 //! Each owner has its own file per key (`<key digest>/<owner digest>.json`), so a second
 //! launch that deliberately repeats a key never replaces the first launch's claim. A launch
-//! releases its own files when it ends or when its run record takes over. A claim of a live
-//! launcher holds for as long as that launcher process runs (up to `MAX_AGE_SECS`, longer
-//! than any launch call); the claim of a dead process is abandoned at once.
+//! releases its own files when it ends or when its run record takes over. A launch that was
+//! cut off (the dispatcher died) is not forgotten: the Python supervisor it started can still
+//! register the run, so its claim holds until `MAX_AGE_SECS` has passed, whether or not the
+//! dispatcher process is still alive.
 
 use crate::lane_guard::Lane;
 use serde_json::{json, Value};
@@ -17,8 +18,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-/// No claim outlives this, even when its launcher process id was reused: the launch call of the
-/// dispatcher gives up long before (its adapter timeout is 200 s).
+/// How long a claim holds that nobody released: longer than any launch can take to register its
+/// run record (the adapter call of the dispatcher gives up after 200 s), so it only ever frees
+/// the key of a launch that died.
 pub const MAX_AGE_SECS: u64 = 600;
 
 fn dir(state: &Path) -> PathBuf {
@@ -47,33 +49,29 @@ fn path(state: &Path, key: &str, owner: &str) -> PathBuf {
     key_dir(state, key).join(format!("{}.json", digest(owner)))
 }
 
-/// Whether the process that wrote a claim still runs. Without `/proc` the age limit alone decides.
-fn launcher_alive(pid: u32) -> bool {
-    !cfg!(target_os = "linux") || Path::new(&format!("/proc/{pid}")).exists()
-}
-
 /// The claims on `keys` of owners other than `owner` that are still active at `at`.
 pub fn lanes(state: &Path, keys: &[String], owner: &str, at: u64) -> Vec<Lane> {
     let mut lanes = Vec::new();
     for key in keys {
         let entries = fs::read_dir(key_dir(state, key)).into_iter().flatten();
-        for entry in entries.filter_map(Result::ok) {
+        // Only published claims count: an unfinished write is a `.tmp` file.
+        for entry in entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        {
             let Some(record) = fs::read(entry.path())
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             else {
                 continue;
             };
-            let (Some(held), Some(ts), Some(pid)) = (
+            let (Some(held), Some(ts)) = (
                 record["owner"].as_str().filter(|held| *held != owner),
                 record["ts"].as_u64(),
-                record["pid"]
-                    .as_u64()
-                    .and_then(|pid| u32::try_from(pid).ok()),
             ) else {
                 continue;
             };
-            if record["key"] == *key && ts + MAX_AGE_SECS > at && launcher_alive(pid) {
+            if record["key"] == *key && ts + MAX_AGE_SECS > at {
                 lanes.push(Lane {
                     name: format!("reservation {held}"),
                     keys: vec![key.clone()],
@@ -91,21 +89,32 @@ pub fn reserve(state: &Path, keys: &[String], owner: &str) -> std::io::Result<()
         fs::create_dir_all(key_dir(state, key))?;
         let target = path(state, key, owner);
         let tmp = target.with_extension(format!("{}.tmp", std::process::id()));
-        fs::write(
+        let published = fs::write(
             &tmp,
-            json!({"key":key,"owner":owner,"ts":now(),"pid":std::process::id()}).to_string(),
-        )?;
-        fs::rename(&tmp, &target)?;
+            json!({"key":key,"owner":owner,"ts":now()}).to_string(),
+        )
+        .and_then(|()| fs::rename(&tmp, &target));
+        if published.is_err() {
+            // No unfinished file is left behind to be mistaken for, or to block, a claim.
+            let _ = fs::remove_file(&tmp);
+        }
+        published?;
     }
     Ok(())
 }
 
-/// Remove the claims of `owner` on `keys`; the claims of other owners stay. The caller holds the
-/// state's lock (`lock`).
+/// Remove the claims of `owner` on `keys`; the claims of other owners stay. Each owner has its
+/// own files, so this is safe without the lock.
 pub fn release(state: &Path, keys: &[String], owner: &str) {
     for key in keys {
         let _ = fs::remove_file(path(state, key, owner));
-        // Only an empty directory goes: another owner's claim keeps it.
+    }
+}
+
+/// Remove the directories of `keys` that no claim keeps. The caller holds the state's lock
+/// (`lock`): a reservation creates its directory under it.
+pub fn prune(state: &Path, keys: &[String]) {
+    for key in keys {
         let _ = fs::remove_dir(key_dir(state, key));
     }
 }
@@ -150,14 +159,10 @@ pub fn claim_files(state: &Path) -> usize {
 mod tests {
     use super::*;
 
-    fn write_claim(state: &Path, key: &str, owner: &str, ts: u64, pid: u32) {
+    fn write_claim(state: &Path, key: &str, owner: &str, ts: u64) {
         let target = path(state, key, owner);
         fs::create_dir_all(target.parent().unwrap()).unwrap();
-        fs::write(
-            target,
-            json!({"key":key,"owner":owner,"ts":ts,"pid":pid}).to_string(),
-        )
-        .unwrap();
+        fs::write(target, json!({"key":key,"owner":owner,"ts":ts}).to_string()).unwrap();
     }
 
     #[test]
@@ -175,33 +180,37 @@ mod tests {
     }
 
     #[test]
-    fn a_live_launcher_keeps_its_claim_past_two_minutes_and_a_dead_one_loses_it() {
+    fn a_claim_survives_the_exit_of_the_dispatcher_that_wrote_it() {
+        // The dispatcher died during admission, but the supervisor it started can still register
+        // the run: a restarted dispatcher meets the claim until it is old enough to be abandoned.
         let dir = tempfile::tempdir().unwrap();
         let keys = ["demo:K".to_owned()];
         let at = now();
-        // The queue of the Python placement can wait 120 s: the claim holds through it.
-        write_claim(
-            dir.path(),
-            "demo:K",
-            "launch-live",
-            at - 300,
-            std::process::id(),
-        );
+        write_claim(dir.path(), "demo:K", "launch-from-a-dead-process", at - 300);
         assert_eq!(lanes(dir.path(), &keys, "launch-b", at).len(), 1);
-        // The process that wrote a claim is gone: the claim is abandoned at once.
-        let gone = std::process::Command::new("true").spawn().map(|mut child| {
-            let pid = child.id();
-            child.wait().unwrap();
-            pid
-        });
-        if cfg!(target_os = "linux") {
-            write_claim(dir.path(), "demo:K", "launch-dead", at, gone.unwrap());
-            let names: Vec<_> = lanes(dir.path(), &keys, "launch-b", at)
-                .into_iter()
-                .map(|lane| lane.name)
-                .collect();
-            assert_eq!(names, ["reservation launch-live"]);
-        }
+        assert!(lanes(dir.path(), &keys, "launch-b", at + 301).is_empty());
+    }
+
+    #[test]
+    fn an_unfinished_write_is_not_a_claim_and_a_failed_publication_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = ["demo:K".to_owned()];
+        let stray = key_dir(dir.path(), "demo:K");
+        fs::create_dir_all(&stray).unwrap();
+        let record = json!({"key":"demo:K","owner":"launch-a","ts":now()}).to_string();
+        fs::write(stray.join("0123.4567.tmp"), &record).unwrap();
+        assert!(lanes(dir.path(), &keys, "launch-b", now()).is_empty());
+        // The rename cannot replace a directory: the temporary file must not outlive the failure.
+        fs::create_dir_all(path(dir.path(), "demo:K", "launch-b")).unwrap();
+        assert!(reserve(dir.path(), &keys, "launch-b").is_err());
+        let own = format!("{}.tmp", std::process::id());
+        let leftovers: Vec<_> = fs::read_dir(&stray)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(&own))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]
@@ -216,7 +225,9 @@ mod tests {
         assert_eq!(held.len(), 1);
         assert_eq!(held[0].name, "reservation launch-a");
         release(dir.path(), &keys, "launch-a");
+        prune(dir.path(), &keys);
         assert_eq!(claim_files(dir.path()), 0);
+        assert!(!key_dir(dir.path(), "demo:K").exists());
         assert!(lanes(dir.path(), &keys, "launch-c", now()).is_empty());
     }
 }

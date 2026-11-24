@@ -9,19 +9,7 @@ use std::path::Path;
 const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(crate) fn valid_item(value: &str) -> bool {
-    let Some((project, id)) = value.split_once(':') else {
-        return false;
-    };
-    value.len() <= 200
-        && !project.is_empty()
-        && !id.is_empty()
-        && id.len() <= 180
-        && project
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+    pg_spawnd::lane_guard::valid_key(value)
 }
 
 pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Value>) {
