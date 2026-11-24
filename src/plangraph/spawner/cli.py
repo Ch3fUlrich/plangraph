@@ -345,6 +345,12 @@ def main(argv=None):
                 options['repository_preview'] = True
             routed = service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             result = routed.to_dict()
+            if args.role == 'review':
+                from plangraph.planner.route_policy import load_route_policy
+                # The native spawner queues seats beyond a leg's bound from this (seat_admission.rs).
+                admission = load_route_policy().review_seat_admission
+                if admission:
+                    result['seat_admission'] = dict(admission)
             if args.leg_scores:
                 from plangraph.planner.review_order import catalog_score
                 from plangraph.routing_support.resolver import get_catalog_models

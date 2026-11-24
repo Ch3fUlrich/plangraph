@@ -160,6 +160,17 @@ pub(crate) fn spawn(
     {
         return Err(ToolError::Internal("route adapter returned no leg".into()));
     }
+    // A review seat takes a slot of its leg first (route policy review_seat_admission); the slot is
+    // held until this call returns, by which time the run record counts for the leg.
+    let (plan, _slot) = if role == "review" && args.get("dry_run") != Some(&json!(true)) {
+        crate::seat_admission::admit(
+            state,
+            plan,
+            &mut crate::seat_admission::Live { state, args },
+        )?
+    } else {
+        (plan, None)
+    };
     match runs.spawn(state, args, host, role.clone(), plan.clone()) {
         Err(error) => {
             let named = ["prompt_too_large", "stdin_prompt_flag_missing"];
