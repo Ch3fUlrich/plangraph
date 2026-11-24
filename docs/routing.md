@@ -254,11 +254,13 @@ D-6652 (rule 3.66 (f), corrected 2026-11-23) changes the review order above and 
 rule. Implement keeps the Codex lead first; `claude-sonnet-5-5-high` (`claude-sonnet-5-5-xhigh`
 for a card with `hard: true`) is routed only while the Codex lead is limited (429 or quota),
 with reason `codex_limited` in the plan and `route_reason` in the run record, and the route
-returns to Codex when it serves again. Review serves the two
-required OpenCode seats (`opencode-go-deepseek-v4-flash`, `opencode-go-glm-5.3-flash`, tools
-mode with checkout reads) ahead of every other leg, each outside the diff's writer families,
-and plans two seats on every head. The Claude review seat serves only for credential,
-authentication and secrets diffs or when both required seats are out of the route.
+returns to Codex when it serves again. Review (rule 3.66 (f10),
+D-6738..D-6741) plans one counted seat on the first smart leg served (`agy-gemini-4-hydrogen-high`,
+the argon legs, then `claude-sonnet-5-5-high` for a head Claude did not write; a credential,
+authentication or secrets diff tries Sonnet first). The two OpenCode seats
+(`opencode-go-deepseek-v4-flash`, `opencode-go-glm-5.3-flash`, tools mode with checkout reads)
+seat the head only when no smart leg serves; the legs after the seat are the fallbacks of a run
+that ends without a verdict. A seat run for several items carries `item_keys` and the head.
 `plangraph router go-row` accepts a part only with two seats that each ACCEPT its head with a
 `FILES READ` line naming files, and the keeper reads a required-seat record without
 `FILES READ` as no seat.
