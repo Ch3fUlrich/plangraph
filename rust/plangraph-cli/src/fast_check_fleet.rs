@@ -12,6 +12,7 @@ use pg_worker_core::hosts::HostRegistry;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 struct Machines {
     command: Vec<String>,
@@ -71,17 +72,22 @@ fn quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', "'\\''"))
 }
 
+/// A host whose probe takes longer than this is treated as having no probe, so one hung
+/// host cannot hold placement before the busy-host retry.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+
+fn read_probe(mut command: Command, timeout: Duration) -> Option<HostProbe> {
+    let bytes = host_command::output(&mut command, timeout).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 impl Fleet for Machines {
     fn sample(&mut self, host: &Candidate) -> Option<Sample> {
         let probe: HostProbe = match &host.route {
             None => host_probe::probe(&self.local).ok()?,
             Some(_) => {
                 let probe = words(&["pg-spawnd", "probe", "--json", "--host-id", &host.name]);
-                let out = remote_command(host, &probe, false).ok()?.output().ok()?;
-                out.status
-                    .success()
-                    .then(|| serde_json::from_slice(&out.stdout).ok())
-                    .flatten()?
+                read_probe(remote_command(host, &probe, false).ok()?, PROBE_TIMEOUT)?
             }
         };
         Some(Sample {

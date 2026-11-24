@@ -205,3 +205,35 @@ fn log_attempts_appends_one_row_per_attempt_and_report_reads_the_file_back() {
     assert!(run(&["--report".into(), log.to_str().unwrap().into()]).is_ok());
     assert!(log_attempts(&dir.path().join("missing/dispatch.log"), &failed).is_err());
 }
+
+#[cfg(unix)]
+fn shell(script: &str) -> Command {
+    let mut command = Command::new("sh");
+    command.args(["-c", script]);
+    command
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hanging_remote_probe_times_out_as_no_probe() {
+    let started = std::time::Instant::now();
+    let probe = read_probe(shell("sleep 30"), std::time::Duration::from_millis(300));
+    assert!(probe.is_none());
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_prompt_remote_probe_is_read_and_a_failing_or_garbled_one_is_not() {
+    let wait = std::time::Duration::from_secs(10);
+    let json = r#"{"host_id":"worker-a","os":"linux","mem_total_mb":2,"mem_available_mb":1,"swap_total_mb":0,"swap_free_mb":0,"cpus":4,"load1":0.5,"load5":null,"load15":null,"ts_ms":1}"#;
+    let probe = read_probe(shell(&format!("echo '{json}'")), wait).unwrap();
+    assert_eq!((probe.cpus, probe.mem_available_mb), (4, 1));
+    assert!(read_probe(shell(&format!("echo '{json}'; exit 3")), wait).is_none());
+    assert!(read_probe(shell("echo nope"), wait).is_none());
+}
+
+#[test]
+fn the_probe_deadline_is_short_of_a_minute() {
+    assert!(PROBE_TIMEOUT.as_secs() <= 10);
+}
