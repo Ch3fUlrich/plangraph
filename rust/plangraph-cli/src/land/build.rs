@@ -39,13 +39,13 @@ pub struct Outcome {
 }
 
 /// Holds the recorded attributes in a file for the duration of one operation.
-struct Attrs {
+pub(super) struct Attrs {
     _dir: tempfile::TempDir,
-    path: PathBuf,
+    pub(super) path: PathBuf,
 }
 
 impl Attrs {
-    fn new(text: &str) -> Result<Attrs, String> {
+    pub(super) fn new(text: &str) -> Result<Attrs, String> {
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let path = dir.path().join("attributes");
         std::fs::write(&path, text).map_err(|e| e.to_string())?;
@@ -53,7 +53,7 @@ impl Attrs {
     }
 }
 
-fn base_date(repo: &Path, base: &str) -> Result<String, String> {
+pub(super) fn base_date(repo: &Path, base: &str) -> Result<String, String> {
     git::out(repo, &["show", "-s", "--format=%cI", base])
 }
 

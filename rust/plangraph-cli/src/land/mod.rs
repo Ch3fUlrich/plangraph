@@ -6,11 +6,13 @@ mod chain;
 #[cfg(test)]
 mod chain_tests;
 pub mod cli;
+pub mod combine;
 pub mod delta;
 pub mod deploy;
 mod deploy_probe;
 #[cfg(test)]
 mod deploy_tests;
+mod driver_cli;
 pub mod git;
 pub mod go_verify;
 #[cfg(test)]
@@ -21,10 +23,14 @@ mod main_gh_tests;
 pub mod main_state;
 #[cfg(test)]
 mod main_state_tests;
+pub mod parallel;
+#[cfg(test)]
+mod parallel_tests;
 mod push;
 pub mod registrar;
 #[cfg(test)]
 mod registrar_tests;
+pub mod remerge;
 pub mod resolve;
 #[cfg(test)]
 mod resolve_tests;
