@@ -508,7 +508,7 @@ fn consumer_paths_and_env_files_are_read_from_the_unit_files() {
                 "deploy/systemd/a.service",
                 "[Service]\nEnvironmentFile=-%h/.config/plangraph/a.env\nEnvironmentFile=/etc/plangraph/b.env\n\
                  ExecStartPre=-%h/.local/bin/pre --x\nExecStart=/usr/local/bin/tool run\n\
-                 ExecStart=/usr/bin/python3 -m x\n",
+                 ExecStart=/usr/bin/python3 -m x\nExecStopPost=-/usr/local/bin/post\nExecReload=%h/.local/bin/reload\n",
             ),
             ("deploy/systemd/t@.service", "[Service]\nEnvironmentFile=%h/.config/plangraph/sub/%i.env\n"),
         ],
@@ -518,10 +518,15 @@ fn consumer_paths_and_env_files_are_read_from_the_unit_files() {
     let consumers = super::scan::consumer_paths(dir.path(), &shipped).unwrap();
     assert_eq!(
         consumers,
-        [("pre", "~/.local/bin/pre"), ("tool", "/usr/local/bin/tool")]
-            .iter()
-            .map(|(b, p)| ((*b).to_owned(), (*p).to_owned()))
-            .collect()
+        [
+            ("post", "/usr/local/bin/post"),
+            ("pre", "~/.local/bin/pre"),
+            ("reload", "~/.local/bin/reload"),
+            ("tool", "/usr/local/bin/tool"),
+        ]
+        .iter()
+        .map(|(b, p)| ((*b).to_owned(), (*p).to_owned()))
+        .collect()
     );
     let env = super::scan::unit_env_files(dir.path(), &shipped).unwrap();
     assert_eq!(
