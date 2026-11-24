@@ -57,7 +57,7 @@ outside the delta's writer families, and the run must match the exact train head
 ## Deploy table and computed GO
 
 `plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD
-[--declared FILE] [--blockers-out FILE]` derives what each part ships from the part's own commits and
+[--declared FILE] [--blockers-out FILE] [--plan-out FILE]` derives what each part ships from the part's own commits and
 diff: a unit added or changed under `deploy/systemd`, or an added host binary, is a family of that part
 alone, so a unitless part never waits on another part's unit. Hosts come from the `Deploy-Hosts:` of the
 part's items (`--declared`, item key to hosts), else the `Deploy:` trailers of its commits, and each must be
@@ -65,6 +65,18 @@ authorized. `CMD HOST FAMILY` is the host install dry run: exit 0 with no output
 `MISSING binary|file|env|path NAME` line per absent thing. The command prints `deploy: unit@host, ...` for
 the GO-REQ (only passing targets) and one `blocker` line per refused target; `--blockers-out` writes a
 `pg define` file with a blocker item for each.
+
+`plangraph land-train deploy-apply --plan FILE --go ROW --state FILE --install-cmd CMD --row-cmd CMD` is the
+post-merge step. `--plan` is the `--plan-out` file; `--go` is the GO row's `deploy:` line, and only the
+passing targets it names are installed. `CMD install|read|disable HOST NAME` installs a family, prints one
+run of it as JSON (`is_active`: `active`, or `installed` for a `bin:` family; a oneshot service adds
+`"oneshot": true`, `result` and `exec_main_exit_timestamp`, and its `.timer` is read the same way) or disables a
+unit; `CMD KEY` receives the keeper `deploy` row as JSON on stdin. A row is written for each item of the
+family's parts only after the first run is good; a good oneshot service also needs its `.timer` active
+(the keeper gate), so the step reads it, writes its row, and runs shipped timers first. A failed first run disables the unit's timer, writes no
+row and stops the step; later targets are listed as not attempted. `--state` records finished targets, so
+a rerun after an interruption skips them (the hook LAND-RESUMABLE-AFTER-MERGE builds on); a recorded
+failure refuses the rerun until the state file is cleared.
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this
