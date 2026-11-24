@@ -1,7 +1,5 @@
 use super::build_tests::g;
 use super::cut::*;
-use super::go_verify::Grant;
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -46,95 +44,68 @@ impl Fx {
         g(self.p(), &["checkout", "-q", "main"]);
         sha
     }
-    pub(super) fn cut(
-        &self,
-        commits: &[String],
-        edits: &[(&str, &str)],
-    ) -> Result<Vec<String>, String> {
-        let granted: Vec<String> = edits.iter().map(|(_, d)| d.to_string()).collect();
-        self.cut_granted(commits, edits, &granted)
+    pub(super) fn cut(&self, commits: &[String]) -> Result<Vec<String>, String> {
+        self.cut_to("slice/a", commits, &gate(), &python)
     }
-    pub(super) fn cut_granted(
+    pub(super) fn cut_to(
         &self,
+        branch: &str,
         commits: &[String],
-        edits: &[(&str, &str)],
-        grants: &[String],
+        gate: &Path,
+        python: &dyn Fn() -> Command,
     ) -> Result<Vec<String>, String> {
-        let gate_edits: BTreeMap<String, String> = edits
-            .iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
-            .collect();
-        // Every D-id is granted for every named source head and the workflow directory.
-        let grants: Vec<Grant> = grants
-            .iter()
-            .flat_map(|d| {
-                commits.iter().map(move |h| Grant {
-                    d_id: d.clone(),
-                    prefix: ".github/workflows/".into(),
-                    head: h.clone(),
-                })
-            })
-            .collect();
         cut(
             &Cut {
                 repo: self.p(),
                 base: &self.base,
-                branch: "slice/a",
+                branch,
                 commits,
-                gate_edits: &gate_edits,
-                grants: &grants,
-                gate: &gate(),
+                gate,
             },
-            &python,
+            python,
         )
     }
     pub(super) fn message(&self, rev: &str) -> String {
         g(self.p(), &["log", "-1", "--format=%B", rev])
     }
+    pub(super) fn worktrees(&self) -> usize {
+        g(self.p(), &["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count()
+    }
 }
 
 #[test]
-fn cut_commits_pass_the_gate_with_gate_edit_inside_the_trailer_block() {
+fn cut_commits_pass_the_gate_with_picked_from_inside_the_trailer_block() {
     let fx = Fx::new();
-    let plain = fx.source("a.txt", TRAILERS);
-    let flow = fx.source(".github/workflows/w.yml", TRAILERS);
-    fx.cut(&[plain.clone(), flow.clone()], &[(&flow, "D-9999")])
-        .unwrap();
+    let a = fx.source("a.txt", TRAILERS);
+    let b = fx.source("b.txt", TRAILERS);
+    fx.cut(&[a.clone(), b.clone()]).unwrap();
     let head = g(fx.p(), &["rev-parse", "slice/a"]);
     let last = fx.message(&head);
     let block = last.rsplit("\n\n").next().unwrap();
     for t in [
         "Plan-Item: plangraph:X".to_string(),
-        "Gate-Edit: D-9999".to_string(),
-        format!("Picked-From: {flow}"),
+        format!("Picked-From: {b}"),
     ] {
         assert!(block.lines().any(|l| l == t), "{t} not in block:\n{last}");
     }
-    assert!(!last.contains("cherry picked"));
-    let first = fx.message(&format!("{head}^"));
-    assert!(first.contains(&format!("Picked-From: {plain}")));
-    assert!(!first.contains("Gate-Edit"));
-    let grants = [Grant {
-        d_id: "D-9999".into(),
-        prefix: ".github/workflows/".into(),
-        head: flow,
-    }];
-    check(fx.p(), &fx.base, &head, &gate(), &grants, &python).unwrap();
+    assert!(!last.contains("cherry picked") && !last.contains("Gate-Edit"));
+    assert!(fx
+        .message(&format!("{head}^"))
+        .contains(&format!("Picked-From: {a}")));
+    check(fx.p(), &fx.base, &head, &gate(), &python).unwrap();
 }
 
 #[test]
-fn a_gate_file_without_a_granted_gate_edit_is_refused_and_no_branch_is_left() {
+fn a_gate_file_commit_is_refused_before_any_pick_and_no_branch_is_left() {
     let fx = Fx::new();
     let flow = fx.source(".github/workflows/w.yml", TRAILERS);
-    let err = fx.cut(&[flow], &[]).unwrap_err();
-    assert!(err.contains("gate edit without Gate-Edit"), "{err}");
+    let err = fx.cut(&[flow]).unwrap_err();
+    assert!(err.contains("grants are not accepted yet"), "{err}");
+    assert!(err.contains(".github/workflows/w.yml"), "{err}");
     assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
-    assert_eq!(
-        g(fx.p(), &["worktree", "list", "--porcelain"])
-            .matches("worktree ")
-            .count(),
-        1
-    );
+    assert_eq!(fx.worktrees(), 1);
 }
 
 #[test]
@@ -147,7 +118,7 @@ fn a_source_with_a_cherry_pick_line_is_cut_without_it() {
     let hand = g(fx.p(), &["rev-parse", "HEAD"]);
     g(fx.p(), &["checkout", "-q", "main"]);
     assert!(fx.message(&hand).contains("(cherry picked from commit"));
-    fx.cut(std::slice::from_ref(&hand), &[]).unwrap();
+    fx.cut(std::slice::from_ref(&hand)).unwrap();
     let cut = fx.message("slice/a");
     assert!(!cut.contains("cherry picked"), "{cut}");
     assert!(cut.contains(&format!("Picked-From: {hand}")));
@@ -160,7 +131,7 @@ fn a_hand_cherry_pick_x_branch_is_refused_by_the_check() {
     g(fx.p(), &["checkout", "-q", "-b", "hand", &fx.base]);
     g(fx.p(), &["cherry-pick", "-x", &src]);
     let head = g(fx.p(), &["rev-parse", "HEAD"]);
-    let err = check(fx.p(), &fx.base, &head, &gate(), &[], &python).unwrap_err();
+    let err = check(fx.p(), &fx.base, &head, &gate(), &python).unwrap_err();
     assert!(err.contains("cherry picked"), "{err}");
 }
 
@@ -172,77 +143,34 @@ fn a_merge_commit_source_is_refused() {
     g(fx.p(), &["merge", "-q", "--no-ff", "-m", "merge", &a]);
     let merge = g(fx.p(), &["rev-parse", "HEAD"]);
     g(fx.p(), &["checkout", "-q", "main"]);
-    assert!(fx.cut(&[merge], &[]).unwrap_err().contains("single-parent"));
+    assert!(fx.cut(&[merge]).unwrap_err().contains("single-parent"));
 }
 
 /// `cargo test` runs in the crate directory, so this path is relative to the caller, not to the worktree.
 #[test]
-fn a_gate_path_relative_to_the_caller_still_works_in_the_cut_worktree() {
+fn a_gate_path_relative_to_the_caller_still_works_in_the_cut_checkout() {
     let fx = Fx::new();
     let src = fx.source("a.txt", TRAILERS);
     let relative = Path::new("../../tools/ci_commit_gate.py");
     assert!(relative.is_file(), "the test runs in the crate directory");
-    let none = BTreeMap::new();
-    cut(
-        &Cut {
-            repo: fx.p(),
-            base: &fx.base,
-            branch: "slice/rel",
-            commits: &[src],
-            gate_edits: &none,
-            grants: &[],
-            gate: relative,
-        },
-        &python,
-    )
-    .unwrap();
+    fx.cut_to("slice/rel", &[src], relative, &python).unwrap();
     let head = g(fx.p(), &["rev-parse", "slice/rel"]);
-    check(fx.p(), &fx.base, &head, relative, &[], &python).unwrap();
+    check(fx.p(), &fx.base, &head, relative, &python).unwrap();
 }
 
 #[test]
 fn a_missing_gate_names_the_reason() {
     let fx = Fx::new();
     let src = fx.source("a.txt", TRAILERS);
-    let none = BTreeMap::new();
-    let err = cut(
-        &Cut {
-            repo: fx.p(),
-            base: &fx.base,
-            branch: "slice/missing",
-            commits: &[src],
-            gate_edits: &none,
-            grants: &[],
-            gate: Path::new("no/such/gate.py"),
-        },
-        &python,
-    )
-    .unwrap_err();
-    assert!(err.contains("no/such/gate.py"), "{err}");
-}
-
-#[test]
-fn a_gate_edit_d_id_the_go_row_does_not_grant_is_refused_before_any_pick() {
-    let fx = Fx::new();
-    let flow = fx.source(".github/workflows/w.yml", TRAILERS);
     let err = fx
-        .cut_granted(
-            std::slice::from_ref(&flow),
-            &[(&flow, "D-1")],
-            &["D-2".to_string()],
+        .cut_to(
+            "slice/missing",
+            &[src],
+            Path::new("no/such/gate.py"),
+            &python,
         )
         .unwrap_err();
-    assert!(err.contains("D-1") && err.contains("not granted"), "{err}");
-    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
-}
-
-#[test]
-fn a_gate_edit_for_a_commit_that_is_not_cut_is_refused() {
-    let fx = Fx::new();
-    let plain = fx.source("a.txt", TRAILERS);
-    let other = fx.source("b.txt", TRAILERS);
-    let err = fx.cut(&[plain], &[(&other, "D-5")]).unwrap_err();
-    assert!(err.contains("not cut"), "{err}");
+    assert!(err.contains("no/such/gate.py"), "{err}");
 }
 
 #[test]
@@ -255,71 +183,9 @@ fn a_branch_created_while_the_gate_runs_is_not_overwritten() {
         g(fx.p(), &["branch", "-f", "slice/a", &rival]);
         python()
     };
-    let none = BTreeMap::new();
-    let err = cut(
-        &Cut {
-            repo: fx.p(),
-            base: &fx.base,
-            branch: "slice/a",
-            commits: &[src],
-            gate_edits: &none,
-            grants: &[],
-            gate: &gate(),
-        },
-        &creating,
-    )
-    .unwrap_err();
+    let err = fx
+        .cut_to("slice/a", &[src], &gate(), &creating)
+        .unwrap_err();
     assert!(err.contains("already exists"), "{err}");
     assert_eq!(g(fx.p(), &["rev-parse", "slice/a"]), rival);
-}
-
-#[test]
-fn a_gate_edit_the_source_already_carries_must_be_granted_too() {
-    let fx = Fx::new();
-    let flow = fx.source(
-        ".github/workflows/w.yml",
-        &format!("{TRAILERS}\nGate-Edit: D-77"),
-    );
-    let err = fx
-        .cut_granted(std::slice::from_ref(&flow), &[], &["D-1".to_string()])
-        .unwrap_err();
-    assert!(
-        err.contains("D-77") && err.contains("does not grant"),
-        "{err}"
-    );
-    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
-    fx.cut_granted(&[flow], &[], &["D-77".to_string()]).unwrap();
-}
-
-#[test]
-fn a_gate_edit_git_does_not_parse_in_the_source_but_the_gate_sees_after_cutting_is_refused() {
-    let fx = Fx::new();
-    // The `(cherry picked ...)` paragraph is the last one, so git finds no Gate-Edit trailer in the source;
-    // cutting drops it and the paragraph before becomes the trailer block the commit gate reads.
-    let src = fx.source(
-        ".github/workflows/w.yml",
-        &format!("{TRAILERS}\nGate-Edit: D-88\n\n(cherry picked from commit ab12)"),
-    );
-    let parsed = g(
-        fx.p(),
-        &[
-            "log",
-            "-1",
-            "--format=%(trailers:key=Gate-Edit,valueonly)",
-            &src,
-        ],
-    );
-    assert!(
-        parsed.is_empty(),
-        "the fixture must hide it from git: {parsed}"
-    );
-    let err = fx
-        .cut_granted(std::slice::from_ref(&src), &[], &["D-1".to_string()])
-        .unwrap_err();
-    assert!(
-        err.contains("D-88") && err.contains("does not grant"),
-        "{err}"
-    );
-    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
-    fx.cut_granted(&[src], &[], &["D-88".to_string()]).unwrap();
 }

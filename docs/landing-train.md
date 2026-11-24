@@ -129,25 +129,23 @@ them into a keeper table needs a keeper schema step that is not part of this cha
 
 ## Cutting a slice or landing branch
 
-`plangraph land-train cut --repo DIR --base REV --branch NAME --commits A,B [--gate-edits A=D-1] --grants FILE`
+`plangraph land-train cut --repo DIR --base REV --branch NAME --commits A,B`
 (rust/plangraph-cli/src/land/cut.rs) resolves every input once to a full commit id, picks the sources (oldest first) onto
-`--base` without `-x`, drops any `(cherry picked from commit ...)` line and adds `Picked-From: <full id>` and, for a commit named
-in `--gate-edits`, `Gate-Edit: <D-id>` inside the existing trailer block. Then it runs `tools/ci_commit_gate.py check` on the
-range with full ids. The gate is the one of the base commit, as CI reads it, and runs under the cutter's git environment (no
-`GIT_*` override, no replacement refs); no flag names another gate. The branch is created by one atomic ref update that fails
-when the branch exists, and that update is the success boundary. The picks, the gate and the exact-replay check run in a
-private shared clone (`git::Checkout`), so the repository's own configuration and `info/attributes` cannot reach them; the clone is a
-temporary directory owned by the call. The head's objects are fetched into the repository without any ref (and without writing `FETCH_HEAD`), so the branch ref is the only ref the cut makes and there is no hold ref to collide or clean up; objects of a cut that died before the ref update are plain unreferenced objects that `git gc` prunes. Scratch that cannot be
-removed afterwards is a warning line, never a failed cut. The `Gate-Edit:` lines of a message are found with the line breaks of the
-gate's Python `splitlines()` (also CR, FF, U+2028 and others), not only LF.
-A merge commit as a source is refused.
+`--base` without `-x`, drops any `(cherry picked from commit ...)` line and adds `Picked-From: <full id>` inside the existing
+trailer block. Then it runs `tools/ci_commit_gate.py check` on the range with full ids. The gate is the one of the base commit,
+as CI reads it, and runs under the cutter's git environment (no `GIT_*` override, no replacement refs); no flag names another
+gate. The branch is created by one atomic ref update that fails when the branch exists, and that update is the success boundary.
+The picks and the gate run in a private shared clone (`git::Checkout`), so the repository's own configuration and
+`info/attributes` cannot reach them; the clone is a temporary directory owned by the call. The head's objects are fetched into
+the repository without any ref (and without writing `FETCH_HEAD`), so the branch ref is the only ref the cut makes; objects of
+a cut that died before the ref update are plain unreferenced objects that `git gc` prunes. Scratch that cannot be removed
+afterwards is a warning line, never a failed cut. A merge commit as a source is refused.
 
-`--grants FILE` is the pre-cut grant record, a JSON array of `{d_id, prefix, head}` (the `go_verify` grant). It is operator
-authority, so only a protected file is read: a regular file (no link) owned by the caller and not writable by group or others
-(mode 0600). A `Gate-Edit` D-id, whether named in `--gate-edits` or already carried by a source anywhere in its message (also
-where git's trailer parser misses it), needs a row for that D-id and the source head, with prefixes covering every path the
-commit changes (read NUL-delimited; the pinned gate decides which paths are gate files). The commit must be single-parent. A hand-cut commit must also
-reproduce its source: the `Picked-From:` commit has to be in the repository and the commit must be its exact replay on its parent (a three-way merge of the source onto the parent gives the commit's own tree, whitespace included). The record is written by the
-router before the cut, because the GO row binds a head that exists only after the cut; its producer is a follow-up item, so
-until it lands the file is written by hand. `land-train cut-check --repo DIR --base REV --head REV [--grants FILE]` runs the same message check and the same gate on a
-branch cut by hand (the source head is its last `Picked-From:`) and refuses a `cherry-pick -x` line.
+No grant is accepted yet. Before the first pick, `cut` refuses a source, and `land-train cut-check --repo DIR --base REV --head REV`
+refuses a commit of a hand-cut range, that carries a `Gate-Edit:` line anywhere in its message (also where git's trailer parser
+misses it; lines are split like the gate's Python `splitlines()`, so CR, FF, U+2028 and others count) or that changes a gate path
+(the operator-class list of the GO verifier, read NUL-delimited and, for a merge, against every parent). The pinned gate then
+runs as the backstop for its own, wider list of gate paths. `--grants` and `--gate-edits` are refused with
+`grants are not accepted yet: LAND-CUT-GRANT-RECORD-PRODUCER`: the producer of a protected pre-cut grant record is a separate
+slice, and until it lands a gate-path change is cut by an operator by hand, never by this verb. `cut-check` also refuses a
+`cherry-pick -x` line.

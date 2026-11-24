@@ -12,8 +12,8 @@ const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA 
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
-  plangraph land-train cut --repo DIR --base REV --branch NAME --commits A,B [--gate-edits A=D-1,B=D-2] --grants FILE\n\
-  plangraph land-train cut-check --repo DIR --base REV --head REV [--grants FILE]\n\
+  plangraph land-train cut --repo DIR --base REV --branch NAME --commits A,B\n\
+  plangraph land-train cut-check --repo DIR --base REV --head REV\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 

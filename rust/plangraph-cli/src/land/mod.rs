@@ -5,11 +5,11 @@ mod build_tests;
 mod chain;
 pub mod cli;
 pub mod cut;
+mod cut_gate;
 #[cfg(test)]
-mod cut_grant_tests;
-mod cut_grants;
+mod cut_refusal_tests;
 #[cfg(test)]
-mod cut_replay_tests;
+mod cut_state_tests;
 #[cfg(test)]
 mod cut_tests;
 pub mod delta;

@@ -1,10 +1,10 @@
 //! `land-train cut`: cuts a slice or landing branch from source commits without breaking the trailer block.
-//! Commits are picked without `-x`; the full source id goes into a `Picked-From:` trailer inside the block, a
-//! granted `Gate-Edit:` is added inside the same block, and the commit gate of the pinned base must accept the
-//! result before the branch exists. `check` is the same test, with the same grants, for a branch cut by hand.
-use super::cut_grants::{authorize, load_grants, prefixes, py_lines};
+//! Commits are picked without `-x`; the full source id goes into a `Picked-From:` trailer inside the block and
+//! the commit gate of the pinned base must accept the result before the branch exists. A range that edits a
+//! gate path or carries a `Gate-Edit:` line is refused before the first pick: no grant is accepted yet.
+//! `check` is the same test for a branch cut by hand.
+use super::cut_gate::{grants_refused, py_lines, refuse_gate_edit};
 use super::git;
-use super::go_verify::Grant;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -17,10 +17,6 @@ pub struct Cut<'a> {
     pub branch: &'a str,
     /// Source commits (any revision that names a commit), oldest first.
     pub commits: &'a [String],
-    /// Source commit -> the D-id for its gate-file edit.
-    pub gate_edits: &'a BTreeMap<String, String>,
-    /// The pre-cut grant record: each `Gate-Edit` D-id is bound to one source head and a path prefix.
-    pub grants: &'a [Grant],
     /// The commit gate script. The CLI writes the one of the pinned base here; tests wire their own.
     pub gate: &'a Path,
 }
@@ -108,33 +104,22 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
         }
         sources.push(id);
     }
-    let mut edits: BTreeMap<String, &String> = BTreeMap::new();
-    for (rev, d) in c.gate_edits {
-        let src = resolve(repo, rev)?;
-        if !sources.contains(&src) {
-            return Err(format!("cut: gate edit names {rev}, which is not cut"));
-        }
-        if prefixes(c.grants, d, &src).is_empty() {
-            return Err(format!("cut: {d} for {src} is not granted by the GO row"));
-        }
-        edits.insert(src, d);
-    }
     for src in &sources {
         let parents = git::out(repo, &["rev-list", "--parents", "-n", "1", src])?;
         if parents.split_whitespace().count() != 2 {
             return Err(format!("cut: {src} is not a single-parent commit"));
         }
-        // A Gate-Edit the source already carries survives the pick: it counts only when the GO row grants it.
+        // Before the first pick: no gate path and no Gate-Edit line, visible or hidden.
         let message = git::out(repo, &["log", "-1", "--format=%B", src])?;
-        authorize(repo, src, &message, Some(src), c.grants)?;
+        refuse_gate_edit(repo, src, &message)?;
     }
     // The pick and the check run in a private clone, so the repository's own configuration and
     // `info/attributes` cannot reach the merge machinery; the clone is a temporary directory owned by this
     // call and registered nowhere in the repository.
     let checkout = git::Checkout::new(repo, &base)?;
     let wt = checkout.path().to_owned();
-    let picked = pick_all(&sources, &edits, &wt).and_then(|head| {
-        check(&wt, &base, &head, c.gate, c.grants, python)?;
+    let picked = pick_all(&sources, &wt).and_then(|head| {
+        check(&wt, &base, &head, c.gate, python)?;
         // The objects come over without a ref; the branch ref below is the only ref this call makes.
         checkout.adopt_objects(&head)?;
         Ok(head)
@@ -166,11 +151,7 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
     Ok(lines)
 }
 
-fn pick_all(
-    sources: &[String],
-    edits: &BTreeMap<String, &String>,
-    wt: &Path,
-) -> Result<String, String> {
+fn pick_all(sources: &[String], wt: &Path) -> Result<String, String> {
     for src in sources {
         let o = git::run(wt, None, &["cherry-pick", "--allow-empty", src])?;
         if !o.status.success() {
@@ -180,10 +161,7 @@ fn pick_all(
                 String::from_utf8_lossy(&o.stderr).trim()
             ));
         }
-        let mut trailers = vec![format!("Picked-From: {src}")];
-        if let Some(d) = edits.get(src) {
-            trailers.push(format!("Gate-Edit: {d}"));
-        }
+        let trailers = vec![format!("Picked-From: {src}")];
         let message = with_trailers(&git::out(wt, &["log", "-1", "--format=%B"])?, &trailers)?;
         let mut amend = git::command(wt, None);
         amend.args(["commit", "--amend", "--allow-empty", "-q", "-F", "-"]);
@@ -225,14 +203,13 @@ fn pin_git_env(cmd: &mut Command) {
 }
 
 /// The check of `base..head`, the same for the cutter and for a branch cut by hand: no `cherry-pick -x` line
-/// anywhere in a message, every `Gate-Edit` granted by the record, then the commit gate (Writer trailer,
-/// Gate-Edit for gate files) on the same range, given as full commit ids.
+/// anywhere in a message, no gate path and no `Gate-Edit` line, then the commit gate (Writer trailer, gate
+/// files) on the same range, given as full commit ids.
 pub fn check(
     repo: &Path,
     base: &str,
     head: &str,
     gate: &Path,
-    grants: &[Grant],
     python: &dyn Fn() -> Command,
 ) -> Result<(), String> {
     let (base, head) = (resolve(repo, base)?, resolve(repo, head)?);
@@ -243,7 +220,7 @@ pub fn check(
                 "{c}: a `(cherry picked from commit ...)` line ends the trailer block; cut with `land-train cut`, not `cherry-pick -x`"
             ));
         }
-        authorize(repo, &c, &message, None, grants)?;
+        refuse_gate_edit(repo, &c, &message)?;
     }
     // The gate runs in `repo` (a temporary worktree for `cut`): a path relative to the caller's directory
     // must be made absolute before the directory changes.
@@ -268,10 +245,9 @@ pub fn check(
     }
 }
 
-/// `cut --repo DIR --base REV --branch NAME --commits A,B [--gate-edits A=D-1,B=D-2] --grants FILE` and
-/// `cut-check --repo DIR --base REV --head REV [--grants FILE]`. FILE is the pre-cut grant record, a JSON
-/// array of `{d_id, prefix, head}`. The commit gate is `tools/ci_commit_gate.py` of the base commit, as CI
-/// reads it; there is no flag to name another (tests give `Cut::gate` directly).
+/// `cut --repo DIR --base REV --branch NAME --commits A,B` and `cut-check --repo DIR --base REV --head REV`.
+/// The commit gate is `tools/ci_commit_gate.py` of the base commit, as CI reads it; there is no flag to name
+/// another (tests give `Cut::gate` directly). `--grants` and `--gate-edits` are refused: no grant is accepted.
 pub fn run_cli(
     cmd: &str,
     flags: &BTreeMap<String, String>,
@@ -283,6 +259,11 @@ pub fn run_cli(
             .cloned()
             .ok_or_else(|| format!("{cmd}: missing --{k}"))
     };
+    for flag in ["grants", "gate-edits"] {
+        if flags.contains_key(flag) {
+            return Err(grants_refused(cmd, flag));
+        }
+    }
     if flags.contains_key("gate") {
         return Err(format!(
             "{cmd}: --gate is not accepted; the gate is read from the base commit"
@@ -290,10 +271,6 @@ pub fn run_cli(
     }
     let repo = PathBuf::from(need("repo")?);
     let base = resolve(&repo, &need("base")?)?;
-    let grants = match flags.get("grants") {
-        Some(f) => load_grants(Path::new(f)).map_err(|e| format!("{cmd}: {e}"))?,
-        None => Vec::new(),
-    };
     let scratch = tempfile::tempdir().map_err(|e| e.to_string())?;
     let gate = scratch.path().join("ci_commit_gate.py");
     std::fs::write(
@@ -302,7 +279,7 @@ pub fn run_cli(
     )
     .map_err(|e| e.to_string())?;
     if cmd == "cut-check" {
-        check(&repo, &base, &need("head")?, &gate, &grants, python)?;
+        check(&repo, &base, &need("head")?, &gate, python)?;
         return Ok(vec!["commit gate accepts the range".into()]);
     }
     let commits: Vec<String> = need("commits")?
@@ -310,23 +287,12 @@ pub fn run_cli(
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect();
-    let gate_edits = flags
-        .get("gate-edits")
-        .map(|s| {
-            s.split(',')
-                .filter_map(|p| p.split_once('='))
-                .map(|(a, b)| (a.to_owned(), b.to_owned()))
-                .collect()
-        })
-        .unwrap_or_default();
     cut(
         &Cut {
             repo: &repo,
             base: &base,
             branch: &need("branch")?,
             commits: &commits,
-            gate_edits: &gate_edits,
-            grants: &grants,
             gate: &gate,
         },
         python,
