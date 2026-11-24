@@ -7,19 +7,46 @@ use std::path::{Path, PathBuf};
 
 const MAX_FILE: u64 = 1 << 20;
 
-/// What one review answer says about the head it names.
+/// What one review answer says about the head it names and the run that produced it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Accept {
     pub head: String,
+    /// The review leg named by the `[served by LEG via spawner run RUN, ...]` header, lowercased.
+    pub leg: String,
+    pub run_id: String,
 }
 
-/// `Some` only for a review answer that accepts: a `FILES READ:` line, a full `HEAD:` sha, and the
-/// last non-empty line `VERDICT: ACCEPT`.
+/// The two OpenCode seats every head needs when no single-seat leg accepted it (rule 3.66 (f)).
+const REQUIRED_PAIR: [&str; 2] = ["deepseek", "glm"];
+/// Legs whose one ACCEPT counts for the head alone.
+pub const DEFAULT_SINGLE_SEAT: &str = "hydrogen";
+
+fn run_id_ok(id: &str) -> bool {
+    (1..=80).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+}
+
+/// `[served by LEG via spawner run RUN, status completed]`
+fn served_by(text: &str) -> Option<(String, String)> {
+    text.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("[served by ")?;
+        let (leg, rest) = rest.split_once(" via spawner run ")?;
+        let (run, status) = rest.split_once(", status ")?;
+        (status.trim_end_matches(']') == "completed" && run_id_ok(run) && !leg.contains(' '))
+            .then(|| (leg.to_ascii_lowercase(), run.to_owned()))
+    })
+}
+
+/// `Some` only for a review answer that accepts: a completed `served by` header with its run id, a
+/// `FILES READ:` line, a full `HEAD:` sha, and the last non-empty line `VERDICT: ACCEPT`.
 pub fn parse(text: &str) -> Option<Accept> {
     let last = text.lines().rev().find(|l| !l.trim().is_empty())?;
     if last.trim() != "VERDICT: ACCEPT" || !text.lines().any(|l| l.starts_with("FILES READ:")) {
         return None;
     }
+    let (leg, run_id) = served_by(text)?;
     let head = text
         .lines()
         .rev()
@@ -28,6 +55,8 @@ pub fn parse(text: &str) -> Option<Accept> {
     let full = head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit());
     full.then(|| Accept {
         head: head.to_ascii_lowercase(),
+        leg,
+        run_id,
     })
 }
 
@@ -52,38 +81,60 @@ fn accepts(dir: &Path) -> Result<Vec<(PathBuf, Accept)>, String> {
     Ok(found)
 }
 
-/// Every part has a counted ACCEPT file at its exact head; returns one line per part for the PR body.
-/// The error names the part, its head and the directory searched, and lists the ACCEPT files on other heads.
-pub fn require(dir: &Path, parts: &[PartIn]) -> Result<Vec<String>, String> {
+/// Every part has counted ACCEPT evidence at its exact head; returns one line per part for the PR body.
+///
+/// Counted means: the part's registrar receipt names a run, an ACCEPT file at the part head carries
+/// that run id, and the head is covered either by a `single_seat` leg (a substring of the leg named
+/// in the file's header) or by both required OpenCode seats (DeepSeek and GLM) on distinct runs.
+/// The error names the part, its head and the directory, and lists the ACCEPT files found.
+pub fn require(
+    dir: &Path,
+    parts: &[PartIn],
+    single_seat: &[String],
+) -> Result<Vec<String>, String> {
     let found = accepts(dir)?;
     let mut lines = Vec::new();
     for part in parts {
         let head = part.head.to_ascii_lowercase();
-        match found.iter().find(|(_, accept)| accept.head == head) {
-            Some((path, _)) => lines.push(format!(
-                "accept #{} head {} file {}",
+        let at_head: Vec<_> = found.iter().filter(|(_, a)| a.head == head).collect();
+        let bound = at_head
+            .iter()
+            .find(|(_, a)| a.run_id == part.receipt.run_id);
+        let leg_accepted = |word: &str| at_head.iter().any(|(_, a)| a.leg.contains(word));
+        let covered = single_seat.iter().any(|leg| leg_accepted(leg))
+            || REQUIRED_PAIR.iter().all(|leg| leg_accepted(leg));
+        match bound {
+            Some((path, _)) if covered => lines.push(format!(
+                "accept #{} head {} run {} file {}",
                 part.pr,
                 part.head,
+                part.receipt.run_id,
                 path.file_name().unwrap_or_default().to_string_lossy()
             )),
-            None => {
-                let older: Vec<String> = found
+            _ => {
+                let seen: Vec<String> = found
                     .iter()
                     .map(|(path, accept)| {
                         format!(
-                            "{} on {}",
+                            "{} on {} run {} leg {}",
                             path.file_name().unwrap_or_default().to_string_lossy(),
-                            accept.head
+                            accept.head,
+                            accept.run_id,
+                            accept.leg
                         )
                     })
                     .collect();
+                let why = match (bound.is_some(), covered) {
+                    (false, _) => "no ACCEPT at this head carries the receipt run",
+                    _ => "neither a single-seat leg nor both deepseek and glm accepted it",
+                };
                 return Err(format!(
-                    "accept: part #{} head {} has no ACCEPT file with HEAD {} in {} (ACCEPT files found: {})",
+                    "accept: part #{} head {} is not counted: {why} (receipt run {}, dir {}, ACCEPT files found: {})",
                     part.pr,
                     part.head,
-                    part.head,
+                    part.receipt.run_id,
                     dir.display(),
-                    if older.is_empty() { "none".into() } else { older.join(", ") }
+                    if seen.is_empty() { "none".into() } else { seen.join(", ") }
                 ));
             }
         }

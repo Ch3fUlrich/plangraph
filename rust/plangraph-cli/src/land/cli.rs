@@ -8,11 +8,11 @@ use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest,
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --accept-dir DIR --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --accept-dir DIR [--single-seat LEGS] --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
-accept dir DIR: the reviewers' answers; build refuses a part with no ACCEPT file whose HEAD line is the part head\n\
+accept dir DIR: the reviewers' answers; build refuses a part unless an ACCEPT at its head carries the receipt run and either a --single-seat leg (default hydrogen) or both deepseek and glm accepted it\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
@@ -218,7 +218,15 @@ pub(super) fn run_inner(
             let answer = main_gh::answer_for(repo, "main", ledger, &matrix);
             let name = need("name")?;
             let base = need("base")?;
-            let accepted = super::accept::require(Path::new(&need("accept-dir")?), &parts)?;
+            let single_seat: Vec<String> = flags
+                .get("single-seat")
+                .map_or(super::accept::DEFAULT_SINGLE_SEAT, String::as_str)
+                .split(',')
+                .map(|leg| leg.trim().to_ascii_lowercase())
+                .filter(|leg| !leg.is_empty())
+                .collect();
+            let accepted =
+                super::accept::require(Path::new(&need("accept-dir")?), &parts, &single_seat)?;
             let adopted = match flags.get("resolution-log") {
                 Some(p) => adopted_from_log(p, &name)?,
                 None => vec![],
