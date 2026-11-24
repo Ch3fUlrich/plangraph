@@ -118,8 +118,24 @@ pub fn pending_path(rec: &Record) -> PathBuf {
     rec.path.with_extension("pending")
 }
 
-pub fn phase(snap: &Value) -> &str {
-    snap.get("phase").and_then(Value::as_str).unwrap_or(ATTEMPT)
+/// The phase a sidecar names. No `phase` key is an attempt (a sidecar nobody finished writing);
+/// any other value is `Unknown`: it proves nothing and is never acted on as a stop.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Phase {
+    Attempt,
+    Stopped,
+    Logged,
+    Unknown,
+}
+
+pub fn phase(snap: &Value) -> Phase {
+    match snap.get("phase") {
+        None => Phase::Attempt,
+        Some(Value::String(s)) if s == ATTEMPT => Phase::Attempt,
+        Some(Value::String(s)) if s == STOPPED => Phase::Stopped,
+        Some(Value::String(s)) if s == LOGGED => Phase::Logged,
+        Some(_) => Phase::Unknown,
+    }
 }
 
 fn same_launch(snap: &Value, rec: &Record) -> bool {

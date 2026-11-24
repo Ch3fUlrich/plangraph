@@ -70,7 +70,10 @@ gets no fresh stop. An `attempt` is ambiguous (the stop may have succeeded befor
 would say so failed): when the record already holds it, or the runtime shows the session
 stopped, it is a stop (`resume.unconfirmed: true` in the second case); when the session still
 runs it is removed; when the runtime cannot be read it is kept and reported
-(`event=stop-unconfirmed`). A sidecar that cannot be removed is reported (exit 2). All /proc reads
+(`event=stop-unconfirmed`). A sidecar whose phase is none of the three (`attempt`, `stopped`,
+`logged`) is read like an attempt except that it is never removed: the launch stays live, the
+sidecar is kept and reported once (`why=unknown-phase`), and only the runtime showing the
+session stopped publishes it. A `logged` sidecar of a record that does not hold the stop is removed. A sidecar that cannot be removed is reported (exit 2). All /proc reads
 go through one root. Each lane keeps the copy of its latest stopped launch, ordered by stop time, then launch, then
 session name: a missing or earlier copy is rewritten (publication and repair alike), a later one
 is left. A kernel lock (flock on

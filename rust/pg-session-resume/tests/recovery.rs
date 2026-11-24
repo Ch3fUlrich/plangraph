@@ -172,3 +172,67 @@ fn a_launch_with_an_unresolved_attempt_gets_no_fresh_stop_in_the_same_tick() {
     );
     assert!(record(&r, "writer").get("resume").is_none());
 }
+
+#[test]
+fn a_sidecar_with_an_unknown_phase_never_marks_a_live_launch_stopped() {
+    for phase in [
+        json!("bogus"),
+        json!(""),
+        json!(7),
+        json!(null),
+        json!("ATTEMPT"),
+    ] {
+        let r = rig("writer", json!({}));
+        let snap = json!({"agent": "claude", "handle": SID, "reason": "done", "head": HEAD,
+            "worktree": "w1", "status_head": HEAD, "round": 0, "stopped_ts": 4000,
+            "launch_ts": 1000, "launch_run": null, "phase": phase});
+        std::fs::write(pending(&r), snap.to_string()).unwrap();
+        let before = std::fs::read_to_string(pending(&r)).unwrap();
+        let mut h = Fake::new(9000);
+        h.activity = Some(1); // idle for hours: eligible for a fresh stop, which must wait
+        for _ in 0..2 {
+            reap_idle(&mut h, &r.cfg);
+        }
+        let rec = record(&r, "writer");
+        assert!(
+            rec.get("resume").is_none() && rec["state"].is_null(),
+            "{phase}: {rec}"
+        );
+        assert!(
+            h.runs.is_empty(),
+            "{phase}: no fresh stop while the sidecar is unresolved"
+        );
+        assert_eq!(
+            std::fs::read_to_string(pending(&r)).unwrap(),
+            before,
+            "{phase}: kept"
+        );
+        let unreadable: Vec<_> = h
+            .lines
+            .iter()
+            .filter(|l| l.contains("why=unknown-phase"))
+            .collect();
+        assert_eq!(unreadable.len(), 1, "{phase}: reported once: {:?}", h.lines);
+        // the runtime showing the session stopped is evidence in its own right
+        h.job = stopped_job();
+        reap_idle(&mut h, &r.cfg);
+        assert_eq!(
+            record(&r, "writer")["resume"]["unconfirmed"],
+            true,
+            "{phase}"
+        );
+    }
+}
+
+#[test]
+fn a_logged_sidecar_never_marks_a_record_that_does_not_hold_the_stop() {
+    let r = rig("writer", json!({}));
+    let snap = json!({"agent": "claude", "handle": SID, "reason": "done", "head": HEAD,
+        "worktree": "w1", "status_head": HEAD, "round": 0, "stopped_ts": 4000,
+        "launch_ts": 1000, "launch_run": null, "phase": "logged"});
+    std::fs::write(pending(&r), snap.to_string()).unwrap();
+    let mut h = Fake::new(5000);
+    reap_idle(&mut h, &r.cfg);
+    assert!(record(&r, "writer").get("resume").is_none());
+    assert!(!pending(&r).exists());
+}

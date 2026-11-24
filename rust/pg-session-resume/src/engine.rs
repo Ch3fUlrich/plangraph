@@ -6,7 +6,7 @@ use crate::contract::{glob_match, parse_status, status_path};
 use crate::host::{Host, Process};
 use crate::persist::{
     drop_pending, pending_path, phase, read_pending, repair_lane_copies, snapshot,
-    write_lane_resume, write_pending, ATTEMPT, LOGGED, STOPPED,
+    write_lane_resume, write_pending, Phase, ATTEMPT, LOGGED, STOPPED,
 };
 use crate::record::{load_all, Agent, Record};
 use serde_json::{json, Value};
@@ -159,17 +159,31 @@ fn drive(
     if rec.stopped() && !held {
         return drop_pending(host, rec, failures); // another stop owns the record
     }
-    if !held && phase(snap) == ATTEMPT {
-        match stop_target(host, rec) {
-            Target::AlreadyStopped => snap["unconfirmed"] = json!(true),
-            Target::Keep(why) if why == "no-runtime-state" || why == "no-job-state" => {
-                let line = format!("event=stop-unconfirmed name={} why={why}", rec.label());
-                return refuse_once(host, rec, &line, "stop-unconfirmed");
-            }
-            _ => return drop_pending(host, rec, failures),
-        }
-    }
+    let ph = phase(snap);
     if !held {
+        match ph {
+            Phase::Stopped => {} // the stop command succeeded: the record is next
+            Phase::Logged => return drop_pending(host, rec, failures), // it no longer holds the stop
+            // An attempt (or a sidecar whose phase cannot be read) proves nothing by itself:
+            // the runtime decides.
+            Phase::Attempt | Phase::Unknown => match stop_target(host, rec) {
+                Target::AlreadyStopped => snap["unconfirmed"] = json!(true),
+                Target::Keep(why) if why == "no-runtime-state" || why == "no-job-state" => {
+                    let line = format!("event=stop-unconfirmed name={} why={why}", rec.label());
+                    return refuse_once(host, rec, &line, "stop-unconfirmed");
+                }
+                // still running: an attempt that failed is removed, a sidecar nobody can read
+                // is kept and reported, and the launch stays live either way
+                _ if ph == Phase::Attempt => return drop_pending(host, rec, failures),
+                _ => {
+                    let line = format!(
+                        "event=stop-unconfirmed name={} why=unknown-phase",
+                        rec.label()
+                    );
+                    return refuse_once(host, rec, &line, "unknown-phase");
+                }
+            },
+        }
         let mut resume = snap.clone();
         if let Some(o) = resume.as_object_mut() {
             o.remove("phase");
@@ -189,7 +203,7 @@ fn drive(
             *failures += 1;
         }
     }
-    if phase(snap) != LOGGED {
+    if ph != Phase::Logged {
         let handle = snap["handle"].as_str().unwrap_or_default().to_owned();
         let at = snap["stopped_ts"].as_u64().unwrap_or(0).to_string();
         let launch = snap["launch_ts"].as_u64().unwrap_or(0).to_string();
