@@ -11,6 +11,13 @@ from plangraph.keeper.store import Store
 from test_keeper_placement_bridge import rules_binary
 from test_keeper_placement_rules import edit, KEY
 
+# The imported session fixture rules_binary runs `cargo build -p pg-worker-core --bin
+# pg-placement-rules`, so the first test of a worker pays that build in its setup.
+pytestmark = pytest.mark.long_test_deadline(
+    600, reason="A cold runner builds the pg-placement-rules helper in the rules_binary session "
+    "fixture, which exceeds the 120 s default in the setup of the first test that uses it.",
+)
+
 MEMORY = 'PG_RULE_HOST_MEMORY_FLOOR_MIB'
 
 

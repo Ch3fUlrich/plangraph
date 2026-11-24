@@ -25,6 +25,13 @@ from plangraph.keeper.events import verify_integrity
 from test_keeper_run_tokens import claimed_with_token, code, mint, rp, w  # noqa: F401
 from test_keeper_run_tokens_doors import d, native_client, native_client_binary  # noqa: F401
 
+# The imported session fixture native_client_binary runs `cargo build` in the setup of the
+# first native test a worker reaches, which can be one of this module's.
+pytestmark = pytest.mark.long_test_deadline(
+    600, reason="A cold runner builds the plangraph CLI in the native_client_binary session "
+    "fixture, which exceeds the 120 s default in the setup of the first test that uses it.",
+)
+
 SYSTEM = Principal("system", "system", [], None)
 
 

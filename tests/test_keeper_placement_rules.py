@@ -12,6 +12,13 @@ from plangraph.keeper.errors import Refused
 from plangraph.keeper.store import Store
 from test_keeper_placement_bridge import rules_binary  # shared session fixture
 
+# The imported session fixture rules_binary runs `cargo build -p pg-worker-core --bin
+# pg-placement-rules`, so the first test of a worker pays that build in its setup.
+pytestmark = pytest.mark.long_test_deadline(
+    600, reason="A cold runner builds the pg-placement-rules helper in the rules_binary session "
+    "fixture, which exceeds the 120 s default in the setup of the first test that uses it.",
+)
+
 KEY = 'PG_RULE_HOST_WORKER_CAP_COUNT'
 
 
