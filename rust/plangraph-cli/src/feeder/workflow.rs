@@ -26,16 +26,18 @@ impl fmt::Display for SpawnError {
         }
     }
 }
-/// Claimed members with their epochs, and the items dropped with their reasons.
-type Claimed = (Vec<(Task, u64)>, Vec<Value>);
 /// Claim every member of `batch` in order, then keep the claims that hold their files against
 /// every other claimed item. Only claims this host holds count as its own batch: a member
 /// another host holds is a rival like any other item. A refused claim or a yielded reservation
 /// drops only that item and releases only its own claim. Infrastructure failures release every
-/// claim of this batch.
-fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, SpawnError> {
+/// claim of this batch. The items dropped on the way, with their reasons, go to `dropped` even
+/// when the batch fails.
+fn claim_batch(
+    batch: &[Task],
+    launch: &mut impl Launch,
+    dropped: &mut Vec<Value>,
+) -> Result<Vec<(Task, u64)>, SpawnError> {
     let mut claimed: Vec<(Task, u64)> = Vec::new();
-    let mut dropped = Vec::new();
     for item in batch {
         match launch.claim(&item.key) {
             Ok(epoch) => claimed.push((item.clone(), epoch)),
@@ -43,7 +45,7 @@ fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, Spaw
                 dropped.push(json!({"item_key":item.key,"reason":reason}));
                 // The highest-priority item is out: the caller picks again from the rest.
                 if claimed.is_empty() && item.key == batch[0].key {
-                    return Ok((Vec::new(), dropped));
+                    return Ok(Vec::new());
                 }
             }
             Err(e) => {
@@ -87,9 +89,9 @@ fn claim_batch(batch: &[Task], launch: &mut impl Launch) -> Result<Claimed, Spaw
         for (key, error) in release_held(&held, launch) {
             dropped.push(json!({"item_key":key,"reason":format!("release failed: {error}")}));
         }
-        return Ok((Vec::new(), dropped));
+        return Ok(Vec::new());
     }
-    Ok((held, dropped))
+    Ok(held)
 }
 /// Release each claim by its own epoch; the failures, as (key, error), stay held until expiry.
 fn release_held(held: &[(Task, u64)], launch: &mut impl Launch) -> Vec<(String, String)> {
@@ -191,12 +193,8 @@ pub fn tick(
             row["skipped"] = json!(skipped);
             return row;
         }
-        let (held, dropped) = match claim_batch(&batch, launch) {
-            Ok(claimed) => claimed,
-            Err(e) => {
-                return json!({"decision":"refused","item_key":seed.key,"reason":e.to_string(),"skipped":skipped,"error":true})
-            }
-        };
+        let mut dropped = Vec::new();
+        let claimed = claim_batch(&batch, launch, &mut dropped);
         for row in &dropped {
             ready["items"]
                 .as_array_mut()
@@ -204,6 +202,12 @@ pub fn tick(
                 .retain(|v| v["key"] != row["item_key"]);
         }
         skipped.extend(dropped);
+        let held = match claimed {
+            Ok(held) => held,
+            Err(e) => {
+                return json!({"decision":"refused","item_key":seed.key,"reason":e.to_string(),"skipped":skipped,"error":true})
+            }
+        };
         if held.is_empty() {
             continue;
         }

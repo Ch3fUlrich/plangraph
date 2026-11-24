@@ -649,3 +649,32 @@ fn a_rival_check_error_after_a_yield_releases_only_the_claims_still_held() {
         "{told_later:?}"
     );
 }
+
+#[test]
+fn a_failed_batch_still_reports_the_members_dropped_before_the_failure() {
+    // ALPHA-2 is held elsewhere (dropped), then ALPHA-3's claim fails as unavailable.
+    let items = vec![
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 8, &["src/b.rs"]),
+        item("ALPHA-3", 7, &["src/c.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    registry
+        .lock()
+        .unwrap()
+        .claimed
+        .insert("plangraph:ALPHA-2".into(), vec!["src/b.rs".into()]);
+    let mut host = Host::new(&registry, &items);
+    host.unavailable_at = Some("plangraph:ALPHA-3".into());
+    let row = drive(&ready(items), &mut host, "dell", 3, false);
+    assert_eq!(row["decision"], "refused", "{row}");
+    assert_eq!(row["error"], true);
+    let dropped = row["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["item_key"] == "plangraph:ALPHA-2")
+        .expect("the dropped member is reported");
+    assert_eq!(dropped["reason"], "conflict");
+    assert_released_with_own_epochs(&registry.lock().unwrap(), &["plangraph:ALPHA-1"]);
+}
