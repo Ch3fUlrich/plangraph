@@ -1,3 +1,16 @@
 {
-  "enabledMcpjsonServers": ["omnigraph", "plangraph-spawner"]
+  "enabledMcpjsonServers": ["omnigraph", "plangraph-spawner"],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'test -x \"$1\" || exit 1; exec \"$1\" message-route' _ \"$HOME/.local/share/plangraph/hooks/pg-hook\""
+          }
+        ]
+      }
+    ]
+  }
 }
