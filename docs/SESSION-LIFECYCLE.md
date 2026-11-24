@@ -38,10 +38,12 @@ A stop needs the runtime's own positive idle signal:
 
 Codex/OpenCode are stopped with SIGTERM through a pidfd opened for the recorded pid and
 re-checked against `pid_start`, so a reused pid is never hit, and `stopped` is published only
-after the process is confirmed gone (10 s; a survivor logs `stop-failed` and the record stays
-unmarked).
+after the whole process is confirmed gone through the pidfd (10 s; a survivor logs `stop-failed`
+and the record stays unmarked). A zombie leader whose other threads still run is a running
+process, not a gone one.
 
-A kept session logs its reason once per cause (`stop_refused` in the record): `no-job-state`,
+A kept session logs its reason once per cause (`stop_refused` in the record, set only after the
+log line was appended, so a failed append is retried by the next tick): `no-job-state`,
 `job-<state>`, `job-has-tasks`, `job-tasks-unknown`, `no-process-identity`, `no-idle-signal`,
 `turn-open`, `has-children`, `no-runtime-state`, `no-resume-handle`. Never stopped: a session
 without a handle, and names matching (case-insensitively) the built-in globs `*-L1`, `*-L1-*`,
@@ -53,9 +55,12 @@ the stop), worktree (inode and git dir), status_head, round, stopped_ts, reason}
 worktree stay null when their lookup failed. `resume.handle` is the "resumable" mark; the lane
 gets `<lane>.resume.json` with the same handle. A stop belongs to the launch that produced it (`resume.launch_ts`, `launch_run`, `handle`
 must equal the record's `ts`, `run_id` and handle), so a `fleet-launch --respawn` copy of the
-record is a live session again. A record that cannot be saved is not published and the run
-exits 2; the next tick finds the runtime stopped and writes the record without a second stop,
-and a missing lane copy is rewritten the same way. A kernel lock (flock on
+record is a live session again. Before a session is touched, the snapshot of the stop (head,
+worktree, status head, round, reason, time) is saved in the record as `stop_pending`; a stop
+whose record write then fails exits 2, and the next tick, once the runtime shows the session
+stopped, publishes from that snapshot without a second stop. A session that survives the stop
+leaves no snapshot. Each lane keeps the copy of its latest stopped launch: a missing or older
+copy is rewritten, a newer one is left. A kernel lock (flock on
 `<state>/launch/pg-session-resume.lock`) keeps two ticks apart: a second one prints that the
 lock is held and leaves the work to the first.
 

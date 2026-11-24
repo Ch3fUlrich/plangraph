@@ -79,8 +79,14 @@ impl Host for System {
     fn process(&self, pid: u32) -> Process {
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stat) => match (proc_state(&stat), proc_start_ticks(&stat)) {
-                // An exited process nobody waited for still has a /proc entry: gone.
-                (Some('Z' | 'X'), _) => Process::Gone,
+                // A zombie leader whose other threads still run is a running process: only the
+                // exit of the whole thread group (the pidfd) ends it.
+                (Some('Z' | 'X'), Some(start)) => match live_threads(pid) {
+                    Some(false) => Process::Gone,
+                    Some(true) => Process::Live(start),
+                    None => Process::Unknown,
+                },
+                (Some('Z' | 'X'), None) => Process::Unknown,
                 (Some(_), Some(start)) => Process::Live(start),
                 _ => Process::Unknown,
             },
@@ -187,7 +193,7 @@ impl Host for System {
         parse_job_state(&text)
     }
 
-    fn log(&mut self, line: &str) {
+    fn log(&mut self, line: &str) -> bool {
         let line = format!("ts={} {line}", self.now());
         println!("{line}");
         let appended = std::fs::OpenOptions::new()
@@ -201,7 +207,9 @@ impl Host for System {
                 self.log_file.display()
             );
             self.log_failed = true;
+            return false;
         }
+        true
     }
 }
 
@@ -224,6 +232,27 @@ impl System {
             Agent::OpenCode => None,
         }
     }
+}
+
+/// Whether any thread of the process other than a zombie is left; None when unreadable.
+fn live_threads(pid: u32) -> Option<bool> {
+    let tasks = match std::fs::read_dir(format!("/proc/{pid}/task")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
+    };
+    for task in tasks.flatten() {
+        match std::fs::read_to_string(task.path().join("stat")) {
+            Ok(stat) => {
+                if !matches!(proc_state(&stat)?, 'Z' | 'X') {
+                    return Some(true);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // that thread just exited
+            Err(_) => return None,
+        }
+    }
+    Some(false)
 }
 
 fn mtime_ns(path: &Path) -> Option<u128> {
@@ -275,7 +304,7 @@ pub fn parse_job_state(text: &str) -> Option<JobState> {
             .and_then(serde_json::Value::as_u64)
             .zip(count(f, "queued"))
             .zip(count(f, "drainableMonitors"))
-            .map(|((t, q), m)| t + q + m),
+            .map(|((t, q), m)| t.saturating_add(q).saturating_add(m)),
         _ => None,
     };
     Some(JobState { state, tasks })

@@ -28,6 +28,10 @@ pub struct Fake {
     /// The signalled process does not exit.
     pub survives: bool,
     pub terminated: Vec<(u32, u64)>,
+    /// The log cannot be appended to.
+    pub log_fails: bool,
+    /// Created as a directory while a stop command runs, so the record's next save fails.
+    pub block_on_run: Option<PathBuf>,
     pub children: Option<bool>,
     pub wt_id: Option<String>,
     pub turn_ended: Option<bool>,
@@ -52,6 +56,8 @@ impl Fake {
             proc_unknown: false,
             survives: false,
             terminated: vec![],
+            log_fails: false,
+            block_on_run: None,
             children: Some(false),
             wt_id: Some("w1".into()),
             turn_ended: Some(true),
@@ -65,6 +71,9 @@ impl Host for Fake {
     }
     fn run(&mut self, cwd: Option<&Path>, argv: &[String]) -> Result<String, String> {
         self.runs.push((cwd.map(Path::to_path_buf), argv.to_vec()));
+        if let Some(p) = &self.block_on_run {
+            std::fs::create_dir(p).unwrap();
+        }
         if self.fail_run {
             Err("boom".into())
         } else {
@@ -109,8 +118,12 @@ impl Host for Fake {
     fn activity_ts(&self, _: &Record) -> Option<u64> {
         self.activity
     }
-    fn log(&mut self, line: &str) {
+    fn log(&mut self, line: &str) -> bool {
+        if self.log_fails {
+            return false;
+        }
         self.lines.push(line.to_owned());
+        true
     }
 }
 

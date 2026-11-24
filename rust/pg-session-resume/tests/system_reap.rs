@@ -216,6 +216,19 @@ fn a_task_count_that_is_not_a_number_is_never_read_as_zero() {
         tasks(&done(r#"{"tasks":0,"queued":1}"#)),
         Some(("done".into(), Some(1)))
     );
+    // counts whose sum overflows saturate: never a panic, never a wrap to zero
+    let huge = u64::MAX;
+    for flight in [
+        format!(r#"{{"tasks":{huge},"queued":1}}"#),
+        format!(r#"{{"tasks":1,"queued":{huge}}}"#),
+        format!(r#"{{"tasks":0,"queued":{huge},"drainableMonitors":1}}"#),
+    ] {
+        assert_eq!(
+            tasks(&done(&flight)),
+            Some(("done".into(), Some(huge))),
+            "{flight}"
+        );
+    }
     for bad in [
         r#"{"tasks":"2"}"#,
         r#"{"tasks":-1}"#,
@@ -231,4 +244,71 @@ fn a_task_count_that_is_not_a_number_is_never_read_as_zero() {
     assert_eq!(tasks(r#"{"state":"done"}"#), Some(("done".into(), None)));
     assert_eq!(tasks("{"), None);
     assert_eq!(tasks(r#"{"state":5}"#), None);
+}
+
+/// A process whose main thread has exited (a zombie leader) while another thread still runs;
+/// `ignore_term`: its signal disposition ignores SIGTERM.
+fn zombie_leader_with_a_live_thread(ignore_term: bool) -> Child {
+    let ignore = if ignore_term {
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    } else {
+        ""
+    };
+    let script = format!(
+        "import ctypes, threading, time, signal\n{ignore}\
+         threading.Thread(target=time.sleep, args=(30,)).start()\n\
+         ctypes.CDLL(None).pthread_exit(None)"
+    );
+    let child = Command::new("python3")
+        .args(["-c", &script])
+        .spawn()
+        .unwrap();
+    let is_zombie = || {
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", child.id())).unwrap();
+        pg_session_resume::system::proc_state(&stat) == Some('Z')
+    };
+    for _ in 0..300 {
+        if is_zombie() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(is_zombie(), "the leader did not become a zombie");
+    child
+}
+
+fn system(exit_wait_ms: i32) -> (tempfile::TempDir, System) {
+    let dir = tempfile::tempdir().unwrap();
+    let host = System {
+        exit_wait_ms,
+        log_file: dir.path().join("log"),
+        log_failed: false,
+    };
+    (dir, host)
+}
+
+#[test]
+fn a_zombie_leader_with_a_live_thread_is_still_a_running_process() {
+    let (_dir, mut h) = system(3000);
+    let mut child = zombie_leader_with_a_live_thread(false);
+    let start = start_of(child.id());
+    assert_eq!(
+        h.process(child.id()),
+        Process::Live(start),
+        "not gone while a thread runs"
+    );
+    // the stop is confirmed by the whole thread group's exit, not by the leader's state
+    h.terminate(child.id(), start).unwrap();
+    assert_eq!(h.process(child.id()), Process::Gone);
+    child.wait().unwrap();
+}
+
+#[test]
+fn a_zombie_leader_whose_thread_ignores_sigterm_is_not_a_stop() {
+    let (_dir, mut h) = system(300);
+    let mut child = zombie_leader_with_a_live_thread(true);
+    let err = h.terminate(child.id(), start_of(child.id())).unwrap_err();
+    assert!(err.contains("still running"), "{err}");
+    child.kill().unwrap();
+    child.wait().unwrap();
 }

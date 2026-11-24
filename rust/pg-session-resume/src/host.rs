@@ -50,5 +50,6 @@ pub trait Host {
     fn activity_ts(&self, rec: &Record) -> Option<u64>;
     /// The runtime's own state of a Claude job, None when unreadable.
     fn job_state(&self, rec: &Record) -> Option<JobState>;
-    fn log(&mut self, line: &str);
+    /// Append one line to the log; false when it could not be persisted.
+    fn log(&mut self, line: &str) -> bool;
 }
