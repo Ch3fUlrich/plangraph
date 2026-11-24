@@ -158,6 +158,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let validated = (|| -> Result<Snapshot, Box<dyn std::error::Error>> {
         let mut s: Snapshot = serde_json::from_slice(&fs::read(&args[1])?)?;
         s.idle_messages = s.host_idle_capacity.messages()?;
+        if let (Some(local), Some(path)) = (hosts::local_name(), hosts::watermarks_path()) {
+            hosts::attach_local_consumers(&mut s.hosts, &local, &path);
+        }
         if s.infra_failed > s.ci_failed || s.ci_failed > s.ci_total {
             return Err("inconsistent CI counts".into());
         }

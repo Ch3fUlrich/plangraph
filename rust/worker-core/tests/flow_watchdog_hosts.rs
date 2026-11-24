@@ -6,6 +6,10 @@ fn active(host: serde_json::Value) -> String {
 
 /// The `active` file and the queued alert messages of one watchdog pass.
 fn run(host: serde_json::Value) -> (String, Vec<String>) {
+    run_with(host, &[])
+}
+
+fn run_with(host: serde_json::Value, env: &[(&str, &std::path::Path)]) -> (String, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let snapshot = serde_json::json!({"pace":66,"budget":66,"ci_failed":0,
         "ci_total":10,"infra_failed":0,"review_age_hours":0,"review_rounds":0,
@@ -17,6 +21,9 @@ fn run(host: serde_json::Value) -> (String, Vec<String>) {
         .args([input.as_os_str(), dir.path().as_os_str()])
         .env_remove("PLANGRAPH_WATCHDOG_DELIVERY")
         .env_remove("PLANGRAPH_FLOW_PUSH")
+        .env_remove("PLANGRAPH_DISK_WATERMARKS")
+        .env("PLANGRAPH_HOST_NAME", "fixture")
+        .envs(env.iter().copied())
         .output()
         .unwrap();
     assert!(output.status.success(), "{:?}", output);
@@ -119,4 +126,33 @@ fn host_disk_alert_at_86_percent_names_the_five_largest_consumers_once() {
         message.find("/var/c7").unwrap() < message.find("/var/c6").unwrap(),
         "{message}"
     );
+}
+
+#[test]
+fn the_local_hosts_alert_names_the_consumers_the_hygiene_watermark_measured() {
+    let state = tempfile::tempdir().unwrap();
+    let marks = state.path().join("disk-watermarks.json");
+    // The shape pg-disk-hygiene writes: device -> {free, total, directories}.
+    let rows: Vec<_> = (1..=7u64)
+        .map(|n| serde_json::json!({"path": format!("/data/d{n}"), "bytes": n * 10}))
+        .collect();
+    fs::write(
+        &marks,
+        serde_json::json!({"64769": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+    )
+    .unwrap();
+    let host = serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":87,
+        "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
+    let (_, messages) = run_with(host.clone(), &[("PLANGRAPH_DISK_WATERMARKS", &marks)]);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        messages[0].contains("/data/d7=70") && messages[0].contains("/data/d3=30"),
+        "{messages:?}"
+    );
+    assert!(!messages[0].contains("/data/d2="), "{messages:?}");
+    // Another host's entry never borrows this host's measurements.
+    let other = serde_json::json!({"host":"elsewhere","tmp_used_percent":0,"root_used_percent":87,
+        "checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100});
+    let (_, messages) = run_with(other, &[("PLANGRAPH_DISK_WATERMARKS", &marks)]);
+    assert!(!messages[0].contains("/data/"), "{messages:?}");
 }

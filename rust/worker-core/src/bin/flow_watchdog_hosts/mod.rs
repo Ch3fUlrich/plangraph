@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::path::Path;
 
 /// A host's disk alert names this many of the largest directories (rule 9.23).
 const TOP_CONSUMERS: usize = 5;
@@ -28,6 +29,60 @@ pub struct Host {
     // Collector supplies the ancestry count, not a comparison of commit timestamps.
     behind_commits: u64,
     age_hours: f64,
+}
+
+/// Fill a local host entry that has no `top_consumers` from the directories `pg-disk-hygiene`
+/// sampled at its 85% watermark (`disk-watermarks.json`, any filesystem). Collectors for other
+/// hosts supply their own list.
+pub fn attach_local_consumers(hosts: &mut [Host], local: &str, watermarks: &Path) {
+    let Some(host) = hosts
+        .iter_mut()
+        .find(|h| h.host == local && h.top_consumers.is_empty())
+    else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(watermarks) else {
+        return;
+    };
+    let Ok(alerts) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    for alert in alerts.as_object().into_iter().flat_map(|a| a.values()) {
+        for row in alert["directories"].as_array().into_iter().flatten() {
+            if let (Some(path), Some(bytes)) = (row["path"].as_str(), row["bytes"].as_u64()) {
+                host.top_consumers.push(Consumer {
+                    path: path.to_owned(),
+                    bytes,
+                });
+            }
+        }
+    }
+}
+
+/// The name this host goes by in the snapshot, then the hygiene state it reads.
+pub fn local_name() -> Option<String> {
+    std::env::var("PLANGRAPH_HOST_NAME")
+        .ok()
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .ok()
+                .map(|name| name.trim().to_owned())
+        })
+}
+
+pub fn watermarks_path() -> Option<std::path::PathBuf> {
+    let var = |name| std::env::var_os(name).filter(|v| !v.is_empty());
+    var("PLANGRAPH_DISK_WATERMARKS")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            var("PLANGRAPH_SPAWN_STATE")
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    var("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state/plangraph"))
+                })
+                .map(|state| state.join("disk-watermarks.json"))
+        })
 }
 
 fn consumers(host: &Host) -> String {
