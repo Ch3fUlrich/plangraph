@@ -241,7 +241,10 @@ pub(super) fn fake_plangraph_path(dir: &Path) -> String {
     fs::create_dir_all(&bin).unwrap();
     pg_worker_core::executable_test_support::write_executable(
         bin.join("plangraph"),
-        include_str!("../tests/fixtures/fake-plangraph-fast-checks.txt"),
+        format!(
+            "#!/bin/sh\n{}",
+            include_str!("../tests/fixtures/fake-plangraph-fast-checks.txt")
+        ),
     );
     format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
 }

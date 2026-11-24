@@ -1,4 +1,3 @@
-#!/bin/sh
 [ "$1 $2" = "fast-checks --owned-worktree" ] || exit 9
 head=$(git rev-parse HEAD)
 common=$(git rev-parse --path-format=absolute --git-common-dir)
