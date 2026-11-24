@@ -75,6 +75,10 @@ pub struct Diagnosis {
     pub tests: Vec<String>,
     /// The diagnosis of some failed job may be partial (capped log, job died early).
     pub incomplete: bool,
+    /// The red jobs read: name, id and class (`classify`); the fix task of main carries them.
+    pub red: Vec<(String, u64, super::classify::RedClass)>,
+    /// The log lines of the first red job that names a failure.
+    pub excerpt: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
