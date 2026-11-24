@@ -145,3 +145,92 @@ fn delivery_continues_past_failed_events_and_quarantines_permanent_refusals() {
     assert!(!outbox.join(&names[1]).exists());
     assert!(!outbox.join(&names[2]).exists());
 }
+
+#[test]
+fn rejoin_settles_the_unknown_run_and_lifts_the_placement_hold() {
+    use pg_worker_core::worker_host::Observation;
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path();
+    let config = root.join("plangraph");
+    let state = root.join("state");
+    let bin = root.join("bin");
+    let row = state.join("runs/run-example");
+    for dir in [&config, &row, &bin] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let host = |id: &str, transport: &str| {
+        json!({
+            "id":id,"aliases":[],"transport":transport,"os":"linux",
+            "state_dir":state,"session_mb":1,"roles":["implement"],
+            "caps":{"max_runs":2,"max_writers":1,"max_seats":1,"max_sessions":1,"mem_floor_mb":1},
+            "warmup":{"warmup_s":1,"ramp_mb":{"implement":1}},
+            "repos":{}
+        })
+    };
+    fs::write(
+        config.join("hosts.json"),
+        json!({"version":1,"self":"observer","hosts":[host("observer","local"),host("worker","ssh")]}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        row.join("record.json"),
+        r#"{"run_id":"run-example","host":"worker","status":"running","events":[]}"#,
+    )
+    .unwrap();
+    let ssh = bin.join("ssh");
+    fs::write(
+        &ssh,
+        r#"#!/bin/sh
+case "$*" in
+*worker-active-runs*) echo '{"host":"worker","runs":[]}';;
+*--changed-since*) echo '{"rows":[{"run_id":"run-example","status":"completed","phase":"ended"}],"next_cursor":1,"more":false}';;
+*work-disk*) echo '"/mnt/work"';;
+*"probe --host-id"*) echo '{"mem_available_mb":4096}';;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let store = Store::new(&state, "worker").unwrap();
+    let tick = |now, ssh| {
+        store
+            .observe_liveness(Observation {
+                now,
+                ssh,
+                tailscale: None,
+                remote_runs: None,
+                placed_runs: if ssh {
+                    Default::default()
+                } else {
+                    ["run-example".to_string()].into()
+                },
+            })
+            .unwrap()
+    };
+    tick(10, false);
+    assert_eq!(tick(20, false), Phase::Unreachable);
+    assert_eq!(tick(900, true), Phase::Rejoining);
+    let rejoin = || {
+        Command::new(binary::spawnd())
+            .args(["rejoin", "worker"])
+            .env("PLANGRAPH_SPAWN_STATE", &state)
+            .env("XDG_CONFIG_HOME", root)
+            .env("PATH", &bin)
+            .output()
+            .unwrap()
+    };
+    let result = rejoin();
+    assert!(result.status.success(), "{result:?}");
+    let record: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(
+        record["runs"],
+        json!([{"run":"run-example","fate":"finished"}])
+    );
+    assert_eq!(store.phase().unwrap(), Phase::Ready);
+    let settled: Value =
+        serde_json::from_slice(&fs::read(row.join("record.json")).unwrap()).unwrap();
+    assert_eq!(settled["status"], "completed");
+    // A ready host has nothing to rejoin.
+    assert!(!rejoin().status.success());
+}

@@ -23,7 +23,7 @@ fn now() -> Result<u64, String> {
         .map_err(|_| "system clock predates epoch".into())
 }
 
-fn registry() -> Result<HostRegistry, String> {
+pub(crate) fn registry() -> Result<HostRegistry, String> {
     let config = env::var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -33,7 +33,7 @@ fn registry() -> Result<HostRegistry, String> {
         .map_err(|_| "fleet host registry unavailable or invalid".into())
 }
 
-fn remote(host: &HostEntry) -> Result<Command, String> {
+pub(crate) fn remote(host: &HostEntry) -> Result<Command, String> {
     let route = host.ssh_route().ok_or("worker has no SSH route")?;
     let mut command = host_command::ssh(&route).map_err(|_| "worker SSH route is invalid")?;
     if let Some(distro) = host.wsl_distro.as_deref() {
@@ -69,7 +69,7 @@ fn active_run_ids(state: &Path, registry: &HostRegistry, host: &str) -> BTreeSet
         .collect()
 }
 
-fn state() -> Result<PathBuf, String> {
+pub(crate) fn state() -> Result<PathBuf, String> {
     crate::state::resolve_state(None, |key| env::var_os(key))
 }
 
