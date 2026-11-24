@@ -95,3 +95,28 @@ def test_ps_shows_a_dead_pid_running_record_as_stale():
     assert shown['stale'] is True and 'pid' in shown['stale_reason'] and shown['status'] == 'running'
     for status in ('completed', 'timed_out', 'stalled'):
         assert 'stale' not in with_stale(dict(dead, status=status))
+
+
+def test_a_busy_host_over_the_cap_sheds_idle_variants_before_refusing(cap, monkeypatch):
+    """LE-WS-DISK-FULL-STALE-WORKTREES-AND-CAP-REFUSALS: busy is a refusal only when trimming did not help."""
+    target, refusal = cap
+    idle, live = target / 'cli-tests' / 'idle', target / 'cli-tests' / 'live'
+    for variant in (idle, live):
+        variant.mkdir(parents=True)
+        (variant / 'obj').write_text('x')
+    old = time.time() - 5 * 3600
+    for path in (idle / 'obj', idle):
+        os.utime(path, (old, old))
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 20.04 if idle.exists() else 3.0)
+    runs = [dict(status='running', pid=os.getpid(), pid_start=None)]
+    assert refusal(runs) is None
+    assert not idle.exists() and (live / 'obj').exists()
+    assert (target / 'artifact').exists()
+
+
+def test_a_busy_host_with_nothing_idle_still_refuses_as_busy(cap):
+    target, refusal = cap
+    (target / 'cli-tests' / 'live').mkdir(parents=True)
+    runs = [dict(status='running', pid=os.getpid(), pid_start=None)]
+    assert 'cargo_target_cap' in refusal(runs) and 'busy' in refusal(runs)
+    assert (target / 'cli-tests' / 'live').exists()

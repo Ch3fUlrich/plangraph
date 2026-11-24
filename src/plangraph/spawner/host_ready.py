@@ -270,6 +270,24 @@ def prune_builds(target, subdir, keep, max_age=CLI_TESTS_MAX_AGE_S, now=None):
     return removed
 
 
+IDLE_VARIANT_SECONDS = 3600
+
+
+def trim_idle_variants(target, now=None):
+    """Drop build variants nothing has touched for an hour, while builds hold shared leases.
+
+    A live build touches its own variant, so an idle one is not in use; the exclusive lease
+    ``prune_builds`` documents is for removing the whole target, not for these.
+    Returns the removed directory names."""
+    removed = []
+    for root in BUILD_ROOTS:
+        try:
+            removed += prune_builds(target, root, sys.maxsize, IDLE_VARIANT_SECONDS, now)
+        except (ValueError, OSError):
+            continue
+    return removed
+
+
 def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
     """Per-checkout ``cli-tests/<hash>`` builds: the newest ``keep`` (PLANGRAPH_CLI_TESTS_KEEP, default 3)."""
     if keep is None:
@@ -504,13 +522,17 @@ def local_disk_admission(worktree, service, role='implement', movable=False, *, 
             if size >= limit:
                 measured = f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {limit:g} GB'
                 if active:
-                    return None, measured + '; busy'
-                if configured_target.is_symlink():
-                    return None, measured + '; cleanup unavailable for a symlinked target'
-                try:
-                    reclaim_cargo_target(target, cap, worktree)
-                except OSError:
-                    return None, measured + '; busy or cleanup unavailable'
+                    # A busy host sheds idle variants before it refuses a writer.
+                    trim_idle_variants(target)
+                    if cargo_target_size_gb(target) >= limit:
+                        return None, measured + '; busy'
+                else:
+                    if configured_target.is_symlink():
+                        return None, measured + '; cleanup unavailable for a symlinked target'
+                    try:
+                        reclaim_cargo_target(target, cap, worktree)
+                    except OSError:
+                        return None, measured + '; busy or cleanup unavailable'
         if building:
             # The legacy caches and the pool slots stay under the same cap.
             for extra in _legacy_cache_roots() + _pool_slot_roots(target):

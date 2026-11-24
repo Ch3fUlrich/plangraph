@@ -1,6 +1,8 @@
 //! Conservative cleanup of registered worktrees under an explicit root.
 #[path = "disk_fast_worktrees.rs"]
 mod fast_worktrees;
+#[path = "disk_stray_worktrees.rs"]
+mod stray_worktrees;
 
 use crate::host_command;
 use serde::Serialize;
@@ -295,6 +297,19 @@ fn clean_caches(
         ));
     }
     Ok(())
+}
+
+/// Remove finished job worktrees that sit outside every configured root (merged, clean, idle).
+pub fn sweep_stray_worktrees(
+    repo: &Path,
+    roots: &[PathBuf],
+    guards: &Guards,
+    now: SystemTime,
+    apply: bool,
+    report: &mut Report,
+    safe_to_remove: impl Fn(&Path) -> io::Result<bool>,
+) -> io::Result<()> {
+    stray_worktrees::sweep(repo, roots, guards, now, apply, report, &safe_to_remove)
 }
 
 /// Reclaim unused caches under disk pressure and old disposable fast-check worktrees.
