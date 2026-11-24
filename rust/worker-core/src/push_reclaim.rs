@@ -1,6 +1,7 @@
 //! Host reclaim of the shared Cargo target between an accepted writer head and its push.
 use crate::disk_hygiene::Guards;
 use crate::disk_hygiene::Report;
+#[cfg(target_os = "linux")]
 use crate::disk_measure::allocated_bytes;
 #[cfg(target_os = "linux")]
 use crate::disk_runtime::process_references;

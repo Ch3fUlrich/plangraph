@@ -321,6 +321,8 @@ pub(crate) fn shared_cache_levels(
         if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
             return Ok(());
         }
+        // What this candidate occupies in the cap's own unit, read before it goes.
+        let size = measure(&candidate).unwrap_or(size);
         if apply {
             fs::remove_dir_all(&candidate)?;
             report.freed_bytes = report.freed_bytes.saturating_add(size);
@@ -335,6 +337,10 @@ pub(crate) fn shared_cache_levels(
             candidate.display()
         ));
     }
+    if apply {
+        // Remeasure under the lease: sizes of removed units are estimates in a mixed unit.
+        bytes = measure(path)?;
+    }
     if bytes > cap {
         for (profile, mut size) in crate::shared_target::debug_profiles(path)? {
             if bytes <= cap {
@@ -347,6 +353,7 @@ pub(crate) fn shared_cache_levels(
             if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
                 return Ok(());
             }
+            size = measure(&profile).unwrap_or(size);
             if apply {
                 fs::remove_dir_all(&profile)?;
                 report.freed_bytes = report.freed_bytes.saturating_add(size);

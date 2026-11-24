@@ -118,14 +118,19 @@ impl Host {
             .remove(0);
         let git_dirs = crate::native_writer_sandbox::git_dirs(&self.cwd, Some(&self.tool_path))
             .map_err(|e| e.to_string())?;
-        let roots = crate::native_writer_sandbox::writable_roots(
-            &cargo_target,
-            &self.reviews,
-            directory,
-            &git_dirs,
-        );
+        let inherited: Vec<_> = std::env::vars_os().collect();
+        let roots = crate::native_writer_sandbox::with_compiler_cache(
+            crate::native_writer_sandbox::writable_roots(
+                &cargo_target,
+                &self.reviews,
+                directory,
+                &git_dirs,
+            ),
+            &inherited,
+        )
+        .map_err(|e| format!("compiler cache directory: {e}"))?;
         let mut command = self.command(codex);
-        crate::native_writer_sandbox::apply_env(&mut command, std::env::vars_os(), &self.tool_path);
+        crate::native_writer_sandbox::apply_env(&mut command, inherited, &self.tool_path);
         #[cfg(target_os = "linux")]
         {
             // `cargo` resolves to a link to this executable: one shared lease per Cargo command.

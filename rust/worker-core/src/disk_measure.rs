@@ -2,14 +2,18 @@
 //!
 //! Matches `cargo_target_size_gb` in the spawner: regular files only, directory symlinks never
 //! followed, each hard-linked file counted once, files that vanish mid-walk ignored.
-use std::{collections::HashSet, fs, io, os::unix::fs::MetadataExt, path::Path};
+use std::{io, path::Path};
 
 /// Apparent bytes, the unit of the generic cache levels.
 pub fn apparent_bytes(path: &Path) -> io::Result<u64> {
     crate::disk_hygiene::scan(path).map(|(bytes, _)| bytes)
 }
 
+/// Allocated bytes: disk blocks, each hard-linked file once. Hosts without block counts
+/// (non-Unix) fall back to apparent bytes.
+#[cfg(unix)]
 pub fn allocated_bytes(path: &Path) -> io::Result<u64> {
+    use std::{collections::HashSet, fs, os::unix::fs::MetadataExt};
     let mut seen = HashSet::new();
     let mut bytes = 0u64;
     let mut pending = vec![path.to_path_buf()];
@@ -30,9 +34,15 @@ pub fn allocated_bytes(path: &Path) -> io::Result<u64> {
     Ok(bytes)
 }
 
-#[cfg(test)]
+#[cfg(not(unix))]
+pub fn allocated_bytes(path: &Path) -> io::Result<u64> {
+    apparent_bytes(path)
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::{fs, os::unix::fs::MetadataExt};
 
     #[test]
     fn a_one_byte_file_occupies_its_allocated_block() {

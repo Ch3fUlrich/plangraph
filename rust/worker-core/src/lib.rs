@@ -84,6 +84,8 @@ pub mod reaper;
 pub mod redact;
 mod redact_tokens;
 pub mod remote_steps;
+#[cfg(target_os = "linux")]
+mod shared_build_roots;
 mod shared_target;
 pub mod sweep_facts;
 mod sweep_runs;

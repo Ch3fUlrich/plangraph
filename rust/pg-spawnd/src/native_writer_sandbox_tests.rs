@@ -46,13 +46,27 @@ fn only_allowlisted_variables_survive() {
         var("CODEX_HOME"),
         var("LC_ALL"),
         var("HTTPS_PROXY"),
+        var("RUSTC_WRAPPER"),
+        var("SCCACHE_DIR"),
+        var("SCCACHE_CACHE_SIZE"),
         var("AWS_SECRET_ACCESS_KEY"),
         var("GITHUB_TOKEN"),
         var("OMNIROUTE_API_KEY"),
         var("PATH"),
     ]);
     let names: Vec<_> = kept.iter().map(|(n, _)| n.to_str().unwrap()).collect();
-    assert_eq!(names, ["HOME", "CODEX_HOME", "LC_ALL", "HTTPS_PROXY"]);
+    assert_eq!(
+        names,
+        [
+            "HOME",
+            "CODEX_HOME",
+            "LC_ALL",
+            "HTTPS_PROXY",
+            "RUSTC_WRAPPER",
+            "SCCACHE_DIR",
+            "SCCACHE_CACHE_SIZE"
+        ]
+    );
 }
 
 #[cfg(unix)]
@@ -180,4 +194,64 @@ fn a_writer_worktree_can_commit_with_the_named_git_directories() {
         "{text}{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn the_compiler_cache_directory_is_a_writable_root_only_with_a_wrapper() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("sccache");
+    let var = |n: &str, v: &Path| (OsString::from(n), v.as_os_str().to_owned());
+    let with = [
+        var("RUSTC_WRAPPER", Path::new("/usr/bin/sccache")),
+        var("SCCACHE_DIR", &cache),
+    ];
+    let named = with_compiler_cache(roots(), &with).unwrap();
+    assert!(named.contains(&cache) && cache.is_dir());
+    // Named once, and never without a wrapper.
+    assert_eq!(with_compiler_cache(named.clone(), &with).unwrap(), named);
+    assert_eq!(
+        with_compiler_cache(roots(), &[var("SCCACHE_DIR", &cache)]).unwrap(),
+        roots()
+    );
+}
+
+/// Real Codex sandbox: the wrapper settings arrive and the compiler cache directory is writable.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "live host check requiring a working Codex sandbox"]
+fn the_sandbox_can_write_the_compiler_cache_the_host_names() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let cache = std::fs::canonicalize(dir.path()).unwrap().join("sccache");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let inherited = vec![
+        (OsString::from("RUSTC_WRAPPER"), OsString::from("/bin/true")),
+        (
+            OsString::from("SCCACHE_DIR"),
+            cache.clone().into_os_string(),
+        ),
+        (OsString::from("SCCACHE_CACHE_SIZE"), OsString::from("1G")),
+    ];
+    let named = with_compiler_cache(vec![], &inherited).unwrap();
+    let mut command = Command::new("codex");
+    apply_env(&mut command, inherited, &std::env::var("PATH").unwrap());
+    let out = command
+        .arg("sandbox")
+        .args(sandbox_args(&named).unwrap())
+        .args([
+            "--",
+            "sh",
+            "-c",
+            "touch \"$SCCACHE_DIR/entry\" && echo \"cache-ok $RUSTC_WRAPPER $SCCACHE_CACHE_SIZE\"",
+        ])
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && text.contains("cache-ok /bin/true 1G"),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(cache.join("entry").exists());
 }
