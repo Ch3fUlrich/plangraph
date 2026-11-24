@@ -351,11 +351,9 @@ fn spawn_one_seat(
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
             let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
             // A refusal before any run exists (a missing harness, a prompt too large) prints no
-            // record: its first line becomes the seat's reason, so the REVIEW line still names it.
-            let cause = stderr
-                .lines()
-                .chain(stdout.lines())
-                .find(|l| !l.trim().is_empty());
+            // record. Its named diagnostic is the cause, wherever a warning or a supervisor
+            // message put it in the output; otherwise the last line, where an error text is printed.
+            let cause = outcome::refusal_cause(&stderr, &stdout);
             match cause {
                 Some(cause) if !out.status.success() => json!({
                     "run_id": format!("spawn-refused-{slot}-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)),

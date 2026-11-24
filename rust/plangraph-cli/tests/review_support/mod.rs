@@ -141,7 +141,10 @@ if verb == "route":
 
 if verb == "spawn" and MODE == "pre_launch_refusal":
     # No run record exists: the refusal is plain text on stderr and the exit code.
+    # The diagnostic sits between a warning and a supervisor message, as the Python CLI prints them.
+    print("warning: fresh-tree handoff skipped (supervisor starter replaced)", file=sys.stderr)
     print("harness_not_found opencode /usr/bin:/bin", file=sys.stderr)
+    print("spawn supervisor failed; check card and override reason", file=sys.stderr)
     sys.exit(2)
 
 if verb == "spawn":
@@ -159,7 +162,7 @@ if verb == "spawn":
         reply = f"Found issue in this group.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: REQUEST_CHANGES\n"
     elif MODE == "no_verdict_line":
         reply = f"I read the diff but ran out of budget.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\n"
-    elif MODE == "explicit_request_changes":
+    elif MODE in ("explicit_request_changes", "denied_review_verdict"):
         reply = f"One defect.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: REQUEST_CHANGES\n"
     elif MODE == "diff_only":
         reply = f"Looks fine.\nFILES READ: diff only\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: ACCEPT\n"
@@ -219,7 +222,7 @@ while not (run / "release").exists() and time.monotonic() < deadline:
     rec = {{
         "run_id": run_id,
         "status": "completed",
-        "exit_code": 0,
+        "exit_code": 1 if MODE == "denied_review_verdict" else 0,
         "chosen_leg": {{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY, "harness": "opencode"}},
         "live_log": str(live_log),
         "stdout_tail": "" if MODE == "fenced_pass" else reply,

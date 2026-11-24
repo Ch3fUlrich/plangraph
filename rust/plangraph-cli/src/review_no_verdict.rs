@@ -55,11 +55,13 @@ fn take_lock(dir: &Path) -> Option<LockGuard> {
 }
 
 /// Whether this outcome is a seat that ended without a verdict: it neither passed nor is
-/// still pending, and either the run did not complete cleanly or its answer had no verdict.
+/// still pending, and the run either did not complete or its answer had no verdict. A completed
+/// run with an explicit verdict has one whatever its exit code (a denied-tools OpenCode review
+/// ends exit 1 with a final REQUEST_CHANGES).
 pub fn is_no_verdict(seat: &SeatOutcome) -> bool {
     !seat.passed
         && seat.verdict != Some(SeatVerdict::Pending)
-        && (seat.status != "completed" || seat.exit_code != 0 || seat.verdict.is_none())
+        && (seat.status != "completed" || seat.verdict.is_none())
 }
 
 /// The one booking path of a terminal seat, used by the foreground review and by the deferred
@@ -99,14 +101,20 @@ pub fn note(dir: &Path, run_id: &str, reason: &str, now: i64) -> Option<Value> {
     .ok()?;
     let mut ids: Vec<String> = Vec::new();
     for row in rows(&seats) {
-        let recent = row["ts"].as_i64().is_some_and(|ts| now - ts <= WINDOW_S);
+        // By terminal time, whichever seat was booked first: within the window on either side.
+        let recent = row["ts"]
+            .as_i64()
+            .is_some_and(|ts| (now - ts).abs() <= WINDOW_S);
         let id = row["run_id"].as_str().unwrap_or_default().to_owned();
         if recent && row["reason"] == cause.as_str() && !ids.contains(&id) {
             ids.push(id);
         }
     }
     let alerted = rows(&alerts).iter().any(|row| {
-        row["reason"] == cause.as_str() && row["ts"].as_i64().is_some_and(|ts| now - ts <= WINDOW_S)
+        row["reason"] == cause.as_str()
+            && row["ts"]
+                .as_i64()
+                .is_some_and(|ts| (now - ts).abs() <= WINDOW_S)
     });
     if ids.len() < REPEAT || alerted {
         return None;
@@ -156,6 +164,17 @@ mod tests {
         assert!(note(dir.path(), "run-aa", CAUSE, 2999).is_none());
         assert!(note(dir.path(), "run-bb", CAUSE, 3000).is_none());
         assert!(!dir.path().join("alerts.jsonl").exists());
+    }
+
+    #[test]
+    fn the_window_is_by_terminal_time_whichever_seat_is_booked_first() {
+        let dir = tempfile::tempdir().unwrap();
+        // The later seat is booked first: 2000 s apart is outside the 30 minutes.
+        assert!(note(dir.path(), "run-late", CAUSE, 3000).is_none());
+        assert!(note(dir.path(), "run-early", CAUSE, 1000).is_none());
+        assert!(!dir.path().join("alerts.jsonl").exists());
+        // 1000 s apart in reverse arrival order is a repeat.
+        assert!(note(dir.path(), "run-mid", CAUSE, 2000).is_some());
     }
 
     #[test]

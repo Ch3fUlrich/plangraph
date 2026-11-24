@@ -157,3 +157,28 @@ fn refusal_reason(record: &Value) -> Option<String> {
             .collect(),
     )
 }
+
+/// Reasons the spawner names when it refuses before creating a run, as a line's first word.
+const NAMED_REFUSALS: [&str; 7] = [
+    "harness_not_found",
+    "harness_missing",
+    "prompt_too_large",
+    "stdin_prompt_flag_missing",
+    "client_missing",
+    "not_served_on_host",
+    "missing_material",
+];
+
+/// The cause of a spawn that printed no run record: the first line that begins with a named
+/// refusal, else the last non-empty line of stderr, else of stdout.
+pub(super) fn refusal_cause<'a>(stderr: &'a str, stdout: &'a str) -> Option<&'a str> {
+    let lines = || stderr.lines().chain(stdout.lines()).map(str::trim);
+    lines()
+        .find(|line| {
+            line.split_whitespace()
+                .next()
+                .is_some_and(|word| NAMED_REFUSALS.contains(&word.trim_end_matches(':')))
+        })
+        .or_else(|| stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()))
+        .or_else(|| stdout.lines().rev().map(str::trim).find(|l| !l.is_empty()))
+}

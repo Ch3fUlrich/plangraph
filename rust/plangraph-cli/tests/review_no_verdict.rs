@@ -127,8 +127,13 @@ fn a_genuinely_missing_verdict_is_booked_and_repeats_alert() {
 #[test]
 fn an_explicit_verdict_is_never_booked_as_a_missing_one() {
     let f = fixture();
-    for _ in 0..3 {
-        let line = review_line(&review(&f, "explicit_request_changes", "5"));
+    // exit 0, and exit 1 (a denied-tools OpenCode review ends exit 1 with a final REQUEST_CHANGES)
+    for mode in [
+        "explicit_request_changes",
+        "denied_review_verdict",
+        "denied_review_verdict",
+    ] {
+        let line = review_line(&review(&f, mode, "5"));
         assert!(line.contains("verdict=REQUEST_CHANGES"), "{line}");
     }
     assert!(alerts(&f.state).is_none());
