@@ -91,7 +91,8 @@ fn a_template_instance_reads_its_own_env_file() {
     let dir = units(&[("s@.service", unit)]);
     let home = tempfile::tempdir().unwrap();
     put(home.path(), ".local/bin/tool", "", 0o755);
-    let needs = plan("s@routing.service", dir.path(), None).unwrap();
+    let instance = format!("s{}routing.service", '@');
+    let needs = plan(&instance, dir.path(), None).unwrap();
     assert_eq!(
         missing(&needs, home.path()),
         ["file ~/.config/p/s/routing.env"]
