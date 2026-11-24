@@ -86,3 +86,67 @@ fn attach_locked_or_unreadable_row_marks_incomplete_and_continues() {
     assert!(incomplete);
     assert_eq!(processed, ["run-next"]);
 }
+
+/// A launched review run whose process is proven gone frees its promoted reservation; the
+/// slot must carry the role of the persisted record, or startup keeps it held forever.
+#[cfg(target_os = "linux")]
+#[test]
+fn startup_frees_the_reservation_of_a_proven_gone_review_run_only_under_its_own_role() {
+    use pg_worker_core::{
+        hosts::Role,
+        slots::{ActiveSlot, SlotClass},
+    };
+    let dir = StateDir::new();
+    let group = "/sys/fs/cgroup/user.slice/pg-run-review.scope";
+    let mut record = RunRecord::create(
+        &dir.0,
+        "run-review",
+        "local",
+        json!({"role":"review"}).as_object().unwrap().clone(),
+        Status::Running,
+        1.0,
+    )
+    .unwrap();
+    record.set(
+        "attempts",
+        json!([{"status":"running", "started":1.0,
+            "proc":{"pid":4242, "start_time":77, "group":group, "pgid":4242},
+            "leg":{"leg_key":"leg", "route_key":"route"}}]),
+    );
+    record.save().unwrap();
+    let rows = crate::reconcile_store::inventory(&dir.0).unwrap();
+    assert_eq!(rows[0].role, "review");
+    let slot = |role| ActiveSlot {
+        run_id: "run-review".into(),
+        pid: 4242,
+        start_time: 77,
+        role,
+        class: SlotClass::Other,
+        repo_id: "repo".into(),
+        seat_slot: None,
+        group: Some(group.into()),
+        reservation_mb: 0,
+        created_ms: 1,
+        bound: true,
+    };
+    // A reservation tagged implement does not match the review record: it is never freed.
+    let mut table = slots::SlotTable::default();
+    table.active.push(slot(Role::Implement));
+    assert!(validated_slots(&rows, &table).is_empty());
+    // The promoted review reservation matches, and the startup reclaim frees exactly it.
+    table.active = vec![slot(Role::Review)];
+    let gone = validated_slots(&rows, &table);
+    assert_eq!(gone.len(), 1);
+    slots::with_table(&dir.0, Duration::from_secs(2), |t| *t = table.clone()).unwrap();
+    reclaim_after(
+        &dir.0,
+        Reconciled {
+            root: dir.0.clone(),
+            gone,
+        },
+        1,
+    )
+    .unwrap();
+    let left = slots::with_table(&dir.0, Duration::from_secs(2), |t| t.clone()).unwrap();
+    assert!(left.active.is_empty(), "{left:?}");
+}

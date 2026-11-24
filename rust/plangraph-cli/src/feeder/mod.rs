@@ -237,8 +237,6 @@ pub trait Launch {
     fn allocate_status(&mut self, wanted: &str) -> Result<String, String> {
         Ok(wanted.into())
     }
-    /// Give back a path from [`Self::allocate_status`] whose launch did not start.
-    fn discard_status(&mut self, _path: &str) {}
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String>;
     /// After `key` is claimed: the key of another claimed item (outside `batch`) whose files
     /// overlap `files`. The claimant yields to any such claim, so two hosts claiming at once

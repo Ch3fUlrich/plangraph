@@ -7,3 +7,4 @@ proof (dead owner, a run record with neither a process nor the `launch_started` 
 and unverifiable rows stay held.
 Tickets and reservations carry the run's own role; the daemon refuses to start when the bind cannot be set up.
 The queued run record is written before the ticket and the ticket before the monitor starts.
+A start claims its run directory atomically before anything is written, so a refused start never touches an existing run's record; the queued record names its owning daemon, and restart settles queued records a dead daemon abandoned before their ticket.

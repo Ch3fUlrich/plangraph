@@ -35,6 +35,8 @@ use std::{
 const LOCK_WAIT: Duration = Duration::from_secs(2);
 /// Record field the monitor sets, durably, right before the launcher call.
 pub const LAUNCH_STARTED: &str = "launch_started";
+/// Record field naming the daemon that created a queued record.
+pub const SLOT_OWNER: &str = "slot_owner";
 
 /// The daemon's own identity and the slot every run it starts asks for.
 #[derive(Debug, Clone)]
@@ -56,6 +58,10 @@ pub enum BindError {
     Table(#[from] SlotError),
     #[error("run id already holds a slot")]
     Held,
+    #[error("run id already has a run directory")]
+    Exists,
+    #[error("run directory: {0}")]
+    Dir(String),
 }
 
 pub(super) struct SlotBind {
@@ -79,6 +85,45 @@ impl SlotBind {
     }
     fn owner(&self) -> (u32, u64) {
         (self.cfg.daemon_pid, self.cfg.daemon_start_time)
+    }
+    /// The `{pid, start_time}` the queued record carries, so recovery can tell a start this
+    /// daemon abandoned (and prove it dead) from every other queued record.
+    pub(super) fn owner_value(&self) -> serde_json::Value {
+        let (pid, start_time) = self.owner();
+        serde_json::json!({"pid": pid, "start_time": start_time})
+    }
+    /// Claim `run_id` exclusively before anything of it is written: the run directory is
+    /// created atomically (an existing one belongs to another run or owner and is never
+    /// touched) and no slot of another owner may hold the id. Read-only on the slot table.
+    pub(super) fn claim_run(&self, run_id: &str) -> Result<(), BindError> {
+        let dir = super::record::run_dir(&self.cfg.slots_dir, run_id)
+            .map_err(|e| BindError::Dir(e.to_string()))?;
+        let runs = self.cfg.slots_dir.join("runs");
+        std::fs::create_dir_all(&runs).map_err(|e| BindError::Dir(e.to_string()))?;
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(BindError::Exists)
+            }
+            Err(e) => return Err(BindError::Dir(e.to_string())),
+        }
+        let (pid, start) = self.owner();
+        let held = slots::with_table(&self.cfg.slots_dir, LOCK_WAIT, |table| {
+            table.active.iter().any(|s| s.run_id == run_id)
+                || table
+                    .queued
+                    .iter()
+                    .any(|t| t.run_id == run_id && (t.pid, t.start_time) != (pid, start))
+        });
+        match held {
+            Ok(false) => Ok(()),
+            other => {
+                // Only the empty directory this call created is removed.
+                let _ = std::fs::remove_dir(&dir);
+                other?;
+                Err(BindError::Held)
+            }
+        }
     }
     /// Persist the pending entry of a run that waits in the local queue, under the role of the
     /// run (the role of the run record, which restart reconciliation compares).
@@ -106,6 +151,10 @@ impl SlotBind {
     /// Drop the pending entry of a run that left the queue without a bind.
     pub(super) fn withdraw(&self, run_id: &str) {
         let (pid, start) = self.owner();
+        // An empty directory is a claim that never got a record; a used one stays.
+        if let Ok(dir) = super::record::run_dir(&self.cfg.slots_dir, run_id) {
+            let _ = std::fs::remove_dir(dir);
+        }
         let _ = slots::with_table(&self.cfg.slots_dir, LOCK_WAIT, |table| {
             table
                 .queued
@@ -260,5 +309,51 @@ pub fn release_pre_exec(
     if !freed.is_empty() {
         slots::touch_wake(slots_dir)?;
     }
+    let mut freed = freed;
+    freed.extend(settle_abandoned(slots_dir, live, &never_started));
     Ok(freed)
+}
+
+/// End the queued records of starts a dead daemon abandoned between the record and its ticket:
+/// the record names its owner (`slot_owner`), the owner is dead and nothing of the run started.
+/// Records without an owner, with a live owner or in doubt stay as they are.
+fn settle_abandoned(
+    slots_dir: &Path,
+    live: &impl GroupLiveness,
+    never_started: &impl Fn(&str, u32, u64) -> bool,
+) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(slots_dir.join("runs")) else {
+        return Vec::new();
+    };
+    let mut settled = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(mut record) = RunRecord::read_path(entry.path().join("record.json")) else {
+            continue;
+        };
+        let owner = record.get(SLOT_OWNER).and_then(|o| {
+            Some((
+                u32::try_from(o.get("pid")?.as_u64()?).ok()?,
+                o.get("start_time")?.as_u64()?,
+            ))
+        });
+        let (Some((pid, start)), Some(super::record::Status::Queued)) = (owner, record.status())
+        else {
+            continue;
+        };
+        let run_id = entry.file_name().to_string_lossy().into_owned();
+        if live.process_alive(pid, start) || !never_started(&run_id, pid, start) {
+            continue;
+        }
+        let now = super::finalize::now();
+        record.set("error", serde_json::json!("abandoned before launch"));
+        record.set("reason", serde_json::json!("abandoned before launch"));
+        if record
+            .transition(super::record::Status::Failed, now)
+            .is_ok()
+            && record.save().is_ok()
+        {
+            settled.push(run_id);
+        }
+    }
+    settled
 }

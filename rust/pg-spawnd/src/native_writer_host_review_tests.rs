@@ -232,3 +232,76 @@ fn native_sonnet_pass_requires_reported_tests() {
         assert_eq!(verdict["verdict"], expected, "{verdict}");
     }
 }
+
+/// Two overlapping feeder launches share a review directory. Each native writer record is
+/// saved from its own card; the review rendered from that saved record quotes only the DONE
+/// lines of its own status file.
+#[cfg(unix)]
+#[test]
+fn reviews_rendered_from_saved_writer_records_quote_only_their_own_done_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let review = root.join("review");
+    fs::create_dir_all(&review).unwrap();
+    let launches: Vec<(String, PathBuf, PathBuf)> = ["alpha", "beta"]
+        .iter()
+        .map(|name| {
+            let id = format!("run-{name}");
+            let record_path = root.join(format!("state/runs/{id}/record.json"));
+            fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+            // The path the feeder reserved and handed to this launch; its writer appends here.
+            let status = review.join(format!("status-{name}-1-aaaaaaaa-e100.txt"));
+            fs::write(
+                &status,
+                format!("DONE plangraph:{}-1 {name}0000\n", name.to_uppercase()),
+            )
+            .unwrap();
+            let request = root.join(format!("{name}-request.json"));
+            fs::write(
+                &request,
+                json!({
+                    "record": {"run_id": id, "repo": root, "base_ref": "refs/heads/main",
+                               "tool_path": root.join("no-tools")},
+                    "record_path": record_path,
+                    "card": {"review_dir": review, "writer_status_path": status},
+                    "prompt": "fixture"
+                })
+                .to_string(),
+            )
+            .unwrap();
+            (request.to_string_lossy().into_owned(), record_path, status)
+        })
+        .collect();
+    std::thread::scope(|scope| {
+        for (request, _, _) in &launches {
+            scope.spawn(move || execute(vec![request.clone()]).unwrap());
+        }
+    });
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    for (name, (_, record_path, status)) in ["alpha", "beta"].iter().zip(&launches) {
+        let record = crate::records::read_record_file(record_path)
+            .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+        assert_eq!(record["writer_status_path"], json!(status));
+        let out = std::process::Command::new("python3")
+            .env("PYTHONPATH", &src)
+            .args([
+                "-c",
+                "import json,sys\nfrom plangraph.review.prompt import render_brief\nprint(render_brief('review', {'writer_run': json.loads(sys.argv[1])}))",
+                &record.to_string(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let brief = String::from_utf8(out.stdout).unwrap();
+        let other = if *name == "alpha" { "BETA" } else { "ALPHA" };
+        assert!(
+            brief.contains(&format!("DONE plangraph:{}-1", name.to_uppercase())),
+            "{brief}"
+        );
+        assert!(!brief.contains(other), "{brief}");
+    }
+}

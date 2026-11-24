@@ -132,6 +132,14 @@ impl Admission for Gate {
                 .0;
         }
     }
+    fn precheck(&self, run_id: &str) -> Result<(), BindError> {
+        self.bind
+            .as_ref()
+            .map_or(Ok(()), |bind| bind.claim_run(run_id))
+    }
+    fn owner(&self) -> Option<Value> {
+        self.bind.as_ref().map(|bind| bind.owner_value())
+    }
     fn enqueued(&self, run_id: &str, base: &Map<String, Value>) -> Result<(), BindError> {
         match &self.bind {
             Some(bind) => {
