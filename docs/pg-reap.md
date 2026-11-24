@@ -33,6 +33,10 @@ hold no whitespace or `; & | ( ) < >`, and for the literal value of a path-value
 `runs/<run>/worktree`. Shell text never reaches the report. An unreadable unit directory protects
 every worktree.
 
+A pin is not a run: `live-run` counts only trees owned by an unfinished run record (its checkout is the
+tree or inside it; a run in an ancestor directory owns nothing below it), and pinned trees (and the
+reserved `plangraph-md-sync` / `live-*` names) report `pinned`. Both protect.
+
 `pg-worktree-sweep --repo REPO --root WORKTREES --pins PINS.json` defaults to dry
 run. Repeat `--root` for each worktree root, including the state `runs` directory.
 `--apply` removes only clean merged candidates using the shared pg-reap protection

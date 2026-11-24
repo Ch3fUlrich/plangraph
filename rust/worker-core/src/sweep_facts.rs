@@ -250,8 +250,10 @@ pub fn facts(
                 .branches
                 .iter()
                 .any(|b| b == branch || branch.strip_prefix("refs/heads/") == Some(b.as_str())),
-        live_run: protection.guards.protects(&canonical)
-            || protection.guards.protects(path)
+        live_run: protection.guards.live_run_owns(&canonical)
+            || protection.guards.live_run_owns(path),
+        pinned: protection.guards.pin_protects(&canonical)
+            || protection.guards.pin_protects(path)
             || tree
                 .branch
                 .as_ref()

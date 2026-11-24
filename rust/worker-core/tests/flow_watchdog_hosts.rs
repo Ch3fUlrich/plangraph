@@ -1,6 +1,11 @@
 use std::{fs, process::Command};
 
 fn active(host: serde_json::Value) -> String {
+    run(host).0
+}
+
+/// The `active` file and the queued alert messages of one watchdog pass.
+fn run(host: serde_json::Value) -> (String, Vec<String>) {
     let dir = tempfile::tempdir().unwrap();
     let snapshot = serde_json::json!({"pace":66,"budget":66,"ci_failed":0,
         "ci_total":10,"infra_failed":0,"review_age_hours":0,"review_rounds":0,
@@ -15,7 +20,18 @@ fn active(host: serde_json::Value) -> String {
         .output()
         .unwrap();
     assert!(output.status.success(), "{:?}", output);
-    fs::read_to_string(dir.path().join("active")).unwrap_or_default()
+    let queue: Vec<serde_json::Value> = fs::read(dir.path().join("queue.json"))
+        .ok()
+        .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+        .unwrap_or_default();
+    let messages = queue
+        .iter()
+        .map(|event| event["message"].as_str().unwrap().to_owned())
+        .collect();
+    (
+        fs::read_to_string(dir.path().join("active")).unwrap_or_default(),
+        messages,
+    )
 }
 
 #[test]
@@ -68,4 +84,39 @@ fn cat_hook_test_crates_are_unix_only() {
     ] {
         assert!(source.starts_with("#![cfg(unix)]"));
     }
+}
+
+#[test]
+fn host_disk_alert_at_86_percent_names_the_five_largest_consumers_once() {
+    let consumers: Vec<_> = (1..=7u64)
+        .map(|n| serde_json::json!({"path": format!("/var/c{n}"), "bytes": n * 1000}))
+        .collect();
+    let host = serde_json::json!({"host":"fixture","tmp_used_percent":0,
+        "root_used_percent":86,"top_consumers":consumers,"checkout_head":"a",
+        "origin_main_head":"a","behind_commits":0,"age_hours":100});
+    let (active, messages) = run(host.clone());
+    assert_eq!(active.matches("host-disk").count(), 1, "{active}");
+    assert!(
+        !active.contains("c7"),
+        "the dedupe key must not move with sizes: {active}"
+    );
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let message = &messages[0];
+    for kept in [
+        "/var/c7=7000",
+        "/var/c6=6000",
+        "/var/c5=5000",
+        "/var/c4=4000",
+        "/var/c3=3000",
+    ] {
+        assert!(message.contains(kept), "{message}");
+    }
+    assert!(
+        !message.contains("/var/c2=") && !message.contains("/var/c1="),
+        "{message}"
+    );
+    assert!(
+        message.find("/var/c7").unwrap() < message.find("/var/c6").unwrap(),
+        "{message}"
+    );
 }

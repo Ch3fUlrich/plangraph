@@ -171,10 +171,15 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
                      f"Write this exact standalone line: TESTS: none: sandbox unavailable on {host}"])
         return {"event": "sandbox_unavailable", "host": host, "python_job_id": job_id}
     target = Path(review_target).resolve() if review_target else None
+    slot = None
+    if target is None:
+        from plangraph.spawner.host_ready import review_cargo_slot
+        slot = review_cargo_slot(job_id).resolve()
     scratch = Path(mkdtemp(prefix="plangraph-claude-review-",
-                           dir=target.parent if target else None)).resolve()
-    run_dirs[job_id] = scratch
-    target = target or (scratch / "cargo-target")
+                           dir=target.parent if target else slot)).resolve()
+    # Removing the run directory removes the seat's slot and its build with it.
+    run_dirs[job_id] = scratch if slot is None else slot
+    target = target or (slot / "target")
     target.mkdir(exist_ok=True)
     env.update(CARGO_TARGET_DIR=str(target), CARGO_BUILD_BUILD_DIR=str(target),
                CLAUDE_CODE_TMPDIR=str(scratch),
@@ -194,6 +199,8 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     if config := env.get("CLAUDE_CONFIG_DIR"):
         credentials.append(str(Path(config).resolve()))
     writable = [str(scratch)]
+    if slot is not None:
+        writable = [str(slot)]  # the scratch directory and the build lock sit inside the slot
     if review_target:
         # The service's private build directory also holds the fast-checks pool lease.
         private_build = target.parent == checkout.parent / "build"
