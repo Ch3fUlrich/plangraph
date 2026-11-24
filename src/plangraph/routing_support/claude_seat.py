@@ -17,6 +17,8 @@ from importlib.resources import files
 from pathlib import Path
 from tempfile import mkdtemp
 
+from .review_toolchain import pytest_bin_dir
+
 READ_TOOLS = "Read,Grep,Glob"
 REVIEW_TOOLS = READ_TOOLS + ",Bash(python3 -m pytest -q *)"
 REVIEW_DENIED = ("Write,Edit,Bash(python3 -m pytest -q -*),Bash(python3 -m pytest -q * -*),"
@@ -182,10 +184,8 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
                PYTEST_ADDOPTS="-p no:cacheprovider", CARGO_NET_OFFLINE="true",
                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     # The installed service's venv is outside the disposable review clone.
-    for bin_dir in (Path(sys.prefix) / "bin", Path(__file__).resolve().parents[3] / ".venv/bin"):
-        if (bin_dir / "pytest").is_file():
-            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", os.defpath)
-            break
+    if bin_dir := pytest_bin_dir():
+        env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", os.defpath)
     checkout = Path(worktree or Path.cwd()).resolve()
     hook = shlex.join([sys.executable, "-I", str(Path(__file__).resolve()),
                        "--review-bash", str(checkout)])
