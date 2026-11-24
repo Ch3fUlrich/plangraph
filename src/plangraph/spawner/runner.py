@@ -880,7 +880,6 @@ def spawn_service(*args, **kwargs):
                     record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                 super()._save(record)
             if terminal:
-                from .run_watchdog import note_no_verdict; note_no_verdict(self.state, record)
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')

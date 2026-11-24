@@ -16,6 +16,8 @@ use std::process::Command;
 
 #[path = "review_seat_completion.rs"]
 mod completion;
+#[path = "review_no_verdict.rs"]
+mod no_verdict;
 #[path = "review_outcome.rs"]
 mod outcome;
 use outcome::evaluate_seat_record;
@@ -50,6 +52,8 @@ pub struct SeatOutcome {
     pub test_gaming: TestGaming,
     pub paths_summary: String,
     pub passed: bool,
+    /// Why a seat ended without a pass, from the spawner record (refusal, error, skip or seat coverage).
+    pub reason: Option<String>,
 }
 
 pub fn usage() -> &'static str {
@@ -598,6 +602,9 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
             s.files_read.as_deref().unwrap_or("none"),
             s.paths_summary
         );
+        if let Some(reason) = &s.reason {
+            println!("SEAT {}/{} reason={reason:?}", s.index, s.total);
+        }
     }
 
     if args.dry_run {
@@ -607,6 +614,19 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
             outcomes.len()
         );
         return Ok(0);
+    }
+
+    // Seats that ended without a verdict feed the repeat-cause alert (2 seats, one cause, 30 min).
+    if let Some(state) = state_dir.as_deref() {
+        let now = chrono::Utc::now().timestamp();
+        for seat in outcomes
+            .iter()
+            .filter(|s| !s.passed && s.verdict != Some(SeatVerdict::Pending))
+        {
+            if let Some(reason) = seat.reason.as_deref() {
+                no_verdict::note(state, &seat.run_id, reason, now);
+            }
+        }
     }
 
     let has_pending = outcomes
@@ -654,8 +674,15 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
         );
         Ok(0)
     } else {
+        // A seat that ended without a verdict names its cause here, so the caller need not read run files.
+        let cause = outcomes
+            .iter()
+            .find(|s| s.reason.is_some())
+            .and_then(|s| s.reason.as_deref())
+            .map(|reason| format!(" reason={reason:?}"))
+            .unwrap_or_default();
         println!(
-            "REVIEW head={} seats={} verdict=REQUEST_CHANGES approval=none",
+            "REVIEW head={} seats={} verdict=REQUEST_CHANGES approval=none{cause}",
             resolved.head_sha,
             outcomes.len()
         );
