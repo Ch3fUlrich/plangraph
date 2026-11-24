@@ -11,6 +11,7 @@ a root system service and timer.
 | pg-snapshot-pull.timer | timer driving pg-snapshot-pull.service every 5 min | reader host |
 | pg-host-link.service + .timer | Tailscale link to the coordinator | worker host |
 | pg-host-ssh-link@.service + @.timer | SSH link and outage evidence for each configured worker | coordinator |
+| pg-quota-facts@.service + @.timer | `plangraph quota --push` over SSH: the quota snapshot to each worker's `~/.config/plangraph/quota-facts.json` every 5 min, so the feeder there never reads null quota (`quota_stale` after 15 min); per worker `systemctl --user enable --now pg-quota-facts@<worker-id>.timer`, same `host-links/<worker-id>.env` as the SSH link | coordinator |
 | pg-ci-watch.service + .timer | Rust CI failure scan and keeper fix tasks every 5 min; see [CI watch](../../docs/ci-watch.md) | CI watcher host |
 | pg-merge-close.service + .timer | `plangraph merge-close`: close every open, claimed or in-review keeper item a merge into main names by `Plan-Item`, every 10 min (the land step calls it too); needs `PG_URL` and a `PG_TOKEN_FILE` of role `system`; `plangraph merge-close --count` prints the merged-but-not-done count; see [Keeper](../../docs/KEEPER.md) | keeper host |
 | pg-reconcile-merged.service + .timer | Hourly proposal-only dry run using a system Keeper token. Routing reads the `reconcile-merged` batch line from the service journal and the latest `watch.json` in the unit's state directory. | keeper host |

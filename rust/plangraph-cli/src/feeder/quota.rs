@@ -162,6 +162,45 @@ fn export(rows: &Value, path: &Path, now: i64) -> std::io::Result<()> {
     std::fs::rename(tmp, path)
 }
 
+/// Install `doc` as the snapshot file of the host at SSH `destination` (the destination the
+/// host-link units already use), by atomic replace on that host. `ssh` is the client program.
+fn push(doc: &str, destination: &str, ssh: &str) -> Result<(), String> {
+    use std::io::Write;
+    if destination.is_empty()
+        || destination.starts_with('-')
+        || destination
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err("quota push: invalid SSH destination".into());
+    }
+    let remote = "umask 077 && mkdir -p ~/.config/plangraph && cat > ~/.config/plangraph/quota-facts.json.tmp && mv ~/.config/plangraph/quota-facts.json.tmp ~/.config/plangraph/quota-facts.json";
+    let mut child = std::process::Command::new(ssh)
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "--",
+            destination,
+            remote,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("quota push: cannot start {ssh}: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or("quota push: no stdin")?
+        .write_all(doc.as_bytes())
+        .map_err(|e| format!("quota push: write failed: {e}"))?;
+    let status = child.wait().map_err(|e| format!("quota push: {e}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("quota push: {ssh} exited with {status}"))
+}
+
 /// Print the most recent available observation for each provider, account and window.
 pub fn run_status(env: &Env, args: &[String]) -> i32 {
     let mut effective = env.clone();
@@ -185,8 +224,28 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
             }
             return 0;
         }
+        [flag, destination] if flag == "--push" => {
+            let rows = std::env::current_dir()
+                .ok()
+                .and_then(|repo| quota_snapshots(&effective, &repo).ok())
+                .filter(|rows| rows.is_array());
+            let Some(rows) = rows else {
+                eprintln!("quota push: reader unavailable");
+                return 2;
+            };
+            let doc = json!({"observed_at":chrono::Utc::now().timestamp(),"rows":rows});
+            return match push(&doc.to_string(), destination, "ssh") {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("{e}");
+                    2
+                }
+            };
+        }
         _ => {
-            eprintln!("usage: plangraph quota [--db PATH | --export PATH]");
+            eprintln!(
+                "usage: plangraph quota [--db PATH | --export PATH | --push SSH_DESTINATION]"
+            );
             return 2;
         }
     }
@@ -294,6 +353,36 @@ mod tests {
             rows_for_host(None, Some(50.0), &file, now, 900).unwrap(),
             None
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn push_streams_the_snapshot_to_the_remote_command_and_refuses_unsafe_destinations() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let out = d.path().join("received");
+        let args = d.path().join("args");
+        // A stand-in ssh: records its arguments and keeps what arrives on stdin.
+        let ssh = d.path().join("ssh");
+        std::fs::write(
+            &ssh,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\ncat > {}\n",
+                args.display(),
+                out.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let doc = json!({"observed_at":1,"rows":[]}).to_string();
+        push(&doc, "worker.example", ssh.to_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), doc);
+        let recorded = std::fs::read_to_string(&args).unwrap();
+        assert!(recorded.contains("BatchMode=yes") && recorded.contains("worker.example"));
+        assert!(recorded.contains("quota-facts.json.tmp && mv"));
+        for bad in ["", "-oProxyCommand=x", "a b", "a\nb"] {
+            assert!(push(&doc, bad, ssh.to_str().unwrap()).is_err(), "{bad:?}");
+        }
+        assert!(push(&doc, "worker.example", "/nonexistent/ssh").is_err());
     }
     #[test]
     fn export_writes_the_snapshot_the_center_file_reader_accepts() {

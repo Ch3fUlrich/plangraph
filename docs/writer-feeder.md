@@ -203,8 +203,10 @@ A host with no codex observation of its own (everything but the quota center) an
 quota in its supplied facts reads the center's snapshot file instead,
 `~/.config/plangraph/quota-facts.json` (`PLANGRAPH_QUOTA_FACTS` selects another path):
 `{"observed_at": <unix seconds>, "rows": [...]}` with the reader's own row format.
-`plangraph quota --export PATH` writes it atomically on the center; the host-sync timer
-copies it to the other hosts. A missing or unreadable file, or one older than
+`plangraph quota --export PATH` writes it atomically on the center. `plangraph quota --push
+SSH_DESTINATION` installs it on a worker over SSH; the coordinator's
+`pg-quota-facts@<worker-id>.timer` (`deploy/systemd`) runs that every 5 minutes with the
+worker's `HOST_LINK_SSH`. A missing or unreadable file, or one older than
 `quota_facts_max_age_seconds` (default 900), refuses the tick as `quota_stale` and names
 the snapshot's age; quota is never null on such a host.
 

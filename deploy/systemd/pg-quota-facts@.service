@@ -1,0 +1,14 @@
+[Unit]
+Description=Push the quota snapshot to worker %i
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+# The same per-worker file the SSH link unit reads (HOST_LINK_SSH), and the gateway
+# database setting of the quota alarms (QUOTA_SNAPSHOT_DB).
+EnvironmentFile=%h/.config/plangraph/host-links/%i.env
+EnvironmentFile=-%h/.config/plangraph/quota-alarms.env
+ExecStart=%h/.local/bin/plangraph quota --push ${HOST_LINK_SSH}
+TimeoutStartSec=60s
+UMask=0077
+NoNewPrivileges=true

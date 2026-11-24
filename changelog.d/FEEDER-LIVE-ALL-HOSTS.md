@@ -5,3 +5,4 @@ Live fleet-launch writer sessions (hand lanes) count as running writers on their
 plangraph feed --once --dry-run lists every batch the tick would start (would_start, slots, stopped), not one decision.
 On WSL the feeder takes free RAM as the lower of WSL MemAvailable and Windows' free physical memory minus a Windows floor (read through powershell.exe interop, cached for one facts window); an unreadable Windows side admits nothing and says why, and the decision line shows both numbers.
 Feeder host admission refuses new writers while /proc/pressure/cpu some avg300 is above cpu_pressure_max_percent (default 50), naming the value; load1 only paces a host that has no PSI file.
+plangraph quota --push SSH_DESTINATION delivers the quota snapshot to a worker; the pg-quota-facts@ timer runs it every 5 minutes per worker.
