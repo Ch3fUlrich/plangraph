@@ -655,6 +655,7 @@ def build_parser():
 
 def _main(root=None):
     args = build_parser().parse_args()
+    _RUN_MODE[:] = [args.run]
     if root is None:
         root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parents[1]
     else:
@@ -776,17 +777,21 @@ def _main(root=None):
     return 0
 
 
+_RUN_MODE = []
+
+
 def _wants_run():
-    """Whether argv asks for `--run`, by the parser's own rules (`--ru` is an accepted abbreviation)."""
-    try:
-        return build_parser().parse_known_args()[0].run
-    except SystemExit:
-        # A parse error: the only run spellings argparse can have accepted are the abbreviations.
-        return any(len(arg) >= 4 and "--run".startswith(arg) for arg in sys.argv[1:])
+    """Whether this invocation is a `--run`: the answer of the one parse `_main` made; only when
+    that parse itself failed (nothing was recorded) are the argv tokens read, never parsed again
+    (a second parse would print the usage or help text a second time)."""
+    if _RUN_MODE:
+        return _RUN_MODE[0]
+    return any(len(arg) >= 4 and "--run".startswith(arg) for arg in sys.argv[1:])
 
 
 def main(root=None):
     """Every `--run` ends with one AFFECTED line, also when the selection is refused before a batch runs."""
+    _RUN_MODE.clear()
     return with_result_line(lambda: _main(root), _wants_run)
 
 

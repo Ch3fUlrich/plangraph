@@ -453,6 +453,11 @@ def test_the_abbreviated_run_flag_and_operational_errors_end_with_a_result_line(
     ambiguous = subprocess.run([sys.executable, str(TOOL), "--ru"], cwd=fixture.tree, env=fixture.env,
                                capture_output=True, text=True, timeout=300)
     assert last_line(ambiguous) == "AFFECTED rc=2 batches=0 failed=1", ambiguous.stdout
+    # One diagnostic, not one per parse: a usage error and --help each print their text once.
+    assert short.stderr.count("usage:") == 0 and ambiguous.stderr.count("usage:") == 1, ambiguous.stderr
+    helped = subprocess.run([sys.executable, str(TOOL), "--help"], cwd=fixture.tree, env=fixture.env,
+                            capture_output=True, text=True, timeout=300)
+    assert helped.returncode == 0 and helped.stdout.count("usage:") == 1 and "AFFECTED" not in helped.stdout
     # An operational error (no scratch directory) is nonzero and says so, then still raises.
     tool = load_tool()
 
