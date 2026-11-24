@@ -27,6 +27,7 @@ import re
 from . import auth, context_sources, timing
 from .coverage import writer_families
 from .errors import Refused
+from .evidence import has_live_clause, live_evidence_missing
 from .evidence_types import Result, as_epoch, valid_commit_ref
 from .store_runs import go_key_scope
 from .schema import RISK_TAGS
@@ -542,6 +543,8 @@ class WaiverMixin:
             if token is not None and not waiver_only and project != item["project"] and revision is None:
                 changes |= self._merged_go_deploy_changes(item, head)
             pending = self._deploy_pending(item, changes, token)
+            if live_evidence_missing(item, self._evidence(key)):
+                pending = [*pending, "live_evidence_missing"]
             if token is not None and not self._deploy_scan_current(item, token):
                 raise Refused("conflict", "merged_on_default_changed")
             if pending:
@@ -650,11 +653,11 @@ class WaiverMixin:
             result["deployment_pending"] = {
                 "missing": missing, "merged_at": earliest[1] if earliest else None,
                 "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}
-        if pending:
+        if missing:
+            # A shipped unit without deploy proof, or a Live: clause without live evidence, holds the item.
             if apply:
-                self._deploy_pending_result(item, pending, now)
+                self._deploy_pending_result(item, missing, now)
             return result
-        # Free-form Live criteria are reported alongside a close. Only shipped units gate it.
         witnessed, flags = self._auto_seats(pinned, proofs, now, require_seats) if seated else ([], None)
         landing = self._landing_evidence(pinned, proofs, now)
         gaps = {"landing_flags": landing["flags"]} if landing["flags"] else {}
@@ -688,15 +691,12 @@ class WaiverMixin:
                     **self._flags_of(flags), **gaps}
 
     def _live_evidence_missing(self, item, proofs):
-        criteria = item.get("done_criteria") or ""
-        if not re.search(r"(?:^|[.!?;]\s+|\n\s*)Live:\s*\S", criteria):
+        if not has_live_clause(item):
             return False
         stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
         if any(stamp is None for stamp in stamps):
             return True
-        last_merge = max(stamps)
-        return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
-                       and (as_epoch(row["at"]) or 0) >= last_merge for row in self._evidence(item["key"]))
+        return live_evidence_missing(item, self._evidence(item["key"]), max(stamps))
 
     def _merged_auto_proofs(self, item):
         """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
