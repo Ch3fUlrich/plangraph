@@ -21,6 +21,7 @@ time.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -159,7 +160,10 @@ def findings(text, idx, limit=600):
     return (after or "\n".join(lines[:idx]).strip())[:limit]
 
 def _process_diagnostics(seat_dir, text, evidence, cwd=None):
-    """Classify findings against the seat's saved final prompt and its dispatched diff scope."""
+    """Classify findings against the seat's saved final prompt and its dispatched diff scope.
+
+    The saved prompt counts only when its digest is the serving attempt's `prompt_sha256`;
+    any other prompt text suppresses nothing (fail closed)."""
     try:
         from plangraph.review import verdict as classifier
     except ImportError:  # run from a checkout without an installed package
@@ -169,8 +173,10 @@ def _process_diagnostics(seat_dir, text, evidence, cwd=None):
         prompt = (seat_dir / "prompt.txt").read_text("utf-8")
     except (OSError, ValueError):
         prompt = ""
+    if hashlib.sha256(prompt.encode("utf-8")).hexdigest() != str(evidence.get("prompt_sha256") or "").lower():
+        prompt = ""
     found = classifier.classify_findings(
-        text, prompt=prompt, changed_paths=classifier.diff_paths(prompt, cwd))
+        text, prompt=prompt, changed_paths=classifier.diff_paths(prompt, cwd) if prompt else None)
     return {"lines": list(found.process), "blocking": found.blocking,
             "prompt_sha256": evidence.get("prompt_sha256")}
 
@@ -421,14 +427,18 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
         print("seat_verdict: no parseable VERDICT line", file=sys.stderr)
         return EXIT_NO_VERDICT
     process = _process_diagnostics(args.seat_dir, text, evidence,
-                                  identity.get("cwd") if isinstance(identity.get("cwd"), str) else None)
+                                   identity.get("cwd") if isinstance(identity.get("cwd"), str) else None)
     if process["lines"]:
         _save_process(args.seat_dir, args.key, evidence, process)
-        if ok is False and not process["blocking"]:
+        if not process["blocking"]:
+            # A verdict given under a defective brief is held, accept or fix alike: nothing is
+            # posted and a fresh passing review on the same head releases it.
             print(json.dumps({"process": process}, indent=2) if args.dry_run else
-                  "seat_verdict: only process findings about the review prompt; not posted "
+                  "seat_verdict: process findings about the review prompt; verdict held, not posted "
                   f"(see {args.seat_dir / 'process.json'})", file=sys.stdout if args.dry_run else sys.stderr)
             return EXIT_PROCESS
+        # An ACCEPT that still lists a HIGH or MED finding of the head never posts as a pass.
+        ok = False if process["blocking"] else ok
     if ok and re.match(r"claude-sonnet-5-5(?:$|[-@])", str(model).rsplit("/", 1)[-1],
                        re.I) and not _reported_tests(text):
         print("seat_verdict: pass refused (Sonnet review tests unavailable)", file=sys.stderr)

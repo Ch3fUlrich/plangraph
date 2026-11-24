@@ -325,12 +325,27 @@ def diff_paths(prompt: str, cwd: str | None = None) -> set[str] | None:
     return paths or None
 
 
-def _names_process_file(line: str) -> str | None:
-    for token in re.split(r"[\s`'\"(),]+", line):
-        path = token.partition(":")[0]
-        if any(path == name or path.endswith("/" + name) for name in PROCESS_PATHS):
+# Words by which a PROCESS diagnostic names the context field it reports as empty.
+_FIELD_WORDS = {
+    "public_symbols": re.compile(r"\bsymbols?\b", re.I),
+    "callers": re.compile(r"\bcallers?\b", re.I),
+    "test_output_paths": re.compile(r"\btest[- ]output|\boutput paths?\b|\btest logs?\b", re.I),
+}
+
+
+def _primary_path(rest: str) -> str | None:
+    """The file of the finding itself: its first token, not a path cited in the advice."""
+    token = rest.strip().lstrip("`'\"(").split(None, 1)[0] if rest.strip() else ""
+    path = token.strip("`'\",;)").partition(":")[0]
+    for name in PROCESS_PATHS:
+        if path == name or path.endswith("/" + name):
             return path
     return None
+
+
+def _names_defect(rest: str, defects: list[str]) -> bool:
+    """The finding names at least one context field the emitted prompt really lacks."""
+    return any(_FIELD_WORDS[field].search(rest) for field in defects)
 
 
 def classify_findings(text: str, *, prompt: str = "",
@@ -344,14 +359,15 @@ def classify_findings(text: str, *, prompt: str = "",
 
     counts = {"high": 0, "med": 0, "low": 0}
     process: list[str] = []
-    verified = bool(prompt) and bool(item_context_defects(prompt)) and changed_paths is not None
+    defects = item_context_defects(prompt) if prompt else []
+    verified = bool(defects) and changed_paths is not None
     for raw in _unquoted_lines(text):
         found = _FINDING_LINE.match(raw)
         if not found:
             continue
         kind = _SEVERITY[found.group(1)]
-        path = _names_process_file(found.group(2))
-        about_prompt = (path is not None and verified
+        path = _primary_path(found.group(2))
+        about_prompt = (path is not None and verified and _names_defect(found.group(2), defects)
                         and not any(c == name or c.endswith("/" + name) or name.endswith("/" + c)
                                     for c in changed_paths for name in (path,)))
         if kind == "process":

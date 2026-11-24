@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 from pathlib import Path
 from runpy import run_path
@@ -137,12 +138,15 @@ def item_context_defects(prompt: str) -> list[str]:
 
     The block of a prompt without one counts as wholly unrendered.
     """
-    _, marker, block = prompt.rpartition("=== ITEM CONTEXT")
+    heading = re.search(r"^=== ITEM CONTEXT[ \t]*$", prompt, re.M)
+    block = prompt[heading.end():] if heading else ""
+    # The rendered block ends at the next section heading; the first line of each label counts.
+    block = re.split(r"^=== ", block, maxsplit=1, flags=re.M)[0]
     found: dict[str, str] = {}
-    for line in block.splitlines() if marker else ():
+    for line in block.splitlines():
         label, sep, value = line.partition(":")
         if sep and label in ITEM_CONTEXT_FIELDS.values():
-            found[label] = value
+            found.setdefault(label, value)
     return [field for field, label in ITEM_CONTEXT_FIELDS.items()
             if _unrendered(found.get(label))]
 

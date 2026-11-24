@@ -58,6 +58,10 @@ fn skipped_items(brief: &str, log: &str) -> Vec<String> {
     skipped.into_values().collect()
 }
 
+/// `git grep` found no line: exit status 1 with both streams empty, unlike a real failure.
+pub(super) fn no_match(error: &str) -> bool {
+    error == "command failed (exit status: 1):\nstdout: \nstderr: "
+}
 impl Host {
     fn review_delta_base<'a>(
         &self,
@@ -185,7 +189,7 @@ impl Host {
     /// Item-context evidence of the versioned review brief, from the writer brief and the
     /// exact diff: item keys, whole done criteria, invariants, both SHAs, the public symbols
     /// the diff adds with their first callers, and the exact-head check and session logs.
-    fn brief_context(&self, base: &str, head: &str) -> Value {
+    pub(super) fn brief_context(&self, base: &str, head: &str) -> Value {
         let mut context = json!({"base_sha": base, "head_sha": head});
         let keys = context::item_keys(&self.brief);
         if !keys.is_empty() {
@@ -200,10 +204,15 @@ impl Host {
         // A failed git read leaves the fields unset, which the strict renderer refuses by
         // name; a search that ran and found nothing is an explicit verified-empty value.
         if let Ok(diff) = self.git(&["diff", "-U0", base, head]) {
+            let read_failed = std::cell::Cell::new(false);
             let symbols = context::changed_symbols(&diff, &|path| {
-                self.git(&["show", &format!("{head}:{path}")]).ok()
+                let shown = self.git(&["show", &format!("{head}:{path}")]);
+                read_failed.set(read_failed.get() || shown.is_err());
+                shown.ok()
             });
-            if symbols.is_empty() {
+            if read_failed.get() {
+                // A changed file that cannot be read says nothing about its symbols.
+            } else if symbols.is_empty() {
                 context["public_symbols"] =
                     json!("none (verified empty: no public symbol added or changed in base..head)");
                 context["callers"] =
@@ -212,35 +221,39 @@ impl Host {
                 let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
                 context["public_symbols"] = json!(names.join(", "));
                 let prefix = format!("{head}:");
-                let callers: Vec<String> = symbols
-                    .iter()
-                    .filter_map(|symbol| {
-                        // Searched at the pinned head, not the working tree; no hit is exit 1.
-                        let grep = self
-                            .git(&[
-                                "grep",
-                                "-n",
-                                "-w",
-                                "-e",
-                                &symbol.name,
-                                head,
-                                "--",
-                                "*.rs",
-                                "*.py",
-                            ])
-                            .unwrap_or_default()
-                            .lines()
-                            .map(|line| line.strip_prefix(&prefix).unwrap_or(line))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        context::callers_line(symbol, &grep)
-                    })
-                    .collect();
-                context["callers"] = if callers.is_empty() {
-                    json!("none (verified empty: no caller of the changed public symbols at head)")
-                } else {
-                    json!(callers.join("\n"))
-                };
+                let mut callers = Vec::new();
+                let mut search_failed = false;
+                for symbol in &symbols {
+                    // Searched at the pinned head, not the working tree.
+                    match self.git(&[
+                        "grep",
+                        "-n",
+                        "-w",
+                        "-e",
+                        &symbol.name,
+                        head,
+                        "--",
+                        "*.rs",
+                        "*.py",
+                    ]) {
+                        Ok(out) => {
+                            let grep: Vec<&str> = out
+                                .lines()
+                                .map(|line| line.strip_prefix(&prefix).unwrap_or(line))
+                                .collect();
+                            callers.extend(context::callers_line(symbol, &grep.join("\n")));
+                        }
+                        Err(e) if no_match(&e) => {}
+                        Err(_) => search_failed = true,
+                    }
+                }
+                if !search_failed {
+                    context["callers"] = if callers.is_empty() {
+                        json!("none (verified empty: no caller of the changed public symbols at head)")
+                    } else {
+                        json!(callers.join("\n"))
+                    };
+                }
             }
         }
         let mut logs = Vec::new();
