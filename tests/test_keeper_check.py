@@ -288,3 +288,17 @@ def test_check_text_and_strict_report_model_pin(world, tmp_path, monkeypatch, ca
     ])
     assert run_main(world, tmp_path, monkeypatch, args) == code
     assert "NAMED-REVIEW-MODEL demo:A done_criteria gpt-6.2-sol" in capsys.readouterr().out.splitlines()
+
+
+def test_one_directory_registered_under_two_names_is_listed_once(world, tmp_path, capsys):
+    """LE-MERGE-CLOSE-SAME-REPO-REGISTERED-TWICE: check names the duplicate registration and reads the repo once."""
+    create(world, defn("A", []))
+    repo, shas = _repo(tmp_path, ["demo:A"])
+    repos = {"demo": str(repo), "decisions": str(repo), "alias": {"path": str(repo), "ref": "main"},
+             "invalid": {"path": str(repo), "ref": "bad ref"}}
+    assert run_check(world, repos) == 0
+    out = capsys.readouterr().out
+    assert out.count("MERGED-OPEN demo:A") == 1
+    assert f"DUPLICATE-REPO {repo.resolve()} alias, decisions, demo, invalid" in out
+    assert run_check(world, {"demo": str(repo)}, json_mode=True) == 0
+    assert json.loads(capsys.readouterr().out)["duplicate_repos"] == []

@@ -8,7 +8,9 @@ transaction/authorisation core.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import re
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -16,7 +18,7 @@ from .. import views
 from . import events
 from .errors import Refused
 from .evidence_floor import event_bases, ref_head
-from .evidence_types import Context, valid_commit_ref
+from .evidence_types import Context, repo_identity, valid_commit_ref
 from .item_fixes import ErrorRecordVerifier, check_error_ref
 
 __all__ = ["SupportMixin", "iso", "parse_iso"]
@@ -60,8 +62,76 @@ def _json_dict(value):
     return parsed if isinstance(parsed, dict) else {}
 
 
+#: A decision row that refuses or cancels the work vouches for no merge, even when it names the sha.
+_REFUSAL_ROW = re.compile(r"\bno[- ]go\b|\bcancel(?:l?ed)?\b|\brevert(?:ed)?\b", re.I)
+
+
 class SupportMixin:
     """Row hydration, event append and evidence-verification helpers."""
+
+    # ------------------------------------------------ merge-close helpers
+    def _one_name_per_repository(self, names):
+        """*names* with each repository (resolved path and ref) kept once, under its first name.
+
+        keeper.json can register one directory under several names; the commits of
+        such a directory are one candidate, not an ambiguity.
+        """
+        git, seen, kept = self._adapter("git"), set(), []
+        for name in names:
+            path = git.repo_path(name) if callable(getattr(git, "repo_path", None)) else None
+            ref = git.repo_ref(name) if callable(getattr(git, "repo_ref", None)) else "main"
+            ident = repo_identity(path, ref) if path else (name, None)
+            if ident not in seen:
+                seen.add(ident)
+                kept.append(name)
+        return kept
+
+    def _lane_merge_decision(self, item, merge, now):
+        """The D-id of a pre-PR lane merge: named in its subject, and its row names this merge sha and the item.
+
+        ``None`` when the subject names no decision (the merge has no proof at all);
+        a refusal in the ``lane_merge_unproven`` class when a named row does not vouch for it.
+        """
+        sha, subject = merge.get("sha"), str(merge.get("subject") or "")
+        ids = list(dict.fromkeys(re.findall(r"\((D-[0-9]+)(?![\w-])", subject)))
+        if not ids or not valid_commit_ref(sha):
+            return None
+        from .store_waiver import _names_item as names_item  # circular at import time
+        # A frozen close reads the rows the warm scan captured (none captured: nothing vouches);
+        # any other close reads the document once.
+        frozen = self.__dict__.get("_frozen_lanes")
+        texts = ((self.__dict__.get("_landing_decisions") or {}).get("texts") or {}) if frozen else {}
+        with contextlib.nullcontext() if frozen else self._decisions_snapshot(item, now):
+            for did in ids:
+                if frozen:
+                    text, known = texts.get(did), did in texts
+                else:
+                    decisions = self._ctx(item, now).decisions
+                    try:
+                        text = decisions.text(did) if decisions.has(did) else None
+                    except Exception:  # noqa: BLE001 - an unreadable row never vouches
+                        text = None
+                    known = text is not None and self._verify_evidence(item, "decision", {"id": did}, now).ok
+                if (text and known and not _REFUSAL_ROW.search(text) and re.search(rf"(?<![0-9a-fA-F]){re.escape(sha)}(?![0-9a-fA-F])", text, re.I)
+                        and names_item(text, item["key"])):
+                    return did
+        raise Refused("evidence_unverified", f"lane_merge_unproven: {sha[:12]} {', '.join(ids)}")
+
+    def _lane_merge_proof(self, item, merge, parents, go_pr, go_head, now):
+        """The ``lane_merge`` proof of a merge without a PR number, ``None`` when none applies.
+
+        A merge whose subject names no decision, or one a GO row bound to its PR already
+        explains, returns ``None``; a named row that does not vouch for the merge refuses
+        as ``lane_merge_unproven`` unless that GO binding can still prove it.
+        """
+        try:
+            did = self._lane_merge_decision(item, merge, now)
+        except Refused:
+            if go_pr and valid_commit_ref(go_head):
+                return None
+            raise
+        return None if did is None else {"pr": None, "head": parents[1], "decision_id": did,
+                                         "merge_sha": merge["sha"], "kind": "lane_merge"}
 
     # ------------------------------------------------------- verification
     def _ctx(self, item, now):

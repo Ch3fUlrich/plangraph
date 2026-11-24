@@ -1,0 +1,1 @@
+A merged close counts a seat whose served model is `unwitnessed` (agy Hydrogen, rule 3.26) when the run record names its harness and the chosen leg's model and family, the verdict names the exact head and a file read, and an opencode run reports tests that ran. Lanes with an `auth` or `secrets` risk tag still refuse it.
