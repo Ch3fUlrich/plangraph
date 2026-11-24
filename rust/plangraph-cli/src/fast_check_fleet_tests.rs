@@ -51,12 +51,9 @@ fn a_route_that_could_pass_an_option_is_refused() {
 
 #[test]
 fn a_wsl_host_runs_through_wsl_exec_in_its_checkout() {
-    let command = remote_command(
-        &host(Some("worker-a"), Some("Ubuntu-24.04")),
-        &words(&["pg-spawnd", "probe"]),
-        true,
-    )
-    .unwrap();
+    let mut place = host(Some("worker-a"), Some("Ubuntu-24.04"));
+    place.cwd = "/srv/plain".into();
+    let command = remote_command(&place, &words(&["pg-spawnd", "probe"]), true).unwrap();
     assert_eq!(
         args(&command)[5..],
         [
@@ -65,7 +62,7 @@ fn a_wsl_host_runs_through_wsl_exec_in_its_checkout() {
             "--distribution",
             "Ubuntu-24.04",
             "--cd",
-            "/srv/it's",
+            "/srv/plain",
             "--exec",
             "pg-spawnd",
             "probe"
@@ -103,4 +100,48 @@ fn the_verdict_message_says_the_busy_retry_was_exhausted() {
     );
     assert!(!message.contains("every eligible host"), "{message}");
     assert!(verdict_error(Verdict::TestFailure, 3).contains("exit 3"));
+}
+
+#[test]
+fn wsl_values_with_spaces_are_double_quoted_for_the_windows_shell() {
+    let mut place = host(Some("worker-a"), Some("Ubuntu"));
+    place.cwd = "/srv/my repo".into();
+    let command =
+        remote_command(&place, &words(&["cargo", "test", "two words", "a=b"]), true).unwrap();
+    assert_eq!(
+        args(&command)[5..],
+        [
+            "worker-a",
+            "wsl.exe",
+            "--distribution",
+            "Ubuntu",
+            "--cd",
+            "\"/srv/my repo\"",
+            "--exec",
+            "cargo",
+            "test",
+            "\"two words\"",
+            "a=b"
+        ]
+    );
+}
+
+#[test]
+fn wsl_values_with_shell_metacharacters_are_refused() {
+    for bad in [
+        "a&b", "a|b", "a;b", "a\"b", "a'b", "a$b", "a`b", "a%b", "a^b", "a<b", "a>b", "a(b)",
+        "a\nb", "",
+    ] {
+        let mut place = host(Some("worker-a"), Some("Ubuntu"));
+        place.cwd = "/srv".into();
+        assert!(
+            remote_command(&place, &words(&["x", bad]), true).is_err(),
+            "{bad:?} as argument"
+        );
+        place.cwd = bad.into();
+        assert!(
+            remote_command(&place, &words(&["x"]), true).is_err(),
+            "{bad:?} as cwd"
+        );
+    }
 }

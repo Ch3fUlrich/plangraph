@@ -33,9 +33,12 @@ fn remote_command(host: &Candidate, argv: &[String], in_cwd: bool) -> Result<Com
         }
         command.args(["wsl.exe", "--distribution", distro]);
         if in_cwd {
-            command.args(["--cd", &host.cwd]);
+            command.arg("--cd").arg(windows_word(&host.cwd)?);
         }
-        command.arg("--exec").args(argv);
+        command.arg("--exec");
+        for word in argv {
+            command.arg(windows_word(word)?);
+        }
     } else {
         let line: Vec<String> = argv.iter().map(|w| quote(w)).collect();
         let line = line.join(" ");
@@ -46,6 +49,21 @@ fn remote_command(host: &Candidate, argv: &[String], in_cwd: bool) -> Result<Com
         });
     }
     Ok(command)
+}
+
+/// One word for the remote Windows shell (cmd or PowerShell), which ssh joins with spaces:
+/// plain words pass, words with spaces are double-quoted, anything the shells treat as
+/// syntax is refused rather than escaped differently per shell.
+fn windows_word(word: &str) -> Result<String, String> {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_-./:=@+,~\\".contains(c);
+    if word.is_empty() || !word.chars().all(|c| plain(c) || c == ' ') {
+        return Err(format!("unsafe for the Windows shell: {word:?}"));
+    }
+    Ok(if word.contains(' ') {
+        format!("\"{word}\"")
+    } else {
+        word.to_owned()
+    })
 }
 
 fn quote(word: &str) -> String {
