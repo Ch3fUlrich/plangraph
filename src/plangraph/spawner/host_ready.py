@@ -475,7 +475,7 @@ def local_disk_admission(worktree, service, role='implement', movable=False, *, 
         cap = cargo_target_cap_gb()
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
-        configured_target = shared_cargo_target(policy)
+        configured_target = shared_cargo_target()
         target = configured_target.resolve() if native else configured_target
         unsafe_cache_dir(target, worktree)
         building = role not in NO_BUILD_ROLES
@@ -596,7 +596,7 @@ def running_disk_refusal(worktree, role='implement'):
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
-        target = shared_cargo_target(policy)
+        target = shared_cargo_target()
         paths = [worktree, target]
         if policy.get('worktree_root'):
             paths.append(policy['worktree_root'])
