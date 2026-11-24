@@ -349,7 +349,10 @@ fn execute_with(
             &scratch,
             cache,
             (&guards, &refs),
-            &|path| disk_runtime::disk_space(path).map(|space| (space.free, space.total)),
+            (
+                &|path| disk_runtime::disk_space(path).map(|space| (space.free, space.total)),
+                &device,
+            ),
             apply,
             &mut report,
         )?;
@@ -361,6 +364,13 @@ fn device(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).ok().map(|meta| meta.dev())
 }
+
+/// Measures (free, total) bytes of the filesystem that holds a path.
+#[cfg(target_os = "linux")]
+type SpaceFn<'a> = dyn Fn(&Path) -> io::Result<(u64, u64)> + 'a;
+/// The device a path is on.
+#[cfg(target_os = "linux")]
+type DeviceFn<'a> = dyn Fn(&Path) -> Option<u64> + 'a;
 
 /// One reclaim per filesystem, grouped by the device each target is really on (a nested mount
 /// under a root is its own group). `space` measures (free, total) of the filesystem holding a
@@ -375,7 +385,7 @@ fn reclaim_below_floor(
     scratch: &[PathBuf],
     cache: Option<&Path>,
     (guards, refs): (&Guards, &[PathBuf]),
-    space: &dyn Fn(&Path) -> io::Result<(u64, u64)>,
+    (space, device): (&SpaceFn<'_>, &DeviceFn<'_>),
     apply: bool,
     report: &mut Report,
 ) -> io::Result<()> {
@@ -412,19 +422,25 @@ fn reclaim_below_floor(
         }
     }
     for candidate in candidates {
-        let Some(parent) = candidate.target.parent().map(Path::to_path_buf) else {
+        let Some(dev) = device(&candidate.target) else {
             continue;
         };
-        if let Some(dev) = device(&candidate.target) {
-            devices
-                .entry(dev)
-                .or_insert_with(|| Group {
-                    probe: parent,
-                    candidates: vec![],
-                })
-                .candidates
-                .push(candidate);
-        }
+        // The parent survives the removal, but a target that is itself a mount point sits on
+        // another device than its parent: then the target is what tells the group's free space.
+        let probe = candidate
+            .target
+            .parent()
+            .filter(|parent| device(parent) == Some(dev))
+            .unwrap_or(&candidate.target)
+            .to_path_buf();
+        devices
+            .entry(dev)
+            .or_insert_with(|| Group {
+                probe,
+                candidates: vec![],
+            })
+            .candidates
+            .push(candidate);
     }
     let mut kept = Vec::new();
     let mut below_floor = false;
