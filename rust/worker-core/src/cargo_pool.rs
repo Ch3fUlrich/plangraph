@@ -147,6 +147,19 @@ pub fn existing_pool_slots(primary: &Path) -> Vec<PathBuf> {
     slots
 }
 
+/// The `slot-review-*` directories of the pool at `primary`: review seats' build slots.
+pub fn existing_review_slots(primary: &Path) -> Vec<PathBuf> {
+    existing_pool_slots(primary)
+        .into_iter()
+        .skip(1)
+        .filter(|slot| {
+            slot.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("slot-review-"))
+        })
+        .collect()
+}
+
 /// Trim every idle slot of the pool at `primary` to `cap_bytes` each, and the pool
 /// as a whole to N x cap. Leased slots are skipped.
 pub fn enforce_pool(
@@ -182,6 +195,19 @@ pub fn pool_slots(primary: &Path, count: usize) -> io::Result<Vec<PathBuf>> {
         }
     }
     Ok(slots)
+}
+
+/// The `slot-review-<id>` directory of the pool that holds `target` (a review seat's
+/// `CARGO_TARGET_DIR` is `<pool>/slot-review-<id>/target`), if it is one.
+pub fn review_slot_of(target: &Path) -> Option<PathBuf> {
+    let slot = target.parent()?;
+    let named = |path: &Path, test: fn(&str) -> bool| {
+        path.file_name().and_then(|n| n.to_str()).is_some_and(test)
+    };
+    let in_pool = slot
+        .parent()
+        .is_some_and(|pool| named(pool, |n| n.ends_with("-pool")));
+    (named(slot, |n| n.starts_with("slot-review-")) && in_pool).then(|| slot.to_path_buf())
 }
 
 pub fn lease_file_path(slot: &Path) -> io::Result<PathBuf> {

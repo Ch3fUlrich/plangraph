@@ -20,6 +20,7 @@ from .host_ready_source import (
     select_drive,
     legacy_cache_roots as _legacy_cache_roots,
     pool_slot_roots as _pool_slot_roots,
+    review_pool,
     record_disk_floor_alarm as _record_disk_floor_alarm,
     windows_cargo_lease as _windows_cargo_lease,
     HOST_TIMEOUT, probe_host, python_test_tools,
@@ -87,8 +88,7 @@ def review_cargo_slot(job_id, leases=None):
     ``leases``, the shared lease hygiene checks for this slot is taken first and kept in
     ``leases[job_id]`` until the seat ends, so a trim never removes a running seat's build.
     """
-    primary = shared_cargo_target()
-    pool = primary.with_name(primary.name + '-pool')
+    pool = review_pool(shared_cargo_target())
     safe = ''.join(c for c in str(job_id) if c.isalnum() or c in '-_') or 'seat'
     slot = pool / f'slot-review-{safe}'
     if leases is not None:

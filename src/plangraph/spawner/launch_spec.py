@@ -226,12 +226,21 @@ def build(request: dict) -> dict:
                 if name.lower() not in {key.lower() for key in env}:
                     raise WindowsEnvIncomplete(name)
         events.append(dict(event='launch_spec', python_job_id=job.job_id))
+        if request['dry_run']:
+            drop_review_slot(env)  # nothing will run, so nothing will release the slot later
         return dict(argv=argv, cwd=os.path.abspath(request['cwd']), env=env,
                     prompt=job.task_prompt,  # REMOVE-AT-R10: Rust redacts the final prompt.
                     stdin=payload.decode('utf-8') if payload is not None else None,
                     warnings=[w for w in rec['warnings'] if isinstance(w, str)], events=events)
     finally:
         tempfile.tempdir = previous
+
+
+def drop_review_slot(env):
+    """Remove the review seat's build slot named by ``env``; a real launch hands it to the supervisor."""
+    target = Path(env.get('CARGO_TARGET_DIR') or '/')
+    if target.parent.name.startswith('slot-review-') and target.parent.parent.name.endswith('-pool'):
+        shutil.rmtree(target.parent, ignore_errors=True)
 
 
 class WindowsEnvIncomplete(Exception):
