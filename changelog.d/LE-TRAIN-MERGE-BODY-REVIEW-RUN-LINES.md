@@ -1,0 +1,1 @@
+Add `land-train merge-body`: the landing train merge body carries a `Plan-Item` and a `Review-Run` line per item and part, built from the manifest and each part's seat receipt; `--check` refuses a body without them.
