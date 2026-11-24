@@ -166,6 +166,15 @@ def row_quality(model):
     return quality
 
 
+def consistent_scale(rows):
+    """Rows ranked together share one quality scale: the coding index counts only when every row has it,
+    else all rank by the AA index (a coding index beside an AA index would not be comparable)."""
+    rows = list(rows)
+    if all(row.get("coding_index") is not None for row in rows):
+        return rows
+    return [dict(row, coding_index=None) if row.get("coding_index") is not None else row for row in rows]
+
+
 def _measured_at(row):
     stamp = row.get("measured_at")
     if not stamp:
