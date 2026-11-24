@@ -17,6 +17,19 @@ def native_writer_review(card):
     return None
 
 
+def batch_members(card):
+    """The valid item keys of a batch card (`item_keys`), at most MAX_BATCH_KEYS, in order."""
+    keys = card.get('item_keys') if isinstance(card, dict) else None
+    if not isinstance(keys, list) or len(keys) > MAX_BATCH_KEYS:
+        return []
+    if not all(valid_item(key) for key in keys):
+        return []
+    return list(dict.fromkeys(keys))
+
+
+MAX_BATCH_KEYS = 50
+
+
 def annotate_item(record, card, *, inherit=False):
     value = card.get('item_key') if isinstance(card, dict) else None
     if value is None or value == '':
@@ -32,6 +45,9 @@ def annotate_item(record, card, *, inherit=False):
             item = item[len(project) + 1:]
         value = project + ':' + item
     record['item_key'] = value
+    members = batch_members(card)
+    if members:
+        record['item_keys'] = members
     if record.get('role') == 'review' and (writer_run := native_writer_review(card)):
         record['native_writer_run'] = writer_run
     if value and record.get('role') == 'review' and not inherit:

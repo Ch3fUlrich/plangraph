@@ -169,6 +169,15 @@ A successful reader returning no valid fresh codex account refuses; an unavailab
 the explicitly supplied facts quota. Missing, invalid, or exhausted quota refuses.
 The fallback quota has the same freshness bound as the other supplied facts.
 
+Policy `batch_max_items` (default 1, range 1..=50; any other value refuses every tick as `invalid_policy`) lets one writer run hold related ready items: the
+first eligible item in launch order plus later eligible items of its family or sharing its
+files, in launch order. Every item is claimed on its own, then checked against the claimed
+items of every host (the keeper snapshot, queued runs included): a claim whose files overlap
+another live claim outside the batch is released by its own epoch and skipped as
+`files_reserved_by:<key>`, so two hosts that claim at once never both keep overlapping files
+(both may yield; the next tick retries). A failed launch releases only its own batch's claims.
+The card of a batch lists every key as `item_keys` and the union of the files. Its brief is a `PLANGRAPH-BATCH-INPUT-V1` payload (one item per key, one `Plan-Item` trailer each), so the run receives the batch-writer skill, not the single-task one.
+
 `--house-rules PATH` defaults to `deploy/feeder/house-rules.md`. Brief generation
 preserves the keeper title, description (including Why/How), done criteria and
 files and notes/PR/CI metadata, rendering string done criteria as plain text and appending that template with `{{item_key}}` substituted. The card fixes

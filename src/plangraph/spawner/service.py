@@ -17,7 +17,7 @@ from .remote_ps import native_receipt, publish_run_record
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
-from .item_key import annotate_item, valid_item
+from .item_key import annotate_item, batch_members, valid_item
 from .base_fresh import admit_base
 def remote_native_running(record):
     """True for a running native Codex run placed on another host; only these need a remote refresh."""
@@ -144,6 +144,7 @@ class SpawnService(SeatSpawnMixin):
             return value
         write_stderr_log(self._stderr_captures.setdefault(record['run_id'], {}), getattr(self.runner, 'jobs', {}), record, self._path(record['run_id']).with_name('stderr.log'), clean)
         host, item_key = record.get('host'), record.get('item_key')
+        item_keys = batch_members({'item_keys': record.get('item_keys')})
         review = record.get('review')
         review_item = review.get('item_key') if record.get('run_kind') == 'native-codex' and isinstance(review, dict) else None
         review_item = review_item if valid_item(review_item) else None
@@ -153,6 +154,8 @@ class SpawnService(SeatSpawnMixin):
             terminal_reason(record, job)
         record.update(clean(record))
         if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
+        if item_keys:
+            record['item_keys'] = item_keys  # validated batch identities, like item_key
         if review_item is not None:
             record['review']['item_key'] = review_item
         if bound_item is not None:
@@ -177,6 +180,10 @@ class SpawnService(SeatSpawnMixin):
         persisted = redact(record)
         if 'item_key' in record:
             persisted['item_key'] = item_key
+        if item_keys:
+            persisted['item_keys'] = item_keys
+        else:
+            persisted.pop('item_keys', None)  # never the redaction marker
         if review_item is not None:
             persisted['review']['item_key'] = review_item
         if bound_item is not None:

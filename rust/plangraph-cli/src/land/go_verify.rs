@@ -17,13 +17,14 @@ const WORKFLOW: &str = include_str!("../../../../.github/workflows/tests.yml");
 /// The event of the run whose jobs count: the full run of the pull request.
 pub const EVENT: &str = "pull_request";
 /// Paths only an operator-granted `Gate-Edit` may change (a prefix, or a file name at any depth for `*/`).
-pub const OPERATOR_CLASS: [&str; 6] = [
+pub const OPERATOR_CLASS: [&str; 7] = [
     "tools/ci_commit_gate.py",
     "tools/ci_commit_exempt.txt",
     ".github/workflows/",
     "tools/gate_wiring_check.py",
     ".gitattributes",
     "deploy/ci-watch/matrix.toml",
+    "rust/plangraph-cli/src/land/go_verify.rs",
 ];
 
 pub struct Pins {
