@@ -2,7 +2,29 @@ use pg_worker_core::worker_host::{Phase, Store};
 use tempfile::tempdir;
 
 #[test]
-fn long_outage_recovers_without_an_onboarding_command() {
+fn short_outage_recovers_without_an_onboarding_command() {
+    use pg_worker_core::worker_host::Observation;
+
+    let state = tempdir().unwrap();
+    let store = Store::new(state.path(), "worker-a").unwrap();
+    let tick = |now, ssh| {
+        store
+            .observe_liveness(Observation {
+                now,
+                ssh,
+                tailscale: Some(ssh),
+                remote_runs: None,
+                placed_runs: Default::default(),
+            })
+            .unwrap()
+    };
+    assert_eq!(tick(60, false), Phase::Ready);
+    assert_eq!(tick(120, false), Phase::Unreachable);
+    assert_eq!(tick(180, true), Phase::Ready);
+}
+
+#[test]
+fn outage_over_ten_minutes_holds_the_host_in_rejoining_until_the_gate_passes() {
     use pg_worker_core::worker_host::Observation;
 
     let state = tempdir().unwrap();
@@ -21,7 +43,10 @@ fn long_outage_recovers_without_an_onboarding_command() {
     assert_eq!(tick(60, false), Phase::Ready);
     assert_eq!(tick(120, false), Phase::Unreachable);
     assert_eq!(tick(720, false), Phase::Unreachable);
-    assert_eq!(tick(780, true), Phase::Ready);
+    assert_eq!(tick(780, true), Phase::Rejoining);
+    assert!(store.refusal().unwrap().unwrap().contains("rejoining"));
+    // Further reachable probes do not lift the hold.
+    assert_eq!(tick(840, true), Phase::Rejoining);
 }
 
 #[test]
