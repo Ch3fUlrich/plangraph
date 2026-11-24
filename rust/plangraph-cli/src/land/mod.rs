@@ -13,6 +13,9 @@ mod deploy_probe;
 #[cfg(test)]
 mod deploy_tests;
 mod driver_cli;
+pub mod experiment;
+#[cfg(test)]
+mod experiment_tests;
 pub mod git;
 pub mod go_verify;
 #[cfg(test)]
