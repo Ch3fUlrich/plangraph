@@ -43,6 +43,7 @@ fn green() -> Evidence {
             base: BASE.into(),
             train_sha: HEAD.into(),
             manifest: "m1".into(),
+            main_in: None,
         },
         ci: Ci {
             repo: "owner/name".into(),
@@ -286,4 +287,54 @@ fn the_cli_refuses_a_fixture_with_a_skipped_windows_job() {
     let err = super::go_verify::run_cli(&flags).unwrap_err();
     assert!(err.starts_with("go refused:"), "{err}");
     assert!(err.contains(&format!("job_not_green: {windows}")), "{err}");
+}
+
+const NEW_MAIN: &str = "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5";
+
+/// A train remerged onto the new main: its manifest base stays the old main, main and the pull request base
+/// moved, and the replay proved the train contains the new main.
+fn remerged() -> Evidence {
+    let mut e = green();
+    e.observed.main_tip = NEW_MAIN.into();
+    e.observed.pr_base = NEW_MAIN.into();
+    e.replay.main_in = Some(NEW_MAIN.into());
+    e
+}
+
+#[test]
+fn a_remerged_train_whose_replay_contains_the_live_main_is_accepted() {
+    assert_eq!(codes(&remerged()), Vec::<&str>::new());
+}
+
+#[test]
+fn a_remerged_train_with_an_older_main_a_moved_base_or_an_unverified_replay_is_refused() {
+    let mut e = remerged();
+    e.replay.main_in = Some("c".repeat(40));
+    assert_eq!(codes(&e), ["stale_base"], "an older main_in");
+    let mut e = remerged();
+    e.replay.main_in = None;
+    assert_eq!(
+        codes(&e),
+        ["stale_base"],
+        "no main_in: the base is the old main"
+    );
+    let mut e = remerged();
+    e.observed.pr_base = BASE.into();
+    assert_eq!(
+        codes(&e),
+        ["stale_base"],
+        "main_in is main's tip, the pull request base is not"
+    );
+    let mut e = remerged();
+    e.replay.verified = false;
+    let refused = codes(&e);
+    assert!(
+        refused.contains(&"stale_base") && refused.contains(&"replay_mismatch"),
+        "{refused:?}"
+    );
+    // Main moving again after the replay leaves the proof stale.
+    let mut e = remerged();
+    e.observed.main_tip = "f".repeat(40);
+    e.observed.pr_base = "f".repeat(40);
+    assert_eq!(codes(&e), ["stale_base"]);
 }

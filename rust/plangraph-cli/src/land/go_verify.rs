@@ -59,6 +59,10 @@ pub struct Replay {
     pub base: String,
     pub train_sha: String,
     pub manifest: String,
+    /// The newest main the replay run proved the train contains (the `main_in` line of `land-train verify`:
+    /// the newest remerged main, else the base). Absent in evidence of a train built on main's tip.
+    #[serde(default)]
+    pub main_in: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,16 +191,23 @@ pub fn verify(e: &Evidence, pins: &Pins) -> Vec<Refusal> {
             ),
         ));
     }
-    if o.main_tip != e.base || o.pr_base != e.base {
+    let r = &e.replay;
+    // A train is on live main when its base is main's tip, or when the verified replay proved it contains
+    // main's tip (a remerge); the pull request base must be main's tip either way.
+    let on_main =
+        o.main_tip == e.base || (r.verified && r.main_in.as_deref() == Some(o.main_tip.as_str()));
+    if !on_main || o.pr_base != o.main_tip {
         out.push(no(
             "stale_base",
             format!(
-                "main is at {}, the pull request base {}, the train base {}",
-                o.main_tip, o.pr_base, e.base
+                "main is at {}, the pull request base {}, the train base {}, the replay's main {}",
+                o.main_tip,
+                o.pr_base,
+                e.base,
+                r.main_in.as_deref().unwrap_or("none")
             ),
         ));
     }
-    let r = &e.replay;
     if !r.verified || r.base != e.base || r.train_sha != e.head || r.manifest != e.manifest {
         out.push(no(
             "replay_mismatch",

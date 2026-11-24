@@ -111,8 +111,8 @@ The driver steps (`parallel.rs`, `remerge.rs`, `combine.rs`; commands in `driver
   the exact head, so every changed head needs its own full CI and delta review, never a part review.
 - `land-train combine --manifests A,B,... --out FILE` writes the union of the parts (each pull request once, receipts kept)
   as `--parts` input for one `build` on the new main.
-- The GO verifier still wants the manifest base to be main's tip, so a remerged train cannot be admitted until
-  `go_verify.rs` accepts a train whose tested head contains main's tip (gate path, separate item).
+- The GO verifier takes a remerged train when the replay's `main_in` (printed by `land-train verify`) equals main's tip
+  and the pull request base is main's tip; otherwise `stale_base` as before.
 - `land-timeline experiment [--days N]` compares batches and items per hour, test runs per landed batch and red trains
   per day over the last N days with the N days before (D-6774); `record --items N` on the `merge` row feeds the items; a test run is a workflow run and attempt (`record --run RUN/ATTEMPT`), and
   `--lineage A,B` on a combined train's row counts its predecessors' runs.

@@ -110,6 +110,7 @@ fn landing_remerging_and_the_fresh_ci_requirement_run_through_the_driver() {
                 base: m0.clone(),
                 train_sha: head.clone(),
                 manifest: "m".into(),
+                main_in: Some(m1.clone()),
             },
             ci: Ci2 {
                 head: ci_head,
