@@ -173,7 +173,7 @@ fn a_preflight_cap_refusal_keeps_the_accepted_head_for_a_push_only_retry() {
 pub(crate) fn run_with_host_handoff(
     accepted: &str,
     reclaim: Box<dyn FnMut() -> Result<(), String>>,
-    push: Box<dyn FnMut(&str) -> Result<Option<String>, String>>,
+    push: HostPush,
 ) -> (serde_json::Value, usize, usize) {
     let mut driver = Fake {
         head_script: vec!["base", Box::leak(accepted.to_owned().into_boxed_str())],
