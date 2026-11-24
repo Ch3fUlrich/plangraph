@@ -146,7 +146,7 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
         });
     }
     let now = chrono::Utc::now().timestamp();
-    let rows = scan(
+    let mut rows = scan_and_sweep(
         &mut Gh { repo: repo.clone() },
         &repo,
         &dir,
@@ -159,20 +159,8 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
             }
             main_freeze_gh::route_or_define(&dir, task, now, keeper_define)
         },
+        |key: &str, reason: &str| cancel_item(use_keeper, env, key, reason),
     )?;
-    let mut rows = rows;
-    rows.extend(sweep::sweep(
-        &mut Gh { repo: repo.clone() },
-        &dir,
-        dry,
-        |key: &str, reason: &str| {
-            if use_keeper {
-                keeper::cancel_for(env, key, reason)
-            } else {
-                Ok(())
-            }
-        },
-    )?);
     if args.iter().any(|a| a == "--main-freeze") && !dry {
         rows.extend(run_main_freeze(
             &repo,
@@ -199,6 +187,37 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
         return Err("keeper delivery incomplete; local tasks retained".into());
     }
     Ok(())
+}
+
+/// Cancels a keeper item. Without `--keeper` nothing is closed there, so the call fails and the sweep
+/// keeps its local row until a run with the keeper can cancel the item.
+fn cancel_item(
+    use_keeper: bool,
+    env: &BTreeMap<String, String>,
+    key: &str,
+    reason: &str,
+) -> Result<()> {
+    if use_keeper {
+        keeper::cancel_for(env, key, reason)
+    } else {
+        Err("run with --keeper to cancel the keeper item".into())
+    }
+}
+
+/// One pass: the sweep first, so an item of an old head is cancelled before the scan files the same
+/// failing test on the moved head, then the scan.
+fn scan_and_sweep(
+    gh: &mut impl Github,
+    repo: &str,
+    dir: &Path,
+    flakes: &BTreeMap<String, String>,
+    dry: bool,
+    define: impl FnMut(&mut Task) -> Result<bool>,
+    cancel: impl FnMut(&str, &str) -> Result<()>,
+) -> Result<Vec<String>> {
+    let mut rows = sweep::sweep(gh, dir, dry, cancel)?;
+    rows.extend(scan(gh, repo, dir, flakes, dry, define)?);
+    Ok(rows)
 }
 
 fn scan(
@@ -354,6 +373,14 @@ fn scan(
             }
             let digest = Sha256::digest(format!("{repo}\0{head}\0{test}").as_bytes());
             let key = format!("plangraph:CI-FIX-{digest:x}");
+            // The sweep could not cancel the item of an older head (keeper down): keep that row, and
+            // its keeper lane, for the next pass instead of reusing the lane for the new head.
+            if let Some(old) = tasks.get(&key) {
+                if !dry && pr.is_some() && old.sha.as_deref().is_some_and(|then| then != sha) {
+                    output.push(format!("cancel pending: {key}"));
+                    continue;
+                }
+            }
             let old_defined = tasks
                 .get(&key)
                 .is_some_and(|t| t.keeper_defined && t.run_id == run_id);

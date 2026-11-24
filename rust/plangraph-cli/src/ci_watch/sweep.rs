@@ -1,6 +1,6 @@
 //! Cancels the CI-FIX items of pull requests that closed, turned into a probe, or moved to a new head.
 use super::github::Github;
-use super::{load_tasks, save_tasks, Result};
+use super::{load_tasks, save_tasks, Result, Task};
 use crate::atomic;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -16,6 +16,16 @@ pub(super) fn not_a_fix_lane_pr(pr: &Value) -> bool {
         || pr["head"]["ref"]
             .as_str()
             .is_some_and(|branch| branch.starts_with("land/"))
+}
+
+/// The head commit of the run that filed `task`: stored on new rows, read from the run for rows
+/// written before the head was stored. `None` when GitHub cannot say; the row then stays.
+fn failing_sha(gh: &mut impl Github, task: &Task) -> Option<String> {
+    task.sha.clone().or_else(|| {
+        gh.value(&format!("actions/runs/{}", task.run_id)).ok()?["head_sha"]
+            .as_str()
+            .map(str::to_owned)
+    })
 }
 
 /// Cancels every tracked CI-FIX item whose pull request is no longer a live fix-lane pull request or
@@ -52,14 +62,16 @@ pub(super) fn sweep(
     let mut changed = false;
     for task in tasks.clone().into_values() {
         let Some(pr) = task.pr else { continue };
-        let reason = match (live.get(&pr), &task.sha) {
-            (None, _) => {
+        let reason = match live.get(&pr) {
+            None => {
                 format!("pull request #{pr} is closed or is a draft, CI probe or landing train")
             }
-            (Some(now), Some(then)) if now != then => {
-                format!("pull request #{pr} head moved on from the failing run's head")
-            }
-            _ => continue,
+            Some(now) => match failing_sha(gh, &task) {
+                Some(then) if &then != now => {
+                    format!("pull request #{pr} head moved on from the failing run's head")
+                }
+                _ => continue,
+            },
         };
         output.push(format!(
             "{}cancel: {} ({reason})",

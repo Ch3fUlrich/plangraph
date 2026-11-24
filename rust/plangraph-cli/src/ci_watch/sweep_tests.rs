@@ -1,6 +1,6 @@
 use super::github::Github;
 use super::sweep::{not_a_fix_lane_pr, sweep};
-use super::{load_tasks, save_tasks, scan, Result, Task};
+use super::{cancel_item, load_tasks, save_tasks, scan, scan_and_sweep, Result, Task};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -24,8 +24,10 @@ impl Github for World {
         for pr in &self.prs {
             let sha = pr["head"]["sha"].as_str().unwrap();
             if endpoint.ends_with(&format!("head_sha={sha}")) {
-                runs.push(json!({"id": 7, "head_sha": sha, "event": "pull_request",
-                    "head_branch": "x", "conclusion": "failure"}));
+                runs.push(
+                    json!({"id": run_id(sha), "head_sha": sha, "event": "pull_request",
+                    "head_branch": "x", "conclusion": "failure"}),
+                );
             }
         }
         Ok(runs)
@@ -36,6 +38,11 @@ impl Github for World {
     fn rerun(&mut self, _: u64) -> Result<()> {
         Ok(())
     }
+}
+
+/// Each head has its own failing run.
+fn run_id(sha: &str) -> u64 {
+    100 + sha.len() as u64
 }
 
 fn pr(number: u64, sha: &str, title: &str, draft: bool, branch: &str) -> Value {
@@ -182,4 +189,217 @@ fn a_main_item_a_current_head_and_a_failed_cancel_stay() {
     .unwrap();
     assert!(rows[0].starts_with("would cancel"));
     assert_eq!(tasks(temp.path()).len(), 2);
+}
+
+fn pass(
+    world: &mut World,
+    dir: &Path,
+    cancelled: &mut Vec<String>,
+    keeper_up: bool,
+) -> Vec<String> {
+    scan_and_sweep(
+        world,
+        "o/r",
+        dir,
+        &BTreeMap::new(),
+        false,
+        |task| {
+            task.keeper_key = Some(format!("lane-{}", task.run_id));
+            Ok(true)
+        },
+        |key, _| {
+            if keeper_up {
+                cancelled.push(key.to_owned());
+                Ok(())
+            } else {
+                Err("keeper down".into())
+            }
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_new_head_failing_the_same_test_cancels_the_old_lane_and_files_a_fresh_one() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut cancelled = Vec::new();
+    pass(
+        &mut World {
+            prs: vec![live(5, "s5")],
+        },
+        temp.path(),
+        &mut cancelled,
+        true,
+    );
+    let old = tasks(temp.path()).remove(0);
+    assert_eq!(
+        old.keeper_key.as_deref(),
+        Some(&*format!("lane-{}", run_id("s5")))
+    );
+    // The pull request moves on and the same test fails again: production order is sweep, then scan.
+    pass(
+        &mut World {
+            prs: vec![live(5, "s5-new")],
+        },
+        temp.path(),
+        &mut cancelled,
+        true,
+    );
+    assert_eq!(cancelled, vec![old.keeper_key.clone().unwrap()]);
+    let now = tasks(temp.path());
+    assert_eq!(now.len(), 1);
+    assert_eq!(now[0].sha.as_deref(), Some("s5-new"));
+    assert_eq!(
+        now[0].keeper_key.as_deref(),
+        Some(&*format!("lane-{}", run_id("s5-new")))
+    );
+}
+
+#[test]
+fn a_refused_cancel_keeps_the_old_row_and_lane_instead_of_reusing_it_for_the_new_head() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut cancelled = Vec::new();
+    pass(
+        &mut World {
+            prs: vec![live(5, "s5")],
+        },
+        temp.path(),
+        &mut cancelled,
+        true,
+    );
+    let rows = pass(
+        &mut World {
+            prs: vec![live(5, "s5-new")],
+        },
+        temp.path(),
+        &mut cancelled,
+        false,
+    );
+    assert!(cancelled.is_empty());
+    assert!(
+        rows.iter().any(|r| r.starts_with("cancel pending")),
+        "{rows:?}"
+    );
+    let now = tasks(temp.path());
+    assert_eq!(now.len(), 1);
+    assert_eq!(now[0].sha.as_deref(), Some("s5"));
+    // The next pass with the keeper up cancels it and files the new head.
+    pass(
+        &mut World {
+            prs: vec![live(5, "s5-new")],
+        },
+        temp.path(),
+        &mut cancelled,
+        true,
+    );
+    assert_eq!(cancelled.len(), 1);
+    assert_eq!(tasks(temp.path())[0].sha.as_deref(), Some("s5-new"));
+}
+
+/// Answers `actions/runs/<id>` for the head the stored run belonged to.
+struct Legacy {
+    world: World,
+    run: u64,
+    head: &'static str,
+}
+impl Github for Legacy {
+    fn pages(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>> {
+        self.world.pages(e, f)
+    }
+    fn page(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>> {
+        self.world.page(e, f)
+    }
+    fn log(&mut self, j: u64) -> Result<String> {
+        self.world.log(j)
+    }
+    fn rerun(&mut self, r: u64) -> Result<()> {
+        self.world.rerun(r)
+    }
+    fn value(&mut self, endpoint: &str) -> Result<Value> {
+        assert_eq!(endpoint, format!("actions/runs/{}", self.run));
+        Ok(json!({"id": self.run, "head_sha": self.head}))
+    }
+}
+
+#[test]
+fn a_row_without_a_stored_head_is_cancelled_when_its_run_belongs_to_an_older_head() {
+    let temp = tempfile::tempdir().unwrap();
+    scan_all(
+        &mut World {
+            prs: vec![live(5, "s5")],
+        },
+        temp.path(),
+    );
+    // Rewrite the row the way the format before the stored head wrote it.
+    let path = temp.path().join("tasks.jsonl");
+    let mut all = load_tasks(&path).unwrap();
+    for task in all.values_mut() {
+        task.sha = None;
+        task.keeper_defined = true;
+    }
+    save_tasks(&path, &all).unwrap();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(raw.contains("\"sha\":null"), "{raw}");
+    let run = run_id("s5");
+    // The same head: the row stays.
+    let rows = sweep(
+        &mut Legacy {
+            world: World {
+                prs: vec![live(5, "s5")],
+            },
+            run,
+            head: "s5",
+        },
+        temp.path(),
+        false,
+        |_, _| panic!("cancelled a current item"),
+    )
+    .unwrap();
+    assert!(rows.is_empty());
+    // A moved head: it is cancelled.
+    let mut cancelled = 0;
+    sweep(
+        &mut Legacy {
+            world: World {
+                prs: vec![live(5, "s5-new")],
+            },
+            run,
+            head: "s5",
+        },
+        temp.path(),
+        false,
+        |_, _| {
+            cancelled += 1;
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(cancelled, 1);
+    assert!(tasks(temp.path()).is_empty());
+}
+
+#[test]
+fn without_the_keeper_a_cancel_fails_so_the_row_is_kept() {
+    assert!(cancel_item(false, &BTreeMap::new(), "plangraph:CI-FIX-x", "closed").is_err());
+    let temp = tempfile::tempdir().unwrap();
+    scan(
+        &mut World {
+            prs: vec![live(5, "s5")],
+        },
+        "o/r",
+        temp.path(),
+        &BTreeMap::new(),
+        false,
+        |_| Ok(true),
+    )
+    .unwrap();
+    let rows = sweep(&mut World { prs: vec![] }, temp.path(), false, |k, r| {
+        cancel_item(false, &BTreeMap::new(), k, r)
+    })
+    .unwrap();
+    assert!(
+        rows.iter().any(|r| r.starts_with("cancel pending")),
+        "{rows:?}"
+    );
+    assert_eq!(tasks(temp.path()).len(), 1);
 }
