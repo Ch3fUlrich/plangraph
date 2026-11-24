@@ -1,0 +1,1 @@
+Add `pg-session-cutover-model`, an executable model of the orchestrator-role cutover to the digest wait (wake, receipt, supervised recycle, direct-message carry) with named scenarios for the review findings and a bounded exhaustive search; it switches nothing live.
