@@ -11,6 +11,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 pub mod install;
+pub mod ledger;
+pub mod live;
+pub mod report;
 pub mod scan;
 pub mod systemd;
 
@@ -319,5 +322,7 @@ pub fn this_host_roles(config_dir: &Path) -> Result<BTreeSet<String>, String> {
 
 #[cfg(test)]
 mod install_tests;
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod tests;

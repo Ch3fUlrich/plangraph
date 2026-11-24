@@ -155,6 +155,19 @@ unless it is already enabled and active. A family whose env file (`~/.config/pla
 reported as `NEEDS-ENV` and left disabled; template units are installed and enabled per instance by hand.
 The command exits 1 while any family is pending.
 
+## Deploy status
+
+`plangraph deploy-status [--repo PATH] [--no-ledger]` reads the manifest of the checkout (default
+`~/code/plangraph`) and prints one `deploy-entry` line per unit family and binary with its state on this host:
+`live`, `not-installed`, `not-enabled(..)`, `not-active(..)`, `last-run-failed(..)` (the service a timer starts
+ended in a failed state), `stale(..)` (the installed release is not the checkout's Rust tree),
+`unreadable(..)` (systemd could not be read; counted as not live) or `elsewhere(..)` (another role, or
+`not_deployed`). A not-live entry shows its age in hours and its first-run check; the last line is
+`deploy-not-live<TAB>N`, and the exit status is 1 while N > 0. The age starts when the unit file reached the
+checkout, not at the first status run. The run rewrites `$XDG_STATE_HOME/plangraph/deploy-live/<host>.json`,
+the ledger the landing GO check reads. `plangraph merge-close --deploy-status` prints the same lines after
+the keeper's list of merged items with no deploy evidence.
+
 ## Host release binaries
 
 After fast-forwarding the main checkout, run `host-sync --install-release REPO`

@@ -458,12 +458,32 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
             } else {
                 print!("{}", done.text);
             }
+            if deploy_status {
+                print_manifest_status();
+            }
             0
         }
         Err(reason) => {
             eprintln!("merge-close: {reason}");
             1
         }
+    }
+}
+
+/// The manifest section of `--deploy-status`: what the units and binaries of this host are doing now,
+/// next to the keeper's list of merged work with no deploy evidence. A failure prints one error line
+/// instead of hiding the keeper part.
+fn print_manifest_status() {
+    let result = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "HOME is not set".to_owned())
+        .and_then(|home| crate::deploy_manifest::report::run_local(&home, &[]));
+    match result {
+        Ok((lines, _)) => lines.iter().for_each(|line| println!("{line}")),
+        Err(reason) => println!(
+            "deploy-manifest-error\t{}",
+            reason.replace(['\n', '\t'], " ")
+        ),
     }
 }
 
