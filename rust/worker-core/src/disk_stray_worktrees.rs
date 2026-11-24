@@ -39,6 +39,7 @@ pub(super) fn outside(repo: &Path, roots: &[PathBuf]) -> io::Result<Vec<PathBuf>
     Ok(trees)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn sweep(
     repo: &Path,
     roots: &[PathBuf],
@@ -47,6 +48,7 @@ pub(super) fn sweep(
     apply: bool,
     report: &mut Report,
     safe_to_remove: &impl Fn(&Path) -> io::Result<bool>,
+    before_lock: &dyn Fn(),
 ) -> io::Result<()> {
     for path in outside(repo, roots)? {
         if guards.protects(&path) {
@@ -55,7 +57,9 @@ pub(super) fn sweep(
                 .push(format!("{}: protected", path.display()));
             continue;
         }
-        if let Err(error) = remove_if_finished(repo, &path, now, apply, report, safe_to_remove) {
+        if let Err(error) =
+            remove_if_finished(repo, &path, now, apply, report, safe_to_remove, before_lock)
+        {
             report.skipped.push(format!(
                 "{}: probe/cleanup unavailable: {error}",
                 path.display()
@@ -65,6 +69,7 @@ pub(super) fn sweep(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn remove_if_finished(
     repo: &Path,
     path: &Path,
@@ -72,6 +77,7 @@ fn remove_if_finished(
     apply: bool,
     report: &mut Report,
     safe_to_remove: &impl Fn(&Path) -> io::Result<bool>,
+    before_lock: &dyn Fn(),
 ) -> io::Result<()> {
     let (bytes, newest) = scan(path)?;
     if now.duration_since(newest).unwrap_or_default() <= IDLE {
@@ -103,6 +109,7 @@ fn remove_if_finished(
     if apply {
         // Everything above was read without the lock. Take it, then check protection, cleanliness
         // and ancestry again right before the removal: a run or a commit may have arrived meanwhile.
+        before_lock();
         let _lock = crate::worktree::mutation_lock(repo).map_err(io::Error::other)?;
         if !safe_to_remove(path)? {
             report

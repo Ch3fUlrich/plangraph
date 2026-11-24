@@ -1,6 +1,8 @@
 #![cfg(target_os = "linux")]
 //! Job worktrees outside the configured roots: merged, clean and idle ones go; nothing else.
-use pg_worker_core::disk_hygiene::{sweep_stray_worktrees, Guards, Report};
+use pg_worker_core::disk_hygiene::{
+    sweep_stray_worktrees, sweep_stray_worktrees_with, Guards, Report,
+};
 use std::{
     fs,
     path::Path,
@@ -161,7 +163,9 @@ fn a_checkout_that_changes_while_the_lock_is_awaited_is_not_removed() {
     }
 }
 
-/// A sweep of `tree` whose protection check reads the state directory fresh, as the binary's does.
+/// A sweep whose protection check reads the state directory fresh, as the binary's does. The
+/// run record is written only after the sweep has said it is about to ask for the lock, which
+/// the test holds: the checks that came before the lock cannot have seen it.
 fn sweep_waiting_for_the_lock(
     repo: &std::path::Path,
     state: &std::path::Path,
@@ -169,12 +173,13 @@ fn sweep_waiting_for_the_lock(
     record_run: Option<&std::path::Path>,
 ) -> Report {
     let lock = pg_worker_core::worktree::mutation_lock(repo).unwrap();
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
     let (repo_owned, state_owned, pins_owned) =
         (repo.to_owned(), state.to_owned(), pins.to_owned());
     let sweeper = std::thread::spawn(move || {
         let mut report = report();
         let now = SystemTime::now() + Duration::from_secs(90000);
-        sweep_stray_worktrees(
+        sweep_stray_worktrees_with(
             &repo_owned,
             &[],
             &Guards::default(),
@@ -182,12 +187,16 @@ fn sweep_waiting_for_the_lock(
             true,
             &mut report,
             |tree| Ok(!Guards::load(&pins_owned, &state_owned)?.protects(tree)),
+            &|| {
+                let _ = reached_tx.send(());
+            },
         )
         .unwrap();
         report
     });
-    // The sweep has passed its unlocked checks and is waiting for the lock.
-    std::thread::sleep(Duration::from_millis(1200));
+    reached_rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the sweep reached the lock step");
     if let Some(tree) = record_run {
         let dir = state.join("runs/run-late");
         fs::create_dir_all(&dir).unwrap();
