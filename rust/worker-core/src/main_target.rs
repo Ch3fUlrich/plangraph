@@ -16,19 +16,29 @@ fn identified(target: &Path) -> bool {
         || crate::private_targets::cargo_target(target)
 }
 
-/// A Git repository or worktree below the target (a `.git` directory or file at any depth) is
-/// someone's source tree, never a build cache, whatever markers sit beside it.
+/// A Git repository below the target is someone's source tree, never a build cache, whatever markers
+/// sit beside it: a `.git` directory or file (a repository or linked worktree) or a bare repository
+/// (a `HEAD` file beside `objects` and `refs` directories) at any depth.
 fn holds_git_repository(target: &Path) -> io::Result<bool> {
     let mut pending = vec![target.to_path_buf()];
     while let Some(directory) = pending.pop() {
+        let (mut head, mut objects, mut refs) = (false, false, false);
         for entry in fs::read_dir(&directory)? {
             let entry = entry?;
-            if entry.file_name() == ".git" {
-                return Ok(true);
+            let is_dir = entry.file_type()?.is_dir();
+            match entry.file_name().to_str() {
+                Some(".git") => return Ok(true),
+                Some("HEAD") => head = !is_dir,
+                Some("objects") => objects = is_dir,
+                Some("refs") => refs = is_dir,
+                _ => {}
             }
-            if entry.file_type()?.is_dir() {
+            if is_dir {
                 pending.push(entry.path());
             }
+        }
+        if head && objects && refs {
+            return Ok(true);
         }
     }
     Ok(false)
@@ -373,6 +383,36 @@ mod tests {
         assert_eq!(run(&repo, true, false).freed_bytes, 0);
     }
 
+    fn age_tree(path: &Path, age_secs: u64) {
+        let old = SystemTime::now() - Duration::from_secs(age_secs);
+        let mut pending = vec![path.to_path_buf()];
+        while let Some(entry) = pending.pop() {
+            if fs::symlink_metadata(&entry).unwrap().is_dir() {
+                pending.extend(fs::read_dir(&entry).unwrap().map(|e| e.unwrap().path()));
+            }
+            if !fs::symlink_metadata(&entry).unwrap().is_symlink() {
+                fs::File::open(&entry).unwrap().set_modified(old).unwrap();
+            }
+        }
+    }
+
+    fn commit(repo: &Path) {
+        git(
+            repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+    }
+
     #[test]
     fn a_git_repository_below_the_target_keeps_the_directory() {
         // A scratch checkout nested in the ignored directory, its tracked file edited locally.
@@ -381,21 +421,43 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         git(&nested, &["init", "-q"]);
         fs::write(nested.join("src.rs"), b"edited").unwrap();
-        let old = SystemTime::now() - Duration::from_secs(7200);
-        for p in [nested.clone(), repo.join("rust/target")] {
-            fs::File::open(p).unwrap().set_modified(old).unwrap();
-        }
+        age_tree(&repo.join("rust/target"), 7200);
         let report = run(&repo, true, false);
         assert_eq!(report.freed_bytes, 0);
         assert!(nested.join("src.rs").exists() && nested.join(".git").exists());
         assert!(report.skipped[0].contains("git repository"));
-        // A linked worktree's `.git` file counts the same.
+    }
+
+    #[test]
+    fn a_linked_worktree_or_bare_repository_below_the_target_keeps_the_directory() {
+        // Without the detection the aged target is removed: both would then vanish.
         let (_tmp, repo) = fixture(7200);
+        commit(&repo);
         let linked = repo.join("rust/target/linked");
-        fs::create_dir_all(&linked).unwrap();
-        fs::write(linked.join(".git"), "gitdir: elsewhere\n").unwrap();
-        assert_eq!(run(&repo, true, false).freed_bytes, 0);
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                linked.to_str().unwrap(),
+            ],
+        );
+        assert!(linked.join(".git").is_file());
+        age_tree(&repo.join("rust/target"), 7200);
+        let report = run(&repo, true, false);
+        assert_eq!(report.freed_bytes, 0);
         assert!(linked.join(".git").exists());
+        assert!(report.skipped.iter().any(|s| s.contains("git repository")));
+        let (_tmp, repo) = fixture(7200);
+        let bare = repo.join("rust/target/mirror.git");
+        git(&repo, &["init", "-q", "--bare", bare.to_str().unwrap()]);
+        age_tree(&repo.join("rust/target"), 7200);
+        let report = run(&repo, true, false);
+        assert_eq!(report.freed_bytes, 0);
+        assert!(bare.join("HEAD").exists());
+        assert!(report.skipped.iter().any(|s| s.contains("git repository")));
     }
 
     #[test]
