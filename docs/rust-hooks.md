@@ -97,25 +97,29 @@ messages with a leading `BLOCKED`, `FAIL` or `CORRECTION` status. Start
 operator corrections with `Correction:` to record them as signals in either
 transcript format.
 
-### Routine messages to routing and stale session names
+### Routine messages to routing
 
-Register `pg-hook message-route` for `PreToolUse` on `SendMessage`, next to
-`message-time`. A message to the routing role (`routing` or `routing-NNNN`)
-whose first word is `ACK`, `DONE`, `FILED`, `MERGED` or `STATUS` (upper case) is
-refused with exit 2 and appended as one line `- <UTC time> <sender>: <text>` to
-`$ROUTING_STATE_DIR/inbox/L0.md` (default `~/.local/state/routing/inbox/L0.md`),
-so routing reads it at its heartbeat instead of waking. Each diversion also adds
-a row `{ts, day, sender, to, word}` to `inbox/diversions.jsonl`; count per day and
-sender with `jq -r '[.day,.sender]|@tsv' inbox/diversions.jsonl | sort | uniq -c`.
-`BLOCKED`, `GO-REQ`, `FAIL`, `INCIDENT` and operator relays are delivered. The
-sender is the `session_name` of the launch record whose `session_id` matches.
+`pg-hook message-route` runs on `PreToolUse` for `SendMessage`. A message to the
+routing role (`routing` or `routing-NNNN`) whose first word is `ACK`, `DONE`,
+`FILED`, `MERGED` or `STATUS` (upper case) is refused with exit 2 and appended as
+one line `- <UTC time> <sender>: <text>` to `L0.md` in the inbox directory the router
+heartbeat reads: `$ROUTER_INBOX_DIR`, else `$ROUTING_STATE_DIR/inbox` (default
+`~/.local/state/routing/inbox`). Routing reads it at its heartbeat instead of waking.
+`BLOCKED`, `GO-REQ`, `FAIL`, `INCIDENT` and operator relays are delivered. The sender is
+the `session_name` of the launch record whose `session_id` matches.
 
-A message to `<role>-NNNN` for `routing`, `plan-order` or `plan-roadmap`
-(`PG_MESSAGE_SINGLETON_ROLES` replaces the list) is refused when
-`launch/sessions/<role>-MMMM.json` exists with a higher counter; the refusal names
-that live name. Writers are not singletons and are never refused this way.
-The hook reads files only (under 50 ms) and fails open on any error. This host's
-Claude settings must register the hook; a host without the entry gets no refusal.
+The hook diverts only on a host that feeds the router: the inbox directory must hold the
+heartbeat's `offsets.json` with an entry for `L0.md`. Without that file the message is
+sent; with `offsets.json` but no `L0.md` entry the hook creates an empty `L0.md` and
+sends the message, so the heartbeat records its offset and skips no later line. Each
+diversion adds a row `{ts, day, sender, to, word}` to `diversions.jsonl` beside it; count
+per day and sender with `jq -r '[.day,.sender]|@tsv' diversions.jsonl | sort | uniq -c`.
+If that row cannot be written the line is still filed and the send is still refused.
+The hook reads files only (under 50 ms) and fails open on any error.
+
+Refusing a message to an old counter name and forwarding it to the live session needs the
+confirmed live name that `fleet-name` reads (`claude agents --json`, seconds); it is not
+done in a hook and is carried by the fleet-bus slice.
 
 ### Agent message timestamps
 
@@ -126,17 +130,19 @@ the transport for CLI sends and MCP `fleet_msg_send`. It finds the
 default installed binary automatically. Set `PG_MESSAGE_TIME_HOOK` to an
 absolute executable path for a custom install.
 
-The guard checks `HH:MMZ` and `HH:MM:SSZ` against the current UTC date.
-ISO timestamps carry their own date and offset. The guard allows one minute
-beyond the current clock. Prefix approximate times with `about`, as in
-`about 04:0xZ`. A refusal identifies the timestamp and exits 2.
+The guard checks `HH:MMZ` and `HH:MM:SSZ` against the current UTC time and refuses one that is
+more than two minutes from it either way (around midnight too). An ISO instant carries its
+own date and offset and is refused when more than two minutes in the future. A placeholder
+such as `05:4xZ` is always refused: state the real time. A refusal identifies the
+timestamp and exits 2.
 
-The `SendMessage` tool is only covered where the host's Claude settings register
-the hook; the fleet client and `fleet_msg_send` check the text themselves. Without
-the settings entry and an installed `pg-hook` a guessed stamp such as `05:4xZ`
-goes through unchecked. Entry, per hook (`message-time`, `message-route`):
-`{"matcher": "SendMessage", "hooks": [{"type": "command", "command": "sh -c 'test -x \"$1\" || exit 1; exec \"$1\" message-time' _ ~/.local/share/plangraph/hooks/pg-hook"}]}`
-under `hooks.PreToolUse`.
+`.claude/settings.json` registers `message-time` and `message-route` on `PreToolUse` for
+`SendMessage`, each through the guarded form `sh -c 'test -x "$1" || exit 1; exec "$1" <mode>'
+_ "$HOME/.local/share/plangraph/hooks/pg-hook"`, so a host without the installed
+`pg-hook` sends as before (exit 1 is not a block). The registration covers sessions whose
+working directory is in this repository; a session elsewhere needs the same entries in its
+settings. `rust/pg-hook/tests/settings_registration.rs` runs the registered commands. The
+fleet client and `fleet_msg_send` check the text themselves.
 
 Read git times as UTC: `git log --date=iso-strict` or `TZ=UTC git log --date=format-local:%H:%MZ`.
 A bare `--date=format:` prints the committer's offset (`+01:00`), which is not `Z`.
