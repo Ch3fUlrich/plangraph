@@ -1,5 +1,5 @@
-//! Every ordering of the event alphabet up to a depth bound, over four parts with one stack, an overlap
-//! and a dependent child: the invariants hold after each event and a denied event changes nothing.
+//! Every ordering of the event alphabet up to a depth bound, over four parts: a stack of three with an
+//! overlap, and an independent part: the invariants hold after each event and a denied event changes nothing.
 mod support;
 use pg_train_model::*;
 use std::collections::HashSet;
@@ -71,11 +71,11 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
 }
 
 fn model(policy: Policy) -> Model {
-    // Parts 0 and 2 overlap; part 1 is the child of part 0; part 3 is independent.
+    // A stack 0 <- 1 <- 2 (parts 0 and 2 overlap) and an independent part 3.
     let specs = vec![
         spec(0b01, None),
         spec(0b10, Some(0)),
-        spec(0b01, None),
+        spec(0b01, Some(1)),
         spec(0b100, None),
     ];
     Model::new(policy, specs)
