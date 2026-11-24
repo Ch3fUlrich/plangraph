@@ -143,6 +143,12 @@ counter then; the log has no class column or session, so the rows are read by te
 `item_defined` event with no field change, that the premise was read against that decision: it clears `newer_decisions` and retired premises
 up to it. `alerts` reports `force_stale_claims` in the alert window.
 
+**Effective priority (PRIORITY-INHERIT-FROM-BLOCKED).** `views.effective_priorities` gives every non-terminal item max(own, effective of each
+non-terminal item that depends on it), transitively (a cycle is reported, its back edge ignored); the stored priority never changes and
+aging/`priority` act on it alone. `ready`, the feeder pick (`effective_priority` on the ready row) and the web table sort by the effective
+value and show `8->10 via KEY`; the snapshot carries `effective_priority`/`priority_via` for raised items only. `reap` upserts the day's
+metrics `priority_inherit_raised` and `priority_inherit_longest_chain`.
+
 ## Verbs (Store) — role rules, state machine, errors
 Every verb: authenticate → authorise → validate → one transaction (event + cache + edges) → audit_log row (ok or refused).
 Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, bad_transition, locked, epoch_stale, lease_held, cycle, validation,
