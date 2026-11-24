@@ -1,0 +1,1 @@
+New `ci-flake` helper in `pg-spawnd`: classifies a red job's first and same-SHA retry logs (`fail-pass` defines a priority-10 Keeper item, `fail-fail` stays red; the job is never made green), prints the owner and expiry of every active quarantine ledger entry for the summaries, lists active Rust (`cargo:` keyed) entries, and merges per-shard duration maps. See `docs/TESTING.md`.
