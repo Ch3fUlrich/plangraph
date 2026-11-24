@@ -425,6 +425,11 @@ def export_units(wt, head, into):
     import io
     import tarfile
 
+    units = Path(into) / "deploy" / "systemd"
+    units.mkdir(parents=True, exist_ok=True)
+    if subprocess.run(["git", "cat-file", "-e", f"{head}:deploy/systemd"], cwd=wt, capture_output=True,
+                      check=False).returncode:
+        return units  # a head without units has no unit sources
     archive = subprocess.run(["git", "archive", "--format=tar", head, "deploy/systemd"], cwd=wt,
                              capture_output=True, check=False)
     if archive.returncode:
@@ -435,7 +440,7 @@ def export_units(wt, head, into):
                 target = Path(into) / member.name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(tar.extractfile(member).read())
-    return Path(into) / "deploy" / "systemd"
+    return units
 
 
 def deploy_report(st, active):
