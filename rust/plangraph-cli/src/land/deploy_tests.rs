@@ -209,3 +209,42 @@ fn dry_run_output_is_parsed_strictly() {
     let missing = cmd(&["sh", "-c", "echo MISSING file /etc/x; exit 1", "sh"]).probe("h", "f");
     assert_eq!(missing.unwrap_err()[0].name, "/etc/x");
 }
+
+#[test]
+fn a_part_that_raises_the_keeper_schema_puts_migration_and_keeper_restart_in_the_go_req() {
+    use super::keeper_schema::SCHEMA_PATH;
+    let fx = Fx::new();
+    let two = "M = (Migration(1, a, X), Migration(2, b, Y))\n";
+    let three = "M = (Migration(1, a, X), Migration(2, b, Y), Migration(3, c, Z))\n";
+    let base = commit(&fx, &[(SCHEMA_PATH, two)], "schema\n\nPlan-Item: demo:S");
+    g(fx.path(), &["checkout", "-q", "main"]);
+    g(fx.path(), &["reset", "-q", "--hard", &base]);
+    let raise = commit(&fx, &[(SCHEMA_PATH, three)], "raise\n\nPlan-Item: demo:B");
+    let docs = commit(&fx, &[("docs/a.md", "a\n")], "docs\n\nPlan-Item: demo:A");
+    let input = BuildInput {
+        repo: fx.path(),
+        build: "b1".into(),
+        base: fx.base(),
+        parts: vec![part(1, &docs, None), part(2, &raise, None)],
+        attributes: String::new(),
+        cap: None,
+        resolutions: vec![],
+        protected: vec![],
+    };
+    let manifest = build(&input).unwrap().manifest.unwrap();
+    let parts = derive(fx.path(), &manifest).unwrap();
+    assert_eq!(
+        parts.iter().map(|p| p.keeper_migration).collect::<Vec<_>>(),
+        [None, Some(3)]
+    );
+    let plan = deploy_plan(&parts, &BTreeMap::new(), &hosts(&[]), &pass());
+    let line = plan.go_req();
+    assert!(line.starts_with("deploy: none; MIGRATION 3; "), "{line}");
+    assert!(
+        line.contains("plangraph keeper-restart") && line.contains("MIGRATION_DSN_FILE"),
+        "{line}"
+    );
+    assert!(line.contains("never a plain restart"), "{line}");
+    let unchanged = deploy_plan(&parts[..1], &BTreeMap::new(), &hosts(&[]), &pass());
+    assert_eq!(unchanged.go_req(), "deploy: none");
+}
