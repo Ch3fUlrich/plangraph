@@ -146,3 +146,111 @@ fn subprocess_capture_times_out_without_waiting_for_exit() {
     assert_eq!(error.kind(), ErrorKind::TimedOut);
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+
+fn writer_policy(extra: serde_json::Value) -> serde_json::Value {
+    let mut policy = serde_json::json!({"worker_roles": ["writer"], "hosts": [
+        {"name": "ws", "memory_floor_gib": 2},
+        {"name": "dell", "memory_floor_gib": 2},
+        {"name": "vm", "memory_floor_gib": 2, "last_resort": true}
+    ]});
+    policy
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    policy
+}
+
+#[test]
+fn a_writer_without_a_host_goes_to_the_worker_with_the_most_free_memory_and_the_last_resort_stays_last(
+) {
+    use placement::Placement;
+    let policy = writer_policy(serde_json::json!({}));
+    let placement =
+        Placement::with_hostname(Some(&policy), Some("writer"), "vm".into(), "vm".into());
+    let pick = |memory: [u64; 3]| {
+        placement
+            .select_with(None, |host, _| {
+                Some(
+                    memory[["ws", "dell", "vm"]
+                        .iter()
+                        .position(|n| *n == host.name())
+                        .unwrap()]
+                        << 10,
+                )
+            })
+            .map(|host| host.name().to_owned())
+    };
+    assert_eq!(pick([105, 16, 90]).unwrap(), "ws");
+    assert_eq!(pick([8, 30, 90]).unwrap(), "dell");
+    assert_eq!(
+        pick([1, 1, 90]).unwrap(),
+        "vm",
+        "coding.vm only when no worker admits"
+    );
+    assert!(pick([1, 1, 1]).is_err());
+}
+
+#[test]
+fn a_writer_naming_a_host_is_refused_while_placement_is_on_unless_routing_dated_an_exception() {
+    use placement::Placement;
+    let refusal = |extra: serde_json::Value, role: &str, name: &str, today: &str| {
+        let policy = writer_policy(extra);
+        Placement::with_hostname(Some(&policy), Some(role), "vm".into(), "vm".into())
+            .named_host_refusal(name, today)
+    };
+    let none = serde_json::json!({});
+    assert!(refusal(none.clone(), "writer", "dell", "2026-11-24")
+        .unwrap()
+        .contains("may not name a host"));
+    assert!(
+        refusal(none, "reviewer", "dell", "2026-11-24").is_none(),
+        "not a worker role"
+    );
+    let exception = |until: &str, host: &str| serde_json::json!({"host_exceptions": [{"host": host, "decision": "D-6741", "until": until}]});
+    assert!(refusal(
+        exception("2026-11-30", "dell"),
+        "writer",
+        "dell",
+        "2026-11-24"
+    )
+    .is_none());
+    assert!(refusal(
+        exception("2026-11-30", "dell"),
+        "writer",
+        "dell",
+        "2026-11-30"
+    )
+    .is_none());
+    assert!(
+        refusal(
+            exception("2026-11-23", "dell"),
+            "writer",
+            "dell",
+            "2026-11-24"
+        )
+        .is_some(),
+        "expired"
+    );
+    assert!(
+        refusal(
+            exception("2026-11-30", "ws"),
+            "writer",
+            "dell",
+            "2026-11-24"
+        )
+        .is_some(),
+        "other host"
+    );
+    let unlisted = Placement::with_hostname(None, Some("writer"), "vm".into(), "vm".into());
+    assert!(
+        unlisted.named_host_refusal("vm", "2026-11-24").is_none(),
+        "no policy: placement is off"
+    );
+}
+
+#[test]
+fn today_is_an_iso_date() {
+    let today = placement::today();
+    assert_eq!(today.len(), 10);
+    assert!(today.starts_with("20") && today.as_bytes()[4] == b'-' && today.as_bytes()[7] == b'-');
+}

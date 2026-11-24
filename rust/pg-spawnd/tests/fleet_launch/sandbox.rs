@@ -154,7 +154,22 @@ impl Sandbox {
         self.dir.path().join(path)
     }
 
+    /// Writes the host policy; every fixture host carries routing's dated exception so a test may name it.
     pub fn hosts(&self, entries: Value) {
+        let exceptions: Vec<Value> = entries
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|host| json!({"host": host["name"], "decision": "D-0", "until": "2999-12-31"}))
+            .collect();
+        self.write_json(
+            "hosts.json",
+            json!({"hosts": entries, "worker_roles": ["writer"], "host_exceptions": exceptions}),
+        );
+    }
+
+    /// The same policy without any exception: placement is on and no host may be named.
+    pub fn hosts_without_exceptions(&self, entries: Value) {
         self.write_json(
             "hosts.json",
             json!({"hosts": entries, "worker_roles": ["writer"]}),

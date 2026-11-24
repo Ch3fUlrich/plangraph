@@ -17,6 +17,8 @@ pub(super) struct Placement {
     hostname: String,
     hosts: Vec<Host>,
     worker: bool,
+    /// `host_exceptions` of the policy: routing's dated permissions to name a host by hand.
+    exceptions: Vec<Value>,
 }
 
 #[derive(Clone)]
@@ -107,12 +109,38 @@ impl Placement {
                 .and_then(|p| p["worker_roles"].as_array())
                 .is_some_and(|roles| roles.iter().any(|candidate| candidate == role))
         });
+        let exceptions = policy
+            .and_then(|p| p["host_exceptions"].as_array())
+            .cloned()
+            .unwrap_or_default();
         Self {
             local,
             hostname,
             hosts,
             worker,
+            exceptions,
         }
+    }
+
+    /// While placement is on (the policy lists hosts) a worker-role launch never names its host: the
+    /// placement picks the host with the most free memory. A name needs an unexpired routing exception
+    /// `{host, decision: "D-<n>", until: "YYYY-MM-DD"}` in the policy's `host_exceptions`.
+    pub fn named_host_refusal(&self, name: &str, today: &str) -> Option<String> {
+        if !self.worker || self.hosts.is_empty() {
+            return None;
+        }
+        let excepted = self.exceptions.iter().any(|row| {
+            row["host"] == name
+                && row["decision"]
+                    .as_str()
+                    .is_some_and(|d| d.starts_with("D-"))
+                && row["until"].as_str().is_some_and(|until| until >= today)
+        });
+        (!excepted).then(|| {
+            format!(
+                "refused: placement is on, so --host {name} may not name a host. Launch without --host (the host with the most free memory is chosen), or ask routing to record a dated host_exceptions row"
+            )
+        })
     }
 
     pub fn fallback(
@@ -188,6 +216,13 @@ impl Placement {
                 "respawn refused: this host is not in the placement policy and the saved spec names no host (set FLEET_LOCAL_HOST to its policy name)"
             )?.name());
         }
+        if let Some(name) = request.args.option("host").filter(|s| !s.is_empty()) {
+            if !request.args.respawn && !forwarded {
+                if let Some(refusal) = self.named_host_refusal(name, &today()) {
+                    return Err(refusal);
+                }
+            }
+        }
         let host = self.select(explicit)?;
         if self.worker
             && explicit.is_some()
@@ -208,6 +243,14 @@ impl Placement {
     }
 
     fn select(&self, explicit: Option<&str>) -> Result<Host, String> {
+        self.select_with(explicit, |host, compare| self.memory(host, compare))
+    }
+
+    pub(super) fn select_with(
+        &self,
+        explicit: Option<&str>,
+        memory: impl Fn(&Host, bool) -> Option<u64>,
+    ) -> Result<Host, String> {
         let mut pool = if explicit.is_some() || self.hosts.is_empty() {
             let (host, _) = self.fallback(explicit, |_| {
                 unreachable!("no memory read for a named or empty policy")
@@ -238,7 +281,7 @@ impl Placement {
                     continue;
                 }
             };
-            let Some(memory) = self.memory(&host, compare) else {
+            let Some(memory) = memory(&host, compare) else {
                 eprintln!("skip {name}: memory unknown");
                 continue;
             };
@@ -367,4 +410,21 @@ pub(super) fn fs_hostname() -> String {
         return String::new();
     }
     String::from_utf8_lossy(name.split(|b| *b == 0).next().unwrap_or_default()).into_owned()
+}
+
+/// Today's UTC date as `YYYY-MM-DD`.
+pub(super) fn today() -> String {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() / 86_400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
 }

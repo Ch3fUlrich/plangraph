@@ -387,3 +387,21 @@ fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {
         .unwrap();
     child.wait_with_output().unwrap()
 }
+
+/// Placement on: a writer naming a host is refused, a writer without one is placed.
+pub fn check_named_host_refused(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    s.hosts_without_exceptions(json!([{"name": LOCAL, "memory_floor_gib": 0}]));
+    let out = s
+        .launch("writer")
+        .args(["--host", LOCAL, "--dry-run"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(s
+        .normalize(&out.stderr)
+        .contains("placement is on, so --host fixture-local may not name a host"));
+    s.no_launch();
+    let out = s.launch("writer").arg("--dry-run").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+}
