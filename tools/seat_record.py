@@ -422,9 +422,11 @@ def eligible_records(item, records_dir, known_keys=()):
             prs = {int(n) for n in re.findall(r"\bPR\s+#(\d+)\b", prompt, re.I)}
             keys = {k.rstrip(".") for k in re.findall(r"(?<![\w.:-])[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+(?![\w.:-])", prompt)} & known_keys
             named = bool(re.search(r"(?<![\w:])" + re.escape(item["key"]) + r"(?![\w-])", prompt))
-            if record.get("item_key") != item["key"] and not (named or item.get("pr_number") in prs): continue
+            part = record.get("item_keys")
+            covered = item["key"] in (part if isinstance(part, list) else ())   # a part of several items
+            if record.get("item_key") != item["key"] and not covered and not (named or item.get("pr_number") in prs): continue
             bound = True
-            if record.get("item_key") not in (None, item["key"]) or keys - {item["key"]}: raise ValueError("item key mismatch")
+            if (record.get("item_key") not in (None, item["key"]) and not covered) or keys - {item["key"]}: raise ValueError("item key mismatch")
             if prs and item.get("pr_number") and prs != {item["pr_number"]}: raise ValueError("PR number mismatch")
             if (_has_symlink(path, index)
                     or not re.fullmatch(r"run-[0-9a-f]{32}", path.parent.name)

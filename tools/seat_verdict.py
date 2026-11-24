@@ -234,7 +234,7 @@ def read_record_identity(seat_dir, key=None):
     if key is not None and "item_key" in record and key != record["item_key"] and not (
             isinstance(part, list) and key in part):
         raise ValueError("record item_key does not match --key")
-    identity = {field: record[field] for field in ("item_key", "head_sha") if field in record}
+    identity = {field: record[field] for field in ("item_key", "item_keys", "head_sha") if field in record}
     request = record.get("request")
     if isinstance(request, dict) and "verdict_binding" in request:
         identity["binding"] = request["verdict_binding"]
@@ -308,6 +308,9 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
                 if paired and not identity.get("head_sha"):
                     raise ValueError("--head only for record seats bound to a checkout head")
                 evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
+                part = identity.get("item_keys")
+                if "item_key" in evidence and isinstance(part, list) and args.key in part:
+                    evidence["item_key"] = args.key   # a seat of a part of several items covers each of its keys
                 break
             except ValueError as exc:
                 # Windows write/replace lock contention can raise PermissionError;
