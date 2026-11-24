@@ -156,8 +156,13 @@ fn plan_unit(file: &str, instance: Option<&str>, units: &Path, follow: bool, nee
                 });
             }
             "Environment" => needs.environment.extend(assignments(&value)),
-            "WorkingDirectory" if !value.is_empty() && !value.starts_with(['-', '~']) => {
-                needs.dirs.insert(value);
+            "WorkingDirectory" if !value.is_empty() => {
+                let dir = value.trim_start_matches('-');
+                let dir = if dir == "~" { "%h" } else { dir };
+                needs.workdir = Some(dir.to_owned());
+                if !value.starts_with(['-', '~']) {
+                    needs.dirs.insert(value);
+                }
             }
             "Unit" => timer_unit = Some(value),
             "ExecStart" if !value.is_empty() => {

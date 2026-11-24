@@ -273,8 +273,16 @@ pub(super) fn evaluate(
             match reads {
                 Err(_) => add("file", shown(&path, home)),
                 Ok(paths) => {
-                    for read in paths.iter().filter(|p| !p.exists()) {
-                        add("path", shown(read, home));
+                    // A relative path is read from the working directory of the service.
+                    let start = needs
+                        .workdir
+                        .as_deref()
+                        .and_then(|w| expand(w, home))
+                        .map_or_else(|| home.to_path_buf(), PathBuf::from);
+                    for read in paths.iter().map(|p| start.join(p)) {
+                        if !read.exists() {
+                            add("path", shown(&read, home));
+                        }
                     }
                 }
             }

@@ -50,6 +50,9 @@ pub(super) struct Needs {
     /// Variables the `ExecStart` lines read.
     pub keys: BTreeSet<String>,
     pub dirs: BTreeSet<String>,
+    /// The service's `WorkingDirectory=`; without one a user service starts in the home directory.
+    #[serde(default)]
+    pub workdir: Option<String>,
     /// Programs whose own settings the host must hold, as `state-wait:ROLE`.
     #[serde(default)]
     pub programs: BTreeSet<String>,
