@@ -55,6 +55,30 @@ pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
     }
 }
 
+/// Run `git <args>` in `dir` with `env` set last (so it wins over any ambient or fixture value).
+pub fn git_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String, GitError> {
+    #[cfg(test)]
+    let mut cmd = crate::git_test_support::command(dir);
+    #[cfg(not(test))]
+    let mut cmd = Command::new("git");
+    let out = cmd
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(env.iter().copied())
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(GitError::Failed {
+            args: args.join(" "),
+            code: out.status.code(),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        })
+    }
+}
+
 /// Run `git <args>` in `dir` with `input` on stdin and return trimmed stdout (for `mktree` and `hash-object`).
 pub fn git_stdin(dir: &Path, args: &[&str], input: &str) -> Result<String, GitError> {
     #[cfg(test)]

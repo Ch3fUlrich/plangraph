@@ -461,6 +461,82 @@ fn a_receipt_pushed_with_the_lane_head_is_read_green_from_a_second_clone() {
     );
 }
 
+/// The receiving side is git's own atomic transaction (GitHub cannot run a hook of ours): when the
+/// remote rejects either ref of the one `push_argv` push, neither ref changes.
+#[test]
+fn a_rejected_receipt_or_lane_update_leaves_both_remote_refs_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = dir.path().join("remote.git");
+    let writer = dir.path().join("writer");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    fs::create_dir_all(&writer).unwrap();
+    git(&writer, &["init", "-q"]);
+    git(
+        &writer,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&writer, &["commit", "--allow-empty", "-qm", "item"]);
+    let head = git(&writer, &["rev-parse", "HEAD"]);
+    let receipt = format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.000\n");
+    let blob = git_stdin(&writer, &["hash-object", "-w", "--stdin"], &receipt);
+    let tree = git_stdin(
+        &writer,
+        &["mktree"],
+        &format!("100644 blob {blob}\t{head}\n"),
+    );
+    let commit = git(
+        &writer,
+        &["commit-tree", &tree, "-m", "fast-checks receipt"],
+    );
+    git(
+        &writer,
+        &[
+            "update-ref",
+            &format!("refs/plangraph/receipts/{head}"),
+            &commit,
+        ],
+    );
+    let argv = pg_worker_core::fast_check_stamp::push_argv(&head, "lane/x");
+    let hook = remote.join("hooks/pre-receive");
+    fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    for (reject, expect_absent) in [
+        ("refs/notes/*", "refs/heads/lane/x"),
+        ("refs/heads/lane/*", "refs/notes/*"),
+    ] {
+        pg_worker_core::executable_test_support::write_executable(
+            &hook,
+            format!("#!/bin/sh\nwhile read old new ref; do case \"$ref\" in {reject}) exit 1;; esac; done\n"),
+        );
+        let pushed = Command::new("git")
+            .current_dir(&writer)
+            .args(&argv)
+            .output()
+            .unwrap();
+        assert!(!pushed.status.success(), "{reject}: {pushed:?}");
+        let refs = git(&remote, &["for-each-ref"]);
+        assert!(
+            !refs.contains("lane"),
+            "{reject} rejected but {expect_absent} moved: {refs}"
+        );
+    }
+    // Nothing rejected: both refs land together.
+    fs::remove_file(&hook).unwrap();
+    let pushed = Command::new("git")
+        .current_dir(&writer)
+        .args(&argv)
+        .output()
+        .unwrap();
+    assert!(pushed.status.success(), "{pushed:?}");
+    let refs = git(&remote, &["for-each-ref"]);
+    assert!(
+        refs.contains("refs/heads/lane/x") && refs.contains("plangraph-fast-checks-lane%2fx"),
+        "{refs}"
+    );
+}
+
 #[test]
 fn fast_checks_plan_for_a_spawner_python_change_tests_pg_spawnd() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

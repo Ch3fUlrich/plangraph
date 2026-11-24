@@ -360,7 +360,7 @@ def receipt_text(head, verdict="green", rc=0, label="fmt"):
     return f"head {head}\nresult {verdict}\ncheck {label} rc={rc} wall=1.000\n"
 
 
-def receipt_commit(repo, head, text=None, parent=None):
+def receipt_commit(repo, head, text=None, parent=None, message="fast-checks receipt", author="plangraph"):
     """The receipt of `head` as `fast-checks` publishes it: one parentless commit, one file named by the head."""
     def plumbing(*args, stdin=None):
         out = subprocess.run(["git", *args], cwd=str(repo), input=stdin, capture_output=True, text=True, check=True,
@@ -370,8 +370,8 @@ def receipt_commit(repo, head, text=None, parent=None):
     blob = plumbing("hash-object", "-w", "--stdin", stdin=text or receipt_text(head))
     tree = plumbing("mktree", stdin=f"100644 blob {blob}\t{head}\n")
     parents = ["-p", parent] if parent else []
-    commit = plumbing("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", tree, *parents,
-                      "-m", "fast-checks receipt")
+    commit = plumbing("-c", f"user.name={author}", "-c", "user.email=plangraph@localhost", "commit-tree", tree,
+                      *parents, "-m", message)
     plumbing("update-ref", f"refs/plangraph/receipts/{head}", commit)
     return commit
 
@@ -490,6 +490,30 @@ def test_a_receipt_ref_travels_only_as_the_designated_ref_of_a_lane_head_in_the_
     # Another lane's receipt ref does not publish this lane.
     res = run_hook(r, [lane_line(head, name="pr10"), receipt_line(commit, head, name="other")], {})
     assert res.returncode == 1
+
+
+@pytest.mark.usefixtures("train_validator_on_path")
+def test_the_receipt_commit_object_itself_may_carry_no_text(repo, tmp_path):
+    r, _ = repo
+    head = commit_file(r, "app/lane.txt", "clean\n")
+    # The tree is a clean receipt; the message or the author carries the text the file scrub never sees.
+    for odd in ({"message": f"reviewed on {fake_ip()}"}, {"author": "someone private"}):
+        commit = receipt_commit(r, head, **odd)
+        res = run_hook(r, [lane_line(head), receipt_line(commit, head)], {})
+        assert res.returncode == 1, odd
+        assert "not a receipt ref" in res.stderr and "canonical" in res.stderr, res.stderr
+
+
+@pytest.mark.usefixtures("train_validator_on_path")
+def test_a_phase_push_has_no_designated_receipt_so_a_receipt_ref_with_it_is_refused(repo, tmp_path):
+    r, base = repo
+    install_preflight(r, tmp_path / "argv")
+    head = commit_file(r, "app/phase.txt", "clean\n")
+    commit = receipt_commit(r, head)
+    line = f"refs/heads/phase/x {head} refs/heads/phase/x {base}"
+    res = run_hook(r, [line, receipt_line(commit, head, "x")], {"TEST_PREFLIGHT_MARKER": str(tmp_path / "argv")})
+    assert res.returncode == 1
+    assert "not the receipt ref of a lane head" in res.stderr
 
 
 @pytest.mark.usefixtures("train_validator_on_path")

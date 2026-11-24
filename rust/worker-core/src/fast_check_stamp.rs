@@ -3,7 +3,7 @@
 //! A reader asks `green`; a missing, red, malformed or other-head stamp is not green. Receipts
 //! written before this format (`green` or the bare sha) stay green.
 
-use crate::git::{git, git_stdin};
+use crate::git::{git, git_env, git_stdin};
 use crate::worktree::fast_check_stamp;
 use std::path::{Path, PathBuf};
 
@@ -113,23 +113,37 @@ pub fn local_receipt_ref(head: &str) -> String {
     format!("refs/plangraph/receipts/{head}")
 }
 
-/// The one push of a lane head and its receipt: atomic, so a lane update never lands without
-/// the receipt (the pre-push hook refuses a lane head whose designated receipt is not in the
-/// same push).
+/// Whether `target` is a lane ref: the only refs whose pushes carry a designated receipt.
+pub fn is_lane_target(target: &str) -> bool {
+    target
+        .strip_prefix("refs/heads/lane/")
+        .is_some_and(|name| !name.is_empty())
+}
+
+/// The one push of a head: for a lane ref, the head and its receipt, atomically, so a lane update
+/// never lands without the receipt (the pre-push hook refuses a lane head whose designated
+/// receipt is not in the same push). Any other branch has no designated receipt and is pushed
+/// alone: the hook would refuse a receipt ref that no lane head names.
 pub fn push_argv(head: &str, target: &str) -> Vec<String> {
     let target = if target.starts_with("refs/") {
         target.to_owned()
     } else {
         format!("refs/heads/{target}")
     };
-    vec![
-        "push".into(),
-        "--atomic".into(),
-        "origin".into(),
-        format!("{head}:{target}"),
+    let mut argv = vec!["push".to_owned()];
+    if is_lane_target(&target) {
+        argv.push("--atomic".into());
+    }
+    argv.extend(["origin".to_owned(), format!("{head}:{target}")]);
+    if is_lane_target(&target) {
         // Forced: the per-lane receipt ref has one writer and holds one parentless commit.
-        format!("+{}:{}", local_receipt_ref(head), receipt_ref_for(&target)),
-    ]
+        argv.push(format!(
+            "+{}:{}",
+            local_receipt_ref(head),
+            receipt_ref_for(&target)
+        ));
+    }
+    argv
 }
 
 /// Write the receipt of `head` once, for every producer: the shared state file (atomically) and
@@ -152,20 +166,7 @@ pub fn publish(repo: &Path, head: &str, checks: &[Check]) -> Result<PathBuf, Str
         git_stdin(repo, &["hash-object", "-w", "--stdin"], &text).map_err(|e| e.to_string())?;
     let tree = git_stdin(repo, &["mktree"], &format!("100644 blob {blob}\t{head}\n"))
         .map_err(|e| e.to_string())?;
-    let commit = git(
-        repo,
-        &[
-            "-c",
-            "user.name=plangraph",
-            "-c",
-            "user.email=plangraph@localhost",
-            "commit-tree",
-            &tree,
-            "-m",
-            "fast-checks receipt",
-        ],
-    )
-    .map_err(|e| e.to_string())?;
+    let commit = receipt_commit(repo, &tree, RECEIPT_MESSAGE, RECEIPT_IDENTITY)?;
     git(repo, &["update-ref", &local_receipt_ref(head), &commit])
         .map_err(|e| format!("receipt ref not written: {e}"))?;
     Ok(stamp)
@@ -205,6 +206,57 @@ fn well_formed(text: &str, name: &str) -> bool {
     heads == 1 && verdicts == 1 && checks > 0
 }
 
+/// The fixed message and identity of a receipt commit (`canonical_commit` accepts nothing else).
+const RECEIPT_MESSAGE: &str = "fast-checks receipt";
+const RECEIPT_IDENTITY: &str = "plangraph";
+
+/// A parentless commit of `tree`. The identity goes in the environment, which beats ambient
+/// `GIT_AUTHOR_*` variables and config alike: the object is the same wherever it is written.
+pub(crate) fn receipt_commit(
+    repo: &Path,
+    tree: &str,
+    message: &str,
+    name: &str,
+) -> Result<String, String> {
+    let email = "plangraph@localhost";
+    git_env(
+        repo,
+        &["commit-tree", tree, "-m", message],
+        &[
+            ("GIT_AUTHOR_NAME", name),
+            ("GIT_AUTHOR_EMAIL", email),
+            ("GIT_COMMITTER_NAME", name),
+            ("GIT_COMMITTER_EMAIL", email),
+        ],
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The commit object `publish` writes: one tree, a fixed author and committer, one fixed line.
+fn canonical_commit(object: &str) -> bool {
+    const PERSON: &str = "plangraph <plangraph@localhost> ";
+    let mut lines = object.split('\n');
+    let tree = lines.next().and_then(|l| l.strip_prefix("tree "));
+    let stamped = |line: Option<&str>, role: &str| {
+        line.and_then(|l| l.strip_prefix(role))
+            .and_then(|l| l.strip_prefix(PERSON))
+            .and_then(|l| l.split_once(' '))
+            .is_some_and(|(seconds, zone)| {
+                !seconds.is_empty()
+                    && seconds.bytes().all(|b| b.is_ascii_digit())
+                    && zone.len() == 5
+                    && matches!(zone.as_bytes()[0], b'+' | b'-')
+                    && zone[1..].bytes().all(|b| b.is_ascii_digit())
+            })
+    };
+    tree.is_some_and(|t| matches!(t.len(), 40 | 64) && t.bytes().all(|b| b.is_ascii_hexdigit()))
+        && stamped(lines.next(), "author ")
+        && stamped(lines.next(), "committer ")
+        && lines.next() == Some("")
+        && lines.next() == Some(RECEIPT_MESSAGE)
+        && lines.all(str::is_empty)
+}
+
 /// What a push may publish as a receipt ref: a notes tree of nothing but well-formed receipts
 /// (each file named by the head it is for); with `head`, one of them a green receipt of it.
 pub fn notes_commit_green(repo: &Path, commit: &str, head: Option<&str>) -> Result<(), String> {
@@ -217,6 +269,12 @@ pub fn notes_commit_green(repo: &Path, commit: &str, head: Option<&str>) -> Resu
             "{commit} has parents: a receipt ref holds one parentless commit"
         ));
     }
+    // The whole commit object is published: its headers and message are exactly what `publish`
+    // writes, so no free text (and nothing for the scrub to miss) rides in the metadata.
+    let object = git(repo, &["cat-file", "commit", commit]).map_err(|e| e.to_string())?;
+    if !canonical_commit(&object) {
+        return Err(format!("{commit} is not a canonical receipt commit"));
+    }
     let listing =
         git(repo, &["ls-tree", "-r", "-z", "--full-tree", commit]).map_err(|e| e.to_string())?;
     let mut found = false;
@@ -224,7 +282,9 @@ pub fn notes_commit_green(repo: &Path, commit: &str, head: Option<&str>) -> Resu
         let (meta, path) = entry.split_once('\t').ok_or("malformed tree entry")?;
         let mut fields = meta.split_whitespace();
         let (_mode, kind, sha) = (fields.next(), fields.next(), fields.next());
-        let name = path.replace('/', "");
+        // Flat layout only: the reader of a fetched ref looks at `<head>`, so a fanout path
+        // that would pass here and fail there is refused here.
+        let name = path.to_owned();
         if kind != Some("blob")
             || !matches!(name.len(), 40 | 64)
             || !name.bytes().all(|b| b.is_ascii_hexdigit())
@@ -379,6 +439,82 @@ mod tests {
         git(dir, &["rev-parse", &local_receipt_ref(head)]).unwrap()
     }
 
+    /// A commit over `tree` with the identity `publish` uses and the given message.
+    fn canonical_commit_of(dir: &Path, tree: &str, message: &str) -> String {
+        receipt_commit(dir, tree, message, RECEIPT_IDENTITY).unwrap()
+    }
+
+    #[test]
+    fn only_a_lane_push_carries_a_receipt_ref() {
+        let head = "a".repeat(40);
+        for target in [
+            "refs/heads/phase/local-result",
+            "refs/heads/land/train-1",
+            "refs/heads/main",
+            "refs/heads/lane/",
+        ] {
+            let argv = push_argv(&head, target);
+            assert_eq!(
+                argv,
+                ["push", "origin", &format!("{head}:{target}")],
+                "{target}"
+            );
+        }
+        assert!(is_lane_target("refs/heads/lane/x"));
+        assert!(!is_lane_target("refs/heads/lane/"));
+    }
+
+    #[test]
+    fn a_receipt_commit_may_not_carry_text_in_its_metadata() {
+        let (dir, head) = repo();
+        publish(dir.path(), &head, &[check("fmt", 0)]).unwrap();
+        let ok = tip(dir.path(), &head);
+        assert_eq!(notes_commit_green(dir.path(), &ok, Some(&head)), Ok(()));
+        let tree = git(dir.path(), &["rev-parse", &format!("{ok}^{{tree}}")]).unwrap();
+        // The tree is clean; the message, the author and an extra header are not receipts.
+        let message = canonical_commit_of(dir.path(), &tree, "see https://private.example/x");
+        let author = receipt_commit(dir.path(), &tree, RECEIPT_MESSAGE, "someone private").unwrap();
+        for bad in [message, author] {
+            let err = notes_commit_green(dir.path(), &bad, Some(&head)).unwrap_err();
+            assert!(err.contains("not a canonical receipt commit"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_fanout_receipt_path_is_refused_so_every_accepted_layout_is_readable() {
+        let (dir, head) = repo();
+        let text = render(&head, &[check("fmt", 0)]);
+        let blob = git_stdin(dir.path(), &["hash-object", "-w", "--stdin"], &text).unwrap();
+        // A fanout layout (`ab/cdef…`), as `git notes` writes it for large histories.
+        let inner = git_stdin(
+            dir.path(),
+            &["mktree"],
+            &format!("100644 blob {blob}\t{}\n", &head[2..]),
+        )
+        .unwrap();
+        let outer = git_stdin(
+            dir.path(),
+            &["mktree"],
+            &format!("040000 tree {inner}\t{}\n", &head[..2]),
+        )
+        .unwrap();
+        let commit = canonical_commit_of(dir.path(), &outer, "fast-checks receipt");
+        let err = notes_commit_green(dir.path(), &commit, Some(&head)).unwrap_err();
+        assert!(err.contains("not a receipt note"), "{err}");
+        // The accepted (flat) layout is what the reader of a fetched ref finds.
+        publish(dir.path(), &head, &[check("fmt", 0)]).unwrap();
+        let flat = tip(dir.path(), &head);
+        assert_eq!(notes_commit_green(dir.path(), &flat, Some(&head)), Ok(()));
+        git(
+            dir.path(),
+            &["update-ref", &receipt_ref_for("lane/x"), &flat],
+        )
+        .unwrap();
+        git(dir.path(), &["update-ref", "-d", &local_receipt_ref(&head)]).unwrap();
+        std::fs::remove_file(fast_check_stamp(dir.path(), &head).unwrap()).unwrap();
+        assert!(green(dir.path(), &head));
+    }
+
     #[test]
     fn the_lane_push_is_atomic_and_carries_one_receipt_ref_per_lane() {
         let head = "a".repeat(40);
@@ -468,20 +604,7 @@ mod tests {
             &format!("100644 blob {blob}\t{head}\n"),
         )
         .unwrap();
-        let bad = git(
-            dir.path(),
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.com",
-                "commit-tree",
-                &tree,
-                "-m",
-                "x",
-            ],
-        )
-        .unwrap();
+        let bad = canonical_commit_of(dir.path(), &tree, "fast-checks receipt");
         assert!(notes_commit_green(dir.path(), &bad, Some(&head))
             .unwrap_err()
             .contains("malformed"));

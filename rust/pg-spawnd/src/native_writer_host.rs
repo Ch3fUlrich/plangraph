@@ -84,6 +84,26 @@ fn output(command: &mut Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())
 }
 impl Host {
+    /// Push `head` to `target` with its receipt in one push (a lane gets its designated receipt
+    /// ref, any other branch is pushed alone). The caller holds the mutation guard.
+    fn publish_head(&mut self, head: &str, target: &str) -> Result<(), String> {
+        // No force flag on the branch: the remote refuses anything but a fast-forward.
+        let mut argv = pg_worker_core::fast_check_stamp::push_argv(head, target);
+        // A head that was never fast-checked has no receipt to send; the lane hook refuses it.
+        if self
+            .git(&[
+                "rev-parse",
+                "--verify",
+                "-q",
+                &pg_worker_core::fast_check_stamp::local_receipt_ref(head),
+            ])
+            .is_err()
+        {
+            argv.truncate(4);
+        }
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        self.git(&argv).map(|_| ())
+    }
     fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         let mut command = Command::new(program);
         command.env("PATH", &self.tool_path);
@@ -385,23 +405,7 @@ impl Driver for Host {
             return Ok(None);
         };
         let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
-        // No force flag on the branch: the remote refuses anything but a fast-forward. The head
-        // and its receipt go in one atomic push, the form the lane hook requires.
-        let mut argv = pg_worker_core::fast_check_stamp::push_argv(head, &target);
-        // A head that was never fast-checked has no receipt to send; the lane hook refuses it.
-        if self
-            .git(&[
-                "rev-parse",
-                "--verify",
-                "-q",
-                &pg_worker_core::fast_check_stamp::local_receipt_ref(head),
-            ])
-            .is_err()
-        {
-            argv.truncate(4);
-        }
-        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
-        self.git(&argv)?;
+        self.publish_head(head, &target)?;
         Ok(Some(target))
     }
     fn record_quota(&mut self, limit: &crate::native_writer::quota::Limit) -> Result<(), String> {
