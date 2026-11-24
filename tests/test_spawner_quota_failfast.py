@@ -410,3 +410,45 @@ def test_agy_account_limit_keeps_other_harnesses_and_accounts_available(tmp_path
     codex_evidence = next(row["evidence"] for row in plan.skipped if row["leg"] == codex.id)
     assert codex_evidence["body_excerpt"] == "Codex rate limit"
     assert {leg.id for leg in plan.legs} == {agy.id, claude.id}
+
+
+def test_a_successful_probe_clears_a_stored_usage_limit_before_its_reset(tmp_path):
+    """D-6804: an upgraded plan lifts the limit; the stored Nov-27 reset must not keep the leg down."""
+    now = time.time()
+    far = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + 3 * 86400))
+    probes = {}
+    gate = QuotaGate(lambda: [_row(0, far)], clock=lambda: now, probe_ts=probes.get)
+    assert gate.apply(SOL, OK, now)['state'] == 'limited'
+    probes[SOL] = quota_snapshots._ts('2026-11-12T00:00:00Z')   # older than the snapshot: still limited
+    assert gate.apply(SOL, OK, now)['state'] == 'limited'
+    probes[SOL] = now                                            # newer than the snapshot: cleared
+    assert gate.apply(SOL, OK, now) == OK
+    assert gate.apply('omniroute/cc-claude-x', OK, now) == OK    # other pools never read this probe
+    newer = dict(_row(0, far), created_at='2099-01-01T00:00:00Z')   # a later snapshot that is exhausted again wins
+    again = QuotaGate(lambda: [newer], clock=lambda: now, probe_ts=probes.get)
+    assert again.apply(SOL, OK, now)['state'] == 'limited'
+
+
+def test_an_unreadable_probe_store_never_clears_a_limit():
+    now = time.time()
+    far = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + 3600))
+    gate = QuotaGate(lambda: [_row(0, far)], clock=lambda: now, probe_ts=_boom(OSError('x')))
+    assert gate.apply(SOL, OK, now)['state'] == 'limited'
+
+
+def test_production_reader_clears_the_snapshot_limit_after_a_probe_pass(tmp_path, monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(flag, 'default_reader', _production_reader)
+    flag.default_reader.cache_clear()
+    store = LegStateStore(tmp_path / 'state')
+    monkeypatch.setattr(leg_state, '_default_store', lambda: store)
+    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
+    monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: []))
+    monkeypatch.setattr(quota_snapshots, 'fetch_snapshot_rows', lambda: [_row(0, '2099-01-01T00:00:00Z')])
+    try:
+        reader = flag.default_reader()
+        assert reader.leg_status(SOL, now=now)['state'] == 'limited'
+        store.record_probe_pass(SOL, 'review-probe', now=now)
+        assert reader.leg_status(SOL, now=now)['state'] == 'ok'
+    finally:
+        flag.default_reader.cache_clear()

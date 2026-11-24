@@ -28,6 +28,12 @@ struct Snapshot {
     review_leg_activity: Option<review::Activity>,
     #[serde(default)]
     host_idle_capacity: pg_worker_core::host_idle::Snapshot,
+    /// ChatGPT pool use per window (object or array); the collector fills `live`, `waiting`
+    /// and `admission_slots`. Absent: the pool-use rule does not run.
+    #[serde(default)]
+    pool_use: Option<PoolUse>,
+    #[serde(skip)]
+    pool_reports: Vec<pg_worker_core::pool_use::Report>,
     #[serde(skip)]
     idle_messages: Vec<String>,
     #[serde(default)]
@@ -49,6 +55,20 @@ struct Snapshot {
     host_drift: bool,
     closes_recent: u64,
     closes_previous: u64,
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PoolUse {
+    One(pg_worker_core::pool_use::Pool),
+    Many(Vec<pg_worker_core::pool_use::Pool>),
+}
+impl PoolUse {
+    fn pools(&self) -> &[pg_worker_core::pool_use::Pool] {
+        match self {
+            Self::One(pool) => std::slice::from_ref(pool),
+            Self::Many(pools) => pools,
+        }
+    }
 }
 struct Alert {
     message: String,
@@ -158,6 +178,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let validated = (|| -> Result<Snapshot, Box<dyn std::error::Error>> {
         let mut s: Snapshot = serde_json::from_slice(&fs::read(&args[1])?)?;
         s.idle_messages = s.host_idle_capacity.messages()?;
+        s.pool_reports = s
+            .pool_use
+            .iter()
+            .flat_map(PoolUse::pools)
+            .map(pg_worker_core::pool_use::Pool::report)
+            .collect::<Result<_, _>>()?;
         if s.infra_failed > s.ci_failed || s.ci_failed > s.ci_total {
             return Err("inconsistent CI counts".into());
         }
@@ -189,6 +215,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 message: message.clone(),
                 recipient: None,
             }));
+            for report in &s.pool_reports {
+                println!("{}", report.digest_line());
+                // Row spacing is the check's ten-minute rhythm; a failed write is loud, never fatal.
+                if let Err(e) =
+                    pg_worker_core::pool_use::record(&dir.join("pool-use.jsonl"), report)
+                {
+                    eprintln!("FLOW-WATCHDOG: pool-use telemetry: {e}");
+                }
+                if let Some(message) = report.alert() {
+                    alerts.push(Alert {
+                        active: report.alert_key(),
+                        message,
+                        recipient: None,
+                    });
+                }
+                // The dispatcher starts the runs; unset or failing hook leaves the alert standing.
+                if let Some(event) = report.start_event() {
+                    let _ = deliver("PLANGRAPH_POOL_START", &event.to_string());
+                }
+            }
             alerts.extend(s.session_activity.alerts());
             alerts.extend(s.writer_activity.iter().flat_map(writer::Activity::alerts));
             alerts.extend(
@@ -231,6 +277,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && validated
                         .as_ref()
                         .map_or(true, |s| s.writer_activity.is_none()))
+                || (line.starts_with("pool-underuse ")
+                    && validated.as_ref().map_or(true, |s| s.pool_use.is_none()))
                 || (line.starts_with("review-leg-unserved ")
                     && validated
                         .as_ref()

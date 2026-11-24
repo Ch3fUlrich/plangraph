@@ -71,6 +71,7 @@ pub mod pathjail;
 pub mod placement_rule_bridge;
 pub mod placement_rule_store;
 pub mod placement_rules;
+pub mod pool_use;
 pub mod private_targets;
 pub mod probe;
 #[cfg(unix)]

@@ -89,6 +89,18 @@ def pool_down_until(rows, provider, now, *, min_pct=1.0):
     return None if not accounts or 0.0 in accounts.values() else min(accounts.values())
 
 
+def pool_seen_at(rows, provider):
+    """Newest snapshot observation time of ``provider`` (epoch), 0.0 when none carries one."""
+    seen = 0.0
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get('provider') or '').split(':', 1)[0]
+        if name == provider:
+            seen = max(seen, _ts(_get(row, 'created_at', 'createdAt', 'timestamp')) or 0.0)
+    return seen
+
+
 def fetch_snapshot_rows(env=None, *, fetch=None):
     """Read-only snapshot DB or management API; LookupError when unreadable."""
     source = os.environ if env is None else env
@@ -143,10 +155,16 @@ def skip_reason(status):
 
 
 class QuotaGate:
-    """Turns a leg-status read into ``limited`` while the leg's omniroute pool is exhausted."""
+    """Turns a leg-status read into ``limited`` while the leg's omniroute pool is exhausted.
 
-    def __init__(self, rows=None, *, clock=time.time, ttl_s=CACHE_S):
-        self.rows, self.clock, self.ttl_s = rows, clock, ttl_s
+    ``probe_ts(model)`` is the epoch of the leg's last successful probe call. A probe
+    that succeeded after the newest snapshot of the pool proves the pool serves, so
+    the stored exhaustion (and its reset time, possibly days away after a plan
+    upgrade) stops gating the leg until a newer snapshot shows it exhausted again.
+    """
+
+    def __init__(self, rows=None, *, clock=time.time, ttl_s=CACHE_S, probe_ts=None):
+        self.rows, self.clock, self.ttl_s, self.probe_ts = rows, clock, ttl_s, probe_ts
         self._at, self._cached, self._observed = None, [], {}
 
     def _snapshot(self):
@@ -174,6 +192,12 @@ class QuotaGate:
             self._at = self.clock()
         return self._cached
 
+    def _probe_pass(self, model):
+        try:
+            return self.probe_ts(model) if self.probe_ts else None
+        except Exception:
+            return None   # an unreadable probe store never clears a limit
+
     def apply(self, model, status, now=None):
         provider = pool_of(model)
         if provider is None or unavailable(status):
@@ -181,6 +205,9 @@ class QuotaGate:
         now = self.clock() if now is None else now
         until = pool_down_until(self._snapshot(), provider, now, min_pct=_min_pct())
         if until is None:
+            return status
+        passed = self._probe_pass(model)
+        if passed is not None and passed > pool_seen_at(self._snapshot(), provider):
             return status
         return dict(state='limited', reason='quota_snapshot', evidence=dict(
             status=429, body_excerpt=f'omniroute {provider} pool at 0%, resets at {until:.0f}',

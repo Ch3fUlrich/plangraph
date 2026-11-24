@@ -516,3 +516,16 @@ def test_failed_agy_reprobe_preserves_a_recent_429_without_reset(store):
     store.record_provider_response(model, 429, 'quota', {}, 'fixture', now=100)
     store.record_probe_fail(model, 'review probe failed', 'review-probe', now=101)
     assert store.leg_status(model, now=102)['state'] == 'limited'
+
+
+def test_probe_pass_supersedes_a_far_provider_usage_limit_in_every_scope(tmp_path):
+    """D-6804: a booked usage limit with a reset days away ends at the next successful probe."""
+    store = ls.LegStateStore(tmp_path / 'legs.sqlite')
+    now = 1_000_000.0
+    for scope in (dict(), dict(account='a1', combo='c1')):
+        store.record_provider_response('cx-gpt-6.2-sol-medium', 429, 'usage limit reached (reset after 72h)',
+                                       {}, 'spawner', now=now, **scope)
+        assert store.leg_status('cx-gpt-6.2-sol-medium', now=now + 60, **scope)['state'] == 'limited'
+        store.record_probe_pass('cx-gpt-6.2-sol-medium', 'review-probe', now=now + 120, **scope)
+        assert store.leg_status('cx-gpt-6.2-sol-medium', now=now + 180, **scope)['state'] == 'ok'
+        now += 1000
