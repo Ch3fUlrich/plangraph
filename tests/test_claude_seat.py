@@ -1,6 +1,7 @@
 """Hermetic argv contracts for the lean Claude review harness."""
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -244,3 +245,28 @@ def test_a_relocated_config_home_is_denied_with_and_without_the_sandbox(tmp_path
         assert f"Read(/{xdg}/plangraph/**)" in settings["permissions"]["deny"]
         if available:
             assert f"{xdg}/plangraph" in settings["sandbox"]["filesystem"]["denyRead"]
+
+
+def test_a_sandbox_that_starts_but_does_not_hide_the_fixture_is_not_a_denial(tmp_path, monkeypatch):
+    """A fake bwrap that runs the command and ignores --tmpfs: it starts, and denies nothing."""
+    from plangraph.routing_support import claude_seat
+
+    monkeypatch.setattr(claude_seat.sys, "platform", "linux")
+    fake = tmp_path / "bwrap"
+    fake.write_text('#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n')
+    fake.chmod(0o700)
+    assert claude_seat.sandbox_denies_reads({"PATH": str(tmp_path)}) is False
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="bwrap smoke check")
+def test_the_real_host_sandbox_hides_a_masked_fixture_file(monkeypatch):
+    """With a working bwrap the masked fixture is really gone: the smoke check says so."""
+    import shutil
+
+    bwrap = shutil.which("bwrap")
+    starts = bwrap and subprocess.run(
+        [bwrap, "--unshare-pid", "--ro-bind", "/", "/", "--proc", "/proc", "--", "/bin/true"],
+        stdin=subprocess.DEVNULL, capture_output=True, timeout=10).returncode == 0
+    if not starts:
+        pytest.skip("this host cannot start bwrap")
+    assert claude_seat.sandbox_denies_reads({"PATH": os.defpath}) is True

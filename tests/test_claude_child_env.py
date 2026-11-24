@@ -74,6 +74,7 @@ def sandbox_starts(monkeypatch):
     """The host can start Claude's sandbox unless a test says otherwise (a smoke run is not hermetic)."""
     from plangraph.routing_support import claude_seat
     monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: True)
+    monkeypatch.setattr(claude_seat, 'sandbox_denies_reads', lambda env: True)
 
 
 def fake_binary(directory, name):
@@ -357,9 +358,11 @@ def test_a_claude_writer_runs_its_shell_in_the_sandbox_with_the_secret_paths_unr
     assert {'~/.ssh', '~/.config/plangraph', '~/.local/share/plangraph/keeper.json', '/xdg/plangraph'} <= set(deny)
 
 
-def test_a_claude_writer_route_is_refused_where_the_shell_cannot_be_sandboxed(monkeypatch, tmp_path):
+@pytest.mark.parametrize('starts, denies', [(False, True), (True, False)], ids=['no-sandbox', 'starts-but-hides-nothing'])
+def test_a_claude_writer_route_is_refused_where_the_shell_cannot_be_sandboxed(monkeypatch, tmp_path, starts, denies):
     from plangraph.routing_support import claude_seat
-    monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: False)
+    monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: starts)
+    monkeypatch.setattr(claude_seat, 'sandbox_denies_reads', lambda env: denies)
     lease = Mock()
     monkeypatch.setattr('plangraph.spawner.host_ready.cargo_lease', lease)
     exe, args, _, job = drive_args(monkeypatch, tmp_path, client='claude', model='claude-haiku-5-5', role='implement')
