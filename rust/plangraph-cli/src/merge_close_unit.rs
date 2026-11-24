@@ -4,6 +4,8 @@
 //! The streak lives in one private file (`{"pending":N,"at":EPOCH}`). Missing or unreadable
 //! means zero. It is committed right after the first refresh outcome, before any page is read:
 //! a run killed earlier neither counts nor resets. Any outcome that is not pending resets it.
+//! Both services take the lock beside the file (`pending.lock`) for the whole run; a run that
+//! finds it held ends at once with `merge_close_busy` and exit 0.
 use crate::feeder::Env;
 use crate::merge_close::{
     scheduled_pass, Pass, Refresh, ScheduleTiming, CONTINUE_WINDOW_SECS, PASS_BUDGET,
@@ -57,9 +59,31 @@ fn refresh_wait(env: &Env) -> Result<Duration, String> {
     }
 }
 
+fn lock_runs(state: &Path) -> Result<Option<pg_worker_core::lockfile::LockGuard>, String> {
+    if let Some(parent) = state.parent().filter(|p| !p.as_os_str().is_empty()) {
+        pg_worker_core::run::record_io::ensure_private_dir(parent)
+            .map_err(|err| format!("create merge-close state dir {}: {err}", parent.display()))?;
+    }
+    pg_worker_core::lockfile::try_lock(&state.with_extension("lock"))
+        .map_err(|err| format!("lock merge-close state {}: {err}", state.display()))
+}
+
 /// One scheduled run; returns the exit status. `continue_only` (the continuation timer) does
 /// nothing unless a pending pass left a scan that can still be read inside the index age.
 pub fn run_unit(env: &Env, state: &Path, continue_only: bool, project: Option<&str>) -> i32 {
+    // One scheduled run at a time across both services: a second run reads the streak the first
+    // one has not written yet. The lock dies with the process, so a crash never holds it.
+    let _lock = match lock_runs(state) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            println!("merge_close_busy\tanother scheduled run holds the state");
+            return 0;
+        }
+        Err(reason) => {
+            eprintln!("merge-close: {reason}");
+            return 1;
+        }
+    };
     let streak = read_streak(state);
     let started = now_secs();
     if continue_only
