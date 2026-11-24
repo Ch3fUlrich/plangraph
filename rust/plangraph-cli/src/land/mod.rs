@@ -15,6 +15,8 @@ pub mod go_statement;
 mod go_statement_tests;
 pub mod go_verify;
 #[cfg(test)]
+mod go_verify_schema_tests;
+#[cfg(test)]
 mod go_verify_tests;
 pub mod keeper_schema;
 #[cfg(test)]
