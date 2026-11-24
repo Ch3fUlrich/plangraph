@@ -134,6 +134,8 @@ pub mod git_test_support;
 #[cfg(target_os = "linux")]
 mod affected_scratch;
 pub mod cargo_cache;
+#[cfg(target_os = "linux")]
+pub mod cargo_command_lease;
 pub mod cargo_pool;
 mod cargo_pool_telemetry;
 mod cargo_pool_trim;

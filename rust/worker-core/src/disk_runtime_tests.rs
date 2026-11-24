@@ -426,3 +426,71 @@ fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_on
                 .all(|a| !a.contains("ffffffffffffffff"))
     );
 }
+
+#[cfg(target_os = "linux")]
+fn over_cap_target(
+    parent: &Path,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    Vec<std::path::PathBuf>,
+) {
+    let checkout = parent.join("checkout");
+    let target = parent.join("target");
+    let profile = target.join("debug");
+    fs::create_dir_all(profile.join("build")).unwrap();
+    fs::create_dir(&checkout).unwrap();
+    fs::write(profile.join(".cargo-lock"), []).unwrap();
+    fs::write(
+        target.join("CACHEDIR.TAG"),
+        b"Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 3600);
+    let units = (0..10)
+        .map(|n| {
+            let path = profile.join("build").join(format!("pg-core-{n:016x}"));
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("build-script-build"), vec![0u8; 100]).unwrap();
+            for p in [path.join("build-script-build"), path.clone()] {
+                fs::File::open(p).unwrap().set_modified(old).unwrap();
+            }
+            path
+        })
+        .collect();
+    (checkout, target, units)
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn trim_refusals_name_the_live_holder_pid() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, _) = over_cap_target(parent.path());
+    let lease = crate::cargo_cache::writer_lease(&target).unwrap();
+    let report = post_run_cargo_using(&checkout, &target, 700, || Ok((vec![], false))).unwrap();
+    let note = format!("held by pid {}", std::process::id());
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.contains("cache lease held") && s.contains(&note)),
+        "{:?}",
+        report.skipped
+    );
+    drop(lease);
+    // A pool slot over its cap and leased reports the same holder.
+    let slot = parent.path().join("slot-0");
+    fs::create_dir_all(slot.join("debug")).unwrap();
+    fs::write(slot.join("debug/blob"), [0u8; 64]).unwrap();
+    let _slot_lease = crate::cargo_cache::writer_lease(&slot).unwrap();
+    let mut report = Report::default();
+    crate::cargo_pool::enforce_pool_cap(&[slot], 10, true, &mut report).unwrap();
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.contains("(leased") && s.contains(&note)),
+        "{:?}",
+        report.skipped
+    );
+}

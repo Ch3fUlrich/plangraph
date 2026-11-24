@@ -175,6 +175,16 @@ def cargo_target_size_gb(path):
 CLEANUP_WAIT_ENV = 'PLANGRAPH_CARGO_CLEANUP_WAIT_S'
 
 
+def _open_lease_file(path, exclusive):
+    """A shared lease needs only read access (a sandboxed writer cannot write beside its target)."""
+    if not exclusive:
+        try:
+            return path.open('rb')
+        except FileNotFoundError:
+            pass
+    return path.open('a+b')
+
+
 def _cargo_lease_for(target, exclusive=False, wait=0.0):
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +194,7 @@ def _cargo_lease_for(target, exclusive=False, wait=0.0):
         try:
             if os.name == 'nt':
                 return _windows_cargo_lease(path, exclusive)
-            lease = path.open('a+b')
+            lease = _open_lease_file(path, exclusive)
             try:
                 import fcntl
                 fcntl.flock(lease, (fcntl.LOCK_EX | fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)
@@ -196,6 +206,35 @@ def _cargo_lease_for(target, exclusive=False, wait=0.0):
             if not exclusive or time.monotonic() >= deadline:
                 raise
             time.sleep(min(0.5, max(deadline - time.monotonic(), 0)))
+
+
+def cargo_lease_holders(target):
+    """Pids that hold a flock on ``<target>.plangraph-lock`` now, from the kernel lock table (Linux).
+
+    A dead or cancelled holder is absent. Empty when the table or the lock file is unreadable."""
+    target = Path(target)
+    try:
+        stat = target.with_name(target.name + '.plangraph-lock').stat()
+        rows = Path('/proc/locks').read_text().splitlines()
+    except OSError:
+        return []
+    pids = set()
+    for row in rows:
+        fields = row.split()
+        try:
+            major, minor, inode = fields[5].split(':')
+            if (fields[1] == 'FLOCK' and os.major(stat.st_dev) == int(major, 16)
+                    and os.minor(stat.st_dev) == int(minor, 16) and stat.st_ino == int(inode)):
+                pids.add(int(fields[4]))
+        except (IndexError, ValueError):
+            continue
+    return sorted(pids)
+
+
+def lease_holder_note(target):
+    """`` (held by pid 12, 34)`` for a refusal that names who blocks the cargo lease, else ''."""
+    pids = cargo_lease_holders(target)
+    return f" (held by pid {', '.join(map(str, pids))})" if pids else ''
 
 
 def cargo_lease(exclusive=False, wait=0.0):
@@ -485,7 +524,7 @@ def local_disk_admission(worktree, service, role='implement', movable=False, *, 
                 try:
                     reclaim_cargo_target(target, cap, worktree)
                 except OSError:
-                    return None, measured + '; busy or cleanup unavailable'
+                    return None, measured + '; busy or cleanup unavailable' + lease_holder_note(target)
         if building:
             # The legacy caches and the pool slots stay under the same cap.
             for extra in _legacy_cache_roots() + _pool_slot_roots(target):
@@ -597,7 +636,7 @@ def running_disk_refusal(worktree, role='implement'):
         building = role not in NO_BUILD_ROLES
         size = cargo_target_size_gb(target) if building else 0
         if building and size >= cap:
-            return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB'
+            return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB' + lease_holder_note(target)
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: runtime measurement or configuration unavailable'
     return None

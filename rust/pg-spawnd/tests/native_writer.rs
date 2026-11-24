@@ -124,7 +124,9 @@ fn native_writer_fixture(hostile_policy: bool, systemd_path: bool) {
         r#"import json, os, pathlib, subprocess
 record = json.loads((pathlib.Path.cwd().parent / 'record.json').read_text())
 assert os.environ['PATH'] == record['tool_path']
-assert pathlib.Path('writer-path').read_text() == record['tool_path']
+# The writer's own PATH starts with the Cargo lease shim of its run directory.
+assert pathlib.Path('writer-path').read_text() == str(pathlib.Path.cwd().parent / 'cargo-shim') + ':' + record['tool_path']
+assert (pathlib.Path.cwd().parent / 'cargo-shim' / 'cargo').is_symlink()
 assert subprocess.check_output(['cargo'], text=True).strip() == 'fixture cargo'
 for tool in ('cargo', 'git', 'codex'):
     import shutil

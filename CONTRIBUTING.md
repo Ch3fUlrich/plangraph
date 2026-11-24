@@ -732,7 +732,8 @@ inputs with CRLF fail early with a normalization diagnostic. Worker tests use
 the existing CI Temporal wrapper and require the Temporal CLI and protobuf tools.
 Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
 The fleet snapshot selection builds `pg-spawnd` from the checkout under the
-Cargo pool lease before pytest. Fast checks and the native writer gate validate
+Cargo pool lease before pytest; preflight sets `PLANGRAPH_CARGO_LEASE_HELD`
+around its Cargo commands and names holder pids when a trim skips. Fast checks and the native writer gate validate
 Class-Search body lines in the commit range using `pg-policy`.
 A non-Rust lane push can reuse a current cached policy executable even when
 the shared target is at the build cap.
