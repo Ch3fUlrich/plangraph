@@ -522,7 +522,8 @@ def export_tree(cfg: Config, runner) -> dict:
         content.mkdir()
         _extract_tar(archive, content)
         old = staging / "previous"
-        if final.exists():
+        # A broken symlink does not "exist" but still blocks the rename onto it.
+        if final.exists() or final.is_symlink():
             os.replace(final, old)
         os.replace(content, final)
         return {"status": "verified", "sha": sha, "tree": str(final)}
