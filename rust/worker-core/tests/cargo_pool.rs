@@ -279,3 +279,31 @@ fn config_file_is_read_from_the_config_home() {
     fs::write(&file, "48\n").unwrap();
     assert_eq!(configured_cap_bytes(), 48 << 30);
 }
+
+#[test]
+fn review_seats_leave_a_temp_shared_target_for_the_default_pool_and_hygiene_lists_their_slots() {
+    use pg_worker_core::{cargo_cache::review_fallback_primary, cargo_pool::existing_review_slots};
+    let home = std::path::Path::new("/home/fixture");
+    let default = home.join(".cache/plangraph/cargo-target");
+    // The workstation's 99.5 GB directory: a shared target configured under /tmp.
+    assert_eq!(
+        review_fallback_primary(
+            std::path::Path::new("/tmp/plangraph-review-shared-cargo-target"),
+            home
+        ),
+        Some(default.clone())
+    );
+    assert_eq!(review_fallback_primary(&default, home), None);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let primary = tmp.path().join("cargo-target");
+    let pool = tmp.path().join("cargo-target-pool");
+    for name in ["slot-1", "slot-review-a", "slot-review-b", "other"] {
+        fs::create_dir_all(pool.join(name)).unwrap();
+    }
+    let names: Vec<_> = existing_review_slots(&primary)
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["slot-review-a", "slot-review-b"]);
+}

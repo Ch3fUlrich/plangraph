@@ -361,3 +361,45 @@ fn cancellation_during_finish_blocks_continuation_and_releases_slot() {
     assert!(d.path().join("queued-finished").exists());
     assert_eq!(s.counts().running, 0);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_review_slot_stays_leased_while_its_run_lives_and_goes_with_it() {
+    let d = tempfile::tempdir().unwrap();
+    let slot = d.path().join("cargo-target-pool/slot-review-seat");
+    std::fs::create_dir_all(slot.join("target")).unwrap();
+    std::fs::write(slot.join("target/object"), "build").unwrap();
+    let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
+    let mut run = spec(d.path(), 70, HOLD);
+    run.env = vec![("CARGO_TARGET_DIR".into(), slot.join("target").into())];
+    s.start(run).unwrap();
+    until(|| s.counts().running == 1);
+    // Hygiene's exclusive lease on the slot is refused while the run is alive.
+    assert!(crate::cargo_cache::try_exclusive_lease(&slot)
+        .unwrap()
+        .is_none());
+    std::fs::write(d.path().join("go"), "").unwrap();
+    assert!(s.wait_finished("run-70", Duration::from_secs(2)));
+    until(|| !slot.exists());
+    assert!(crate::cargo_cache::try_exclusive_lease(&slot)
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn only_a_review_slot_of_a_pool_is_recognized() {
+    use crate::cargo_pool::review_slot_of;
+    let ok = Path::new("/c/cargo-target-pool/slot-review-a/target");
+    assert_eq!(
+        review_slot_of(ok),
+        Some("/c/cargo-target-pool/slot-review-a".into())
+    );
+    for other in [
+        "/c/cargo-target-pool/slot-1",
+        "/c/cargo-target/slot-review-a/target",
+        "/c/cargo-target-pool/slot-review-a",
+        "/tmp/plain/target",
+    ] {
+        assert_eq!(review_slot_of(Path::new(other)), None, "{other}");
+    }
+}

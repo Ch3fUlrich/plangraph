@@ -211,21 +211,32 @@ def test_review_pytest_paths_are_judged_by_text_not_platform_path_text(
     assert claude_seat._review_command(command, tmp_path) is allowed
 
 
-def test_review_seat_without_worker_target_builds_in_the_capped_pool(tmp_path, monkeypatch):
-    """The seat's slot is in the pool that cleanup and hygiene enumerate, and it holds its lease."""
-    import fcntl
-
+def _configure_seat(tmp_path, monkeypatch, configured, outside_temp):
     from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
     from plangraph.routing_support import claude_seat
-    from plangraph.spawner import host_ready
+    from plangraph.spawner import host_ready_source
 
-    configured = tmp_path / "cache/cargo-target"
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(configured))
+    if outside_temp:  # pytest's tmp_path itself sits under the system temp directory
+        monkeypatch.setattr(host_ready_source, "_under_system_temp", lambda _: False)
     monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
     leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
     argv, env, run_dirs, leases = claude_access_args("review"), {}, {}, {}
     claude_seat.configure_review_tests(argv, env, leg, "review", run_dirs, "job1", leases=leases)
+    return home, argv, env, run_dirs, leases
 
+
+def test_review_seat_without_worker_target_builds_in_the_capped_pool(tmp_path, monkeypatch):
+    """The seat's slot is in the pool that cleanup and hygiene enumerate, and it holds its lease."""
+    import fcntl
+
+    from plangraph.spawner import host_ready
+
+    configured = tmp_path / "cache/cargo-target"
+    _, argv, env, run_dirs, leases = _configure_seat(tmp_path, monkeypatch, configured, True)
     pool = tmp_path / "cache/cargo-target-pool"
     target = Path(env["CARGO_TARGET_DIR"])
     assert target == pool / "slot-review-job1" / "target"
@@ -243,3 +254,31 @@ def test_review_seat_without_worker_target_builds_in_the_capped_pool(tmp_path, m
     leases["job1"].close()
     fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
     probe.close()
+
+
+def test_review_seat_never_builds_under_tmp_and_cleanup_enumerates_where_it_does(tmp_path, monkeypatch):
+    """A shared target configured under /tmp is not used for review slots; admission cleanup finds them."""
+    from plangraph.spawner import host_ready
+
+    home, _, env, _, leases = _configure_seat(
+        tmp_path, monkeypatch, "/tmp/plangraph-review-shared-cargo-target", False)
+    target = Path(env["CARGO_TARGET_DIR"])
+    assert target == home / ".cache/plangraph/cargo-target-pool/slot-review-job1/target"
+    assert not str(target).startswith("/tmp/")
+    assert target.parent in host_ready._shared_cache_roots()
+    leases["job1"].close()
+
+
+def test_a_dry_launch_drops_the_review_slot_it_created(tmp_path):
+    from plangraph.spawner.launch_spec import drop_review_slot
+
+    slot = tmp_path / "cargo-target-pool" / "slot-review-job1"
+    (slot / "target").mkdir(parents=True)
+    drop_review_slot({"CARGO_TARGET_DIR": str(slot / "target")})
+    assert not slot.exists()
+    # Anything that is not a review slot of a pool stays.
+    plain = tmp_path / "plain" / "target"
+    plain.mkdir(parents=True)
+    drop_review_slot({"CARGO_TARGET_DIR": str(plain)})
+    drop_review_slot({})
+    assert plain.exists()

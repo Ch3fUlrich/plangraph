@@ -32,7 +32,7 @@ If the target is still above the cap, trimming can remove Cargo-marked debug
 profiles. Over-cap busy hosts refuse a building role with
 `cargo_target_cap`, which names the measured cache path, after dropping build variants
 idle for an hour. A review seat without a worker checkout builds in `slot-review-<id>` of the
-pool beside the shared target; admission cleanup and `pg-disk-hygiene` enumerate that pool, and the seat holds the slot's lease until it ends, so the cap and trim cover it and never remove a running build. A detached
+pool beside the shared target, or in `~/.cache/plangraph/cargo-target-pool` when that target is configured under the system temp directory; admission cleanup and `pg-disk-hygiene` enumerate that pool. The seat holds the slot's lease until it ends (the supervisor holds it for a native launch and removes the slot afterwards), so the cap and trim never remove a running build. A detached
 spawn refused after admission exits non-zero and logs `ALERT SPAWN <run> REFUSED: <reason>`. Native writer reviews use
 a disposable Cargo target alongside the exact-head checkout on a worker. The
 free-space floor applies to reviews, which are exempt from the shared cap. Idle hosts clear the shared cache before

@@ -109,14 +109,41 @@ def legacy_cache_roots():
             for rel in ('.cache/pg-target-po', '.cache/pg-target-warm')]
 
 
-def pool_slot_roots(primary):
-    """Pool slots beside the primary target (`<primary>-pool/slot-N`), as created by cargo_pool."""
+def _under_system_temp(path):
+    import tempfile
+    roots = {Path(root).resolve() for root in ('/tmp', '/var/tmp', tempfile.gettempdir())}
+    resolved = Path(path).resolve()
+    return any(resolved == root or root in resolved.parents for root in roots)
+
+
+def review_pool(primary):
+    """Pool of the review seats' build slots: beside the shared target, never under the system temp dir.
+
+    A shared target configured there is not capped by hygiene's own pool, so the seats use the
+    default pool under ``~/.cache/plangraph``; admission cleanup and ``pg-disk-hygiene`` enumerate it too."""
     pool = primary.with_name(primary.name + '-pool')
-    try:
-        return sorted(p for p in pool.glob('slot-*')
-                      if p.is_dir() and not p.is_symlink() and '.' not in p.name)
-    except OSError:
-        return []
+    if _under_system_temp(pool):
+        return (Path.home() / '.cache/plangraph/cargo-target-pool').absolute()
+    return pool
+
+
+def pool_slot_roots(primary):
+    """Pool slots beside the primary target (`<primary>-pool/slot-N`), as created by cargo_pool.
+
+    When review seats build in the fallback pool, its `slot-review-*` slots are listed too (only those:
+    the fallback pool's other slots belong to a default-configured target)."""
+    own = primary.with_name(primary.name + '-pool')
+    pools = [(own, 'slot-*')]
+    if (fallback := review_pool(primary)) != own:
+        pools.append((fallback, 'slot-review-*'))
+    found = []
+    for pool, pattern in pools:
+        try:
+            found += sorted(p for p in pool.glob(pattern)
+                            if p.is_dir() and not p.is_symlink() and '.' not in p.name)
+        except OSError:
+            continue
+    return found
 
 
 def record_disk_floor_alarm(service, free_gb, floor_gb, reason):

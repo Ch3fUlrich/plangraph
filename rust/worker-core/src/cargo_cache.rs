@@ -17,6 +17,27 @@ pub fn shared_cache_roots() -> io::Result<Vec<PathBuf>> {
     )
 }
 
+/// Whether `path` lies under the system temporary directory (`/tmp`, `/var/tmp`, `TMPDIR`).
+pub fn under_system_temp(path: &Path) -> bool {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    [
+        Path::new("/tmp"),
+        Path::new("/var/tmp"),
+        env::temp_dir().as_path(),
+    ]
+    .into_iter()
+    .any(|root| {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        resolved.starts_with(root)
+    })
+}
+
+/// The shared target review seats use in place of one configured under the system temp
+/// directory, which no cap or trim would cover: `<home>/.cache/plangraph/cargo-target`.
+pub fn review_fallback_primary(primary: &Path, home: &Path) -> Option<PathBuf> {
+    under_system_temp(primary).then(|| home.join(".cache/plangraph/cargo-target"))
+}
+
 /// Check the actual child setting against the host's configured writer target.
 pub fn require_writer_target(checkout: &Path, value: Option<&OsStr>) -> io::Result<PathBuf> {
     let refuse = |reason: &str| io::Error::other(format!("CARGO_TARGET_DIR: {reason}"));
