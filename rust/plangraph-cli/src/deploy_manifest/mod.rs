@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+pub mod guard;
 pub mod install;
 pub mod ledger;
 pub mod live;
@@ -320,6 +321,8 @@ pub fn this_host_roles(config_dir: &Path) -> Result<BTreeSet<String>, String> {
     )
 }
 
+#[cfg(test)]
+mod guard_tests;
 #[cfg(test)]
 mod install_tests;
 #[cfg(test)]

@@ -1,0 +1,9 @@
+# Dated routing exceptions to the GO check's rule "no manifest entry stays not live for more than 24 hours".
+# This file is compiled into the GO verifier (land-train go-verify), so an exception takes effect only
+# through a reviewed change. One entry per exception:
+#
+#   [[exception]]
+#   entry = "unit:pg-keeper-backup"        # unit:<manifest name> or binary:<package>/<bin>
+#   until = "2026-12-01"                    # the last day (UTC) the exception holds
+#   decision = "D-1234"                     # the routing decision that grants it
+#   reason = "restore test waits for the key placement"

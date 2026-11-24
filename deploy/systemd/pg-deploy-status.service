@@ -1,0 +1,13 @@
+[Unit]
+Description=Compare the deploy manifest with live units and binaries on this host (deploy-status)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+# Reads the roles of this host from PG_HOST_ROLES or ~/.config/plangraph/host-roles.
+# Exit status 1 means "some entry is not live"; the journal lists them and the unit stays successful so
+# that this unit's own state is not mistaken for the entries it reports.
+SuccessExitStatus=1
+ExecStart=%h/.local/bin/plangraph deploy-status
+TimeoutStartSec=120
+UMask=0077

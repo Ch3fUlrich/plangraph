@@ -13,6 +13,12 @@
 # --- unit families -------------------------------------------------------------------------------
 
 [[unit]]
+name = "pg-deploy-status"
+files = ["pg-deploy-status.service", "pg-deploy-status.timer"]
+hosts = ["all"]
+first_run = "systemctl --user start pg-deploy-status.service lists every entry and writes ~/.local/state/plangraph/deploy-live/<host>.json"
+
+[[unit]]
 name = "pg-feeder"
 files = ["pg-feeder.service", "pg-feeder.timer"]
 hosts = ["keeper"]
