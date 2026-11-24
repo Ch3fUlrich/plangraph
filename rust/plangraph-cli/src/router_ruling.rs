@@ -25,9 +25,9 @@ const OWN_SOURCES: [&str; 7] = [
     "sqlite",
 ];
 
-/// Phrases of a measurement that found nothing, failed or is not finished (a pending queue of
-/// trains is a measured quantity; a pending query is not).
-const EMPTY: [&str; 14] = [
+/// Phrases of a measurement that found nothing, did not finish or failed (a pending queue of
+/// trains is a measured quantity; a pending or aborted query is not).
+const EMPTY: [&str; 20] = [
     "no result",
     "no data",
     "n/a",
@@ -42,13 +42,18 @@ const EMPTY: [&str; 14] = [
     "query pending",
     "query is pending",
     "still running",
+    "aborted",
+    "cancelled",
+    "canceled",
+    "interrupted",
+    "incomplete",
+    "partial result",
 ];
 
-/// Another company's or tool's system: its numbers are not ours, whatever source word they carry.
-const EXTERNAL: [&str; 12] = [
+/// Another party's system named in the field. Ownership comes from what the field names as its
+/// source, not from topic words: our own merge queue is a fair subject, GitHub's is not.
+const EXTERNAL: [&str; 15] = [
     "github's",
-    "merge queue",
-    "merge-queue",
     "gitlab",
     "zuul",
     "chromium",
@@ -58,13 +63,19 @@ const EXTERNAL: [&str; 12] = [
     "other compan",
     "industry",
     "best practice",
+    "unrelated",
+    "another repo",
+    "other repo",
+    "third-party",
+    "third party",
 ];
 
-/// Words before a number that name no metric (prepositions, status and error codes, identifiers).
-const NOT_METRIC: [&str; 27] = [
+/// Words before a number that name no metric (prepositions, status and error codes, identifiers,
+/// retry counters).
+const NOT_METRIC: [&str; 32] = [
     "for", "on", "at", "of", "in", "to", "and", "or", "with", "by", "from", "as", "http", "status",
     "code", "error", "errno", "since", "until", "is", "was", "than", "id", "pr", "run", "key",
-    "ref",
+    "ref", "attempt", "attempts", "retry", "try", "page",
 ];
 
 /// Whether one token identifies a result: a date or date range, a decision id, a pull request
@@ -132,6 +143,8 @@ fn measured_field(cell: &str) -> bool {
     let tokens: Vec<String> = cell
         .split(|c: char| c.is_whitespace() || ",;()".contains(c))
         .map(|t| t.trim_matches(|c: char| !(c.is_alphanumeric() || "#-+<>~%.".contains(c))))
+        // A sentence-ending period is not a decimal point: `counted 14.` is 14.
+        .map(|t| t.trim_end_matches('.'))
         // `metric=value` is two tokens: the metric and its value.
         .flat_map(|t| t.split('='))
         .filter(|t| !t.is_empty())
@@ -230,6 +243,9 @@ mod tests {
         for row in [
             "| D-1 | demo | y | router | cause: CI queue. Measured: keeper query runs 2026-11-20..24, 41 of 63 red trains waited 30 min |",
             "cause: queue\nMeasured: keeper query 2026-11-24 counted 14 pending trains",
+            "cause: queue\nMeasured: keeper query 2026-11-24 counted 12 entries in our merge queue",
+            "cause: queue\nMeasured: keeper query 2026-11-24 counted 14.",
+            "cause: queue\nMeasured: keeper query 2026-11-24 median 6.5.",
             "cause: queue\nMeasured: telemetry 2026-11-24 median 250ms",
             "cause: queue\nMeasured: telemetry 2026-11-24 throughput delta -6.5 jobs/hour",
             "cause: queue\nMeasured: ledger 2026-11-24 trains=63 red=41",
@@ -261,6 +277,9 @@ mod tests {
             "cause: slow CI\nMeasured: keeper pending query for 14 projects on 2026-11-24",
             "cause: slow CI\nMeasured: ci-runs for GitHub's own merge queue counted 42 trains on 2026-11-24",
             "cause: slow CI\nMeasured: keeper 2026-11-24 id 7 at 09:30",
+            "cause: slow CI\nMeasured: keeper query aborted 2026-11-24 attempt 3",
+            "cause: slow CI\nMeasured: keeper query 2026-11-24 attempt 3",
+            "cause: slow CI\nMeasured: ci-runs of an unrelated repository 2026-11-24 trains=42",
             "cause: slow CI\nMeasured: keeper 2026-11-24 run-12 d-6744",
         ] {
             assert!(ruling_refusal(row).is_some(), "{row}");
