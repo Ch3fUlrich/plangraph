@@ -1,6 +1,7 @@
 //! Pins a native run's base: the pushed ref when `origin` has it, else the host repository's own.
 use super::{output, Host};
 use crate::native_writer::ReviewBase;
+use std::collections::HashSet;
 use std::io::Write;
 use std::process::Stdio;
 
@@ -27,6 +28,29 @@ fn exact_ref(listing: &str, name: &str) -> Option<String> {
     })
 }
 
+/// A path as text without loss: a backslash is `\\`, and each byte that is not valid UTF-8 is
+/// `\xNN`, so two different paths never give the same text.
+pub(super) fn lossless_path(bytes: &[u8]) -> String {
+    let mut text = String::new();
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let (valid, bad) = match std::str::from_utf8(rest) {
+            Ok(valid) => (valid, 0),
+            Err(e) => (
+                std::str::from_utf8(&rest[..e.valid_up_to()]).unwrap_or_default(),
+                e.error_len().unwrap_or(rest.len() - e.valid_up_to()),
+            ),
+        };
+        text.push_str(&valid.replace('\\', "\\\\"));
+        let end = valid.len() + bad;
+        for byte in &rest[valid.len()..end] {
+            text.push_str(&format!("\\x{byte:02x}"));
+        }
+        rest = &rest[end..];
+    }
+    text
+}
+
 impl Host {
     fn repo_git(&self, args: &[&str]) -> Result<String, String> {
         output(self.command("git").arg("-C").arg(&self.repo).args(args))
@@ -36,6 +60,10 @@ impl Host {
         Self::listing_in(self.command("git").arg("-C").arg(&self.repo).args(args))
     }
     fn listing_in(command: &mut std::process::Command) -> Result<String, String> {
+        Self::bytes_in(command).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    }
+    /// Git's stdout as the raw bytes, for output that carries file names.
+    fn bytes_in(command: &mut std::process::Command) -> Result<Vec<u8>, String> {
         let result = command.output().map_err(|e| e.to_string())?;
         if !result.status.success() {
             return Err(format!(
@@ -43,7 +71,7 @@ impl Host {
                 String::from_utf8_lossy(&result.stderr)
             ));
         }
-        Ok(String::from_utf8_lossy(&result.stdout).into_owned())
+        Ok(result.stdout)
     }
     /// Pin `base_ref` at `pin`: the pushed ref when `origin` has exactly that ref, else the
     /// host repository's own exact ref (a lane head never pushed). A ref found in neither
@@ -197,8 +225,11 @@ impl Host {
 
     /// Replay the commits of HEAD that `onto` does not hold on `onto`. `onto` is also the upstream,
     /// so a patch `onto` already holds is found by its patch id and dropped before any replay
-    /// (a replay of it next to a later edit on `onto` would otherwise conflict).
+    /// (a replay of it next to a later edit on `onto` would otherwise conflict). Git's patch id
+    /// ignores whitespace, so a drop is allowed only where the patch also matches a commit of
+    /// `onto` byte for byte; any other match is refused before the rebase starts.
     pub(super) fn rebase(&self, onto: &str) -> Result<Integrated, String> {
+        self.refuse_whitespace_only_matches(onto)?;
         let result = self.git(&[
             "-c",
             "rerere.enabled=false",
@@ -211,6 +242,72 @@ impl Host {
             onto,
         ]);
         self.finish_integration(result, "rebase-merge", &["rebase", "--abort"])
+    }
+
+    fn refuse_whitespace_only_matches(&self, onto: &str) -> Result<(), String> {
+        let lines = |args: &[&str]| -> Result<Vec<String>, String> {
+            Ok(self.git(args)?.lines().map(str::to_owned).collect())
+        };
+        let own = format!("{onto}..HEAD");
+        let symmetric = format!("{onto}...HEAD");
+        let all = lines(&["rev-list", "--no-merges", &own])?;
+        let kept = lines(&[
+            "rev-list",
+            "--no-merges",
+            "--cherry-pick",
+            "--right-only",
+            &symmetric,
+        ])?;
+        let dropped: Vec<&String> = all.iter().filter(|c| !kept.contains(c)).collect();
+        if dropped.is_empty() {
+            return Ok(());
+        }
+        let upstream: HashSet<String> = self
+            .verbatim_patch_ids(&format!("HEAD..{onto}"))?
+            .into_iter()
+            .map(|(patch, _)| patch)
+            .collect();
+        let own_ids = self.verbatim_patch_ids(&own)?;
+        for commit in dropped {
+            // A commit with no diff has no patch id: dropping it loses nothing.
+            let mut ids = own_ids.iter().filter(|(_, id)| id == commit).peekable();
+            if ids.peek().is_some() && !ids.any(|(patch, _)| upstream.contains(patch)) {
+                return Err(format!(
+                    "part commit {commit} matches a commit of main only up to whitespace; it is not dropped"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `(patch id, commit)` of the non-merge commits of `range`, the patch id taken with the
+    /// whitespace kept (`git patch-id --verbatim`).
+    fn verbatim_patch_ids(&self, range: &str) -> Result<Vec<(String, String)>, String> {
+        let mut log = self
+            .command("git")
+            .arg("-C")
+            .arg(&self.cwd)
+            .args(["log", "-p", "--no-merges", "--no-renames", "--no-ext-diff"])
+            .args(["--no-textconv", "--no-color", range])
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        let stream = log.stdout.take().ok_or("git log has no stdout")?;
+        let ids = Self::listing_in(
+            self.command("git")
+                .arg("-C")
+                .arg(&self.cwd)
+                .args(["patch-id", "--verbatim"])
+                .stdin(Stdio::from(stream)),
+        );
+        if !log.wait().map_err(|e| e.to_string())?.success() {
+            return Err(format!("git log {range} failed"));
+        }
+        Ok(ids?
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .map(|(patch, commit)| (patch.to_owned(), commit.to_owned()))
+            .collect())
     }
 
     pub(super) fn finish_integration(
@@ -228,7 +325,7 @@ impl Host {
         }
         // The unmerged paths are read before the abort clears them; a failure without one is no conflict.
         // NUL-delimited and untrimmed, so a path git would quote or end in whitespace is exact.
-        let unmerged = Self::listing_in(self.command("git").arg("-C").arg(&self.cwd).args([
+        let unmerged = Self::bytes_in(self.command("git").arg("-C").arg(&self.cwd).args([
             "diff",
             "--name-only",
             "-z",
@@ -236,9 +333,9 @@ impl Host {
         ]));
         self.git(abort)?;
         let files: Vec<String> = unmerged?
-            .split('\0')
+            .split(|byte| *byte == 0)
             .filter(|path| !path.is_empty())
-            .map(str::to_owned)
+            .map(lossless_path)
             .collect();
         if files.is_empty() {
             return Err(error);
